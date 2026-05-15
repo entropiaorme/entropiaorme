@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-GB
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_filters:
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/Cargo.lock"
+    - "!data/demo/entropia_orme.db"
+    - "!backend/assets/models/*.onnx"
+    - "!backend/data/snapshot/*.json"
+    - "!backend/data/*.csv"
+    - "!assets/**"
+    - "!frontend/static/**"
+    - "!frontend/src-tauri/icons/**"
+    - "!frontend/src-tauri/installer/*.bmp"
+    - "!THIRD-PARTY-NOTICES.md"
+  path_instructions:
+    - path: "frontend/src/**/*.{svelte,ts}"
+      instructions: |
+        Conventions for newly authored content (not drive-by renames of pre-existing content):
+        - UK spelling (customise, colour, behaviour, normalise, initialise, organise).
+        - No emdashes; prefer colons, semicolons, parentheses, commas, or sentence breaks.
+        - User-facing brand: hyphenless "EntropiaOrme" / "entropiaorme". The hyphenated "entropia-orme" form is dev-tooling only (Cargo crate, repo paths, cli prefixes).
+
+        Code shape:
+        - Default to writing no comments. Only add one when the WHY is non-obvious (hidden constraint, subtle invariant, workaround for a specific bug).
+        - Don't add error handling, fallbacks, or validation for scenarios that can't happen at internal call boundaries. Validate at system boundaries only (user input, external APIs).
+        - Don't add backwards-compatibility shims or feature flags when a straight change works.
+        - Trust framework guarantees; don't pre-empt with defensive code.
+
+        Reactivity (Svelte 5):
+        - Prefer $state / $derived / $effect over legacy stores where the surrounding code uses runes.
+        - Don't wipe local state to a placeholder on transient fetch errors; preserve last-good state and let the next poll restore live state.
+
+    - path: "backend/**/*.py"
+      instructions: |
+        Conventions for newly authored content (not drive-by renames of pre-existing content):
+        - UK spelling on docstrings, comments, log messages, and user-visible error strings.
+        - No emdashes in newly authored content; use colons, semicolons, or sentence breaks instead.
+
+        Code shape:
+        - Default to writing no comments. Only add one when the WHY is non-obvious.
+        - Don't add try/except blocks that swallow exceptions to "make tests pass" or hide root causes; fix the underlying issue.
+        - Don't add error handling for scenarios that can't happen at internal boundaries.
+
+        Capability + listener scoping:
+        - Keyboard / mouse / input hooks must be scoped to the narrowest context where the captured data is actually consumed. A listener that's only useful in a manual-scan flow should gate its dispatch on that flow's active state.
+        - Capability toggles default off. The user opts in once the supporting state is configured. Readiness should be enforced at operation time, not toggle time.
+        - A toggle gates only user-initiated paths. Automation sub-paths stay under the automation's own toggle.
+
+        Boundaries:
+        - User-visible strings returned from API endpoints flow to UI. Stylistic norms (UK / no emdash) apply.
+        - Don't change the toolchain (Python via .venv, npm for frontend) drive-by.
+
+    - path: "frontend/src-tauri/**/*.rs"
+      instructions: |
+        Conventions for newly authored content (not drive-by renames):
+        - UK spelling on doc comments and user-visible strings.
+        - No emdashes in newly authored content.
+
+        Process / subprocess safety:
+        - Any std::process::Command shelling out on Windows must set creation_flags(CREATE_NO_WINDOW = 0x08000000) under #[cfg(windows)] to avoid conhost-window flashes from a GUI-subsystem parent.
+        - Sidecar lifecycle paths (spawn / drain / kill) must walk the PID tree (PyInstaller onefile spawns a bootloader + python child; TerminateProcess on the bootloader orphans the child).
+        - Async tasks reading from a sidecar's pipes must drain continuously; Windows pipe buffers are ~4 KB and a stalled drain blocks the child's logging.
+
+    - path: "frontend/src-tauri/tauri.conf.json"
+      instructions: |
+        Security posture for changes to the Tauri config:
+        - CSP changes must be narrowly scoped. Don't introduce wildcards. Any new connect-src / img-src / script-src host must have a corresponding code consumer (a fetch or img tag against that host); flag changes that loosen scope without an identifiable consumer.
+        - Bundle resources must be attributed in THIRD-PARTY-NOTICES.md if they originate from a third party.
+
+    - path: "frontend/src-tauri/capabilities/*.json"
+      instructions: |
+        Capability scoping:
+        - Prefer scope-restricted permission variants (with `validate` regex / URL allowlists) over blanket grants where the upstream schema supports it.
+        - Plugin-shell permissions in particular: `shell:allow-open` should carry an explicit `validate` regex bounding the URLs it can open in the OS browser.
+
+    - path: "backend/build_sidecar.spec"
+      instructions: |
+        PyInstaller spec changes:
+        - The sidecar is never user-facing; build as console=False (GUI subsystem) so no conhost window can surface.
+        - New `datas` entries that bundle third-party content must be reflected in THIRD-PARTY-NOTICES.md.
+        - `excludes` carry rationale comments where they're load-bearing (e.g. preventing ML-framework bloat).
+
+    - path: "**/*.md"
+      instructions: |
+        Documentation conventions:
+        - UK spelling on newly authored content.
+        - No emdashes in newly authored content; use colons, semicolons, parentheses, commas, or sentence breaks.
+        - Brand naming: hyphenless "entropiaorme" / "EntropiaOrme" for user-facing references; hyphenated "entropia-orme" is dev-tooling only.
+        - README, SECURITY, CONTRIBUTING are broad-audience surfaces. Avoid gaming jargon (gameplay, loot, etc.); use neutral framing that reads cleanly to portfolio reviewers and technical peers.
+        - Don't use boasting language ("full", "comprehensive", "complete") when describing externally-sourced data that the project didn't originate. State the affordance flatly.
+
+    - path: ".github/workflows/*.yml"
+      instructions: |
+        CI workflow changes:
+        - Don't add --no-verify-style bypass flags to git operations.
+        - Pinned action versions preferred over @latest / @main floating refs.
+        - Workflow runs that touch secrets must explicitly enumerate which secrets are consumed.
+
+  tools:
+    actionlint:
+      enabled: true
+    biome:
+      enabled: true
+    ruff:
+      enabled: true
+    clippy:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: local
+  pull_requests:
+    scope: local

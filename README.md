@@ -43,6 +43,8 @@ launch.bat
 
 Opens two Windows Terminal tabs: FastAPI backend + Tauri dev shell.
 
+On first invocation `launch.ps1` stages a zero-byte placeholder at `frontend/src-tauri/binaries/entropiaorme-backend-x86_64-pc-windows-msvc.exe`. This is intentional dev affordance, not cruft: `tauri.conf.json` declares the sidecar via `bundle.externalBin`, which causes Tauri's build script to check the platform-triple-suffixed binary's existence at compile time even under `tauri dev`. The dev path runs the Python backend directly in a sibling terminal and never invokes the sidecar; the placeholder just satisfies the existence check. `backend/build_app.py` overwrites this stub with the real PyInstaller-frozen exe at release-build time, and the launcher leaves any existing file at that path untouched.
+
 ### Build installer
 
 ```bash

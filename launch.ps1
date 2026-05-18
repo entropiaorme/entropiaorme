@@ -16,6 +16,24 @@ if (-not (Test-Path $frontendDir)) {
     Write-Error "Missing frontend directory at $frontendDir."
 }
 
+# Dev affordance: tauri.conf.json declares the backend sidecar via
+# `bundle.externalBin`, which causes Tauri's build-script-build to check
+# the platform-triple-suffixed binary's existence at compile time even
+# under `tauri dev`. The dev path runs the Python backend directly in a
+# sibling terminal (via `python -m backend.main` below) and never invokes
+# the sidecar at runtime, so a zero-byte placeholder satisfies the check.
+# Release builds via `backend/build_app.py` replace this stub with the
+# real PyInstaller-frozen exe at the same path. The guard is strictly
+# "create if missing" so a frozen sidecar from a prior release build
+# survives launch.ps1 re-invocations untouched.
+$sidecarDir = Join-Path $frontendDir "src-tauri\binaries"
+$sidecarStub = Join-Path $sidecarDir "entropiaorme-backend-x86_64-pc-windows-msvc.exe"
+if (-not (Test-Path $sidecarStub)) {
+    New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
+    New-Item -ItemType File -Path $sidecarStub | Out-Null
+    Write-Host "Staged dev sidecar placeholder at $sidecarStub"
+}
+
 $backendCmd = "`"$pythonExe`" -X utf8 -m backend.main"
 $tauriCmd = "npm exec tauri dev"
 

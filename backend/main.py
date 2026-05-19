@@ -41,13 +41,22 @@ else:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Port configuration: the backend listens on ENTROPIAORME_BACKEND_PORT
+# (default 8421) and the matching CORS origins / Host-header entries derive
+# from ENTROPIAORME_FRONTEND_PORT (default 5173). Defaults preserve the
+# historical behaviour when the env vars are unset; setting them at process
+# start lets multiple instances of the app run concurrently on the same
+# machine without port collisions.
+BACKEND_PORT = int(os.environ.get("ENTROPIAORME_BACKEND_PORT", "8421"))
+FRONTEND_PORT = int(os.environ.get("ENTROPIAORME_FRONTEND_PORT", "5173"))
+
 ALLOWED_API_ORIGINS = {
     "tauri://localhost",
     "http://tauri.localhost",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
+    f"http://localhost:{FRONTEND_PORT}",
+    f"http://127.0.0.1:{FRONTEND_PORT}",
 }
-ALLOWED_API_HOSTS = {"127.0.0.1:8421", "localhost:8421"}
+ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 
 from backend.dependencies import Services, set_services
 from backend.db.app_database import AppDatabase
@@ -363,4 +372,4 @@ if __name__ == "__main__":
     # Pass the app object directly: an import string would re-import
     # `backend.main` as a separate module from `__main__` in a frozen
     # bundle, doubling the lifespan-init work.
-    uvicorn.run(app, host="127.0.0.1", port=8421)
+    uvicorn.run(app, host="127.0.0.1", port=BACKEND_PORT)

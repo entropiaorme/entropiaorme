@@ -46,9 +46,22 @@ if str(PROJECT_ROOT) not in sys.path:
 # from ENTROPIAORME_FRONTEND_PORT (default 5173). Defaults preserve the
 # historical behaviour when the env vars are unset; setting them at process
 # start lets multiple instances of the app run concurrently on the same
-# machine without port collisions.
-BACKEND_PORT = int(os.environ.get("ENTROPIAORME_BACKEND_PORT", "8421"))
-FRONTEND_PORT = int(os.environ.get("ENTROPIAORME_FRONTEND_PORT", "5173"))
+# machine without port collisions. Invalid values fail fast at module import
+# with a descriptive error rather than producing a bare ValueError during
+# int() conversion.
+def _read_port(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer between 1 and 65535") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError(f"{name} must be between 1 and 65535")
+    return port
+
+
+BACKEND_PORT = _read_port("ENTROPIAORME_BACKEND_PORT", 8421)
+FRONTEND_PORT = _read_port("ENTROPIAORME_FRONTEND_PORT", 5173)
 
 ALLOWED_API_ORIGINS = {
     "tauri://localhost",

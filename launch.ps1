@@ -35,7 +35,10 @@ if (-not (Test-Path $sidecarStub)) {
 }
 
 $backendCmd = "`"$pythonExe`" -X utf8 -m backend.main"
-$tauriCmd = "npm exec tauri dev"
+# Use the tauri:dev npm script so the dev-mode CSP overlay (broader
+# connect-src allowing alternate localhost backend ports) is applied
+# automatically.
+$tauriCmd = "npm run tauri:dev"
 
 Start-Process wt.exe -ArgumentList @(
     "-w", "0",

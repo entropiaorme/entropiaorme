@@ -15,7 +15,11 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const port = process.env.ENTROPIAORME_FRONTEND_PORT ?? "5173";
+const rawPort = (process.env.ENTROPIAORME_FRONTEND_PORT ?? "5173").trim();
+const port = Number(rawPort);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+	throw new Error("ENTROPIAORME_FRONTEND_PORT must be an integer between 1 and 65535");
+}
 const overlay = { build: { devUrl: `http://localhost:${port}` } };
 const out = join(dirname(fileURLToPath(import.meta.url)), "tauri.dev.local.json");
 writeFileSync(out, JSON.stringify(overlay, null, 2) + "\n");

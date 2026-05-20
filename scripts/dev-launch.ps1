@@ -8,7 +8,7 @@ $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 # Env vars (ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT /
 # ENTROPIAORME_DATA_DIR) are sourced from .env.local by `just` itself via
 # `set dotenv-load` in the justfile. This script inherits them from its
-# parent (just → powershell → Start-Process wt.exe → cmd /k child).
+# parent (just -> powershell -> Start-Process wt.exe -> cmd /k child).
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     Write-Error "Windows Terminal (wt.exe) is required for dev-launch.ps1."

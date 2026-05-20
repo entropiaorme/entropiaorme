@@ -17,7 +17,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"tauri": "tauri",
-		"tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+		"tauri:dev": "node src-tauri/build-dev-config.mjs && tauri dev --config src-tauri/tauri.dev.conf.json --config src-tauri/tauri.dev.local.json",
 		"tauri:build": "tauri build --bundles nsis"
 	},
 	"devDependencies": {

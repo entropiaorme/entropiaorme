@@ -1,11 +1,8 @@
 $ErrorActionPreference = "Stop"
 
-# Backward-compatibility shim. Daily-driver dev launch is `just dev`; this
-# file exists so existing muscle memory (`./launch.ps1`, `launch.bat` →
-# `launch.ps1`) keeps working through the dev-orchestration lane's
-# transition. Both routes produce identical behaviour. Scheduled for
-# retirement at dev-orchestration R5 once direnv adoption is the canonical
-# activation surface and cross-platform parity is verified at R4.
+# Backward-compatibility shim. The canonical dev launch is `just dev`;
+# this file exists so existing `./launch.ps1` invocations keep working.
+# Both routes produce identical behaviour.
 
 Set-Location $PSScriptRoot
 

@@ -1,6 +1,6 @@
-# entropiaorme dev recipes. `just dev` launches the dev stack; the
-# legacy launch.ps1 / launch.bat at the repo root are thin shims that
-# call `just dev`.
+# entropiaorme dev recipes. `just dev` launches the dev stack; `just
+# check` runs the frontend type-check + build; `just test-backend` runs
+# the pytest suite. Run `just --list` to see every recipe.
 #
 # Env vars from .env.local (if present) are loaded automatically before
 # each recipe via `set dotenv-load` below. Recognised keys:

@@ -19,8 +19,8 @@ The rest of this README is for developers building from source. Windows-only for
 - Rust (`rustup`): for the Tauri shell
 - Visual Studio Build Tools (MSVC C++ workload): required by Tauri on Windows
 - Windows Terminal (`wt.exe`): used by the launcher
-- [`just`](https://just.systems/) ≥ 1.34: cross-platform task runner driving `just dev` etc. (Windows: `scoop install just`).
-- [`direnv`](https://direnv.net/) (optional): activates env vars from a local `.env.local` on `cd`-in so direct shell invocations of `python -m backend.main` / `pytest` / `npm` honour the local env without going through `just dev`. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist.)
+- [`just`](https://just.systems/) ≥ 1.34: task runner driving `just dev` etc. (Windows: `scoop install just`).
+- [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
 
 ### Setup
 
@@ -43,7 +43,7 @@ cd ..
 just dev
 ```
 
-Opens two Windows Terminal tabs: FastAPI backend + Tauri dev shell. `launch.bat` and `launch.ps1` remain at the repo root as backward-compatibility shims and produce identical behaviour.
+Opens two Windows Terminal tabs: FastAPI backend + Tauri dev shell.
 
 Run `just --list` to see other recipes (`just check` for frontend type-check + build, `just test-backend` for the pytest suite).
 

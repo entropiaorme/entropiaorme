@@ -4,7 +4,7 @@
  * All backend communication goes through this module.
  */
 
-const API_BASE = 'http://127.0.0.1:8421/api';
+const API_BASE = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT}/api`;
 
 import type { NotableEventCategory, NotableEventType } from '$lib/types/common';
 import { guideState } from '$lib/guide/state.svelte';

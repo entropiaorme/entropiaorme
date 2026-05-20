@@ -37,3 +37,18 @@ check:
 smoke:
     @echo "just smoke: headless smoke verification is not yet implemented."
     @exit 1
+
+# Start Caddy in the background using the Caddyfile at the repo root.
+# Caddy runs as a long-lived process; subsequent invocations are no-ops
+# once it is running. See `Caddyfile` for the routed hostname.
+proxy-up:
+    caddy start --config Caddyfile
+
+# Stop the background Caddy via its admin endpoint (localhost:2019).
+proxy-down:
+    caddy stop
+
+# Cheap liveness check via Caddy's admin endpoint. Prints `caddy running`
+# or `caddy not running`.
+proxy-status:
+    @curl -fsS -o /dev/null http://localhost:2019/config/ && echo "caddy running" || echo "caddy not running"

@@ -4,6 +4,32 @@ $repoRoot = (Resolve-Path $PSScriptRoot).Path
 $frontendDir = Join-Path $repoRoot "frontend"
 $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 
+# Source $repoRoot\.env.local (if present) into the current PowerShell session
+# before spawning the backend and tauri child tabs. Start-Process wt.exe
+# inherits the parent's env block, so values flow through to both children:
+# backend/main.py reads ENTROPIAORME_BACKEND_PORT and ENTROPIAORME_DATA_DIR,
+# frontend/vite.config.ts reads ENTROPIAORME_FRONTEND_PORT. Absence of the
+# file (the common case for a fresh public-tier clone) is intentional — env
+# vars stay unset, runtime defaults bind on the documented ports.
+$envLocal = Join-Path $repoRoot ".env.local"
+if (Test-Path $envLocal) {
+    Get-Content $envLocal | ForEach-Object {
+        $line = $_.Trim()
+        if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { return }
+        $eqIdx = $line.IndexOf("=")
+        if ($eqIdx -lt 1) { return }
+        $key = $line.Substring(0, $eqIdx).Trim()
+        $value = $line.Substring($eqIdx + 1).Trim()
+        if ([string]::IsNullOrWhiteSpace($key)) { return }
+        if (($value.Length -ge 2) -and
+            ((($value.StartsWith('"')) -and ($value.EndsWith('"'))) -or
+             (($value.StartsWith("'")) -and ($value.EndsWith("'"))))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        Set-Item -Path "env:$key" -Value $value
+    }
+}
+
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     Write-Error "Windows Terminal (wt.exe) is required for launch.ps1."
 }

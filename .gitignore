@@ -26,6 +26,10 @@ frontend/src-tauri/binaries/
 
 # Config & secrets
 .env
+# Per-instance dotenv consumed by launch.ps1 to drive ENTROPIAORME_BACKEND_PORT
+# / ENTROPIAORME_FRONTEND_PORT / ENTROPIAORME_DATA_DIR. Tier dirs and lane
+# worktrees each carry their own; never tracked.
+.env.local
 config.json
 *.db
 *.db-journal

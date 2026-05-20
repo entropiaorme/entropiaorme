@@ -30,7 +30,7 @@ From the repo root:
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r backend/requirements.txt
-pip install -r backend/requirements-dev.txt   # only needed for `backend/build_app.py`
+pip install -r backend/requirements-dev.txt   # pytest (`just test-backend`) and pyinstaller (`backend/build_app.py`)
 
 cd frontend
 npm install

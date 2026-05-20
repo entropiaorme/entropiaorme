@@ -1,37 +1,17 @@
 $ErrorActionPreference = "Stop"
 
-$repoRoot = (Resolve-Path $PSScriptRoot).Path
+# Resolve the repo root from this script's location (scripts/ subdir).
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $frontendDir = Join-Path $repoRoot "frontend"
 $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 
-# Source $repoRoot\.env.local (if present) into the current PowerShell session
-# before spawning the backend and tauri child tabs. Start-Process wt.exe
-# inherits the parent's env block, so values flow through to both children:
-# backend/main.py reads ENTROPIAORME_BACKEND_PORT and ENTROPIAORME_DATA_DIR,
-# frontend/vite.config.ts reads ENTROPIAORME_FRONTEND_PORT. Absence of the
-# file (the common case for a fresh public-tier clone) is intentional — env
-# vars stay unset, runtime defaults bind on the documented ports.
-$envLocal = Join-Path $repoRoot ".env.local"
-if (Test-Path $envLocal) {
-    Get-Content $envLocal | ForEach-Object {
-        $line = $_.Trim()
-        if ([string]::IsNullOrEmpty($line) -or $line.StartsWith("#")) { return }
-        $eqIdx = $line.IndexOf("=")
-        if ($eqIdx -lt 1) { return }
-        $key = $line.Substring(0, $eqIdx).Trim()
-        $value = $line.Substring($eqIdx + 1).Trim()
-        if ([string]::IsNullOrWhiteSpace($key)) { return }
-        if (($value.Length -ge 2) -and
-            ((($value.StartsWith('"')) -and ($value.EndsWith('"'))) -or
-             (($value.StartsWith("'")) -and ($value.EndsWith("'"))))) {
-            $value = $value.Substring(1, $value.Length - 2)
-        }
-        Set-Item -Path "env:$key" -Value $value
-    }
-}
+# Env vars (ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT /
+# ENTROPIAORME_DATA_DIR) are sourced from .env.local by `just` itself via
+# `set dotenv-load` in the justfile. This script inherits them from its
+# parent (just → powershell → Start-Process wt.exe → cmd /k child).
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
-    Write-Error "Windows Terminal (wt.exe) is required for launch.ps1."
+    Write-Error "Windows Terminal (wt.exe) is required for dev-launch.ps1."
 }
 
 if (-not (Test-Path $pythonExe)) {
@@ -51,7 +31,7 @@ if (-not (Test-Path $frontendDir)) {
 # Release builds via `backend/build_app.py` replace this stub with the
 # real PyInstaller-frozen exe at the same path. The guard is strictly
 # "create if missing" so a frozen sidecar from a prior release build
-# survives launch.ps1 re-invocations untouched.
+# survives launch re-invocations untouched.
 $sidecarDir = Join-Path $frontendDir "src-tauri\binaries"
 $sidecarStub = Join-Path $sidecarDir "entropiaorme-backend-x86_64-pc-windows-msvc.exe"
 if (-not (Test-Path $sidecarStub)) {

@@ -2,6 +2,17 @@
 
 import sys
 import os
+from pathlib import Path
+
+# Load .env.local at startup so direct invocations (python -m backend.main,
+# pytest backend/) honour per-checkout env overrides. Skipped in frozen
+# builds: packaged installs read env from the user's shell, not from a
+# file beside the executable. load_dotenv defaults to override=False, so
+# values already in the environment (e.g. set by a parent shell) take
+# precedence over the file.
+if not getattr(sys, "frozen", False):
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env.local")
 
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
@@ -19,7 +30,6 @@ elif sys.platform == "linux":
         pass  # May fail without permissions — non-critical
 
 import logging
-from pathlib import Path
 
 log = logging.getLogger(__name__)
 from contextlib import asynccontextmanager

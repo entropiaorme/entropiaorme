@@ -1,0 +1,18 @@
+# entropiaorme dev-environment reverse proxy.
+#
+# Fronts the local `just dev` stack on a stable `entropiaorme.localhost`
+# hostname so URLs in the browser, DevTools, Postman, screenshots, and
+# similar tooling read as a hostname rather than a port number.
+#
+# Start with `just proxy-up`; `just proxy-status` for a liveness check;
+# `just proxy-down` to stop. Skipping the Caddy install keeps the
+# existing port-based `just dev` flow unmodified.
+#
+# HTTP-only for now; the explicit `http://` scheme tells Caddy "no
+# auto-HTTPS provisioning." A subsequent change enables HTTPS by
+# dropping the scheme prefix and adding a `tls internal` directive
+# once the local-CA setup lands.
+
+http://entropiaorme.localhost {
+	reverse_proxy localhost:5173
+}

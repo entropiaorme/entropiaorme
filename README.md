@@ -20,9 +20,6 @@ The rest of this README is for developers building from source. Windows-only for
 - Visual Studio Build Tools (MSVC C++ workload): required by Tauri on Windows
 - Windows Terminal (`wt.exe`): used by the launcher
 - [`just`](https://just.systems/) ≥ 1.34: task runner driving `just dev` etc. (Windows: `scoop install just`).
-- [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
-- [`caddy`](https://caddyserver.com/) (optional): reverse proxy fronting the dev stack on a stable `https://entropiaorme.localhost` hostname instead of a port number. Run `caddy trust` once after install (elevated on Windows, `sudo` on macOS/Linux) to install Caddy's local CA root into the OS trust store. Start via `just proxy-up`. Skip to keep the port-based `just dev` flow. (Windows: `winget install CaddyServer.Caddy`.)
-- [`coredns`](https://coredns.io/) (optional, pairs with `caddy`): local DNS resolver answering `*.localhost` → `127.0.0.1` so the dev hostname above resolves through every OS resolver path; needed because Windows Winsock doesn't honour RFC 6761 for `.localhost` subdomains. Start via `just dns-up`; configure the primary network adapter's DNS once per machine (snippet below). (Windows: `scoop install coredns`.)
 
 ### Setup
 
@@ -38,15 +35,6 @@ cd frontend
 npm install
 cd ..
 ```
-
-If you installed `coredns`, configure your primary network adapter's DNS once per machine (elevated PowerShell — the secondary upstream keeps non-`.localhost` resolution working when CoreDNS is down):
-
-```powershell
-$iface = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).Name
-Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses '127.0.0.1','1.1.1.1'
-```
-
-Revert with `Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddresses`.
 
 ### Run
 
@@ -71,6 +59,23 @@ Produces (at `frontend/src-tauri/target/release/`):
 - Matching `.sha256` sidecar files for both artefacts (single-line `<hash>  <filename>`, `sha256sum -c` compatible).
 
 Installer chrome assets (header / sidebar BMPs + plain-text MIT license) live under `frontend/src-tauri/installer/` and are wired through `bundle.windows.nsis` in `frontend/src-tauri/tauri.conf.json`.
+
+## Optional dev environment
+
+Beyond the core `just dev` flow, two optional capabilities are available: stable `https://entropiaorme.localhost` URLs via a reverse-proxy + DNS layer (useful for browser bookmarks, DevTools, screenshots, and running multiple checkouts of this repo on the same machine), and per-checkout env-var activation in ad-hoc shells. Skip this section to keep the basic flow unchanged.
+
+- [`caddy`](https://caddyserver.com/): reverse proxy fronting the dev stack on a stable `https://entropiaorme.localhost` hostname instead of a port number. Run `caddy trust` once after install (elevated on Windows, `sudo` on macOS/Linux) to install Caddy's local CA root into the OS trust store. Start via `just proxy-up`. (Windows: `winget install CaddyServer.Caddy`.)
+- [`coredns`](https://coredns.io/) (pairs with `caddy`): local DNS resolver answering `*.localhost` → `127.0.0.1` so the dev hostname above resolves through every OS resolver path; needed because Windows Winsock doesn't honour RFC 6761 for `.localhost` subdomains. Start via `just dns-up`; configure the primary network adapter's DNS once per machine (snippet below). (Windows: `scoop install coredns`.)
+- [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
+
+Once per machine, point your primary network adapter at CoreDNS (elevated PowerShell). The secondary upstream keeps non-`.localhost` resolution working when CoreDNS is down:
+
+```powershell
+$iface = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).Name
+Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses '127.0.0.1','1.1.1.1'
+```
+
+Revert with `Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddresses`.
 
 ## License
 

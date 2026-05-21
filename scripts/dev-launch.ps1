@@ -14,12 +14,20 @@ $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 # Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
 # edits or newly-allocated per-checkout fragments propagate without a
 # restart. No-op when Caddy is reachable on its admin endpoint and the
-# config is unchanged; emits a diagnostic if Caddy is not running, but
-# does not block dev launch. Skipped silently when Caddy is not on PATH
-# (the Caddy install is optional — the port-based devUrl fallback in
-# build-dev-config.mjs keeps `just dev` working without it).
+# config is unchanged; surfaces caddy's own "admin endpoint unreachable"
+# stderr if Caddy is not running, but does not block dev launch.
+# Skipped silently when caddy is not on PATH (the Caddy install is
+# optional — the port-based devUrl fallback in build-dev-config.mjs
+# keeps `just dev` working without it). The catch covers rare
+# PowerShell-level invocation exceptions (the native-command non-zero
+# exit path does not throw in PS 5.1, so caddy-not-running is handled
+# by caddy's own stderr rather than this catch).
 if (Get-Command caddy -ErrorAction SilentlyContinue) {
-    try { & caddy reload --config (Join-Path $repoRoot "Caddyfile") } catch { }
+    try {
+        & caddy reload --config (Join-Path $repoRoot "Caddyfile")
+    } catch {
+        Write-Warning "caddy reload threw a PowerShell exception (continuing without reload): $($_.Exception.Message)"
+    }
 }
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {

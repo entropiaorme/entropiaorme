@@ -6,9 +6,21 @@ $frontendDir = Join-Path $repoRoot "frontend"
 $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 
 # Env vars (ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT /
-# ENTROPIAORME_DATA_DIR) are sourced from .env.local by `just` itself via
-# `set dotenv-load` in the justfile. This script inherits them from its
-# parent (just -> powershell -> Start-Process wt.exe -> cmd /k child).
+# ENTROPIAORME_DATA_DIR / ENTROPIAORME_HOSTNAME) are sourced from
+# .env.local by `just` itself via `set dotenv-load` in the justfile.
+# This script inherits them from its parent (just -> powershell ->
+# Start-Process wt.exe -> cmd /k child).
+
+# Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
+# edits or newly-allocated per-checkout fragments propagate without a
+# restart. No-op when Caddy is reachable on its admin endpoint and the
+# config is unchanged; emits a diagnostic if Caddy is not running, but
+# does not block dev launch. Skipped silently when Caddy is not on PATH
+# (the Caddy install is optional — the port-based devUrl fallback in
+# build-dev-config.mjs keeps `just dev` working without it).
+if (Get-Command caddy -ErrorAction SilentlyContinue) {
+    try { & caddy reload --config (Join-Path $repoRoot "Caddyfile") } catch { }
+}
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     Write-Error "Windows Terminal (wt.exe) is required for dev-launch.ps1."

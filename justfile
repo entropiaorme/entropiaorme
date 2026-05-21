@@ -5,8 +5,10 @@
 # Env vars from .env.local (if present) are loaded automatically before
 # each recipe via `set dotenv-load` below. Recognised keys:
 # ENTROPIAORME_BACKEND_PORT, ENTROPIAORME_FRONTEND_PORT,
-# ENTROPIAORME_DATA_DIR. Absence of the file falls through to runtime
-# defaults.
+# ENTROPIAORME_DATA_DIR, ENTROPIAORME_HOSTNAME. Absence of the file
+# falls through to runtime defaults; absence of ENTROPIAORME_HOSTNAME
+# specifically falls through to the port-based devUrl in
+# build-dev-config.mjs (i.e. Caddy is optional).
 
 set dotenv-load
 set dotenv-filename := ".env.local"

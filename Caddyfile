@@ -16,3 +16,11 @@
 http://entropiaorme.localhost {
 	reverse_proxy localhost:5173
 }
+
+# Additional checkouts of this repo (sharing this dev machine but bound
+# to distinct frontend ports) drop their own routing stanzas into the
+# directory below. The glob matches zero files in a fresh clone, which
+# Caddy accepts as a no-op rather than an error; checkout stand-up
+# regenerates the relevant fragment and triggers `caddy reload` when a
+# new checkout comes online.
+import .dev/Caddyfile.worktrees/*.caddy

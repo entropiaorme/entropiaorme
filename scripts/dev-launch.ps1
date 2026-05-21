@@ -11,6 +11,24 @@ $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 # This script inherits them from its parent (just -> powershell ->
 # Start-Process wt.exe -> cmd /k child).
 
+# Defensive CoreDNS start: the hostname-based devUrl resolves via OS DNS,
+# which means CoreDNS must be running before the Tauri shell's tauri-cli
+# resolves the devUrl during the tab launches below. The lifecycle
+# script is idempotent — already-running is a no-op — so this is safe
+# to invoke unconditionally on every dev launch. Skipped silently when
+# coredns is not on PATH (the CoreDNS install is optional — the
+# port-based devUrl fallback in build-dev-config.mjs keeps `just dev`
+# working without it). The catch covers rare PowerShell-level invocation
+# exceptions; non-zero exit from the lifecycle script surfaces its own
+# message rather than throwing.
+if (Get-Command coredns -ErrorAction SilentlyContinue) {
+    try {
+        & (Join-Path $PSScriptRoot "dns-lifecycle.ps1") -Action up
+    } catch {
+        Write-Warning "dns-lifecycle up threw a PowerShell exception (continuing without DNS layer): $($_.Exception.Message)"
+    }
+}
+
 # Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
 # edits or newly-allocated per-checkout fragments propagate without a
 # restart. No-op when Caddy is reachable on its admin endpoint and the

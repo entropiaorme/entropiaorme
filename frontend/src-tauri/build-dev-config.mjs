@@ -5,13 +5,15 @@
 //
 // devUrl resolves in two modes:
 //   * When ENTROPIAORME_HOSTNAME is set, the overlay points at the
-//     hostname (e.g. `http://entropiaorme.localhost`). Caddy reverse-
-//     proxies that hostname to the picked frontend port; see the
-//     committed `Caddyfile`.
+//     hostname over HTTPS (e.g. `https://entropiaorme.localhost`).
+//     Caddy reverse-proxies that hostname to the picked frontend
+//     port and serves a cert from its local CA; see the committed
+//     `Caddyfile` and the README's `caddy trust` prereq.
 //   * When ENTROPIAORME_HOSTNAME is unset, the overlay falls back to
 //     `http://localhost:<port>` driven by ENTROPIAORME_FRONTEND_PORT
 //     (default 5173). Contributors who skip the Caddy install keep a
-//     working `just dev` via this fallback.
+//     working `just dev` via this fallback (plain HTTP straight to
+//     Vite).
 //
 // The indirection exists because Tauri 2 does not support `${env:VAR}`
 // interpolation inside tauri.conf.json field values, and the only
@@ -27,7 +29,7 @@ import { dirname, join } from "node:path";
 const hostname = (process.env.ENTROPIAORME_HOSTNAME ?? "").trim();
 let devUrl;
 if (hostname) {
-	devUrl = `http://${hostname}`;
+	devUrl = `https://${hostname}`;
 } else {
 	const rawPort = (process.env.ENTROPIAORME_FRONTEND_PORT ?? "5173").trim();
 	const port = Number(rawPort);

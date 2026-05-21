@@ -8,19 +8,21 @@
 # `just proxy-down` to stop. Skipping the Caddy install keeps the
 # existing port-based `just dev` flow unmodified.
 #
-# HTTP-only for now; the explicit `http://` scheme tells Caddy "no
-# auto-HTTPS provisioning." A subsequent change enables HTTPS by
-# dropping the scheme prefix and adding a `tls internal` directive
-# once the local-CA setup lands.
+# HTTPS is served via Caddy's local CA (`tls internal`). One-time
+# elevated step `caddy trust` installs Caddy's root certificate into
+# the OS trust store so the dev hostnames load without warnings in
+# browsers, Tauri's WebView2, and other native HTTPS clients.
 
-http://entropiaorme.localhost {
+entropiaorme.localhost {
+	tls internal
 	reverse_proxy localhost:5173
 }
 
 # Additional checkouts of this repo (sharing this dev machine but bound
 # to distinct frontend ports) drop their own routing stanzas into the
-# directory below. The glob matches zero files in a fresh clone, which
-# Caddy accepts as a no-op rather than an error; checkout stand-up
-# regenerates the relevant fragment and triggers `caddy reload` when a
-# new checkout comes online.
+# directory below. Fragments use the same `tls internal` shape so each
+# checkout gets its own auto-provisioned cert. The glob matches zero
+# files in a fresh clone, which Caddy accepts as a no-op rather than
+# an error; checkout stand-up regenerates the relevant fragment and
+# triggers `caddy reload` when a new checkout comes online.
 import .dev/Caddyfile.worktrees/*.caddy

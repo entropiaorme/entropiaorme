@@ -21,7 +21,7 @@ The rest of this README is for developers building from source. Windows-only for
 - Windows Terminal (`wt.exe`): used by the launcher
 - [`just`](https://just.systems/) ≥ 1.34: task runner driving `just dev` etc. (Windows: `scoop install just`).
 - [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
-- [`caddy`](https://caddyserver.com/) (optional): reverse proxy that fronts the dev stack on a stable `http://entropiaorme.localhost` hostname so URLs in the browser, DevTools, and screenshots read as a hostname rather than a port number. Start via `just proxy-up`; skip installing Caddy to keep the existing port-based `just dev` flow. (Windows: `winget install CaddyServer.Caddy`.)
+- [`caddy`](https://caddyserver.com/) (optional): reverse proxy that fronts the dev stack on a stable `https://entropiaorme.localhost` hostname so URLs in the browser, DevTools, and screenshots read as a hostname rather than a port number. Run `caddy trust` once after install (elevated on Windows, `sudo` on macOS/Linux) to add Caddy's local CA root to the OS trust store; this lets the dev hostnames load without certificate warnings. Start the proxy via `just proxy-up`. Skip installing Caddy to keep the existing port-based `just dev` flow (which stays on plain HTTP straight to Vite). (Windows: `winget install CaddyServer.Caddy`.)
 
 ### Setup
 

@@ -29,10 +29,18 @@ frontend/src-tauri/binaries/
 # is how Vite's env-driven port stays in lockstep with Tauri's loaded URL.
 frontend/src-tauri/tauri.dev.local.json
 
+# Per-checkout local dev runtime state: Caddy routing fragments generated
+# by checkout stand-up (the committed Caddyfile imports
+# `.dev/Caddyfile.worktrees/*.caddy` so each additional checkout's hostname
+# routes alongside the tracked canonical stanza) plus CoreDNS log files
+# captured by `just dns-up`. Never tracked.
+.dev/
+
 # Config & secrets
 .env
 # Local dotenv consumed by `just`'s `set dotenv-load` to drive
-# ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT / ENTROPIAORME_DATA_DIR.
+# ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT /
+# ENTROPIAORME_DATA_DIR / ENTROPIAORME_HOSTNAME.
 # Per-checkout; never tracked.
 .env.local
 # direnv activation file. Sources .env.local on `cd`-in so direct shell

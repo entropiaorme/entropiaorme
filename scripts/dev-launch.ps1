@@ -6,9 +6,47 @@ $frontendDir = Join-Path $repoRoot "frontend"
 $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 
 # Env vars (ENTROPIAORME_BACKEND_PORT / ENTROPIAORME_FRONTEND_PORT /
-# ENTROPIAORME_DATA_DIR) are sourced from .env.local by `just` itself via
-# `set dotenv-load` in the justfile. This script inherits them from its
-# parent (just -> powershell -> Start-Process wt.exe -> cmd /k child).
+# ENTROPIAORME_DATA_DIR / ENTROPIAORME_HOSTNAME) are sourced from
+# .env.local by `just` itself via `set dotenv-load` in the justfile.
+# This script inherits them from its parent (just -> powershell ->
+# Start-Process wt.exe -> cmd /k child).
+
+# Defensive CoreDNS start: the hostname-based devUrl resolves via OS DNS,
+# which means CoreDNS must be running before the Tauri shell's tauri-cli
+# resolves the devUrl during the tab launches below. The lifecycle
+# script is idempotent — already-running is a no-op — so this is safe
+# to invoke unconditionally on every dev launch. Skipped silently when
+# coredns is not on PATH (the CoreDNS install is optional — the
+# port-based devUrl fallback in build-dev-config.mjs keeps `just dev`
+# working without it). The catch covers rare PowerShell-level invocation
+# exceptions; non-zero exit from the lifecycle script surfaces its own
+# message rather than throwing.
+if (Get-Command coredns -ErrorAction SilentlyContinue) {
+    try {
+        & (Join-Path $PSScriptRoot "dns-lifecycle.ps1") -Action up
+    } catch {
+        Write-Warning "dns-lifecycle up threw a PowerShell exception (continuing without DNS layer): $($_.Exception.Message)"
+    }
+}
+
+# Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
+# edits or newly-allocated per-checkout fragments propagate without a
+# restart. No-op when Caddy is reachable on its admin endpoint and the
+# config is unchanged; surfaces caddy's own "admin endpoint unreachable"
+# stderr if Caddy is not running, but does not block dev launch.
+# Skipped silently when caddy is not on PATH (the Caddy install is
+# optional — the port-based devUrl fallback in build-dev-config.mjs
+# keeps `just dev` working without it). The catch covers rare
+# PowerShell-level invocation exceptions (the native-command non-zero
+# exit path does not throw in PS 5.1, so caddy-not-running is handled
+# by caddy's own stderr rather than this catch).
+if (Get-Command caddy -ErrorAction SilentlyContinue) {
+    try {
+        & caddy reload --config (Join-Path $repoRoot "Caddyfile")
+    } catch {
+        Write-Warning "caddy reload threw a PowerShell exception (continuing without reload): $($_.Exception.Message)"
+    }
+}
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     Write-Error "Windows Terminal (wt.exe) is required for dev-launch.ps1."

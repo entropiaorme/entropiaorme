@@ -92,7 +92,7 @@ ALLOWED_API_ORIGINS = {
 # environment). Absent in fresh clones without the substrate, in which
 # case the static origins above cover the canonical case.
 #
-# Defense-in-depth: only accept .localhost values so a mis-set or
+# Defence-in-depth: only accept .localhost values so a mis-set or
 # malicious env var can't silently widen the CORS allowlist to a non-local
 # origin. Matches _read_port's fail-fast posture for invalid env config.
 _per_checkout_hostname = os.environ.get("ENTROPIAORME_HOSTNAME", "").strip()

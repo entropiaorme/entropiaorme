@@ -8,7 +8,7 @@
 # ENTROPIAORME_DATA_DIR, ENTROPIAORME_HOSTNAME. Absence of the file
 # falls through to runtime defaults; absence of ENTROPIAORME_HOSTNAME
 # specifically falls through to the port-based devUrl in
-# build-dev-config.mjs (i.e. Caddy is optional).
+# build-dev-config.mjs (i.e. Caddy and CoreDNS are both optional).
 
 set dotenv-load
 set dotenv-filename := ".env.local"
@@ -54,3 +54,37 @@ proxy-down:
 # or `caddy not running`.
 proxy-status:
     @curl -fsS -o /dev/null http://localhost:2019/config/ && echo "caddy running" || echo "caddy not running"
+
+# Start CoreDNS in the background using the Corefile at the repo root.
+# Binds 127.0.0.1:53 for *.localhost resolution. Idempotent: a second
+# invocation reports `coredns already running` rather than spawning a
+# duplicate. See `Corefile` for the resolved zones.
+[windows]
+dns-up:
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\dns-lifecycle.ps1" -Action up
+
+[unix]
+dns-up:
+    @echo "just dns-up: macOS / Linux DNS launch is not yet implemented; contributions welcome."
+    @exit 1
+
+# Stop the background CoreDNS by process name.
+[windows]
+dns-down:
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\dns-lifecycle.ps1" -Action down
+
+[unix]
+dns-down:
+    @echo "just dns-down: macOS / Linux DNS launch is not yet implemented; contributions welcome."
+    @exit 1
+
+# Cheap liveness check by process presence. Prints `coredns running`
+# or `coredns not running`.
+[windows]
+dns-status:
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\dns-lifecycle.ps1" -Action status
+
+[unix]
+dns-status:
+    @echo "just dns-status: macOS / Linux DNS launch is not yet implemented; contributions welcome."
+    @exit 1

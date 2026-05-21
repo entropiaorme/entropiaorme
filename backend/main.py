@@ -78,7 +78,32 @@ ALLOWED_API_ORIGINS = {
     "http://tauri.localhost",
     f"http://localhost:{FRONTEND_PORT}",
     f"http://127.0.0.1:{FRONTEND_PORT}",
+    # Canonical dev hostname when the optional Caddy reverse-proxy
+    # substrate fronts the frontend over HTTPS. Always allowed because the
+    # entry is harmless when Caddy isn't in play (no request would carry
+    # this Origin) and avoids a second env-var check just to gate it.
+    "https://entropiaorme.localhost",
 }
+
+# Per-checkout HTTPS dev hostname when the optional Caddy substrate is in
+# play and the checkout has been configured for it (the install-once
+# stand-up beat exports ENTROPIAORME_HOSTNAME to .env.local, which the
+# load_dotenv call at module top has already sourced into the process
+# environment). Absent in fresh clones without the substrate, in which
+# case the static origins above cover the canonical case.
+#
+# Defence-in-depth: only accept .localhost values so a mis-set or
+# malicious env var can't silently widen the CORS allowlist to a non-local
+# origin. Matches _read_port's fail-fast posture for invalid env config.
+_per_checkout_hostname = os.environ.get("ENTROPIAORME_HOSTNAME", "").strip()
+if _per_checkout_hostname:
+    if not _per_checkout_hostname.endswith(".localhost"):
+        raise RuntimeError(
+            f"ENTROPIAORME_HOSTNAME must end with '.localhost' "
+            f"(got: {_per_checkout_hostname!r})"
+        )
+    ALLOWED_API_ORIGINS.add(f"https://{_per_checkout_hostname}")
+
 ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 
 from backend.dependencies import Services, set_services

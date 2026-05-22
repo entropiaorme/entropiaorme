@@ -3,6 +3,7 @@
 	import {
 		activateLootItem,
 		deactivateLootItem,
+		getSessionDetail,
 		renameSessionMob,
 		restoreSessionMob,
 	} from '$lib/api';
@@ -68,8 +69,23 @@
 	// appear in both arrays (partial-state cohort), so the source array
 	// has to be tracked alongside the name.
 	let lootConfirmSource = $state<'active' | 'deactivated' | null>(null);
-	let lootBusyName = $state<string | null>(null);
+	// Per-row pending tracking. A single shared-string busy marker would
+	// let a click on a second row overwrite the marker, leaving the first
+	// request's finally to clear the busy state while the second is still
+	// in flight. The Set allows concurrent different-row mutations while
+	// blocking same-row re-entry.
+	let pendingLootNames = $state(new Set<string>());
 	let lootError = $state<string | null>(null);
+
+	function markLootPending(name: string) {
+		pendingLootNames = new Set(pendingLootNames).add(name);
+	}
+
+	function clearLootPending(name: string) {
+		const next = new Set(pendingLootNames);
+		next.delete(name);
+		pendingLootNames = next;
+	}
 
 	function openLootConfirm(itemName: string, source: 'active' | 'deactivated') {
 		lootError = null;
@@ -83,12 +99,9 @@
 	}
 
 	async function onLootDeactivate(row: LootItem) {
-		// Re-entry guard: a double-click on the confirm Yes button can
-		// dispatch the second call before the first resolves, racing the
-		// optimistic local move and double-applying the backend flip.
-		if (lootBusyName === row.name) return;
+		if (pendingLootNames.has(row.name)) return;
 		lootError = null;
-		lootBusyName = row.name;
+		markLootPending(row.name);
 		try {
 			const resp = await deactivateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'active->deactivated');
@@ -96,15 +109,15 @@
 		} catch (e) {
 			lootError = errorMessage(e, 'Failed to deactivate loot.');
 		} finally {
-			lootBusyName = null;
+			clearLootPending(row.name);
 			cancelLootConfirm();
 		}
 	}
 
 	async function onLootActivate(row: LootItem) {
-		if (lootBusyName === row.name) return;
+		if (pendingLootNames.has(row.name)) return;
 		lootError = null;
-		lootBusyName = row.name;
+		markLootPending(row.name);
 		try {
 			const resp = await activateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'deactivated->active');
@@ -112,7 +125,7 @@
 		} catch (e) {
 			lootError = errorMessage(e, 'Failed to activate loot.');
 		} finally {
-			lootBusyName = null;
+			clearLootPending(row.name);
 			cancelLootConfirm();
 		}
 	}
@@ -202,7 +215,7 @@
 		mobError = null;
 		try {
 			await renameSessionMob(detail.sessionId, from, to);
-			applyMobRename(from, to);
+			await refetchSessionDetail();
 			cancelMobEdit();
 		} catch (e) {
 			mobError = errorMessage(e, isTagMode ? 'Retag failed.' : 'Rename failed.');
@@ -217,8 +230,8 @@
 		mobBusy = true;
 		mobError = null;
 		try {
-			const resp = await restoreSessionMob(detail.sessionId, current);
-			applyMobRestore(current, resp.mobName);
+			await restoreSessionMob(detail.sessionId, current);
+			await refetchSessionDetail();
 			cancelMobEdit();
 		} catch (e) {
 			mobError = errorMessage(e, 'Restore failed.');
@@ -227,71 +240,18 @@
 		}
 	}
 
-	function applyMobRename(from: string, to: string) {
-		// Local merge of the rename's effect on mobBreakdown. If `to`
-		// already exists as a row (the rename merges two cohorts), fold
-		// the counts together; otherwise rewrite the row's currentName
-		// in place. `originalName` follows the COALESCE-on-first-rename
-		// rule from the backend (first rename captures the genuine
-		// original; subsequent renames preserve it).
-		const fromRow = detail.mobBreakdown.find((r) => r.currentName === from);
-		if (!fromRow) return;
-		const existingTo = detail.mobBreakdown.find((r) => r.currentName === to);
-		const preservedOriginal = fromRow.originalName ?? from;
-		// Round-trip A->B->A landing back at the original: clear the
-		// preservation column so no "originally X" indicator appears.
-		const isRoundTripClear = preservedOriginal === to;
-		const newOriginal = isRoundTripClear ? null : preservedOriginal;
-		if (existingTo) {
-			detail.mobBreakdown = detail.mobBreakdown
-				.map((r) => {
-					if (r.currentName === to) {
-						return {
-							...r,
-							// Merged cohort: preservation column on the merge
-							// destination is ambiguous (multiple distinct
-							// originals possible). Backend lands the row at
-							// its existing originalName; the next refetch is
-							// the source of truth for ambiguity surfacing.
-							killCount: r.killCount + fromRow.killCount,
-						};
-					}
-					return r;
-				})
-				.filter((r) => r.currentName !== from);
-		} else {
-			detail.mobBreakdown = detail.mobBreakdown.map((r) =>
-				r.currentName === from
-					? { ...r, currentName: to, originalName: newOriginal }
-					: r,
-			);
-		}
-		// Rewrite kills.mob_name on every loot-entry-killing kill is not
-		// reflected client-side; the next session refetch reconciles. The
-		// loot section keeps rendering against its current data.
-	}
-
-	function applyMobRestore(currentName: string, restoredTo: string) {
-		// Restore reverts the rename: rewrite currentName back to its
-		// originalName and null out the preservation column.
-		const existing = detail.mobBreakdown.find((r) => r.currentName === restoredTo);
-		const restoredRow = detail.mobBreakdown.find((r) => r.currentName === currentName);
-		if (!restoredRow) return;
-		if (existing) {
-			detail.mobBreakdown = detail.mobBreakdown
-				.map((r) => {
-					if (r.currentName === restoredTo) {
-						return { ...r, killCount: r.killCount + restoredRow.killCount };
-					}
-					return r;
-				})
-				.filter((r) => r.currentName !== currentName);
-		} else {
-			detail.mobBreakdown = detail.mobBreakdown.map((r) =>
-				r.currentName === currentName
-					? { ...r, currentName: restoredTo, originalName: null }
-					: r,
-			);
+	// Backend groups mobBreakdown by (mob_name, original_mob_name), so a
+	// rename can leave two rows sharing currentName but carrying distinct
+	// originalName (the renamed cohort + the pre-existing cohort at the
+	// destination). Client-side merge-by-currentName loses that
+	// distinction and the restore affordance; refetch is the source of
+	// truth.
+	async function refetchSessionDetail() {
+		try {
+			detail = await getSessionDetail(detail.sessionId);
+		} catch {
+			// Soft-fail: the next expand cycle will reconcile from the
+			// backend regardless. The mutation itself succeeded.
 		}
 	}
 
@@ -396,7 +356,7 @@
 		<div>
 			<h3 class="eyebrow mb-3">{attributionHeading}</h3>
 			<div class="rounded-md border border-border/60 divide-y divide-border/40">
-				{#each mobBreakdown as row (row.currentName)}
+				{#each mobBreakdown as row (`${row.currentName}|${row.originalName ?? ''}`)}
 					{@const isEditing = mobEditMode === 'edit' && mobEditTarget === row.currentName}
 					{@const isRestoring = mobEditMode === 'restore' && mobEditTarget === row.currentName}
 					<div class="px-3 py-2 flex flex-wrap items-center gap-3 text-sm">
@@ -574,7 +534,7 @@
 						<button
 							type="button"
 							class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1 disabled:opacity-50 disabled:cursor-not-allowed"
-							disabled={lootBusyName === row.name}
+							disabled={pendingLootNames.has(row.name)}
 							onclick={() => openLootConfirm(row.name, 'active')}
 							aria-label="Archive all {row.name} entries"
 							title="Archive all {row.name} entries"
@@ -613,7 +573,7 @@
 						<button
 							type="button"
 							class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-							disabled={lootBusyName === row.name}
+							disabled={pendingLootNames.has(row.name)}
 							onclick={() => onLootDeactivate(row)}
 						>
 							Yes
@@ -645,7 +605,7 @@
 							<button
 								type="button"
 								class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1 disabled:opacity-50 disabled:cursor-not-allowed"
-								disabled={lootBusyName === row.name}
+								disabled={pendingLootNames.has(row.name)}
 								onclick={() => openLootConfirm(row.name, 'deactivated')}
 								aria-label="Restore all {row.name} entries"
 								title="Restore all {row.name} entries"
@@ -684,7 +644,7 @@
 							<button
 								type="button"
 								class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-								disabled={lootBusyName === row.name}
+								disabled={pendingLootNames.has(row.name)}
 								onclick={() => onLootActivate(row)}
 							>
 								Yes

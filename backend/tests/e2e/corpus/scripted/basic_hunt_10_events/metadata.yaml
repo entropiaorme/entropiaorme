@@ -1,0 +1,23 @@
+name: basic_hunt_10_events
+flavour: scripted
+description: >
+  A minimal 10-event hunt exercising combat accumulation, loot grouping
+  by tick boundary, mid-session skill gain, and multi-kill session
+  bookkeeping. The first scenario the harness lands; its job is to
+  prove the real ChatlogWatcher tail loop drives the same end-state
+  the existing direct-call tests assert against.
+surfaces:
+  - tracking-kill-creation
+  - tracking-tick-boundary
+  - tracking-loot-grouping
+events: 10
+expected_kills: 3
+expected_total_loot_ped: 8.62
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Synthetic — authored by hand for R1. No OCR fixtures, no keystrokes,
+  no real-time replay. Timestamps are wall-clock-zero; the watcher
+  reads each line as the test writes it.

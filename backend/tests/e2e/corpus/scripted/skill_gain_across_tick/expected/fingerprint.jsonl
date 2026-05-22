@@ -1,0 +1,11 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 0.05, "skill_name": "Bioregenesis", "timestamp": "<TS_1>", "type": "skill_gain"}, "topic": "skill_gain"}
+{"payload": {"amount": 14.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 18.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 200, "value_ped": 2.0}], "timestamp": "<TS_3>", "total_ped": 2.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"amount": 0.02, "skill_name": "Combat Sense", "timestamp": "<TS_3>", "type": "skill_gain"}, "topic": "skill_gain"}
+{"payload": {"amount": 0.01, "skill_name": "Anatomy", "timestamp": "<TS_4>", "type": "skill_gain"}, "topic": "skill_gain"}
+{"payload": {"amount": 20.0, "timestamp": "<TS_5>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 11.0, "timestamp": "<TS_6>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 330, "value_ped": 3.3}], "timestamp": "<TS_7>", "total_ped": 3.3, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

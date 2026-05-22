@@ -1,0 +1,2 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

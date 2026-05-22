@@ -1,0 +1,70 @@
+{
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_2>",
+      "quantity": 1500,
+      "value_ped": 15.0
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 75.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 2,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 75.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_global": 1,
+      "is_hof": 0,
+      "loot_total_ped": 15.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 2,
+      "timestamp": "<TS_7>"
+    }
+  ],
+  "ledger_entries": [
+    {
+      "amount": 0.15,
+      "date": "<TS_8>",
+      "description": "Shrapnel Conversion",
+      "id": "<UUID_3>",
+      "tag": "convert",
+      "type": "markup"
+    }
+  ],
+  "notable_events": [
+    {
+      "event_type": "global_kill",
+      "kill_id": "<UUID_2>",
+      "mob_or_item": "Argonaut Stalker",
+      "session_id": "<UUID_1>",
+      "timestamp": "<TS_9>",
+      "value_ped": 130.0
+    }
+  ],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_5>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_6>"
+    }
+  ]
+}

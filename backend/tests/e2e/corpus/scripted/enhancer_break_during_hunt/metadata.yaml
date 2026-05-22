@@ -1,0 +1,21 @@
+name: enhancer_break_during_hunt
+flavour: scripted
+description: >
+  A weapon enhancer breaks mid-combat during a single-mob hunt.
+  Pins the enhancer-break event path: the chatlog ENHANCER_BREAK
+  line surfaces as a tracked event, the shrapnel-return is
+  accounted for, and the surrounding kill closes normally on
+  the subsequent loot tick.
+surfaces:
+  - chatlog-enhancer-break
+  - tracking-enhancer-cost
+  - tracking-kill-creation
+events: 6
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. The enhancer-break line lands between two combat
+  shots; the kill closes on a Shrapnel loot tick.

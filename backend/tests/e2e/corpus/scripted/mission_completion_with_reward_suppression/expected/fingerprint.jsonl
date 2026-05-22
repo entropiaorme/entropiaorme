@@ -1,0 +1,7 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"mission_name": "Codex Argonaut Stage 1", "timestamp": "<TS_1>", "type": "mission_received"}, "topic": "mission_received"}
+{"payload": {"amount": 16.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 19.0, "timestamp": "<TS_3>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 250, "value_ped": 2.5}], "timestamp": "<TS_4>", "total_ped": 2.5, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"amount": 0.05, "skill_name": "Bioregenesis", "timestamp": "<TS_5>", "type": "skill_gain"}, "topic": "skill_gain"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

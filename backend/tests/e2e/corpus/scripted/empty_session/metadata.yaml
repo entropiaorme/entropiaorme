@@ -1,0 +1,24 @@
+name: empty_session
+flavour: scripted
+description: >
+  Boots the tracker, starts a session, drains zero chatlog events,
+  stops the session. Asserts the no-events path produces a session
+  row with empty kill/loot accumulators and the session-stop ledger
+  entry still emits cleanly. Pins the smallest-possible session
+  shape so subsequent scenarios always have a baseline diff to
+  compare against.
+surfaces:
+  - tracking-session-lifecycle
+  - tracking-empty-session
+events: 0
+expected_kills: 0
+expected_total_loot_ped: 0.0
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. No OCR fixtures, no keystrokes, no
+  real-time replay. The DSL produces an empty chat_replay.log;
+  the watcher tail loop reads no lines and the tracker observes
+  only the session_started / session_stopped lifecycle pair.

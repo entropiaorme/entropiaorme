@@ -1,4 +1,4 @@
-"""E2E replay harness — test-mode infrastructure.
+"""E2E replay harness test-mode infrastructure.
 
 This package holds the apparatus the backend leans on at test time:
 
@@ -14,6 +14,6 @@ This package holds the apparatus the backend leans on at test time:
   watcher-tailed file and draining the watcher's tick buffer.
 
 The harness is built round-by-round per the lane working doc:
-R1 lands the scaffolding plus the chatlog-redirection scenario; later
-rounds wire each seam into production callers.
+the first round lands the scaffolding plus the chatlog-redirection
+scenario; later rounds wire each seam into production callers.
 """

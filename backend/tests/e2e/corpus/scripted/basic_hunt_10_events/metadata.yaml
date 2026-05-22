@@ -18,6 +18,6 @@ character_context:
   location: ""
   mob_species: ""
 notes: >
-  Synthetic — authored by hand for R1. No OCR fixtures, no keystrokes,
-  no real-time replay. Timestamps are wall-clock-zero; the watcher
-  reads each line as the test writes it.
+  Synthetic: authored by hand. No OCR fixtures, no keystrokes, no
+  real-time replay. Timestamps are wall-clock-zero; the watcher reads
+  each line as the test writes it.

@@ -1,4 +1,4 @@
-"""R1 acceptance test — basic 10-event hunt scenario.
+"""Acceptance test for the basic 10-event hunt scenario.
 
 The scenario lives at
 ``backend/tests/e2e/corpus/scripted/basic_hunt_10_events/`` and
@@ -6,8 +6,8 @@ contains ten chat.log lines spanning three loot ticks. This test
 boots the real ``ChatlogWatcher`` against a temp file, streams the
 scenario's lines through it, and asserts the resulting ``HuntTracker``
 state matches the scenario's documented expectation. The path under
-test — file write -> watcher tail loop -> parser -> tick buffer -> bus
--> tracker -> SQLite — is the same one the live game drives in
+test (file write -> watcher tail loop -> parser -> tick buffer -> bus
+-> tracker -> SQLite) is the same one the live game drives in
 production; this is the first test in the suite to exercise it
 end-to-end rather than via direct ``_process_line(...)`` calls.
 """
@@ -25,7 +25,9 @@ def test_basic_hunt_produces_three_kills_via_real_tail_loop(
     e2e_pipeline,
     corpus_root: Path,
 ) -> None:
-    bus, tracker, watcher, chatlog = e2e_pipeline
+    """Stream the 10-event scenario through the real watcher and
+    assert the tracker captured three kills with the documented stats."""
+    _bus, tracker, _watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "basic_hunt_10_events"
 

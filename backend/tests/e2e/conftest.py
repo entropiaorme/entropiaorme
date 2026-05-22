@@ -7,10 +7,10 @@ Tests stream a scenario's lines into the temp file via
 loop reads them and publishes events through the bus as it would in
 production.
 
-The fixture intentionally uses no test-mode short-circuits — the watcher
-runs its full daemon thread, the bus delivers synchronously, the
-tracker writes to SQLite. The harness validates production behaviour,
-not a stubbed pipeline.
+The fixture intentionally uses no test-mode short-circuits: the
+watcher runs its full daemon thread, the bus delivers synchronously,
+the tracker writes to SQLite. The harness validates production
+behaviour, not a stubbed pipeline.
 """
 
 from __future__ import annotations

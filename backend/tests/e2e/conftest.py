@@ -11,18 +11,25 @@ The fixture intentionally uses no test-mode short-circuits: the
 watcher runs its full daemon thread, the bus delivers synchronously,
 the tracker writes to SQLite. The harness validates production
 behaviour, not a stubbed pipeline.
+
+The golden-set fixture pairs the recorded event stream and DB
+snapshot with a scenario's ``expected/`` directory, switching between
+assert-against-golden mode (default) and write-new-golden mode
+(``--update-fingerprints``) per the pytest CLI option registered in
+``backend/tests/conftest.py``.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pytest
 
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.golden import GoldenSet
 from backend.tracking.tracker import HuntTracker
 
 
@@ -75,3 +82,25 @@ def e2e_pipeline(
         yield bus, tracker, watcher, temp_chatlog
     finally:
         watcher.stop()
+
+
+@pytest.fixture
+def update_fingerprints(request) -> bool:
+    """True when the run was invoked with ``--update-fingerprints``."""
+    return bool(request.config.getoption("--update-fingerprints"))
+
+
+@pytest.fixture
+def golden_set(update_fingerprints: bool) -> Callable[[Path], GoldenSet]:
+    """Factory: build a ``GoldenSet`` for the named scenario directory.
+
+    The factory shape keeps per-test wiring concise (one call yields
+    both the recorder to install on the bus and the assert helper for
+    end-of-test verification) while sharing the update-mode flag
+    across every scenario in the run.
+    """
+
+    def _make(scenario_dir: Path) -> GoldenSet:
+        return GoldenSet(scenario_dir, update=update_fingerprints)
+
+    return _make

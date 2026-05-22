@@ -10,6 +10,13 @@ test (file write -> watcher tail loop -> parser -> tick buffer -> bus
 -> tracker -> SQLite) is the same one the live game drives in
 production; this is the first test in the suite to exercise it
 end-to-end rather than via direct ``_process_line(...)`` calls.
+
+R2 layers golden-file assertions on top of the explicit kill-by-kill
+checks: the explicit assertions stay as a clarity backstop and a
+quick orientation surface for a developer reading the test, while the
+goldens add full-coverage regression catching across fields the
+explicit assertions do not enumerate (event ordering, ledger entries,
+tool-stat rows, schema-side rounding behaviour).
 """
 
 from __future__ import annotations
@@ -24,12 +31,23 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 def test_basic_hunt_produces_three_kills_via_real_tail_loop(
     e2e_pipeline,
     corpus_root: Path,
+    golden_set,
+    in_memory_db,
 ) -> None:
     """Stream the 10-event scenario through the real watcher and
-    assert the tracker captured three kills with the documented stats."""
-    _bus, tracker, _watcher, chatlog = e2e_pipeline
+    assert the tracker captured three kills with the documented stats.
+
+    The fingerprint recorder is installed before ``start_session`` so
+    the ``session_started`` event is captured alongside every chatlog
+    event the scenario produces; the DB snapshot is taken after
+    ``stop_session`` so the ledger-entry rows created at session-stop
+    time appear in the golden too.
+    """
+    bus, tracker, _watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "basic_hunt_10_events"
+    goldens = golden_set(scenario)
+    goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
@@ -68,3 +86,11 @@ def test_basic_hunt_produces_three_kills_via_real_tail_loop(
     assert sum(k.shots_fired for k in result.kills) == 5
     assert sum(k.damage_dealt for k in result.kills) == pytest.approx(100.5)
     assert sum(k.loot_total_ped for k in result.kills) == pytest.approx(8.62)
+
+    # Golden-file assertions: the explicit checks above pin the kill
+    # shape readers care about at a glance; the goldens pin the rest
+    # of the externally-observable surface (every published event in
+    # order, every persisted row, every ledger entry generated at
+    # session-stop). Under ``pytest --update-fingerprints`` this call
+    # writes new goldens instead of asserting against the old ones.
+    goldens.assert_matches(in_memory_db)

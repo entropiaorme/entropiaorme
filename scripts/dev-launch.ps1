@@ -14,9 +14,9 @@ $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 # Defensive CoreDNS start: the hostname-based devUrl resolves via OS DNS,
 # which means CoreDNS must be running before the Tauri shell's tauri-cli
 # resolves the devUrl during the tab launches below. The lifecycle
-# script is idempotent — already-running is a no-op — so this is safe
+# script is idempotent (already-running is a no-op), so this is safe
 # to invoke unconditionally on every dev launch. Skipped silently when
-# coredns is not on PATH (the CoreDNS install is optional — the
+# coredns is not on PATH (the CoreDNS install is optional; the
 # port-based devUrl fallback in build-dev-config.mjs keeps `just dev`
 # working without it). The catch covers rare PowerShell-level invocation
 # exceptions; non-zero exit from the lifecycle script surfaces its own
@@ -33,14 +33,14 @@ if (Get-Command coredns -ErrorAction SilentlyContinue) {
 # edits or newly-allocated per-checkout fragments propagate without a
 # restart. Routes through caddy-lifecycle.ps1 so the main worktree's
 # Caddyfile (rather than this launching checkout's local copy) is the
-# reload target — preserves multi-checkout coexistence, since the
+# reload target; that preserves multi-checkout coexistence, since the
 # main worktree's `.dev/Caddyfile.worktrees/` is the canonical home for
 # every active checkout's per-checkout routing fragment. No-op when
 # Caddy is reachable on its admin endpoint and the config is unchanged;
 # the lifecycle script surfaces caddy's own "admin endpoint
 # unreachable" stderr if Caddy is not running, but does not block dev
 # launch. Skipped silently when caddy is not on PATH (the Caddy install
-# is optional — the port-based devUrl fallback in build-dev-config.mjs
+# is optional; the port-based devUrl fallback in build-dev-config.mjs
 # keeps `just dev` working without it).
 if (Get-Command caddy -ErrorAction SilentlyContinue) {
     try {

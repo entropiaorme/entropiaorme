@@ -34,7 +34,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 # first entry equals $repoRoot, so the resolution is idempotent. Falls
 # back to $repoRoot on any failure (git missing, not a git repo,
 # malformed output) so the script stays functional in degraded
-# environments — the fallback just loses the cross-worktree-coexistence
+# environments; the fallback just loses the cross-worktree-coexistence
 # property for that invocation.
 function Resolve-MainWorktree {
     try {
@@ -83,7 +83,7 @@ switch ($Action) {
     'reload' {
         # `caddy reload` requires a running Caddy; if the admin endpoint
         # is unreachable, Caddy surfaces its own "admin endpoint
-        # unreachable" stderr. We don't block on that — the dev launch
+        # unreachable" stderr. We don't block on that; the dev launch
         # flow tolerates Caddy not running (the port-based devUrl
         # fallback keeps `just dev` working).
         & caddy reload --config $caddyfile

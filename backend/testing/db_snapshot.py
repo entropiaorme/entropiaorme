@@ -156,6 +156,10 @@ def write(snapshot: dict[str, Any], path: Path) -> None:
 
 
 def _fetch_rows(db: sqlite3.Connection, spec: TableSpec) -> list[dict[str, Any]]:
+    """Execute ``spec.query`` with its ``order_by`` appended and return
+    each row as a ``{column: value}`` dict so the caller can hand the
+    rows straight to the ``Normalizer`` without re-mapping positional
+    columns."""
     query = spec.query
     if spec.order_by:
         query += " ORDER BY " + ", ".join(spec.order_by)
@@ -165,6 +169,10 @@ def _fetch_rows(db: sqlite3.Connection, spec: TableSpec) -> list[dict[str, Any]]
 
 
 def _table_exists(db: sqlite3.Connection, name: str) -> bool:
+    """Return whether ``name`` exists as a table in the connection's
+    schema. Lets the snapshot stay structurally consistent when a
+    scenario's in-memory DB has not initialised every table the
+    catalogue knows about."""
     row = db.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         (name,),

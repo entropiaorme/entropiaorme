@@ -11,6 +11,15 @@ from __future__ import annotations
 
 
 def pytest_addoption(parser):
+    """Register backend-wide pytest CLI options.
+
+    Currently exposes ``--update-fingerprints`` so the e2e harness can
+    rewrite scenario goldens. Hoisting the registration to this
+    backend-root conftest (rather than the e2e subdir conftest) keeps
+    the flag recognised regardless of which subset of tests is being
+    collected, so ``pytest backend/tests/test_fingerprint.py
+    --update-fingerprints`` does not error on argument parsing.
+    """
     parser.addoption(
         "--update-fingerprints",
         action="store_true",

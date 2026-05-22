@@ -186,6 +186,27 @@ def test_recorder_serialise_empty_stream_returns_empty_string() -> None:
     assert recorder.serialize() == ""
 
 
+def test_recorder_install_on_second_bus_unwraps_first() -> None:
+    """Re-installing on a different bus must unwrap the prior bus.
+
+    Otherwise the prior bus would keep dispatching through the
+    recorder's shadow function, silently mixing one scenario's
+    events into the next test's recorded stream.
+    """
+    bus_a = EventBus()
+    bus_b = EventBus()
+    recorder = FingerprintRecorder(Normalizer())
+
+    recorder.install(bus_a)
+    recorder.install(bus_b)
+
+    bus_a.publish("from_a", {"x": 1})
+    bus_b.publish("from_b", {"x": 2})
+
+    # Only the bus the recorder currently wraps should feed it.
+    assert recorder.events == [("from_b", {"x": 2})]
+
+
 def test_recorder_uninstall_restores_original_publish() -> None:
     """After uninstall, publishing on the bus stops feeding the recorder.
 

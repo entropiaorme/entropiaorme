@@ -44,6 +44,9 @@ class GoldenAssertionFailure(AssertionError):
         fingerprint_diff: str | None,
         snapshot_diff: str | None,
     ):
+        """Compose the AssertionError message from the structured
+        per-surface diffs while keeping the diffs accessible on the
+        instance for downstream tooling that wants the raw data."""
         self.scenario_name = scenario_name
         self.fingerprint_diff = fingerprint_diff
         self.snapshot_diff = snapshot_diff
@@ -75,6 +78,9 @@ class GoldenSet:
     """
 
     def __init__(self, scenario_dir: Path, *, update: bool = False) -> None:
+        """Set up the recorder + normaliser pair pinned to
+        ``scenario_dir/expected/``. ``update=True`` flips this set
+        into write mode for the duration of the test."""
         self.scenario_dir = scenario_dir
         self.expected_dir = scenario_dir / "expected"
         self.fingerprint_path = self.expected_dir / "fingerprint.jsonl"

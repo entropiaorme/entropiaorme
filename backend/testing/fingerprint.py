@@ -65,6 +65,18 @@ class Normalizer:
         self._timestamps.clear()
 
     def _walk(self, value: Any) -> Any:
+        """Recursive type-dispatched canonicalisation.
+
+        The branch order matters: bools must precede ints (a Python
+        bool is an ``int`` subclass), and strings are pattern-matched
+        against UUID then ISO timestamp before falling through as a
+        plain string. Float-classification uses the epoch heuristic to
+        catch source-timestamp columns the catalogue stores as raw
+        epoch seconds. Unknown types degrade to ``repr`` so the
+        fingerprint stays serialisable; the repr output is a visible
+        marker that the harness should grow explicit handling for the
+        new shape rather than silently flattening it.
+        """
         if value is None or isinstance(value, bool):
             return value
         if isinstance(value, datetime):
@@ -85,17 +97,22 @@ class Normalizer:
             return {key: self._walk(value[key]) for key in sorted(value.keys())}
         if isinstance(value, (list, tuple)):
             return [self._walk(item) for item in value]
-        # Unknown types fall back to repr so the fingerprint stays
-        # stringifiable; surfaces a clear marker on any drift toward an
-        # unhandled value shape rather than silently losing it.
         return repr(value)
 
     def _symbol_for_uuid(self, value: str) -> str:
+        """Return (assigning on first sight) the ``<UUID_N>`` symbol
+        for ``value``. Encounter order across the lifetime of this
+        ``Normalizer`` controls the index."""
         if value not in self._uuids:
             self._uuids[value] = f"<UUID_{len(self._uuids) + 1}>"
         return self._uuids[value]
 
     def _symbol_for_timestamp(self, value: Any) -> str:
+        """Return (assigning on first sight) the ``<TS_N>`` symbol
+        for ``value``. Distinct raw values map to distinct symbols
+        even when the underlying instants are semantically the same
+        across encodings (epoch float vs ISO string); callers are
+        expected to feed the canonical-encoded form."""
         if value not in self._timestamps:
             self._timestamps[value] = f"<TS_{len(self._timestamps) + 1}>"
         return self._timestamps[value]
@@ -120,9 +137,21 @@ class FingerprintRecorder:
 
     def install(self, bus: EventBus) -> None:
         """Attach the recorder to ``bus`` by shadowing its publish
-        method. Idempotent: re-installing on the same bus is a no-op."""
+        method.
+
+        Idempotent on the same bus (re-installing is a no-op). If
+        ``install`` is called with a different bus while a prior bus
+        is still wrapped, the prior bus is unwrapped first so it
+        stops dispatching through the recorder's shadow function:
+        otherwise the first bus would keep feeding the recorder
+        through a stale binding while the new bus starts feeding it
+        through a fresh one, mixing two scenarios' events into one
+        recorded stream.
+        """
         if self._bus is bus and self._original_publish is not None:
             return
+        if self._bus is not None:
+            self.uninstall()
         self._bus = bus
         self._original_publish = bus.publish
 

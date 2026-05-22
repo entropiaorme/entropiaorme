@@ -68,6 +68,13 @@ def _length_mismatch_message(
     actual: list[str],
     context: int,
 ) -> str:
+    """Format the diff message for two streams of different length.
+
+    Walks whichever side has surplus events and renders up to
+    ``context`` of them inline so the reader sees a sample of the
+    extra/missing content; remaining events are summarised as a
+    count.
+    """
     lines = [
         f"Event stream length mismatch: expected {len(expected)} events, "
         f"got {len(actual)}."
@@ -97,6 +104,15 @@ def _event_divergence_message(
     actual: list[str],
     context: int,
 ) -> str:
+    """Format the diff message for two streams that differ at event
+    ``idx``.
+
+    Surfaces the topic, then walks the two payloads to find the first
+    field-level divergence (rendered with ``field path: expected X,
+    got Y`` syntax). If only the topic differs, that fact is reported
+    directly. ``context`` prior events are echoed beneath for
+    orientation when ``idx > 0``.
+    """
     exp_obj = json.loads(expected[idx])
     act_obj = json.loads(actual[idx])
     lines = [
@@ -137,6 +153,17 @@ def _first_divergence(
     actual: Any,
     path: list[str],
 ) -> tuple[str, Any, Any] | None:
+    """Depth-first walk returning the first divergent ``(path,
+    expected, actual)`` triple, or ``None`` when the two structures
+    are equal.
+
+    Dict-key sets are compared (missing-on-one-side is reported as
+    ``value vs None`` at the key's path); shared keys recurse. List
+    length mismatch returns a ``[len]`` segment with the two lengths
+    so the surface message reads as ``kills[len]: 3 vs 2``. Mixed
+    types (e.g. dict vs list at the same path) report the two values
+    directly.
+    """
     if type(expected) is not type(actual):
         return _format_path(path), expected, actual
     if isinstance(expected, dict):

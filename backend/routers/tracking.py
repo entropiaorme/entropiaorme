@@ -751,15 +751,458 @@ def get_session(session_id: str):
     return get_session_impl(get_services().app_db.conn, session_id)
 
 
+class RenameMobRequest(BaseModel):
+    fromMobName: str
+    toMobName: str
+
+
+class RestoreMobRequest(BaseModel):
+    currentMobName: str
+
+
+# ── Session metadata edit: rename mob / restore mob ──────────────────
+#
+# Mass-rename overlay: editing a session's attributed mob name rewrites
+# `kills.mob_name` for all kills in that session whose current mob_name
+# matches the `from` value. The pre-edit value is preserved into
+# `kills.original_mob_name` via COALESCE on the first rename, so the
+# inverse restore endpoint can revert even after multiple consecutive
+# renames (COALESCE keeps the *first* original, so undo lands at the
+# genuinely-original capture). Tag-mode sessions persist the tag into
+# `kills.mob_name` at write time, so the same endpoint covers tag edits
+# transparently (frontend labels the affordance based on session mode).
+
+def _validate_session_exists(conn, session_id: str) -> None:
+    """Validate that the session exists and is not still active.
+
+    Raises 404 if missing. Raises 409 if the session is still active:
+    rename and restore are post-hoc operations, and editing kills.mob_name
+    on a live session creates drift between SQLite and the tracker's
+    in-memory state (the tracker continues writing further kills under
+    the pre-edit name + can stamp the session's stop-flow with stale
+    aggregates). The frontend should only expose the edit affordances
+    after the session has ended.
+    """
+    row = conn.execute(
+        "SELECT id, is_active FROM tracking_sessions WHERE id = ?", (session_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if bool(row[1]):
+        raise HTTPException(
+            status_code=409,
+            detail="Session mob edits are only available after the session has ended",
+        )
+
+
+def _build_mob_edit_response(conn, session_id: str, mob_name: str):
+    """Build the response payload for rename-mob / restore-mob.
+
+    Queries the post-mutation per-mob kill count for the resulting
+    `mob_name` so the frontend can re-render the session row + the
+    per-mob breakdown without a full session refetch. Queries (rather
+    than reusing the affected-rows count) because the destination
+    `mob_name` may have had pre-existing kills in the session: a
+    rename A->C when C already has kills lands the destination at
+    `affected + pre-existing`, not just `affected`.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
+        (session_id, mob_name),
+    ).fetchone()
+    return {
+        "sessionId": session_id,
+        "mobName": mob_name,
+        "killCount": int(row[0] or 0),
+    }
+
+
+@router.post("/session/{session_id}/rename-mob")
+def rename_session_mob(session_id: str, body: RenameMobRequest):
+    """Rewrite kills.mob_name for matching kills in this session.
+
+    Atomically: preserves the pre-edit `mob_name` into
+    `original_mob_name` via COALESCE (first-original semantics), rewrites
+    `mob_name` for every matching kill in the session, invalidates the
+    `session_summaries` cache row. 404 on missing session. 409 if the
+    `fromMobName` value has no matching kills in the session, or if
+    `fromMobName == toMobName` (the no-op rename would silently succeed
+    otherwise).
+    """
+    conn = get_services().app_db.conn
+    return _rename_session_mob_impl(conn, session_id, body.fromMobName, body.toMobName)
+
+
+def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
+    """Backend-side rename operation; the connection-injectable form of
+    `rename_session_mob` for direct testing against an arbitrary SQLite
+    connection without spinning up the full services container.
+
+    Race-safe: the first UPDATE opens an implicit transaction that
+    acquires SQLite's writer lock. The 'matching' count derives from
+    that UPDATE's rowcount inside the same transaction, so there's no
+    SELECT-then-write window where a concurrent request could leave the
+    precondition stale. If the first UPDATE touches zero rows the whole
+    transaction rolls back, eliminating side effects from a failed
+    precondition.
+
+    Round-trip cleanup: when `to_mob` equals an affected row's preserved
+    `original_mob_name` (e.g. a rename sequence A->B->A landing back at
+    the genuinely-original capture), the preservation column is cleared
+    in the same statement via a CASE expression. Without that, the row
+    would carry mob_name='A', original_mob_name='A', which would
+    surface a bogus 'originally A' indicator in the per-mob breakdown.
+    """
+    _validate_session_exists(conn, session_id)
+    from_mob = from_mob.strip()
+    to_mob = to_mob.strip()
+    if not from_mob or not to_mob:
+        raise HTTPException(
+            status_code=400,
+            detail="Mob names cannot be blank",
+        )
+    if from_mob == to_mob:
+        raise HTTPException(
+            status_code=409,
+            detail="rename target matches the current value (no-op)",
+        )
+
+    try:
+        preserve_cursor = conn.execute(
+            "UPDATE kills "
+            "SET original_mob_name = COALESCE(original_mob_name, mob_name) "
+            "WHERE session_id = ? AND mob_name = ?",
+            (session_id, from_mob),
+        )
+        if preserve_cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"No kills in this session match mob_name='{from_mob}'",
+            )
+        conn.execute(
+            "UPDATE kills "
+            "SET mob_name = ?, "
+            "    original_mob_name = CASE "
+            "        WHEN original_mob_name = ? THEN NULL "
+            "        ELSE original_mob_name "
+            "    END "
+            "WHERE session_id = ? AND mob_name = ?",
+            (to_mob, to_mob, session_id, from_mob),
+        )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_mob_edit_response(conn, session_id, to_mob)
+
+
+@router.post("/session/{session_id}/restore-mob")
+def restore_session_mob(session_id: str, body: RestoreMobRequest):
+    """Revert kills in this session whose current mob_name matches the
+    request and carry a preserved `original_mob_name`.
+
+    Inverse of rename-mob. Atomically: rewrites `mob_name` back to
+    `original_mob_name`, clears `original_mob_name`, invalidates the
+    `session_summaries` cache. 404 on missing session. 409 if no kills
+    in the session match the request (either nothing has been renamed
+    to that current name, or no preserved original exists to restore).
+    """
+    conn = get_services().app_db.conn
+    return _restore_session_mob_impl(conn, session_id, body.currentMobName)
+
+
+def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
+    """Backend-side restore operation; the connection-injectable form of
+    `restore_session_mob` for direct testing against an arbitrary SQLite
+    connection without spinning up the full services container.
+
+    Race-safe: uses SQL RETURNING to capture each restored row's new
+    `mob_name` (the previously-preserved original) atomically with the
+    UPDATE, so the eligibility checks (any rows matched, only one
+    distinct original) derive from the UPDATE's own output inside the
+    implicit transaction. No SELECT-then-write window exists where a
+    concurrent request could shift the precondition under us. Both
+    failure paths roll back the UPDATE before raising.
+    """
+    _validate_session_exists(conn, session_id)
+    current_mob = current_mob.strip()
+    if not current_mob:
+        raise HTTPException(
+            status_code=400,
+            detail="Mob name cannot be blank",
+        )
+
+    try:
+        cursor = conn.execute(
+            "UPDATE kills "
+            "SET mob_name = original_mob_name, original_mob_name = NULL "
+            "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL "
+            "RETURNING mob_name",
+            (session_id, current_mob),
+        )
+        restored_rows = cursor.fetchall()
+
+        if not restored_rows:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No restorable kills in this session for mob_name='{current_mob}' "
+                    "(either no rename has happened or the preservation column is empty)"
+                ),
+            )
+
+        distinct_originals = {row[0] for row in restored_rows}
+        if len(distinct_originals) > 1:
+            # Two or more distinct prior names merged into the same
+            # current mob_name (e.g. rename A->C, then rename B->C).
+            # Restoring would need to split the cohort back into
+            # multiple destinations, which the single-result response
+            # shape cannot express unambiguously. Refuse with an
+            # informative 409; the API does not offer a target-by-
+            # original-name endpoint, so this case is for the frontend
+            # to surface to the user.
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Ambiguous restore for mob_name='{current_mob}': "
+                    f"{len(distinct_originals)} distinct prior names merged into it."
+                ),
+            )
+
+        restored_to = next(iter(distinct_originals))
+
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_mob_edit_response(conn, session_id, restored_to)
+
+
+# ── Loot-item deactivate / activate (post-hoc sessions-tab editing) ──
+#
+# Hidden-flag overlay: each kill_loot_items row carries a deactivated_at
+# flag that toggles between NULL (active) and unixepoch('now')
+# (deactivated). The denormalised kills.loot_total_ped is mutated in the
+# same transaction so the analytics surface that reads
+# SUM(kills.loot_total_ped) stays untouched by this affordance. The
+# session_summaries cache row is invalidated so the next session-list
+# read recomputes.
+#
+# Wholesale-by-item-name shape: the sessions-tab UI surfaces the
+# aggregate Loot Breakdown (rolled up by item_name) as the user-facing
+# canonical view; the user-level mental model is "remove all Nanocube
+# from this session" rather than "remove this specific Nanocube
+# capture." These endpoints flip every matching row for
+# `(session_id, item_name)` in one atomic transaction so the
+# aggregate-row affordance lands without N round-trips, race windows,
+# or partial-state surprises.
+#
+# Idempotency model: deactivate flips rows currently in the active
+# state to deactivated; activate flips rows currently deactivated back
+# to active. If no rows are in the opposite state for the target
+# (item_name, session_id) the endpoint 409s. 404 distinguishes "session
+# missing" and "item_name not present in this session at all" so the
+# frontend can surface them distinctly.
+
+
+def _build_loot_item_edit_response(
+    conn,
+    session_id: str,
+    item_name: str,
+    affected_rows: int,
+    total_value_delta: float,
+):
+    """Build the response payload for bulk loot-item deactivate / activate.
+
+    Returns the affected row count plus the per-session returns total so
+    the frontend can re-render Summary stats without a full session
+    refetch. `total_value_delta` is signed (negative on deactivate,
+    positive on activate) for clarity at the call site.
+    """
+    session_returns = conn.execute(
+        "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0]
+    return {
+        "sessionId": session_id,
+        "itemName": item_name,
+        "affectedRows": affected_rows,
+        "totalValueDelta": round(float(total_value_delta), 4),
+        "sessionTotalReturns": round(float(session_returns or 0.0), 2),
+    }
+
+
+def _bulk_flip_loot_item(
+    conn,
+    session_id: str,
+    item_name: str,
+    to_state: str,
+):
+    """Shared implementation for both bulk endpoints.
+
+    Race-safe: the eligibility check and the state flip happen in a
+    single locked UPDATE with RETURNING, so two concurrent requests
+    cannot both pass the precondition and double-apply the
+    `loot_total_ped` delta. `BEGIN IMMEDIATE` acquires SQLite's writer
+    lock before the UPDATE so the only contention point is the lock
+    itself; the second request waits, then sees the post-flip state and
+    409s cleanly.
+
+    `to_state` is 'deactivated' or 'active'. The UPDATE flips matching
+    rows currently in the opposite state and RETURNS their kill_id +
+    value_ped, which drives per-kill loot_total_ped adjustments inside
+    the same transaction. The 404 / 409 distinction derives from the
+    UPDATE's RETURNING set:
+
+    - RETURNING empty + no row exists for `(session_id, item_name)` at
+      all → 404 (item_name is not in this session).
+    - RETURNING empty + at least one row exists in the target state →
+      409 (all rows are already in the target state, nothing to flip).
+    """
+    _validate_session_exists(conn, session_id)
+    item_name = item_name.strip()
+    if not item_name:
+        raise HTTPException(status_code=400, detail="Item name cannot be blank")
+
+    if to_state == "deactivated":
+        opposite_clause = "l.deactivated_at IS NULL"
+        new_flag_sql = "unixepoch('now')"
+        delta_sign = -1.0
+    elif to_state == "active":
+        opposite_clause = "l.deactivated_at IS NOT NULL"
+        new_flag_sql = "NULL"
+        delta_sign = 1.0
+    else:
+        raise ValueError(f"unsupported to_state: {to_state!r}")
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        flipped = conn.execute(
+            "UPDATE kill_loot_items "
+            f"SET deactivated_at = {new_flag_sql} "
+            "WHERE id IN ("
+            "    SELECT l.id "
+            "    FROM kill_loot_items l "
+            "    JOIN kills k ON k.id = l.kill_id "
+            f"    WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause}"
+            ") "
+            "RETURNING kill_id, value_ped",
+            (session_id, item_name),
+        ).fetchall()
+
+        if not flipped:
+            # Distinguish 404 (item not in session at all) from 409
+            # (already in target state) inside the same locked
+            # transaction so the answer reflects the post-decision
+            # state, not a stale pre-UPDATE read.
+            any_row = conn.execute(
+                "SELECT 1 FROM kill_loot_items l "
+                "JOIN kills k ON k.id = l.kill_id "
+                "WHERE k.session_id = ? AND l.item_name = ? "
+                "LIMIT 1",
+                (session_id, item_name),
+            ).fetchone()
+            conn.rollback()
+            if not any_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No loot named '{item_name}' in this session",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=f"All '{item_name}' rows in this session are already {to_state}",
+            )
+
+        # Aggregate per-kill deltas from RETURNING so each parent's
+        # denormalised loot_total_ped gets one UPDATE rather than N.
+        per_kill_delta: dict = {}
+        total_delta = 0.0
+        for kill_id, value_ped in flipped:
+            v = float(value_ped or 0.0)
+            per_kill_delta[kill_id] = per_kill_delta.get(kill_id, 0.0) + v
+            total_delta += v
+        for kill_id, kill_delta in per_kill_delta.items():
+            conn.execute(
+                "UPDATE kills SET loot_total_ped = loot_total_ped + ? WHERE id = ?",
+                (delta_sign * kill_delta, kill_id),
+            )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_loot_item_edit_response(
+        conn, session_id, item_name, len(flipped), delta_sign * total_delta,
+    )
+
+
+@router.post("/session/{session_id}/loot-item/{item_name:path}/deactivate")
+def bulk_deactivate_loot_item(session_id: str, item_name: str):
+    """Bulk-deactivate every `kill_loot_items` row matching `item_name`
+    in this session (item-name is URL-path encoded so spaces survive).
+
+    Atomically flips all active matching rows + rewrites each parent
+    kill's `loot_total_ped` + invalidates `session_summaries`. 404 if
+    the item isn't in this session at all; 409 if every matching row is
+    already deactivated.
+    """
+    conn = get_services().app_db.conn
+    return _bulk_deactivate_loot_item_impl(conn, session_id, item_name)
+
+
+def _bulk_deactivate_loot_item_impl(conn, session_id: str, item_name: str):
+    """Backend-side bulk-deactivate; connection-injectable form for
+    direct testing against an arbitrary SQLite connection."""
+    return _bulk_flip_loot_item(conn, session_id, item_name, "deactivated")
+
+
+@router.post("/session/{session_id}/loot-item/{item_name:path}/activate")
+def bulk_activate_loot_item(session_id: str, item_name: str):
+    """Bulk-activate every previously-deactivated `kill_loot_items`
+    row matching `item_name` in this session. Inverse of
+    bulk_deactivate.
+    """
+    conn = get_services().app_db.conn
+    return _bulk_activate_loot_item_impl(conn, session_id, item_name)
+
+
+def _bulk_activate_loot_item_impl(conn, session_id: str, item_name: str):
+    """Backend-side bulk-activate; connection-injectable form for
+    direct testing against an arbitrary SQLite connection."""
+    return _bulk_flip_loot_item(conn, session_id, item_name, "active")
+
+
 def get_session_impl(conn, session_id: str):
     session_row = conn.execute(
-        "SELECT id, started_at, ended_at, is_active FROM tracking_sessions WHERE id = ?",
+        "SELECT id, started_at, ended_at, is_active, mob_tracking_mode "
+        "FROM tracking_sessions WHERE id = ?",
         (session_id,),
     ).fetchone()
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
     started_at, ended_at, is_active = session_row[1], session_row[2], bool(session_row[3])
+    mob_entry_mode = session_row[4] or "mob"
 
     # Duration
     if ended_at and started_at:
@@ -813,13 +1256,19 @@ def get_session_impl(conn, session_id: str):
             "costAttributed": cost_attr,
         }
 
-    # Loot breakdown aggregated in a single query.
+    # Loot breakdown aggregated in a single query. Deactivated rows are
+    # filtered out of the active aggregate so the existing UI surface
+    # (item-name rollup) reflects the user's post-hoc edits, and a
+    # parallel `deactivatedLootBreakdown` aggregate is built below so
+    # the frontend can render a greyed section with the inverse
+    # Activate affordance per item name.
     loot_agg_rows = conn.execute(
         "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
         "FROM kill_loot_items l "
         "JOIN kills k ON k.id = l.kill_id "
         "WHERE k.session_id = ? "
         "AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 "
+        "AND l.deactivated_at IS NULL "
         "GROUP BY l.item_name",
         (session_id,),
     ).fetchall()
@@ -827,6 +1276,47 @@ def get_session_impl(conn, session_id: str):
         name: {"quantity": int(qty or 0), "ttValue": float(val or 0.0)}
         for name, qty, val in loot_agg_rows
     }
+
+    # Parallel aggregate for deactivated rows. An item appearing in both
+    # arrays (partial state) means some captures are deactivated and
+    # others active; the frontend renders both rows with their
+    # respective flip affordances. Shrapnel is excluded symmetrically.
+    deactivated_loot_agg_rows = conn.execute(
+        "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
+        "FROM kill_loot_items l "
+        "JOIN kills k ON k.id = l.kill_id "
+        "WHERE k.session_id = ? "
+        "AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 "
+        "AND l.deactivated_at IS NOT NULL "
+        "GROUP BY l.item_name",
+        (session_id,),
+    ).fetchall()
+    merged_deactivated_loot: dict[str, dict] = {
+        name: {"quantity": int(qty or 0), "ttValue": float(val or 0.0)}
+        for name, qty, val in deactivated_loot_agg_rows
+    }
+
+    # Per-mob breakdown for the sessions-tab metadata-edit affordance.
+    # Surfaces both the current attributed `mob_name` and any preserved
+    # `original_mob_name` so the frontend can render an "originally X"
+    # indicator on renamed mobs and offer a restore action. Sorted by
+    # kill count descending so the most-hunted mob appears first.
+    mob_breakdown_rows = conn.execute(
+        "SELECT mob_name, original_mob_name, COUNT(*) "
+        "FROM kills "
+        "WHERE session_id = ? AND mob_name IS NOT NULL "
+        "GROUP BY mob_name, original_mob_name "
+        "ORDER BY COUNT(*) DESC",
+        (session_id,),
+    ).fetchall()
+    mob_breakdown = [
+        {
+            "currentName": row[0],
+            "originalName": row[1],
+            "killCount": int(row[2] or 0),
+        }
+        for row in mob_breakdown_rows
+    ]
 
     total_cost = weapon_cost + session_heal_cost + total_enhancer_cost + armour_cost + dangling_cost
 
@@ -844,6 +1334,16 @@ def get_session_impl(conn, session_id: str):
     # Build loot breakdown sorted by TT value descending
     loot_breakdown = sorted(
         [{"name": k, "quantity": v["quantity"], "ttValue": round(v["ttValue"], 2)} for k, v in merged_loot.items()],
+        key=lambda x: x["ttValue"],
+        reverse=True,
+    )
+
+    # Parallel aggregate for deactivated rows, same shape + ordering.
+    deactivated_loot_breakdown = sorted(
+        [
+            {"name": k, "quantity": v["quantity"], "ttValue": round(v["ttValue"], 2)}
+            for k, v in merged_deactivated_loot.items()
+        ],
         key=lambda x: x["ttValue"],
         reverse=True,
     )
@@ -898,8 +1398,11 @@ def get_session_impl(conn, session_id: str):
                 "armourCost": round(armour_cost, 2),
             },
         },
+        "mobEntryMode": mob_entry_mode,
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
+        "deactivatedLootBreakdown": deactivated_loot_breakdown,
+        "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,
         "skillGains": _session_skill_gains(conn, session_id),

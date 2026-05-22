@@ -583,10 +583,19 @@ class HuntTracker:
         self._event_bus.subscribe(EVENT_GLOBAL, self._on_global)
         self._event_bus.subscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
 
-        # Persist session start
+        # Persist session start. `mob_tracking_mode` records the input
+        # mode the session was captured under so post-hoc UI surfaces
+        # can choose label vocabulary; the value never mutates after
+        # session start.
         self._db.execute(
-            "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES (?, ?, 1)",
-            (session_id, self._session.start_time.timestamp()),
+            "INSERT INTO tracking_sessions "
+            "(id, started_at, is_active, mob_tracking_mode) "
+            "VALUES (?, ?, 1, ?)",
+            (
+                session_id,
+                self._session.start_time.timestamp(),
+                self._session_mob_tracking_mode,
+            ),
         )
         self._db.commit()
 

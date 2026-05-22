@@ -12,7 +12,7 @@ from backend.db.base import BaseDatabase
 
 log = logging.getLogger(__name__)
 
-DB_VERSION = 31
+DB_VERSION = 32
 
 
 # Tables that auto-fill a timestamp column on INSERT when callers leave it NULL.
@@ -51,6 +51,8 @@ class AppDatabase(BaseDatabase):
             self._migrate_to_v30()
         if from_version < 31:
             self._migrate_to_v31()
+        if from_version < 32:
+            self._migrate_to_v32()
 
     def _migrate_to_v29(self) -> None:
         """Drop the unused profession_calibrations + archive tables.
@@ -134,6 +136,50 @@ class AppDatabase(BaseDatabase):
                 )
             elif "duplicate column" in msg:
                 log.info("v31: kills.original_mob_name already present, skipping")
+            else:
+                raise
+
+    def _migrate_to_v32(self) -> None:
+        """Add the `mob_tracking_mode` column to `tracking_sessions`.
+
+        Records which input mode the session was captured under ('mob'
+        vs 'tag') so post-hoc UI surfaces can choose label vocabulary
+        ('Mob Attribution' vs 'Tag Attribution'). The column is
+        NOT NULL with DEFAULT 'mob': pre-migration rows surface as
+        mob-mode, which matches the historical implicit default. Any
+        undocumented tag-mode usage before this migration loses its
+        mode flavour cosmetically; the underlying data is unaffected
+        (tag-mode sessions persist the tag string into kills.mob_name
+        the same way as mob-mode sessions).
+
+        Defensive in the same two directions as v30 / v31:
+          - "no such table": the user installed a prior version but
+            never started tracking. The future `init_tracking_tables`
+            call on Tracker init will create tracking_sessions with the
+            column baked in.
+          - "duplicate column name": idempotent re-run.
+        """
+        try:
+            self.conn.execute(
+                "ALTER TABLE tracking_sessions ADD COLUMN "
+                "mob_tracking_mode TEXT NOT NULL DEFAULT 'mob'"
+            )
+            self.conn.commit()
+            log.info(
+                "Migrated app DB to v32: added tracking_sessions.mob_tracking_mode"
+            )
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such table" in msg:
+                log.info(
+                    "v32: tracking_sessions not present yet; column will land "
+                    "via tracking_schema when Tracker first initialises"
+                )
+            elif "duplicate column" in msg:
+                log.info(
+                    "v32: tracking_sessions.mob_tracking_mode already present, "
+                    "skipping"
+                )
             else:
                 raise
 

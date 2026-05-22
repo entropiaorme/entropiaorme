@@ -1195,13 +1195,15 @@ def _bulk_activate_loot_item_impl(conn, session_id: str, item_name: str):
 
 def get_session_impl(conn, session_id: str):
     session_row = conn.execute(
-        "SELECT id, started_at, ended_at, is_active FROM tracking_sessions WHERE id = ?",
+        "SELECT id, started_at, ended_at, is_active, mob_tracking_mode "
+        "FROM tracking_sessions WHERE id = ?",
         (session_id,),
     ).fetchone()
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
     started_at, ended_at, is_active = session_row[1], session_row[2], bool(session_row[3])
+    mob_entry_mode = session_row[4] or "mob"
 
     # Duration
     if ended_at and started_at:
@@ -1397,6 +1399,7 @@ def get_session_impl(conn, session_id: str):
                 "armourCost": round(armour_cost, 2),
             },
         },
+        "mobEntryMode": mob_entry_mode,
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "deactivatedLootBreakdown": deactivated_loot_breakdown,

@@ -23,6 +23,12 @@ export interface CostBreakdown {
 	armourCost: Ped;
 }
 
+/** Mob-attribution input mode the session was captured under.
+ * Persisted at session start; never mutates afterwards. Drives label
+ * vocabulary in post-hoc edit surfaces ('Mob Attribution' vs 'Tag
+ * Attribution'); data semantics are identical between the two modes. */
+export type MobEntryMode = 'mob' | 'tag';
+
 /** Expanded session detail (inline expand from history row) */
 export interface SessionDetail {
 	sessionId: string;
@@ -36,6 +42,7 @@ export interface SessionDetail {
 		duration: Seconds;
 		costBreakdown?: CostBreakdown;
 	};
+	mobEntryMode: MobEntryMode;
 	notableEvents: NotableEvent[];
 	/** Item-name aggregate of currently-active loot rows. */
 	lootBreakdown: LootItem[];

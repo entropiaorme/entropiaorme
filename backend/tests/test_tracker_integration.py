@@ -1096,7 +1096,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
 
@@ -1124,7 +1124,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
 
@@ -1163,7 +1163,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
 
@@ -1182,7 +1182,7 @@ class TestV30Migration:
             version = second.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             second.close()
 
@@ -2046,7 +2046,7 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
 
@@ -2074,7 +2074,7 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
 
@@ -2110,6 +2110,246 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 31
+            assert int(version) == 32
         finally:
             app_db.close()
+
+
+# ── V32 migration: tracking_sessions.mob_tracking_mode ──────────────
+
+
+class TestV32Migration:
+    """The version-counter migration that lands mob_tracking_mode on
+    tracking_sessions for existing DBs (v31 to v32 forward-migrate).
+    Fresh installs land the column via the canonical tracking schema;
+    this class pins the in-place upgrade path and its defensive cases.
+
+    The column is NOT NULL with DEFAULT 'mob', so pre-migration rows
+    surface as mob-mode after the migration. This is the deliberate
+    choice: undocumented tag-mode usage before this migration loses its
+    mode flavour cosmetically; the underlying data is unaffected (the
+    tag string is persisted into kills.mob_name in tag-mode sessions
+    just as it is in mob-mode sessions).
+    """
+
+    def test_upgrade_existing_v31_tracking_sessions(self, tmp_path):
+        """A v31-shaped DB with tracking_sessions present picks up
+        mob_tracking_mode on AppDatabase open; pre-migration rows
+        default to 'mob' per the column's DEFAULT clause."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
+        )
+        seed.execute(
+            "CREATE TABLE tracking_sessions ("
+            "  id TEXT PRIMARY KEY,"
+            "  started_at REAL NOT NULL,"
+            "  ended_at REAL,"
+            "  is_active INTEGER NOT NULL DEFAULT 1"
+            ")"
+        )
+        pre_session_id = "pre-migration-session"
+        seed.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, ?, 0)",
+            (pre_session_id, time.time() - 600, time.time()),
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            cols = {
+                row[1]
+                for row in app_db.conn.execute(
+                    "PRAGMA table_info(tracking_sessions)"
+                ).fetchall()
+            }
+            assert "mob_tracking_mode" in cols
+
+            mode = app_db.conn.execute(
+                "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
+                (pre_session_id,),
+            ).fetchone()[0]
+            assert mode == "mob"
+
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 32
+        finally:
+            app_db.close()
+
+    def test_upgrade_without_tracking_sessions_table(self, tmp_path):
+        """A v31 install that never started tracking has no
+        tracking_sessions table; the migration tolerates that and the
+        column will land via init_tracking_tables on first Tracker
+        start. Defensive-path coverage matching the v30 / v31 shape."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 32
+        finally:
+            app_db.close()
+
+    def test_upgrade_idempotent_when_column_already_present(self, tmp_path):
+        """Partial-run safety: the column already exists, and the
+        migration's duplicate-column branch swallows the error."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
+        )
+        seed.execute(
+            "CREATE TABLE tracking_sessions ("
+            "  id TEXT PRIMARY KEY,"
+            "  started_at REAL NOT NULL,"
+            "  ended_at REAL,"
+            "  is_active INTEGER NOT NULL DEFAULT 1,"
+            "  mob_tracking_mode TEXT NOT NULL DEFAULT 'mob'"
+            ")"
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 32
+        finally:
+            app_db.close()
+
+
+# ── Tracker + response: mob_tracking_mode at session start ──────────
+
+
+class TestMobTrackingModePersistence:
+    """The mob_tracking_mode column is written at session start by
+    HuntTracker and surfaced through get_session_impl as mobEntryMode.
+    Pins the round-trip from tracker write through the API contract."""
+
+    def test_fresh_install_has_mob_tracking_mode_column(self):
+        """init_tracking_tables on a fresh DB produces the column with
+        the canonical default."""
+        db = _setup_orphan_db()
+        cols = {
+            row[1]
+            for row in db.execute("PRAGMA table_info(tracking_sessions)").fetchall()
+        }
+        assert "mob_tracking_mode" in cols
+
+    def test_tracker_persists_mob_mode_at_session_start(self):
+        """A tracker initialised with a 'mob' mode provider writes 'mob'
+        to tracking_sessions.mob_tracking_mode at start_session."""
+        db = sqlite3.connect(":memory:", check_same_thread=False)
+        bus = EventBus()
+        tracker = HuntTracker(
+            bus,
+            db,
+            mob_tracking_mode_provider=lambda: "mob",
+        )
+        tracker.start_session()
+        try:
+            mode = db.execute(
+                "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
+                (tracker._session.id,),
+            ).fetchone()[0]
+            assert mode == "mob"
+        finally:
+            tracker.stop_session()
+            db.close()
+
+    def test_tracker_persists_tag_mode_at_session_start(self):
+        """A tracker initialised with a 'tag' mode provider writes 'tag'
+        to tracking_sessions.mob_tracking_mode at start_session."""
+        db = sqlite3.connect(":memory:", check_same_thread=False)
+        bus = EventBus()
+        tracker = HuntTracker(
+            bus,
+            db,
+            mob_tracking_mode_provider=lambda: "tag",
+        )
+        tracker.start_session()
+        try:
+            mode = db.execute(
+                "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
+                (tracker._session.id,),
+            ).fetchone()[0]
+            assert mode == "tag"
+        finally:
+            tracker.stop_session()
+            db.close()
+
+    def test_session_detail_response_surfaces_mob_mode(self, tmp_path):
+        """GET /api/tracking/session/{id} carries mobEntryMode='mob' for
+        a session written in mob mode."""
+        from backend.db.app_database import AppDatabase
+
+        app_db = AppDatabase(tmp_path / "app.db")
+        db = app_db.conn
+        init_tracking_tables(db)
+        try:
+            session_id = str(uuid.uuid4())
+            now = time.time()
+            db.execute(
+                "INSERT INTO tracking_sessions "
+                "(id, started_at, ended_at, is_active, mob_tracking_mode) "
+                "VALUES (?, ?, ?, 0, 'mob')",
+                (session_id, now - 60, now),
+            )
+            db.commit()
+            detail = get_session_impl(db, session_id)
+        finally:
+            app_db.close()
+        assert detail["mobEntryMode"] == "mob"
+
+    def test_session_detail_response_surfaces_tag_mode(self, tmp_path):
+        """GET /api/tracking/session/{id} carries mobEntryMode='tag' for
+        a session written in tag mode."""
+        from backend.db.app_database import AppDatabase
+
+        app_db = AppDatabase(tmp_path / "app.db")
+        db = app_db.conn
+        init_tracking_tables(db)
+        try:
+            session_id = str(uuid.uuid4())
+            now = time.time()
+            db.execute(
+                "INSERT INTO tracking_sessions "
+                "(id, started_at, ended_at, is_active, mob_tracking_mode) "
+                "VALUES (?, ?, ?, 0, 'tag')",
+                (session_id, now - 60, now),
+            )
+            db.commit()
+            detail = get_session_impl(db, session_id)
+        finally:
+            app_db.close()
+        assert detail["mobEntryMode"] == "tag"

@@ -143,6 +143,16 @@
 
 	// ── Mob attribution edit ──────────────────────────────────────────
 	const mobBreakdown = $derived(detail.mobBreakdown ?? []);
+	const isTagMode = $derived(detail.mobEntryMode === 'tag');
+	const attributionHeading = $derived(isTagMode ? 'Tag Attribution' : 'Mob Attribution');
+	const attributionInputLabel = $derived(isTagMode ? 'New tag' : 'New mob name');
+	const attributionRenameVerb = $derived(isTagMode ? 'Retag' : 'Rename');
+	const attributionRestoreTitle = $derived(
+		isTagMode ? 'Restore original tag' : 'Restore original name',
+	);
+	const attributionOriginallyLabel = $derived(
+		isTagMode ? 'originally tagged' : 'originally',
+	);
 
 	type MobEditMode = 'idle' | 'edit' | 'restore';
 	let mobEditMode = $state<MobEditMode>('idle');
@@ -176,7 +186,7 @@
 		const from = mobEditTarget;
 		const to = mobEditDraft.trim();
 		if (!to) {
-			mobError = 'Name cannot be blank.';
+			mobError = isTagMode ? 'Tag cannot be blank.' : 'Name cannot be blank.';
 			return;
 		}
 		if (to === from) {
@@ -190,7 +200,7 @@
 			applyMobRename(from, to);
 			cancelMobEdit();
 		} catch (e) {
-			mobError = errorMessage(e, 'Rename failed.');
+			mobError = errorMessage(e, isTagMode ? 'Retag failed.' : 'Rename failed.');
 		} finally {
 			mobBusy = false;
 		}
@@ -379,7 +389,7 @@
 	{#if mobBreakdown.length > 0}
 		<Divider />
 		<div>
-			<h3 class="eyebrow mb-3">Mob Attribution</h3>
+			<h3 class="eyebrow mb-3">{attributionHeading}</h3>
 			<div class="rounded-md border border-border/60 divide-y divide-border/40">
 				{#each mobBreakdown as row (row.currentName)}
 					{@const isEditing = mobEditMode === 'edit' && mobEditTarget === row.currentName}
@@ -391,7 +401,7 @@
 									type="text"
 									class="flex-1 min-w-0 bg-surface border border-border rounded-sm px-2 py-1 text-sm text-text focus:outline-none focus:border-accent"
 									bind:value={mobEditDraft}
-									aria-label="New mob name"
+									aria-label={attributionInputLabel}
 									disabled={mobBusy}
 									onkeydown={(e) => {
 										if (e.key === 'Enter') confirmMobRename();
@@ -442,7 +452,7 @@
 								<span class="text-text">{row.currentName}</span>
 								{#if row.originalName}
 									<span class="text-xs text-text-tertiary italic">
-										originally {row.originalName}
+										{attributionOriginallyLabel} {row.originalName}
 									</span>
 								{/if}
 							</div>
@@ -454,8 +464,8 @@
 									type="button"
 									class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1"
 									onclick={() => startMobEdit(row)}
-									aria-label="Rename {row.currentName}"
-									title="Rename"
+									aria-label="{attributionRenameVerb} {row.currentName}"
+									title={attributionRenameVerb}
 								>
 									<svg
 										xmlns="http://www.w3.org/2000/svg"
@@ -478,7 +488,7 @@
 										class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1"
 										onclick={() => startMobRestore(row)}
 										aria-label="Restore {row.currentName}"
-										title="Restore original name"
+										title={attributionRestoreTitle}
 									>
 										<svg
 											xmlns="http://www.w3.org/2000/svg"

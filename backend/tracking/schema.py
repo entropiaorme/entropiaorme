@@ -17,15 +17,24 @@ def init_tracking_tables(conn: sqlite3.Connection) -> None:
 
 def _current_schema(conn: sqlite3.Connection) -> None:
     conn.executescript("""
+        -- `mob_tracking_mode` records which input mode the session was
+        -- captured under ('mob' = mob-name attribution, 'tag' = tag
+        -- attribution). The tracker writes the value at session start
+        -- and never mutates it afterwards. Post-hoc UI surfaces read it
+        -- to choose label vocabulary ('Mob Attribution' vs 'Tag
+        -- Attribution'); the data semantics are identical (the tag
+        -- string is persisted into kills.mob_name in tag-mode
+        -- sessions), so this is purely a presentation hint.
         CREATE TABLE IF NOT EXISTS tracking_sessions (
-            id             TEXT PRIMARY KEY,
-            started_at     REAL NOT NULL,
-            ended_at       REAL,
-            is_active      INTEGER NOT NULL DEFAULT 1,
-            armour_cost    REAL DEFAULT 0,
-            heal_cost      REAL DEFAULT 0,
-            dangling_cost  REAL DEFAULT 0,
-            updated_at     REAL
+            id                 TEXT PRIMARY KEY,
+            started_at         REAL NOT NULL,
+            ended_at           REAL,
+            is_active          INTEGER NOT NULL DEFAULT 1,
+            armour_cost        REAL DEFAULT 0,
+            heal_cost          REAL DEFAULT 0,
+            dangling_cost      REAL DEFAULT 0,
+            mob_tracking_mode  TEXT NOT NULL DEFAULT 'mob',
+            updated_at         REAL
         );
 
         CREATE TRIGGER IF NOT EXISTS trg_fill_updated_at_tracking_sessions

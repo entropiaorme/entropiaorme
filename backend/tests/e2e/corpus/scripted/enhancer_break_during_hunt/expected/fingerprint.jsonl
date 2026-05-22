@@ -1,0 +1,7 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 13.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 17.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"enhancer_name": "Weapon Damage Enhancer 1", "item_name": "ArMatrix LR-5", "remaining": 2, "shrapnel_ped": 0.83, "timestamp": "<TS_3>", "type": "enhancer_break"}, "topic": "enhancer_break"}
+{"payload": {"amount": 21.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 410, "value_ped": 4.1}, {"is_enhancer_shrapnel": false, "item_name": "Animal Eye Oil", "quantity": 1, "value_ped": 0.55}], "timestamp": "<TS_5>", "total_ped": 4.65, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

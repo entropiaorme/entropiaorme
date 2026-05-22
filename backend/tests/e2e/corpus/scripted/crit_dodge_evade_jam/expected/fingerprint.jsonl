@@ -1,0 +1,10 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 14.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_1>", "type": "target_dodge"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>", "type": "target_evade"}, "topic": "combat"}
+{"payload": {"amount": 17.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 30.0, "timestamp": "<TS_2>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_3>", "type": "target_jam"}, "topic": "combat"}
+{"payload": {"amount": 12.0, "timestamp": "<TS_3>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 540, "value_ped": 5.4}], "timestamp": "<TS_4>", "total_ped": 5.4, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

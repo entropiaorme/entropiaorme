@@ -1,0 +1,11 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 15.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 20.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 350, "value_ped": 3.5}], "timestamp": "<TS_3>", "total_ped": 3.5, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"amount": 11.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 14.0, "timestamp": "<TS_5>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 28.0, "timestamp": "<TS_5>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.65}, {"is_enhancer_shrapnel": false, "item_name": "Wool", "quantity": 3, "value_ped": 1.2}], "timestamp": "<TS_6>", "total_ped": 1.85, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"amount": 18.0, "timestamp": "<TS_7>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 670, "value_ped": 6.7}], "timestamp": "<TS_8>", "total_ped": 6.7, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

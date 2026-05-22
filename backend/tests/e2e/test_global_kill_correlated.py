@@ -1,0 +1,46 @@
+"""Acceptance test for ``global_kill_correlated``.
+
+A local kill is followed by a Globals-channel announcement
+naming the test's configured player_name. Pins
+``HuntTracker._on_global``'s correlation path: the global event
+lands within the 5-second staleness window of the most recent
+kill and tags the kill as ``is_global``. Uses
+``make_e2e_pipeline`` to set ``player_name`` explicitly since
+the default pipeline drops globals on the floor.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from backend.testing.replay import replay_scenario, wait_for_drain
+
+
+def test_global_kill_correlates_to_recent_kill(
+    make_e2e_pipeline,
+    corpus_root: Path,
+    golden_set,
+    in_memory_db,
+) -> None:
+    bus, tracker, _watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
+
+    scenario = corpus_root / "scripted" / "global_kill_correlated"
+    goldens = golden_set(scenario)
+    goldens.recorder.install(bus)
+
+    tracker.start_session()
+    replay_scenario(scenario, chatlog)
+    wait_for_drain()
+    result = tracker.stop_session()
+
+    # Single kill: 40.0 + 35.0 = 75.0 dmg across two shots, loot 15.0.
+    assert len(result.kills) == 1
+    kill = result.kills[0]
+    assert kill.shots_fired == 2
+    assert kill.damage_dealt == pytest.approx(75.0)
+    assert kill.loot_total_ped == pytest.approx(15.0)
+    assert kill.is_global is True
+
+    goldens.assert_matches(in_memory_db)

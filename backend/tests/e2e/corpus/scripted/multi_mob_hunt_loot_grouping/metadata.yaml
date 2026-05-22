@@ -1,0 +1,21 @@
+name: multi_mob_hunt_loot_grouping
+flavour: scripted
+description: >
+  Three mobs hunted in sequence, each with its own combat window
+  and loot tick. Pins the multi-kill flush path where each loot
+  announcement closes its own accumulator and a fresh combat
+  window opens between kills.
+surfaces:
+  - tracking-multi-kill-session
+  - tracking-tick-boundary
+  - tracking-loot-grouping
+events: 10
+expected_kills: 3
+expected_total_loot_ped: 12.05
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Three distinct combat -> loot cycles separated by
+  multi-second gaps so each loot tick cleanly flushes one kill.

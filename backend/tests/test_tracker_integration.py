@@ -1729,6 +1729,45 @@ class TestMobEditEndpoints:
         assert exc.value.status_code == 404
         assert exc.value.detail == "Session not found"
 
+    def test_rename_blank_input_is_400(self):
+        """Whitespace-only mob names are rejected with 400 before any
+        DB mutation, so empty strings can't persist into kills.mob_name."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        for from_val, to_val in [
+            ("   ", "Argonaut Old"),
+            ("Caboria Old", ""),
+            ("", ""),
+        ]:
+            with pytest.raises(HTTPException) as exc:
+                _rename_session_mob_impl(db, seed["session_id"], from_val, to_val)
+            assert exc.value.status_code == 400
+            assert "blank" in exc.value.detail.lower()
+
+    def test_rename_active_session_is_409(self):
+        """Renames on a live session create drift between SQLite and
+        the tracker's in-memory state; the helper refuses with 409."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, NULL, 1)",
+            (session_id, now - 60),
+        )
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Caboria Old', ?, 5, 50.0, 1.0, 2.0)",
+            (str(uuid.uuid4()), session_id, now - 30),
+        )
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            _rename_session_mob_impl(db, session_id, "Caboria Old", "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "after the session has ended" in exc.value.detail.lower()
+
     def test_rename_no_matching_kills_is_409(self):
         """from_mob value with no matching kills in the session is a
         409 rather than a silent no-op (the request expressed an
@@ -1811,6 +1850,34 @@ class TestMobEditEndpoints:
         with pytest.raises(HTTPException) as exc:
             _restore_session_mob_impl(db, "no-such-session", "Argonaut Old")
         assert exc.value.status_code == 404
+
+    def test_restore_blank_input_is_400(self):
+        """Whitespace-only current_mob is rejected with 400 before any
+        DB query, distinct from a 409 'nothing matches' which would
+        otherwise mislead callers about what went wrong."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, seed["session_id"], "   ")
+        assert exc.value.status_code == 400
+        assert "blank" in exc.value.detail.lower()
+
+    def test_restore_active_session_is_409(self):
+        """Restores on a live session create the same drift hazard as
+        renames; the same guard refuses with 409."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, NULL, 1)",
+            (session_id, now - 60),
+        )
+        db.commit()
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, session_id, "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "after the session has ended" in exc.value.detail.lower()
 
     def test_restore_no_eligible_kills_is_409(self):
         """No matching kills (either the current name never existed or

@@ -891,12 +891,26 @@ class RestoreMobRequest(BaseModel):
 # transparently (frontend labels the affordance based on session mode).
 
 def _validate_session_exists(conn, session_id: str) -> None:
-    """Raise 404 if the session row is missing."""
+    """Validate that the session exists and is not still active.
+
+    Raises 404 if missing. Raises 409 if the session is still active:
+    rename and restore are post-hoc operations, and editing kills.mob_name
+    on a live session creates drift between SQLite and the tracker's
+    in-memory state (the tracker continues writing further kills under
+    the pre-edit name + can stamp the session's stop-flow with stale
+    aggregates). The frontend should only expose the edit affordances
+    after the session has ended.
+    """
     row = conn.execute(
-        "SELECT id FROM tracking_sessions WHERE id = ?", (session_id,),
+        "SELECT id, is_active FROM tracking_sessions WHERE id = ?", (session_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    if bool(row[1]):
+        raise HTTPException(
+            status_code=409,
+            detail="Session mob edits are only available after the session has ended",
+        )
 
 
 def _build_mob_edit_response(conn, session_id: str, mob_name: str):
@@ -942,6 +956,13 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
     `rename_session_mob` for direct testing against an arbitrary SQLite
     connection without spinning up the full services container."""
     _validate_session_exists(conn, session_id)
+    from_mob = from_mob.strip()
+    to_mob = to_mob.strip()
+    if not from_mob or not to_mob:
+        raise HTTPException(
+            status_code=400,
+            detail="Mob names cannot be blank",
+        )
     if from_mob == to_mob:
         raise HTTPException(
             status_code=409,
@@ -1000,6 +1021,12 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
     `restore_session_mob` for direct testing against an arbitrary SQLite
     connection without spinning up the full services container."""
     _validate_session_exists(conn, session_id)
+    current_mob = current_mob.strip()
+    if not current_mob:
+        raise HTTPException(
+            status_code=400,
+            detail="Mob name cannot be blank",
+        )
 
     eligible = conn.execute(
         "SELECT COUNT(*), COUNT(DISTINCT original_mob_name), MIN(original_mob_name) "
@@ -1023,16 +1050,15 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
         # mob_name (e.g. rename A->C, then rename B->C). Restoring would
         # need to split the cohort back into multiple destinations,
         # which the single-result response shape cannot express
-        # unambiguously. Refuse and surface the situation so the client
-        # can present a multi-target restore UI or undo the merging
-        # rename first.
+        # unambiguously. Refuse with an informative 409 so the caller
+        # knows the situation; the API does not offer a target-by-
+        # original-name endpoint, so this case is for the frontend to
+        # surface to the user.
         raise HTTPException(
             status_code=409,
             detail=(
                 f"Ambiguous restore for mob_name='{current_mob}': "
-                f"{distinct_originals} distinct prior names merged into it. "
-                "Undo the most recent rename first or restore each original "
-                "explicitly."
+                f"{distinct_originals} distinct prior names merged into it."
             ),
         )
 

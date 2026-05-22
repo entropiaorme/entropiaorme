@@ -1703,7 +1703,7 @@ class TestMobEditEndpoints:
         assert len(rows) == seed["from_mob_count"]
         for current, original in rows:
             assert current == "Caboria Old"
-            assert original is None  # Preservation column cleared.
+            assert original is None
 
     def test_rename_preserves_first_original_across_consecutive_renames(self):
         """Renaming A->B then B->C must keep original_mob_name = A

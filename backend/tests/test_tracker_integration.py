@@ -821,22 +821,10 @@ class TestCrashRecovery:
         assert not tracker.is_tracking
 
 
-# ── Loot-entry deactivation (substrate behaviour) ─────────────────────
-#
-# These tests pin the substrate behaviour that the post-hoc loot-entry
-# Deactivate/Activate affordance on the analytics → sessions tab relies on:
-# the `deactivated_at` nullable timestamp on `kill_loot_items` paired with
-# atomic mutation of the denormalised `kills.loot_total_ped`. The API
-# surface that exposes these operations to the frontend is a subsequent
-# change; this test class verifies the schema substrate plus the SQL
-# manoeuvre that the API will wrap.
-#
-# Operation in full:
-#   Deactivate(loot_id):
-#     UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?
-#     UPDATE kills SET loot_total_ped = loot_total_ped - <value_ped> WHERE id = <kill_id>
-#     (cache invalidation on session_summaries is the API layer's concern)
-#   Activate(loot_id): inverse, clearing `deactivated_at` and adding value_ped back.
+# Substrate invariant: `kill_loot_items.deactivated_at` and the
+# denormalised `kills.loot_total_ped` must mutate atomically; the API
+# layer wraps the same SQL pattern under transaction + cache
+# invalidation.
 
 
 class TestLootDeactivation:
@@ -1007,7 +995,7 @@ class TestLootDeactivation:
         filter) returns only active rows for its item-name rollup,
         without losing them from the underlying table."""
         db = _setup_orphan_db()
-        session_id, kill_id, (loot_a_id, _), (loot_a_value, loot_b_value) = (
+        session_id, kill_id, (loot_a_id, _), (_, loot_b_value) = (
             self._seed_session_with_loot(db)
         )
 

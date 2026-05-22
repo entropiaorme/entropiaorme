@@ -1055,21 +1055,24 @@ def _bulk_flip_loot_item(
 ):
     """Shared implementation for both bulk endpoints.
 
-    `to_state` is 'deactivated' or 'active'. Selects all matching rows
-    (joined to kills to scope by session_id) currently in the opposite
-    state, flips their `deactivated_at`, and rewrites each parent kill's
-    denormalised `loot_total_ped` by the row's `value_ped` (signed
-    appropriately for the direction). All writes happen inside the
-    implicit transaction the first UPDATE opens; the cursor's rowcount
-    drives the 404 / 409 differentiation:
+    Race-safe: the eligibility check and the state flip happen in a
+    single locked UPDATE with RETURNING, so two concurrent requests
+    cannot both pass the precondition and double-apply the
+    `loot_total_ped` delta. `BEGIN IMMEDIATE` acquires SQLite's writer
+    lock before the UPDATE so the only contention point is the lock
+    itself; the second request waits, then sees the post-flip state and
+    409s cleanly.
 
-    - 0 rows match `(session_id, item_name)` at all → 404 (item_name
-      is not in this session).
-    - 0 rows match `(session_id, item_name, opposite-state)` → 409 (all
-      rows are already in the target state, nothing to flip).
+    `to_state` is 'deactivated' or 'active'. The UPDATE flips matching
+    rows currently in the opposite state and RETURNS their kill_id +
+    value_ped, which drives per-kill loot_total_ped adjustments inside
+    the same transaction. The 404 / 409 distinction derives from the
+    UPDATE's RETURNING set:
 
-    Atomicity: every per-kill UPDATE happens inside the same implicit
-    transaction; a mid-batch failure rolls back the partial flip.
+    - RETURNING empty + no row exists for `(session_id, item_name)` at
+      all → 404 (item_name is not in this session).
+    - RETURNING empty + at least one row exists in the target state →
+      409 (all rows are already in the target state, nothing to flip).
     """
     _validate_session_exists(conn, session_id)
     item_name = item_name.strip()
@@ -1077,7 +1080,6 @@ def _bulk_flip_loot_item(
         raise HTTPException(status_code=400, detail="Item name cannot be blank")
 
     if to_state == "deactivated":
-        # Select rows currently active, eligible to flip to deactivated.
         opposite_clause = "l.deactivated_at IS NULL"
         new_flag_sql = "unixepoch('now')"
         delta_sign = -1.0
@@ -1088,52 +1090,49 @@ def _bulk_flip_loot_item(
     else:
         raise ValueError(f"unsupported to_state: {to_state!r}")
 
-    # First check whether the item appears in the session at all, so the
-    # 404 vs 409 distinction is data-driven rather than blurred. A 404
-    # means "the user asked about an item that isn't here"; a 409 means
-    # "the item is here but already in the target state."
-    any_row = conn.execute(
-        "SELECT 1 FROM kill_loot_items l "
-        "JOIN kills k ON k.id = l.kill_id "
-        "WHERE k.session_id = ? AND l.item_name = ? "
-        "LIMIT 1",
-        (session_id, item_name),
-    ).fetchone()
-    if not any_row:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No loot named '{item_name}' in this session",
-        )
-
-    # Pull the eligible rows up front so we can update parent kills
-    # row-by-row with their value_peds inside the same transaction.
-    eligible = conn.execute(
-        "SELECT l.id, l.kill_id, l.value_ped FROM kill_loot_items l "
-        "JOIN kills k ON k.id = l.kill_id "
-        f"WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause}",
-        (session_id, item_name),
-    ).fetchall()
-    if not eligible:
-        raise HTTPException(
-            status_code=409,
-            detail=f"All '{item_name}' rows in this session are already {to_state}",
-        )
-
     try:
-        ids = [row[0] for row in eligible]
-        placeholders = ",".join("?" * len(ids))
-        conn.execute(
-            f"UPDATE kill_loot_items SET deactivated_at = {new_flag_sql} "
-            f"WHERE id IN ({placeholders})",
-            ids,
-        )
-        # Aggregate the per-kill deltas so each parent's denormalised
-        # loot_total_ped gets one UPDATE rather than N. SQLite handles
-        # repeated UPDATEs efficiently either way; the aggregation keeps
-        # the audit shape closer to "one kill, one mutation."
+        conn.execute("BEGIN IMMEDIATE")
+        flipped = conn.execute(
+            "UPDATE kill_loot_items "
+            f"SET deactivated_at = {new_flag_sql} "
+            "WHERE id IN ("
+            "    SELECT l.id "
+            "    FROM kill_loot_items l "
+            "    JOIN kills k ON k.id = l.kill_id "
+            f"    WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause}"
+            ") "
+            "RETURNING kill_id, value_ped",
+            (session_id, item_name),
+        ).fetchall()
+
+        if not flipped:
+            # Distinguish 404 (item not in session at all) from 409
+            # (already in target state) inside the same locked
+            # transaction so the answer reflects the post-decision
+            # state, not a stale pre-UPDATE read.
+            any_row = conn.execute(
+                "SELECT 1 FROM kill_loot_items l "
+                "JOIN kills k ON k.id = l.kill_id "
+                "WHERE k.session_id = ? AND l.item_name = ? "
+                "LIMIT 1",
+                (session_id, item_name),
+            ).fetchone()
+            conn.rollback()
+            if not any_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No loot named '{item_name}' in this session",
+                )
+            raise HTTPException(
+                status_code=409,
+                detail=f"All '{item_name}' rows in this session are already {to_state}",
+            )
+
+        # Aggregate per-kill deltas from RETURNING so each parent's
+        # denormalised loot_total_ped gets one UPDATE rather than N.
         per_kill_delta: dict = {}
         total_delta = 0.0
-        for _, kill_id, value_ped in eligible:
+        for kill_id, value_ped in flipped:
             v = float(value_ped or 0.0)
             per_kill_delta[kill_id] = per_kill_delta.get(kill_id, 0.0) + v
             total_delta += v
@@ -1153,7 +1152,7 @@ def _bulk_flip_loot_item(
         raise
 
     return _build_loot_item_edit_response(
-        conn, session_id, item_name, len(eligible), delta_sign * total_delta,
+        conn, session_id, item_name, len(flipped), delta_sign * total_delta,
     )
 
 

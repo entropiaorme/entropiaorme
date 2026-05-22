@@ -83,6 +83,10 @@
 	}
 
 	async function onLootDeactivate(row: LootItem) {
+		// Re-entry guard: a double-click on the confirm Yes button can
+		// dispatch the second call before the first resolves, racing the
+		// optimistic local move and double-applying the backend flip.
+		if (lootBusyName === row.name) return;
 		lootError = null;
 		lootBusyName = row.name;
 		try {
@@ -98,6 +102,7 @@
 	}
 
 	async function onLootActivate(row: LootItem) {
+		if (lootBusyName === row.name) return;
 		lootError = null;
 		lootBusyName = row.name;
 		try {
@@ -607,7 +612,8 @@
 						</button>
 						<button
 							type="button"
-							class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium"
+							class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+							disabled={lootBusyName === row.name}
 							onclick={() => onLootDeactivate(row)}
 						>
 							Yes
@@ -677,7 +683,8 @@
 							</button>
 							<button
 								type="button"
-								class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium"
+								class="text-xs text-accent hover:text-accent-hover px-2 py-0.5 rounded-sm cursor-pointer border border-accent/40 hover:border-accent font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+								disabled={lootBusyName === row.name}
 								onclick={() => onLootActivate(row)}
 							>
 								Yes

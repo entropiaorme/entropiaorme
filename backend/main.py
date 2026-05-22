@@ -86,8 +86,8 @@ ALLOWED_API_ORIGINS = {
 }
 
 # Per-checkout HTTPS dev hostname when the optional Caddy substrate is in
-# play and the checkout has been configured for it (the install-once
-# stand-up beat exports ENTROPIAORME_HOSTNAME to .env.local, which the
+# play and the checkout has been configured for it (an additional
+# checkout exports ENTROPIAORME_HOSTNAME via its `.env.local`, which the
 # load_dotenv call at module top has already sourced into the process
 # environment). Absent in fresh clones without the substrate, in which
 # case the static origins above cover the canonical case.

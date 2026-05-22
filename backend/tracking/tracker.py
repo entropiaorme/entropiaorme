@@ -768,7 +768,8 @@ class HuntTracker:
             "FROM kill_loot_items kli "
             "JOIN kills k ON kli.kill_id = k.id "
             "WHERE k.session_id = ? AND kli.item_name = 'Shrapnel' "
-            "AND COALESCE(kli.is_enhancer_shrapnel, 0) = 0",
+            "AND COALESCE(kli.is_enhancer_shrapnel, 0) = 0 "
+            "AND kli.deactivated_at IS NULL",
             (session_id,),
         ).fetchone()
         shrapnel_ped = row[0] if row else 0.0
@@ -794,7 +795,8 @@ class HuntTracker:
             "SELECT COALESCE(SUM(kli.value_ped), 0) "
             "FROM kill_loot_items kli "
             "JOIN kills k ON kli.kill_id = k.id "
-            "WHERE k.session_id = ? AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1",
+            "WHERE k.session_id = ? AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1 "
+            "AND kli.deactivated_at IS NULL",
             (session_id,),
         ).fetchone()
         rebate_ped = row[0] if row else 0.0

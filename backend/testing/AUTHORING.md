@@ -12,18 +12,18 @@ only.
 A self-describing directory under
 `backend/tests/e2e/corpus/scripted/<name>/` carrying:
 
-- `metadata.yaml` (handwritten) — describes the scenario's
+- `metadata.yaml` (handwritten): describes the scenario's
   surfaces, expected kill count, character context, and any
   notes useful for a reader.
-- `build.py` (handwritten) — a small script that imports the
+- `build.py` (handwritten): a small script that imports the
   DSL, builds a `Scenario`, and calls `s.write(...)` to emit
   `chat_replay.log`. Re-run to regenerate the log when the
   authoring source changes.
-- `chat_replay.log` (DSL-generated) — the canonical chat.log
+- `chat_replay.log` (DSL-generated): the canonical chat.log
   the harness streams through the production `ChatlogWatcher`
   tail loop. Do not hand-edit; regenerate via `build.py`.
 - `expected/fingerprint.jsonl` and `expected/db_state.json`
-  (golden, generated) — captured by
+  (golden, generated): captured by
   `pytest --update-fingerprints` after the scenario is wired
   into a test file. Asserted against on every subsequent run.
 

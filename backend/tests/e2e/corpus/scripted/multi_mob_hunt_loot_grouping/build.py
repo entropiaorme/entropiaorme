@@ -25,7 +25,7 @@ def build() -> Path:
     s.tick()
     s.loot.received("Shrapnel", value_ped=3.50, quantity=350)
 
-    # Gap before kill 2 (5 seconds — well outside any tick window).
+    # Gap before kill 2 (5 seconds, well outside any tick window).
     s.at("2026-05-19 10:00:08")
     s.combat.damage_dealt(11.0)
     s.tick()

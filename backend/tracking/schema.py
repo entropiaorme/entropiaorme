@@ -38,22 +38,31 @@ def _current_schema(conn: sqlite3.Connection) -> None:
             WHERE rowid = NEW.rowid;
         END;
 
+        -- `original_mob_name` preserves the pre-edit `mob_name` value
+        -- when the user mass-renames a session's attributed mob via the
+        -- sessions-tab metadata-edit affordance. NULL = never renamed;
+        -- populated = renamed at least once, and the inverse restore
+        -- endpoint can clear `original_mob_name` while reverting
+        -- `mob_name` to it. COALESCE on the rename write keeps the
+        -- *first* original across N consecutive renames so undo always
+        -- lands at the genuinely-original capture.
         CREATE TABLE IF NOT EXISTS kills (
-            id              TEXT PRIMARY KEY,
-            session_id      TEXT NOT NULL REFERENCES tracking_sessions(id),
-            mob_name        TEXT,
-            mob_species     TEXT DEFAULT '',
-            mob_maturity    TEXT DEFAULT '',
-            timestamp       REAL NOT NULL,
-            shots_fired     INTEGER DEFAULT 0,
-            damage_dealt    REAL DEFAULT 0,
-            damage_taken    REAL DEFAULT 0,
-            critical_hits   INTEGER DEFAULT 0,
-            cost_ped        REAL DEFAULT 0,
-            enhancer_cost   REAL DEFAULT 0,
-            loot_total_ped  REAL DEFAULT 0,
-            is_global       INTEGER DEFAULT 0,
-            is_hof          INTEGER DEFAULT 0
+            id                 TEXT PRIMARY KEY,
+            session_id         TEXT NOT NULL REFERENCES tracking_sessions(id),
+            mob_name           TEXT,
+            mob_species        TEXT DEFAULT '',
+            mob_maturity       TEXT DEFAULT '',
+            timestamp          REAL NOT NULL,
+            shots_fired        INTEGER DEFAULT 0,
+            damage_dealt       REAL DEFAULT 0,
+            damage_taken       REAL DEFAULT 0,
+            critical_hits      INTEGER DEFAULT 0,
+            cost_ped           REAL DEFAULT 0,
+            enhancer_cost      REAL DEFAULT 0,
+            loot_total_ped     REAL DEFAULT 0,
+            is_global          INTEGER DEFAULT 0,
+            is_hof             INTEGER DEFAULT 0,
+            original_mob_name  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_kill_session ON kills(session_id);
 

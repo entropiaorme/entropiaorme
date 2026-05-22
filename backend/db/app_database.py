@@ -12,7 +12,7 @@ from backend.db.base import BaseDatabase
 
 log = logging.getLogger(__name__)
 
-DB_VERSION = 30
+DB_VERSION = 31
 
 
 # Tables that auto-fill a timestamp column on INSERT when callers leave it NULL.
@@ -49,6 +49,8 @@ class AppDatabase(BaseDatabase):
             self._migrate_to_v29()
         if from_version < 30:
             self._migrate_to_v30()
+        if from_version < 31:
+            self._migrate_to_v31()
 
     def _migrate_to_v29(self) -> None:
         """Drop the unused profession_calibrations + archive tables.
@@ -97,6 +99,41 @@ class AppDatabase(BaseDatabase):
                 )
             elif "duplicate column" in msg:
                 log.info("v30: kill_loot_items.deactivated_at already present, skipping")
+            else:
+                raise
+
+    def _migrate_to_v31(self) -> None:
+        """Add the nullable `original_mob_name` column to `kills`.
+
+        Enables the recoverable post-hoc session-metadata edit affordance
+        on the analytics sessions tab: the mass-rename endpoint preserves
+        the pre-edit `kills.mob_name` value into `original_mob_name` on
+        the first rename via COALESCE, so the inverse restore endpoint
+        can revert the rename even after multiple consecutive renames.
+
+        Defensive in the same two directions as v30 (and follows the
+        same migration shape for parity):
+          - "no such table": the user installed a prior version but never
+            started tracking, so `kills` doesn't exist yet. The future
+            `init_tracking_tables` call on Tracker init will create it
+            with the column baked in.
+          - "duplicate column name": idempotent re-run.
+        """
+        try:
+            self.conn.execute(
+                "ALTER TABLE kills ADD COLUMN original_mob_name TEXT"
+            )
+            self.conn.commit()
+            log.info("Migrated app DB to v31: added kills.original_mob_name")
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such table" in msg:
+                log.info(
+                    "v31: kills not present yet; column will land via "
+                    "tracking_schema when Tracker first initialises"
+                )
+            elif "duplicate column" in msg:
+                log.info("v31: kills.original_mob_name already present, skipping")
             else:
                 raise
 

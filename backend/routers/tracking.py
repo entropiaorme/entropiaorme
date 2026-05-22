@@ -869,6 +869,164 @@ def activate_loot_item(session_id: str, loot_item_id: int):
     return _activate_loot_item_impl(conn, session_id, loot_item_id)
 
 
+class RenameMobRequest(BaseModel):
+    fromMobName: str
+    toMobName: str
+
+
+class RestoreMobRequest(BaseModel):
+    currentMobName: str
+
+
+# ── Session metadata edit — rename mob / restore mob ─────────────────
+#
+# Mass-rename overlay: editing a session's attributed mob name rewrites
+# `kills.mob_name` for all kills in that session whose current mob_name
+# matches the `from` value. The pre-edit value is preserved into
+# `kills.original_mob_name` via COALESCE on the first rename, so the
+# inverse restore endpoint can revert even after multiple consecutive
+# renames (COALESCE keeps the *first* original — undo lands at the
+# genuinely-original capture). Tag-mode sessions persist the tag into
+# `kills.mob_name` at write time, so the same endpoint covers tag edits
+# transparently (frontend labels the affordance based on session mode).
+
+def _validate_session_exists(conn, session_id: str) -> None:
+    """Raise 404 if the session row is missing."""
+    row = conn.execute(
+        "SELECT id FROM tracking_sessions WHERE id = ?", (session_id,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+
+def _build_mob_edit_response(conn, session_id: str, mob_name: str, affected: int):
+    """Build the response payload for rename-mob / restore-mob.
+
+    Carries the post-mutation per-mob kill count for the resulting
+    `mob_name` so the frontend can re-render the session row + the
+    per-mob breakdown without a full session refetch.
+    """
+    return {
+        "sessionId": session_id,
+        "mobName": mob_name,
+        "killCount": int(affected),
+    }
+
+
+@router.post("/session/{session_id}/rename-mob")
+def rename_session_mob(session_id: str, body: RenameMobRequest):
+    """Rewrite kills.mob_name for matching kills in this session.
+
+    Atomically: preserves the pre-edit `mob_name` into
+    `original_mob_name` via COALESCE (first-original semantics), rewrites
+    `mob_name` for every matching kill in the session, invalidates the
+    `session_summaries` cache row. 404 on missing session. 409 if the
+    `fromMobName` value has no matching kills in the session, or if
+    `fromMobName == toMobName` (the no-op rename would silently succeed
+    otherwise).
+    """
+    conn = get_services().app_db.conn
+    return _rename_session_mob_impl(conn, session_id, body.fromMobName, body.toMobName)
+
+
+def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
+    """Backend-side rename operation; the connection-injectable form of
+    `rename_session_mob` for direct testing against an arbitrary SQLite
+    connection without spinning up the full services container."""
+    _validate_session_exists(conn, session_id)
+    if from_mob == to_mob:
+        raise HTTPException(
+            status_code=409,
+            detail="rename target matches the current value (no-op)",
+        )
+
+    matching = conn.execute(
+        "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
+        (session_id, from_mob),
+    ).fetchone()[0]
+    if matching == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No kills in this session match mob_name='{from_mob}'",
+        )
+
+    try:
+        conn.execute(
+            "UPDATE kills "
+            "SET original_mob_name = COALESCE(original_mob_name, mob_name) "
+            "WHERE session_id = ? AND mob_name = ?",
+            (session_id, from_mob),
+        )
+        conn.execute(
+            "UPDATE kills SET mob_name = ? WHERE session_id = ? AND mob_name = ?",
+            (to_mob, session_id, from_mob),
+        )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_mob_edit_response(conn, session_id, to_mob, matching)
+
+
+@router.post("/session/{session_id}/restore-mob")
+def restore_session_mob(session_id: str, body: RestoreMobRequest):
+    """Revert kills in this session whose current mob_name matches the
+    request and carry a preserved `original_mob_name`.
+
+    Inverse of rename-mob. Atomically: rewrites `mob_name` back to
+    `original_mob_name`, clears `original_mob_name`, invalidates the
+    `session_summaries` cache. 404 on missing session. 409 if no kills
+    in the session match the request (either nothing has been renamed
+    to that current name, or no preserved original exists to restore).
+    """
+    conn = get_services().app_db.conn
+    return _restore_session_mob_impl(conn, session_id, body.currentMobName)
+
+
+def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
+    """Backend-side restore operation; the connection-injectable form of
+    `restore_session_mob` for direct testing against an arbitrary SQLite
+    connection without spinning up the full services container."""
+    _validate_session_exists(conn, session_id)
+
+    eligible = conn.execute(
+        "SELECT COUNT(*), MIN(original_mob_name) FROM kills "
+        "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL",
+        (session_id, current_mob),
+    ).fetchone()
+    matching = int(eligible[0] or 0)
+    restored_to = eligible[1]
+    if matching == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No restorable kills in this session for mob_name='{current_mob}' "
+                "(either no rename has happened or the preservation column is empty)"
+            ),
+        )
+
+    try:
+        conn.execute(
+            "UPDATE kills "
+            "SET mob_name = original_mob_name, original_mob_name = NULL "
+            "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL",
+            (session_id, current_mob),
+        )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_mob_edit_response(conn, session_id, restored_to, matching)
+
+
 def _activate_loot_item_impl(conn, session_id: str, loot_item_id: int):
     """Backend-side activate operation; the connection-injectable form
     of `activate_loot_item` for direct testing against an arbitrary
@@ -980,6 +1138,28 @@ def get_session_impl(conn, session_id: str):
         for name, qty, val in loot_agg_rows
     }
 
+    # Per-mob breakdown for the sessions-tab metadata-edit affordance.
+    # Surfaces both the current attributed `mob_name` and any preserved
+    # `original_mob_name` so the frontend can render an "originally X"
+    # indicator on renamed mobs and offer a restore action. Sorted by
+    # kill count descending so the most-hunted mob appears first.
+    mob_breakdown_rows = conn.execute(
+        "SELECT mob_name, original_mob_name, COUNT(*) "
+        "FROM kills "
+        "WHERE session_id = ? AND mob_name IS NOT NULL "
+        "GROUP BY mob_name, original_mob_name "
+        "ORDER BY COUNT(*) DESC",
+        (session_id,),
+    ).fetchall()
+    mob_breakdown = [
+        {
+            "currentName": row[0],
+            "originalName": row[1],
+            "killCount": int(row[2] or 0),
+        }
+        for row in mob_breakdown_rows
+    ]
+
     # Per-row loot detail for the sessions-tab editing affordance. Returned
     # unfiltered so the frontend can render both active and deactivated
     # rows (the latter greyed out, with an Activate action). Sorted by id
@@ -1079,6 +1259,7 @@ def get_session_impl(conn, session_id: str):
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "lootEntries": loot_entries,
+        "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,
         "skillGains": _session_skill_gains(conn, session_id),

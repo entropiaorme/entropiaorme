@@ -807,7 +807,7 @@ def _build_loot_edit_response(conn, session_id: str, kill_id: str, loot_item_id:
         "sessionId": session_id,
         "killId": kill_id,
         "lootItemId": loot_item_id,
-        "deactivatedAt": flag_row[0],
+        "deactivatedAt": _ts_to_iso(flag_row[0]),
         "killLootTotalPed": round(float(kill_total or 0.0), 4),
         "sessionTotalReturns": round(float(session_returns or 0.0), 2),
     }
@@ -828,6 +828,9 @@ def deactivate_loot_item(session_id: str, loot_item_id: int):
 
 
 def _deactivate_loot_item_impl(conn, session_id: str, loot_item_id: int):
+    """Backend-side deactivate operation; the connection-injectable form
+    of `deactivate_loot_item` for direct testing against an arbitrary
+    SQLite connection without spinning up the full services container."""
     kill_id, value_ped, deactivated_at = _lookup_loot_for_session(
         conn, session_id, loot_item_id,
     )
@@ -867,6 +870,9 @@ def activate_loot_item(session_id: str, loot_item_id: int):
 
 
 def _activate_loot_item_impl(conn, session_id: str, loot_item_id: int):
+    """Backend-side activate operation; the connection-injectable form
+    of `activate_loot_item` for direct testing against an arbitrary
+    SQLite connection without spinning up the full services container."""
     kill_id, value_ped, deactivated_at = _lookup_loot_for_session(
         conn, session_id, loot_item_id,
     )
@@ -995,7 +1001,7 @@ def get_session_impl(conn, session_id: str):
             "quantity": int(row[3] or 0),
             "valuePed": float(row[4] or 0.0),
             "isEnhancerShrapnel": bool(row[5]),
-            "deactivatedAt": row[6],
+            "deactivatedAt": _ts_to_iso(row[6]),
         }
         for row in loot_entry_rows
     ]

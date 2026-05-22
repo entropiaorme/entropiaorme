@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
@@ -17,6 +18,12 @@ from backend.core.events import (
     EVENT_ENHANCER_BREAK,
     EVENT_GLOBAL,
     EVENT_LOOT_GROUP,
+)
+from backend.routers.tracking import (
+    _activate_loot_item_impl,
+    _deactivate_loot_item_impl,
+    _ts_to_iso,
+    get_session_impl,
 )
 from backend.tracking.tracker import HuntTracker
 from backend.tracking.schema import init_tracking_tables
@@ -1185,14 +1192,6 @@ class TestV30Migration:
 # The underlying SQL manoeuvre is already pinned by TestLootDeactivation
 # above; this class focuses on the API contract layered on top.
 
-from fastapi import HTTPException
-
-from backend.routers.tracking import (
-    _activate_loot_item_impl,
-    _deactivate_loot_item_impl,
-    get_session_impl,
-)
-
 
 class TestLootEditEndpoints:
     def _seed(self, db):
@@ -1254,6 +1253,9 @@ class TestLootEditEndpoints:
     # ── Happy paths ──────────────────────────────────────────────────
 
     def test_deactivate_returns_updated_totals_and_flips_flag(self):
+        """Happy-path deactivate: response carries the post-mutation
+        totals + ISO-formatted flag, and the underlying DB state mirrors
+        the response."""
         db = _setup_orphan_db()
         seed = self._seed(db)
 
@@ -1269,13 +1271,16 @@ class TestLootEditEndpoints:
         assert result["sessionTotalReturns"] == pytest.approx(round(seed["loot_b_value"], 2))
 
         # Underlying state mirrors the response: flag stamped, kill total
-        # reduced by the deactivated row's value_ped.
+        # reduced by the deactivated row's value_ped. The response surfaces
+        # the timestamp as ISO 8601 for API consistency with the rest of
+        # the session-detail response (startTime, endTime, etc.), so the
+        # underlying raw Unix value goes through the same converter.
         flag = db.execute(
             "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
             (seed["loot_a_id"],),
         ).fetchone()[0]
         assert flag is not None
-        assert flag == result["deactivatedAt"]
+        assert _ts_to_iso(flag) == result["deactivatedAt"]
 
         kill_total = db.execute(
             "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
@@ -1283,6 +1288,8 @@ class TestLootEditEndpoints:
         assert kill_total == pytest.approx(seed["loot_b_value"])
 
     def test_activate_restores_state(self):
+        """Deactivate then activate returns the row + kill total to
+        pre-edit state; the flag clears to None on the response."""
         db = _setup_orphan_db()
         seed = self._seed(db)
 
@@ -1304,6 +1311,8 @@ class TestLootEditEndpoints:
         assert flag is None
 
     def test_deactivate_clears_session_summaries_cache(self):
+        """A pre-existing session_summaries cache row is deleted on
+        deactivate; the next session-list read recomputes fresh."""
         db = _setup_orphan_db()
         seed = self._seed(db)
         self._seed_summary_row(db, seed["session_id"])
@@ -1323,6 +1332,7 @@ class TestLootEditEndpoints:
         assert after is None  # Cache invalidated; next read recomputes.
 
     def test_activate_clears_session_summaries_cache(self):
+        """Same cache-invalidation contract on the activate path."""
         db = _setup_orphan_db()
         seed = self._seed(db)
         _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
@@ -1339,6 +1349,7 @@ class TestLootEditEndpoints:
     # ── 404 paths ────────────────────────────────────────────────────
 
     def test_deactivate_missing_session_is_404(self):
+        """Unknown session id yields 404 with the expected detail message."""
         db = _setup_orphan_db()
         with pytest.raises(HTTPException) as exc:
             _deactivate_loot_item_impl(db, "no-such-session", 1)
@@ -1346,6 +1357,7 @@ class TestLootEditEndpoints:
         assert exc.value.detail == "Session not found"
 
     def test_deactivate_missing_loot_item_is_404(self):
+        """Unknown loot-item id within a real session yields 404."""
         db = _setup_orphan_db()
         seed = self._seed(db)
         with pytest.raises(HTTPException) as exc:
@@ -1372,6 +1384,7 @@ class TestLootEditEndpoints:
         assert flag is None
 
     def test_activate_missing_loot_item_is_404(self):
+        """Symmetric 404 behaviour on the activate path."""
         db = _setup_orphan_db()
         seed = self._seed(db)
         with pytest.raises(HTTPException) as exc:
@@ -1381,6 +1394,8 @@ class TestLootEditEndpoints:
     # ── 409 paths ────────────────────────────────────────────────────
 
     def test_deactivate_already_deactivated_is_409(self):
+        """Repeat-deactivate yields 409 and is a no-op on the kill total;
+        silent idempotency would double-subtract on a stale client retry."""
         db = _setup_orphan_db()
         seed = self._seed(db)
         _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
@@ -1403,6 +1418,8 @@ class TestLootEditEndpoints:
         assert kill_total_after == pytest.approx(kill_total_before)
 
     def test_activate_already_active_is_409(self):
+        """Repeat-activate yields 409 and is a no-op on the kill total
+        (would double-add under silent idempotency)."""
         db = _setup_orphan_db()
         seed = self._seed(db)
 

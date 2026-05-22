@@ -10,7 +10,7 @@ surfaces:
   - tracking-skill-gain
   - tracking-skill-gain-during-tick
   - tracking-tick-boundary
-events: 10
+events: 9
 expected_kills: 2
 character_context:
   profession_set: ""

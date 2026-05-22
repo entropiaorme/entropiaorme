@@ -287,7 +287,7 @@ def test_emit_before_at_raises() -> None:
     """Builder calls before any ``Scenario.at`` raise RuntimeError."""
 
     s = Scenario(name="missing_at")
-    with pytest.raises(RuntimeError, match="Scenario.at"):
+    with pytest.raises(RuntimeError, match=r"Scenario\.at"):
         s.combat.damage_dealt(10.0)
 
 
@@ -295,5 +295,22 @@ def test_tick_before_at_raises() -> None:
     """``Scenario.tick`` before any ``Scenario.at`` raises."""
 
     s = Scenario(name="missing_at")
-    with pytest.raises(RuntimeError, match="Scenario.at"):
+    with pytest.raises(RuntimeError, match=r"Scenario\.at"):
         s.tick()
+
+
+def test_tick_with_non_positive_seconds_raises() -> None:
+    """``Scenario.tick(seconds)`` rejects values < 1.
+
+    Zero would stall the clock and negative values would reverse
+    it; either case breaks the monotonic-timestamp guarantee the
+    surrounding harness relies on (kill flushes are partitioned
+    by ascending timestamps, and the DB-snapshot SQL catalogue
+    orders rows by the parsed-timestamp + rowid tiebreaker).
+    """
+
+    s = Scenario(name="non_positive_tick").at("2026-05-19 10:00:00")
+    with pytest.raises(ValueError, match=r"seconds >= 1"):
+        s.tick(seconds=0)
+    with pytest.raises(ValueError, match=r"seconds >= 1"):
+        s.tick(seconds=-5)

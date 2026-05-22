@@ -9,7 +9,7 @@ surfaces:
   - tracking-multi-kill-session
   - tracking-tick-boundary
   - tracking-loot-grouping
-events: 13
+events: 10
 expected_kills: 3
 expected_total_loot_ped: 12.05
 character_context:

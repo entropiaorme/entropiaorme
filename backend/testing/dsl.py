@@ -106,13 +106,20 @@ class Scenario:
         Authors use ``tick()`` as a visual flush marker between
         event clusters; the time advance keeps consecutive lines
         from sharing a timestamp without re-typing an explicit
-        :meth:`at` call. Raises if called before any :meth:`at`.
+        :meth:`at` call. Raises if called before any :meth:`at`,
+        or if ``seconds`` is not a positive integer (a non-positive
+        advance would move time backwards or stall it and break the
+        monotonic-timestamp guarantee scenarios rely on).
         """
 
         if self._now is None:
             raise RuntimeError(
                 "Scenario.tick() called before any Scenario.at(...); "
                 "set an initial timestamp first."
+            )
+        if seconds < 1:
+            raise ValueError(
+                f"Scenario.tick() requires seconds >= 1, got {seconds}."
             )
         self._now = self._now + timedelta(seconds=seconds)
         return self
@@ -148,7 +155,7 @@ class Scenario:
         target_dir.mkdir(parents=True, exist_ok=True)
         out = target_dir / "chat_replay.log"
         out.write_text("".join(self._lines), encoding="utf-8")
-        return out
+        return out.resolve()
 
     def lines(self) -> list[str]:
         """Return the accumulated chat-log lines without writing.

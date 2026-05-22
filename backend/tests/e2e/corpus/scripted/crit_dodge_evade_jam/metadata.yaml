@@ -11,7 +11,7 @@ surfaces:
   - chatlog-countered-shots
   - tracking-critical-hit
   - tracking-kill-creation
-events: 7
+events: 8
 expected_kills: 1
 character_context:
   profession_set: ""

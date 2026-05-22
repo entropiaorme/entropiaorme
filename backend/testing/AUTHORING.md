@@ -103,7 +103,12 @@ lines today, so the DSL has no sub-namespace for them.
 3. Write `metadata.yaml` per the existing convention: `name`,
    `flavour: scripted`, `description`, `surfaces` list,
    `events` count, `expected_kills` count, `character_context`
-   placeholders, and a `notes` line.
+   placeholders, and a `notes` line. The `events` field counts
+   chat lines the scenario's `chat_replay.log` carries (the same
+   convention the original `basic_hunt_10_events` scenario set,
+   encoded in its name); it is not the count of bus events the
+   tracker emits at replay time, which the goldens already pin
+   downstream of the parser's tick-grouping.
 4. Write `build.py` importing the DSL. Anchor with `s.at(...)`,
    emit builders interleaved with `s.tick()` calls, finish with
    `s.write(Path(__file__).parent)`.

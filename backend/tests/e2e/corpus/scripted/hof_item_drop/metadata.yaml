@@ -15,7 +15,7 @@ surfaces:
   - tracking-global-correlation
   - tracking-hof-tagging
   - tracking-notable-events
-events: 5
+events: 4
 expected_kills: 1
 character_context:
   profession_set: ""

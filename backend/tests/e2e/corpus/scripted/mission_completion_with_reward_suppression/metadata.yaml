@@ -14,7 +14,7 @@ surfaces:
   - chatlog-mission-received
   - chatlog-mission-completed
   - tracking-skill-gain-during-mission
-events: 7
+events: 6
 expected_kills: 1
 character_context:
   profession_set: ""

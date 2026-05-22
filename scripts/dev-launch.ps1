@@ -31,18 +31,20 @@ if (Get-Command coredns -ErrorAction SilentlyContinue) {
 
 # Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
 # edits or newly-allocated per-checkout fragments propagate without a
-# restart. No-op when Caddy is reachable on its admin endpoint and the
-# config is unchanged; surfaces caddy's own "admin endpoint unreachable"
-# stderr if Caddy is not running, but does not block dev launch.
-# Skipped silently when caddy is not on PATH (the Caddy install is
-# optional — the port-based devUrl fallback in build-dev-config.mjs
-# keeps `just dev` working without it). The catch covers rare
-# PowerShell-level invocation exceptions (the native-command non-zero
-# exit path does not throw in PS 5.1, so caddy-not-running is handled
-# by caddy's own stderr rather than this catch).
+# restart. Routes through caddy-lifecycle.ps1 so the main worktree's
+# Caddyfile (rather than this launching checkout's local copy) is the
+# reload target — preserves multi-checkout coexistence, since the
+# main worktree's `.dev/Caddyfile.worktrees/` is the canonical home for
+# every active checkout's per-checkout routing fragment. No-op when
+# Caddy is reachable on its admin endpoint and the config is unchanged;
+# the lifecycle script surfaces caddy's own "admin endpoint
+# unreachable" stderr if Caddy is not running, but does not block dev
+# launch. Skipped silently when caddy is not on PATH (the Caddy install
+# is optional — the port-based devUrl fallback in build-dev-config.mjs
+# keeps `just dev` working without it).
 if (Get-Command caddy -ErrorAction SilentlyContinue) {
     try {
-        & caddy reload --config (Join-Path $repoRoot "Caddyfile")
+        & (Join-Path $PSScriptRoot "caddy-lifecycle.ps1") -Action reload
     } catch {
         Write-Warning "caddy reload threw a PowerShell exception (continuing without reload): $($_.Exception.Message)"
     }

@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { ApiError } from '$lib/api';
 	import {
-		activateLootItem,
-		deactivateLootItem,
+		bulkActivateLootItem,
+		bulkDeactivateLootItem,
 		renameSessionMob,
 		restoreSessionMob,
 	} from '$lib/api';
 	import type {
 		SessionDetail,
-		LootEntry,
+		LootItem,
 		MobBreakdownRow,
 	} from '$lib/types/tracking';
 	import { formatPed, formatPercent } from '$lib/utils/format';
@@ -52,66 +52,93 @@
 		return 'warning';
 	}
 
-	// ── Per-row loot entries ──────────────────────────────────────────
-	// Backend returns one row per kill_loot_items capture (shrapnel rows
-	// included for completeness). Filter shrapnel out of the visible
-	// list since it's already excluded from the canonical Loot Breakdown
-	// aggregate and end users don't reason about it as discrete loot.
-	const visibleLootEntries = $derived(
-		(detail.lootEntries ?? []).filter((e) => !e.isEnhancerShrapnel),
-	);
-	const activeLootEntries = $derived(
-		visibleLootEntries
-			.filter((e) => e.deactivatedAt === null)
-			.slice()
-			.sort((a, b) => b.valuePed - a.valuePed),
-	);
-	const deactivatedLootEntries = $derived(
-		visibleLootEntries
-			.filter((e) => e.deactivatedAt !== null)
-			.slice()
-			.sort((a, b) => b.valuePed - a.valuePed),
-	);
+	// ── Loot breakdown (aggregate-by-item with wholesale archive) ────
+	// The canonical user-facing view is the item-name aggregate. The
+	// wholesale archive affordance operates on the aggregate row:
+	// "Deactivate Nanocube" flips every Nanocube capture in this session
+	// in one atomic backend transaction. The greyed parallel aggregate
+	// below carries the inverse Activate affordance per item name.
+	const activeLootRows = $derived(detail.lootBreakdown ?? []);
+	const deactivatedLootRows = $derived(detail.deactivatedLootBreakdown ?? []);
 
-	let lootConfirmId = $state<number | null>(null);
-	let lootBusyId = $state<number | null>(null);
+	let lootConfirmName = $state<string | null>(null);
+	// `confirm-active` opens the deactivate prompt on an active-aggregate
+	// row; `confirm-deactivated` opens the activate prompt on a
+	// deactivated-aggregate row. The same item name can in principle
+	// appear in both arrays (partial-state cohort), so the source array
+	// has to be tracked alongside the name.
+	let lootConfirmSource = $state<'active' | 'deactivated' | null>(null);
+	let lootBusyName = $state<string | null>(null);
 	let lootError = $state<string | null>(null);
 
-	async function onLootDeactivate(entry: LootEntry) {
+	function openLootConfirm(itemName: string, source: 'active' | 'deactivated') {
 		lootError = null;
-		lootBusyId = entry.id;
+		lootConfirmName = itemName;
+		lootConfirmSource = source;
+	}
+
+	function cancelLootConfirm() {
+		lootConfirmName = null;
+		lootConfirmSource = null;
+	}
+
+	async function onLootDeactivate(row: LootItem) {
+		lootError = null;
+		lootBusyName = row.name;
 		try {
-			const resp = await deactivateLootItem(detail.sessionId, entry.id);
-			// Mutate the entry in-place so the derived splits re-evaluate
-			// without a full refetch. Update the per-session returns total
-			// so the Summary card's Loot TT + Net reflect the edit live.
-			detail.lootEntries = detail.lootEntries.map((e) =>
-				e.id === entry.id ? { ...e, deactivatedAt: resp.deactivatedAt } : e,
-			);
+			const resp = await bulkDeactivateLootItem(detail.sessionId, row.name);
+			moveLootRow(row.name, 'active->deactivated');
 			applySessionTotals(resp.sessionTotalReturns);
 		} catch (e) {
-			lootError = errorMessage(e, 'Failed to deactivate loot entry.');
+			lootError = errorMessage(e, 'Failed to deactivate loot.');
 		} finally {
-			lootBusyId = null;
-			lootConfirmId = null;
+			lootBusyName = null;
+			cancelLootConfirm();
 		}
 	}
 
-	async function onLootActivate(entry: LootEntry) {
+	async function onLootActivate(row: LootItem) {
 		lootError = null;
-		lootBusyId = entry.id;
+		lootBusyName = row.name;
 		try {
-			const resp = await activateLootItem(detail.sessionId, entry.id);
-			detail.lootEntries = detail.lootEntries.map((e) =>
-				e.id === entry.id ? { ...e, deactivatedAt: resp.deactivatedAt } : e,
-			);
+			const resp = await bulkActivateLootItem(detail.sessionId, row.name);
+			moveLootRow(row.name, 'deactivated->active');
 			applySessionTotals(resp.sessionTotalReturns);
 		} catch (e) {
-			lootError = errorMessage(e, 'Failed to activate loot entry.');
+			lootError = errorMessage(e, 'Failed to activate loot.');
 		} finally {
-			lootBusyId = null;
-			lootConfirmId = null;
+			lootBusyName = null;
+			cancelLootConfirm();
 		}
+	}
+
+	function moveLootRow(itemName: string, direction: 'active->deactivated' | 'deactivated->active') {
+		// Wholesale flip means every matching row moves between the two
+		// aggregates. Partial-state cohorts merge: if Nanocube already
+		// exists on the destination side, the moved row's quantity +
+		// ttValue fold into the existing destination row. The next
+		// session refetch is the source of truth either way.
+		const srcKey = direction === 'active->deactivated' ? 'lootBreakdown' : 'deactivatedLootBreakdown';
+		const destKey = direction === 'active->deactivated' ? 'deactivatedLootBreakdown' : 'lootBreakdown';
+		const moving = detail[srcKey].find((r) => r.name === itemName);
+		if (!moving) return;
+		const existingDest = detail[destKey].find((r) => r.name === itemName);
+		const nextDest = existingDest
+			? detail[destKey].map((r) =>
+				r.name === itemName
+					? { ...r, quantity: r.quantity + moving.quantity, ttValue: r.ttValue + moving.ttValue }
+					: r,
+			)
+			: [...detail[destKey], { ...moving }];
+		// Re-sort by ttValue desc to keep aggregate ordering stable
+		// with the backend.
+		nextDest.sort((a, b) => b.ttValue - a.ttValue);
+		const nextSrc = detail[srcKey].filter((r) => r.name !== itemName);
+		detail = {
+			...detail,
+			[srcKey]: nextSrc,
+			[destKey]: nextDest,
+		};
 	}
 
 	// ── Mob attribution edit ──────────────────────────────────────────
@@ -507,35 +534,35 @@
 		</div>
 	{/if}
 
-	<!-- 3. Loot breakdown (per-row with deactivate / activate) -->
+	<!-- 3. Loot breakdown (aggregate-by-item with wholesale archive) -->
 	<Divider />
 	<div>
 		<h3 class="eyebrow mb-3">Loot Breakdown</h3>
-		{#if activeLootEntries.length === 0 && deactivatedLootEntries.length === 0}
+		{#if activeLootRows.length === 0 && deactivatedLootRows.length === 0}
 			<p class="text-xs text-text-tertiary">No loot recorded.</p>
 		{:else}
 			<DataTable
 				columns={[
-					{ key: 'itemName', label: 'Item' },
+					{ key: 'name', label: 'Item' },
 					{ key: 'quantity', label: 'Qty', align: 'right' },
-					{ key: 'valuePed', label: 'TT Value', align: 'right' },
+					{ key: 'ttValue', label: 'TT Value', align: 'right' },
 					{ key: '__action', label: '', align: 'right', widthClass: 'w-[10%]' }
 				]}
-				rows={activeLootEntries}
-				rowKeyFn={(row) => String(row.id)}
-				overlayKey={lootConfirmId !== null ? String(lootConfirmId) : null}
+				rows={activeLootRows}
+				rowKeyFn={(row) => row.name}
+				overlayKey={lootConfirmSource === 'active' ? lootConfirmName : null}
 			>
 				{#snippet cell({ row, column, value })}
-					{#if column.key === 'valuePed'}
-						{formatPed(row.valuePed)}
+					{#if column.key === 'ttValue'}
+						{formatPed(row.ttValue)}
 					{:else if column.key === '__action'}
 						<button
 							type="button"
 							class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1 disabled:opacity-50 disabled:cursor-not-allowed"
-							disabled={lootBusyId === row.id}
-							onclick={() => (lootConfirmId = row.id)}
-							aria-label="Deactivate {row.itemName}"
-							title="Deactivate this loot entry"
+							disabled={lootBusyName === row.name}
+							onclick={() => openLootConfirm(row.name, 'active')}
+							aria-label="Archive all {row.name} entries"
+							title="Archive all {row.name} entries"
 						>
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
@@ -558,11 +585,13 @@
 				{/snippet}
 				{#snippet rowOverlay({ row })}
 					<div class="inline-flex items-center gap-3">
-						<span class="text-xs text-text-secondary">Deactivate this loot entry?</span>
+						<span class="text-xs text-text-secondary">
+							Archive all {row.quantity} "{row.name}" {row.quantity === 1 ? 'entry' : 'entries'}?
+						</span>
 						<button
 							type="button"
 							class="text-xs text-text-secondary hover:text-text px-2 py-0.5 rounded-sm cursor-pointer border border-border/60 hover:border-border-bright"
-							onclick={() => (lootConfirmId = null)}
+							onclick={cancelLootConfirm}
 						>
 							Cancel
 						</button>
@@ -578,32 +607,32 @@
 			</DataTable>
 		{/if}
 
-		{#if deactivatedLootEntries.length > 0}
+		{#if deactivatedLootRows.length > 0}
 			<div class="mt-4">
-				<p class="eyebrow mb-2 text-text-tertiary">Deactivated</p>
+				<p class="eyebrow mb-2 text-text-tertiary">Archived</p>
 				<DataTable
 					columns={[
-						{ key: 'itemName', label: 'Item' },
+						{ key: 'name', label: 'Item' },
 						{ key: 'quantity', label: 'Qty', align: 'right' },
-						{ key: 'valuePed', label: 'TT Value', align: 'right' },
+						{ key: 'ttValue', label: 'TT Value', align: 'right' },
 						{ key: '__action', label: '', align: 'right', widthClass: 'w-[10%]' }
 					]}
-					rows={deactivatedLootEntries}
-					rowKeyFn={(row) => String(row.id)}
-					overlayKey={lootConfirmId !== null ? String(lootConfirmId) : null}
+					rows={deactivatedLootRows}
+					rowKeyFn={(row) => row.name}
+					overlayKey={lootConfirmSource === 'deactivated' ? lootConfirmName : null}
 					class="opacity-60"
 				>
 					{#snippet cell({ row, column, value })}
-						{#if column.key === 'valuePed'}
-							{formatPed(row.valuePed)}
+						{#if column.key === 'ttValue'}
+							{formatPed(row.ttValue)}
 						{:else if column.key === '__action'}
 							<button
 								type="button"
 								class="text-text-tertiary hover:text-text transition-colors duration-[var(--duration-fast)] cursor-pointer p-1 disabled:opacity-50 disabled:cursor-not-allowed"
-								disabled={lootBusyId === row.id}
-								onclick={() => (lootConfirmId = row.id)}
-								aria-label="Activate {row.itemName}"
-								title="Activate this loot entry"
+								disabled={lootBusyName === row.name}
+								onclick={() => openLootConfirm(row.name, 'deactivated')}
+								aria-label="Restore all {row.name} entries"
+								title="Restore all {row.name} entries"
 							>
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
@@ -626,11 +655,13 @@
 					{/snippet}
 					{#snippet rowOverlay({ row })}
 						<div class="inline-flex items-center gap-3">
-							<span class="text-xs text-text-secondary">Activate this loot entry?</span>
+							<span class="text-xs text-text-secondary">
+								Restore all {row.quantity} "{row.name}" {row.quantity === 1 ? 'entry' : 'entries'}?
+							</span>
 							<button
 								type="button"
 								class="text-xs text-text-secondary hover:text-text px-2 py-0.5 rounded-sm cursor-pointer border border-border/60 hover:border-border-bright"
-								onclick={() => (lootConfirmId = null)}
+								onclick={cancelLootConfirm}
 							>
 								Cancel
 							</button>

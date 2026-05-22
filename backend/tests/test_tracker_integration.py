@@ -21,6 +21,8 @@ from backend.core.events import (
 )
 from backend.routers.tracking import (
     _activate_loot_item_impl,
+    _bulk_activate_loot_item_impl,
+    _bulk_deactivate_loot_item_impl,
     _deactivate_loot_item_impl,
     _rename_session_mob_impl,
     _restore_session_mob_impl,
@@ -1558,6 +1560,330 @@ class TestLootEditEndpoints:
         assert detail["summary"]["returns"] == pytest.approx(
             round(seed["loot_b_value"], 2)
         )
+
+
+# ── Bulk loot-item deactivate / activate (aggregate-row affordance) ──
+#
+# These tests exercise the wholesale-by-item-name flip endpoints that
+# back the sessions-tab aggregate-row archive affordance. The
+# single-row endpoints above (TestLootEditEndpoints) cover one
+# kill_loot_items row at a time; the bulk endpoints flip every matching
+# row for (session_id, item_name) atomically in one transaction.
+
+
+class TestBulkLootEditEndpoints:
+    def _seed_multi_item_session(self, db, *, is_active: int = 0):
+        """Seed a session with three Nanocube drops across two kills
+        plus one Mob-Drop-Other in a third kill, so cross-kill bulk
+        flips and untouched-cohort isolation can both be observed."""
+        session_id = str(uuid.uuid4())
+        kill1_id = str(uuid.uuid4())
+        kill2_id = str(uuid.uuid4())
+        kill3_id = str(uuid.uuid4())
+        now = time.time()
+        nano_values = (2.50, 3.00, 1.25)
+        other_value = 4.75
+
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, now - 600, None if is_active else now, is_active),
+        )
+        # Kill 1: two Nanocube drops.
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Atrox', ?, 5, 50.0, ?, 2.0)",
+            (kill1_id, session_id, now - 300, nano_values[0] + nano_values[1]),
+        )
+        nano1_id = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Nanocube', 1, ?, 0)",
+            (kill1_id, nano_values[0]),
+        ).lastrowid
+        nano2_id = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Nanocube', 1, ?, 0)",
+            (kill1_id, nano_values[1]),
+        ).lastrowid
+        # Kill 2: one Nanocube drop.
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Atrox', ?, 4, 40.0, ?, 2.0)",
+            (kill2_id, session_id, now - 200, nano_values[2]),
+        )
+        nano3_id = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Nanocube', 1, ?, 0)",
+            (kill2_id, nano_values[2]),
+        ).lastrowid
+        # Kill 3: one Mob-Drop-Other, untouched by Nanocube bulk flips.
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Atrox', ?, 6, 60.0, ?, 2.0)",
+            (kill3_id, session_id, now - 100, other_value),
+        )
+        other_id = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Mob-Drop-Other', 1, ?, 0)",
+            (kill3_id, other_value),
+        ).lastrowid
+        db.commit()
+        return {
+            "session_id": session_id,
+            "kill1_id": kill1_id,
+            "kill2_id": kill2_id,
+            "kill3_id": kill3_id,
+            "nano_ids": (nano1_id, nano2_id, nano3_id),
+            "nano_values": nano_values,
+            "other_id": other_id,
+            "other_value": other_value,
+            "kill1_initial_total": nano_values[0] + nano_values[1],
+            "kill2_initial_total": nano_values[2],
+            "kill3_initial_total": other_value,
+            "session_initial_returns": sum(nano_values) + other_value,
+        }
+
+    def _seed_summary_row(self, db, session_id):
+        db.execute(
+            "INSERT INTO session_summaries ("
+            "session_id, summary_version, started_at, ended_at, duration_hours, "
+            "kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, heal_cost, "
+            "dangling_cost, cycled_ped, regular_skill_ped_json, attribute_levels_json, "
+            "regular_skill_tt, attribute_levels_total"
+            ") VALUES (?, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '{}', '{}', 0, 0)",
+            (session_id,),
+        )
+        db.commit()
+
+    # ── Happy paths ──────────────────────────────────────────────────
+
+    def test_bulk_deactivate_flips_all_matching_rows_atomically(self):
+        """Bulk-deactivate Nanocube flips all three matching rows
+        across two kills in one shot; each parent kill's
+        loot_total_ped reduces by the sum of its matching rows;
+        Mob-Drop-Other is untouched."""
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+
+        result = _bulk_deactivate_loot_item_impl(
+            db, seed["session_id"], "Nanocube",
+        )
+
+        assert result["sessionId"] == seed["session_id"]
+        assert result["itemName"] == "Nanocube"
+        assert result["affectedRows"] == 3
+        assert result["totalValueDelta"] == pytest.approx(-sum(seed["nano_values"]))
+        # Only Mob-Drop-Other remains as live loot.
+        assert result["sessionTotalReturns"] == pytest.approx(seed["other_value"], rel=1e-4)
+
+        # All three Nanocube rows carry deactivated_at; other untouched.
+        flags = [
+            db.execute(
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+            ).fetchone()[0]
+            for i in seed["nano_ids"]
+        ]
+        assert all(f is not None for f in flags)
+        other_flag = db.execute(
+            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+            (seed["other_id"],),
+        ).fetchone()[0]
+        assert other_flag is None
+
+        # Per-kill loot_total_ped mutated correctly.
+        kill1_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill1_id"],),
+        ).fetchone()[0]
+        kill2_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill2_id"],),
+        ).fetchone()[0]
+        kill3_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill3_id"],),
+        ).fetchone()[0]
+        assert kill1_total == pytest.approx(0.0)
+        assert kill2_total == pytest.approx(0.0)
+        assert kill3_total == pytest.approx(seed["other_value"])
+
+    def test_bulk_activate_restores_all_matching_rows(self):
+        """Bulk-deactivate followed by bulk-activate returns every row
+        and per-kill total to pre-edit state."""
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+
+        _bulk_deactivate_loot_item_impl(db, seed["session_id"], "Nanocube")
+        result = _bulk_activate_loot_item_impl(db, seed["session_id"], "Nanocube")
+
+        assert result["affectedRows"] == 3
+        assert result["totalValueDelta"] == pytest.approx(sum(seed["nano_values"]))
+        assert result["sessionTotalReturns"] == pytest.approx(
+            seed["session_initial_returns"], rel=1e-4,
+        )
+
+        flags = [
+            db.execute(
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+            ).fetchone()[0]
+            for i in seed["nano_ids"]
+        ]
+        assert all(f is None for f in flags)
+
+        kill1_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill1_id"],),
+        ).fetchone()[0]
+        kill2_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill2_id"],),
+        ).fetchone()[0]
+        assert kill1_total == pytest.approx(seed["kill1_initial_total"])
+        assert kill2_total == pytest.approx(seed["kill2_initial_total"])
+
+    def test_bulk_deactivate_clears_session_summaries_cache(self):
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+        self._seed_summary_row(db, seed["session_id"])
+
+        _bulk_deactivate_loot_item_impl(db, seed["session_id"], "Nanocube")
+
+        cached = db.execute(
+            "SELECT 1 FROM session_summaries WHERE session_id = ?",
+            (seed["session_id"],),
+        ).fetchone()
+        assert cached is None
+
+    def test_bulk_partial_state_only_flips_eligible_rows(self):
+        """If one Nanocube row is already deactivated via the single-row
+        endpoint, bulk-deactivate flips the remaining two active rows
+        only; the inverse bulk-activate then promotes only the
+        deactivated rows back."""
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+
+        # Pre-deactivate one row via the single-row endpoint to set up
+        # partial state.
+        _deactivate_loot_item_impl(db, seed["session_id"], seed["nano_ids"][0])
+
+        result = _bulk_deactivate_loot_item_impl(
+            db, seed["session_id"], "Nanocube",
+        )
+        assert result["affectedRows"] == 2
+        # Now all three are deactivated.
+        flags = [
+            db.execute(
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+            ).fetchone()[0]
+            for i in seed["nano_ids"]
+        ]
+        assert all(f is not None for f in flags)
+
+    # ── 404 / 409 boundaries ────────────────────────────────────────
+
+    def test_bulk_deactivate_missing_session_is_404(self):
+        db = _setup_orphan_db()
+        # No seed; just call against a fabricated id.
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_deactivate_loot_item_impl(
+                db, "missing-session", "Nanocube",
+            )
+        assert excinfo.value.status_code == 404
+
+    def test_bulk_deactivate_item_not_in_session_is_404(self):
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_deactivate_loot_item_impl(
+                db, seed["session_id"], "Not-In-Session",
+            )
+        assert excinfo.value.status_code == 404
+        assert "no loot named" in excinfo.value.detail.lower()
+
+    def test_bulk_deactivate_all_already_deactivated_is_409(self):
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+        _bulk_deactivate_loot_item_impl(db, seed["session_id"], "Nanocube")
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_deactivate_loot_item_impl(
+                db, seed["session_id"], "Nanocube",
+            )
+        assert excinfo.value.status_code == 409
+        assert "already" in excinfo.value.detail.lower()
+
+    def test_bulk_activate_all_already_active_is_409(self):
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_activate_loot_item_impl(
+                db, seed["session_id"], "Nanocube",
+            )
+        assert excinfo.value.status_code == 409
+
+    def test_bulk_blank_item_name_is_400(self):
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db)
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_deactivate_loot_item_impl(db, seed["session_id"], "   ")
+        assert excinfo.value.status_code == 400
+
+    def test_bulk_active_session_is_409(self):
+        """The active-session block from _validate_session_exists also
+        guards the bulk endpoints, closing the parity gap the
+        single-row endpoints carried as a parked follow-up."""
+        db = _setup_orphan_db()
+        seed = self._seed_multi_item_session(db, is_active=1)
+        with pytest.raises(HTTPException) as excinfo:
+            _bulk_deactivate_loot_item_impl(
+                db, seed["session_id"], "Nanocube",
+            )
+        assert excinfo.value.status_code == 409
+        assert "session" in excinfo.value.detail.lower()
+
+    # ── Session-detail response: parallel aggregate ─────────────────
+
+    def test_session_detail_carries_deactivated_loot_breakdown(self, tmp_path):
+        """GET /api/tracking/session/{id} surfaces a
+        deactivatedLootBreakdown aggregate parallel to lootBreakdown so
+        the frontend can render the greyed section with the inverse
+        activate affordance per item name."""
+        from backend.db.app_database import AppDatabase
+
+        app_db = AppDatabase(tmp_path / "app.db")
+        db = app_db.conn
+        init_tracking_tables(db)
+        try:
+            seed = self._seed_multi_item_session(db)
+            _bulk_deactivate_loot_item_impl(
+                db, seed["session_id"], "Nanocube",
+            )
+            detail = get_session_impl(db, seed["session_id"])
+        finally:
+            app_db.close()
+
+        # Active aggregate contains only Mob-Drop-Other; deactivated
+        # aggregate contains Nanocube rolled up.
+        active_names = {row["name"] for row in detail["lootBreakdown"]}
+        deactivated_names = {row["name"] for row in detail["deactivatedLootBreakdown"]}
+        assert active_names == {"Mob-Drop-Other"}
+        assert deactivated_names == {"Nanocube"}
+
+        nano_row = detail["deactivatedLootBreakdown"][0]
+        assert nano_row["quantity"] == 3
+        assert nano_row["ttValue"] == pytest.approx(
+            round(sum(seed["nano_values"]), 2),
+        )
+
+    def test_session_detail_empty_deactivated_breakdown_when_no_edits(self, tmp_path):
+        from backend.db.app_database import AppDatabase
+
+        app_db = AppDatabase(tmp_path / "app.db")
+        db = app_db.conn
+        init_tracking_tables(db)
+        try:
+            seed = self._seed_multi_item_session(db)
+            detail = get_session_impl(db, seed["session_id"])
+        finally:
+            app_db.close()
+        assert detail["deactivatedLootBreakdown"] == []
 
 
 # ── Session-metadata-edit endpoints (rename-mob / restore-mob) ───────

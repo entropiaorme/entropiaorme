@@ -424,6 +424,37 @@ export async function activateLootItem(
 	);
 }
 
+/** Response shape from the bulk loot-item deactivate / activate
+ * endpoints. Operates on every kill_loot_items row matching
+ * `(sessionId, itemName)` in one atomic transaction. */
+export interface BulkLootItemEditResponse {
+	sessionId: string;
+	itemName: string;
+	affectedRows: number;
+	totalValueDelta: number;
+	sessionTotalReturns: number;
+}
+
+export async function bulkDeactivateLootItem(
+	sessionId: string,
+	itemName: string,
+): Promise<BulkLootItemEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/deactivate`,
+		{ method: 'POST' },
+	);
+}
+
+export async function bulkActivateLootItem(
+	sessionId: string,
+	itemName: string,
+): Promise<BulkLootItemEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/activate`,
+		{ method: 'POST' },
+	);
+}
+
 /** Response shape from the rename-mob / restore-mob endpoints. */
 export interface MobEditResponse {
 	sessionId: string;

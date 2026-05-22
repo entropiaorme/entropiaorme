@@ -37,7 +37,15 @@ export interface SessionDetail {
 		costBreakdown?: CostBreakdown;
 	};
 	notableEvents: NotableEvent[];
+	/** Item-name aggregate of currently-active loot rows. */
 	lootBreakdown: LootItem[];
+	/** Item-name aggregate of currently-deactivated loot rows. Parallel
+	 * to lootBreakdown; an item appearing in both means a partial-state
+	 * cohort (some captures active, some deactivated). */
+	deactivatedLootBreakdown: LootItem[];
+	/** Per-row loot detail. Carried for completeness; the canonical
+	 * user-facing view is the lootBreakdown / deactivatedLootBreakdown
+	 * aggregates. */
 	lootEntries: LootEntry[];
 	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: Ped;

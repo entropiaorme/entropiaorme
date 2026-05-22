@@ -1141,6 +1141,199 @@ def _activate_loot_item_impl(conn, session_id: str, loot_item_id: int):
     return _build_loot_edit_response(conn, session_id, kill_id, loot_item_id)
 
 
+# ── Bulk loot-item deactivate / activate (aggregate-row affordance) ──
+#
+# The single-row endpoints above operate on one kill_loot_items row at a
+# time, keyed by primary key. The sessions-tab UI surfaces the aggregate
+# Loot Breakdown (rolled up by item_name) as the user-facing canonical
+# view; the user-level mental model is "remove all Nanocube from this
+# session" rather than "remove this specific Nanocube capture." These
+# bulk endpoints flip every matching row for `(session_id, item_name)`
+# in one atomic transaction so the aggregate-row affordance lands
+# without N round-trips, race windows, or partial-state surprises.
+#
+# Idempotency model: bulk-deactivate flips rows currently in the active
+# state to deactivated; bulk-activate flips rows currently deactivated
+# back to active. If no rows are in the opposite state for the target
+# (item_name, session_id) the endpoint 409s, mirroring the single-row
+# convention. 404 distinguishes "session missing" and "item_name not
+# present in this session at all" so the frontend can surface them
+# distinctly.
+
+
+def _build_loot_item_edit_response(
+    conn,
+    session_id: str,
+    item_name: str,
+    affected_rows: int,
+    total_value_delta: float,
+):
+    """Build the response payload for bulk loot-item deactivate / activate.
+
+    Returns the affected row count plus the per-session returns total so
+    the frontend can re-render Summary stats without a full session
+    refetch. `total_value_delta` is signed (negative on deactivate,
+    positive on activate) for clarity at the call site.
+    """
+    session_returns = conn.execute(
+        "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()[0]
+    return {
+        "sessionId": session_id,
+        "itemName": item_name,
+        "affectedRows": affected_rows,
+        "totalValueDelta": round(float(total_value_delta), 4),
+        "sessionTotalReturns": round(float(session_returns or 0.0), 2),
+    }
+
+
+def _bulk_flip_loot_item(
+    conn,
+    session_id: str,
+    item_name: str,
+    to_state: str,
+):
+    """Shared implementation for both bulk endpoints.
+
+    `to_state` is 'deactivated' or 'active'. Selects all matching rows
+    (joined to kills to scope by session_id) currently in the opposite
+    state, flips their `deactivated_at`, and rewrites each parent kill's
+    denormalised `loot_total_ped` by the row's `value_ped` (signed
+    appropriately for the direction). All writes happen inside the
+    implicit transaction the first UPDATE opens; the cursor's rowcount
+    drives the 404 / 409 differentiation:
+
+    - 0 rows match `(session_id, item_name)` at all → 404 (item_name
+      is not in this session).
+    - 0 rows match `(session_id, item_name, opposite-state)` → 409 (all
+      rows are already in the target state, nothing to flip).
+
+    Atomicity: every per-kill UPDATE happens inside the same implicit
+    transaction; a mid-batch failure rolls back the partial flip.
+    """
+    _validate_session_exists(conn, session_id)
+    item_name = item_name.strip()
+    if not item_name:
+        raise HTTPException(status_code=400, detail="Item name cannot be blank")
+
+    if to_state == "deactivated":
+        # Select rows currently active, eligible to flip to deactivated.
+        opposite_clause = "l.deactivated_at IS NULL"
+        new_flag_sql = "unixepoch('now')"
+        delta_sign = -1.0
+    elif to_state == "active":
+        opposite_clause = "l.deactivated_at IS NOT NULL"
+        new_flag_sql = "NULL"
+        delta_sign = 1.0
+    else:
+        raise ValueError(f"unsupported to_state: {to_state!r}")
+
+    # First check whether the item appears in the session at all, so the
+    # 404 vs 409 distinction is data-driven rather than blurred. A 404
+    # means "the user asked about an item that isn't here"; a 409 means
+    # "the item is here but already in the target state."
+    any_row = conn.execute(
+        "SELECT 1 FROM kill_loot_items l "
+        "JOIN kills k ON k.id = l.kill_id "
+        "WHERE k.session_id = ? AND l.item_name = ? "
+        "LIMIT 1",
+        (session_id, item_name),
+    ).fetchone()
+    if not any_row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No loot named '{item_name}' in this session",
+        )
+
+    # Pull the eligible rows up front so we can update parent kills
+    # row-by-row with their value_peds inside the same transaction.
+    eligible = conn.execute(
+        "SELECT l.id, l.kill_id, l.value_ped FROM kill_loot_items l "
+        "JOIN kills k ON k.id = l.kill_id "
+        f"WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause}",
+        (session_id, item_name),
+    ).fetchall()
+    if not eligible:
+        raise HTTPException(
+            status_code=409,
+            detail=f"All '{item_name}' rows in this session are already {to_state}",
+        )
+
+    try:
+        ids = [row[0] for row in eligible]
+        placeholders = ",".join("?" * len(ids))
+        conn.execute(
+            f"UPDATE kill_loot_items SET deactivated_at = {new_flag_sql} "
+            f"WHERE id IN ({placeholders})",
+            ids,
+        )
+        # Aggregate the per-kill deltas so each parent's denormalised
+        # loot_total_ped gets one UPDATE rather than N. SQLite handles
+        # repeated UPDATEs efficiently either way; the aggregation keeps
+        # the audit shape closer to "one kill, one mutation."
+        per_kill_delta: dict = {}
+        total_delta = 0.0
+        for _, kill_id, value_ped in eligible:
+            v = float(value_ped or 0.0)
+            per_kill_delta[kill_id] = per_kill_delta.get(kill_id, 0.0) + v
+            total_delta += v
+        for kill_id, kill_delta in per_kill_delta.items():
+            conn.execute(
+                "UPDATE kills SET loot_total_ped = loot_total_ped + ? WHERE id = ?",
+                (delta_sign * kill_delta, kill_id),
+            )
+        conn.execute(
+            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+        )
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+
+    return _build_loot_item_edit_response(
+        conn, session_id, item_name, len(eligible), delta_sign * total_delta,
+    )
+
+
+@router.post("/session/{session_id}/loot-item/{item_name:path}/deactivate")
+def bulk_deactivate_loot_item(session_id: str, item_name: str):
+    """Bulk-deactivate every `kill_loot_items` row matching `item_name`
+    in this session (item-name is URL-path encoded so spaces survive).
+
+    Atomically flips all active matching rows + rewrites each parent
+    kill's `loot_total_ped` + invalidates `session_summaries`. 404 if
+    the item isn't in this session at all; 409 if every matching row is
+    already deactivated.
+    """
+    conn = get_services().app_db.conn
+    return _bulk_deactivate_loot_item_impl(conn, session_id, item_name)
+
+
+def _bulk_deactivate_loot_item_impl(conn, session_id: str, item_name: str):
+    """Backend-side bulk-deactivate; connection-injectable form for
+    direct testing against an arbitrary SQLite connection."""
+    return _bulk_flip_loot_item(conn, session_id, item_name, "deactivated")
+
+
+@router.post("/session/{session_id}/loot-item/{item_name:path}/activate")
+def bulk_activate_loot_item(session_id: str, item_name: str):
+    """Bulk-activate every previously-deactivated `kill_loot_items`
+    row matching `item_name` in this session. Inverse of
+    bulk_deactivate.
+    """
+    conn = get_services().app_db.conn
+    return _bulk_activate_loot_item_impl(conn, session_id, item_name)
+
+
+def _bulk_activate_loot_item_impl(conn, session_id: str, item_name: str):
+    """Backend-side bulk-activate; connection-injectable form for
+    direct testing against an arbitrary SQLite connection."""
+    return _bulk_flip_loot_item(conn, session_id, item_name, "active")
+
+
 def get_session_impl(conn, session_id: str):
     session_row = conn.execute(
         "SELECT id, started_at, ended_at, is_active FROM tracking_sessions WHERE id = ?",
@@ -1204,9 +1397,11 @@ def get_session_impl(conn, session_id: str):
         }
 
     # Loot breakdown aggregated in a single query. Deactivated rows are
-    # filtered out of the aggregate so the existing UI surface (item-name
-    # rollup) reflects the user's post-hoc edits; the individual rows
-    # remain accessible via `lootEntries` below for the editing affordance.
+    # filtered out of the active aggregate so the existing UI surface
+    # (item-name rollup) reflects the user's post-hoc edits, and a
+    # parallel `deactivatedLootBreakdown` aggregate is built below so
+    # the frontend can render a greyed section with the inverse
+    # Activate affordance per item name.
     loot_agg_rows = conn.execute(
         "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
         "FROM kill_loot_items l "
@@ -1220,6 +1415,25 @@ def get_session_impl(conn, session_id: str):
     merged_loot: dict[str, dict] = {
         name: {"quantity": int(qty or 0), "ttValue": float(val or 0.0)}
         for name, qty, val in loot_agg_rows
+    }
+
+    # Parallel aggregate for deactivated rows. An item appearing in both
+    # arrays (partial state) means some captures are deactivated and
+    # others active; the frontend renders both rows with their
+    # respective flip affordances. Shrapnel is excluded symmetrically.
+    deactivated_loot_agg_rows = conn.execute(
+        "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
+        "FROM kill_loot_items l "
+        "JOIN kills k ON k.id = l.kill_id "
+        "WHERE k.session_id = ? "
+        "AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 "
+        "AND l.deactivated_at IS NOT NULL "
+        "GROUP BY l.item_name",
+        (session_id,),
+    ).fetchall()
+    merged_deactivated_loot: dict[str, dict] = {
+        name: {"quantity": int(qty or 0), "ttValue": float(val or 0.0)}
+        for name, qty, val in deactivated_loot_agg_rows
     }
 
     # Per-mob breakdown for the sessions-tab metadata-edit affordance.
@@ -1290,6 +1504,16 @@ def get_session_impl(conn, session_id: str):
         reverse=True,
     )
 
+    # Parallel aggregate for deactivated rows, same shape + ordering.
+    deactivated_loot_breakdown = sorted(
+        [
+            {"name": k, "quantity": v["quantity"], "ttValue": round(v["ttValue"], 2)}
+            for k, v in merged_deactivated_loot.items()
+        ],
+        key=lambda x: x["ttValue"],
+        reverse=True,
+    )
+
     # Build tool stats sorted by shots fired descending
     tool_stats = sorted(
         [
@@ -1342,6 +1566,7 @@ def get_session_impl(conn, session_id: str):
         },
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
+        "deactivatedLootBreakdown": deactivated_loot_breakdown,
         "lootEntries": loot_entries,
         "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),

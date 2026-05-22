@@ -20,10 +20,8 @@ from backend.core.events import (
     EVENT_LOOT_GROUP,
 )
 from backend.routers.tracking import (
-    _activate_loot_item_impl,
     _bulk_activate_loot_item_impl,
     _bulk_deactivate_loot_item_impl,
-    _deactivate_loot_item_impl,
     _rename_session_mob_impl,
     _restore_session_mob_impl,
     _ts_to_iso,
@@ -1189,386 +1187,16 @@ class TestV30Migration:
             second.close()
 
 
-# ── Loot deactivate / activate endpoints ─────────────────────────────
+# ── Loot deactivate / activate endpoints (aggregate-row affordance) ─
 #
 # These tests cover the FastAPI-facing impl functions for the post-hoc
-# loot-edit affordance: the wrapper transactions, the 404 / 409 boundary
-# behaviour, the cache-invalidation footprint on session_summaries, and
-# the session-detail response extension carrying per-row `deactivated_at`.
-# The underlying SQL manoeuvre is already pinned by TestLootDeactivation
-# above; this class focuses on the API contract layered on top.
-
-
-class TestLootEditEndpoints:
-    def _seed(self, db):
-        """Seed one session + one kill + two loot rows. Mirrors
-        TestLootDeactivation's helper so the two test classes share a
-        substrate shape; returning explicit names here keeps tests
-        readable when they only reference one of the two loot rows."""
-        session_id = str(uuid.uuid4())
-        kill_id = str(uuid.uuid4())
-        now = time.time()
-        loot_a_value, loot_b_value = 4.20, 1.30
-
-        db.execute(
-            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
-            "VALUES (?, ?, ?, 0)",
-            (session_id, now - 600, now),
-        )
-        db.execute(
-            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
-            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
-            "VALUES (?, ?, 'Atrox', ?, 10, 100.0, ?, 5.0)",
-            (kill_id, session_id, now - 60, loot_a_value + loot_b_value),
-        )
-        loot_a_id = db.execute(
-            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
-            "VALUES (?, 'Mob-Drop-A', 1, ?, 0)",
-            (kill_id, loot_a_value),
-        ).lastrowid
-        loot_b_id = db.execute(
-            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
-            "VALUES (?, 'Mob-Drop-B', 1, ?, 0)",
-            (kill_id, loot_b_value),
-        ).lastrowid
-        db.commit()
-        return {
-            "session_id": session_id,
-            "kill_id": kill_id,
-            "loot_a_id": loot_a_id,
-            "loot_b_id": loot_b_id,
-            "loot_a_value": loot_a_value,
-            "loot_b_value": loot_b_value,
-        }
-
-    def _seed_summary_row(self, db, session_id):
-        """Drop a stand-in session_summaries row so cache invalidation
-        is observable; the columns mirror schema.py:114-136 but only the
-        primary key matters for the DELETE assertion."""
-        db.execute(
-            "INSERT INTO session_summaries ("
-            "session_id, summary_version, started_at, ended_at, duration_hours, "
-            "kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, heal_cost, "
-            "dangling_cost, cycled_ped, regular_skill_ped_json, attribute_levels_json, "
-            "regular_skill_tt, attribute_levels_total"
-            ") VALUES (?, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '{}', '{}', 0, 0)",
-            (session_id,),
-        )
-        db.commit()
-
-    # ── Happy paths ──────────────────────────────────────────────────
-
-    def test_deactivate_returns_updated_totals_and_flips_flag(self):
-        """Happy-path deactivate: response carries the post-mutation
-        totals + ISO-formatted flag, and the underlying DB state mirrors
-        the response."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-
-        result = _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        # Response shape carries the post-mutation totals so the frontend
-        # can re-render without a full session refetch.
-        assert result["sessionId"] == seed["session_id"]
-        assert result["killId"] == seed["kill_id"]
-        assert result["lootItemId"] == seed["loot_a_id"]
-        assert result["deactivatedAt"] is not None
-        assert result["killLootTotalPed"] == pytest.approx(seed["loot_b_value"])
-        assert result["sessionTotalReturns"] == pytest.approx(round(seed["loot_b_value"], 2))
-
-        # Underlying state mirrors the response: flag stamped, kill total
-        # reduced by the deactivated row's value_ped. The response surfaces
-        # the timestamp as ISO 8601 for API consistency with the rest of
-        # the session-detail response (startTime, endTime, etc.), so the
-        # underlying raw Unix value goes through the same converter.
-        flag = db.execute(
-            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
-            (seed["loot_a_id"],),
-        ).fetchone()[0]
-        assert flag is not None
-        assert _ts_to_iso(flag) == result["deactivatedAt"]
-
-        kill_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-        assert kill_total == pytest.approx(seed["loot_b_value"])
-
-    def test_activate_restores_state(self):
-        """Deactivate then activate returns the row + kill total to
-        pre-edit state; the flag clears to None on the response."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-
-        _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-        result = _activate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        assert result["deactivatedAt"] is None
-        assert result["killLootTotalPed"] == pytest.approx(
-            seed["loot_a_value"] + seed["loot_b_value"]
-        )
-        assert result["sessionTotalReturns"] == pytest.approx(
-            round(seed["loot_a_value"] + seed["loot_b_value"], 2)
-        )
-
-        flag = db.execute(
-            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
-            (seed["loot_a_id"],),
-        ).fetchone()[0]
-        assert flag is None
-
-    def test_deactivate_clears_session_summaries_cache(self):
-        """A pre-existing session_summaries cache row is deleted on
-        deactivate; the next session-list read recomputes fresh."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        self._seed_summary_row(db, seed["session_id"])
-
-        before = db.execute(
-            "SELECT 1 FROM session_summaries WHERE session_id = ?",
-            (seed["session_id"],),
-        ).fetchone()
-        assert before is not None
-
-        _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        after = db.execute(
-            "SELECT 1 FROM session_summaries WHERE session_id = ?",
-            (seed["session_id"],),
-        ).fetchone()
-        assert after is None  # Cache invalidated; next read recomputes.
-
-    def test_activate_clears_session_summaries_cache(self):
-        """Same cache-invalidation contract on the activate path."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        self._seed_summary_row(db, seed["session_id"])
-        _activate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        row = db.execute(
-            "SELECT 1 FROM session_summaries WHERE session_id = ?",
-            (seed["session_id"],),
-        ).fetchone()
-        assert row is None
-
-    # ── 404 paths ────────────────────────────────────────────────────
-
-    def test_deactivate_missing_session_is_404(self):
-        """Unknown session id yields 404 with the expected detail message."""
-        db = _setup_orphan_db()
-        with pytest.raises(HTTPException) as exc:
-            _deactivate_loot_item_impl(db, "no-such-session", 1)
-        assert exc.value.status_code == 404
-        assert exc.value.detail == "Session not found"
-
-    def test_deactivate_missing_loot_item_is_404(self):
-        """Unknown loot-item id within a real session yields 404."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        with pytest.raises(HTTPException) as exc:
-            _deactivate_loot_item_impl(db, seed["session_id"], 999_999)
-        assert exc.value.status_code == 404
-        assert exc.value.detail == "Loot item not found in this session"
-
-    def test_deactivate_cross_session_loot_item_is_404(self):
-        """A loot row that exists but belongs to a different session
-        cannot be reached by id-guessing from another session's URL."""
-        db = _setup_orphan_db()
-        seed_a = self._seed(db)
-        seed_b = self._seed(db)
-
-        with pytest.raises(HTTPException) as exc:
-            _deactivate_loot_item_impl(db, seed_a["session_id"], seed_b["loot_a_id"])
-        assert exc.value.status_code == 404
-
-        # Cross-session probe leaves both sessions untouched.
-        flag = db.execute(
-            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
-            (seed_b["loot_a_id"],),
-        ).fetchone()[0]
-        assert flag is None
-
-    def test_activate_missing_loot_item_is_404(self):
-        """Symmetric 404 behaviour on the activate path."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        with pytest.raises(HTTPException) as exc:
-            _activate_loot_item_impl(db, seed["session_id"], 999_999)
-        assert exc.value.status_code == 404
-
-    # ── 409 paths ────────────────────────────────────────────────────
-
-    def test_deactivate_already_deactivated_is_409(self):
-        """Repeat-deactivate yields 409 and is a no-op on the kill total;
-        silent idempotency would double-subtract on a stale client retry."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-        kill_total_before = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-
-        with pytest.raises(HTTPException) as exc:
-            _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-        assert exc.value.status_code == 409
-        assert "already deactivated" in exc.value.detail.lower()
-
-        # Repeat-deactivate is a no-op: kill total stays at the
-        # post-first-deactivate value (would have double-subtracted on
-        # silent idempotency, which is exactly the wrong default).
-        kill_total_after = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-        assert kill_total_after == pytest.approx(kill_total_before)
-
-    def test_activate_already_active_is_409(self):
-        """Repeat-activate yields 409 and is a no-op on the kill total
-        (would double-add under silent idempotency)."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-
-        kill_total_before = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-
-        with pytest.raises(HTTPException) as exc:
-            _activate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-        assert exc.value.status_code == 409
-        assert "already active" in exc.value.detail.lower()
-
-        # Repeat-activate is a no-op: total stays unchanged (would have
-        # double-added under silent idempotency).
-        kill_total_after = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-        assert kill_total_after == pytest.approx(kill_total_before)
-
-    # ── Atomicity ────────────────────────────────────────────────────
-
-    def test_deactivate_rollback_on_mid_transaction_failure(self):
-        """A SQL error mid-transaction leaves no partial state. The impl
-        runs five execute calls (two for the row lookup, then UPDATE
-        kill_loot_items, UPDATE kills, DELETE session_summaries) and
-        commits at the end; injecting a failure on call #4 (UPDATE kills,
-        between the flag flip and the cache invalidation) verifies the
-        try/except/rollback wrapper reverts the just-completed UPDATE
-        kill_loot_items too. Uses a wrapping proxy because sqlite3.
-        Connection.execute is read-only and cannot be monkey-patched
-        directly."""
-        db = _setup_orphan_db()
-        seed = self._seed(db)
-        kill_total_before = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-
-        class FailingConn:
-            def __init__(self, real, fail_on_call):
-                self._real = real
-                self._count = 0
-                self._fail_on = fail_on_call
-
-            def execute(self, *args, **kwargs):
-                self._count += 1
-                if self._count == self._fail_on:
-                    raise sqlite3.OperationalError(
-                        "simulated failure mid-transaction"
-                    )
-                return self._real.execute(*args, **kwargs)
-
-            def commit(self):
-                return self._real.commit()
-
-            def rollback(self):
-                return self._real.rollback()
-
-        wrapped = FailingConn(db, fail_on_call=4)
-        with pytest.raises(sqlite3.OperationalError):
-            _deactivate_loot_item_impl(wrapped, seed["session_id"], seed["loot_a_id"])
-
-        # Post-rollback: flag stays NULL (first mutating statement
-        # reverted), kill total stays unchanged.
-        flag = db.execute(
-            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
-            (seed["loot_a_id"],),
-        ).fetchone()[0]
-        assert flag is None
-        kill_total_after = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill_id"],),
-        ).fetchone()[0]
-        assert kill_total_after == pytest.approx(kill_total_before)
-
-    # ── Session-detail response extension ────────────────────────────
-
-    def test_session_detail_carries_loot_entries_with_deactivated_at(self, tmp_path):
-        """GET /api/tracking/session/{id} surfaces per-row loot detail
-        including deactivated_at so the frontend can split into active
-        and greyed sections without a separate endpoint round-trip.
-
-        Uses AppDatabase rather than the lighter _setup_orphan_db helper
-        because get_session_impl reads from skill_gains and notable_events
-        as part of the full session-detail response shape."""
-        from backend.db.app_database import AppDatabase
-
-        app_db = AppDatabase(tmp_path / "app.db")
-        db = app_db.conn
-        init_tracking_tables(db)
-        try:
-            seed = self._seed(db)
-            _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-            detail = get_session_impl(db, seed["session_id"])
-        finally:
-            app_db.close()
-        entries = detail["lootEntries"]
-
-        assert len(entries) == 2
-        by_id = {e["id"]: e for e in entries}
-        deactivated = by_id[seed["loot_a_id"]]
-        active = by_id[seed["loot_b_id"]]
-
-        assert deactivated["deactivatedAt"] is not None
-        assert deactivated["itemName"] == "Mob-Drop-A"
-        assert deactivated["valuePed"] == pytest.approx(seed["loot_a_value"])
-        assert deactivated["killId"] == seed["kill_id"]
-        assert deactivated["isEnhancerShrapnel"] is False
-
-        assert active["deactivatedAt"] is None
-        assert active["itemName"] == "Mob-Drop-B"
-        assert active["valuePed"] == pytest.approx(seed["loot_b_value"])
-
-    def test_session_detail_breakdown_filters_deactivated_rows(self, tmp_path):
-        """The item-name aggregate (`lootBreakdown`) hides deactivated
-        rows so the existing UI surface reflects the user's edits, while
-        the session-level returns total (read from `kills.loot_total_ped`)
-        already mirrors the deactivation via the atomic mutation."""
-        from backend.db.app_database import AppDatabase
-
-        app_db = AppDatabase(tmp_path / "app.db")
-        db = app_db.conn
-        init_tracking_tables(db)
-        try:
-            seed = self._seed(db)
-            _deactivate_loot_item_impl(db, seed["session_id"], seed["loot_a_id"])
-
-            detail = get_session_impl(db, seed["session_id"])
-        finally:
-            app_db.close()
-        breakdown_names = {row["name"] for row in detail["lootBreakdown"]}
-        assert breakdown_names == {"Mob-Drop-B"}
-        assert detail["summary"]["returns"] == pytest.approx(
-            round(seed["loot_b_value"], 2)
-        )
-
-
-# ── Bulk loot-item deactivate / activate (aggregate-row affordance) ──
-#
-# These tests exercise the wholesale-by-item-name flip endpoints that
-# back the sessions-tab aggregate-row archive affordance. The
-# single-row endpoints above (TestLootEditEndpoints) cover one
-# kill_loot_items row at a time; the bulk endpoints flip every matching
-# row for (session_id, item_name) atomically in one transaction.
+# loot-edit affordance: the wholesale-by-item-name wrapper transactions,
+# the 400 / 404 / 409 boundary behaviour, the cache-invalidation footprint
+# on session_summaries, partial-state semantics, the active-session
+# block, and the deactivatedLootBreakdown extension on the session-detail
+# response. The underlying SQL manoeuvre is already pinned by
+# TestLootDeactivation above; this class focuses on the API contract
+# layered on top.
 
 
 class TestBulkLootEditEndpoints:
@@ -1753,16 +1381,31 @@ class TestBulkLootEditEndpoints:
         assert cached is None
 
     def test_bulk_partial_state_only_flips_eligible_rows(self):
-        """If one Nanocube row is already deactivated via the single-row
-        endpoint, bulk-deactivate flips the remaining two active rows
-        only; the inverse bulk-activate then promotes only the
-        deactivated rows back."""
+        """If one Nanocube row is already deactivated (e.g. a future
+        more-granular affordance flipped just one capture), the bulk
+        endpoint flips only the remaining active rows; the eligibility
+        clause is `deactivated_at IS NULL` rather than "every row for
+        this item." Mirrors the inverse property for bulk-activate.
+
+        Partial state is set up by writing the flag directly via SQL
+        rather than through an API path. The schema column carries the
+        load-bearing semantics; the wholesale-by-item-name endpoint is
+        the only API shape that surfaces those semantics today, so this
+        guards the case where partial state arrives through some
+        out-of-band route."""
         db = _setup_orphan_db()
         seed = self._seed_multi_item_session(db)
 
-        # Pre-deactivate one row via the single-row endpoint to set up
-        # partial state.
-        _deactivate_loot_item_impl(db, seed["session_id"], seed["nano_ids"][0])
+        # Pre-deactivate one row directly to set up partial state.
+        db.execute(
+            "UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?",
+            (seed["nano_ids"][0],),
+        )
+        db.execute(
+            "UPDATE kills SET loot_total_ped = loot_total_ped - ? WHERE id = ?",
+            (seed["nano_values"][0], seed["kill1_id"]),
+        )
+        db.commit()
 
         result = _bulk_deactivate_loot_item_impl(
             db, seed["session_id"], "Nanocube",

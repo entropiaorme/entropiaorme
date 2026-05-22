@@ -43,29 +43,10 @@ export interface SessionDetail {
 	 * to lootBreakdown; an item appearing in both means a partial-state
 	 * cohort (some captures active, some deactivated). */
 	deactivatedLootBreakdown: LootItem[];
-	/** Per-row loot detail. Carried for completeness; the canonical
-	 * user-facing view is the lootBreakdown / deactivatedLootBreakdown
-	 * aggregates. */
-	lootEntries: LootEntry[];
 	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: Ped;
 	toolStats: ToolStat[];
 	skillGains: SkillGain[];
-}
-
-/** Per-row loot entry for the sessions-tab editing affordance.
- * Deactivated rows (`deactivatedAt` populated) are filtered out of the
- * aggregate `lootBreakdown` rollup; they surface here so the frontend
- * can render them greyed-out with the inverse Activate action.
- */
-export interface LootEntry {
-	id: number;
-	killId: string;
-	itemName: string;
-	quantity: number;
-	valuePed: Ped;
-	isEnhancerShrapnel: boolean;
-	deactivatedAt: ISODate | null;
 }
 
 /** Per-mob row for the sessions-tab metadata-edit affordance.

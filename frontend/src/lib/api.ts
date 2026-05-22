@@ -394,40 +394,10 @@ export async function deleteSession(sessionId: string): Promise<void> {
 	await request(`/tracking/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
 }
 
-/** Response shape from the loot deactivate / activate endpoints. */
-export interface LootEditResponse {
-	sessionId: string;
-	killId: string;
-	lootItemId: number;
-	deactivatedAt: string | null;
-	killLootTotalPed: number;
-	sessionTotalReturns: number;
-}
-
-export async function deactivateLootItem(
-	sessionId: string,
-	lootItemId: number,
-): Promise<LootEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/loot/${lootItemId}/deactivate`,
-		{ method: 'POST' },
-	);
-}
-
-export async function activateLootItem(
-	sessionId: string,
-	lootItemId: number,
-): Promise<LootEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/loot/${lootItemId}/activate`,
-		{ method: 'POST' },
-	);
-}
-
-/** Response shape from the bulk loot-item deactivate / activate
- * endpoints. Operates on every kill_loot_items row matching
+/** Response shape from the loot-item deactivate / activate endpoints.
+ * Wholesale-by-item-name: flips every kill_loot_items row matching
  * `(sessionId, itemName)` in one atomic transaction. */
-export interface BulkLootItemEditResponse {
+export interface LootItemEditResponse {
 	sessionId: string;
 	itemName: string;
 	affectedRows: number;
@@ -435,20 +405,20 @@ export interface BulkLootItemEditResponse {
 	sessionTotalReturns: number;
 }
 
-export async function bulkDeactivateLootItem(
+export async function deactivateLootItem(
 	sessionId: string,
 	itemName: string,
-): Promise<BulkLootItemEditResponse> {
+): Promise<LootItemEditResponse> {
 	return request(
 		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/deactivate`,
 		{ method: 'POST' },
 	);
 }
 
-export async function bulkActivateLootItem(
+export async function activateLootItem(
 	sessionId: string,
 	itemName: string,
-): Promise<BulkLootItemEditResponse> {
+): Promise<LootItemEditResponse> {
 	return request(
 		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/activate`,
 		{ method: 'POST' },

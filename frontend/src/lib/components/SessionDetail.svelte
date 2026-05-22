@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ApiError } from '$lib/api';
 	import {
-		bulkActivateLootItem,
-		bulkDeactivateLootItem,
+		activateLootItem,
+		deactivateLootItem,
 		renameSessionMob,
 		restoreSessionMob,
 	} from '$lib/api';
@@ -86,7 +86,7 @@
 		lootError = null;
 		lootBusyName = row.name;
 		try {
-			const resp = await bulkDeactivateLootItem(detail.sessionId, row.name);
+			const resp = await deactivateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'active->deactivated');
 			applySessionTotals(resp.sessionTotalReturns);
 		} catch (e) {
@@ -101,7 +101,7 @@
 		lootError = null;
 		lootBusyName = row.name;
 		try {
-			const resp = await bulkActivateLootItem(detail.sessionId, row.name);
+			const resp = await activateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'deactivated->active');
 			applySessionTotals(resp.sessionTotalReturns);
 		} catch (e) {

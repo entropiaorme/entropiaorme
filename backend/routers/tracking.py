@@ -751,124 +751,6 @@ def get_session(session_id: str):
     return get_session_impl(get_services().app_db.conn, session_id)
 
 
-# ── Loot-entry deactivate / activate (post-hoc sessions-tab editing) ──
-#
-# Hidden-flag overlay: a row's deactivated_at flips between NULL (active)
-# and unixepoch('now') (deactivated). The denormalised kills.loot_total_ped
-# is mutated in the same transaction so the analytics surface that reads
-# SUM(kills.loot_total_ped) stays untouched by this affordance. The
-# session_summaries cache row is invalidated so the next session-list read
-# recomputes.
-
-def _lookup_loot_for_session(conn, session_id: str, loot_item_id: int):
-    """Resolve a loot row scoped to a session.
-
-    Returns (kill_id, value_ped, deactivated_at). Raises 404 if the
-    session does not exist, or if the loot row does not exist within it
-    (cross-session ids cannot reach into another session).
-    """
-    session_row = conn.execute(
-        "SELECT id FROM tracking_sessions WHERE id = ?", (session_id,),
-    ).fetchone()
-    if not session_row:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    loot_row = conn.execute(
-        "SELECT l.kill_id, l.value_ped, l.deactivated_at "
-        "FROM kill_loot_items l "
-        "JOIN kills k ON k.id = l.kill_id "
-        "WHERE l.id = ? AND k.session_id = ?",
-        (loot_item_id, session_id),
-    ).fetchone()
-    if not loot_row:
-        raise HTTPException(status_code=404, detail="Loot item not found in this session")
-    return loot_row[0], float(loot_row[1] or 0.0), loot_row[2]
-
-
-def _build_loot_edit_response(conn, session_id: str, kill_id: str, loot_item_id: int):
-    """Build the response payload returned by deactivate / activate.
-
-    Includes the post-mutation flag plus the two totals the frontend
-    re-renders against (per-kill denormalised total + per-session
-    SUM aggregate) so the client can update without a full session
-    refetch.
-    """
-    flag_row = conn.execute(
-        "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (loot_item_id,),
-    ).fetchone()
-    kill_total = conn.execute(
-        "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
-    ).fetchone()[0]
-    session_returns = conn.execute(
-        "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
-        (session_id,),
-    ).fetchone()[0]
-    return {
-        "sessionId": session_id,
-        "killId": kill_id,
-        "lootItemId": loot_item_id,
-        "deactivatedAt": _ts_to_iso(flag_row[0]),
-        "killLootTotalPed": round(float(kill_total or 0.0), 4),
-        "sessionTotalReturns": round(float(session_returns or 0.0), 2),
-    }
-
-
-@router.post("/session/{session_id}/loot/{loot_item_id}/deactivate")
-def deactivate_loot_item(session_id: str, loot_item_id: int):
-    """Soft-deactivate a loot row; reversible via the activate endpoint.
-
-    Atomically: stamps `deactivated_at`, subtracts the row's `value_ped`
-    from the parent `kills.loot_total_ped`, invalidates the
-    `session_summaries` cache for the session. 409 if the row is already
-    deactivated (idempotency would silently no-op the kill-total update
-    on a stale client retry, which is the wrong default).
-    """
-    conn = get_services().app_db.conn
-    return _deactivate_loot_item_impl(conn, session_id, loot_item_id)
-
-
-def _deactivate_loot_item_impl(conn, session_id: str, loot_item_id: int):
-    """Backend-side deactivate operation; the connection-injectable form
-    of `deactivate_loot_item` for direct testing against an arbitrary
-    SQLite connection without spinning up the full services container."""
-    kill_id, value_ped, deactivated_at = _lookup_loot_for_session(
-        conn, session_id, loot_item_id,
-    )
-    if deactivated_at is not None:
-        raise HTTPException(status_code=409, detail="Loot item is already deactivated")
-
-    try:
-        conn.execute(
-            "UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?",
-            (loot_item_id,),
-        )
-        conn.execute(
-            "UPDATE kills SET loot_total_ped = loot_total_ped - ? WHERE id = ?",
-            (value_ped, kill_id),
-        )
-        conn.execute(
-            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-
-    return _build_loot_edit_response(conn, session_id, kill_id, loot_item_id)
-
-
-@router.post("/session/{session_id}/loot/{loot_item_id}/activate")
-def activate_loot_item(session_id: str, loot_item_id: int):
-    """Reactivate a previously deactivated loot row.
-
-    Inverse of deactivate: clears `deactivated_at`, adds the row's
-    `value_ped` back to the parent `kills.loot_total_ped`, invalidates
-    the `session_summaries` cache. 409 if the row is already active.
-    """
-    conn = get_services().app_db.conn
-    return _activate_loot_item_impl(conn, session_id, loot_item_id)
-
-
 class RenameMobRequest(BaseModel):
     fromMobName: str
     toMobName: str
@@ -1111,54 +993,31 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
     return _build_mob_edit_response(conn, session_id, restored_to)
 
 
-def _activate_loot_item_impl(conn, session_id: str, loot_item_id: int):
-    """Backend-side activate operation; the connection-injectable form
-    of `activate_loot_item` for direct testing against an arbitrary
-    SQLite connection without spinning up the full services container."""
-    kill_id, value_ped, deactivated_at = _lookup_loot_for_session(
-        conn, session_id, loot_item_id,
-    )
-    if deactivated_at is None:
-        raise HTTPException(status_code=409, detail="Loot item is already active")
-
-    try:
-        conn.execute(
-            "UPDATE kill_loot_items SET deactivated_at = NULL WHERE id = ?",
-            (loot_item_id,),
-        )
-        conn.execute(
-            "UPDATE kills SET loot_total_ped = loot_total_ped + ? WHERE id = ?",
-            (value_ped, kill_id),
-        )
-        conn.execute(
-            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-
-    return _build_loot_edit_response(conn, session_id, kill_id, loot_item_id)
-
-
-# ── Bulk loot-item deactivate / activate (aggregate-row affordance) ──
+# ── Loot-item deactivate / activate (post-hoc sessions-tab editing) ──
 #
-# The single-row endpoints above operate on one kill_loot_items row at a
-# time, keyed by primary key. The sessions-tab UI surfaces the aggregate
-# Loot Breakdown (rolled up by item_name) as the user-facing canonical
-# view; the user-level mental model is "remove all Nanocube from this
-# session" rather than "remove this specific Nanocube capture." These
-# bulk endpoints flip every matching row for `(session_id, item_name)`
-# in one atomic transaction so the aggregate-row affordance lands
-# without N round-trips, race windows, or partial-state surprises.
+# Hidden-flag overlay: each kill_loot_items row carries a deactivated_at
+# flag that toggles between NULL (active) and unixepoch('now')
+# (deactivated). The denormalised kills.loot_total_ped is mutated in the
+# same transaction so the analytics surface that reads
+# SUM(kills.loot_total_ped) stays untouched by this affordance. The
+# session_summaries cache row is invalidated so the next session-list
+# read recomputes.
 #
-# Idempotency model: bulk-deactivate flips rows currently in the active
-# state to deactivated; bulk-activate flips rows currently deactivated
-# back to active. If no rows are in the opposite state for the target
-# (item_name, session_id) the endpoint 409s, mirroring the single-row
-# convention. 404 distinguishes "session missing" and "item_name not
-# present in this session at all" so the frontend can surface them
-# distinctly.
+# Wholesale-by-item-name shape: the sessions-tab UI surfaces the
+# aggregate Loot Breakdown (rolled up by item_name) as the user-facing
+# canonical view; the user-level mental model is "remove all Nanocube
+# from this session" rather than "remove this specific Nanocube
+# capture." These endpoints flip every matching row for
+# `(session_id, item_name)` in one atomic transaction so the
+# aggregate-row affordance lands without N round-trips, race windows,
+# or partial-state surprises.
+#
+# Idempotency model: deactivate flips rows currently in the active
+# state to deactivated; activate flips rows currently deactivated back
+# to active. If no rows are in the opposite state for the target
+# (item_name, session_id) the endpoint 409s. 404 distinguishes "session
+# missing" and "item_name not present in this session at all" so the
+# frontend can surface them distinctly.
 
 
 def _build_loot_item_edit_response(
@@ -1458,32 +1317,6 @@ def get_session_impl(conn, session_id: str):
         for row in mob_breakdown_rows
     ]
 
-    # Per-row loot detail for the sessions-tab editing affordance. Returned
-    # unfiltered so the frontend can render both active and deactivated
-    # rows (the latter greyed out, with an Activate action). Sorted by id
-    # to keep insertion order stable across reads.
-    loot_entry_rows = conn.execute(
-        "SELECT l.id, l.kill_id, l.item_name, l.quantity, l.value_ped, "
-        "       l.is_enhancer_shrapnel, l.deactivated_at "
-        "FROM kill_loot_items l "
-        "JOIN kills k ON k.id = l.kill_id "
-        "WHERE k.session_id = ? "
-        "ORDER BY l.id",
-        (session_id,),
-    ).fetchall()
-    loot_entries = [
-        {
-            "id": row[0],
-            "killId": row[1],
-            "itemName": row[2],
-            "quantity": int(row[3] or 0),
-            "valuePed": float(row[4] or 0.0),
-            "isEnhancerShrapnel": bool(row[5]),
-            "deactivatedAt": _ts_to_iso(row[6]),
-        }
-        for row in loot_entry_rows
-    ]
-
     total_cost = weapon_cost + session_heal_cost + total_enhancer_cost + armour_cost + dangling_cost
 
     detail_skill_tt = conn.execute(
@@ -1567,7 +1400,6 @@ def get_session_impl(conn, session_id: str):
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "deactivatedLootBreakdown": deactivated_loot_breakdown,
-        "lootEntries": loot_entries,
         "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,

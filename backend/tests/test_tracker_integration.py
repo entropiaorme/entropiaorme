@@ -1683,6 +1683,28 @@ class TestMobEditEndpoints:
         ).fetchone()[0]
         assert actual == seed["from_mob_count"] + seed["other_mob_count"]
 
+    def test_rename_back_to_original_clears_preservation_column(self):
+        """A round-trip rename (A -> B -> A) lands at the original name
+        with the preservation column cleared, so the rows look identical
+        to never-renamed rows. Without this, mobBreakdown would surface
+        a bogus 'originally A' indicator and restore-mob would become a
+        no-op metadata cleanup."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Argonaut Old", "Caboria Old")
+
+        rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Caboria Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(rows) == seed["from_mob_count"]
+        for current, original in rows:
+            assert current == "Caboria Old"
+            assert original is None  # Preservation column cleared.
+
     def test_rename_preserves_first_original_across_consecutive_renames(self):
         """Renaming A->B then B->C must keep original_mob_name = A
         (COALESCE first-original semantics); undo always lands at the

@@ -954,7 +954,23 @@ def rename_session_mob(session_id: str, body: RenameMobRequest):
 def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
     """Backend-side rename operation; the connection-injectable form of
     `rename_session_mob` for direct testing against an arbitrary SQLite
-    connection without spinning up the full services container."""
+    connection without spinning up the full services container.
+
+    Race-safe: the first UPDATE opens an implicit transaction that
+    acquires SQLite's writer lock. The 'matching' count derives from
+    that UPDATE's rowcount inside the same transaction, so there's no
+    SELECT-then-write window where a concurrent request could leave the
+    precondition stale. If the first UPDATE touches zero rows the whole
+    transaction rolls back, eliminating side effects from a failed
+    precondition.
+
+    Round-trip cleanup: when `to_mob` equals an affected row's preserved
+    `original_mob_name` (e.g. a rename sequence A->B->A landing back at
+    the genuinely-original capture), the preservation column is cleared
+    in the same statement via a CASE expression. Without that, the row
+    would carry mob_name='A', original_mob_name='A', which would
+    surface a bogus 'originally A' indicator in the per-mob breakdown.
+    """
     _validate_session_exists(conn, session_id)
     from_mob = from_mob.strip()
     to_mob = to_mob.strip()
@@ -969,31 +985,35 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
             detail="rename target matches the current value (no-op)",
         )
 
-    matching = conn.execute(
-        "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
-        (session_id, from_mob),
-    ).fetchone()[0]
-    if matching == 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"No kills in this session match mob_name='{from_mob}'",
-        )
-
     try:
-        conn.execute(
+        preserve_cursor = conn.execute(
             "UPDATE kills "
             "SET original_mob_name = COALESCE(original_mob_name, mob_name) "
             "WHERE session_id = ? AND mob_name = ?",
             (session_id, from_mob),
         )
+        if preserve_cursor.rowcount == 0:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=f"No kills in this session match mob_name='{from_mob}'",
+            )
         conn.execute(
-            "UPDATE kills SET mob_name = ? WHERE session_id = ? AND mob_name = ?",
-            (to_mob, session_id, from_mob),
+            "UPDATE kills "
+            "SET mob_name = ?, "
+            "    original_mob_name = CASE "
+            "        WHEN original_mob_name = ? THEN NULL "
+            "        ELSE original_mob_name "
+            "    END "
+            "WHERE session_id = ? AND mob_name = ?",
+            (to_mob, to_mob, session_id, from_mob),
         )
         conn.execute(
             "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
         )
         conn.commit()
+    except HTTPException:
+        raise
     except Exception:
         conn.rollback()
         raise
@@ -1019,7 +1039,16 @@ def restore_session_mob(session_id: str, body: RestoreMobRequest):
 def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
     """Backend-side restore operation; the connection-injectable form of
     `restore_session_mob` for direct testing against an arbitrary SQLite
-    connection without spinning up the full services container."""
+    connection without spinning up the full services container.
+
+    Race-safe: uses SQL RETURNING to capture each restored row's new
+    `mob_name` (the previously-preserved original) atomically with the
+    UPDATE, so the eligibility checks (any rows matched, only one
+    distinct original) derive from the UPDATE's own output inside the
+    implicit transaction. No SELECT-then-write window exists where a
+    concurrent request could shift the precondition under us. Both
+    failure paths roll back the UPDATE before raising.
+    """
     _validate_session_exists(conn, session_id)
     current_mob = current_mob.strip()
     if not current_mob:
@@ -1028,51 +1057,53 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
             detail="Mob name cannot be blank",
         )
 
-    eligible = conn.execute(
-        "SELECT COUNT(*), COUNT(DISTINCT original_mob_name), MIN(original_mob_name) "
-        "FROM kills "
-        "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL",
-        (session_id, current_mob),
-    ).fetchone()
-    matching = int(eligible[0] or 0)
-    distinct_originals = int(eligible[1] or 0)
-    restored_to = eligible[2]
-    if matching == 0:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"No restorable kills in this session for mob_name='{current_mob}' "
-                "(either no rename has happened or the preservation column is empty)"
-            ),
-        )
-    if distinct_originals > 1:
-        # Two or more distinct prior names merged into the same current
-        # mob_name (e.g. rename A->C, then rename B->C). Restoring would
-        # need to split the cohort back into multiple destinations,
-        # which the single-result response shape cannot express
-        # unambiguously. Refuse with an informative 409 so the caller
-        # knows the situation; the API does not offer a target-by-
-        # original-name endpoint, so this case is for the frontend to
-        # surface to the user.
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Ambiguous restore for mob_name='{current_mob}': "
-                f"{distinct_originals} distinct prior names merged into it."
-            ),
-        )
-
     try:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE kills "
             "SET mob_name = original_mob_name, original_mob_name = NULL "
-            "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL",
+            "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL "
+            "RETURNING mob_name",
             (session_id, current_mob),
         )
+        restored_rows = cursor.fetchall()
+
+        if not restored_rows:
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No restorable kills in this session for mob_name='{current_mob}' "
+                    "(either no rename has happened or the preservation column is empty)"
+                ),
+            )
+
+        distinct_originals = {row[0] for row in restored_rows}
+        if len(distinct_originals) > 1:
+            # Two or more distinct prior names merged into the same
+            # current mob_name (e.g. rename A->C, then rename B->C).
+            # Restoring would need to split the cohort back into
+            # multiple destinations, which the single-result response
+            # shape cannot express unambiguously. Refuse with an
+            # informative 409; the API does not offer a target-by-
+            # original-name endpoint, so this case is for the frontend
+            # to surface to the user.
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Ambiguous restore for mob_name='{current_mob}': "
+                    f"{len(distinct_originals)} distinct prior names merged into it."
+                ),
+            )
+
+        restored_to = next(iter(distinct_originals))
+
         conn.execute(
             "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
         )
         conn.commit()
+    except HTTPException:
+        raise
     except Exception:
         conn.rollback()
         raise

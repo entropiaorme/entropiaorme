@@ -1,0 +1,93 @@
+{
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_2>",
+      "quantity": 200,
+      "value_ped": 2.0
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_3>",
+      "quantity": 330,
+      "value_ped": 3.3
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 32.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 2,
+      "tool_name": "Unknown"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 31.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 2,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 32.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 2.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 2,
+      "timestamp": "<TS_10>"
+    },
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 31.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_3>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 3.3,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 2,
+      "timestamp": "<TS_11>"
+    }
+  ],
+  "ledger_entries": [
+    {
+      "amount": 0.053,
+      "date": "<TS_12>",
+      "description": "Shrapnel Conversion",
+      "id": "<UUID_4>",
+      "tag": "convert",
+      "type": "markup"
+    }
+  ],
+  "notable_events": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_8>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_9>"
+    }
+  ]
+}

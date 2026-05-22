@@ -1,0 +1,6 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 40.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 35.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 1500, "value_ped": 15.0}], "timestamp": "<TS_3>", "total_ped": 15.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"creature": "Argonaut Stalker", "player": "TestPlayer", "timestamp": "<TS_4>", "type": "global_kill", "value": 130.0}, "topic": "global"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

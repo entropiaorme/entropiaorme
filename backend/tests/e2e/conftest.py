@@ -72,6 +72,11 @@ def e2e_pipeline(
     started here so its tail loop is already polling when the test
     streams in the scenario; the fixture's teardown stops the watcher
     and lets the DB connection close on its own owner-fixture's exit.
+
+    Defaults the tracker's ``player_name`` to the empty string so
+    globals correlation is dormant; scenarios that exercise the
+    correlation path use ``make_e2e_pipeline`` and pass a non-empty
+    ``player_name``.
     """
 
     bus = EventBus()
@@ -82,6 +87,47 @@ def e2e_pipeline(
         yield bus, tracker, watcher, temp_chatlog
     finally:
         watcher.stop()
+
+
+@pytest.fixture
+def make_e2e_pipeline(
+    in_memory_db: sqlite3.Connection,
+    temp_chatlog: Path,
+) -> Iterator[
+    Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
+]:
+    """Factory variant of ``e2e_pipeline`` accepting custom tracker args.
+
+    A scenario that needs a non-default tracker configuration
+    (notably ``player_name`` for globals-correlation scenarios)
+    invokes::
+
+        bus, tracker, watcher, chatlog = make_e2e_pipeline(
+            player_name="ExpectedPlayer",
+        )
+
+    Every watcher the factory spawns is stopped at teardown so the
+    fixture is safe to call once per test even if the test exits
+    via exception. The factory shares the underlying in-memory DB
+    and temp chatlog with the default ``e2e_pipeline`` fixture
+    surface, which keeps wiring symmetric across scenario tests.
+    """
+
+    spawned: list[ChatlogWatcher] = []
+
+    def _make(**tracker_kwargs) -> tuple[EventBus, HuntTracker, ChatlogWatcher, Path]:
+        bus = EventBus()
+        tracker = HuntTracker(bus, in_memory_db, **tracker_kwargs)
+        watcher = ChatlogWatcher(bus, temp_chatlog)
+        watcher.start()
+        spawned.append(watcher)
+        return bus, tracker, watcher, temp_chatlog
+
+    try:
+        yield _make
+    finally:
+        for watcher in spawned:
+            watcher.stop()
 
 
 @pytest.fixture

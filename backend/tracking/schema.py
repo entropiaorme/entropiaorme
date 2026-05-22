@@ -17,15 +17,24 @@ def init_tracking_tables(conn: sqlite3.Connection) -> None:
 
 def _current_schema(conn: sqlite3.Connection) -> None:
     conn.executescript("""
+        -- `mob_tracking_mode` records which input mode the session was
+        -- captured under ('mob' = mob-name attribution, 'tag' = tag
+        -- attribution). The tracker writes the value at session start
+        -- and never mutates it afterwards. Post-hoc UI surfaces read it
+        -- to choose label vocabulary ('Mob Attribution' vs 'Tag
+        -- Attribution'); the data semantics are identical (the tag
+        -- string is persisted into kills.mob_name in tag-mode
+        -- sessions), so this is purely a presentation hint.
         CREATE TABLE IF NOT EXISTS tracking_sessions (
-            id             TEXT PRIMARY KEY,
-            started_at     REAL NOT NULL,
-            ended_at       REAL,
-            is_active      INTEGER NOT NULL DEFAULT 1,
-            armour_cost    REAL DEFAULT 0,
-            heal_cost      REAL DEFAULT 0,
-            dangling_cost  REAL DEFAULT 0,
-            updated_at     REAL
+            id                 TEXT PRIMARY KEY,
+            started_at         REAL NOT NULL,
+            ended_at           REAL,
+            is_active          INTEGER NOT NULL DEFAULT 1,
+            armour_cost        REAL DEFAULT 0,
+            heal_cost          REAL DEFAULT 0,
+            dangling_cost      REAL DEFAULT 0,
+            mob_tracking_mode  TEXT NOT NULL DEFAULT 'mob',
+            updated_at         REAL
         );
 
         CREATE TRIGGER IF NOT EXISTS trg_fill_updated_at_tracking_sessions
@@ -38,22 +47,31 @@ def _current_schema(conn: sqlite3.Connection) -> None:
             WHERE rowid = NEW.rowid;
         END;
 
+        -- `original_mob_name` preserves the pre-edit `mob_name` value
+        -- when the user mass-renames a session's attributed mob via the
+        -- sessions-tab metadata-edit affordance. NULL = never renamed;
+        -- populated = renamed at least once, and the inverse restore
+        -- endpoint can clear `original_mob_name` while reverting
+        -- `mob_name` to it. COALESCE on the rename write keeps the
+        -- *first* original across N consecutive renames so undo always
+        -- lands at the genuinely-original capture.
         CREATE TABLE IF NOT EXISTS kills (
-            id              TEXT PRIMARY KEY,
-            session_id      TEXT NOT NULL REFERENCES tracking_sessions(id),
-            mob_name        TEXT,
-            mob_species     TEXT DEFAULT '',
-            mob_maturity    TEXT DEFAULT '',
-            timestamp       REAL NOT NULL,
-            shots_fired     INTEGER DEFAULT 0,
-            damage_dealt    REAL DEFAULT 0,
-            damage_taken    REAL DEFAULT 0,
-            critical_hits   INTEGER DEFAULT 0,
-            cost_ped        REAL DEFAULT 0,
-            enhancer_cost   REAL DEFAULT 0,
-            loot_total_ped  REAL DEFAULT 0,
-            is_global       INTEGER DEFAULT 0,
-            is_hof          INTEGER DEFAULT 0
+            id                 TEXT PRIMARY KEY,
+            session_id         TEXT NOT NULL REFERENCES tracking_sessions(id),
+            mob_name           TEXT,
+            mob_species        TEXT DEFAULT '',
+            mob_maturity       TEXT DEFAULT '',
+            timestamp          REAL NOT NULL,
+            shots_fired        INTEGER DEFAULT 0,
+            damage_dealt       REAL DEFAULT 0,
+            damage_taken       REAL DEFAULT 0,
+            critical_hits      INTEGER DEFAULT 0,
+            cost_ped           REAL DEFAULT 0,
+            enhancer_cost      REAL DEFAULT 0,
+            loot_total_ped     REAL DEFAULT 0,
+            is_global          INTEGER DEFAULT 0,
+            is_hof             INTEGER DEFAULT 0,
+            original_mob_name  TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_kill_session ON kills(session_id);
 
@@ -68,13 +86,21 @@ def _current_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(kill_id, tool_name, cost_per_shot)
         );
 
+        -- `deactivated_at` is a nullable Unix-epoch timestamp; NULL = active
+        -- (included in aggregates), populated = deactivated at that moment by
+        -- a post-hoc edit on the sessions tab. Deactivation is recoverable:
+        -- clearing the timestamp reactivates the entry. The denormalised
+        -- per-kill total `kills.loot_total_ped` is mutated atomically
+        -- alongside the flag, so analytics queries reading `kills.loot_total_ped`
+        -- need no filter clause and stay untouched by this affordance.
         CREATE TABLE IF NOT EXISTS kill_loot_items (
             id                   INTEGER PRIMARY KEY AUTOINCREMENT,
             kill_id              TEXT NOT NULL REFERENCES kills(id),
             item_name            TEXT NOT NULL,
             quantity             INTEGER DEFAULT 1,
             value_ped            REAL NOT NULL,
-            is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0
+            is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0,
+            deactivated_at       REAL
         );
         CREATE INDEX IF NOT EXISTS idx_kill_loot_items_kill_id
             ON kill_loot_items(kill_id);

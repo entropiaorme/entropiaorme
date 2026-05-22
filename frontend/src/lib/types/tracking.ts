@@ -23,6 +23,12 @@ export interface CostBreakdown {
 	armourCost: Ped;
 }
 
+/** Mob-attribution input mode the session was captured under.
+ * Persisted at session start; never mutates afterwards. Drives label
+ * vocabulary in post-hoc edit surfaces ('Mob Attribution' vs 'Tag
+ * Attribution'); data semantics are identical between the two modes. */
+export type MobEntryMode = 'mob' | 'tag';
+
 /** Expanded session detail (inline expand from history row) */
 export interface SessionDetail {
 	sessionId: string;
@@ -36,11 +42,29 @@ export interface SessionDetail {
 		duration: Seconds;
 		costBreakdown?: CostBreakdown;
 	};
+	mobEntryMode: MobEntryMode;
 	notableEvents: NotableEvent[];
+	/** Item-name aggregate of currently-active loot rows. */
 	lootBreakdown: LootItem[];
+	/** Item-name aggregate of currently-deactivated loot rows. Parallel
+	 * to lootBreakdown; an item appearing in both means a partial-state
+	 * cohort (some captures active, some deactivated). */
+	deactivatedLootBreakdown: LootItem[];
+	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: Ped;
 	toolStats: ToolStat[];
 	skillGains: SkillGain[];
+}
+
+/** Per-mob row for the sessions-tab metadata-edit affordance.
+ * `originalName` is populated when the mob has been renamed at least
+ * once; the frontend renders an "originally X" indicator and offers a
+ * Restore action that calls `restore-mob`.
+ */
+export interface MobBreakdownRow {
+	currentName: string;
+	originalName: string | null;
+	killCount: number;
 }
 
 export interface NotableEvent {

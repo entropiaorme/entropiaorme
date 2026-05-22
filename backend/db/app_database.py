@@ -6,12 +6,13 @@ Long-lived database with user-owned data.
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 from backend.db.base import BaseDatabase
 
 log = logging.getLogger(__name__)
 
-DB_VERSION = 29
+DB_VERSION = 30
 
 
 # Tables that auto-fill a timestamp column on INSERT when callers leave it NULL.
@@ -46,6 +47,8 @@ class AppDatabase(BaseDatabase):
         # Forward migrations from v28.
         if from_version < 29:
             self._migrate_to_v29()
+        if from_version < 30:
+            self._migrate_to_v30()
 
     def _migrate_to_v29(self) -> None:
         """Drop the unused profession_calibrations + archive tables.
@@ -59,6 +62,43 @@ class AppDatabase(BaseDatabase):
             DROP TABLE IF EXISTS profession_calibrations_archive;
         """)
         log.info("Migrated app DB to v29: dropped profession_calibrations tables")
+
+    def _migrate_to_v30(self) -> None:
+        """Add the nullable `deactivated_at` column to `kill_loot_items`.
+
+        Enables the recoverable post-hoc loot-entry deactivation affordance on
+        the analytics → sessions tab. The column is owned by the tracking
+        schema (`backend/tracking/schema.py`), but the migration lives here
+        because tracking tables have no version-counter migration system of
+        their own — they rely on `CREATE TABLE IF NOT EXISTS` for fresh
+        installs and on the app DB's versioned forward-migrations for
+        in-place schema evolution.
+
+        Defensive in two directions:
+          - "no such table" — the user installed a prior version but never
+            started tracking, so kill_loot_items doesn't exist yet. The
+            future `init_tracking_tables` call on Tracker init will create
+            it with the column baked in (per the canonical schema).
+          - "duplicate column name" — the column was already added by a
+            partial run; idempotent re-run skips cleanly.
+        """
+        try:
+            self.conn.execute(
+                "ALTER TABLE kill_loot_items ADD COLUMN deactivated_at REAL"
+            )
+            self.conn.commit()
+            log.info("Migrated app DB to v30: added kill_loot_items.deactivated_at")
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such table" in msg:
+                log.info(
+                    "v30: kill_loot_items not present yet — column will land "
+                    "via tracking_schema when Tracker first initialises"
+                )
+            elif "duplicate column" in msg:
+                log.info("v30: kill_loot_items.deactivated_at already present, skipping")
+            else:
+                raise
 
     def _current_schema(self) -> None:
         """Create the current schema directly for a fresh install."""

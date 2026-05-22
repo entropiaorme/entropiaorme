@@ -68,13 +68,21 @@ def _current_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(kill_id, tool_name, cost_per_shot)
         );
 
+        -- `deactivated_at` is a nullable Unix-epoch timestamp; NULL = active
+        -- (included in aggregates), populated = deactivated at that moment by
+        -- a post-hoc edit on the sessions tab. Deactivation is recoverable —
+        -- clearing the timestamp reactivates the entry. The denormalised
+        -- per-kill total `kills.loot_total_ped` is mutated atomically
+        -- alongside the flag, so analytics queries reading `kills.loot_total_ped`
+        -- need no filter clause and stay untouched by this affordance.
         CREATE TABLE IF NOT EXISTS kill_loot_items (
             id                   INTEGER PRIMARY KEY AUTOINCREMENT,
             kill_id              TEXT NOT NULL REFERENCES kills(id),
             item_name            TEXT NOT NULL,
             quantity             INTEGER DEFAULT 1,
             value_ped            REAL NOT NULL,
-            is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0
+            is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0,
+            deactivated_at       REAL
         );
         CREATE INDEX IF NOT EXISTS idx_kill_loot_items_kill_id
             ON kill_loot_items(kill_id);

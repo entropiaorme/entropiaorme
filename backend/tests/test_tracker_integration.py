@@ -387,6 +387,7 @@ class TestFullPipeline:
         assert "ledger_entries" in table_names
         loot_cols = {row[1] for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()}
         assert "is_enhancer_shrapnel" in loot_cols
+        assert "deactivated_at" in loot_cols
 
 
 # ── Mob Lock Confirmation & Retrofit ──────────────────────────────────
@@ -807,3 +808,368 @@ class TestCrashRecovery:
         assert tracker.is_tracking
         tracker.stop_session()
         assert not tracker.is_tracking
+
+
+# ── Loot-entry deactivation (sessions-editing recoverability shape) ───
+#
+# These tests pin the substrate behaviour that the post-hoc loot-entry
+# Deactivate/Activate affordance on the analytics → sessions tab relies on:
+# the `deactivated_at` nullable timestamp on `kill_loot_items` paired with
+# atomic mutation of the denormalised `kills.loot_total_ped`. The API
+# surface that exposes these operations to the frontend is a subsequent
+# round; this test class verifies the schema substrate plus the SQL
+# manoeuvre that the API will wrap.
+#
+# Operation in full (per `.planning/situational/sessions-editing-recoverability.md`):
+#   Deactivate(loot_id):
+#     UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?
+#     UPDATE kills SET loot_total_ped = loot_total_ped - <value_ped> WHERE id = <kill_id>
+#     (cache invalidation on session_summaries is the API layer's concern)
+#   Activate(loot_id): inverse — clear `deactivated_at`, add value_ped back.
+
+
+class TestLootDeactivation:
+    def _seed_session_with_loot(self, db):
+        """Insert one session with one kill carrying two loot items.
+
+        Returns (session_id, kill_id, [loot_row_id, loot_row_id], [value_ped, value_ped]).
+        kills.loot_total_ped is the sum of the two loot rows so the
+        denormalisation invariant is established up-front.
+        """
+        session_id = str(uuid.uuid4())
+        kill_id = str(uuid.uuid4())
+        now = time.time()
+
+        loot_a_value = 4.20
+        loot_b_value = 1.30
+        loot_total = loot_a_value + loot_b_value
+
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, ?, 0)",
+            (session_id, now - 600, now),
+        )
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Atrox', ?, 10, 100.0, ?, 5.0)",
+            (kill_id, session_id, now - 60, loot_total),
+        )
+        cursor_a = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Mob-Drop-A', 1, ?, 0)",
+            (kill_id, loot_a_value),
+        )
+        loot_a_id = cursor_a.lastrowid
+        cursor_b = db.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) "
+            "VALUES (?, 'Mob-Drop-B', 1, ?, 0)",
+            (kill_id, loot_b_value),
+        )
+        loot_b_id = cursor_b.lastrowid
+        db.commit()
+        return session_id, kill_id, (loot_a_id, loot_b_id), (loot_a_value, loot_b_value)
+
+    def test_schema_column_present_and_defaults_null(self):
+        """Fresh-init tracking schema lands kill_loot_items.deactivated_at as nullable."""
+        db = _setup_orphan_db()
+        cols = {row[1]: row for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()}
+        assert "deactivated_at" in cols
+        # row shape: (cid, name, type, notnull, dflt_value, pk)
+        notnull_flag = cols["deactivated_at"][3]
+        assert notnull_flag == 0, "deactivated_at must be nullable"
+
+        # New inserts default to NULL — verifies the column is truly nullable
+        # at the row level, not just by schema declaration.
+        _, _, (loot_a_id, _), _ = self._seed_session_with_loot(db)
+        row = db.execute(
+            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+            (loot_a_id,),
+        ).fetchone()
+        assert row[0] is None
+
+    def test_deactivate_reduces_denormalised_kill_total(self):
+        """Deactivating a loot row shrinks the per-kill total to match
+        the remaining active loot, and the per-session aggregate
+        (the read path used by `list_sessions_impl`) reflects the change."""
+        db = _setup_orphan_db()
+        session_id, kill_id, (loot_a_id, _), (loot_a_value, loot_b_value) = (
+            self._seed_session_with_loot(db)
+        )
+        initial_total = loot_a_value + loot_b_value
+
+        # Confirm the starting invariant: kills.loot_total_ped equals the
+        # sum of kill_loot_items rows. This is the denormalisation that the
+        # deactivation manoeuvre maintains.
+        kills_total_before = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+        ).fetchone()[0]
+        assert kills_total_before == pytest.approx(initial_total)
+
+        # Deactivate loot_a — the atomic two-statement manoeuvre future
+        # API + service code will execute inside one transaction.
+        db.execute(
+            "UPDATE kill_loot_items SET deactivated_at = ? WHERE id = ?",
+            (time.time(), loot_a_id),
+        )
+        db.execute(
+            "UPDATE kills SET loot_total_ped = loot_total_ped - ? WHERE id = ?",
+            (loot_a_value, kill_id),
+        )
+        db.commit()
+
+        # Per-kill denormalised total tracks the remaining active loot.
+        kills_total_after = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+        ).fetchone()[0]
+        assert kills_total_after == pytest.approx(loot_b_value)
+
+        # Per-session aggregate — this is the exact query shape used by
+        # `routers/tracking.py::list_sessions_impl` for the session list's
+        # returns column, and by the analytics surface for cross-session
+        # rollups. It reads from `kills.loot_total_ped` directly and so
+        # picks up the deactivation without needing a filter clause.
+        session_returns = db.execute(
+            "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        assert session_returns == pytest.approx(loot_b_value)
+
+        # The deactivated row is still present in kill_loot_items — soft
+        # delete, not destructive — and carries the timestamp.
+        row = db.execute(
+            "SELECT deactivated_at, value_ped FROM kill_loot_items WHERE id = ?",
+            (loot_a_id,),
+        ).fetchone()
+        assert row[0] is not None
+        assert row[1] == pytest.approx(loot_a_value)
+
+    def test_reactivate_restores_denormalised_kill_total(self):
+        """Reactivating restores the per-kill total and clears the flag."""
+        db = _setup_orphan_db()
+        session_id, kill_id, (loot_a_id, _), (loot_a_value, loot_b_value) = (
+            self._seed_session_with_loot(db)
+        )
+
+        # Deactivate then reactivate; landing state should equal the
+        # pre-deactivation state.
+        db.execute(
+            "UPDATE kill_loot_items SET deactivated_at = ? WHERE id = ?",
+            (time.time(), loot_a_id),
+        )
+        db.execute(
+            "UPDATE kills SET loot_total_ped = loot_total_ped - ? WHERE id = ?",
+            (loot_a_value, kill_id),
+        )
+        db.commit()
+
+        db.execute(
+            "UPDATE kill_loot_items SET deactivated_at = NULL WHERE id = ?",
+            (loot_a_id,),
+        )
+        db.execute(
+            "UPDATE kills SET loot_total_ped = loot_total_ped + ? WHERE id = ?",
+            (loot_a_value, kill_id),
+        )
+        db.commit()
+
+        kills_total = db.execute(
+            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+        ).fetchone()[0]
+        assert kills_total == pytest.approx(loot_a_value + loot_b_value)
+
+        row = db.execute(
+            "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+            (loot_a_id,),
+        ).fetchone()
+        assert row[0] is None
+
+        session_returns = db.execute(
+            "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        assert session_returns == pytest.approx(loot_a_value + loot_b_value)
+
+    def test_per_kill_loot_breakdown_filter_isolates_active_rows(self):
+        """The session-detail loot breakdown query (one of the three sites
+        in the production code that needs the `deactivated_at IS NULL`
+        filter) returns only active rows for its item-name rollup,
+        without losing them from the underlying table."""
+        db = _setup_orphan_db()
+        session_id, kill_id, (loot_a_id, _), (loot_a_value, loot_b_value) = (
+            self._seed_session_with_loot(db)
+        )
+
+        db.execute(
+            "UPDATE kill_loot_items SET deactivated_at = ? WHERE id = ?",
+            (time.time(), loot_a_id),
+        )
+        db.commit()
+
+        # Mirror of routers/tracking.py::get_session_impl's loot breakdown
+        # query, plus the filter clause the R2 API work will add.
+        active_breakdown = db.execute(
+            "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
+            "FROM kill_loot_items l "
+            "JOIN kills k ON k.id = l.kill_id "
+            "WHERE k.session_id = ? "
+            "AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 "
+            "AND l.deactivated_at IS NULL "
+            "GROUP BY l.item_name",
+            (session_id,),
+        ).fetchall()
+        assert len(active_breakdown) == 1
+        assert active_breakdown[0][0] == "Mob-Drop-B"
+        assert active_breakdown[0][2] == pytest.approx(loot_b_value)
+
+        # The deactivated row is still queryable without the filter — the
+        # frontend's greyed-out section will read it this way.
+        all_rows = db.execute(
+            "SELECT item_name, deactivated_at FROM kill_loot_items "
+            "WHERE kill_id = ? ORDER BY item_name",
+            (kill_id,),
+        ).fetchall()
+        assert len(all_rows) == 2
+        assert all_rows[0][0] == "Mob-Drop-A"
+        assert all_rows[0][1] is not None  # deactivated
+        assert all_rows[1][0] == "Mob-Drop-B"
+        assert all_rows[1][1] is None  # active
+
+
+class TestV30Migration:
+    """The version-counter migration that lands deactivated_at on existing
+    DBs (v29 → v30 forward-migrate). Fresh installs land the column via
+    the canonical tracking schema; this class pins the in-place upgrade
+    path and its defensive cases."""
+
+    def test_upgrade_existing_v29_kill_loot_items(self, tmp_path):
+        """A v29-shaped DB with kill_loot_items present picks up
+        deactivated_at on AppDatabase open."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        # Stand up a v29-shaped DB by hand: app metadata at version 29,
+        # kill_loot_items present without the new column.
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
+        )
+        seed.execute(
+            "CREATE TABLE kill_loot_items ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  kill_id TEXT NOT NULL,"
+            "  item_name TEXT NOT NULL,"
+            "  quantity INTEGER DEFAULT 1,"
+            "  value_ped REAL NOT NULL,"
+            "  is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
+        seed.commit()
+        seed.close()
+
+        # Opening AppDatabase triggers the version-bump migration.
+        app_db = AppDatabase(db_path)
+        try:
+            cols = {
+                row[1]
+                for row in app_db.conn.execute(
+                    "PRAGMA table_info(kill_loot_items)"
+                ).fetchall()
+            }
+            assert "deactivated_at" in cols
+
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 30
+        finally:
+            app_db.close()
+
+    def test_upgrade_without_tracking_tables(self, tmp_path):
+        """A v29 install that never started tracking has no
+        kill_loot_items table; the migration tolerates that and the
+        column will land via init_tracking_tables on first Tracker
+        start. Defensive-path coverage."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
+        )
+        seed.commit()
+        seed.close()
+
+        # Should not raise.
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 30
+        finally:
+            app_db.close()
+
+    def test_upgrade_idempotent_when_column_already_present(self, tmp_path):
+        """Partial-run safety: the column already exists (e.g. a Tracker
+        ran against this DB ahead of the migration in a debug path), and
+        the migration's duplicate-column branch swallows the error."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
+        )
+        # Column already present at v29.
+        seed.execute(
+            "CREATE TABLE kill_loot_items ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  kill_id TEXT NOT NULL,"
+            "  item_name TEXT NOT NULL,"
+            "  quantity INTEGER DEFAULT 1,"
+            "  value_ped REAL NOT NULL,"
+            "  is_enhancer_shrapnel INTEGER NOT NULL DEFAULT 0,"
+            "  deactivated_at REAL"
+            ")"
+        )
+        seed.commit()
+        seed.close()
+
+        # Should not raise.
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 30
+        finally:
+            app_db.close()
+
+    def test_reopen_at_v30_is_noop(self, tmp_path):
+        """Opening twice in a row keeps version at 30 and doesn't
+        re-attempt the ALTER — basic version-counter sanity."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+
+        first = AppDatabase(db_path)
+        first.close()
+
+        second = AppDatabase(db_path)
+        try:
+            version = second.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 30
+        finally:
+            second.close()

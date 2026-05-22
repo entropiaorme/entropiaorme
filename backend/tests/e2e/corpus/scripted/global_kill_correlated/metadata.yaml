@@ -1,0 +1,25 @@
+name: global_kill_correlated
+flavour: scripted
+description: >
+  A local hunt that closes with a kill, followed by a Globals
+  channel announcement naming the same player as the test's
+  configured player_name. Pins the cross-event correlation path
+  in HuntTracker._on_global: when the global event lands within
+  the 5-second staleness window of the most recent kill, the
+  tracker tags the kill as is_global and writes a notable_events
+  row. Uses the make_e2e_pipeline factory fixture to set
+  player_name explicitly; the default e2e_pipeline drops globals
+  on the floor because its player_name is empty.
+surfaces:
+  - chatlog-globals
+  - tracking-global-correlation
+  - tracking-notable-events
+events: 5
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Player name "TestPlayer" must match the global
+  announcement's player field for correlation to fire.

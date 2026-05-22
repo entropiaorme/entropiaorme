@@ -1,0 +1,28 @@
+name: hof_item_drop
+flavour: scripted
+description: >
+  A local hunt closes with a kill, then a Globals-channel
+  Hall-of-Fame rare-item announcement lands within the 5-second
+  correlation window naming the test's configured player_name.
+  Pins the HOF_ITEM parser rule path (the only one of the four
+  Globals-channel rules not exercised by the other scenarios) and
+  the tracker's _on_global tagging of the most recent kill as
+  is_global + is_hof when the event is a HoF-flavoured one. Uses
+  make_e2e_pipeline to set player_name explicitly since the
+  default pipeline drops globals on the floor.
+surfaces:
+  - chatlog-globals-hof-item
+  - tracking-global-correlation
+  - tracking-hof-tagging
+  - tracking-notable-events
+events: 5
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Player name "TestPlayer" must match the global
+  announcement's player field for correlation to fire; hof=True
+  on s.globals.item appends the Hall-of-Fame suffix that promotes
+  the parse to HOF_ITEM and the correlation to is_hof.

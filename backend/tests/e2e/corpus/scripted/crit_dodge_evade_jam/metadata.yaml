@@ -1,0 +1,23 @@
+name: crit_dodge_evade_jam
+flavour: scripted
+description: >
+  Full offensive-combat-line coverage including the trifecta of
+  countered-shot paths (target dodged, target evaded, target
+  jammed). Pins every offensive-combat parser line at least once
+  in a single kill window so the regex precedence and prefix
+  matching surface is exercised end-to-end.
+surfaces:
+  - chatlog-offensive-combat
+  - chatlog-countered-shots
+  - tracking-critical-hit
+  - tracking-kill-creation
+events: 7
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Damage shots interleaved with one critical and
+  three countered-shot lines; kill closes on a Shrapnel loot
+  tick.

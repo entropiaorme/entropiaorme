@@ -1,0 +1,132 @@
+{
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_2>",
+      "quantity": 350,
+      "value_ped": 3.5
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Animal Muscle Oil",
+      "kill_id": "<UUID_3>",
+      "quantity": 1,
+      "value_ped": 0.65
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Wool",
+      "kill_id": "<UUID_3>",
+      "quantity": 3,
+      "value_ped": 1.2
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_4>",
+      "quantity": 670,
+      "value_ped": 6.7
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 35.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 2,
+      "tool_name": "Unknown"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 1,
+      "damage_dealt": 53.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 3,
+      "tool_name": "Unknown"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 18.0,
+      "kill_id": "<UUID_4>",
+      "shots_fired": 1,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 35.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 3.5,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 2,
+      "timestamp": "<TS_11>"
+    },
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 1,
+      "damage_dealt": 53.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_3>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 1.85,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 3,
+      "timestamp": "<TS_12>"
+    },
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 18.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_4>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 6.7,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 1,
+      "timestamp": "<TS_13>"
+    }
+  ],
+  "ledger_entries": [
+    {
+      "amount": 0.102,
+      "date": "<TS_14>",
+      "description": "Shrapnel Conversion",
+      "id": "<UUID_5>",
+      "tag": "convert",
+      "type": "markup"
+    }
+  ],
+  "notable_events": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_9>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_10>"
+    }
+  ]
+}

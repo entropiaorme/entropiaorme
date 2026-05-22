@@ -1,0 +1,7 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"amount": 12.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 18.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 35.0, "timestamp": "<TS_2>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"amount": 22.0, "timestamp": "<TS_3>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 800, "value_ped": 8.0}, {"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.4}], "timestamp": "<TS_4>", "total_ped": 8.4, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}

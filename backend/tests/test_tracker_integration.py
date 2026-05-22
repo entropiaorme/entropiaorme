@@ -1659,6 +1659,30 @@ class TestMobEditEndpoints:
             assert current == "Atrox"
             assert original is None
 
+    def test_rename_into_existing_mob_reports_post_mutation_total(self):
+        """Renaming `from` -> `to` where `to` already has kills in the
+        session: the response `killCount` reflects the post-mutation
+        total for the destination (affected + pre-existing), not just
+        the affected count, so the frontend can re-render the session
+        row without a refetch."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        # Rename Caboria Old -> Atrox; Atrox already has 2 kills, so the
+        # post-mutation Atrox count is 3 (affected) + 2 (pre-existing) = 5.
+        result = _rename_session_mob_impl(
+            db, seed["session_id"], seed["from_mob"], "Atrox",
+        )
+        assert result["mobName"] == "Atrox"
+        assert result["killCount"] == seed["from_mob_count"] + seed["other_mob_count"]
+
+        # And verify the underlying DB matches.
+        actual = db.execute(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = 'Atrox'",
+            (seed["session_id"],),
+        ).fetchone()[0]
+        assert actual == seed["from_mob_count"] + seed["other_mob_count"]
+
     def test_rename_preserves_first_original_across_consecutive_renames(self):
         """Renaming A->B then B->C must keep original_mob_name = A
         (COALESCE first-original semantics); undo always lands at the
@@ -1800,27 +1824,54 @@ class TestMobEditEndpoints:
         assert exc.value.status_code == 409
         assert "no restorable" in exc.value.detail.lower()
 
+    def test_restore_ambiguous_when_two_originals_merged_is_409(self):
+        """If two distinct prior names were renamed into the same
+        current name (A->C, then B->C), the restore endpoint cannot
+        unambiguously split the cohort back into A vs B with a
+        single-result response shape. Refuse with 409 rather than
+        arbitrarily picking one original."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        # Rename Caboria Old -> Argonaut Old, then Atrox -> Argonaut Old.
+        # Now Argonaut Old has 5 kills with 2 distinct original_mob_name
+        # values.
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Atrox", "Argonaut Old")
+
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, seed["session_id"], "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "ambiguous" in exc.value.detail.lower()
+
+        # And the kills stay at the post-merge state: nothing got partially
+        # restored.
+        merged = db.execute(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = 'Argonaut Old'",
+            (seed["session_id"],),
+        ).fetchone()[0]
+        assert merged == seed["from_mob_count"] + seed["other_mob_count"]
+
     # ── Atomicity ─────────────────────────────────────────────────────
 
     def test_rename_rollback_on_mid_transaction_failure(self):
         """A SQL error mid-transaction reverts both UPDATE statements
         (preservation + rename) so the kill rows stay at their pre-edit
-        state. Five execute calls: validate-exists, count-matching,
-        UPDATE preserve, UPDATE rename, DELETE cache; injecting a
-        failure on call #4 (the rename UPDATE) lands mid-transaction
+        state. Injects a failure on the rename UPDATE specifically (by
+        SQL content rather than ordinal call count, so harmless internal
+        query refactors don't break the test), landing mid-transaction
         after the preservation UPDATE has already executed."""
         db = _setup_orphan_db()
         seed = self._seed_mixed_mob_session(db)
 
         class FailingConn:
-            def __init__(self, real, fail_on_call):
+            def __init__(self, real, fail_on_sql_contains):
                 self._real = real
-                self._count = 0
-                self._fail_on = fail_on_call
+                self._fail_on_sql_contains = fail_on_sql_contains
 
             def execute(self, *args, **kwargs):
-                self._count += 1
-                if self._count == self._fail_on:
+                sql = args[0] if args else ""
+                if isinstance(sql, str) and self._fail_on_sql_contains in sql:
                     raise sqlite3.OperationalError(
                         "simulated failure mid-transaction"
                     )
@@ -1832,7 +1883,7 @@ class TestMobEditEndpoints:
             def rollback(self):
                 return self._real.rollback()
 
-        wrapped = FailingConn(db, fail_on_call=4)
+        wrapped = FailingConn(db, fail_on_sql_contains="UPDATE kills SET mob_name")
         with pytest.raises(sqlite3.OperationalError):
             _rename_session_mob_impl(wrapped, seed["session_id"], "Caboria Old", "Argonaut Old")
 
@@ -1868,8 +1919,17 @@ class TestMobEditEndpoints:
 
         breakdown = detail["mobBreakdown"]
         assert len(breakdown) == 2
-        by_current = {row["currentName"]: row for row in breakdown}
 
+        # API contract: sorted by killCount descending. Pin explicitly
+        # so reordering regressions surface here rather than as
+        # frontend display bugs.
+        assert [row["currentName"] for row in breakdown] == ["Argonaut Old", "Atrox"]
+        assert [row["killCount"] for row in breakdown] == [
+            seed["from_mob_count"],
+            seed["other_mob_count"],
+        ]
+
+        by_current = {row["currentName"]: row for row in breakdown}
         renamed = by_current["Argonaut Old"]
         assert renamed["originalName"] == "Caboria Old"
         assert renamed["killCount"] == seed["from_mob_count"]

@@ -878,14 +878,14 @@ class RestoreMobRequest(BaseModel):
     currentMobName: str
 
 
-# ── Session metadata edit — rename mob / restore mob ─────────────────
+# ── Session metadata edit: rename mob / restore mob ──────────────────
 #
 # Mass-rename overlay: editing a session's attributed mob name rewrites
 # `kills.mob_name` for all kills in that session whose current mob_name
 # matches the `from` value. The pre-edit value is preserved into
 # `kills.original_mob_name` via COALESCE on the first rename, so the
 # inverse restore endpoint can revert even after multiple consecutive
-# renames (COALESCE keeps the *first* original — undo lands at the
+# renames (COALESCE keeps the *first* original, so undo lands at the
 # genuinely-original capture). Tag-mode sessions persist the tag into
 # `kills.mob_name` at write time, so the same endpoint covers tag edits
 # transparently (frontend labels the affordance based on session mode).
@@ -899,17 +899,25 @@ def _validate_session_exists(conn, session_id: str) -> None:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
-def _build_mob_edit_response(conn, session_id: str, mob_name: str, affected: int):
+def _build_mob_edit_response(conn, session_id: str, mob_name: str):
     """Build the response payload for rename-mob / restore-mob.
 
-    Carries the post-mutation per-mob kill count for the resulting
+    Queries the post-mutation per-mob kill count for the resulting
     `mob_name` so the frontend can re-render the session row + the
-    per-mob breakdown without a full session refetch.
+    per-mob breakdown without a full session refetch. Queries (rather
+    than reusing the affected-rows count) because the destination
+    `mob_name` may have had pre-existing kills in the session: a
+    rename A->C when C already has kills lands the destination at
+    `affected + pre-existing`, not just `affected`.
     """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
+        (session_id, mob_name),
+    ).fetchone()
     return {
         "sessionId": session_id,
         "mobName": mob_name,
-        "killCount": int(affected),
+        "killCount": int(row[0] or 0),
     }
 
 
@@ -969,7 +977,7 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
         conn.rollback()
         raise
 
-    return _build_mob_edit_response(conn, session_id, to_mob, matching)
+    return _build_mob_edit_response(conn, session_id, to_mob)
 
 
 @router.post("/session/{session_id}/restore-mob")
@@ -994,18 +1002,37 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
     _validate_session_exists(conn, session_id)
 
     eligible = conn.execute(
-        "SELECT COUNT(*), MIN(original_mob_name) FROM kills "
+        "SELECT COUNT(*), COUNT(DISTINCT original_mob_name), MIN(original_mob_name) "
+        "FROM kills "
         "WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL",
         (session_id, current_mob),
     ).fetchone()
     matching = int(eligible[0] or 0)
-    restored_to = eligible[1]
+    distinct_originals = int(eligible[1] or 0)
+    restored_to = eligible[2]
     if matching == 0:
         raise HTTPException(
             status_code=409,
             detail=(
                 f"No restorable kills in this session for mob_name='{current_mob}' "
                 "(either no rename has happened or the preservation column is empty)"
+            ),
+        )
+    if distinct_originals > 1:
+        # Two or more distinct prior names merged into the same current
+        # mob_name (e.g. rename A->C, then rename B->C). Restoring would
+        # need to split the cohort back into multiple destinations,
+        # which the single-result response shape cannot express
+        # unambiguously. Refuse and surface the situation so the client
+        # can present a multi-target restore UI or undo the merging
+        # rename first.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Ambiguous restore for mob_name='{current_mob}': "
+                f"{distinct_originals} distinct prior names merged into it. "
+                "Undo the most recent rename first or restore each original "
+                "explicitly."
             ),
         )
 
@@ -1024,7 +1051,7 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
         conn.rollback()
         raise
 
-    return _build_mob_edit_response(conn, session_id, restored_to, matching)
+    return _build_mob_edit_response(conn, session_id, restored_to)
 
 
 def _activate_loot_item_impl(conn, session_id: str, loot_item_id: int):

@@ -810,17 +810,17 @@ class TestCrashRecovery:
         assert not tracker.is_tracking
 
 
-# ── Loot-entry deactivation (sessions-editing recoverability shape) ───
+# ── Loot-entry deactivation (substrate behaviour) ─────────────────────
 #
 # These tests pin the substrate behaviour that the post-hoc loot-entry
 # Deactivate/Activate affordance on the analytics → sessions tab relies on:
 # the `deactivated_at` nullable timestamp on `kill_loot_items` paired with
 # atomic mutation of the denormalised `kills.loot_total_ped`. The API
 # surface that exposes these operations to the frontend is a subsequent
-# round; this test class verifies the schema substrate plus the SQL
+# change; this test class verifies the schema substrate plus the SQL
 # manoeuvre that the API will wrap.
 #
-# Operation in full (per `.planning/situational/sessions-editing-recoverability.md`):
+# Operation in full:
 #   Deactivate(loot_id):
 #     UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?
 #     UPDATE kills SET loot_total_ped = loot_total_ped - <value_ped> WHERE id = <kill_id>
@@ -1007,7 +1007,8 @@ class TestLootDeactivation:
         db.commit()
 
         # Mirror of routers/tracking.py::get_session_impl's loot breakdown
-        # query, plus the filter clause the R2 API work will add.
+        # query, plus the filter clause the deactivate/activate API
+        # surface will add.
         active_breakdown = db.execute(
             "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) "
             "FROM kill_loot_items l "

@@ -22,6 +22,8 @@ from backend.core.events import (
 from backend.routers.tracking import (
     _activate_loot_item_impl,
     _deactivate_loot_item_impl,
+    _rename_session_mob_impl,
+    _restore_session_mob_impl,
     _ts_to_iso,
     get_session_impl,
 )
@@ -395,6 +397,8 @@ class TestFullPipeline:
         loot_cols = {row[1] for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()}
         assert "is_enhancer_shrapnel" in loot_cols
         assert "deactivated_at" in loot_cols
+        kill_cols = {row[1] for row in db.execute("PRAGMA table_info(kills)").fetchall()}
+        assert "original_mob_name" in kill_cols
 
 
 # ── Mob Lock Confirmation & Retrofit ──────────────────────────────────
@@ -1092,7 +1096,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 30
+            assert int(version) == 31
         finally:
             app_db.close()
 
@@ -1120,7 +1124,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 30
+            assert int(version) == 31
         finally:
             app_db.close()
 
@@ -1159,7 +1163,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 30
+            assert int(version) == 31
         finally:
             app_db.close()
 
@@ -1178,7 +1182,7 @@ class TestV30Migration:
             version = second.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 30
+            assert int(version) == 31
         finally:
             second.close()
 
@@ -1554,3 +1558,589 @@ class TestLootEditEndpoints:
         assert detail["summary"]["returns"] == pytest.approx(
             round(seed["loot_b_value"], 2)
         )
+
+
+# ── Session-metadata-edit endpoints (rename-mob / restore-mob) ───────
+#
+# Mass-rename overlay: editing a session's attributed mob name rewrites
+# `kills.mob_name` for matching kills in the session and preserves the
+# pre-edit value into `kills.original_mob_name` via COALESCE on the
+# first rename. Subsequent renames don't overwrite the preservation
+# column (COALESCE keeps the first original), so a single restore
+# always lands at the genuinely-original capture.
+
+
+class TestMobEditEndpoints:
+    def _seed_mixed_mob_session(self, db):
+        """Insert one session with kills split across two mob_names so
+        the targeted-rename behaviour can be observed against the
+        untouched cohort. Returns the session id + mob names + counts."""
+        session_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, ?, 0)",
+            (session_id, now - 600, now),
+        )
+        for i in range(3):
+            db.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+                "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+                "VALUES (?, ?, 'Caboria Old', ?, 5, 50.0, 1.0, 2.0)",
+                (str(uuid.uuid4()), session_id, now - 60 + i),
+            )
+        for i in range(2):
+            db.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+                "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+                "VALUES (?, ?, 'Atrox', ?, 5, 50.0, 0.5, 2.0)",
+                (str(uuid.uuid4()), session_id, now - 30 + i),
+            )
+        db.commit()
+        return {
+            "session_id": session_id,
+            "from_mob": "Caboria Old",
+            "from_mob_count": 3,
+            "other_mob": "Atrox",
+            "other_mob_count": 2,
+        }
+
+    def _seed_summary_row(self, db, session_id):
+        """Drop a stand-in session_summaries row so cache-invalidation
+        is observable. Columns mirror schema.py:114-136; only the
+        primary key matters for the DELETE assertion."""
+        db.execute(
+            "INSERT INTO session_summaries ("
+            "session_id, summary_version, started_at, ended_at, duration_hours, "
+            "kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, heal_cost, "
+            "dangling_cost, cycled_ped, regular_skill_ped_json, attribute_levels_json, "
+            "regular_skill_tt, attribute_levels_total"
+            ") VALUES (?, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '{}', '{}', 0, 0)",
+            (session_id,),
+        )
+        db.commit()
+
+    # ── Rename happy paths ────────────────────────────────────────────
+
+    def test_rename_rewrites_matching_kills_and_preserves_original(self):
+        """Renaming 'Caboria Old' to 'Argonaut Old' rewrites every
+        matching kill, preserves the pre-edit value into
+        original_mob_name on each, and leaves non-matching kills
+        untouched."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        result = _rename_session_mob_impl(
+            db, seed["session_id"], seed["from_mob"], "Argonaut Old",
+        )
+        assert result["sessionId"] == seed["session_id"]
+        assert result["mobName"] == "Argonaut Old"
+        assert result["killCount"] == seed["from_mob_count"]
+
+        renamed_rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Argonaut Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(renamed_rows) == seed["from_mob_count"]
+        for current, original in renamed_rows:
+            assert current == "Argonaut Old"
+            assert original == "Caboria Old"
+
+        # Non-matching cohort (Atrox) stays untouched, including a NULL
+        # original_mob_name.
+        untouched = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Atrox'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(untouched) == seed["other_mob_count"]
+        for current, original in untouched:
+            assert current == "Atrox"
+            assert original is None
+
+    def test_rename_into_existing_mob_reports_post_mutation_total(self):
+        """Renaming `from` -> `to` where `to` already has kills in the
+        session: the response `killCount` reflects the post-mutation
+        total for the destination (affected + pre-existing), not just
+        the affected count, so the frontend can re-render the session
+        row without a refetch."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        # Rename Caboria Old -> Atrox; Atrox already has 2 kills, so the
+        # post-mutation Atrox count is 3 (affected) + 2 (pre-existing) = 5.
+        result = _rename_session_mob_impl(
+            db, seed["session_id"], seed["from_mob"], "Atrox",
+        )
+        assert result["mobName"] == "Atrox"
+        assert result["killCount"] == seed["from_mob_count"] + seed["other_mob_count"]
+
+        # And verify the underlying DB matches.
+        actual = db.execute(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = 'Atrox'",
+            (seed["session_id"],),
+        ).fetchone()[0]
+        assert actual == seed["from_mob_count"] + seed["other_mob_count"]
+
+    def test_rename_back_to_original_clears_preservation_column(self):
+        """A round-trip rename (A -> B -> A) lands at the original name
+        with the preservation column cleared, so the rows look identical
+        to never-renamed rows. Without this, mobBreakdown would surface
+        a bogus 'originally A' indicator and restore-mob would become a
+        no-op metadata cleanup."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Argonaut Old", "Caboria Old")
+
+        rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Caboria Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(rows) == seed["from_mob_count"]
+        for current, original in rows:
+            assert current == "Caboria Old"
+            assert original is None
+
+    def test_rename_preserves_first_original_across_consecutive_renames(self):
+        """Renaming A->B then B->C must keep original_mob_name = A
+        (COALESCE first-original semantics); undo always lands at the
+        genuinely-original capture."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Argonaut Old", "Atrox Old")
+
+        rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Atrox Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(rows) == seed["from_mob_count"]
+        for current, original in rows:
+            assert current == "Atrox Old"
+            # First original is preserved; second rename did NOT clobber it.
+            assert original == "Caboria Old"
+
+    def test_rename_clears_session_summaries_cache(self):
+        """Cache invalidation contract: a pre-existing summary row is
+        deleted on rename so the next read recomputes."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        self._seed_summary_row(db, seed["session_id"])
+
+        _rename_session_mob_impl(db, seed["session_id"], seed["from_mob"], "Argonaut Old")
+
+        row = db.execute(
+            "SELECT 1 FROM session_summaries WHERE session_id = ?",
+            (seed["session_id"],),
+        ).fetchone()
+        assert row is None
+
+    # ── Rename 404 / 409 paths ────────────────────────────────────────
+
+    def test_rename_missing_session_is_404(self):
+        """Unknown session id yields 404."""
+        db = _setup_orphan_db()
+        with pytest.raises(HTTPException) as exc:
+            _rename_session_mob_impl(db, "no-such-session", "X", "Y")
+        assert exc.value.status_code == 404
+        assert exc.value.detail == "Session not found"
+
+    def test_rename_blank_input_is_400(self):
+        """Whitespace-only mob names are rejected with 400 before any
+        DB mutation, so empty strings can't persist into kills.mob_name."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        for from_val, to_val in [
+            ("   ", "Argonaut Old"),
+            ("Caboria Old", ""),
+            ("", ""),
+        ]:
+            with pytest.raises(HTTPException) as exc:
+                _rename_session_mob_impl(db, seed["session_id"], from_val, to_val)
+            assert exc.value.status_code == 400
+            assert "blank" in exc.value.detail.lower()
+
+    def test_rename_active_session_is_409(self):
+        """Renames on a live session create drift between SQLite and
+        the tracker's in-memory state; the helper refuses with 409."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, NULL, 1)",
+            (session_id, now - 60),
+        )
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, "
+            "shots_fired, damage_dealt, loot_total_ped, cost_ped) "
+            "VALUES (?, ?, 'Caboria Old', ?, 5, 50.0, 1.0, 2.0)",
+            (str(uuid.uuid4()), session_id, now - 30),
+        )
+        db.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            _rename_session_mob_impl(db, session_id, "Caboria Old", "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "after the session has ended" in exc.value.detail.lower()
+
+    def test_rename_no_matching_kills_is_409(self):
+        """from_mob value with no matching kills in the session is a
+        409 rather than a silent no-op (the request expressed an
+        intention against zero rows)."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        with pytest.raises(HTTPException) as exc:
+            _rename_session_mob_impl(db, seed["session_id"], "Nonexistent", "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "no kills" in exc.value.detail.lower()
+
+    def test_rename_noop_same_name_is_409(self):
+        """from == to is a 409 (silent success would leave the cache
+        invalidated for no reason, plus signals client confusion)."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        with pytest.raises(HTTPException) as exc:
+            _rename_session_mob_impl(db, seed["session_id"], seed["from_mob"], seed["from_mob"])
+        assert exc.value.status_code == 409
+        assert "no-op" in exc.value.detail.lower()
+
+    # ── Restore happy paths ───────────────────────────────────────────
+
+    def test_restore_reverts_to_original_and_clears_preservation(self):
+        """Restore inverts the rename: mob_name returns to the preserved
+        original_mob_name, and the preservation column clears."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        result = _restore_session_mob_impl(db, seed["session_id"], "Argonaut Old")
+        assert result["sessionId"] == seed["session_id"]
+        assert result["mobName"] == "Caboria Old"
+        assert result["killCount"] == seed["from_mob_count"]
+
+        # Restored kills carry the original name with the preservation
+        # column cleared, ready for a fresh rename if needed.
+        rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Caboria Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(rows) == seed["from_mob_count"]
+        for current, original in rows:
+            assert current == "Caboria Old"
+            assert original is None
+
+    def test_restore_after_consecutive_renames_lands_at_first_original(self):
+        """A single restore after two renames jumps back to the
+        first-captured name (consistent with COALESCE preservation)."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Argonaut Old", "Atrox Old")
+        result = _restore_session_mob_impl(db, seed["session_id"], "Atrox Old")
+        assert result["mobName"] == "Caboria Old"
+        assert result["killCount"] == seed["from_mob_count"]
+
+    def test_restore_clears_session_summaries_cache(self):
+        """Same cache-invalidation contract on the restore path."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+
+        self._seed_summary_row(db, seed["session_id"])
+        _restore_session_mob_impl(db, seed["session_id"], "Argonaut Old")
+
+        row = db.execute(
+            "SELECT 1 FROM session_summaries WHERE session_id = ?",
+            (seed["session_id"],),
+        ).fetchone()
+        assert row is None
+
+    # ── Restore 404 / 409 paths ───────────────────────────────────────
+
+    def test_restore_missing_session_is_404(self):
+        """Unknown session id yields 404."""
+        db = _setup_orphan_db()
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, "no-such-session", "Argonaut Old")
+        assert exc.value.status_code == 404
+
+    def test_restore_blank_input_is_400(self):
+        """Whitespace-only current_mob is rejected with 400 before any
+        DB query, distinct from a 409 'nothing matches' which would
+        otherwise mislead callers about what went wrong."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, seed["session_id"], "   ")
+        assert exc.value.status_code == 400
+        assert "blank" in exc.value.detail.lower()
+
+    def test_restore_active_session_is_409(self):
+        """Restores on a live session create the same drift hazard as
+        renames; the same guard refuses with 409."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) "
+            "VALUES (?, ?, NULL, 1)",
+            (session_id, now - 60),
+        )
+        db.commit()
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, session_id, "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "after the session has ended" in exc.value.detail.lower()
+
+    def test_restore_no_eligible_kills_is_409(self):
+        """No matching kills (either the current name never existed or
+        the preservation column is empty) yields 409."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+        # Atrox kills were never renamed, so their original_mob_name is
+        # NULL. Asking to restore them is a 409.
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, seed["session_id"], "Atrox")
+        assert exc.value.status_code == 409
+        assert "no restorable" in exc.value.detail.lower()
+
+    def test_restore_ambiguous_when_two_originals_merged_is_409(self):
+        """If two distinct prior names were renamed into the same
+        current name (A->C, then B->C), the restore endpoint cannot
+        unambiguously split the cohort back into A vs B with a
+        single-result response shape. Refuse with 409 rather than
+        arbitrarily picking one original."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        # Rename Caboria Old -> Argonaut Old, then Atrox -> Argonaut Old.
+        # Now Argonaut Old has 5 kills with 2 distinct original_mob_name
+        # values.
+        _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+        _rename_session_mob_impl(db, seed["session_id"], "Atrox", "Argonaut Old")
+
+        with pytest.raises(HTTPException) as exc:
+            _restore_session_mob_impl(db, seed["session_id"], "Argonaut Old")
+        assert exc.value.status_code == 409
+        assert "ambiguous" in exc.value.detail.lower()
+
+        # And the kills stay at the post-merge state: nothing got partially
+        # restored.
+        merged = db.execute(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = 'Argonaut Old'",
+            (seed["session_id"],),
+        ).fetchone()[0]
+        assert merged == seed["from_mob_count"] + seed["other_mob_count"]
+
+    # ── Atomicity ─────────────────────────────────────────────────────
+
+    def test_rename_rollback_on_mid_transaction_failure(self):
+        """A SQL error mid-transaction reverts both UPDATE statements
+        (preservation + rename) so the kill rows stay at their pre-edit
+        state. Injects a failure on the rename UPDATE specifically (by
+        SQL content rather than ordinal call count, so harmless internal
+        query refactors don't break the test), landing mid-transaction
+        after the preservation UPDATE has already executed."""
+        db = _setup_orphan_db()
+        seed = self._seed_mixed_mob_session(db)
+
+        class FailingConn:
+            def __init__(self, real, fail_on_sql_contains):
+                self._real = real
+                self._fail_on_sql_contains = fail_on_sql_contains
+
+            def execute(self, *args, **kwargs):
+                sql = args[0] if args else ""
+                if isinstance(sql, str) and self._fail_on_sql_contains in sql:
+                    raise sqlite3.OperationalError(
+                        "simulated failure mid-transaction"
+                    )
+                return self._real.execute(*args, **kwargs)
+
+            def commit(self):
+                return self._real.commit()
+
+            def rollback(self):
+                return self._real.rollback()
+
+        wrapped = FailingConn(db, fail_on_sql_contains="UPDATE kills SET mob_name")
+        with pytest.raises(sqlite3.OperationalError):
+            _rename_session_mob_impl(wrapped, seed["session_id"], "Caboria Old", "Argonaut Old")
+
+        # Post-rollback: nothing renamed, nothing preserved.
+        rows = db.execute(
+            "SELECT mob_name, original_mob_name FROM kills "
+            "WHERE session_id = ? AND mob_name = 'Caboria Old'",
+            (seed["session_id"],),
+        ).fetchall()
+        assert len(rows) == seed["from_mob_count"]
+        for current, original in rows:
+            assert current == "Caboria Old"
+            assert original is None
+
+    # ── Session-detail response extension ─────────────────────────────
+
+    def test_session_detail_carries_mob_breakdown_with_original_name(self, tmp_path):
+        """GET /api/tracking/session/{id} surfaces per-mob breakdown
+        including current + original names so the frontend can render
+        an 'originally X' indicator on renamed mobs."""
+        from backend.db.app_database import AppDatabase
+
+        app_db = AppDatabase(tmp_path / "app.db")
+        db = app_db.conn
+        init_tracking_tables(db)
+        try:
+            seed = self._seed_mixed_mob_session(db)
+            _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+
+            detail = get_session_impl(db, seed["session_id"])
+        finally:
+            app_db.close()
+
+        breakdown = detail["mobBreakdown"]
+        assert len(breakdown) == 2
+
+        # API contract: sorted by killCount descending. Pin explicitly
+        # so reordering regressions surface here rather than as
+        # frontend display bugs.
+        assert [row["currentName"] for row in breakdown] == ["Argonaut Old", "Atrox"]
+        assert [row["killCount"] for row in breakdown] == [
+            seed["from_mob_count"],
+            seed["other_mob_count"],
+        ]
+
+        by_current = {row["currentName"]: row for row in breakdown}
+        renamed = by_current["Argonaut Old"]
+        assert renamed["originalName"] == "Caboria Old"
+        assert renamed["killCount"] == seed["from_mob_count"]
+
+        untouched = by_current["Atrox"]
+        assert untouched["originalName"] is None
+        assert untouched["killCount"] == seed["other_mob_count"]
+
+
+# ── V31 migration: kills.original_mob_name ───────────────────────────
+
+
+class TestV31Migration:
+    """The version-counter migration that lands `original_mob_name` on
+    `kills` for existing DBs (v30 to v31 forward-migrate). Fresh
+    installs land the column via the canonical tracking schema; this
+    class pins the in-place upgrade path and its defensive cases."""
+
+    def test_upgrade_existing_v30_kills(self, tmp_path):
+        """A v30-shaped DB with `kills` present picks up
+        `original_mob_name` on AppDatabase open."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        # Stand up a v30-shaped DB by hand: app metadata at version 30,
+        # `kills` present without the new column.
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
+        )
+        seed.execute(
+            "CREATE TABLE kills ("
+            "  id TEXT PRIMARY KEY,"
+            "  session_id TEXT NOT NULL,"
+            "  mob_name TEXT,"
+            "  timestamp REAL NOT NULL,"
+            "  loot_total_ped REAL DEFAULT 0"
+            ")"
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            cols = {
+                row[1]
+                for row in app_db.conn.execute(
+                    "PRAGMA table_info(kills)"
+                ).fetchall()
+            }
+            assert "original_mob_name" in cols
+
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 31
+        finally:
+            app_db.close()
+
+    def test_upgrade_without_kills_table(self, tmp_path):
+        """A v30 install that never started tracking has no `kills`
+        table; the v31 migration tolerates that and the column will land
+        via init_tracking_tables on first Tracker start. Defensive-path
+        coverage matching the v30 migration's shape."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
+        )
+        seed.commit()
+        seed.close()
+
+        # Should not raise.
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 31
+        finally:
+            app_db.close()
+
+    def test_upgrade_idempotent_when_column_already_present(self, tmp_path):
+        """Partial-run safety: the column already exists, and the
+        migration's duplicate-column branch swallows the error."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
+        )
+        seed.execute(
+            "CREATE TABLE kills ("
+            "  id TEXT PRIMARY KEY,"
+            "  session_id TEXT NOT NULL,"
+            "  mob_name TEXT,"
+            "  timestamp REAL NOT NULL,"
+            "  loot_total_ped REAL DEFAULT 0,"
+            "  original_mob_name TEXT"
+            ")"
+        )
+        seed.commit()
+        seed.close()
+
+        # Should not raise.
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 31
+        finally:
+            app_db.close()

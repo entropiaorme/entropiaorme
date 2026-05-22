@@ -394,6 +394,70 @@ export async function deleteSession(sessionId: string): Promise<void> {
 	await request(`/tracking/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
 }
 
+/** Response shape from the loot deactivate / activate endpoints. */
+export interface LootEditResponse {
+	sessionId: string;
+	killId: string;
+	lootItemId: number;
+	deactivatedAt: string | null;
+	killLootTotalPed: number;
+	sessionTotalReturns: number;
+}
+
+export async function deactivateLootItem(
+	sessionId: string,
+	lootItemId: number,
+): Promise<LootEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/loot/${lootItemId}/deactivate`,
+		{ method: 'POST' },
+	);
+}
+
+export async function activateLootItem(
+	sessionId: string,
+	lootItemId: number,
+): Promise<LootEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/loot/${lootItemId}/activate`,
+		{ method: 'POST' },
+	);
+}
+
+/** Response shape from the rename-mob / restore-mob endpoints. */
+export interface MobEditResponse {
+	sessionId: string;
+	mobName: string;
+	killCount: number;
+}
+
+export async function renameSessionMob(
+	sessionId: string,
+	fromMobName: string,
+	toMobName: string,
+): Promise<MobEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/rename-mob`,
+		{
+			method: 'POST',
+			body: JSON.stringify({ fromMobName, toMobName }),
+		},
+	);
+}
+
+export async function restoreSessionMob(
+	sessionId: string,
+	currentMobName: string,
+): Promise<MobEditResponse> {
+	return request(
+		`/tracking/session/${encodeURIComponent(sessionId)}/restore-mob`,
+		{
+			method: 'POST',
+			body: JSON.stringify({ currentMobName }),
+		},
+	);
+}
+
 export async function getRecentEvents(): Promise<RecentEvent[]> {
 	return request(demoPath('/tracking/recent-events'));
 }

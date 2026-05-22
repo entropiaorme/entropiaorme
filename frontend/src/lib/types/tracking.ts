@@ -38,9 +38,37 @@ export interface SessionDetail {
 	};
 	notableEvents: NotableEvent[];
 	lootBreakdown: LootItem[];
+	lootEntries: LootEntry[];
+	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: Ped;
 	toolStats: ToolStat[];
 	skillGains: SkillGain[];
+}
+
+/** Per-row loot entry for the sessions-tab editing affordance.
+ * Deactivated rows (`deactivatedAt` populated) are filtered out of the
+ * aggregate `lootBreakdown` rollup; they surface here so the frontend
+ * can render them greyed-out with the inverse Activate action.
+ */
+export interface LootEntry {
+	id: number;
+	killId: string;
+	itemName: string;
+	quantity: number;
+	valuePed: Ped;
+	isEnhancerShrapnel: boolean;
+	deactivatedAt: ISODate | null;
+}
+
+/** Per-mob row for the sessions-tab metadata-edit affordance.
+ * `originalName` is populated when the mob has been renamed at least
+ * once; the frontend renders an "originally X" indicator and offers a
+ * Restore action that calls `restore-mob`.
+ */
+export interface MobBreakdownRow {
+	currentName: string;
+	originalName: string | null;
+	killCount: number;
 }
 
 export interface NotableEvent {

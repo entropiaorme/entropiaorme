@@ -70,16 +70,16 @@ class AppDatabase(BaseDatabase):
         the analytics → sessions tab. The column is owned by the tracking
         schema (`backend/tracking/schema.py`), but the migration lives here
         because tracking tables have no version-counter migration system of
-        their own — they rely on `CREATE TABLE IF NOT EXISTS` for fresh
+        their own: they rely on `CREATE TABLE IF NOT EXISTS` for fresh
         installs and on the app DB's versioned forward-migrations for
         in-place schema evolution.
 
         Defensive in two directions:
-          - "no such table" — the user installed a prior version but never
+          - "no such table": the user installed a prior version but never
             started tracking, so kill_loot_items doesn't exist yet. The
             future `init_tracking_tables` call on Tracker init will create
             it with the column baked in (per the canonical schema).
-          - "duplicate column name" — the column was already added by a
+          - "duplicate column name": the column was already added by a
             partial run; idempotent re-run skips cleanly.
         """
         try:
@@ -92,7 +92,7 @@ class AppDatabase(BaseDatabase):
             msg = str(exc).lower()
             if "no such table" in msg:
                 log.info(
-                    "v30: kill_loot_items not present yet — column will land "
+                    "v30: kill_loot_items not present yet; column will land "
                     "via tracking_schema when Tracker first initialises"
                 )
             elif "duplicate column" in msg:

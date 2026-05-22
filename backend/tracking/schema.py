@@ -70,7 +70,7 @@ def _current_schema(conn: sqlite3.Connection) -> None:
 
         -- `deactivated_at` is a nullable Unix-epoch timestamp; NULL = active
         -- (included in aggregates), populated = deactivated at that moment by
-        -- a post-hoc edit on the sessions tab. Deactivation is recoverable —
+        -- a post-hoc edit on the sessions tab. Deactivation is recoverable:
         -- clearing the timestamp reactivates the entry. The denormalised
         -- per-kill total `kills.loot_total_ped` is mutated atomically
         -- alongside the flag, so analytics queries reading `kills.loot_total_ped`

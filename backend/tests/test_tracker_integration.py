@@ -825,7 +825,7 @@ class TestCrashRecovery:
 #     UPDATE kill_loot_items SET deactivated_at = unixepoch('now') WHERE id = ?
 #     UPDATE kills SET loot_total_ped = loot_total_ped - <value_ped> WHERE id = <kill_id>
 #     (cache invalidation on session_summaries is the API layer's concern)
-#   Activate(loot_id): inverse — clear `deactivated_at`, add value_ped back.
+#   Activate(loot_id): inverse, clearing `deactivated_at` and adding value_ped back.
 
 
 class TestLootDeactivation:
@@ -879,7 +879,7 @@ class TestLootDeactivation:
         notnull_flag = cols["deactivated_at"][3]
         assert notnull_flag == 0, "deactivated_at must be nullable"
 
-        # New inserts default to NULL — verifies the column is truly nullable
+        # New inserts default to NULL; verifies the column is truly nullable
         # at the row level, not just by schema declaration.
         _, _, (loot_a_id, _), _ = self._seed_session_with_loot(db)
         row = db.execute(
@@ -906,8 +906,8 @@ class TestLootDeactivation:
         ).fetchone()[0]
         assert kills_total_before == pytest.approx(initial_total)
 
-        # Deactivate loot_a — the atomic two-statement manoeuvre future
-        # API + service code will execute inside one transaction.
+        # Deactivate loot_a. The atomic two-statement manoeuvre below is
+        # what future API + service code will execute inside one transaction.
         db.execute(
             "UPDATE kill_loot_items SET deactivated_at = ? WHERE id = ?",
             (time.time(), loot_a_id),
@@ -924,7 +924,7 @@ class TestLootDeactivation:
         ).fetchone()[0]
         assert kills_total_after == pytest.approx(loot_b_value)
 
-        # Per-session aggregate — this is the exact query shape used by
+        # Per-session aggregate: this is the exact query shape used by
         # `routers/tracking.py::list_sessions_impl` for the session list's
         # returns column, and by the analytics surface for cross-session
         # rollups. It reads from `kills.loot_total_ped` directly and so
@@ -935,8 +935,8 @@ class TestLootDeactivation:
         ).fetchone()[0]
         assert session_returns == pytest.approx(loot_b_value)
 
-        # The deactivated row is still present in kill_loot_items — soft
-        # delete, not destructive — and carries the timestamp.
+        # The deactivated row is still present in kill_loot_items (soft
+        # delete, not destructive) and carries the timestamp.
         row = db.execute(
             "SELECT deactivated_at, value_ped FROM kill_loot_items WHERE id = ?",
             (loot_a_id,),
@@ -1022,7 +1022,7 @@ class TestLootDeactivation:
         assert active_breakdown[0][0] == "Mob-Drop-B"
         assert active_breakdown[0][2] == pytest.approx(loot_b_value)
 
-        # The deactivated row is still queryable without the filter — the
+        # The deactivated row is still queryable without the filter; the
         # frontend's greyed-out section will read it this way.
         all_rows = db.execute(
             "SELECT item_name, deactivated_at FROM kill_loot_items "
@@ -1157,7 +1157,7 @@ class TestV30Migration:
 
     def test_reopen_at_v30_is_noop(self, tmp_path):
         """Opening twice in a row keeps version at 30 and doesn't
-        re-attempt the ALTER — basic version-counter sanity."""
+        re-attempt the ALTER; basic version-counter sanity."""
         from backend.db.app_database import AppDatabase
 
         db_path = tmp_path / "app.db"

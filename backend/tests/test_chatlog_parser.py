@@ -137,24 +137,6 @@ from backend.services.chatlog_parser import parse_line, parse_file, EventType
         EventType.HOF_ITEM,
         {"player": "Test Player", "item": "Adjusted ArMatrix LR-40 (L)", "value": 500.0},
     ),
-    # ── Player death ────────────────────────────────────────────────────────
-    (
-        "2026-03-24 15:10:00 [System] [] You were killed by the old Atrox",
-        EventType.PLAYER_DEATH,
-        {"mob_name": "Atrox"},
-    ),
-    # ── Player revived ──────────────────────────────────────────────────────
-    (
-        "2026-03-24 15:10:30 [System] [] You have been revived",
-        EventType.PLAYER_REVIVED,
-        {},
-    ),
-    # ── Tier increase ───────────────────────────────────────────────────────
-    (
-        "2026-03-24 15:15:00 [System] [] Karma Killer Mk. 3a has reached tier 2",
-        EventType.TIER_INCREASE,
-        {"item_name": "Karma Killer Mk. 3a", "tier": 2},
-    ),
     # ── Mission completed ───────────────────────────────────────────────────
     (
         "2026-03-24 17:31:58 [System] [] Mission completed (Paneleon Hunter Jameson's Mission (repeatable))",
@@ -200,8 +182,6 @@ def test_all_event_types_covered():
         EventType.LOOT, EventType.SKILL_GAIN, EventType.ENHANCER_BREAK,
         EventType.GLOBAL_KILL, EventType.HOF_KILL,
         EventType.GLOBAL_ITEM, EventType.HOF_ITEM,
-        EventType.PLAYER_DEATH, EventType.PLAYER_REVIVED,
-        EventType.TIER_INCREASE,
         EventType.MISSION_COMPLETE, EventType.MISSION_RECEIVED,
     }
     for event_type in EventType:

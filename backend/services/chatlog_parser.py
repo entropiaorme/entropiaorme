@@ -27,9 +27,6 @@ class EventType(Enum):
     LOOT = "loot"
     SKILL_GAIN = "skill_gain"
     ENHANCER_BREAK = "enhancer_break"
-    PLAYER_DEATH = "player_death"
-    PLAYER_REVIVED = "player_revived"
-    TIER_INCREASE = "tier_increase"
     GLOBAL_KILL = "global_kill"
     HOF_KILL = "hof_kill"
     GLOBAL_ITEM = "global_item"
@@ -113,18 +110,6 @@ SYSTEM_RULES: tuple[_Rule, ...] = (
             "shrapnel_ped": float(match.group(4)),
         },
         "Your enhancer",
-    ),
-    _Rule(
-        EventType.PLAYER_DEATH,
-        re.compile(r"You were killed by the \w+ (.+)"),
-        lambda match: {"mob_name": match.group(1).strip()},
-        "You were killed",
-    ),
-    _Rule(EventType.PLAYER_REVIVED, re.compile(r"You have been revived"), lambda _: {}, "You have been revived"),
-    _Rule(
-        EventType.TIER_INCREASE,
-        re.compile(r"(.+?) has reached tier (\d+)"),
-        lambda match: {"item_name": match.group(1).strip(), "tier": int(match.group(2))},
     ),
     _Rule(
         EventType.MISSION_COMPLETE,

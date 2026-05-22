@@ -40,20 +40,41 @@ smoke:
     @echo "just smoke: headless smoke verification is not yet implemented."
     @exit 1
 
-# Start Caddy in the background using the Caddyfile at the repo root.
-# Caddy runs as a long-lived process; subsequent invocations are no-ops
-# once it is running. See `Caddyfile` for the routed hostname.
+# Start Caddy in the background using the main worktree's Caddyfile.
+# Routes through caddy-lifecycle.ps1 so the main worktree (resolved via
+# `git worktree list`) is the canonical config home, regardless of
+# which checkout this recipe is invoked from. Caddy runs as a
+# long-lived process; subsequent invocations are no-ops once it is
+# running. See `Caddyfile` for the routed hostname.
+[windows]
 proxy-up:
-    caddy start --config Caddyfile
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\caddy-lifecycle.ps1" -Action up
+
+[unix]
+proxy-up:
+    @echo "just proxy-up: macOS / Linux Caddy launch is not yet implemented; contributions welcome."
+    @exit 1
 
 # Stop the background Caddy via its admin endpoint (localhost:2019).
+[windows]
 proxy-down:
-    caddy stop
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\caddy-lifecycle.ps1" -Action down
+
+[unix]
+proxy-down:
+    @echo "just proxy-down: macOS / Linux Caddy launch is not yet implemented; contributions welcome."
+    @exit 1
 
 # Cheap liveness check via Caddy's admin endpoint. Prints `caddy running`
 # or `caddy not running`.
+[windows]
 proxy-status:
-    @curl -fsS -o /dev/null http://localhost:2019/config/ && echo "caddy running" || echo "caddy not running"
+    @powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\caddy-lifecycle.ps1" -Action status
+
+[unix]
+proxy-status:
+    @echo "just proxy-status: macOS / Linux Caddy launch is not yet implemented; contributions welcome."
+    @exit 1
 
 # Start CoreDNS in the background using the Corefile at the repo root.
 # Binds 127.0.0.1:53 for *.localhost resolution. Idempotent: a second

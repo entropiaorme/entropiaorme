@@ -23,6 +23,15 @@ entropiaorme.localhost {
 # directory below. Fragments use the same `tls internal` shape so each
 # checkout gets its own auto-provisioned cert. The glob matches zero
 # files in a fresh clone, which Caddy accepts as a no-op rather than
-# an error; checkout stand-up regenerates the relevant fragment and
-# triggers `caddy reload` when a new checkout comes online.
+# an error; the fragment is generated when the additional checkout
+# comes online and a `caddy reload` picks it up.
+#
+# Fragments belong in the *main worktree's* `.dev/Caddyfile.worktrees/`
+# (Caddy resolves this `import` relative to the loaded file's
+# directory). `scripts/caddy-lifecycle.ps1` (invoked by
+# `scripts/dev-launch.ps1`'s defensive reload and by the `just proxy-*`
+# recipes) always loads this Caddyfile from the main worktree
+# (resolved via `git worktree list --porcelain`), so every active
+# checkout's fragment survives any reload regardless of which checkout
+# triggered it.
 import .dev/Caddyfile.worktrees/*.caddy

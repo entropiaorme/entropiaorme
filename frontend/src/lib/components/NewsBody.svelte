@@ -41,7 +41,18 @@
 					return text;
 				}
 				const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-				return `<a href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
+				// External links (web + mail) open in the OS browser / mail client
+				// rather than navigating the in-app webview in place. In-page
+				// anchors (#...) and internal routes (/...) stay in the webview.
+				const trimmed = href.trim().toLowerCase();
+				const isExternal =
+					trimmed.startsWith('http:') ||
+					trimmed.startsWith('https:') ||
+					trimmed.startsWith('mailto:');
+				const targetAttr = isExternal
+					? ' target="_blank" rel="noopener noreferrer"'
+					: '';
+				return `<a href="${escapeHtml(href)}"${titleAttr}${targetAttr}>${text}</a>`;
 			},
 			// Drop images entirely. CSP `img-src 'self' data:` would already block
 			// remote loads, but rendering nothing is unambiguous and avoids any

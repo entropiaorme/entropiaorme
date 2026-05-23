@@ -102,7 +102,7 @@ def _notable_event_description(event_type: str, mob_or_item: str, value_ped: flo
     label = _notable_event_label(event_type)
     if event_type.startswith("quest_"):
         return f"{label}: {mob_or_item}"
-    return f"{label} — {mob_or_item}: {value_ped:.2f} PED"
+    return f"{label}: {mob_or_item} ({value_ped:.2f} PED)"
 
 def _notable_event_payload(
     event_type: str,

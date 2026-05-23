@@ -99,7 +99,7 @@ class SkillScanManual:
 
     def start(self, page_count: int | None = None) -> dict:
         if not self._core.has_engine:
-            return {"error": "Local OCR engine is unavailable — check the backend log"}
+            return {"error": "Local OCR engine is unavailable: check the backend log"}
         region = skill_region()
         if region is None:
             return {"error": "Entropia Universe window not found: start the game first"}
@@ -108,9 +108,9 @@ class SkillScanManual:
                 return {"error": f"page_count must be between 1 and {MAX_PAGE_COUNT}"}
         with self._lock:
             if self._processing:
-                return {"error": "Scan currently processing — wait for it to finish"}
+                return {"error": "Scan currently processing: wait for it to finish"}
             if self._pending_result is not None:
-                return {"error": "Pending scan result awaiting review — accept or reject first"}
+                return {"error": "Pending scan result awaiting review: accept or reject first"}
             if page_count is not None:
                 self._expected_pages = page_count
             self._active = True
@@ -128,7 +128,7 @@ class SkillScanManual:
     def capture_current_page(self) -> dict:
         with self._lock:
             if not self._active:
-                return {"error": "No active scan — call start first"}
+                return {"error": "No active scan: call start first"}
             if self._region is None:
                 return {"error": "Region not configured"}
             tl, br = self._region
@@ -147,7 +147,7 @@ class SkillScanManual:
     def cancel(self) -> dict:
         with self._lock:
             if self._processing:
-                return {"error": "Cannot cancel while processing — wait for completion"}
+                return {"error": "Cannot cancel while processing: wait for completion"}
             self._reset()
         log.info("Manual skill scan cancelled")
         return self.get_status()
@@ -161,11 +161,11 @@ class SkillScanManual:
         """
         with self._lock:
             if not self._active:
-                return {"error": "No active scan — call start first"}
+                return {"error": "No active scan: call start first"}
             if self._processing:
-                return {"error": "Cannot undo while processing — wait for completion"}
+                return {"error": "Cannot undo while processing: wait for completion"}
             if self._pending_result is not None:
-                return {"error": "Pending result awaiting review — accept or reject first"}
+                return {"error": "Pending result awaiting review: accept or reject first"}
             if not self._captures:
                 return {"error": "No captures to undo"}
             popped_idx = len(self._captures)
@@ -190,9 +190,9 @@ class SkillScanManual:
         """Kick off local-OCR extraction on a background thread; result held on ``_pending_result``."""
         with self._lock:
             if self._processing:
-                return {"error": "Scan currently processing — wait for it to finish"}
+                return {"error": "Scan currently processing: wait for it to finish"}
             if self._pending_result is not None:
-                return {"error": "Pending result awaiting review — accept or reject first"}
+                return {"error": "Pending result awaiting review: accept or reject first"}
             if not self._active:
                 return {"error": "No active scan to process"}
             captures = list(self._captures)

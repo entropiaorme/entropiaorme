@@ -904,7 +904,7 @@ class QuestService:
         # type so the SessionDetail card renders the unit correctly.
         desc = quest["name"]
         if suppressed_desc:
-            desc += f" — {suppressed_desc}"
+            desc += f": {suppressed_desc}"
         event_type = "quest_completed_pes" if is_skill else "quest_completed"
         self._record_notable_event(event_type, desc, reward_ped or 0)
 

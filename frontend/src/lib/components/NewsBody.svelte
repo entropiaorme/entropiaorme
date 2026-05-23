@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Marked } from 'marked';
+	import { isExternalHref, externalLinks } from '$lib/utils/openExternal';
 
 	let { markdown }: { markdown: string } = $props();
 
@@ -9,6 +10,9 @@
 
 	function isSafeLinkHref(href: string): boolean {
 		const trimmed = href.trim().toLowerCase();
+		// Protocol-relative URLs (//host) are external despite the leading
+		// slash; reject them so they are not mistaken for internal routes.
+		if (trimmed.startsWith('//')) return false;
 		if (trimmed.startsWith('#') || trimmed.startsWith('/')) return true;
 		return ALLOWED_LINK_SCHEMES.some((s) => trimmed.startsWith(s));
 	}
@@ -41,7 +45,14 @@
 					return text;
 				}
 				const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-				return `<a href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
+				// External links (web + mail) carry target/rel for browser-context
+				// correctness; in the Tauri runtime the delegated click handler
+				// below routes them to the OS browser via the shell open API.
+				// In-page anchors (#...) and internal routes (/...) stay in-app.
+				const targetAttr = isExternalHref(href)
+					? ' target="_blank" rel="noopener noreferrer"'
+					: '';
+				return `<a href="${escapeHtml(href)}"${titleAttr}${targetAttr}>${text}</a>`;
 			},
 			// Drop images entirely. CSP `img-src 'self' data:` would already block
 			// remote loads, but rendering nothing is unambiguous and avoids any
@@ -55,7 +66,11 @@
 	let html = $derived(md.parse(markdown) as string);
 </script>
 
-<div class="prose">
+<!-- Rendered markdown is injected via {@html}, so its anchors cannot carry
+     Svelte handlers directly. The action delegates clicks on external links to
+     the OS browser (mirroring the interactive guide); in-page anchors and
+     internal routes navigate the webview in place. -->
+<div class="prose" use:externalLinks>
 	{@html html}
 </div>
 

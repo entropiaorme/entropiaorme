@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Marked } from 'marked';
+	import { isExternalHref, delegateExternalLinks } from '$lib/utils/openExternal';
 
 	let { markdown }: { markdown: string } = $props();
 
@@ -41,15 +42,11 @@
 					return text;
 				}
 				const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-				// External links (web + mail) open in the OS browser / mail client
-				// rather than navigating the in-app webview in place. In-page
-				// anchors (#...) and internal routes (/...) stay in the webview.
-				const trimmed = href.trim().toLowerCase();
-				const isExternal =
-					trimmed.startsWith('http:') ||
-					trimmed.startsWith('https:') ||
-					trimmed.startsWith('mailto:');
-				const targetAttr = isExternal
+				// External links (web + mail) carry target/rel for browser-context
+				// correctness; in the Tauri runtime the delegated click handler
+				// below routes them to the OS browser via the shell open API.
+				// In-page anchors (#...) and internal routes (/...) stay in-app.
+				const targetAttr = isExternalHref(href)
 					? ' target="_blank" rel="noopener noreferrer"'
 					: '';
 				return `<a href="${escapeHtml(href)}"${titleAttr}${targetAttr}>${text}</a>`;
@@ -66,7 +63,11 @@
 	let html = $derived(md.parse(markdown) as string);
 </script>
 
-<div class="prose">
+<!-- Rendered markdown is injected via {@html}, so its anchors cannot carry
+     Svelte handlers directly. The action delegates clicks on external links to
+     the OS browser (mirroring the interactive guide); in-page anchors and
+     internal routes navigate the webview in place. -->
+<div class="prose" use:delegateExternalLinks>
 	{@html html}
 </div>
 

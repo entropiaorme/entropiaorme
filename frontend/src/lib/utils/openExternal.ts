@@ -41,14 +41,16 @@ export function isExternalHref(href: string): boolean {
 }
 
 /**
- * Svelte action for containers of rendered HTML (e.g. `{@html}` markdown).
- * Delegates click handling: external links inside the node are routed to the
- * OS browser; in-page anchors and internal routes navigate normally. Used as
- * an action rather than an element handler so the host element does not need
- * an interactive ARIA role (the anchors themselves remain keyboard-accessible:
- * Enter on a focused link fires a click that bubbles here).
+ * Svelte action: the single app-wide pattern for opening external links. Apply
+ * it to an external-link anchor, or to a container of rendered HTML (e.g.
+ * `{@html}` markdown). Click handling is delegated from the node: external
+ * links route to the OS browser via {@link openExternalUrl}; in-page anchors
+ * (`#...`) and internal routes (`/...`) navigate normally. As an action rather
+ * than an element click handler the host needs no interactive ARIA role, and
+ * anchors stay keyboard-accessible (Enter on a focused link fires a click that
+ * reaches this listener).
  */
-export const delegateExternalLinks: Action<HTMLElement> = (node) => {
+export const externalLinks: Action<HTMLElement> = (node) => {
 	function handleClick(event: MouseEvent) {
 		const anchor = (event.target as HTMLElement | null)?.closest('a');
 		const href = anchor?.getAttribute('href');

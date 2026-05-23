@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Marked } from 'marked';
-	import { isExternalHref, delegateExternalLinks } from '$lib/utils/openExternal';
+	import { isExternalHref, externalLinks } from '$lib/utils/openExternal';
 
 	let { markdown }: { markdown: string } = $props();
 
@@ -67,7 +67,7 @@
      Svelte handlers directly. The action delegates clicks on external links to
      the OS browser (mirroring the interactive guide); in-page anchors and
      internal routes navigate the webview in place. -->
-<div class="prose" use:delegateExternalLinks>
+<div class="prose" use:externalLinks>
 	{@html html}
 </div>
 

@@ -13,6 +13,13 @@
 set dotenv-load
 set dotenv-filename := ".env.local"
 
+# just defaults the recipe-body shell to `sh` on every platform, including
+# Windows, where a stock machine has no sh.exe on PATH. Route recipe bodies
+# through PowerShell on Windows so the recipes run without Git Bash or WSL
+# installed. RemoteSigned matches the execution policy the Windows recipes
+# already pass to `powershell -File`.
+set windows-shell := ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-Command"]
+
 # Default: list available recipes.
 default:
     @just --list
@@ -31,9 +38,14 @@ dev:
 test-backend:
     .venv/Scripts/python.exe -m pytest backend/tests/
 
+# Each step is its own recipe line (just stops on the first non-zero exit)
+# rather than an `&&` chain, so the body runs under any shell, including
+# Windows PowerShell, which does not support `&&`. `npm --prefix` runs each
+# script from the frontend package without a shell-specific `cd`.
 # Frontend type-check + production build (matches the CI `Frontend (build + check)` job).
 check:
-    cd frontend && npm run check && npm run build
+    npm --prefix frontend run check
+    npm --prefix frontend run build
 
 # Headless smoke verification of the dev launch. Not yet implemented.
 smoke:

@@ -193,7 +193,6 @@ class CodexService:
             "rank": rank,
             "skillName": skill_name,
             "pedValue": ped_value,
-            "fromLevel": current_level,  # pre-claim level for suppression diagnostic (None if uncalibrated)
         }
 
     # ── Calibrate (direct rank set) ────────────────────────────────────────
@@ -338,7 +337,6 @@ class CodexService:
             raise ValueError(f"'{attribute_name}' is not an attribute. Valid: {sorted(self.ATTRIBUTES)}")
 
         now = time.time()
-        current_level = self._get_skill_level(attribute_name)
 
         self._app_db.conn.execute(
             "INSERT INTO codex_claims "
@@ -348,11 +346,10 @@ class CodexService:
         )
         self._app_db.conn.commit()
 
-        log.info("Codex meta claim: %s (1.00 PES, level %.1f)", attribute_name, current_level or 0)
+        log.info("Codex meta claim: %s (1.00 PES)", attribute_name)
         return {
             "attributeName": attribute_name,
             "pedValue": self.META_PED,
-            "fromLevel": current_level,
         }
 
     def get_meta_attributes(self) -> list[dict]:

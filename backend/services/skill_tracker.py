@@ -38,8 +38,8 @@ class SkillTracker:
         self._session_skills: dict[str, float] = {}     # name → total amount
         self._session_skill_tt: dict[str, float] = {}   # name → total TT PED
 
-        # Codex claim suppression: {skill_name: (ped_value, from_level, source, expiry_epoch)}
-        self._suppressed_claims: dict[str, tuple[float, float | None, str, float]] = {}
+        # Codex claim suppression: {skill_name: expiry_epoch}
+        self._suppressed_claims: dict[str, float] = {}
 
         event_bus.subscribe(EVENT_SKILL_GAIN, self._on_skill_gain)
         event_bus.subscribe(EVENT_SESSION_STARTED, self._on_session_start)
@@ -50,6 +50,8 @@ class SkillTracker:
         self._session_id = data.get("session_id")
         self._session_skills.clear()
         self._session_skill_tt.clear()
+        # A suppression armed in a prior session must not carry into this one.
+        self._suppressed_claims.clear()
         log.info("Skill tracking started for session %s", self._session_id[:8] if self._session_id else "?")
 
     def _on_session_stop(self, data: dict) -> None:
@@ -62,6 +64,9 @@ class SkillTracker:
             )
         self._active = False
         self._session_id = None
+        # Drop any still-armed codex suppression so it can't bleed into the
+        # next session.
+        self._suppressed_claims.clear()
 
     def _on_skill_gain(self, data: dict) -> None:
         if not self._active or not self._session_id:
@@ -72,43 +77,17 @@ class SkillTracker:
         timestamp: datetime = data["timestamp"]
         ts_epoch = timestamp.timestamp() if isinstance(timestamp, datetime) else float(timestamp)
 
-        # Check codex claim suppression
+        # Check codex claim suppression: swallow the next matching gain so the
+        # in-game skill-up a codex claim produces isn't double-counted alongside
+        # the ledger entry the claim already recorded.
         if skill_name in self._suppressed_claims:
-            expected_ped, from_level, source, expiry = self._suppressed_claims[skill_name]
+            expiry = self._suppressed_claims[skill_name]
+            del self._suppressed_claims[skill_name]
             if _time.time() < expiry:
-                del self._suppressed_claims[skill_name]
-                # Diagnostic: use the pre-claim level to compute TT round-trip
-                if from_level is not None:
-                    curve_ped = tt_value_of_gain(from_level, from_level + amount)
-                    deviation = abs(curve_ped - expected_ped)
-                    pct = deviation / expected_ped * 100 if expected_ped > 0 else 0
-                    log.info(
-                        "CODEX SUPPRESSED [%s]: %s +%.4f levels (from %.1f) | "
-                        "TT curve says %.4f PED | codex formula predicted %.4f PED | "
-                        "delta %.4f PED (%.1f%%)",
-                        source, skill_name, amount, from_level,
-                        curve_ped, expected_ped, deviation, pct,
-                    )
-                    # Store as a TT curve observation for ongoing calibration
-                    with self._db_lock:
-                        self._db.execute(
-                            "INSERT INTO tt_curve_observations "
-                            "(skill_name, from_level, level_gain, known_ped, curve_ped, deviation, source, observed_at) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            (skill_name, from_level, amount, expected_ped, curve_ped, deviation, source, _time.time()),
-                        )
-                        self._db.commit()
-                else:
-                    log.info(
-                        "CODEX SUPPRESSED [%s]: %s +%.4f levels (no calibration — can't verify TT) | "
-                        "codex formula predicted %.4f PED",
-                        source, skill_name, amount, expected_ped,
-                    )
+                log.info("Codex-claim gain suppressed: %s +%.4f levels", skill_name, amount)
                 return
-            else:
-                # Expired — remove and process normally
-                del self._suppressed_claims[skill_name]
-                log.info("Suppression for %s expired, processing normally", skill_name)
+            # Expired: fall through and process normally
+            log.info("Suppression for %s expired, processing normally", skill_name)
 
         # Get current calibrated level for TT computation
         old_level = self._get_current_level(skill_name)
@@ -149,22 +128,13 @@ class SkillTracker:
             ).fetchone()
         return float(row[0]) if row else None
 
-    def suppress_next(
-        self, skill_name: str, ped_value: float,
-        from_level: float | None = None, source: str = "codex",
-        timeout: float = 30.0,
-    ) -> None:
+    def suppress_next(self, skill_name: str, timeout: float = 30.0) -> None:
         """Register a pending codex claim — suppress the next matching skill gain.
 
         When the player claims a codex rank in-game, the resulting skill gain
         shows up in chat.log. This method marks that upcoming gain for
-        suppression so it isn't double-counted alongside the ledger entry.
-
-        from_level is the pre-claim calibrated level — used to verify the TT
-        curve against the known codex PED value when the gain arrives.
-        source distinguishes 'codex' (mob skill) from 'codex_meta' (attribute).
+        suppression so it isn't double-counted alongside the ledger entry the
+        claim already recorded.
         """
-        expiry = _time.time() + timeout
-        self._suppressed_claims[skill_name] = (ped_value, from_level, source, expiry)
-        log.info("Suppressing next %s gain (%.4f PED, from level %.1f, source=%s, expires in %.0fs)",
-                 skill_name, ped_value, from_level or 0, source, timeout)
+        self._suppressed_claims[skill_name] = _time.time() + timeout
+        log.info("Suppressing next %s gain (expires in %.0fs)", skill_name, timeout)

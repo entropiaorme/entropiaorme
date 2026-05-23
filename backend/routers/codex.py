@@ -59,10 +59,7 @@ def claim_rank(req: ClaimRequest):
 
     # If tracking is active, suppress the upcoming skill gain from deduplication
     if svc.tracker.is_tracking:
-        svc.skill_tracker.suppress_next(
-            req.skill_name, result["pedValue"],
-            from_level=result.get("fromLevel"),
-        )
+        svc.skill_tracker.suppress_next(req.skill_name)
 
     return result
 
@@ -91,7 +88,7 @@ def recommend(
 
 @router.get("/meta/attributes")
 def meta_attributes():
-    """Return the 6 attributes with current levels and observation counts."""
+    """Return the 6 attributes with current levels."""
     svc = get_services()
     return svc.codex_service.get_meta_attributes()
 
@@ -106,10 +103,6 @@ def meta_claim(req: MetaClaimRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     if svc.tracker.is_tracking:
-        svc.skill_tracker.suppress_next(
-            req.attribute_name, result["pedValue"],
-            from_level=result.get("fromLevel"),
-            source="codex_meta",
-        )
+        svc.skill_tracker.suppress_next(req.attribute_name)
 
     return result

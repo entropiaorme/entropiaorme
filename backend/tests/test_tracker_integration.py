@@ -1084,7 +1084,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -1112,7 +1112,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -1151,7 +1151,7 @@ class TestV30Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -1170,7 +1170,7 @@ class TestV30Migration:
             version = second.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             second.close()
 
@@ -2034,7 +2034,7 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -2062,7 +2062,7 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -2098,7 +2098,7 @@ class TestV31Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -2170,7 +2170,7 @@ class TestV32Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -2197,7 +2197,7 @@ class TestV32Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
         finally:
             app_db.close()
 
@@ -2231,7 +2231,94 @@ class TestV32Migration:
             version = app_db.conn.execute(
                 "SELECT value FROM db_metadata WHERE key = 'version'"
             ).fetchone()[0]
-            assert int(version) == 32
+            assert int(version) == 33
+        finally:
+            app_db.close()
+
+
+class TestV33Migration:
+    """The version-counter migration that drops the unused
+    tt_curve_observations table for existing DBs (v32 to v33
+    forward-migrate). The table was write-only in the v32 surface (the
+    skill tracker recorded a row on every suppressed codex skill gain,
+    but no read path consumed it); the cross-check it backed is retired
+    now that the TT value curve is trusted. Fresh installs simply never
+    create the table; this class pins the in-place drop path.
+    """
+
+    def test_upgrade_existing_v32_drops_tt_curve_observations(self, tmp_path):
+        """A v32-shaped DB carrying tt_curve_observations has the table
+        dropped on AppDatabase open."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '32')"
+        )
+        seed.execute(
+            "CREATE TABLE tt_curve_observations ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  skill_name TEXT NOT NULL,"
+            "  from_level REAL NOT NULL,"
+            "  level_gain REAL NOT NULL,"
+            "  known_ped REAL NOT NULL,"
+            "  curve_ped REAL NOT NULL,"
+            "  deviation REAL NOT NULL,"
+            "  source TEXT NOT NULL DEFAULT 'codex',"
+            "  observed_at REAL NOT NULL DEFAULT (unixepoch('now'))"
+            ")"
+        )
+        seed.execute(
+            "INSERT INTO tt_curve_observations "
+            "(skill_name, from_level, level_gain, known_ped, curve_ped, deviation) "
+            "VALUES ('Aim', 500.0, 0.1, 0.5, 0.48, 0.02)"
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            tables = {
+                row[0]
+                for row in app_db.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            assert "tt_curve_observations" not in tables
+
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 33
+        finally:
+            app_db.close()
+
+    def test_upgrade_without_tt_curve_observations_table(self, tmp_path):
+        """A v32 DB that never created tt_curve_observations migrates
+        cleanly; DROP TABLE IF EXISTS tolerates the absent table."""
+        from backend.db.app_database import AppDatabase
+
+        db_path = tmp_path / "app.db"
+        seed = sqlite3.connect(str(db_path))
+        seed.execute(
+            "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        seed.execute(
+            "INSERT INTO db_metadata (key, value) VALUES ('version', '32')"
+        )
+        seed.commit()
+        seed.close()
+
+        app_db = AppDatabase(db_path)
+        try:
+            version = app_db.conn.execute(
+                "SELECT value FROM db_metadata WHERE key = 'version'"
+            ).fetchone()[0]
+            assert int(version) == 33
         finally:
             app_db.close()
 

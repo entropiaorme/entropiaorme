@@ -41,7 +41,6 @@ _REPORTED_TABLES: tuple[str, ...] = (
     "quest_claims",
     "session_quest_completions",
     "session_quest_analytics_links",
-    "tt_curve_observations",
 )
 
 

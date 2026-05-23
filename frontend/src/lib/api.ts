@@ -744,6 +744,49 @@ export async function updateSettings(updates: SettingsUpdate): Promise<AppSettin
 	return request('/settings', { method: 'PATCH', body: JSON.stringify(updates) });
 }
 
+// --- Recording (developer-only) ---
+
+export interface RecordingStatus {
+	state: 'idle' | 'recording' | 'finalising';
+	started_at: string | null;
+	lines: number;
+	captures: number;
+	keystrokes: number;
+}
+
+export interface StopRecordingMeta {
+	scenario_name: string;
+	description?: string;
+	surfaces?: string[];
+	character_context?: Record<string, string>;
+	rare_event_flags?: string[];
+	notes?: string;
+}
+
+export interface StopRecordingResult {
+	finalized_path?: string;
+	determinism?: 'ok' | 'leak';
+	diff?: string;
+	error?: string;
+	recovery_path?: string;
+}
+
+export async function startRecording(): Promise<RecordingStatus> {
+	return request('/recording/start', { method: 'POST' });
+}
+
+export async function getRecordingStatus(): Promise<RecordingStatus> {
+	return request('/recording/status');
+}
+
+export async function stopRecording(meta: StopRecordingMeta): Promise<StopRecordingResult> {
+	return request('/recording/stop', { method: 'POST', body: JSON.stringify(meta) });
+}
+
+export async function abortRecording(): Promise<{ state: string }> {
+	return request('/recording/abort', { method: 'POST' });
+}
+
 // --- Overlay ---
 
 export async function getOverlayPosition(): Promise<{ x: number | null; y: number | null }> {

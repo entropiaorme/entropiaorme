@@ -58,6 +58,12 @@ pub fn run() {
         .setup(|app| {
             #[cfg(windows)]
             install_runtime_window_icons(app.handle());
+            // Only the bundled release shell spawns the PyInstaller sidecar.
+            // Dev builds talk to a separately launched backend, and the dev
+            // sidecar slot holds a placeholder binary that Windows rejects
+            // (os error 193); gating the spawn to release keeps that error
+            // out of the dev console.
+            #[cfg(not(debug_assertions))]
             spawn_backend_sidecar(app.handle());
             Ok(())
         })
@@ -135,6 +141,10 @@ fn kill_sidecar_tree(child: &CommandChild) {
     let _ = cmd.output();
 }
 
+// In debug builds the call site above is compiled out (dev uses a separately
+// launched backend), leaving this function without a caller; silence the
+// resulting dead-code lint rather than drop the release-only definition.
+#[cfg_attr(debug_assertions, allow(dead_code))]
 fn spawn_backend_sidecar(app: &tauri::AppHandle) {
     let sidecar = match app.shell().sidecar("entropiaorme-backend") {
         Ok(cmd) => cmd,

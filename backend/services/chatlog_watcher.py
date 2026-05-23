@@ -122,6 +122,11 @@ class ChatlogWatcher:
         self._thread: threading.Thread | None = None
         self._quest_reward_filter = quest_reward_filter
 
+        # Optional verbatim line observer. None in normal operation (production
+        # behaviour unchanged); set by the recording controller to copy every
+        # tailed line into a recording bundle.
+        self._line_tap: Callable[[str], None] | None = None
+
         # Tick buffer — accumulates all events sharing one timestamp
         self._tick_ts: datetime | None = None
         self._tick_events: list[ChatEvent] = []
@@ -138,6 +143,14 @@ class ChatlogWatcher:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    def set_line_tap(self, tap: Callable[[str], None]) -> None:
+        """Install a verbatim line observer (called with each tailed line)."""
+        self._line_tap = tap
+
+    def clear_line_tap(self) -> None:
+        """Remove the line observer; the watcher reverts to normal operation."""
+        self._line_tap = None
 
     def start(self) -> None:
         """Start tailing chat.log in a background thread."""
@@ -180,6 +193,12 @@ class ChatlogWatcher:
                 while self._running:
                     line = f.readline()
                     if line:
+                        tap = self._line_tap
+                        if tap is not None:
+                            try:
+                                tap(line)
+                            except Exception:
+                                log.exception("Chatlog line tap failed")
                         self._process_line(line)
                     else:
                         self._flush_tick()

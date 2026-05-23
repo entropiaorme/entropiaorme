@@ -79,6 +79,10 @@ data/demo/*
 tmp/
 /calibration/
 
+# In-flight session-recording staging; finalised bundles under
+# corpus/recorded/ are committed, the staging dir never is.
+backend/tests/e2e/corpus/recording_in_progress/
+
 # Local dev scratch dirs
 /agents/
 /.venv-*/

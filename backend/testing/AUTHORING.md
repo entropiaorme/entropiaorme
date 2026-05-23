@@ -2,10 +2,9 @@
 
 This is the convention reference for hand-authoring scripted
 scenarios via the gameplay DSL at `backend/testing/dsl.py`.
-Recorded scenarios captured from live gameplay will live under
-a separate workflow (with its own companion doc landing
-alongside that work); this document covers scripted scenarios
-only.
+Recorded scenarios captured from live gameplay live under a
+separate workflow documented in `RECORDING.md`; this document
+covers scripted scenarios only.
 
 ## What a scripted scenario is
 

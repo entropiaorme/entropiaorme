@@ -50,6 +50,8 @@ class SkillTracker:
         self._session_id = data.get("session_id")
         self._session_skills.clear()
         self._session_skill_tt.clear()
+        # A suppression armed in a prior session must not carry into this one.
+        self._suppressed_claims.clear()
         log.info("Skill tracking started for session %s", self._session_id[:8] if self._session_id else "?")
 
     def _on_session_stop(self, data: dict) -> None:
@@ -62,6 +64,9 @@ class SkillTracker:
             )
         self._active = False
         self._session_id = None
+        # Drop any still-armed codex suppression so it can't bleed into the
+        # next session.
+        self._suppressed_claims.clear()
 
     def _on_skill_gain(self, data: dict) -> None:
         if not self._active or not self._session_id:
@@ -81,7 +86,7 @@ class SkillTracker:
             if _time.time() < expiry:
                 log.info("Codex-claim gain suppressed: %s +%.4f levels", skill_name, amount)
                 return
-            # Expired — fall through and process normally
+            # Expired: fall through and process normally
             log.info("Suppression for %s expired, processing normally", skill_name)
 
         # Get current calibrated level for TT computation

@@ -204,3 +204,32 @@ def test_suppress_only_consumes_once():
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1  # only the second gain
     db.close()
+
+
+def test_suppression_does_not_leak_across_sessions():
+    """A suppression armed in one session must not carry into the next.
+
+    A codex claim armed just before tracking stops would otherwise suppress
+    the first matching gain of the next session (until its timeout), dropping
+    a valid data point. Session start and stop both clear the cache.
+    """
+    tracker, bus, db = _make_tracker()
+    bus.publish("session_started", {"session_id": "test-leak-1"})
+
+    # Arm a long-lived suppression, then end the session before the gain lands.
+    tracker.suppress_next("Aim", timeout=300)
+    bus.publish("session_stopped", {})
+    assert "Aim" not in tracker._suppressed_claims
+
+    # New session: a genuine Aim gain must be recorded, not suppressed.
+    bus.publish("session_started", {"session_id": "test-leak-2"})
+    bus.publish("skill_gain", {
+        "skill_name": "Aim",
+        "amount": 0.1,
+        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+    })
+
+    rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["skill_name"] == "Aim"
+    db.close()

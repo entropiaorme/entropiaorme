@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from backend.services.hotbar_listener import HotbarListener
     from backend.services.repair_ocr import RepairOcrService
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
+    from backend.testing.recording_controller import RecordingController
 
 @dataclass
 class Services:
@@ -39,6 +40,7 @@ class Services:
     hotbar_listener: HotbarListener
     repair_ocr: RepairOcrService
     spacebar_capture_listener: SpacebarCaptureListener
+    recording_controller: RecordingController
 
 _services: Services | None = None
 

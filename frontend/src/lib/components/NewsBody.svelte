@@ -10,6 +10,9 @@
 
 	function isSafeLinkHref(href: string): boolean {
 		const trimmed = href.trim().toLowerCase();
+		// Protocol-relative URLs (//host) are external despite the leading
+		// slash; reject them so they are not mistaken for internal routes.
+		if (trimmed.startsWith('//')) return false;
 		if (trimmed.startsWith('#') || trimmed.startsWith('/')) return true;
 		return ALLOWED_LINK_SCHEMES.some((s) => trimmed.startsWith(s));
 	}

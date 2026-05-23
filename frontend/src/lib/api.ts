@@ -721,6 +721,7 @@ export interface SettingsUpdate {
 	hotbar_hooks_enabled?: boolean;
 	repair_ocr_enabled?: boolean;
 	end_of_session_armour_reminder_enabled?: boolean;
+	developer_mode_enabled?: boolean;
 	mob_tracking_mode?: 'mob' | 'tag';
 	mob_tracking_tag?: string;
 	hotbar?: Record<string, number | null>;

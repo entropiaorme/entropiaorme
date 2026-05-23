@@ -32,6 +32,7 @@ export interface AppSettings {
 	hotbarHooksEnabled: boolean;
 	repairOcrEnabled: boolean;
 	endOfSessionArmourReminderEnabled: boolean;
+	developerModeEnabled: boolean;
 	mobTrackingMode: MobTrackingMode;
 	mobTrackingTag: string;
 	hotbar: Hotbar;

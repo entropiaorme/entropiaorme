@@ -16,6 +16,9 @@
 	let savingField = $state<string | null>(null);
 	let capabilityError: string | null = $state(null);
 
+	// Developer-only tooling renders only in dev builds (vite build strips it in production).
+	const isDev = import.meta.env.DEV;
+
 	// Loot filter
 	let newFilterItem = $state('');
 
@@ -132,6 +135,20 @@
 			flashSaved('armourReminder');
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : 'Failed to update armour reminder';
+		} finally {
+			savingField = null;
+		}
+	}
+
+	async function handleDeveloperMode(checked: boolean) {
+		if (!settings) return;
+		savingField = 'developerMode';
+		capabilityError = null;
+		try {
+			settings = await updateSettings({ developer_mode_enabled: checked });
+			flashSaved('developerMode');
+		} catch (e) {
+			capabilityError = e instanceof Error ? e.message : 'Failed to update developer mode';
 		} finally {
 			savingField = null;
 		}
@@ -386,6 +403,36 @@
 			</div>
 		</div>
 	</section>
+
+	{#if isDev}
+		<!-- Cluster: Developer (dev builds only) -->
+		<section>
+			<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
+				Developer
+			</h2>
+
+			<div class="mt-3">
+				<!-- Developer mode -->
+				<div class="py-5 flex items-start justify-between gap-6">
+					<div>
+						<p class="text-sm text-text">Developer mode</p>
+						<p class="text-xs text-text-tertiary mt-0.5">
+							Surfaces developer-only tooling such as session recording. Off by default.
+						</p>
+						{#if savedIndicator === 'developerMode'}
+							<p class="text-xs text-success mt-1">Saved</p>
+						{/if}
+					</div>
+					<Toggle
+						checked={settings.developerModeEnabled}
+						disabled={savingField !== null}
+						onchange={handleDeveloperMode}
+						label="Enable developer mode"
+					/>
+				</div>
+			</div>
+		</section>
+	{/if}
 
 	<!-- Cluster: Preferences -->
 	<section>

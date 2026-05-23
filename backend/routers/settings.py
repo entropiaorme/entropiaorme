@@ -59,6 +59,7 @@ def _build_response(svc) -> dict:
         "hotbarHooksEnabled": config.hotbar_hooks_enabled,
         "repairOcrEnabled": config.repair_ocr_enabled,
         "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
+        "developerModeEnabled": config.developer_mode_enabled,
         "mobTrackingMode": config.mob_tracking_mode,
         "mobTrackingTag": config.mob_tracking_tag,
         "hotbar": config.hotbar,
@@ -90,6 +91,7 @@ class SettingsPatch(BaseModel):
     hotbar_hooks_enabled: bool | None = None
     repair_ocr_enabled: bool | None = None
     end_of_session_armour_reminder_enabled: bool | None = None
+    developer_mode_enabled: bool | None = None
     mob_tracking_mode: str | None = None
     mob_tracking_tag: str | None = None
     hotbar: dict[str, int | None] | None = None

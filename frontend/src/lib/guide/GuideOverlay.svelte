@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { open as openExternal } from '@tauri-apps/plugin-shell';
+	import { externalLinks } from '$lib/utils/openExternal';
 	import { guideState } from './state.svelte';
 	import { closeGuide, nextStep, previousStep, replayCurrentStep, setCursorElement } from './engine';
 
@@ -19,33 +19,6 @@
 	let isLast = $derived(guideState.currentStepIndex + 1 >= totalSteps);
 	/** Narrative steps have no anchor: uniform-dim overlay, centred prose card. */
 	let isNarrative = $derived(currentStep != null && !currentStep.anchor);
-	let lastExternalOpen = { href: '', at: 0 };
-
-	type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
-
-	function handleExternalLinkClick(event: MouseEvent, href: string | undefined): void {
-		event.preventDefault();
-		event.stopPropagation();
-		if (!href) return;
-
-		const now = Date.now();
-		if (lastExternalOpen.href === href && now - lastExternalOpen.at < 750) return;
-		lastExternalOpen = { href, at: now };
-		void openGuideExternalLink(href);
-	}
-
-	async function openGuideExternalLink(href: string): Promise<void> {
-		const tauriWindow = window as TauriWindow;
-		if (tauriWindow.__TAURI_INTERNALS__) {
-			try {
-				await openExternal(href);
-				return;
-			} catch (error) {
-				console.warn('[guide] shell open failed, falling back to window.open:', error);
-			}
-		}
-		window.open(href, '_blank', 'noopener,noreferrer');
-	}
 
 	onMount(() => {
 		const updateViewport = () => {
@@ -409,7 +382,7 @@
 													target="_blank"
 													rel="noopener noreferrer"
 													class="text-accent hover:underline"
-													onclick={(event) => handleExternalLinkClick(event, span.href)}
+													use:externalLinks
 												>{span.text}</a>
 											{:else}
 												{span.text}
@@ -441,7 +414,7 @@
 										target="_blank"
 										rel="noopener noreferrer"
 										class="text-accent hover:underline"
-										onclick={(event) => handleExternalLinkClick(event, span.href)}
+										use:externalLinks
 									>{span.text}</a>
 								{:else}
 									{span.text}

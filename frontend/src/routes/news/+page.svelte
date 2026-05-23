@@ -17,6 +17,7 @@
 		pinnedSlugSet,
 	} from '$lib/news-pins';
 	import { formatDate } from '$lib/utils/format';
+	import { externalLinks } from '$lib/utils/openExternal';
 
 	let expandedPin = $state<SlotId | null>(null);
 	let expandedRow = $state<string | null>(null);
@@ -258,6 +259,7 @@
 										href={card.link}
 										target="_blank"
 										rel="noopener noreferrer"
+										use:externalLinks
 									>
 										<span>Open canonical link</span>
 										<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="h-3 w-3">
@@ -361,6 +363,7 @@
 											href={item.link}
 											target="_blank"
 											rel="noopener noreferrer"
+											use:externalLinks
 										>
 											<span>Open canonical link</span>
 											<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" class="h-3 w-3">

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { externalLinks } from '$lib/utils/openExternal';
+
 	let { accepted = $bindable(false) } = $props<{ accepted?: boolean }>();
 
 	const TERMS_URL = 'https://entropiaorme.com/terms';
@@ -14,7 +16,7 @@
 		Please review the linked Terms of Service and Privacy Policy.
 	</p>
 	<div class="links">
-		<a class="external" href={TERMS_URL} target="_blank" rel="noopener noreferrer">
+		<a class="external" href={TERMS_URL} target="_blank" rel="noopener noreferrer" use:externalLinks>
 			<span>Terms of Service</span>
 			<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
 				<path
@@ -24,7 +26,7 @@
 				/>
 			</svg>
 		</a>
-		<a class="external" href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">
+		<a class="external" href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" use:externalLinks>
 			<span>Privacy Policy</span>
 			<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
 				<path

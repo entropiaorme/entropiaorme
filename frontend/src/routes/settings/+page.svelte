@@ -5,6 +5,7 @@
 	import { newsOptIn, setNewsOptIn } from '$lib/news';
 	import { getSettings, updateSettings } from '$lib/api';
 	import type { AppSettings } from '$lib/types';
+	import { externalLinks } from '$lib/utils/openExternal';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -453,6 +454,7 @@
 			target="_blank"
 			rel="noopener noreferrer"
 			class="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-accent transition-colors duration-[var(--duration-base)] ease-[var(--ease-out)]"
+			use:externalLinks
 		>
 			<span>Game data from Entropia&nbsp;Nexus</span>
 			<svg viewBox="0 0 20 20" fill="currentColor" class="w-2.5 h-2.5" aria-hidden="true">

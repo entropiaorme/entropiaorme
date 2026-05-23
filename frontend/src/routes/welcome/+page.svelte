@@ -10,6 +10,7 @@
 	import { refreshNews } from '$lib/newsFetch';
 	import NewsOptInStep from './NewsOptInStep.svelte';
 	import TermsStep from './TermsStep.svelte';
+	import { externalLinks } from '$lib/utils/openExternal';
 
 	let step = $state(1);
 	let tosAccepted = $state(false);
@@ -250,6 +251,7 @@
 							href="https://entropianexus.com/"
 							target="_blank"
 							rel="noopener noreferrer"
+							use:externalLinks
 						>
 							<span>Visit Entropia Nexus</span>
 							<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

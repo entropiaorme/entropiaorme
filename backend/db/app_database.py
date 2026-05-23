@@ -12,7 +12,7 @@ from backend.db.base import BaseDatabase
 
 log = logging.getLogger(__name__)
 
-DB_VERSION = 32
+DB_VERSION = 33
 
 
 # Tables that auto-fill a timestamp column on INSERT when callers leave it NULL.
@@ -53,6 +53,8 @@ class AppDatabase(BaseDatabase):
             self._migrate_to_v31()
         if from_version < 32:
             self._migrate_to_v32()
+        if from_version < 33:
+            self._migrate_to_v33()
 
     def _migrate_to_v29(self) -> None:
         """Drop the unused profession_calibrations + archive tables.
@@ -183,6 +185,21 @@ class AppDatabase(BaseDatabase):
             else:
                 raise
 
+    def _migrate_to_v33(self) -> None:
+        """Drop the unused tt_curve_observations table.
+
+        It was write-only in the v32 surface: the skill tracker recorded a
+        row on every suppressed codex skill gain, but no read path ever
+        consumed it. The rows existed to cross-check the TT value curve
+        against the known codex reward value while the curve was still being
+        calibrated; the curve is now trusted, so the cross-check (and its
+        backing table) are retired.
+        """
+        self.conn.executescript("""
+            DROP TABLE IF EXISTS tt_curve_observations;
+        """)
+        log.info("Migrated app DB to v33: dropped tt_curve_observations table")
+
     def _current_schema(self) -> None:
         """Create the current schema directly for a fresh install."""
         conn = self.conn
@@ -252,18 +269,6 @@ class AppDatabase(BaseDatabase):
             );
             CREATE INDEX IF NOT EXISTS idx_codex_claims_species
                 ON codex_claims(species_name);
-
-            CREATE TABLE IF NOT EXISTS tt_curve_observations (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                skill_name    TEXT NOT NULL,
-                from_level    REAL NOT NULL,
-                level_gain    REAL NOT NULL,
-                known_ped     REAL NOT NULL,
-                curve_ped     REAL NOT NULL,
-                deviation     REAL NOT NULL,
-                source        TEXT NOT NULL DEFAULT 'codex',
-                observed_at   REAL NOT NULL DEFAULT (unixepoch('now'))
-            );
 
             CREATE TABLE IF NOT EXISTS quests (
                 id                INTEGER PRIMARY KEY AUTOINCREMENT,

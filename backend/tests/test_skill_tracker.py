@@ -125,7 +125,7 @@ def test_suppress_next_consumes_matching_gain():
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-suppress-1"})
 
-    tracker.suppress_next("Aim", 0.5, from_level=500.0, timeout=30)
+    tracker.suppress_next("Aim", timeout=30)
     bus.publish("skill_gain", {
         "skill_name": "Aim",
         "amount": 0.1,
@@ -140,56 +140,12 @@ def test_suppress_next_consumes_matching_gain():
     db.close()
 
 
-def test_suppress_stores_tt_observation():
-    """Suppressed gain with from_level should create a tt_curve_observations row."""
-    tracker, bus, db = _make_tracker()
-    bus.publish("session_started", {"session_id": "test-suppress-obs"})
-
-    tracker.suppress_next("Aim", 0.5, from_level=500.0, timeout=30)
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
-
-    rows = db.conn.execute("SELECT * FROM tt_curve_observations").fetchall()
-    assert len(rows) == 1
-    assert rows[0]["skill_name"] == "Aim"
-    assert rows[0]["from_level"] == 500.0
-    assert rows[0]["level_gain"] == 0.1
-    assert rows[0]["known_ped"] == 0.5
-    assert rows[0]["curve_ped"] > 0  # should compute something
-    assert rows[0]["source"] == "codex"
-    db.close()
-
-
-def test_suppress_no_observation_without_from_level():
-    """Suppression without from_level should not create an observation."""
-    tracker, bus, db = _make_tracker()
-    bus.publish("session_started", {"session_id": "test-suppress-nolevel"})
-
-    tracker.suppress_next("Aim", 0.5, timeout=30)  # no from_level
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
-
-    # Gain still suppressed
-    rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
-    assert len(rows) == 0
-    # But no observation
-    obs = db.conn.execute("SELECT * FROM tt_curve_observations").fetchall()
-    assert len(obs) == 0
-    db.close()
-
-
 def test_suppress_does_not_affect_other_skills():
     """Only the suppressed skill should be dropped; others pass through."""
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-suppress-2"})
 
-    tracker.suppress_next("Aim", 0.5, from_level=500.0, timeout=30)
+    tracker.suppress_next("Aim", timeout=30)
     bus.publish("skill_gain", {
         "skill_name": "Rifle",
         "amount": 0.2,
@@ -210,8 +166,8 @@ def test_suppress_expired_processes_normally():
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-suppress-3"})
 
-    # Set suppression that already expired (tuple: ped, from_level, source, expiry)
-    tracker._suppressed_claims["Aim"] = (0.5, 500.0, "codex", _t.time() - 10)
+    # Set suppression that already expired
+    tracker._suppressed_claims["Aim"] = _t.time() - 10
 
     bus.publish("skill_gain", {
         "skill_name": "Aim",
@@ -230,7 +186,7 @@ def test_suppress_only_consumes_once():
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-suppress-4"})
 
-    tracker.suppress_next("Aim", 0.5, from_level=500.0, timeout=30)
+    tracker.suppress_next("Aim", timeout=30)
 
     # First gain: suppressed
     bus.publish("skill_gain", {

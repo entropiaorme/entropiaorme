@@ -214,7 +214,6 @@ export interface CodexMetaAttribute {
 export interface CodexMetaClaimResult {
 	attributeName: string;
 	pedValue: number;
-	fromLevel: number | null;
 }
 
 export interface CodexSkillOption {

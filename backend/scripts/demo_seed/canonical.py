@@ -25,8 +25,8 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from backend.scripts.demo_seed.contract import (
     CanonicalRefs,
@@ -37,7 +37,6 @@ from backend.scripts.demo_seed.contract import (
     MobRef,
     PlaylistRef,
     QuestRef,
-    Seeder,
     TimelineAnchor,
     TrifectaPresetRef,
 )
@@ -171,6 +170,7 @@ ATTRIBUTE_NAMES: tuple[str, ...] = (
 # seeder resolves catalog_ids and enriches properties_json without changing
 # the IDs.
 
+
 # Stub properties_json shape — enough to satisfy the equipment routes' read
 # path without breaking. Real cost-per-shot calculation requires resolved
 # weapon entities, which the equipment seeder fills in.
@@ -219,17 +219,17 @@ def _stub_consumable_props(name: str) -> dict:
 # tool per real game-data (it is a UL FAP, not a weapon).
 _ITEM_SEEDS: tuple[tuple[str, str, str | None, Callable[..., dict]], ...] = (
     # Weapons (5) — laser pistols, blp carbine + pistol, melee blade.
-    ("Emik Enigma L1 (L)",             "weapon",     "Laser Pistoleer", _stub_weapon_props),
-    ("Korss H400",                     "weapon",     "Laser Pistoleer", _stub_weapon_props),
-    ("Herman CAP-7 Jungle (L)",        "weapon",     "Blp Carbiner",    _stub_weapon_props),
-    ("Jester D-1",                     "weapon",     "Blp Pistoleer",   _stub_weapon_props),
-    ("Castorian Pioneer EnBlade-2 (L)","weapon",     "Swordsman",       _stub_weapon_props),
+    ("Emik Enigma L1 (L)", "weapon", "Laser Pistoleer", _stub_weapon_props),
+    ("Korss H400", "weapon", "Laser Pistoleer", _stub_weapon_props),
+    ("Herman CAP-7 Jungle (L)", "weapon", "Blp Carbiner", _stub_weapon_props),
+    ("Jester D-1", "weapon", "Blp Pistoleer", _stub_weapon_props),
+    ("Castorian Pioneer EnBlade-2 (L)", "weapon", "Swordsman", _stub_weapon_props),
     # Healing tools (3) — including the reclassified Hedoc Mayhem, Adjusted.
-    ("Hedoc Mayhem, Adjusted",         "healing",    None,              _stub_heal_props),
-    ("Vivo T1",                        "healing",    None,              _stub_heal_props),
-    ("Vivo T5",                        "healing",    None,              _stub_heal_props),
+    ("Hedoc Mayhem, Adjusted", "healing", None, _stub_heal_props),
+    ("Vivo T1", "healing", None, _stub_heal_props),
+    ("Vivo T5", "healing", None, _stub_heal_props),
     # Consumable (1).
-    ("H-DNA",                          "consumable", None,              _stub_consumable_props),
+    ("H-DNA", "consumable", None, _stub_consumable_props),
 )
 
 
@@ -311,7 +311,6 @@ _QUEST_SEEDS: tuple[dict, ...] = (
     # NOTE: Iron Missions are an outdated EU concept that no longer exists in
     # current game state — removed from canonical. The "Iron Skilling" playlist
     # that referenced them is also dropped (see _PLAYLIST_SEEDS below).
-
     # Repeatable bounties
     {
         "name": "Bounty: Atrox Stalker",
@@ -374,22 +373,22 @@ _PLAYLIST_SEEDS: tuple[dict, ...] = (
         "name": "Quick Dailies",
         "planet": "Calypso",
         "estimated_minutes": 25,
-        "immediate_indices": (3, 5),         # Argonaut Daily + Combibo Patrol
-        "long_horizon_indices": (8,),        # Codex Master: Caboria
+        "immediate_indices": (3, 5),  # Argonaut Daily + Combibo Patrol
+        "long_horizon_indices": (8,),  # Codex Master: Caboria
     },
     {
         "name": "Atrox Run",
         "planet": "Calypso",
         "estimated_minutes": 45,
-        "immediate_indices": (4, 6),         # Atrox Cull + Atrox Stalker Bounty
+        "immediate_indices": (4, 6),  # Atrox Cull + Atrox Stalker Bounty
         "long_horizon_indices": (),
     },
     {
         "name": "Codex Chain: Caboria",
         "planet": "Calypso",
         "estimated_minutes": 60,
-        "immediate_indices": (0, 1, 2),      # Caboria I/II/III chain
-        "long_horizon_indices": (8,),        # Codex Master: Caboria
+        "immediate_indices": (0, 1, 2),  # Caboria I/II/III chain
+        "long_horizon_indices": (8,),  # Codex Master: Caboria
     },
 )
 
@@ -517,8 +516,8 @@ class CoreSeeder:
                 db_id=-1,
                 name=p["name"],
                 estimated_minutes=p["estimated_minutes"],
-                immediate_quest_ids=tuple(),       # set post-insert
-                long_horizon_quest_ids=tuple(),    # set post-insert
+                immediate_quest_ids=(),  # set post-insert
+                long_horizon_quest_ids=(),  # set post-insert
             )
             for p in _PLAYLIST_SEEDS
         )
@@ -560,7 +559,9 @@ class CoreSeeder:
             live_scenarios=LIVE_SCENARIOS,
         )
 
-    def seed(self, refs: CanonicalRefs, db: sqlite3.Connection, data_dir: Path) -> CanonicalRefs:
+    def seed(
+        self, refs: CanonicalRefs, db: sqlite3.Connection, data_dir: Path
+    ) -> CanonicalRefs:
         """Write foundational rows + settings.json. Returns refs with real IDs filled.
 
         Note: returns refs so the driver can replace its frozen reference. The
@@ -570,8 +571,14 @@ class CoreSeeder:
         """
         # 1) Equipment library inserts — capture autoincrement IDs back into refs.
         items_with_ids: list[ItemRef] = []
-        for (orig, (name, item_type, profession, props_builder)) in zip(refs.items, _ITEM_SEEDS):
-            props = props_builder(name) if item_type != "weapon" else props_builder(name, profession)
+        for _orig, (name, item_type, profession, props_builder) in zip(
+            refs.items, _ITEM_SEEDS, strict=False
+        ):
+            props = (
+                props_builder(name)
+                if item_type != "weapon"
+                else props_builder(name, profession)
+            )
             cur = db.execute(
                 "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) "
                 "VALUES (?, ?, ?, ?)",
@@ -589,7 +596,7 @@ class CoreSeeder:
 
         # 2) Quests inserts.
         quests_with_ids: list[QuestRef] = []
-        for orig, qs in zip(refs.quests, _QUEST_SEEDS):
+        for _orig, qs in zip(refs.quests, _QUEST_SEEDS, strict=False):
             cur = db.execute(
                 """
                 INSERT INTO quests (
@@ -598,8 +605,12 @@ class CoreSeeder:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
-                    qs["name"], qs["planet"], qs["waypoint"], qs["cooldown_hours"],
-                    qs["reward_ped"], 1 if qs["reward_is_skill"] else 0,
+                    qs["name"],
+                    qs["planet"],
+                    qs["waypoint"],
+                    qs["cooldown_hours"],
+                    qs["reward_ped"],
+                    1 if qs["reward_is_skill"] else 0,
                     None,
                     qs["chain"][0] if qs["chain"] else None,
                     qs["chain"][1] if qs["chain"] else None,
@@ -683,9 +694,13 @@ class CoreSeeder:
         # 5) Resolve hotbar + trifecta library_ids using the now-known equipment IDs.
         item_by_name = {it.name: it for it in items_with_ids}
         hotbar_with_ids = (
-            HotbarBinding(slot="1", library_id=item_by_name["Emik Enigma L1 (L)"].library_id),
+            HotbarBinding(
+                slot="1", library_id=item_by_name["Emik Enigma L1 (L)"].library_id
+            ),
             HotbarBinding(slot="2", library_id=item_by_name["Korss H400"].library_id),
-            HotbarBinding(slot="3", library_id=item_by_name["Herman CAP-7 Jungle (L)"].library_id),
+            HotbarBinding(
+                slot="3", library_id=item_by_name["Herman CAP-7 Jungle (L)"].library_id
+            ),
             HotbarBinding(slot="5", library_id=item_by_name["Vivo T1"].library_id),
             HotbarBinding(slot="9", library_id=item_by_name["H-DNA"].library_id),
         )

@@ -11,7 +11,9 @@ def app_db(tmp_path):
     return AppDatabase(tmp_path / "test_app.db")
 
 
-def _seed_skill_scan(conn, skill_name: str, level: float, scanned_at: float, source: str = "scan") -> int:
+def _seed_skill_scan(
+    conn, skill_name: str, level: float, scanned_at: float, source: str = "scan"
+) -> int:
     cur = conn.execute(
         "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) VALUES (?, ?, ?, ?)",
         (skill_name, level, source, scanned_at),

@@ -4,15 +4,17 @@ Settings stored as JSON in data/settings.json.
 Atomic save: write to .tmp → os.replace() → keep .bak
 """
 
+import contextlib
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 HOTBAR_SLOTS = [str(i) for i in range(1, 10)] + ["0"]
 DEFAULT_TRIFECTA_PRESET_ID = "default"
 DEFAULT_TRIFECTA_PRESET_NAME = "Default"
+
 
 @dataclass
 class TrifectaPresetConfig:
@@ -22,6 +24,7 @@ class TrifectaPresetConfig:
     big_weapon_id: int | None = None
     heal_id: int | None = None
 
+
 def active_trifecta_preset(config: "AppConfig") -> TrifectaPresetConfig | None:
     """Return the currently active trifecta preset, or None if not resolvable."""
     if not config.active_trifecta_preset_id:
@@ -30,6 +33,7 @@ def active_trifecta_preset(config: "AppConfig") -> TrifectaPresetConfig | None:
         if preset.id == config.active_trifecta_preset_id:
             return preset
     return None
+
 
 @dataclass
 class AppConfig:
@@ -41,9 +45,11 @@ class AppConfig:
 
     # Capability toggles — each independently controls one subsystem.
     # All default off: the user opts in to each automation as they configure it.
-    hotbar_hooks_enabled: bool = False      # Hotbar slot-key listener
-    repair_ocr_enabled: bool = False        # Post-session repair cost OCR.
-    end_of_session_armour_reminder_enabled: bool = False  # Yellow "Track armour?" prompt on session stop.
+    hotbar_hooks_enabled: bool = False  # Hotbar slot-key listener
+    repair_ocr_enabled: bool = False  # Post-session repair cost OCR.
+    end_of_session_armour_reminder_enabled: bool = (
+        False  # Yellow "Track armour?" prompt on session stop.
+    )
 
     mob_tracking_mode: str = "mob"  # mob | tag
     mob_tracking_tag: str = ""
@@ -52,14 +58,18 @@ class AppConfig:
 
     # Hotbar — maps slot keys "1"-"9","0" to equipment_library IDs
     # None means the slot is empty
-    hotbar: dict[str, int | None] = field(default_factory=lambda: {
-        slot: None for slot in HOTBAR_SLOTS
-    })
+    hotbar: dict[str, int | None] = field(
+        default_factory=lambda: dict.fromkeys(HOTBAR_SLOTS)
+    )
 
     # Trifecta-attribution tool selection presets (small weapon, big weapon, heal tool)
-    trifecta_presets: list[TrifectaPresetConfig] = field(default_factory=lambda: [
-        TrifectaPresetConfig(id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME)
-    ])
+    trifecta_presets: list[TrifectaPresetConfig] = field(
+        default_factory=lambda: [
+            TrifectaPresetConfig(
+                id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME
+            )
+        ]
+    )
     active_trifecta_preset_id: str | None = DEFAULT_TRIFECTA_PRESET_ID
 
     # Loot filter — item names to exclude from tracking returns
@@ -72,6 +82,7 @@ class AppConfig:
     @staticmethod
     def default_chatlog_path() -> str:
         return str(Path.home() / "Documents" / "Entropia Universe" / "chat.log")
+
 
 class ConfigService:
     def __init__(self, data_dir: Path):
@@ -109,7 +120,9 @@ class ConfigService:
             active_trifecta_preset_id=active_trifecta_preset_id,
             overlay_x=data.get("overlay_x"),
             overlay_y=data.get("overlay_y"),
-            loot_filter_blacklist=data.get("loot_filter_blacklist", AppConfig().loot_filter_blacklist),
+            loot_filter_blacklist=data.get(
+                "loot_filter_blacklist", AppConfig().loot_filter_blacklist
+            ),
         )
         return config
 
@@ -156,16 +169,26 @@ class ConfigService:
                 presets.append(preset)
 
         if not presets:
-            presets = [TrifectaPresetConfig(id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME)]
+            presets = [
+                TrifectaPresetConfig(
+                    id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME
+                )
+            ]
 
-        normalized_active_id = active_id if active_id in {preset.id for preset in presets} else presets[0].id
+        normalized_active_id = (
+            active_id
+            if active_id in {preset.id for preset in presets}
+            else presets[0].id
+        )
         return presets, normalized_active_id
 
     def _ensure_active_trifecta_preset(self, config: AppConfig) -> TrifectaPresetConfig:
         preset = active_trifecta_preset(config)
         if preset is not None:
             return preset
-        fallback = TrifectaPresetConfig(id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME)
+        fallback = TrifectaPresetConfig(
+            id=DEFAULT_TRIFECTA_PRESET_ID, name=DEFAULT_TRIFECTA_PRESET_NAME
+        )
         config.trifecta_presets = [fallback]
         config.active_trifecta_preset_id = fallback.id
         return fallback
@@ -175,11 +198,15 @@ class ConfigService:
             if not hasattr(config, key):
                 continue
             if key == "hotbar":
-                config.hotbar = self._normalize_hotbar({str(k): v for k, v in value.items()})
+                config.hotbar = self._normalize_hotbar(
+                    {str(k): v for k, v in value.items()}
+                )
             elif key == "trifecta_presets":
-                config.trifecta_presets, config.active_trifecta_preset_id = self._normalize_trifecta_presets(
-                    value,
-                    active_id=config.active_trifecta_preset_id,
+                config.trifecta_presets, config.active_trifecta_preset_id = (
+                    self._normalize_trifecta_presets(
+                        value,
+                        active_id=config.active_trifecta_preset_id,
+                    )
                 )
             else:
                 setattr(config, key, value)
@@ -189,7 +216,9 @@ class ConfigService:
 
         return config
 
-    def _normalize_hotbar(self, hotbar_raw: dict[str, int | None]) -> dict[str, int | None]:
+    def _normalize_hotbar(
+        self, hotbar_raw: dict[str, int | None]
+    ) -> dict[str, int | None]:
         """Fill any missing hotbar slots so config always has the full 1-9,0 shape."""
         return {slot: hotbar_raw.get(slot) for slot in HOTBAR_SLOTS}
 
@@ -218,10 +247,8 @@ class ConfigService:
         tmp_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
         if self.config_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 os.replace(str(self.config_path), str(bak_path))
-            except OSError:
-                pass
         os.replace(str(tmp_path), str(self.config_path))
 
     def get(self) -> AppConfig:

@@ -95,9 +95,7 @@ class DamageAttributor:
         for profile in self._profiles.values():
             low, high = self._bounds(profile, critical=critical)
             if low <= amount <= high:
-                matches.append(
-                    _DamageMatch(profile=profile, low=low, high=high)
-                )
+                matches.append(_DamageMatch(profile=profile, low=low, high=high))
         return matches
 
     def _bounds(

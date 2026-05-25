@@ -29,7 +29,7 @@ _RNG_SEED = 0xC0DEC0DE
 _META_SENTINEL_SPECIES = "__meta__"
 _META_PED_VALUE = 1.0
 _META_BUDGET_DIVISOR = 5  # 1 meta-claim allowance per 5 mob ranks earned
-_META_BUDGET_CAP = 4      # cap demo-data meta claims for visual restraint
+_META_BUDGET_CAP = 4  # cap demo-data meta claims for visual restraint
 
 _SECONDS_PER_DAY = 86400
 _CLAIM_HISTORY_DAYS = 60
@@ -39,11 +39,11 @@ _CLAIM_HISTORY_DAYS = 60
 #   1..24   → colour-coded "X/25", next-rank info card with skill recs
 #   25      → green "Codex complete" card, no Claim button
 _SPECIES_RANKS: dict[str, int] = {
-    "Caboria": 12,         # mid in-flight; pairs with the Caboria codex quest chain
-    "Atrox": 22,           # near-complete; pairs with Atrox daily/bounty
-    "Argonaut": 8,         # mid in-flight (lower)
-    "Combibo": 0,          # untouched
-    "Daikiba": 25,         # codex complete
+    "Caboria": 12,  # mid in-flight; pairs with the Caboria codex quest chain
+    "Atrox": 22,  # near-complete; pairs with Atrox daily/bounty
+    "Argonaut": 8,  # mid in-flight (lower)
+    "Combibo": 0,  # untouched
+    "Daikiba": 25,  # codex complete
     "Snablesnot Male": 0,  # untouched
 }
 
@@ -66,10 +66,10 @@ _SPECIES_COST_TIER: dict[str, float] = {
 # interleaved across the full 60-day history. Ordered chronologically:
 # Daikiba completed long ago, Atrox grind recent, Argonaut quick burst.
 _SPECIES_BURST_WINDOW: dict[str, tuple[float, float]] = {
-    "Daikiba":  (58.0, 14.0),  # oldest grind, completed
-    "Caboria":  (40.0,  7.0),  # mid-history, mid-grind paused at rank 12
-    "Atrox":    (25.0, 12.0),  # recent big grind, paused at rank 22
-    "Argonaut": ( 8.0,  4.0),  # most recent, quick burst to rank 8
+    "Daikiba": (58.0, 14.0),  # oldest grind, completed
+    "Caboria": (40.0, 7.0),  # mid-history, mid-grind paused at rank 12
+    "Atrox": (25.0, 12.0),  # recent big grind, paused at rank 22
+    "Argonaut": (8.0, 4.0),  # most recent, quick burst to rank 8
 }
 
 # Per-species codex-eligible skill pools. Every name MUST appear in BOTH
@@ -89,28 +89,52 @@ _SPECIES_BURST_WINDOW: dict[str, tuple[float, float]] = {
 # picks; pools below skew accordingly.
 _SPECIES_SKILL_POOL: dict[str, tuple[str, ...]] = {
     "Caboria": (
-        "Athletics", "Athletics", "Athletics",  # weighted: popular evasion pick
-        "Anatomy", "Anatomy",
-        "Aim", "Combat Reflexes", "Evade",
+        "Athletics",
+        "Athletics",
+        "Athletics",  # weighted: popular evasion pick
+        "Anatomy",
+        "Anatomy",
+        "Aim",
+        "Combat Reflexes",
+        "Evade",
     ),
     "Atrox": (
-        "Athletics", "Athletics", "Athletics",
-        "Combat Reflexes", "Combat Reflexes",
-        "Anatomy", "Evade", "Dodge", "Aim",
+        "Athletics",
+        "Athletics",
+        "Athletics",
+        "Combat Reflexes",
+        "Combat Reflexes",
+        "Anatomy",
+        "Evade",
+        "Dodge",
+        "Aim",
         "Bioregenesis",
     ),
     "Argonaut": (
-        "Athletics", "Athletics",
-        "Aim", "Anatomy", "Combat Reflexes",
-        "Inflict Ranged Damage", "Evade",
+        "Athletics",
+        "Athletics",
+        "Aim",
+        "Anatomy",
+        "Combat Reflexes",
+        "Inflict Ranged Damage",
+        "Evade",
     ),
     "Combibo": (),
     "Daikiba": (
-        "Athletics", "Athletics", "Athletics", "Athletics",
-        "Combat Reflexes", "Combat Reflexes",
-        "Anatomy", "Anatomy",
-        "Aim", "Evade", "Dodge",
-        "Diagnosis", "First Aid", "Bioregenesis",
+        "Athletics",
+        "Athletics",
+        "Athletics",
+        "Athletics",
+        "Combat Reflexes",
+        "Combat Reflexes",
+        "Anatomy",
+        "Anatomy",
+        "Aim",
+        "Evade",
+        "Dodge",
+        "Diagnosis",
+        "First Aid",
+        "Bioregenesis",
         "Concentration",
     ),
     "Snablesnot Male": (),
@@ -229,7 +253,9 @@ class CodexSeeder:
 
         log.info(
             "codex seeder: %d codex_progress UPDATEs, %d rank claims + %d meta claims.",
-            progress_updates, rank_claims_written, meta_claims_written,
+            progress_updates,
+            rank_claims_written,
+            meta_claims_written,
         )
 
     def validate_synthetic_data(self, refs: CanonicalRefs) -> list[str]:

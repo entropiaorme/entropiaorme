@@ -1,7 +1,7 @@
 """Tests for skill gain tracking during sessions."""
 
-import tempfile
 import os
+import tempfile
 from datetime import datetime
 
 from backend.core.event_bus import EventBus
@@ -20,11 +20,14 @@ def _make_tracker():
 
 def test_gain_ignored_without_session():
     tracker, bus, db = _make_tracker()
-    bus.publish("skill_gain", {
-        "skill_name": "Laser Weaponry Technology",
-        "amount": 0.1234,
-        "timestamp": datetime(2026, 3, 25, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Laser Weaponry Technology",
+            "amount": 0.1234,
+            "timestamp": datetime(2026, 3, 25, 12, 0, 0),
+        },
+    )
     # No session active; gain should be ignored
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 0
@@ -34,11 +37,14 @@ def test_gain_ignored_without_session():
 def test_gain_recorded_during_session():
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-session-1"})
-    bus.publish("skill_gain", {
-        "skill_name": "Laser Weaponry Technology",
-        "amount": 0.1234,
-        "timestamp": datetime(2026, 3, 25, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Laser Weaponry Technology",
+            "amount": 0.1234,
+            "timestamp": datetime(2026, 3, 25, 12, 0, 0),
+        },
+    )
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1
     assert rows[0][2] is not None  # timestamp
@@ -58,11 +64,14 @@ def test_tt_value_computed_when_calibrated():
     db.conn.commit()
 
     bus.publish("session_started", {"session_id": "test-session-2"})
-    bus.publish("skill_gain", {
-        "skill_name": "Laser Weaponry Technology",
-        "amount": 100.0,
-        "timestamp": datetime(2026, 3, 25, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Laser Weaponry Technology",
+            "amount": 100.0,
+            "timestamp": datetime(2026, 3, 25, 12, 0, 0),
+        },
+    )
 
     rows = db.conn.execute("SELECT ped_value FROM skill_gains").fetchall()
     assert len(rows) == 1
@@ -80,11 +89,14 @@ def test_calibration_level_incremented():
     db.conn.commit()
 
     bus.publish("session_started", {"session_id": "test-session-3"})
-    bus.publish("skill_gain", {
-        "skill_name": "Anatomy",
-        "amount": 0.5,
-        "timestamp": datetime(2026, 3, 25, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Anatomy",
+            "amount": 0.5,
+            "timestamp": datetime(2026, 3, 25, 12, 0, 0),
+        },
+    )
 
     # Should have a new calibration row with incremented level
     rows = db.conn.execute(
@@ -100,17 +112,23 @@ def test_calibration_level_incremented():
 def test_gains_ignored_after_session_stop():
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-session-5"})
-    bus.publish("skill_gain", {
-        "skill_name": "Anatomy",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 25, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Anatomy",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 25, 12, 0, 0),
+        },
+    )
     bus.publish("session_stopped", {"session_id": "test-session-5"})
-    bus.publish("skill_gain", {
-        "skill_name": "Anatomy",
-        "amount": 0.2,
-        "timestamp": datetime(2026, 3, 25, 12, 1, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Anatomy",
+            "amount": 0.2,
+            "timestamp": datetime(2026, 3, 25, 12, 1, 0),
+        },
+    )
 
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1  # only the gain during session
@@ -126,11 +144,14 @@ def test_suppress_next_consumes_matching_gain():
     bus.publish("session_started", {"session_id": "test-suppress-1"})
 
     tracker.suppress_next("Aim", timeout=30)
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Aim",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+        },
+    )
 
     # The gain should have been suppressed
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
@@ -146,11 +167,14 @@ def test_suppress_does_not_affect_other_skills():
     bus.publish("session_started", {"session_id": "test-suppress-2"})
 
     tracker.suppress_next("Aim", timeout=30)
-    bus.publish("skill_gain", {
-        "skill_name": "Rifle",
-        "amount": 0.2,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Rifle",
+            "amount": 0.2,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+        },
+    )
 
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1
@@ -163,17 +187,21 @@ def test_suppress_does_not_affect_other_skills():
 def test_suppress_expired_processes_normally():
     """Expired suppression should not block the gain."""
     import time as _t
+
     tracker, bus, db = _make_tracker()
     bus.publish("session_started", {"session_id": "test-suppress-3"})
 
     # Set suppression that already expired
     tracker._suppressed_claims["Aim"] = _t.time() - 10
 
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Aim",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+        },
+    )
 
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1  # processed normally
@@ -189,17 +217,23 @@ def test_suppress_only_consumes_once():
     tracker.suppress_next("Aim", timeout=30)
 
     # First gain: suppressed
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Aim",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+        },
+    )
     # Second gain: should be recorded
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 1),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Aim",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 1),
+        },
+    )
 
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1  # only the second gain
@@ -223,11 +257,14 @@ def test_suppression_does_not_leak_across_sessions():
 
     # New session: a genuine Aim gain must be recorded, not suppressed.
     bus.publish("session_started", {"session_id": "test-leak-2"})
-    bus.publish("skill_gain", {
-        "skill_name": "Aim",
-        "amount": 0.1,
-        "timestamp": datetime(2026, 3, 26, 12, 0, 0),
-    })
+    bus.publish(
+        "skill_gain",
+        {
+            "skill_name": "Aim",
+            "amount": 0.1,
+            "timestamp": datetime(2026, 3, 26, 12, 0, 0),
+        },
+    )
 
     rows = db.conn.execute("SELECT * FROM skill_gains").fetchall()
     assert len(rows) == 1

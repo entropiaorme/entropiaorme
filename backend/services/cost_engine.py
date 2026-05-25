@@ -22,8 +22,15 @@ def _economy(entity: dict) -> dict:
 
 
 _DAMAGE_TYPES = (
-    "impact", "cut", "stab", "penetration", "shrapnel",
-    "burn", "cold", "acid", "electric",
+    "impact",
+    "cut",
+    "stab",
+    "penetration",
+    "shrapnel",
+    "burn",
+    "cold",
+    "acid",
+    "electric",
 )
 
 
@@ -194,7 +201,11 @@ def cost_per_shot(
 
 def cost_per_shot_from_props(props: dict, damage_enhancers: int | None = None) -> dict:
     """Calculate weapon cost from an ``equipment_library`` ``properties_json`` payload."""
-    configured_damage = props.get("damage_enhancers", 0) if damage_enhancers is None else damage_enhancers
+    configured_damage = (
+        props.get("damage_enhancers", 0)
+        if damage_enhancers is None
+        else damage_enhancers
+    )
     return cost_per_shot(
         weapon=props["weapon_entity"],
         amp=props.get("amp_entity"),

@@ -24,11 +24,10 @@ from backend.routers.tracking import (
     _bulk_deactivate_loot_item_impl,
     _rename_session_mob_impl,
     _restore_session_mob_impl,
-    _ts_to_iso,
     get_session_impl,
 )
-from backend.tracking.tracker import HuntTracker
 from backend.tracking.schema import init_tracking_tables
+from backend.tracking.tracker import HuntTracker
 
 
 @pytest.fixture
@@ -62,12 +61,18 @@ class TestFullPipeline:
     def test_combat_accumulates_stats(self, pipeline):
         """Combat without loot → no kills, stats in dangling cost."""
         bus, tracker, db = pipeline
-        session = tracker.start_session()
+        tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.5, "timestamp": now})
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now})
-        bus.publish(EVENT_COMBAT, {"type": "critical_hit", "amount": 30.0, "timestamp": now})
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.5, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_COMBAT, {"type": "critical_hit", "amount": 30.0, "timestamp": now}
+        )
 
         # Accumulator should have stats
         acc = tracker.current_accumulator
@@ -86,17 +91,28 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "type": "loot",
-            "items": [
-                {"item_name": "Shrapnel", "quantity": 50, "value_ped": 0.50},
-                {"item_name": "Animal Oil Residue", "quantity": 3, "value_ped": 0.03},
-            ],
-            "total_ped": 0.53,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "type": "loot",
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 50, "value_ped": 0.50},
+                    {
+                        "item_name": "Animal Oil Residue",
+                        "quantity": 3,
+                        "value_ped": 0.03,
+                    },
+                ],
+                "total_ped": 0.53,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         assert len(result.kills) == 1
@@ -121,12 +137,17 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
-            "total_ped": 0.01,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
+                "total_ped": 0.01,
+                "timestamp": now,
+            },
+        )
 
         # Accumulator should be reset
         acc = tracker.current_accumulator
@@ -143,19 +164,27 @@ class TestFullPipeline:
         now = datetime.now(tz=None)
         for i in range(3):
             t = now + timedelta(seconds=i * 5)
-            bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": t})
-            bus.publish(EVENT_LOOT_GROUP, {
-                "items": [{"item_name": "Shrapnel", "quantity": 10, "value_ped": 0.10}],
-                "total_ped": 0.10,
-                "timestamp": t + timedelta(seconds=1),
-            })
+            bus.publish(
+                EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": t}
+            )
+            bus.publish(
+                EVENT_LOOT_GROUP,
+                {
+                    "items": [
+                        {"item_name": "Shrapnel", "quantity": 10, "value_ped": 0.10}
+                    ],
+                    "total_ped": 0.10,
+                    "timestamp": t + timedelta(seconds=1),
+                },
+            )
 
         result = tracker.stop_session()
         assert len(result.kills) == 3
 
         # Verify DB
         db_kills = db.execute(
-            "SELECT id FROM kills WHERE session_id = ?", (result.id,),
+            "SELECT id FROM kills WHERE session_id = ?",
+            (result.id,),
         ).fetchall()
         assert len(db_kills) == 3
 
@@ -168,8 +197,12 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now})
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now}
+        )
 
         result = tracker.stop_session()
         assert len(result.kills) == 0
@@ -177,7 +210,8 @@ class TestFullPipeline:
 
         # Verify in DB
         row = db.execute(
-            "SELECT dangling_cost FROM tracking_sessions WHERE id = ?", (result.id,),
+            "SELECT dangling_cost FROM tracking_sessions WHERE id = ?",
+            (result.id,),
         ).fetchone()
         assert abs(row[0] - 1.00) < 1e-6
 
@@ -189,6 +223,7 @@ class TestFullPipeline:
         tracker.start_session()
 
         from backend.core.events import EVENT_ACTIVE_TOOL_CHANGED
+
         now = datetime.now(tz=None)
         bus.publish(EVENT_ACTIVE_TOOL_CHANGED, {"tool_name": "Opalo"})
         bus.publish(EVENT_COMBAT, {"type": "target_jam", "timestamp": now})
@@ -197,7 +232,8 @@ class TestFullPipeline:
         assert result.dangling_cost == 0.50
 
         row = db.execute(
-            "SELECT dangling_cost FROM tracking_sessions WHERE id = ?", (result.id,),
+            "SELECT dangling_cost FROM tracking_sessions WHERE id = ?",
+            (result.id,),
         ).fetchone()
         assert abs(row[0] - 0.50) < 1e-6
 
@@ -206,12 +242,19 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Universal Ammo", "quantity": 100, "value_ped": 1.0}],
-            "total_ped": 1.0,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Universal Ammo", "quantity": 100, "value_ped": 1.0}
+                ],
+                "total_ped": 1.0,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -234,15 +277,24 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [
-                {"item_name": "Animal Oil Residue", "quantity": 3, "value_ped": 0.03},
-                {"item_name": "Shrapnel", "quantity": 5, "value_ped": 0.05},
-            ],
-            "total_ped": 0.08,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {
+                        "item_name": "Animal Oil Residue",
+                        "quantity": 3,
+                        "value_ped": 0.03,
+                    },
+                    {"item_name": "Shrapnel", "quantity": 5, "value_ped": 0.05},
+                ],
+                "total_ped": 0.08,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -256,12 +308,17 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
-            "total_ped": 0.01,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
+                "total_ped": 0.01,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -273,24 +330,34 @@ class TestFullPipeline:
         tracker.start_session()
 
         from backend.core.events import EVENT_ACTIVE_TOOL_CHANGED
+
         now = datetime.now(tz=None)
 
         # Shots before tool detection go to "Unknown"
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now})
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now}
+        )
 
         # Tool detected → merge
         bus.publish(EVENT_ACTIVE_TOOL_CHANGED, {"tool_name": "Opalo"})
 
         # More shots under real tool
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 20.0, "timestamp": now})
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 20.0, "timestamp": now}
+        )
 
         # Loot → creates kill
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
-            "total_ped": 0.01,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.01}],
+                "total_ped": 0.01,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -305,15 +372,24 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [
-                {"item_name": "Shrapnel", "quantity": 1000, "value_ped": 10.00},
-                {"item_name": "Animal Oil Residue", "quantity": 5, "value_ped": 0.05},
-            ],
-            "total_ped": 10.05,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 1000, "value_ped": 10.00},
+                    {
+                        "item_name": "Animal Oil Residue",
+                        "quantity": 5,
+                        "value_ped": 0.05,
+                    },
+                ],
+                "total_ped": 10.05,
+                "timestamp": now,
+            },
+        )
 
         tracker.stop_session()
 
@@ -332,26 +408,34 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_ENHANCER_BREAK, {
-            "enhancer_name": "T1 Weapon Damage Enhancer",
-            "item_name": "Electric Attack Nanochip 9",
-            "remaining": 3,
-            "shrapnel_ped": 0.80,
-        })
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [
-                {
-                    "item_name": "Shrapnel",
-                    "quantity": 8000,
-                    "value_ped": 0.80,
-                    "is_enhancer_shrapnel": True,
-                },
-                {"item_name": "Shrapnel", "quantity": 1000, "value_ped": 10.00},
-            ],
-            "total_ped": 10.80,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_ENHANCER_BREAK,
+            {
+                "enhancer_name": "T1 Weapon Damage Enhancer",
+                "item_name": "Electric Attack Nanochip 9",
+                "remaining": 3,
+                "shrapnel_ped": 0.80,
+            },
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {
+                        "item_name": "Shrapnel",
+                        "quantity": 8000,
+                        "value_ped": 0.80,
+                        "is_enhancer_shrapnel": True,
+                    },
+                    {"item_name": "Shrapnel", "quantity": 1000, "value_ped": 10.00},
+                ],
+                "total_ped": 10.80,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
 
@@ -371,12 +455,23 @@ class TestFullPipeline:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Animal Oil Residue", "quantity": 5, "value_ped": 0.05}],
-            "total_ped": 0.05,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {
+                        "item_name": "Animal Oil Residue",
+                        "quantity": 5,
+                        "value_ped": 0.05,
+                    }
+                ],
+                "total_ped": 0.05,
+                "timestamp": now,
+            },
+        )
 
         tracker.stop_session()
 
@@ -394,10 +489,15 @@ class TestFullPipeline:
         assert "kill_tool_stats" in table_names
         assert "kill_loot_items" in table_names
         assert "ledger_entries" in table_names
-        loot_cols = {row[1] for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()}
+        loot_cols = {
+            row[1]
+            for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()
+        }
         assert "is_enhancer_shrapnel" in loot_cols
         assert "deactivated_at" in loot_cols
-        kill_cols = {row[1] for row in db.execute("PRAGMA table_info(kills)").fetchall()}
+        kill_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(kills)").fetchall()
+        }
         assert "original_mob_name" in kill_cols
 
 
@@ -415,12 +515,19 @@ def _make_kill(bus, now=None):
     _kill_counter += 1
     now = now or datetime.now(tz=None)
     ped = 0.01 * _kill_counter
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-    bus.publish(EVENT_LOOT_GROUP, {
-        "items": [{"item_name": "Shrapnel", "quantity": _kill_counter, "value_ped": ped}],
-        "total_ped": ped,
-        "timestamp": now,
-    })
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+    )
+    bus.publish(
+        EVENT_LOOT_GROUP,
+        {
+            "items": [
+                {"item_name": "Shrapnel", "quantity": _kill_counter, "value_ped": ped}
+            ],
+            "total_ped": ped,
+            "timestamp": now,
+        },
+    )
 
 
 class TestTrifectaInferredManualMobLock:
@@ -567,6 +674,7 @@ class TestSessionTagMode:
 
 # ── Global/HoF correlation ──────────────────────────────────────────────
 
+
 @pytest.fixture
 def pipeline_with_player():
     """Pipeline with player_name set; needed for global event filtering."""
@@ -583,23 +691,31 @@ class TestGlobalCorrelation:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 50.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [
-                {"item_name": "Shrapnel", "quantity": 5000, "value_ped": 50.00},
-                {"item_name": "Blazar Fragment", "quantity": 1, "value_ped": 2.50},
-            ],
-            "total_ped": 52.50,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 50.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 5000, "value_ped": 50.00},
+                    {"item_name": "Blazar Fragment", "quantity": 1, "value_ped": 2.50},
+                ],
+                "total_ped": 52.50,
+                "timestamp": now,
+            },
+        )
 
-        bus.publish(EVENT_GLOBAL, {
-            "type": "global_kill",
-            "player": "TestPlayer",
-            "creature": "Atrox Provider",
-            "value": 52.50,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_GLOBAL,
+            {
+                "type": "global_kill",
+                "player": "TestPlayer",
+                "creature": "Atrox Provider",
+                "value": 52.50,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -618,19 +734,29 @@ class TestGlobalCorrelation:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 100.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 10000, "value_ped": 100.00}],
-            "total_ped": 100.00,
-            "timestamp": now,
-        })
-        bus.publish(EVENT_GLOBAL, {
-            "type": "hof_kill",
-            "player": "TestPlayer",
-            "creature": "Atrox Stalker",
-            "value": 100.00,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 100.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 10000, "value_ped": 100.00}
+                ],
+                "total_ped": 100.00,
+                "timestamp": now,
+            },
+        )
+        bus.publish(
+            EVENT_GLOBAL,
+            {
+                "type": "hof_kill",
+                "player": "TestPlayer",
+                "creature": "Atrox Stalker",
+                "value": 100.00,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -642,19 +768,29 @@ class TestGlobalCorrelation:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 50.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 5000, "value_ped": 50.00}],
-            "total_ped": 50.00,
-            "timestamp": now,
-        })
-        bus.publish(EVENT_GLOBAL, {
-            "type": "global_kill",
-            "player": "SomeoneElse",
-            "creature": "Atrox",
-            "value": 50.00,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 50.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 5000, "value_ped": 50.00}
+                ],
+                "total_ped": 50.00,
+                "timestamp": now,
+            },
+        )
+        bus.publish(
+            EVENT_GLOBAL,
+            {
+                "type": "global_kill",
+                "player": "SomeoneElse",
+                "creature": "Atrox",
+                "value": 50.00,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -666,19 +802,29 @@ class TestGlobalCorrelation:
         tracker.start_session()
 
         now = datetime.now(tz=None)
-        bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 30.0, "timestamp": now})
-        bus.publish(EVENT_LOOT_GROUP, {
-            "items": [{"item_name": "Shrapnel", "quantity": 3000, "value_ped": 30.00}],
-            "total_ped": 30.00,
-            "timestamp": now,
-        })
-        bus.publish(EVENT_GLOBAL, {
-            "type": "global_kill",
-            "player": "TestPlayer",
-            "creature": "Atrox",
-            "value": 30.00,
-            "timestamp": now,
-        })
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 30.0, "timestamp": now}
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [
+                    {"item_name": "Shrapnel", "quantity": 3000, "value_ped": 30.00}
+                ],
+                "total_ped": 30.00,
+                "timestamp": now,
+            },
+        )
+        bus.publish(
+            EVENT_GLOBAL,
+            {
+                "type": "global_kill",
+                "player": "TestPlayer",
+                "creature": "Atrox",
+                "value": 30.00,
+                "timestamp": now,
+            },
+        )
 
         result = tracker.stop_session()
         kill = result.kills[0]
@@ -688,7 +834,9 @@ class TestGlobalCorrelation:
         ).fetchone()
         assert notable[0] == kill.id
 
+
 # ── Crash recovery ─────────────────────────────────────────────────────
+
 
 def _setup_orphan_db():
     """Create a DB with tracking tables and return it; no HuntTracker yet."""
@@ -811,11 +959,15 @@ class TestCrashRecovery:
         bus = EventBus()
         tracker = HuntTracker(bus, db)
 
-        assert db.execute(
-            "SELECT is_active FROM tracking_sessions WHERE id = ?", (old_id,),
-        ).fetchone()[0] == 0
+        assert (
+            db.execute(
+                "SELECT is_active FROM tracking_sessions WHERE id = ?",
+                (old_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
-        session = tracker.start_session()
+        tracker.start_session()
         assert tracker.is_tracking
         tracker.stop_session()
         assert not tracker.is_tracking
@@ -872,7 +1024,10 @@ class TestLootDeactivation:
     def test_schema_column_present_and_defaults_null(self):
         """Fresh-init tracking schema lands kill_loot_items.deactivated_at as nullable."""
         db = _setup_orphan_db()
-        cols = {row[1]: row for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()}
+        cols = {
+            row[1]: row
+            for row in db.execute("PRAGMA table_info(kill_loot_items)").fetchall()
+        }
         assert "deactivated_at" in cols
         # row shape: (cid, name, type, notnull, dflt_value, pk)
         notnull_flag = cols["deactivated_at"][3]
@@ -901,7 +1056,8 @@ class TestLootDeactivation:
         # sum of kill_loot_items rows. This is the denormalisation that the
         # deactivation manoeuvre maintains.
         kills_total_before = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (kill_id,),
         ).fetchone()[0]
         assert kills_total_before == pytest.approx(initial_total)
 
@@ -919,7 +1075,8 @@ class TestLootDeactivation:
 
         # Per-kill denormalised total tracks the remaining active loot.
         kills_total_after = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (kill_id,),
         ).fetchone()[0]
         assert kills_total_after == pytest.approx(loot_b_value)
 
@@ -973,7 +1130,8 @@ class TestLootDeactivation:
         db.commit()
 
         kills_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (kill_id,),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (kill_id,),
         ).fetchone()[0]
         assert kills_total == pytest.approx(loot_a_value + loot_b_value)
 
@@ -1054,9 +1212,7 @@ class TestV30Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '29')")
         seed.execute(
             "CREATE TABLE kill_loot_items ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -1100,9 +1256,7 @@ class TestV30Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '29')")
         seed.commit()
         seed.close()
 
@@ -1127,9 +1281,7 @@ class TestV30Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '29')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '29')")
         # Column already present at v29.
         seed.execute(
             "CREATE TABLE kill_loot_items ("
@@ -1285,7 +1437,9 @@ class TestBulkLootEditEndpoints:
         seed = self._seed_multi_item_session(db)
 
         result = _bulk_deactivate_loot_item_impl(
-            db, seed["session_id"], "Nanocube",
+            db,
+            seed["session_id"],
+            "Nanocube",
         )
 
         assert result["sessionId"] == seed["session_id"]
@@ -1293,12 +1447,15 @@ class TestBulkLootEditEndpoints:
         assert result["affectedRows"] == 3
         assert result["totalValueDelta"] == pytest.approx(-sum(seed["nano_values"]))
         # Only Mob-Drop-Other remains as live loot.
-        assert result["sessionTotalReturns"] == pytest.approx(seed["other_value"], rel=1e-4)
+        assert result["sessionTotalReturns"] == pytest.approx(
+            seed["other_value"], rel=1e-4
+        )
 
         # All three Nanocube rows carry deactivated_at; other untouched.
         flags = [
             db.execute(
-                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+                (i,),
             ).fetchone()[0]
             for i in seed["nano_ids"]
         ]
@@ -1311,13 +1468,16 @@ class TestBulkLootEditEndpoints:
 
         # Per-kill loot_total_ped mutated correctly.
         kill1_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill1_id"],),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (seed["kill1_id"],),
         ).fetchone()[0]
         kill2_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill2_id"],),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (seed["kill2_id"],),
         ).fetchone()[0]
         kill3_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill3_id"],),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (seed["kill3_id"],),
         ).fetchone()[0]
         assert kill1_total == pytest.approx(0.0)
         assert kill2_total == pytest.approx(0.0)
@@ -1335,22 +1495,26 @@ class TestBulkLootEditEndpoints:
         assert result["affectedRows"] == 3
         assert result["totalValueDelta"] == pytest.approx(sum(seed["nano_values"]))
         assert result["sessionTotalReturns"] == pytest.approx(
-            seed["session_initial_returns"], rel=1e-4,
+            seed["session_initial_returns"],
+            rel=1e-4,
         )
 
         flags = [
             db.execute(
-                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+                (i,),
             ).fetchone()[0]
             for i in seed["nano_ids"]
         ]
         assert all(f is None for f in flags)
 
         kill1_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill1_id"],),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (seed["kill1_id"],),
         ).fetchone()[0]
         kill2_total = db.execute(
-            "SELECT loot_total_ped FROM kills WHERE id = ?", (seed["kill2_id"],),
+            "SELECT loot_total_ped FROM kills WHERE id = ?",
+            (seed["kill2_id"],),
         ).fetchone()[0]
         assert kill1_total == pytest.approx(seed["kill1_initial_total"])
         assert kill2_total == pytest.approx(seed["kill2_initial_total"])
@@ -1396,13 +1560,16 @@ class TestBulkLootEditEndpoints:
         db.commit()
 
         result = _bulk_deactivate_loot_item_impl(
-            db, seed["session_id"], "Nanocube",
+            db,
+            seed["session_id"],
+            "Nanocube",
         )
         assert result["affectedRows"] == 2
         # Now all three are deactivated.
         flags = [
             db.execute(
-                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?", (i,),
+                "SELECT deactivated_at FROM kill_loot_items WHERE id = ?",
+                (i,),
             ).fetchone()[0]
             for i in seed["nano_ids"]
         ]
@@ -1415,7 +1582,9 @@ class TestBulkLootEditEndpoints:
         # No seed; just call against a fabricated id.
         with pytest.raises(HTTPException) as excinfo:
             _bulk_deactivate_loot_item_impl(
-                db, "missing-session", "Nanocube",
+                db,
+                "missing-session",
+                "Nanocube",
             )
         assert excinfo.value.status_code == 404
 
@@ -1424,7 +1593,9 @@ class TestBulkLootEditEndpoints:
         seed = self._seed_multi_item_session(db)
         with pytest.raises(HTTPException) as excinfo:
             _bulk_deactivate_loot_item_impl(
-                db, seed["session_id"], "Not-In-Session",
+                db,
+                seed["session_id"],
+                "Not-In-Session",
             )
         assert excinfo.value.status_code == 404
         assert "no loot named" in excinfo.value.detail.lower()
@@ -1435,7 +1606,9 @@ class TestBulkLootEditEndpoints:
         _bulk_deactivate_loot_item_impl(db, seed["session_id"], "Nanocube")
         with pytest.raises(HTTPException) as excinfo:
             _bulk_deactivate_loot_item_impl(
-                db, seed["session_id"], "Nanocube",
+                db,
+                seed["session_id"],
+                "Nanocube",
             )
         assert excinfo.value.status_code == 409
         assert "already" in excinfo.value.detail.lower()
@@ -1445,7 +1618,9 @@ class TestBulkLootEditEndpoints:
         seed = self._seed_multi_item_session(db)
         with pytest.raises(HTTPException) as excinfo:
             _bulk_activate_loot_item_impl(
-                db, seed["session_id"], "Nanocube",
+                db,
+                seed["session_id"],
+                "Nanocube",
             )
         assert excinfo.value.status_code == 409
 
@@ -1464,7 +1639,9 @@ class TestBulkLootEditEndpoints:
         seed = self._seed_multi_item_session(db, is_active=1)
         with pytest.raises(HTTPException) as excinfo:
             _bulk_deactivate_loot_item_impl(
-                db, seed["session_id"], "Nanocube",
+                db,
+                seed["session_id"],
+                "Nanocube",
             )
         assert excinfo.value.status_code == 409
         assert "session" in excinfo.value.detail.lower()
@@ -1484,7 +1661,9 @@ class TestBulkLootEditEndpoints:
         try:
             seed = self._seed_multi_item_session(db)
             _bulk_deactivate_loot_item_impl(
-                db, seed["session_id"], "Nanocube",
+                db,
+                seed["session_id"],
+                "Nanocube",
             )
             detail = get_session_impl(db, seed["session_id"])
         finally:
@@ -1588,7 +1767,10 @@ class TestMobEditEndpoints:
         seed = self._seed_mixed_mob_session(db)
 
         result = _rename_session_mob_impl(
-            db, seed["session_id"], seed["from_mob"], "Argonaut Old",
+            db,
+            seed["session_id"],
+            seed["from_mob"],
+            "Argonaut Old",
         )
         assert result["sessionId"] == seed["session_id"]
         assert result["mobName"] == "Argonaut Old"
@@ -1628,7 +1810,10 @@ class TestMobEditEndpoints:
         # Rename Caboria Old -> Atrox; Atrox already has 2 kills, so the
         # post-mutation Atrox count is 3 (affected) + 2 (pre-existing) = 5.
         result = _rename_session_mob_impl(
-            db, seed["session_id"], seed["from_mob"], "Atrox",
+            db,
+            seed["session_id"],
+            seed["from_mob"],
+            "Atrox",
         )
         assert result["mobName"] == "Atrox"
         assert result["killCount"] == seed["from_mob_count"] + seed["other_mob_count"]
@@ -1690,7 +1875,9 @@ class TestMobEditEndpoints:
         seed = self._seed_mixed_mob_session(db)
         self._seed_summary_row(db, seed["session_id"])
 
-        _rename_session_mob_impl(db, seed["session_id"], seed["from_mob"], "Argonaut Old")
+        _rename_session_mob_impl(
+            db, seed["session_id"], seed["from_mob"], "Argonaut Old"
+        )
 
         row = db.execute(
             "SELECT 1 FROM session_summaries WHERE session_id = ?",
@@ -1754,7 +1941,9 @@ class TestMobEditEndpoints:
         db = _setup_orphan_db()
         seed = self._seed_mixed_mob_session(db)
         with pytest.raises(HTTPException) as exc:
-            _rename_session_mob_impl(db, seed["session_id"], "Nonexistent", "Argonaut Old")
+            _rename_session_mob_impl(
+                db, seed["session_id"], "Nonexistent", "Argonaut Old"
+            )
         assert exc.value.status_code == 409
         assert "no kills" in exc.value.detail.lower()
 
@@ -1764,7 +1953,9 @@ class TestMobEditEndpoints:
         db = _setup_orphan_db()
         seed = self._seed_mixed_mob_session(db)
         with pytest.raises(HTTPException) as exc:
-            _rename_session_mob_impl(db, seed["session_id"], seed["from_mob"], seed["from_mob"])
+            _rename_session_mob_impl(
+                db, seed["session_id"], seed["from_mob"], seed["from_mob"]
+            )
         assert exc.value.status_code == 409
         assert "no-op" in exc.value.detail.lower()
 
@@ -1918,9 +2109,7 @@ class TestMobEditEndpoints:
             def execute(self, *args, **kwargs):
                 sql = args[0] if args else ""
                 if isinstance(sql, str) and self._fail_on_sql_contains in sql:
-                    raise sqlite3.OperationalError(
-                        "simulated failure mid-transaction"
-                    )
+                    raise sqlite3.OperationalError("simulated failure mid-transaction")
                 return self._real.execute(*args, **kwargs)
 
             def commit(self):
@@ -1931,7 +2120,9 @@ class TestMobEditEndpoints:
 
         wrapped = FailingConn(db, fail_on_sql_contains="UPDATE kills SET mob_name")
         with pytest.raises(sqlite3.OperationalError):
-            _rename_session_mob_impl(wrapped, seed["session_id"], "Caboria Old", "Argonaut Old")
+            _rename_session_mob_impl(
+                wrapped, seed["session_id"], "Caboria Old", "Argonaut Old"
+            )
 
         # Post-rollback: nothing renamed, nothing preserved.
         rows = db.execute(
@@ -1957,7 +2148,9 @@ class TestMobEditEndpoints:
         init_tracking_tables(db)
         try:
             seed = self._seed_mixed_mob_session(db)
-            _rename_session_mob_impl(db, seed["session_id"], "Caboria Old", "Argonaut Old")
+            _rename_session_mob_impl(
+                db, seed["session_id"], "Caboria Old", "Argonaut Old"
+            )
 
             detail = get_session_impl(db, seed["session_id"])
         finally:
@@ -2006,9 +2199,7 @@ class TestV31Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '30')")
         seed.execute(
             "CREATE TABLE kills ("
             "  id TEXT PRIMARY KEY,"
@@ -2025,9 +2216,7 @@ class TestV31Migration:
         try:
             cols = {
                 row[1]
-                for row in app_db.conn.execute(
-                    "PRAGMA table_info(kills)"
-                ).fetchall()
+                for row in app_db.conn.execute("PRAGMA table_info(kills)").fetchall()
             }
             assert "original_mob_name" in cols
 
@@ -2050,9 +2239,7 @@ class TestV31Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '30')")
         seed.commit()
         seed.close()
 
@@ -2076,9 +2263,7 @@ class TestV31Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '30')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '30')")
         seed.execute(
             "CREATE TABLE kills ("
             "  id TEXT PRIMARY KEY,"
@@ -2131,9 +2316,7 @@ class TestV32Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '31')")
         seed.execute(
             "CREATE TABLE tracking_sessions ("
             "  id TEXT PRIMARY KEY,"
@@ -2186,9 +2369,7 @@ class TestV32Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '31')")
         seed.commit()
         seed.close()
 
@@ -2211,9 +2392,7 @@ class TestV32Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '31')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '31')")
         seed.execute(
             "CREATE TABLE tracking_sessions ("
             "  id TEXT PRIMARY KEY,"
@@ -2256,9 +2435,7 @@ class TestV33Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '32')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '32')")
         seed.execute(
             "CREATE TABLE tt_curve_observations ("
             "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -2307,9 +2484,7 @@ class TestV33Migration:
         seed.execute(
             "CREATE TABLE db_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
-        seed.execute(
-            "INSERT INTO db_metadata (key, value) VALUES ('version', '32')"
-        )
+        seed.execute("INSERT INTO db_metadata (key, value) VALUES ('version', '32')")
         seed.commit()
         seed.close()
 

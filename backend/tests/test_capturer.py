@@ -7,6 +7,8 @@ swap the whole ``ScreenCapturer`` for a recorder to pin the ``(tl, br)`` →
 ``x/y/w/h`` adaptation and the ``None``-on-failure contract.
 """
 
+from typing import ClassVar
+
 import cv2
 import numpy as np
 import pytest
@@ -82,8 +84,8 @@ def test_capture_region_png_raises_on_nonpositive_dims(width, height):
 class _RecordingCapturer:
     """Stub ScreenCapturer counting instantiations and recording PNG args."""
 
-    instances = 0
-    calls: list[tuple[int, int, int, int]] = []
+    instances: ClassVar[int] = 0
+    calls: ClassVar[list[tuple[int, int, int, int]]] = []
 
     def __init__(self):
         type(self).instances += 1

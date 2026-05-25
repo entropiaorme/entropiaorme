@@ -57,6 +57,10 @@ class SkillScanCore:
                 self._capturer = ScreenCapturer()
             return self._capturer.capture_region_png(left, top, width, height)
         except Exception:
+            log.exception(
+                "Skill scan: capture failed for region (%d, %d, %d, %d)",
+                left, top, width, height,
+            )
             return None
 
     def extract_page_levels(self, png_bytes: bytes) -> dict[str, float]:

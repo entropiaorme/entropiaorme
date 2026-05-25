@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Callable
 
 from backend.services.scan_presets import repair_region
 
@@ -24,6 +25,18 @@ class RepairOcrService:
 
     def __init__(self, config_service):
         self._config = config_service
+        # Optional capture observer. None in normal operation; set by the
+        # recording controller to copy the captured frame into a bundle.
+        # Called as tap(panel: str, region: dict, frame: np.ndarray).
+        self._capture_tap: Callable[..., None] | None = None
+
+    def set_capture_tap(self, tap: Callable[..., None]) -> None:
+        """Install a capture observer (called after a successful frame grab)."""
+        self._capture_tap = tap
+
+    def clear_capture_tap(self) -> None:
+        """Remove the capture observer."""
+        self._capture_tap = None
 
     def scan_repair_cost(self) -> dict:
         """Capture and OCR the repair cost region. Returns {cost_ped, raw_text, confidence}."""
@@ -59,6 +72,13 @@ class RepairOcrService:
                     "raw_text": "",
                     "confidence": 0.0,
                 }
+
+            tap = self._capture_tap
+            if tap is not None:
+                try:
+                    tap("repair", {"x": x, "y": y, "w": w, "h": h}, frame)
+                except Exception:
+                    log.exception("Scan capture tap failed")
 
             engine = local_ocr.get_engine()
             if engine is None:

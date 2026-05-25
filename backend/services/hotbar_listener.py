@@ -42,6 +42,11 @@ class HotbarListener:
         # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
         self._key_listener: Any = None
 
+        # Optional keystroke observer. None in normal operation; set by the
+        # recording controller to copy hotbar-slot presses into a bundle.
+        # Called as tap(key: str, kind: str).
+        self._key_tap = None
+
         event_bus.subscribe(EVENT_SESSION_STARTED, self._on_session_started)
         event_bus.subscribe(EVENT_SESSION_STOPPED, self._on_session_stopped)
 
@@ -49,6 +54,14 @@ class HotbarListener:
     def is_running(self) -> bool:
         """True if the pynput listener is currently active."""
         return self._key_listener is not None
+
+    def set_key_tap(self, tap) -> None:
+        """Install a keystroke observer (called for each hotbar-slot press)."""
+        self._key_tap = tap
+
+    def clear_key_tap(self) -> None:
+        """Remove the keystroke observer."""
+        self._key_tap = None
 
     # ------------------------------------------------------------------
     # Capability toggle
@@ -109,15 +122,22 @@ class HotbarListener:
                     ch = key.char
                 except AttributeError:
                     return
-                if ch in HOTBAR_SLOT_KEYS and self._hotbar_resolver:
-                    # Keep on_press short — do all work off the listener thread.
-                    import threading
+                if ch in HOTBAR_SLOT_KEYS:
+                    tap = self._key_tap
+                    if tap is not None:
+                        try:
+                            tap(ch, "press")
+                        except Exception:
+                            log.exception("Keystroke tap failed")
+                    if self._hotbar_resolver:
+                        # Keep on_press short — do all work off the listener thread.
+                        import threading
 
-                    threading.Thread(
-                        target=self._resolve_hotbar_slot,
-                        args=(ch,),
-                        daemon=True,
-                    ).start()
+                        threading.Thread(
+                            target=self._resolve_hotbar_slot,
+                            args=(ch,),
+                            daemon=True,
+                        ).start()
 
             self._key_listener = keyboard.Listener(on_press=on_press)
             self._key_listener.daemon = True

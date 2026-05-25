@@ -39,7 +39,7 @@ known-first-party = ["backend"]
 testpaths = ["backend/tests"]
 addopts = "--strict-markers --strict-config"
 markers = [
-    "fast: pure-logic, in-memory, sub-second tests (run on every PR and in pre-commit)",
+    "fast: pure-logic, in-memory, sub-second tests (run on every PR)",
     "standard: db / filesystem / in-process-stateful tests (run on every PR)",
     "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
 ]

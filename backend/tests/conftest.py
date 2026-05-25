@@ -3,7 +3,7 @@
 The runtime-tier markers (registered in pyproject.toml) are applied here by
 test module, so the whole classification lives in one readable place:
 
-- ``fast``:     pure-logic, in-memory, sub-second (every PR and pre-commit)
+- ``fast``:     pure-logic, in-memory, sub-second (every PR)
 - ``standard``: db / filesystem / in-process-stateful (every PR)
 - ``full``:     device / OCR / listener-touching or slow (nightly; none yet)
 

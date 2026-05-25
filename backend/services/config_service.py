@@ -50,6 +50,9 @@ class AppConfig:
     end_of_session_armour_reminder_enabled: bool = (
         False  # Yellow "Track armour?" prompt on session stop.
     )
+    developer_mode_enabled: bool = (
+        False  # Surfaces developer-only tooling (e.g. session recording).
+    )
 
     mob_tracking_mode: str = "mob"  # mob | tag
     mob_tracking_tag: str = ""
@@ -133,6 +136,7 @@ class ConfigService:
             "end_of_session_armour_reminder_enabled": bool(
                 data.get("end_of_session_armour_reminder_enabled", False)
             ),
+            "developer_mode_enabled": bool(data.get("developer_mode_enabled", False)),
         }
 
     def _normalize_trifecta_presets(

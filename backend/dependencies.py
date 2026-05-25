@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from backend.services.skill_scan_manual import SkillScanManual
     from backend.services.skill_tracker import SkillTracker
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
+    from backend.testing.recording_controller import RecordingController
     from backend.tracking.tracker import HuntTracker
 
 
@@ -40,6 +41,7 @@ class Services:
     hotbar_listener: HotbarListener
     repair_ocr: RepairOcrService
     spacebar_capture_listener: SpacebarCaptureListener
+    recording_controller: RecordingController
 
 
 _services: Services | None = None

@@ -102,7 +102,10 @@ def compute_session_summary(conn: sqlite3.Connection, session_id: str) -> dict |
     if tool_rows:
         total_shots = sum(float(r[1] or 0) for r in tool_rows)
         top_name, top_shots = tool_rows[0]
-        if total_shots > 0 and float(top_shots or 0) / total_shots >= DOMINANCE_THRESHOLD:
+        if (
+            total_shots > 0
+            and float(top_shots or 0) / total_shots >= DOMINANCE_THRESHOLD
+        ):
             dominant_weapon = top_name
 
     regular_rows = conn.execute(
@@ -225,10 +228,25 @@ def delete_session_summary(conn: sqlite3.Connection, session_id: str) -> None:
 def _row_to_prospect_dict(row: sqlite3.Row | tuple) -> dict:
     # Column order matches the SELECT in load_prospect_sessions.
     (
-        session_id, started_at, ended_at, duration_hours, kills, loot_tt,
-        weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost,
-        cycled_ped, regular_json, attr_json, regular_skill_tt,
-        attribute_levels_total, dominant_mob, dominant_tag, dominant_weapon,
+        session_id,
+        started_at,
+        ended_at,
+        duration_hours,
+        kills,
+        loot_tt,
+        weapon_cost,
+        enhancer_cost,
+        armour_cost,
+        heal_cost,
+        dangling_cost,
+        cycled_ped,
+        regular_json,
+        attr_json,
+        regular_skill_tt,
+        attribute_levels_total,
+        dominant_mob,
+        dominant_tag,
+        dominant_weapon,
     ) = row
     return {
         "id": session_id,

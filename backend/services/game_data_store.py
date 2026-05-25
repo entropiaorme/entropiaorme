@@ -49,9 +49,7 @@ class GameDataStore:
                 self._by_endpoint[endpoint] = []
         log.info(
             "Loaded game-data snapshot: %s",
-            ", ".join(
-                f"{ep}={len(items)}" for ep, items in self._by_endpoint.items()
-            ),
+            ", ".join(f"{ep}={len(items)}" for ep, items in self._by_endpoint.items()),
         )
 
     # --- Read API ---

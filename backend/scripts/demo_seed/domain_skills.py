@@ -31,12 +31,12 @@ _RNG_SEED = 0x5C12_5C12
 # is the "barely touched" floor; upper bound is the "actively grinding main"
 # ceiling. Top picks per category bias to the upper third of the range.
 _CATEGORY_LEVEL_RANGES: dict[str, tuple[int, int]] = {
-    "Combat (Ranged)": (1500, 7000),   # main profession; tops cluster 5000-7000
-    "Combat (Melee)": (200, 1500),     # off-profession; touched but not grinded
-    "Support": (500, 2000),            # passive growth from self-heal habits
-    "Survival": (1500, 4000),          # Evade/Dodge/Wounded climb with hunting
-    "Trade": (30, 300),                # essentially untouched for a hunter
-    "Mind": (150, 800),                # slow passive build
+    "Combat (Ranged)": (1500, 7000),  # main profession; tops cluster 5000-7000
+    "Combat (Melee)": (200, 1500),  # off-profession; touched but not grinded
+    "Support": (500, 2000),  # passive growth from self-heal habits
+    "Survival": (1500, 4000),  # Evade/Dodge/Wounded climb with hunting
+    "Trade": (30, 300),  # essentially untouched for a hunter
+    "Mind": (150, 800),  # slow passive build
 }
 
 # Per-attribute target ranges. Health sits well above the rest (~150-200);
@@ -77,26 +77,26 @@ def _pick_gain(rng: random.Random, current: float) -> float:
     in. Numbers tuned to land plausibly in a 90-day window.
     """
     if current >= 4000:
-        gain = rng.uniform(60.0, 250.0)        # active main grind
+        gain = rng.uniform(60.0, 250.0)  # active main grind
     elif current >= 1500:
-        gain = rng.uniform(40.0, 180.0)        # secondary combat / survival
+        gain = rng.uniform(40.0, 180.0)  # secondary combat / survival
     elif current >= 500:
-        gain = rng.uniform(20.0, 100.0)        # mid-tier
+        gain = rng.uniform(20.0, 100.0)  # mid-tier
     elif current >= 100:
-        gain = rng.uniform(8.0, 50.0)          # low-tier
+        gain = rng.uniform(8.0, 50.0)  # low-tier
     else:
-        gain = rng.uniform(2.0, 25.0)          # near-floor
+        gain = rng.uniform(2.0, 25.0)  # near-floor
     return round(gain, 2)
 
 
 def _pick_attribute_gain(rng: random.Random, current: float) -> float:
     """Attributes grow very slowly — fractional points per 90 days is typical."""
     if current >= 150:
-        return round(rng.uniform(0.4, 2.0), 2)     # Health-tier
+        return round(rng.uniform(0.4, 2.0), 2)  # Health-tier
     elif current >= 60:
         return round(rng.uniform(0.3, 1.8), 2)
     else:
-        return round(rng.uniform(0.2, 1.2), 2)     # Stamina-tier (slowest)
+        return round(rng.uniform(0.2, 1.2), 2)  # Stamina-tier (slowest)
 
 
 def _build_rows_for(
@@ -135,10 +135,8 @@ def _build_rows_for(
     fractions = sorted(rng.uniform(0.15, 0.9) for _ in range(n_progress - 1))
     fractions.append(1.0)
 
-    rows: list[tuple[str, float, str, float]] = [
-        (name, anchor_level, "scan", anchor_t)
-    ]
-    for ts, frac in zip(progress_ts, fractions):
+    rows: list[tuple[str, float, str, float]] = [(name, anchor_level, "scan", anchor_t)]
+    for ts, frac in zip(progress_ts, fractions, strict=False):
         level = round(anchor_level + gain * frac, 2)
         # Weighted: chatlog 80%, codex 20%, mirroring the typical ratio
         # while keeping codex-driven jumps visible in the timeline.
@@ -167,9 +165,7 @@ class SkillsSeeder:
             top_indices = set(rng.sample(range(len(skill_names)), top_count))
             for idx, skill_name in enumerate(skill_names):
                 is_top = idx in top_indices
-                current_level = _pick_skill_level(
-                    rng, lo, hi, is_top=is_top
-                )
+                current_level = _pick_skill_level(rng, lo, hi, is_top=is_top)
                 gain = _pick_gain(rng, current_level)
                 # Don't let gain exceed the level itself (avoid negative anchors).
                 gain = min(gain, current_level - 1.0)
@@ -231,7 +227,7 @@ class SkillsSeeder:
         return violations
 
 
-SEEDER: "SkillsSeeder" = SkillsSeeder()
+SEEDER: SkillsSeeder = SkillsSeeder()
 
 
 # Self-test entry point — runs core + this seeder against a temp dir.
@@ -239,7 +235,9 @@ if __name__ == "__main__":
     import shutil
     import tempfile
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
 
     from backend.scripts.demo_seed.driver import format_report, run
 

@@ -16,13 +16,16 @@ router = APIRouter(prefix="/scan", tags=["scan-manual"])
 
 # ── Skill scan ──
 
+
 @router.get("/skills/status")
 def skill_status(services: Services = Depends(get_services)):
     return services.skill_scan_manual.get_status()
 
 
 @router.post("/skills/start")
-def skill_start(page_count: int | None = None, services: Services = Depends(get_services)):
+def skill_start(
+    page_count: int | None = None, services: Services = Depends(get_services)
+):
     return services.skill_scan_manual.start(page_count=page_count)
 
 
@@ -73,6 +76,7 @@ def skill_capture_png(page: int, services: Services = Depends(get_services)):
 
 
 # ── Spacebar capture (overlay-wide toggle) ──
+
 
 @router.post("/spacebar-capture")
 def set_spacebar_capture(enabled: bool, services: Services = Depends(get_services)):

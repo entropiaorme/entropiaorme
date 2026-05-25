@@ -3,3 +3,11 @@ pyinstaller>=6.20.0
 
 # Test runner for backend/tests/.
 pytest>=8.0.0
+# Parallel test execution.
+pytest-xdist>=3.6.0
+# Randomised test ordering, to surface inter-test coupling.
+pytest-randomly>=3.15.0
+
+# Linter + formatter. Pinned exactly: the formatter's output is
+# version-sensitive, so a fixed version keeps local and CI runs identical.
+ruff==0.15.14

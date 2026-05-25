@@ -76,7 +76,9 @@ class PanelAnchor:
 
 
 _SKILL_FALLBACK = PanelAnchor(width=635, height=331, right_offset=30, bottom_offset=170)
-_PROFESSION_FALLBACK = PanelAnchor(width=474, height=293, right_offset=31, bottom_offset=161)
+_PROFESSION_FALLBACK = PanelAnchor(
+    width=474, height=293, right_offset=31, bottom_offset=161
+)
 _REPAIR_FALLBACK = PanelAnchor(width=50, height=17, right_offset=48, bottom_offset=86)
 
 

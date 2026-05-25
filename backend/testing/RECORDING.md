@@ -104,7 +104,7 @@ disk for inspection when a leak is reported.
 
 ## Bundle layout
 
-```
+```text
 corpus/recorded/<name>/
   metadata.yaml         # name, flavour: recorded, description, surfaces,
                         # character_context, counts, notes, verification scope

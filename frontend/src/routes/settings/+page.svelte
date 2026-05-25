@@ -189,11 +189,13 @@
 	async function refreshRecordingStatus() {
 		try {
 			recording = await getRecordingStatus();
+			recordingError = null;
 			if (recording.state === 'recording') startRecordingPoll();
 			else stopRecordingPoll();
-		} catch {
-			recording = null;
-			stopRecordingPoll();
+		} catch (e) {
+			recordingError = e instanceof Error ? e.message : 'Failed to refresh recording status';
+			// Keep last-good state on a transient failure; stop polling only if not mid-recording.
+			if (recording?.state !== 'recording') stopRecordingPoll();
 		}
 	}
 

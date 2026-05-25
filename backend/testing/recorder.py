@@ -66,7 +66,7 @@ class ChatlogTap:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._lock = threading.Lock()
-        self._handle = path.open("a", encoding="utf-8")
+        self._handle = path.open("a", encoding="utf-8", newline="")
         self._count = 0
 
     def record_line(self, line: str) -> None:
@@ -136,7 +136,7 @@ class KeystrokeTap:
         self._path = path
         self._epoch = monotonic_epoch
         self._lock = threading.Lock()
-        self._handle = path.open("a", encoding="utf-8")
+        self._handle = path.open("a", encoding="utf-8", newline="")
         self._count = 0
 
     def record_key(self, key: str, kind: str) -> None:

@@ -42,7 +42,7 @@ def start_recording():
     try:
         return svc.recording_controller.start()
     except RecordingStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/status")
@@ -61,9 +61,9 @@ def stop_recording(body: StopRecordingBody):
     try:
         return svc.recording_controller.stop(body.model_dump())
     except RecordingValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RecordingStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/abort")

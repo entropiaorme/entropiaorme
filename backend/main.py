@@ -371,8 +371,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
-    if recording_controller.is_recording:
+    # Cleanup. Abort only an in-flight recording; is_recording is true for both
+    # the recording and finalising states, and aborting mid-finalise could
+    # discard or corrupt the bundle being committed.
+    if recording_controller.status().get("state") == "recording":
         recording_controller.abort()
     spacebar_capture_listener.stop()
     hotbar_listener.stop()

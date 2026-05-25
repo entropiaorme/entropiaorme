@@ -1,6 +1,7 @@
 """Skill scan core — screenshot capture + local OCR extraction primitives.
 
-Owns the mss capture path and the OpenOCR-backed local extraction. Skill
+Captures via the shared :class:`~backend.ocr.capturer.ScreenCapturer` and
+runs OpenOCR-backed local extraction. Skill
 panel cells are sliced via the calibrated geometry in
 ``backend/data/panel_geometry.json`` and read per-cell by
 :mod:`backend.services.local_ocr`. Names resolve through fuzzy match
@@ -12,17 +13,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from backend.ocr.capturer import ScreenCapturer
 from backend.services import local_ocr
 
 log = logging.getLogger(__name__)
-
-try:
-    import mss
-    import mss.tools
-    MSS_AVAILABLE = True
-except ImportError:
-    mss = None
-    MSS_AVAILABLE = False
 
 PAGE_COUNT = 12
 
@@ -34,6 +28,7 @@ class SkillScanCore:
         from backend.services.config_service import ConfigService
         self._config: ConfigService = config_service
         self._data_dir = data_dir
+        self._capturer: ScreenCapturer | None = None
 
     @property
     def has_engine(self) -> bool:
@@ -41,24 +36,31 @@ class SkillScanCore:
         return local_ocr.is_engine_available()
 
     def capture_region(self, tl: list[int] | None, br: list[int] | None) -> bytes | None:
-        """Capture the skill panel region as PNG bytes via mss."""
-        if not MSS_AVAILABLE or not tl or not br:
+        """Capture the skill panel region as PNG bytes via the shared capturer.
+
+        Adapts the ``(tl, br)`` corner pair to the capturer's ``x/y/w/h``
+        primitive and delegates to :meth:`ScreenCapturer.capture_region_png`.
+        Returns ``None`` on bad input, an empty region, or any capture
+        failure (mss unavailable, grab error) so the caller's failure
+        contract is preserved.
+        """
+        if not tl or not br:
             return None
         x1, y1 = tl
         x2, y2 = br
-        monitor = {
-            "left": min(x1, x2),
-            "top": min(y1, y2),
-            "width": abs(x2 - x1),
-            "height": abs(y2 - y1),
-        }
-        if monitor["width"] <= 0 or monitor["height"] <= 0:
+        left, top = min(x1, x2), min(y1, y2)
+        width, height = abs(x2 - x1), abs(y2 - y1)
+        if width <= 0 or height <= 0:
             return None
         try:
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-                return mss.tools.to_png(screenshot.rgb, screenshot.size)
+            if self._capturer is None:
+                self._capturer = ScreenCapturer()
+            return self._capturer.capture_region_png(left, top, width, height)
         except Exception:
+            log.exception(
+                "Skill scan: capture failed for region (%d, %d, %d, %d)",
+                left, top, width, height,
+            )
             return None
 
     def extract_page_levels(self, png_bytes: bytes) -> dict[str, float]:

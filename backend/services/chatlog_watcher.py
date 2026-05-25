@@ -18,18 +18,18 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_COMBAT,
-    EVENT_LOOT_GROUP,
-    EVENT_SKILL_GAIN,
     EVENT_ENHANCER_BREAK,
     EVENT_GLOBAL,
+    EVENT_LOOT_GROUP,
     EVENT_MISSION_RECEIVED,
+    EVENT_SKILL_GAIN,
 )
 from backend.services.chatlog_parser import ChatEvent, EventType, parse_line
 
@@ -177,7 +177,7 @@ class ChatlogWatcher:
     def _tail_loop(self) -> None:
         """Main loop: seek to end, then read new lines as they appear."""
         try:
-            with open(self._path, "r", encoding="utf-8", errors="replace") as f:
+            with open(self._path, encoding="utf-8", errors="replace") as f:
                 # Seek to end — don't replay history
                 f.seek(0, os.SEEK_END)
 

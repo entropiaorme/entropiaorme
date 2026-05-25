@@ -25,8 +25,8 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from backend.scripts.demo_seed.contract import (
     CanonicalRefs,
@@ -37,7 +37,6 @@ from backend.scripts.demo_seed.contract import (
     MobRef,
     PlaylistRef,
     QuestRef,
-    Seeder,
     TimelineAnchor,
     TrifectaPresetRef,
 )
@@ -517,8 +516,8 @@ class CoreSeeder:
                 db_id=-1,
                 name=p["name"],
                 estimated_minutes=p["estimated_minutes"],
-                immediate_quest_ids=tuple(),  # set post-insert
-                long_horizon_quest_ids=tuple(),  # set post-insert
+                immediate_quest_ids=(),  # set post-insert
+                long_horizon_quest_ids=(),  # set post-insert
             )
             for p in _PLAYLIST_SEEDS
         )
@@ -572,8 +571,8 @@ class CoreSeeder:
         """
         # 1) Equipment library inserts — capture autoincrement IDs back into refs.
         items_with_ids: list[ItemRef] = []
-        for orig, (name, item_type, profession, props_builder) in zip(
-            refs.items, _ITEM_SEEDS
+        for _orig, (name, item_type, profession, props_builder) in zip(
+            refs.items, _ITEM_SEEDS, strict=False
         ):
             props = (
                 props_builder(name)
@@ -597,7 +596,7 @@ class CoreSeeder:
 
         # 2) Quests inserts.
         quests_with_ids: list[QuestRef] = []
-        for orig, qs in zip(refs.quests, _QUEST_SEEDS):
+        for _orig, qs in zip(refs.quests, _QUEST_SEEDS, strict=False):
             cur = db.execute(
                 """
                 INSERT INTO quests (

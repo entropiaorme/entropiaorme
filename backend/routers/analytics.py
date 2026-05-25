@@ -3,10 +3,10 @@
 Returns shapes matching the frontend analytics types.
 """
 
-from collections import defaultdict
 import time
 import uuid
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -33,7 +33,7 @@ def _period_epoch(period: str | None) -> float | None:
 
 
 def _epoch_to_iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _where(col: str, epoch_start: float | None, epoch_end: float | None):
@@ -979,7 +979,7 @@ def create_inventory_item(item: InventoryItemCreate):
     """Create a new inventory item."""
     svc = get_services()
     item_id = str(uuid.uuid4())
-    acquired_at = item.acquired_at or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    acquired_at = item.acquired_at or datetime.now(UTC).strftime("%Y-%m-%d")
     svc.app_db.conn.execute(
         "INSERT INTO inventory_items (id, name, tt_value, markup_paid, notes, acquired_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1070,7 +1070,7 @@ def sell_inventory_item(item_id: str, payload: InventoryItemSell):
 
     cost_basis = row["tt_value"] + row["markup_paid"]
     delta = payload.sale_price - cost_basis
-    sold_at = payload.sold_at or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sold_at = payload.sold_at or datetime.now(UTC).strftime("%Y-%m-%d")
     sold_item = _inventory_row_to_dict(row)
 
     ledger_entry: dict | None = None

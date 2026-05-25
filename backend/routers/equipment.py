@@ -116,8 +116,6 @@ def _library_row_to_equipment(row) -> dict:
     if item_type == "weapon":
         weapon_e = props["weapon_entity"]
         amp_e = props.get("amp_entity")
-        scope_e = props.get("scope_entity")
-        absorber_e = props.get("absorber_entity")
         damage_enhancers = max(0, int(props.get("damage_enhancers", 0) or 0))
         cost_result = cost_per_shot_from_props(props)
         damage_profile = get_weapon_damage_profile(

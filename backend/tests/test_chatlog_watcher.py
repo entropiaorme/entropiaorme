@@ -12,11 +12,11 @@ import pytest
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
-    EVENT_LOOT_GROUP,
     EVENT_COMBAT,
-    EVENT_SKILL_GAIN,
     EVENT_ENHANCER_BREAK,
+    EVENT_LOOT_GROUP,
     EVENT_MISSION_RECEIVED,
+    EVENT_SKILL_GAIN,
 )
 from backend.services.chatlog_watcher import ChatlogWatcher
 

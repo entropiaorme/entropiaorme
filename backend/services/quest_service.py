@@ -5,7 +5,7 @@ import re
 import time
 import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 
 from backend.core.event_bus import EventBus
@@ -278,7 +278,7 @@ class QuestService:
                 )
             else:
                 ledger_id = str(uuid.uuid4())
-                date_str = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+                date_str = datetime.fromtimestamp(now, tz=UTC).isoformat()
                 self._conn.execute(
                     "INSERT INTO ledger_entries (id, date, type, description, amount, tag) VALUES (?, ?, ?, ?, ?, ?)",
                     (
@@ -521,9 +521,7 @@ class QuestService:
                 (*updates.values(), playlist_id),
             )
 
-        if "items" in data:
-            self._set_playlist_items(playlist_id, self._normalize_playlist_items(data))
-        elif "quest_ids" in data:
+        if "items" in data or "quest_ids" in data:
             self._set_playlist_items(playlist_id, self._normalize_playlist_items(data))
 
         self._conn.commit()
@@ -968,7 +966,7 @@ class QuestService:
             # ledger doesn't double-count.
             if skill_gains:
                 result = {"suppress_loot_index": None, "suppress_skill_index": 0}
-                suppressed_desc = f"skill reward suppressed"
+                suppressed_desc = "skill reward suppressed"
         elif reward_ped is not None and loot_items:
             if reward_ped > 0:
                 best_idx = None
@@ -1188,7 +1186,7 @@ class QuestService:
             return row.get(key)
         if hasattr(row, "keys"):
             try:
-                if key in row.keys():
+                if key in row:
                     return row[key]
             except Exception:
                 pass
@@ -1208,7 +1206,7 @@ class QuestService:
         if last is not None and cd_hours is not None and cd_hours > 0:
             expires_ts = last + cd_hours * 3600
             d["cooldown_expires_at"] = datetime.fromtimestamp(
-                expires_ts, tz=timezone.utc
+                expires_ts, tz=UTC
             ).isoformat()
         else:
             d["cooldown_expires_at"] = None

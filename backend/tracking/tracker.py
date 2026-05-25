@@ -16,18 +16,18 @@ import sqlite3
 import sys
 import time as _time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
+    EVENT_ACTIVE_HEAL_TOOL_CHANGED,
+    EVENT_ACTIVE_TOOL_CHANGED,
     EVENT_COMBAT,
     EVENT_ENHANCER_BREAK,
     EVENT_GLOBAL,
     EVENT_LOOT_GROUP,
-    EVENT_ACTIVE_TOOL_CHANGED,
-    EVENT_ACTIVE_HEAL_TOOL_CHANGED,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
 )
@@ -78,7 +78,7 @@ class _DamageEnhancerState:
     _cached_cost_ped: float | None = field(default=None, init=False, repr=False)
 
     @classmethod
-    def from_props(cls, tool_name: str, props: dict) -> "_DamageEnhancerState":
+    def from_props(cls, tool_name: str, props: dict) -> _DamageEnhancerState:
         configured = max(0, int(props.get("damage_enhancers", 0) or 0))
         return cls(tool_name=tool_name, props=props, stacks=[100] * configured)
 
@@ -392,7 +392,7 @@ class HuntTracker:
         if not self._accumulator:
             raise RuntimeError("No accumulator available")
 
-        for key, stats in self._accumulator.tool_stats.items():
+        for stats in self._accumulator.tool_stats.values():
             if stats.tool_name != tool_name:
                 continue
             if abs(stats.cost_per_shot - cost_per_shot) < 1e-9:
@@ -906,7 +906,9 @@ class HuntTracker:
         elif event_type == "damage_received":
             self._accumulator.damage_taken += amount
 
-        elif event_type == "self_heal":
+        # Kept as nested ifs rather than one combined condition so each
+        # event-type branch dispatches on a single comparison.
+        elif event_type == "self_heal":  # noqa: SIM102
             # Deduplicate: tool activations produce multiple heal ticks in chat.log.
             # Use the tool's reload time as the dedup window.
             if timestamp:

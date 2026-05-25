@@ -21,6 +21,10 @@ ignore = [
     # argument defaults by design; bugbear's function-call-in-default check is
     # a false positive for it.
     "B008",
+    # `ruff format` owns line length: it wraps code to line-length but leaves
+    # strings, comments, and SQL literals intact rather than forcing breaks.
+    # Enforcing E501 on top would only nag about those un-splittable lines.
+    "E501",
 ]
 
 [tool.ruff.lint.isort]

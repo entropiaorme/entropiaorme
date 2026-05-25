@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 ENV_VAR = "ENTROPIAORME_DEMO_SCENARIO"
 
 
-def maybe_prime_tracker_from_env(tracker: "HuntTracker") -> bool:
+def maybe_prime_tracker_from_env(tracker: HuntTracker) -> bool:
     """If the env var is set, prime the tracker. Returns True if attempted."""
     scenario_name = os.environ.get(ENV_VAR, "").strip()
     if not scenario_name:
@@ -66,7 +66,7 @@ def maybe_prime_tracker_from_env(tracker: "HuntTracker") -> bool:
     return prime_tracker(tracker, scenario_name)
 
 
-def prime_tracker(tracker: "HuntTracker", scenario_name: str) -> bool:
+def prime_tracker(tracker: HuntTracker, scenario_name: str) -> bool:
     """Prime tracker in-memory state for ``scenario_name``."""
     scenario = next((s for s in LIVE_SCENARIOS if s.name == scenario_name), None)
     if scenario is None:
@@ -224,10 +224,10 @@ def _build_kill_stream(
         else:
             raw_loot.append(rng.uniform(1.40, 3.00))
     loot_scale = other_loot_total / sum(raw_loot)
-    other_loot_scaled = [round(l * loot_scale, 4) for l in raw_loot]
+    other_loot_scaled = [round(v * loot_scale, 4) for v in raw_loot]
 
     per_kill_loot = [0.0] * n
-    for idx, value in zip(other_indices, other_loot_scaled):
+    for idx, value in zip(other_indices, other_loot_scaled, strict=False):
         per_kill_loot[idx] = value
     per_kill_loot[_MID_HUNT_HIGH_MULT_IDX] = _MID_HUNT_COMPOSITION_TOTAL
     per_kill_loot[n - 1] = _MID_HUNT_LAST_KILL_LOOT
@@ -394,7 +394,9 @@ def _write_demo_session_to_db(
     pes_scale = target_pes_total / sum(raw_pes)
     pes_values = [round(v * pes_scale, 4) for v in raw_pes]
     skill_window = _MID_HUNT_SKILL_POOL[:n_gains]
-    for i, (skill_name, ped_value) in enumerate(zip(skill_window, pes_values)):
+    for i, (skill_name, ped_value) in enumerate(
+        zip(skill_window, pes_values, strict=False)
+    ):
         ts = started_at_epoch + (i + 0.5) * (elapsed_seconds / n_gains)
         amount = round(ped_value * rng.uniform(2.0, 2.4), 5)
         db.execute(
@@ -425,7 +427,7 @@ def _write_demo_session_to_db(
     db.commit()
 
 
-def _prime_mid_hunt(tracker: "HuntTracker", payload: dict) -> None:
+def _prime_mid_hunt(tracker: HuntTracker, payload: dict) -> None:
     """Mid-hunt scenario: synthesise a fully populated active session.
 
     Builds an in-memory ``TrackingSession`` with 100 kills hitting the

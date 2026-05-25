@@ -157,7 +157,7 @@ def test_scope_markup():
     result = cost_per_shot(weapon, scope=scope, scope_markup=1.3)
 
     scope_line = next(
-        l for l in result["costBreakdown"] if l["component"] == "Scope decay"
+        line for line in result["costBreakdown"] if line["component"] == "Scope decay"
     )
     assert scope_line["costPec"] == 0.5
     assert scope_line["markupMultiplier"] == 1.3
@@ -186,10 +186,10 @@ def test_ammo_always_at_tt():
     result = cost_per_shot(weapon, amp=amp)
 
     ammo_weapon = next(
-        l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)"
+        line for line in result["costBreakdown"] if line["component"] == "Ammo (weapon)"
     )
     ammo_amp = next(
-        l for l in result["costBreakdown"] if l["component"] == "Ammo (amp)"
+        line for line in result["costBreakdown"] if line["component"] == "Ammo (amp)"
     )
 
     assert ammo_weapon["markupMultiplier"] == 1.0
@@ -236,7 +236,7 @@ def test_full_setup_all_markups():
 
     # Ammo always at TT (1.0 multiplier)
     ammo_weapon = next(
-        l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)"
+        line for line in result["costBreakdown"] if line["component"] == "Ammo (weapon)"
     )
     assert ammo_weapon["markupMultiplier"] == 1.0
 

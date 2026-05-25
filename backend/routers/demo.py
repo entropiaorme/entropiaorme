@@ -102,8 +102,8 @@ def _ensure_svc():
             return _state["svc"]
 
         try:
-            from backend.tracking.tracker import HuntTracker
             from backend.scripts.demo_seed.live_injection import prime_tracker
+            from backend.tracking.tracker import HuntTracker
         except ImportError as exc:
             raise HTTPException(
                 status_code=503,
@@ -111,7 +111,7 @@ def _ensure_svc():
                     "Demo tracker priming not available in this build. "
                     f"Underlying error: {exc}"
                 ),
-            )
+            ) from exc
 
         tracker = HuntTracker(event_bus=EventBus(), db_conn=conn)
         primed = prime_tracker(tracker, "mid_hunt")

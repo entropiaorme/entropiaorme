@@ -346,7 +346,7 @@ class EquipmentSeeder:
         return violations
 
 
-SEEDER: "EquipmentSeeder" = EquipmentSeeder()
+SEEDER: EquipmentSeeder = EquipmentSeeder()
 
 
 # Self-test entry point — runs core + equipment seeders against a temp dir.

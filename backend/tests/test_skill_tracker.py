@@ -1,7 +1,7 @@
 """Tests for skill gain tracking during sessions."""
 
-import tempfile
 import os
+import tempfile
 from datetime import datetime
 
 from backend.core.event_bus import EventBus

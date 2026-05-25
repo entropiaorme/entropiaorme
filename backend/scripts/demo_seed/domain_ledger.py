@@ -12,7 +12,7 @@ import logging
 import random
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.scripts.demo_seed.contract import CanonicalRefs
@@ -36,7 +36,7 @@ _MARKUP_TAGS = ("item_sale", "quest_reward", "inventory_sale", "markup", "other"
 
 
 def _iso_date(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).date().isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).date().isoformat()
 
 
 # Hand-curated entry shapes — each is (offset_days_back, type, description, amount, tag).
@@ -206,7 +206,7 @@ class LedgerSeeder:
         return violations
 
 
-SEEDER: "LedgerSeeder" = LedgerSeeder()
+SEEDER: LedgerSeeder = LedgerSeeder()
 
 
 # Self-test: run core + this seeder against a temp dir and print the report.

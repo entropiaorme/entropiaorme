@@ -1,7 +1,10 @@
 """Tests for quest service: CRUD, cooldowns, playlists, completion."""
 
-import pytest
+from datetime import UTC
 from pathlib import Path
+
+import pytest
+
 from backend.db.app_database import AppDatabase
 from backend.services.quest_service import QuestService
 
@@ -353,10 +356,10 @@ class TestCooldown:
         q2 = quest_service.get_quest(q["id"])
         assert q2["cooldown_expires_at"] is not None
         # Expires ~24h from now
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         expires = datetime.fromisoformat(q2["cooldown_expires_at"])
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         diff_hours = (expires - now).total_seconds() / 3600
         assert 23.9 < diff_hours < 24.1
 
@@ -836,7 +839,7 @@ class TestSessionQuestCompletions:
 
     def test_duplicate_completion_ignored(self, svc_with_events):
         svc, bus = svc_with_events
-        q = svc.create_quest({"name": "Repeatable", "reward_ped": 1.0})
+        svc.create_quest({"name": "Repeatable", "reward_ped": 1.0})
         bus.publish("session_started", {"session_id": "sess-abc"})
 
         # Complete same quest twice in same session

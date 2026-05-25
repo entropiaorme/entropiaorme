@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from backend.services.scan_presets import skill_region
 from backend.services.skill_scan_core import PAGE_COUNT, SkillScanCore
@@ -105,13 +106,12 @@ class SkillScanManual:
         region = skill_region()
         if region is None:
             return {"error": "Entropia Universe window not found: start the game first"}
-        if page_count is not None:
-            if (
-                not isinstance(page_count, int)
-                or page_count < 1
-                or page_count > MAX_PAGE_COUNT
-            ):
-                return {"error": f"page_count must be between 1 and {MAX_PAGE_COUNT}"}
+        if page_count is not None and (
+            not isinstance(page_count, int)
+            or page_count < 1
+            or page_count > MAX_PAGE_COUNT
+        ):
+            return {"error": f"page_count must be between 1 and {MAX_PAGE_COUNT}"}
         with self._lock:
             if self._processing:
                 return {"error": "Scan currently processing: wait for it to finish"}

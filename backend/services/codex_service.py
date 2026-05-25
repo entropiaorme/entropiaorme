@@ -8,8 +8,6 @@ player progress from app_db, and handles claim recording with ledger
 import logging
 import time
 
-from backend.db.app_database import AppDatabase
-from backend.services.game_data_store import GameDataStore
 from backend.data.codex_categories import (
     CODEX_SKILL_CATEGORIES,
     build_rank_breakdown,
@@ -18,6 +16,8 @@ from backend.data.codex_categories import (
     is_cat4_rank,
 )
 from backend.data.tt_value_curve import levels_for_tt_value
+from backend.db.app_database import AppDatabase
+from backend.services.game_data_store import GameDataStore
 
 log = logging.getLogger(__name__)
 

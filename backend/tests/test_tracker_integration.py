@@ -24,11 +24,10 @@ from backend.routers.tracking import (
     _bulk_deactivate_loot_item_impl,
     _rename_session_mob_impl,
     _restore_session_mob_impl,
-    _ts_to_iso,
     get_session_impl,
 )
-from backend.tracking.tracker import HuntTracker
 from backend.tracking.schema import init_tracking_tables
+from backend.tracking.tracker import HuntTracker
 
 
 @pytest.fixture
@@ -62,7 +61,7 @@ class TestFullPipeline:
     def test_combat_accumulates_stats(self, pipeline):
         """Combat without loot → no kills, stats in dangling cost."""
         bus, tracker, db = pipeline
-        session = tracker.start_session()
+        tracker.start_session()
 
         now = datetime.now(tz=None)
         bus.publish(
@@ -968,7 +967,7 @@ class TestCrashRecovery:
             == 0
         )
 
-        session = tracker.start_session()
+        tracker.start_session()
         assert tracker.is_tracking
         tracker.stop_session()
         assert not tracker.is_tracking

@@ -57,7 +57,7 @@ def claim_rank(req: ClaimRequest):
             req.species_name, req.rank, req.skill_name
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     # If tracking is active, suppress the upcoming skill gain from deduplication
     if svc.tracker.is_tracking:
@@ -73,7 +73,7 @@ def calibrate(req: CalibrateRequest):
     try:
         return svc.codex_service.calibrate(req.species_name, req.rank)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/recommend")
@@ -102,7 +102,7 @@ def meta_claim(req: MetaClaimRequest):
     try:
         result = svc.codex_service.meta_claim(req.attribute_name)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
     if svc.tracker.is_tracking:
         svc.skill_tracker.suppress_next(req.attribute_name)

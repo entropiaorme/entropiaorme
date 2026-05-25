@@ -2,6 +2,12 @@
 
 import pytest
 
+from backend.data.codex_categories import get_codex_category
+from backend.data.tt_value_curve import (
+    max_tt_curve_level,
+    tt_value_at,
+    tt_value_of_gain,
+)
 from backend.services.character_calc import (
     calculate_hp,
     codex_next_reward,
@@ -13,13 +19,6 @@ from backend.services.character_calc import (
     profession_skill_optimizer,
     skill_rank,
 )
-from backend.data.tt_value_curve import (
-    max_tt_curve_level,
-    tt_value_at,
-    tt_value_of_gain,
-)
-from backend.data.codex_categories import get_codex_category
-
 
 # ── TT Value Curve ─────────────────────────────────────────────────────────────
 

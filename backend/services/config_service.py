@@ -4,9 +4,10 @@ Settings stored as JSON in data/settings.json.
 Atomic save: write to .tmp → os.replace() → keep .bak
 """
 
+import contextlib
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,7 @@ class AppConfig:
     # Hotbar — maps slot keys "1"-"9","0" to equipment_library IDs
     # None means the slot is empty
     hotbar: dict[str, int | None] = field(
-        default_factory=lambda: {slot: None for slot in HOTBAR_SLOTS}
+        default_factory=lambda: dict.fromkeys(HOTBAR_SLOTS)
     )
 
     # Trifecta-attribution tool selection presets (small weapon, big weapon, heal tool)
@@ -246,10 +247,8 @@ class ConfigService:
         tmp_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
         if self.config_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 os.replace(str(self.config_path), str(bak_path))
-            except OSError:
-                pass
         os.replace(str(tmp_path), str(self.config_path))
 
     def get(self) -> AppConfig:

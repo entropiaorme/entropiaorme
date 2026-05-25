@@ -1,7 +1,8 @@
 """FastAPI backend for EntropiaOrme — serves REST API to Svelte frontend."""
 
-import sys
+import contextlib
 import os
+import sys
 from pathlib import Path
 
 # Load .env.local at startup so direct invocations (python -m backend.main,
@@ -25,21 +26,20 @@ if sys.platform == "win32":
         ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS
     )
 elif sys.platform == "linux":
-    # Equivalent: nice the process down so it doesn't compete with the game
-    try:
+    # Equivalent: nice the process down so it doesn't compete with the game.
+    # os.nice may fail without the right permissions; that is non-critical.
+    with contextlib.suppress(OSError):
         os.nice(5)
-    except OSError:
-        pass  # May fail without permissions — non-critical
 
 import logging
 
 log = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -109,44 +109,43 @@ if _per_checkout_hostname:
 
 ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 
-from backend.dependencies import Services, set_services
-from backend.db.app_database import AppDatabase
-from backend.services.game_data_store import GameDataStore
-from backend.services.mob_lookup_service import MobLookupService
-from backend.services.config_service import ConfigService
 from backend.core.event_bus import EventBus
-from backend.tracking.tracker import HuntTracker
+from backend.db.app_database import AppDatabase
+from backend.dependencies import Services, set_services
+from backend.routers import (
+    analytics,
+    character,
+    codex,
+    demo,
+    equipment,
+    health,
+    quests,
+    scan_manual,
+    settings,
+    tracking,
+)
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.services.codex_service import CodexService
+from backend.services.config_service import ConfigService, active_trifecta_preset
 from backend.services.cost_engine import (
     cost_per_shot_from_props,
     heal_cost_per_use,
     heal_reload_seconds,
 )
-from backend.services.config_service import active_trifecta_preset
-from backend.services.trifecta_service import describe_trifecta
-from backend.services.skill_tracker import SkillTracker
-from backend.services.skill_scan_manual import SkillScanManual
+from backend.services.game_data_store import GameDataStore
+from backend.services.hotbar_listener import HotbarListener
+from backend.services.mob_lookup_service import MobLookupService
+from backend.services.quest_service import QuestService
+from backend.services.repair_ocr import RepairOcrService
 from backend.services.scan_completion import (
     hydrate_skill_scan_state,
     make_skill_scan_completion,
 )
-from backend.services.codex_service import CodexService
-from backend.services.quest_service import QuestService
-from backend.services.hotbar_listener import HotbarListener
-from backend.services.repair_ocr import RepairOcrService
+from backend.services.skill_scan_manual import SkillScanManual
+from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
-from backend.routers import (
-    health,
-    character,
-    equipment,
-    settings,
-    tracking,
-    analytics,
-    codex,
-    quests,
-)
-from backend.routers import scan_manual
-from backend.routers import demo
+from backend.services.trifecta_service import describe_trifecta
+from backend.tracking.tracker import HuntTracker
 
 
 @asynccontextmanager

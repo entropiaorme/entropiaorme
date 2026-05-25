@@ -136,7 +136,7 @@ def _build_rows_for(
     fractions.append(1.0)
 
     rows: list[tuple[str, float, str, float]] = [(name, anchor_level, "scan", anchor_t)]
-    for ts, frac in zip(progress_ts, fractions):
+    for ts, frac in zip(progress_ts, fractions, strict=False):
         level = round(anchor_level + gain * frac, 2)
         # Weighted: chatlog 80%, codex 20%, mirroring the typical ratio
         # while keeping codex-driven jumps visible in the timeline.
@@ -227,7 +227,7 @@ class SkillsSeeder:
         return violations
 
 
-SEEDER: "SkillsSeeder" = SkillsSeeder()
+SEEDER: SkillsSeeder = SkillsSeeder()
 
 
 # Self-test entry point — runs core + this seeder against a temp dir.

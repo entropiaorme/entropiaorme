@@ -5,7 +5,7 @@ Returns shapes matching the frontend TrackingSession and SessionDetail types.
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -82,7 +82,7 @@ def _ts_to_iso(ts: float | None) -> str | None:
     """Convert a Unix timestamp (SQLite REAL) to an ISO 8601 string."""
     if ts is None:
         return None
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat()
 
 
 def _notable_event_category(event_type: str) -> str:
@@ -313,7 +313,7 @@ def tracking_status_impl(svc):
     cumulative_net_history: list[float] = []
     if kills:
         running = 0.0
-        for k, w in zip(kills, per_kill_weapon):
+        for k, w in zip(kills, per_kill_weapon, strict=True):
             heal_share = (heal_cost * (w / total_weapon)) if total_weapon > 0 else 0.0
             running += k.loot_total_ped - w - k.enhancer_cost - heal_share
             cumulative_net_history.append(round(running, 2))
@@ -589,7 +589,7 @@ def tracking_live_impl(svc):
                 }
             )
 
-    for i, r in enumerate(notable):
+    for r in notable:
         event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
         recent_events_list.append(
             _notable_event_payload(event_type, mob_or_item, value_ped, timestamp)

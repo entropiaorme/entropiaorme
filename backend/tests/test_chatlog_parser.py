@@ -1,7 +1,8 @@
 """Tests for the chat.log parser: every EventType must have at least one case."""
 
 import pytest
-from backend.services.chatlog_parser import parse_line, parse_file, EventType
+
+from backend.services.chatlog_parser import EventType, parse_file, parse_line
 
 
 @pytest.mark.parametrize(

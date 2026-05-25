@@ -1,26 +1,26 @@
 """Character stats endpoints — computed from calibrated skill levels + the bundled game-data catalogue."""
 
-from collections import defaultdict
-from datetime import datetime, timezone
 import time
+from collections import defaultdict
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
+from backend.data.codex_categories import get_codex_category
+from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
 from backend.dependencies import get_services
 from backend.services.character_calc import (
     ATTRIBUTE_SKILLS,
     all_profession_levels,
     codex_next_reward,
     codex_tier_progress,
-    hp_skill_optimizer,
     effective_points,
+    hp_skill_optimizer,
     profession_level,
     profession_path_optimizer,
     profession_skill_optimizer,
     skill_rank,
 )
-from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
-from backend.data.codex_categories import get_codex_category
 from backend.services.session_summary import load_prospect_sessions
 
 router = APIRouter(prefix="/character", tags=["character"])
@@ -489,7 +489,7 @@ def get_calibration():
     return {
         "calibrated": True,
         "lastCalibration": (
-            datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat()
+            datetime.fromtimestamp(last_ts, tz=UTC).isoformat()
             if last_ts is not None
             else None
         ),

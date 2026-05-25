@@ -10,12 +10,12 @@ the math layer so the public functions read as straight formulas.
 import bisect
 from collections.abc import Iterator
 
+from backend.data.codex_categories import REWARD_DIVISORS, get_codex_category
 from backend.data.tt_value_curve import (
     levels_for_tt_value,
     max_tt_curve_level,
     tt_value_at,
 )
-from backend.data.codex_categories import get_codex_category, REWARD_DIVISORS
 
 # Attribute skills receive a ×20 multiplier in profession calculations
 ATTRIBUTE_SKILLS = {

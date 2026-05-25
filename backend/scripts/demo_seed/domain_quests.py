@@ -322,7 +322,7 @@ class QuestsSeeder:
         chosen_for_links = rng.sample(session_records, target_links)
         link_count = 0
         playlist_ids = [p.db_id for p in refs.playlists]
-        for idx, (sid, _sstart, _send) in enumerate(chosen_for_links):
+        for sid, _sstart, _send in chosen_for_links:
             roll = rng.random()
             if roll < 0.15:
                 kind = "declined"

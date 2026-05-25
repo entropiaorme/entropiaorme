@@ -6,20 +6,20 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from backend.db.app_database import AppDatabase
-    from backend.services.game_data_store import GameDataStore
-    from backend.services.mob_lookup_service import MobLookupService
-    from backend.services.config_service import ConfigService
     from backend.core.event_bus import EventBus
-    from backend.tracking.tracker import HuntTracker
+    from backend.db.app_database import AppDatabase
     from backend.services.chatlog_watcher import ChatlogWatcher
-    from backend.services.skill_tracker import SkillTracker
-    from backend.services.skill_scan_manual import SkillScanManual
     from backend.services.codex_service import CodexService
-    from backend.services.quest_service import QuestService
+    from backend.services.config_service import ConfigService
+    from backend.services.game_data_store import GameDataStore
     from backend.services.hotbar_listener import HotbarListener
+    from backend.services.mob_lookup_service import MobLookupService
+    from backend.services.quest_service import QuestService
     from backend.services.repair_ocr import RepairOcrService
+    from backend.services.skill_scan_manual import SkillScanManual
+    from backend.services.skill_tracker import SkillTracker
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
+    from backend.tracking.tracker import HuntTracker
 
 
 @dataclass

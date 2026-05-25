@@ -13,9 +13,9 @@ from datetime import datetime
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
-    EVENT_SKILL_GAIN,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
+    EVENT_SKILL_GAIN,
 )
 from backend.data.tt_value_curve import tt_value_of_gain
 from backend.services.character_calc import ATTRIBUTE_SKILLS

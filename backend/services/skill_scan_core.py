@@ -26,6 +26,7 @@ class SkillScanCore:
 
     def __init__(self, config_service: Any, data_dir: Path):
         from backend.services.config_service import ConfigService
+
         self._config: ConfigService = config_service
         self._data_dir = data_dir
         self._capturer: ScreenCapturer | None = None
@@ -35,7 +36,9 @@ class SkillScanCore:
         """Whether the local OCR engine can be loaded right now."""
         return local_ocr.is_engine_available()
 
-    def capture_region(self, tl: list[int] | None, br: list[int] | None) -> bytes | None:
+    def capture_region(
+        self, tl: list[int] | None, br: list[int] | None
+    ) -> bytes | None:
         """Capture the skill panel region as PNG bytes via the shared capturer.
 
         Adapts the ``(tl, br)`` corner pair to the capturer's ``x/y/w/h``
@@ -59,7 +62,10 @@ class SkillScanCore:
         except Exception:
             log.exception(
                 "Skill scan: capture failed for region (%d, %d, %d, %d)",
-                left, top, width, height,
+                left,
+                top,
+                width,
+                height,
             )
             return None
 

@@ -27,40 +27,44 @@ from typing import Protocol, runtime_checkable
 @dataclass(frozen=True)
 class CharacterProfile:
     player_name: str
-    chatlog_path: str            # plausible Windows path; file may or may not exist
-    theme: str                   # "dark" or "light"
+    chatlog_path: str  # plausible Windows path; file may or may not exist
+    theme: str  # "dark" or "light"
 
 
 @dataclass(frozen=True)
 class TimelineAnchor:
-    demo_now: float              # epoch seconds; "now" for the synthetic career
-    history_window_days: int     # how far back synthetic history extends
+    demo_now: float  # epoch seconds; "now" for the synthetic career
+    history_window_days: int  # how far back synthetic history extends
 
 
 @dataclass(frozen=True)
 class MobRef:
-    species: str                 # canonical species name (real EU lore name; public game data)
+    species: str  # canonical species name (real EU lore name; public game data)
     maturities: tuple[str, ...]  # ordered list of maturity tiers used in this career
 
 
 @dataclass(frozen=True)
 class ItemRef:
-    library_id: int              # row ID assigned by core seeder when it INSERTs into equipment_library
+    library_id: (
+        int  # row ID assigned by core seeder when it INSERTs into equipment_library
+    )
     name: str
-    item_type: str               # "weapon" | "armour" | "healing" | "consumable" | "amp" | "scope" | "absorber"
-    catalog_id: str | None       # game-data catalog reference, when resolved
-    profession: str | None       # for weapons: the profession this serves (Laser, Blaster, Melee, etc.)
+    item_type: str  # "weapon" | "armour" | "healing" | "consumable" | "amp" | "scope" | "absorber"
+    catalog_id: str | None  # game-data catalog reference, when resolved
+    profession: (
+        str | None
+    )  # for weapons: the profession this serves (Laser, Blaster, Melee, etc.)
 
 
 @dataclass(frozen=True)
 class QuestRef:
-    db_id: int                   # row ID assigned by core seeder when it INSERTs into quests
+    db_id: int  # row ID assigned by core seeder when it INSERTs into quests
     name: str
     category: str
     planet: str
-    mob_names: tuple[str, ...]   # references into MobRef.species
+    mob_names: tuple[str, ...]  # references into MobRef.species
     is_chain: bool
-    chain_position: int | None   # 1-indexed within chain
+    chain_position: int | None  # 1-indexed within chain
     chain_total: int | None
     reward_is_skill: bool
     reward_ped: float
@@ -77,7 +81,7 @@ class PlaylistRef:
 
 @dataclass(frozen=True)
 class TrifectaPresetRef:
-    preset_id: str               # the same id stored in settings.json
+    preset_id: str  # the same id stored in settings.json
     name: str
     small_weapon_library_id: int | None
     big_weapon_library_id: int | None
@@ -86,7 +90,7 @@ class TrifectaPresetRef:
 
 @dataclass(frozen=True)
 class HotbarBinding:
-    slot: str                    # "1".."9", "0"
+    slot: str  # "1".."9", "0"
     library_id: int
 
 
@@ -97,9 +101,9 @@ class LiveInjectionScenario:
     Used by ``live_injection.py`` (dev-gated) to pre-populate tracker state.
     """
 
-    name: str                    # "mid_hunt" | "overlay_menu_open" | "skill_scan_in_progress"
+    name: str  # "mid_hunt" | "overlay_menu_open" | "skill_scan_in_progress"
     description: str
-    payload: dict                # opaque to contract; consumer schema defined by live_injection.py
+    payload: dict  # opaque to contract; consumer schema defined by live_injection.py
 
 
 @dataclass(frozen=True)
@@ -114,10 +118,14 @@ class CanonicalRefs:
 
     # Reference data (no DB write of these as standalone tables; consumed by domain seeders)
     mobs: tuple[MobRef, ...]
-    skill_names: tuple[str, ...]                 # canonical subset of game-data skills used by this career
-    skill_categories: dict[str, tuple[str, ...]] # category -> skill_names belonging to it
-    attribute_names: tuple[str, ...]             # the 6 EU attributes
-    codex_species: tuple[str, ...]               # subset of MobRef.species exposed in codex (~20-30)
+    skill_names: tuple[
+        str, ...
+    ]  # canonical subset of game-data skills used by this career
+    skill_categories: dict[
+        str, tuple[str, ...]
+    ]  # category -> skill_names belonging to it
+    attribute_names: tuple[str, ...]  # the 6 EU attributes
+    codex_species: tuple[str, ...]  # subset of MobRef.species exposed in codex (~20-30)
 
     # Reference data the core seeder also writes to DB (so per-domain seeders use the IDs)
     items: tuple[ItemRef, ...]
@@ -150,11 +158,11 @@ class Seeder(Protocol):
     name: str
     depends_on: tuple[str, ...]
 
-    def seed(self, refs: CanonicalRefs, db: sqlite3.Connection, data_dir: Path) -> None:
-        ...
+    def seed(
+        self, refs: CanonicalRefs, db: sqlite3.Connection, data_dir: Path
+    ) -> None: ...
 
-    def validate_synthetic_data(self, refs: CanonicalRefs) -> list[str]:
-        ...
+    def validate_synthetic_data(self, refs: CanonicalRefs) -> list[str]: ...
 
 
 @dataclass
@@ -163,6 +171,10 @@ class SeedRunReport:
 
     data_dir: Path
     seeders_run: list[str] = field(default_factory=list)
-    rows_written: dict[str, int] = field(default_factory=dict)  # table -> row count delta
-    violations: list[str] = field(default_factory=list)         # synthetic-data violations (if any)
-    demo_now: float = 0.0                                       # the timeline anchor used
+    rows_written: dict[str, int] = field(
+        default_factory=dict
+    )  # table -> row count delta
+    violations: list[str] = field(
+        default_factory=list
+    )  # synthetic-data violations (if any)
+    demo_now: float = 0.0  # the timeline anchor used

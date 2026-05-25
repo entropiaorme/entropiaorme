@@ -102,7 +102,9 @@ class AppDatabase(BaseDatabase):
                     "via tracking_schema when Tracker first initialises"
                 )
             elif "duplicate column" in msg:
-                log.info("v30: kill_loot_items.deactivated_at already present, skipping")
+                log.info(
+                    "v30: kill_loot_items.deactivated_at already present, skipping"
+                )
             else:
                 raise
 
@@ -124,9 +126,7 @@ class AppDatabase(BaseDatabase):
           - "duplicate column name": idempotent re-run.
         """
         try:
-            self.conn.execute(
-                "ALTER TABLE kills ADD COLUMN original_mob_name TEXT"
-            )
+            self.conn.execute("ALTER TABLE kills ADD COLUMN original_mob_name TEXT")
             self.conn.commit()
             log.info("Migrated app DB to v31: added kills.original_mob_name")
         except sqlite3.OperationalError as exc:
@@ -179,8 +179,7 @@ class AppDatabase(BaseDatabase):
                 )
             elif "duplicate column" in msg:
                 log.info(
-                    "v32: tracking_sessions.mob_tracking_mode already present, "
-                    "skipping"
+                    "v32: tracking_sessions.mob_tracking_mode already present, skipping"
                 )
             else:
                 raise

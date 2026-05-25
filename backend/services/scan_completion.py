@@ -9,7 +9,7 @@ canonical source, so there is no separate profession-scan persistence.
 
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from backend.services.scan_drift import summarize_level_drift
 

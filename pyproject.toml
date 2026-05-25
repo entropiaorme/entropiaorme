@@ -1,0 +1,45 @@
+# Tool configuration for the EntropiaOrme Python backend.
+#
+# Tool config only: runtime dependencies live in backend/requirements.txt (the
+# manifest the PyInstaller freeze consumes) and dev/test tooling in
+# backend/requirements-dev.txt. There is intentionally no [project] or
+# [build-system] table: the backend ships as a PyInstaller-frozen sidecar, not
+# an installable wheel, so adding packaging metadata would only risk confusing
+# that pipeline.
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["."]
+
+[tool.ruff.lint]
+# A curated, high-signal rule set: pycodestyle/pyflakes (E, F), import sorting
+# (I), pyupgrade (UP), bugbear (B), comprehensions (C4), and simplify (SIM).
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # FastAPI's dependency-injection idiom puts Depends()/Query()/Path() in
+    # argument defaults by design; bugbear's function-call-in-default check is
+    # a false positive for it.
+    "B008",
+    # `ruff format` owns line length: it wraps code to line-length but leaves
+    # strings, comments, and SQL literals intact rather than forcing breaks.
+    # Enforcing E501 on top would only nag about those un-splittable lines.
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py loads .env.local and sets process priority / UTF-8 mode before the
+# heavy module imports run, so its imports are deliberately not all at the top.
+"backend/main.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "fast: pure-logic, in-memory, sub-second tests (run on every PR)",
+    "standard: db / filesystem / in-process-stateful tests (run on every PR)",
+    "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
+]

@@ -38,6 +38,7 @@ def _absorber(absorption: float) -> dict:
 
 # ── Basic cases ──────────────────────────────────────────────────────────────
 
+
 def test_weapon_only_bp30():
     """BP-30: Decay 1.116, AmmoBurn 1072 → 1.116 + 10.72 = 11.836 PEC/shot."""
     weapon = _weapon(1.116, 1072, "Scott & Barlow BP-30 (L)")
@@ -60,8 +61,8 @@ def test_weapon_only_bp30():
 
 def test_weapon_with_amp():
     """Weapon + amp: sum both decays and ammo burns."""
-    weapon = _weapon(2.0, 200)   # 2.0 decay + 2.0 ammo PEC
-    amp = _amp(1.0, 100)          # 1.0 decay + 1.0 ammo PEC
+    weapon = _weapon(2.0, 200)  # 2.0 decay + 2.0 ammo PEC
+    amp = _amp(1.0, 100)  # 1.0 decay + 1.0 ammo PEC
 
     result = cost_per_shot(weapon, amp=amp)
 
@@ -71,16 +72,22 @@ def test_weapon_with_amp():
 
 
 def test_damage_enhancers_only_scale_weapon_portion():
-    weapon = _weapon(2.0, 200)   # 2.0 decay + 2.0 ammo PEC
-    amp = _amp(1.0, 100)          # 1.0 decay + 1.0 ammo PEC
+    weapon = _weapon(2.0, 200)  # 2.0 decay + 2.0 ammo PEC
+    amp = _amp(1.0, 100)  # 1.0 decay + 1.0 ammo PEC
 
     result = cost_per_shot(weapon, amp=amp, damage_enhancers=2)
 
     # Weapon portion x1.2, amp untouched
     assert result["totalCostPerUse"] == 6.8
-    weapon_decay = next(line for line in result["costBreakdown"] if line["component"] == "Weapon decay")
-    weapon_ammo = next(line for line in result["costBreakdown"] if line["component"] == "Ammo (weapon)")
-    amp_decay = next(line for line in result["costBreakdown"] if line["component"] == "Amp decay")
+    weapon_decay = next(
+        line for line in result["costBreakdown"] if line["component"] == "Weapon decay"
+    )
+    weapon_ammo = next(
+        line for line in result["costBreakdown"] if line["component"] == "Ammo (weapon)"
+    )
+    amp_decay = next(
+        line for line in result["costBreakdown"] if line["component"] == "Amp decay"
+    )
 
     assert weapon_decay["costPec"] == 2.4
     assert weapon_ammo["costPec"] == 2.4
@@ -149,7 +156,9 @@ def test_scope_markup():
 
     result = cost_per_shot(weapon, scope=scope, scope_markup=1.3)
 
-    scope_line = next(l for l in result["costBreakdown"] if l["component"] == "Scope decay")
+    scope_line = next(
+        l for l in result["costBreakdown"] if l["component"] == "Scope decay"
+    )
     assert scope_line["costPec"] == 0.5
     assert scope_line["markupMultiplier"] == 1.3
     assert scope_line["effectiveCostPec"] == 0.65
@@ -172,12 +181,16 @@ def test_limited_weapon_markup():
 def test_ammo_always_at_tt():
     """Ammo is always at TT: crafted ammo margin tracked via ledger."""
     weapon = _weapon(1.0, 100)  # 1.0 ammo PEC
-    amp = _amp(0.5, 50)         # 0.5 ammo PEC
+    amp = _amp(0.5, 50)  # 0.5 ammo PEC
 
     result = cost_per_shot(weapon, amp=amp)
 
-    ammo_weapon = next(l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)")
-    ammo_amp = next(l for l in result["costBreakdown"] if l["component"] == "Ammo (amp)")
+    ammo_weapon = next(
+        l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)"
+    )
+    ammo_amp = next(
+        l for l in result["costBreakdown"] if l["component"] == "Ammo (amp)"
+    )
 
     assert ammo_weapon["markupMultiplier"] == 1.0
     assert ammo_amp["markupMultiplier"] == 1.0
@@ -185,21 +198,30 @@ def test_ammo_always_at_tt():
 
 def test_full_setup_all_markups():
     """Full weapon setup with all components and markups."""
-    weapon = _weapon(2.0, 200)           # 2.0 decay, 2.0 ammo PEC
-    amp = _amp(1.0, 100)                 # 1.0 decay, 1.0 ammo PEC
-    scope = _scope(0.3)                  # 0.3 decay
-    absorber = _absorber(0.10)           # 10% absorption
+    weapon = _weapon(2.0, 200)  # 2.0 decay, 2.0 ammo PEC
+    amp = _amp(1.0, 100)  # 1.0 decay, 1.0 ammo PEC
+    scope = _scope(0.3)  # 0.3 decay
+    absorber = _absorber(0.10)  # 10% absorption
 
     result = cost_per_shot(
-        weapon, amp=amp, scope=scope, absorber=absorber,
-        weapon_markup=1.2, amp_markup=1.1,
-        scope_markup=1.3, absorber_markup=1.5,
+        weapon,
+        amp=amp,
+        scope=scope,
+        absorber=absorber,
+        weapon_markup=1.2,
+        amp_markup=1.1,
+        scope_markup=1.3,
+        absorber_markup=1.5,
     )
 
     components = [line["component"] for line in result["costBreakdown"]]
     assert components == [
-        "Absorber decay", "Weapon decay", "Amp decay", "Scope decay",
-        "Ammo (weapon)", "Ammo (amp)",
+        "Absorber decay",
+        "Weapon decay",
+        "Amp decay",
+        "Scope decay",
+        "Ammo (weapon)",
+        "Ammo (amp)",
     ]
 
     # Absorber: 2.0 * 0.10 = 0.2 PEC at 150% = 0.3
@@ -213,11 +235,14 @@ def test_full_setup_all_markups():
     assert abs(weapon_line["effectiveCostPec"] - 2.16) < 0.001
 
     # Ammo always at TT (1.0 multiplier)
-    ammo_weapon = next(l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)")
+    ammo_weapon = next(
+        l for l in result["costBreakdown"] if l["component"] == "Ammo (weapon)"
+    )
     assert ammo_weapon["markupMultiplier"] == 1.0
 
 
 # ── Limited detection ────────────────────────────────────────────────────────
+
 
 def test_is_limited_true():
     assert is_limited({"name": "ArMatrix LR-35 (L)"}) is True
@@ -228,6 +253,7 @@ def test_is_limited_false():
 
 
 # ── Healing tool ─────────────────────────────────────────────────────────────
+
 
 def test_heal_cost_per_use():
     """Medical tool: decay + ammo_burn / 100."""
@@ -258,6 +284,7 @@ def test_heal_range_returns_none_when_min_or_max_missing():
 
 # ── Damage range (max-skill simplified) ──────────────────────────────────────
 
+
 def test_damage_range_collapses_to_half_to_full():
     """At maxed skill the damage range is always [0.5 × total, total]."""
     assert damage_range_at_max_skill(40.0) == {"min": 20.0, "max": 40.0}
@@ -265,6 +292,7 @@ def test_damage_range_collapses_to_half_to_full():
 
 
 # ── Total damage ─────────────────────────────────────────────────────────────
+
 
 def test_weapon_total_damage_sums_damage_types():
     weapon = {
@@ -301,6 +329,7 @@ def test_weapon_total_damage_amp_under_cap_used_as_is():
 
 # ── Damage profile end-to-end ────────────────────────────────────────────────
 
+
 def test_get_weapon_damage_profile_composes_total_and_range():
     weapon = {"name": "X", "damage": {"impact": 30.0}}
     profile = get_weapon_damage_profile(weapon)
@@ -316,6 +345,7 @@ def test_get_weapon_damage_profile_returns_none_when_no_damage():
 
 
 # ── Heal reload (max-skill simplified) ───────────────────────────────────────
+
 
 def test_heal_reload_seconds_from_uses_per_minute():
     tool = {"uses_per_minute": 24}

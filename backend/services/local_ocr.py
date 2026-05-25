@@ -294,7 +294,7 @@ def slice_panel_cells(panel_bgr: np.ndarray, panel_key: str) -> list[CellCrop]:
                 else first
             )
             y_bot = y_top + cell["height"]
-            crop = panel_bgr[y_top:y_bot, cell["x_left"]:cell["x_right"]]
+            crop = panel_bgr[y_top:y_bot, cell["x_left"] : cell["x_right"]]
             out.append(CellCrop(row=r, cell=cell_name, image=crop))
     return out
 
@@ -347,7 +347,9 @@ def parse_bar_fill(crop_bgr: np.ndarray) -> float:
     return fill
 
 
-def fuzzy_resolve(ocr_text: str, vocab: list[str]) -> tuple[str | None, float, list[tuple[str, float]]]:
+def fuzzy_resolve(
+    ocr_text: str, vocab: list[str]
+) -> tuple[str | None, float, list[tuple[str, float]]]:
     """Resolve an OCR name to its canonical vocab entry.
 
     Tries (in order):
@@ -409,7 +411,10 @@ def read_skill_panel(panel_bgr: np.ndarray) -> list[dict[str, Any]]:
 
     rows: dict[int, dict[str, Any]] = {}
     for crop in crops:
-        row = rows.setdefault(crop.row, {"name": None, "level": None, "_int_level": None, "_bar_fill": 0.0})
+        row = rows.setdefault(
+            crop.row,
+            {"name": None, "level": None, "_int_level": None, "_bar_fill": 0.0},
+        )
         if crop.cell == "bar":
             row["_bar_fill"] = parse_bar_fill(crop.image)
             continue

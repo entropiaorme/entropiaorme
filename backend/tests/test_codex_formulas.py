@@ -33,17 +33,28 @@ def test_multipliers_endpoints():
 # ── Category cycling ────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("rank,expected", [
-    (1, "cat1"), (2, "cat1"),
-    (3, "cat2"), (4, "cat2"),
-    (5, "cat3"),
-    (6, "cat1"), (7, "cat1"),
-    (8, "cat2"), (9, "cat2"),
-    (10, "cat3"),
-    (11, "cat1"), (16, "cat1"),
-    (13, "cat2"), (14, "cat2"),
-    (15, "cat3"), (20, "cat3"), (25, "cat3"),
-])
+@pytest.mark.parametrize(
+    "rank,expected",
+    [
+        (1, "cat1"),
+        (2, "cat1"),
+        (3, "cat2"),
+        (4, "cat2"),
+        (5, "cat3"),
+        (6, "cat1"),
+        (7, "cat1"),
+        (8, "cat2"),
+        (9, "cat2"),
+        (10, "cat3"),
+        (11, "cat1"),
+        (16, "cat1"),
+        (13, "cat2"),
+        (14, "cat2"),
+        (15, "cat3"),
+        (20, "cat3"),
+        (25, "cat3"),
+    ],
+)
 def test_category_cycling(rank, expected):
     assert get_category_for_rank(rank) == expected
 

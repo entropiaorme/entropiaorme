@@ -35,8 +35,8 @@ class SkillTracker:
         self._session_id: str | None = None
 
         # In-memory session totals
-        self._session_skills: dict[str, float] = {}     # name → total amount
-        self._session_skill_tt: dict[str, float] = {}   # name → total TT PED
+        self._session_skills: dict[str, float] = {}  # name → total amount
+        self._session_skill_tt: dict[str, float] = {}  # name → total TT PED
 
         # Codex claim suppression: {skill_name: expiry_epoch}
         self._suppressed_claims: dict[str, float] = {}
@@ -52,7 +52,10 @@ class SkillTracker:
         self._session_skill_tt.clear()
         # A suppression armed in a prior session must not carry into this one.
         self._suppressed_claims.clear()
-        log.info("Skill tracking started for session %s", self._session_id[:8] if self._session_id else "?")
+        log.info(
+            "Skill tracking started for session %s",
+            self._session_id[:8] if self._session_id else "?",
+        )
 
     def _on_session_stop(self, data: dict) -> None:
         if self._session_skills:
@@ -60,7 +63,9 @@ class SkillTracker:
             total_tt = sum(self._session_skill_tt.values())
             log.info(
                 "Skill tracking stopped: %d skills, %.4f exp, %.4f PED TT",
-                len(self._session_skills), total_exp, total_tt,
+                len(self._session_skills),
+                total_exp,
+                total_tt,
             )
         self._active = False
         self._session_id = None
@@ -75,7 +80,11 @@ class SkillTracker:
         skill_name: str = data["skill_name"]
         amount: float = data["amount"]
         timestamp: datetime = data["timestamp"]
-        ts_epoch = timestamp.timestamp() if isinstance(timestamp, datetime) else float(timestamp)
+        ts_epoch = (
+            timestamp.timestamp()
+            if isinstance(timestamp, datetime)
+            else float(timestamp)
+        )
 
         # Check codex claim suppression: swallow the next matching gain so the
         # in-game skill-up a codex claim produces isn't double-counted alongside
@@ -84,7 +93,9 @@ class SkillTracker:
             expiry = self._suppressed_claims[skill_name]
             del self._suppressed_claims[skill_name]
             if _time.time() < expiry:
-                log.info("Codex-claim gain suppressed: %s +%.4f levels", skill_name, amount)
+                log.info(
+                    "Codex-claim gain suppressed: %s +%.4f levels", skill_name, amount
+                )
                 return
             # Expired: fall through and process normally
             log.info("Suppression for %s expired, processing normally", skill_name)
@@ -115,9 +126,13 @@ class SkillTracker:
             self._db.commit()
 
         # Update in-memory session totals
-        self._session_skills[skill_name] = self._session_skills.get(skill_name, 0.0) + amount
+        self._session_skills[skill_name] = (
+            self._session_skills.get(skill_name, 0.0) + amount
+        )
         if ped_value is not None:
-            self._session_skill_tt[skill_name] = self._session_skill_tt.get(skill_name, 0.0) + ped_value
+            self._session_skill_tt[skill_name] = (
+                self._session_skill_tt.get(skill_name, 0.0) + ped_value
+            )
 
     def _get_current_level(self, skill_name: str) -> float | None:
         """Get the latest calibrated level for a skill."""

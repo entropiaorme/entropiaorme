@@ -53,7 +53,9 @@ def claim_rank(req: ClaimRequest):
     """Claim a codex rank reward."""
     svc = get_services()
     try:
-        result = svc.codex_service.claim_rank(req.species_name, req.rank, req.skill_name)
+        result = svc.codex_service.claim_rank(
+            req.species_name, req.rank, req.skill_name
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -170,6 +170,7 @@ def _ensure_svc():
 
 # ── Analytics ──────────────────────────────────────────────────────────────
 
+
 @router.get("/analytics/overview")
 def demo_analytics_overview(period: str = "all"):
     return analytics_router.overview_impl(_ensure_conn(), period)
@@ -196,6 +197,7 @@ def demo_list_inventory_items():
 
 
 # ── Tracking ───────────────────────────────────────────────────────────────
+
 
 @router.get("/tracking/sessions")
 def demo_list_sessions():

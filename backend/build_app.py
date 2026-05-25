@@ -94,8 +94,15 @@ def main() -> int:
         # sidecar. `--no-deps` keeps the rest of the env untouched.
         step("Pinning onnxruntime-directml binaries (Windows)")
         subprocess.run(
-            [sys.executable, "-m", "pip", "install",
-             "--force-reinstall", "--no-deps", "onnxruntime-directml"],
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                "--no-deps",
+                "onnxruntime-directml",
+            ],
             cwd=PROJECT_ROOT,
             check=True,
         )

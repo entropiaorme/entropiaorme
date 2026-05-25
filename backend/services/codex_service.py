@@ -67,17 +67,20 @@ class CodexService:
             next_cost = None
             if next_rank:
                 from backend.data.codex_categories import get_rank_cost
+
                 next_cost = round(get_rank_cost(next_rank, sp["baseCost"]), 2)
 
-            result.append({
-                "name": sp["name"],
-                "baseCost": sp["baseCost"],
-                "codexType": sp["codexType"],
-                "currentRank": rank,
-                "nextRank": next_rank,
-                "nextCategory": next_category,
-                "nextCost": next_cost,
-            })
+            result.append(
+                {
+                    "name": sp["name"],
+                    "baseCost": sp["baseCost"],
+                    "codexType": sp["codexType"],
+                    "currentRank": rank,
+                    "nextRank": next_rank,
+                    "nextCategory": next_category,
+                    "nextCost": next_cost,
+                }
+            )
 
         # Sort: rank desc then name asc
         result.sort(key=lambda s: (-s["currentRank"], s["name"]))
@@ -128,7 +131,9 @@ class CodexService:
         """Claim a codex rank reward. Validates, records, updates calibration and ledger."""
         species = self._find_species(species_name)
         if species is None:
-            raise ValueError(f"Species '{species_name}' not found in game-data catalogue")
+            raise ValueError(
+                f"Species '{species_name}' not found in game-data catalogue"
+            )
 
         # Validate rank is next
         row = self._app_db.conn.execute(
@@ -150,7 +155,9 @@ class CodexService:
         if cat4:
             valid_skills |= set(CODEX_SKILL_CATEGORIES["cat4"])
         if skill_name not in valid_skills:
-            raise ValueError(f"Skill '{skill_name}' not valid for rank {rank} (category {category})")
+            raise ValueError(
+                f"Skill '{skill_name}' not valid for rank {rank} (category {category})"
+            )
 
         # Compute reward — cat4 skills use cat4 divisor
         if skill_name in CODEX_SKILL_CATEGORIES.get("cat4", []):
@@ -187,7 +194,13 @@ class CodexService:
 
             self._app_db.conn.commit()
 
-        log.info("Codex claim: %s rank %d → %s (%.4f PES)", species_name, rank, skill_name, ped_value)
+        log.info(
+            "Codex claim: %s rank %d → %s (%.4f PES)",
+            species_name,
+            rank,
+            skill_name,
+            ped_value,
+        )
         return {
             "speciesName": species_name,
             "rank": rank,
@@ -279,32 +292,48 @@ class CodexService:
             current_level = self._get_skill_level(skill_name)
             levels_gained = levels_for_tt_value(current_level or 0, ped)
             weight = weight_map.get(skill_name, 0)
-            prof_contrib = round(levels_gained * weight / 10000, 6) if weight > 0 else 0.0
+            prof_contrib = (
+                round(levels_gained * weight / 10000, 6) if weight > 0 else 0.0
+            )
             hp_increase = hp_map.get(skill_name, 0.0)
             hp_gain = round(levels_gained / hp_increase, 6) if hp_increase > 0 else 0.0
 
-            skills.append({
-                "skillName": skill_name,
-                "category": cat,
-                "rewardPed": ped,
-                "currentLevel": round(current_level, 1) if current_level is not None else None,
-                "levelsGained": round(levels_gained, 2),
-                "professionWeight": weight,
-                "profContribution": prof_contrib,
-                "hpIncrease": round(hp_increase, 2) if hp_increase > 0 else None,
-                "hpGain": hp_gain,
-            })
+            skills.append(
+                {
+                    "skillName": skill_name,
+                    "category": cat,
+                    "rewardPed": ped,
+                    "currentLevel": round(current_level, 1)
+                    if current_level is not None
+                    else None,
+                    "levelsGained": round(levels_gained, 2),
+                    "professionWeight": weight,
+                    "profContribution": prof_contrib,
+                    "hpIncrease": round(hp_increase, 2) if hp_increase > 0 else None,
+                    "hpGain": hp_gain,
+                }
+            )
 
         if target == "hp":
             # Sort: highest HP gain first, then lower current level, then name
-            skills.sort(key=lambda s: (
-                -s["hpGain"],
-                s["currentLevel"] if s["currentLevel"] is not None else float("inf"),
-                s["skillName"],
-            ))
+            skills.sort(
+                key=lambda s: (
+                    -s["hpGain"],
+                    s["currentLevel"]
+                    if s["currentLevel"] is not None
+                    else float("inf"),
+                    s["skillName"],
+                )
+            )
         else:
             # Sort: highest profession contribution first, then weight, then name
-            skills.sort(key=lambda s: (-s["profContribution"], -s["professionWeight"], s["skillName"]))
+            skills.sort(
+                key=lambda s: (
+                    -s["profContribution"],
+                    -s["professionWeight"],
+                    s["skillName"],
+                )
+            )
 
         # Add 1-based rank for skills that are relevant to the active optimisation target
         rank_counter = 0
@@ -334,7 +363,9 @@ class CodexService:
         table rebuild.
         """
         if attribute_name not in self.ATTRIBUTES:
-            raise ValueError(f"'{attribute_name}' is not an attribute. Valid: {sorted(self.ATTRIBUTES)}")
+            raise ValueError(
+                f"'{attribute_name}' is not an attribute. Valid: {sorted(self.ATTRIBUTES)}"
+            )
 
         now = time.time()
 
@@ -357,10 +388,12 @@ class CodexService:
         result = []
         for attr in sorted(self.ATTRIBUTES):
             level = self._get_skill_level(attr)
-            result.append({
-                "name": attr,
-                "currentLevel": round(level, 1) if level is not None else None,
-            })
+            result.append(
+                {
+                    "name": attr,
+                    "currentLevel": round(level, 1) if level is not None else None,
+                }
+            )
         return result
 
     # ── Private helpers ─────────────────────────────────────────────────────

@@ -39,7 +39,9 @@ def _make_skill_line(ts: str, amount: str, skill: str) -> str:
     return f"{ts} [System] [] You have gained {amount} {skill}"
 
 
-def _make_enhancer_break_line(ts: str, enhancer: str, item: str, remaining: int, shrapnel: str) -> str:
+def _make_enhancer_break_line(
+    ts: str, enhancer: str, item: str, remaining: int, shrapnel: str
+) -> str:
     return (
         f"{ts} [System] [] Your enhancer {enhancer} on your {item} broke. "
         f"You have {remaining} enhancers remaining on the item. "
@@ -64,8 +66,12 @@ class TestLootGrouping:
         bus.subscribe(EVENT_LOOT_GROUP, lambda d: events.append(("loot", d)))
         bus.subscribe(EVENT_COMBAT, lambda d: events.append(("combat", d)))
         bus.subscribe(EVENT_SKILL_GAIN, lambda d: events.append(("skill", d)))
-        bus.subscribe(EVENT_ENHANCER_BREAK, lambda d: events.append(("enhancer_break", d)))
-        bus.subscribe(EVENT_MISSION_RECEIVED, lambda d: events.append(("mission_received", d)))
+        bus.subscribe(
+            EVENT_ENHANCER_BREAK, lambda d: events.append(("enhancer_break", d))
+        )
+        bus.subscribe(
+            EVENT_MISSION_RECEIVED, lambda d: events.append(("mission_received", d))
+        )
         # Use a dummy path; we won't call start(), just _process_line directly
         watcher = ChatlogWatcher(bus, "dummy.log")
         return watcher, events
@@ -74,7 +80,9 @@ class TestLootGrouping:
         """A single loot line produces one group with one item after flush."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12"))
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12")
+        )
         assert len(events) == 0  # Not flushed yet
 
         watcher._flush_tick()
@@ -105,10 +113,16 @@ class TestLootGrouping:
         """Loot lines with different timestamps → separate groups."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_loot_qty_line("2026-03-27 10:00:00", "Shrapnel", 100, "1.00"))
-        watcher._process_line(_make_loot_line("2026-03-27 10:00:00", "Animal Oil Residue", "0.05"))
+        watcher._process_line(
+            _make_loot_qty_line("2026-03-27 10:00:00", "Shrapnel", 100, "1.00")
+        )
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Animal Oil Residue", "0.05")
+        )
         # Different timestamp → flushes first group, starts second
-        watcher._process_line(_make_loot_qty_line("2026-03-27 10:00:05", "Shrapnel", 200, "2.00"))
+        watcher._process_line(
+            _make_loot_qty_line("2026-03-27 10:00:05", "Shrapnel", 200, "2.00")
+        )
         watcher._flush_tick()
 
         assert len(events) == 2
@@ -176,7 +190,9 @@ class TestLootGrouping:
         """Second flush after already flushed publishes nothing."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_loot_line("2026-03-27 10:00:00", "Shrapnel", "0.50"))
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Shrapnel", "0.50")
+        )
         watcher._flush_tick()
         assert len(events) == 1
 
@@ -187,7 +203,9 @@ class TestLootGrouping:
         """Item quantity from chat.log is preserved in the grouped event."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_loot_qty_line("2026-03-27 10:00:00", "Shrapnel", 4762, "47.62"))
+        watcher._process_line(
+            _make_loot_qty_line("2026-03-27 10:00:00", "Shrapnel", 4762, "47.62")
+        )
         watcher._flush_tick()
 
         item = events[0][1]["items"][0]
@@ -199,7 +217,9 @@ class TestLootGrouping:
         """The group's timestamp matches the chat.log loot timestamp."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_loot_line("2026-03-27 10:00:00", "Shrapnel", "1.00"))
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Shrapnel", "1.00")
+        )
         watcher._flush_tick()
 
         assert events[0][1]["timestamp"] == datetime(2026, 3, 27, 10, 0, 0)
@@ -281,8 +301,9 @@ class TestLootGrouping:
         """New Mission received line emits EVENT_MISSION_RECEIVED."""
         watcher, events = self._make_watcher()
 
-        watcher._process_line(_make_mission_received_line(
-            "2026-03-27 10:00:00", "ARIS - Daily Hunting 1"))
+        watcher._process_line(
+            _make_mission_received_line("2026-03-27 10:00:00", "ARIS - Daily Hunting 1")
+        )
         watcher._flush_tick()
 
         mr_events = [e for e in events if e[0] == "mission_received"]
@@ -304,6 +325,7 @@ class TestQuestRewardSuppression:
 
     def test_ped_reward_suppressed_from_loot(self):
         """Quest reward item matched by PED value is suppressed; mob loot remains."""
+
         def fake_filter(mission_name, loot_items, skill_gains):
             # Simulate: quest has 1.5 PED reward
             for i, item in enumerate(loot_items):
@@ -317,7 +339,9 @@ class TestQuestRewardSuppression:
         # Quest reward: Universal Ammo 1.5 PED
         watcher._process_line(_make_loot_qty_line(ts, "Universal Ammo", 15000, "1.50"))
         # Mission complete
-        watcher._process_line(_make_mission_complete_line(ts, "Paneleon Hunter (repeatable)"))
+        watcher._process_line(
+            _make_mission_complete_line(ts, "Paneleon Hunter (repeatable)")
+        )
         # Mob loot
         watcher._process_line(_make_loot_qty_line(ts, "Shrapnel", 825, "0.0825"))
         watcher._process_line(_make_loot_qty_line(ts, "Shrapnel", 7247, "0.7247"))
@@ -335,10 +359,13 @@ class TestQuestRewardSuppression:
 
     def test_zero_ped_reward_suppresses_lowest_value(self):
         """0 PED quest reward: suppress the lowest-value item (badge/token)."""
+
         def fake_filter(mission_name, loot_items, skill_gains):
             # Simulate: quest has 0 PED reward → suppress lowest-value item
             if loot_items:
-                min_idx = min(range(len(loot_items)), key=lambda i: loot_items[i]["value"])
+                min_idx = min(
+                    range(len(loot_items)), key=lambda i: loot_items[i]["value"]
+                )
                 return {"suppress_loot_index": min_idx, "suppress_skill_index": None}
             return None
 
@@ -347,7 +374,11 @@ class TestQuestRewardSuppression:
 
         # Badge at 0 PED (quest reward)
         watcher._process_line(_make_loot_qty_line(ts, "A.R.C. Faction Badge", 3, "0"))
-        watcher._process_line(_make_mission_complete_line(ts, "Atlas Haven Imperium Ranger Hunt! (repeatable)"))
+        watcher._process_line(
+            _make_mission_complete_line(
+                ts, "Atlas Haven Imperium Ranger Hunt! (repeatable)"
+            )
+        )
         # Mob loot
         watcher._process_line(_make_loot_qty_line(ts, "Shrapnel", 825, "0.0825"))
         watcher._process_line(_make_loot_line(ts, "Animal Eye Oil", "0.80"))
@@ -362,6 +393,7 @@ class TestQuestRewardSuppression:
 
     def test_skill_reward_suppressed(self):
         """Skill quest reward: first skill gain in tick suppressed."""
+
         def fake_filter(mission_name, loot_items, skill_gains):
             if skill_gains:
                 return {"suppress_loot_index": None, "suppress_skill_index": 0}
@@ -370,7 +402,9 @@ class TestQuestRewardSuppression:
         watcher, events = self._make_watcher_with_filter(fake_filter)
         ts = "2026-03-25 12:54:57"
 
-        watcher._process_line(_make_skill_line(ts, "0.5000", "Laser Weaponry Technology"))
+        watcher._process_line(
+            _make_skill_line(ts, "0.5000", "Laser Weaponry Technology")
+        )
         watcher._process_line(_make_mission_complete_line(ts, "Skill Quest"))
         # Mob loot at same timestamp
         watcher._process_line(_make_loot_line(ts, "Shrapnel", "0.50"))
@@ -412,21 +446,34 @@ class TestQuestRewardSuppression:
 
     def test_mob_loot_at_next_second_not_suppressed(self):
         """Loot at a different timestamp from mission complete is never suppressed."""
+
         def fake_filter(mission_name, loot_items, skill_gains):
             # Would suppress lowest value, but only items in the SAME tick
             if loot_items:
-                min_idx = min(range(len(loot_items)), key=lambda i: loot_items[i]["value"])
+                min_idx = min(
+                    range(len(loot_items)), key=lambda i: loot_items[i]["value"]
+                )
                 return {"suppress_loot_index": min_idx, "suppress_skill_index": None}
             return None
 
         watcher, events = self._make_watcher_with_filter(fake_filter)
 
         # Tick 1: badge + mission complete (same ts)
-        watcher._process_line(_make_loot_qty_line("2026-03-25 13:14:33", "A.R.C. Faction Badge", 10, "0.0001"))
-        watcher._process_line(_make_mission_complete_line("2026-03-25 13:14:33", "Island Biome Hunt! (repeatable)"))
+        watcher._process_line(
+            _make_loot_qty_line(
+                "2026-03-25 13:14:33", "A.R.C. Faction Badge", 10, "0.0001"
+            )
+        )
+        watcher._process_line(
+            _make_mission_complete_line(
+                "2026-03-25 13:14:33", "Island Biome Hunt! (repeatable)"
+            )
+        )
         # Tick 2: mob loot at next second
         watcher._process_line(_make_loot_line("2026-03-25 13:14:34", "Wool", "0.20"))
-        watcher._process_line(_make_loot_qty_line("2026-03-25 13:14:34", "Shrapnel", 209, "0.0209"))
+        watcher._process_line(
+            _make_loot_qty_line("2026-03-25 13:14:34", "Shrapnel", 209, "0.0209")
+        )
         watcher._flush_tick()
 
         loot_events = [e for e in events if e[0] == "loot"]
@@ -440,6 +487,7 @@ class TestQuestRewardSuppression:
 
     def test_filter_exception_does_not_crash_watcher(self):
         """If the filter callback raises, events still pass through."""
+
         def exploding_filter(mission_name, loot_items, skill_gains):
             raise RuntimeError("boom")
 

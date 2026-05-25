@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 from backend.core.event_bus import EventBus
-from backend.core.events import EVENT_MISSION_RECEIVED, EVENT_SESSION_STARTED, EVENT_SESSION_STOPPED
+from backend.core.events import (
+    EVENT_MISSION_RECEIVED,
+    EVENT_SESSION_STARTED,
+    EVENT_SESSION_STOPPED,
+)
 from backend.db.app_database import AppDatabase
 
 log = logging.getLogger(__name__)
@@ -25,7 +29,13 @@ PLAYLIST_GROUP_LONG_HORIZON = "long_horizon"
 
 def _normalize_quest_name(name: str) -> str:
     """Normalise quest name for comparison: NFKD → ASCII, lowercase, strip."""
-    return unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode('ascii').strip().lower()
+    return (
+        unicodedata.normalize("NFKD", name)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+        .strip()
+        .lower()
+    )
 
 
 class QuestService:
@@ -43,8 +53,10 @@ class QuestService:
 
     def _on_session_start(self, data: dict) -> None:
         self._current_session_id = data.get("session_id")
-        log.info("Quest service tracking session %s",
-                 self._current_session_id[:8] if self._current_session_id else "?")
+        log.info(
+            "Quest service tracking session %s",
+            self._current_session_id[:8] if self._current_session_id else "?",
+        )
 
     def _on_session_stop(self, data: dict) -> None:
         self._current_session_id = None
@@ -132,10 +144,19 @@ class QuestService:
             return None
 
         allowed = {
-            "name", "planet", "waypoint", "cooldown_hours",
-            "reward_ped", "reward_is_skill", "notes",
-            "chain_name", "chain_position", "chain_total",
-            "category", "reward_description", "expected_reward_markup_percent",
+            "name",
+            "planet",
+            "waypoint",
+            "cooldown_hours",
+            "reward_ped",
+            "reward_is_skill",
+            "notes",
+            "chain_name",
+            "chain_position",
+            "chain_total",
+            "category",
+            "reward_description",
+            "expected_reward_markup_percent",
         }
         updates = {}
         for key in allowed:
@@ -145,18 +166,35 @@ class QuestService:
                     val = 1 if val else 0
                 updates[key] = val
 
-        if any(key in data for key in ("reward_ped", "reward_is_skill", "expected_reward_markup_percent")):
-            reward_ped = data["reward_ped"] if "reward_ped" in data else existing.get("reward_ped")
-            reward_is_skill = data["reward_is_skill"] if "reward_is_skill" in data else existing.get("reward_is_skill")
+        if any(
+            key in data
+            for key in (
+                "reward_ped",
+                "reward_is_skill",
+                "expected_reward_markup_percent",
+            )
+        ):
+            reward_ped = (
+                data["reward_ped"]
+                if "reward_ped" in data
+                else existing.get("reward_ped")
+            )
+            reward_is_skill = (
+                data["reward_is_skill"]
+                if "reward_is_skill" in data
+                else existing.get("reward_is_skill")
+            )
             expected_markup = (
                 data["expected_reward_markup_percent"]
                 if "expected_reward_markup_percent" in data
                 else existing.get("expected_reward_markup_percent")
             )
-            updates["expected_reward_markup_percent"] = self._normalize_expected_reward_markup(
-                reward_ped,
-                reward_is_skill,
-                expected_markup,
+            updates["expected_reward_markup_percent"] = (
+                self._normalize_expected_reward_markup(
+                    reward_ped,
+                    reward_is_skill,
+                    expected_markup,
+                )
             )
 
         if updates:
@@ -235,19 +273,28 @@ class QuestService:
                 self._conn.commit()
                 log.info(
                     "Auto-created quest claim for '%s': %.2f PES",
-                    quest["name"], quest["reward_ped"],
+                    quest["name"],
+                    quest["reward_ped"],
                 )
             else:
                 ledger_id = str(uuid.uuid4())
                 date_str = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
                 self._conn.execute(
                     "INSERT INTO ledger_entries (id, date, type, description, amount, tag) VALUES (?, ?, ?, ?, ?, ?)",
-                    (ledger_id, date_str, "markup", f"Quest: {quest['name']}", quest["reward_ped"], "quest_reward"),
+                    (
+                        ledger_id,
+                        date_str,
+                        "markup",
+                        f"Quest: {quest['name']}",
+                        quest["reward_ped"],
+                        "quest_reward",
+                    ),
                 )
                 self._conn.commit()
                 log.info(
                     "Auto-created ledger entry for quest '%s': %.2f PED",
-                    quest["name"], quest["reward_ped"],
+                    quest["name"],
+                    quest["reward_ped"],
                 )
 
         session_id = self._resolve_session_for_completion()
@@ -322,7 +369,9 @@ class QuestService:
         """Suggest a curated analytics link for a completed session."""
         existing = self._get_session_analytics_link_row(session_id)
         if existing:
-            reason = "declined" if existing["link_type"] == "declined" else "already_linked"
+            reason = (
+                "declined" if existing["link_type"] == "declined" else "already_linked"
+            )
             return {
                 "suggestion_type": "none",
                 "reason": reason,
@@ -393,7 +442,9 @@ class QuestService:
                 playlist_id=suggestion["playlist_id"],
             )
         else:
-            raise ValueError(f"No linkable suggestion for session {session_id}: {suggestion['reason']}")
+            raise ValueError(
+                f"No linkable suggestion for session {session_id}: {suggestion['reason']}"
+            )
         return suggestion
 
     def decline_session_link(self, session_id: str) -> None:
@@ -440,7 +491,11 @@ class QuestService:
         """Create a playlist with classified items."""
         cur = self._conn.execute(
             "INSERT INTO quest_playlists (name, planet, estimated_minutes) VALUES (?, ?, ?)",
-            (data["name"], data.get("planet", "Calypso"), data.get("estimated_minutes", 30)),
+            (
+                data["name"],
+                data.get("planet", "Calypso"),
+                data.get("estimated_minutes", 30),
+            ),
         )
         playlist_id = cur.lastrowid
 
@@ -511,22 +566,24 @@ class QuestService:
             stats = self._compute_quest_session_stats(qr[0])
             if stats["linked_sessions"] == 0:
                 continue
-            results.append({
-                "quest_id": qr[0],
-                "quest_name": qr[1],
-                "planet": qr[2],
-                "category": qr[3],
-                "reward_ped": qr[4] or 0,
-                "reward_is_skill": bool(qr[5]),
-                "expected_reward_markup_percent": qr[6],
-                "total_expected_reward_ped": self._expected_reward_total(
-                    qr[4] or 0,
-                    bool(qr[5]),
-                    qr[6],
-                    stats["linked_sessions"],
-                ),
-                **stats,
-            })
+            results.append(
+                {
+                    "quest_id": qr[0],
+                    "quest_name": qr[1],
+                    "planet": qr[2],
+                    "category": qr[3],
+                    "reward_ped": qr[4] or 0,
+                    "reward_is_skill": bool(qr[5]),
+                    "expected_reward_markup_percent": qr[6],
+                    "total_expected_reward_ped": self._expected_reward_total(
+                        qr[4] or 0,
+                        bool(qr[5]),
+                        qr[6],
+                        stats["linked_sessions"],
+                    ),
+                    **stats,
+                }
+            )
         return results
 
     def _compute_quest_session_stats(self, quest_id: int) -> dict:
@@ -561,8 +618,12 @@ class QuestService:
         if not pl:
             return None
 
-        immediate_ids = self._get_playlist_quest_ids(playlist_id, PLAYLIST_GROUP_IMMEDIATE)
-        long_horizon_ids = self._get_playlist_quest_ids(playlist_id, PLAYLIST_GROUP_LONG_HORIZON)
+        immediate_ids = self._get_playlist_quest_ids(
+            playlist_id, PLAYLIST_GROUP_IMMEDIATE
+        )
+        long_horizon_ids = self._get_playlist_quest_ids(
+            playlist_id, PLAYLIST_GROUP_LONG_HORIZON
+        )
         if not immediate_ids:
             return {
                 "playlist_id": playlist_id,
@@ -580,19 +641,32 @@ class QuestService:
                 "total_expected_immediate_reward_ped": 0,
                 "total_expected_bonus_reward_ped": 0,
                 "total_duration": 0,
-                "weapon_cost": 0, "heal_cost": 0,
-                "enhancer_cost": 0, "armour_cost": 0,
-                "loot_tt": 0, "skill_tt": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
             }
 
         session_ids = self._get_curated_playlist_session_ids(playlist_id)
-        stats = self._compute_session_set_stats(session_ids) if session_ids else {
-            "linked_sessions": 0, "total_duration": 0,
-            "weapon_cost": 0, "heal_cost": 0,
-            "enhancer_cost": 0, "armour_cost": 0,
-            "loot_tt": 0, "skill_tt": 0,
-        }
-        reward_stats = self._compute_playlist_reward_stats(session_ids, immediate_ids, long_horizon_ids)
+        stats = (
+            self._compute_session_set_stats(session_ids)
+            if session_ids
+            else {
+                "linked_sessions": 0,
+                "total_duration": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
+            }
+        )
+        reward_stats = self._compute_playlist_reward_stats(
+            session_ids, immediate_ids, long_horizon_ids
+        )
 
         return {
             "playlist_id": playlist_id,
@@ -614,7 +688,9 @@ class QuestService:
                 continue
             long_horizon_set = set(playlist.get("long_horizon_quest_ids", []))
             playlist_scope = immediate_set | long_horizon_set
-            if immediate_set.issubset(completed_set) and completed_set.issubset(playlist_scope):
+            if immediate_set.issubset(completed_set) and completed_set.issubset(
+                playlist_scope
+            ):
                 matches.append(playlist["id"])
         return matches
 
@@ -630,10 +706,14 @@ class QuestService:
         """Aggregate economics for a set of sessions (by ID)."""
         if not session_ids:
             return {
-                "linked_sessions": 0, "total_duration": 0,
-                "weapon_cost": 0, "heal_cost": 0,
-                "enhancer_cost": 0, "armour_cost": 0,
-                "loot_tt": 0, "skill_tt": 0,
+                "linked_sessions": 0,
+                "total_duration": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
             }
 
         placeholders = ",".join("?" * len(session_ids))
@@ -736,7 +816,8 @@ class QuestService:
             "total_skill_reward_ped": total_immediate_skill + total_bonus_skill,
             "total_immediate_skill_reward_ped": total_immediate_skill,
             "total_bonus_skill_reward_ped": total_bonus_skill,
-            "total_expected_reward_ped": total_expected_immediate + total_expected_bonus,
+            "total_expected_reward_ped": total_expected_immediate
+            + total_expected_bonus,
             "total_expected_immediate_reward_ped": total_expected_immediate,
             "total_expected_bonus_reward_ped": total_expected_bonus,
         }
@@ -821,14 +902,21 @@ class QuestService:
         """
         quest = self.match_quest_by_mission_name(mission_name)
         if not quest:
-            log.info("Mission received '%s' — no matching quest in DB, ignoring", mission_name)
+            log.info(
+                "Mission received '%s' — no matching quest in DB, ignoring",
+                mission_name,
+            )
             return
         if quest.get("started_at"):
             log.debug("Quest '%s' already started, skipping auto-start", quest["name"])
             return
         self.start_quest(quest["id"])
-        log.info("Started quest '%s' (id=%d) from chat.log mission '%s'",
-                 quest["name"], quest["id"], mission_name)
+        log.info(
+            "Started quest '%s' (id=%d) from chat.log mission '%s'",
+            quest["name"],
+            quest["id"],
+            mission_name,
+        )
         self._record_notable_event("quest_started", quest["name"], 0)
 
     def quest_reward_filter(
@@ -853,15 +941,21 @@ class QuestService:
         """
         quest = self.match_quest_by_mission_name(mission_name)
         if not quest:
-            log.info("Mission '%s' — no matching quest in DB, no suppression", mission_name)
+            log.info(
+                "Mission '%s' — no matching quest in DB, no suppression", mission_name
+            )
             return None
 
         # Auto-complete the quest (clears in-progress state, records the
         # reward in either ledger_entries or quest_claims based on
         # reward_is_skill, and records the session-quest completion).
         self.complete_quest(quest["id"])
-        log.info("Auto-completed quest '%s' (id=%d) from chat.log mission '%s'",
-                 quest["name"], quest["id"], mission_name)
+        log.info(
+            "Auto-completed quest '%s' (id=%d) from chat.log mission '%s'",
+            quest["name"],
+            quest["id"],
+            mission_name,
+        )
 
         reward_ped = quest.get("reward_ped")
         is_skill = bool(quest.get("reward_is_skill"))
@@ -885,17 +979,24 @@ class QuestService:
                         best_diff = diff
                         best_idx = i
                 if best_idx is not None:
-                    result = {"suppress_loot_index": best_idx, "suppress_skill_index": None}
+                    result = {
+                        "suppress_loot_index": best_idx,
+                        "suppress_skill_index": None,
+                    }
                     item_name = loot_items[best_idx].get("item_name", "?")
                     suppressed_desc = f"{item_name} ({reward_ped:.2f} PED) suppressed"
                 else:
                     log.warning(
                         "Quest '%s' reward %.2f PED — no matching loot item in tick (items: %s)",
-                        quest["name"], reward_ped,
+                        quest["name"],
+                        reward_ped,
                         [(i.get("item_name"), i.get("value")) for i in loot_items],
                     )
             else:
-                min_idx = min(range(len(loot_items)), key=lambda i: loot_items[i].get("value", 0.0))
+                min_idx = min(
+                    range(len(loot_items)),
+                    key=lambda i: loot_items[i].get("value", 0.0),
+                )
                 result = {"suppress_loot_index": min_idx, "suppress_skill_index": None}
                 item_name = loot_items[min_idx].get("item_name", "?")
                 suppressed_desc = f"{item_name} suppressed"
@@ -910,7 +1011,9 @@ class QuestService:
 
         return result
 
-    def _record_notable_event(self, event_type: str, description: str, value_ped: float) -> None:
+    def _record_notable_event(
+        self, event_type: str, description: str, value_ped: float
+    ) -> None:
         """Insert a notable event for the overlay if a tracking session is active."""
         if not self._current_session_id:
             return
@@ -919,12 +1022,17 @@ class QuestService:
                 """INSERT INTO notable_events
                    (session_id, kill_id, event_type, mob_or_item, value_ped, timestamp)
                    VALUES (?, NULL, ?, ?, ?, ?)""",
-                (self._current_session_id, event_type, description, value_ped, time.time()),
+                (
+                    self._current_session_id,
+                    event_type,
+                    description,
+                    value_ped,
+                    time.time(),
+                ),
             )
             self._conn.commit()
         except Exception:
             log.debug("Could not record notable event")
-
 
     def _record_session_completion(
         self,
@@ -948,7 +1056,9 @@ class QuestService:
         )
         self._conn.commit()
         if session_id is not None:
-            log.info("Recorded quest %d completion in session %s", quest_id, session_id[:8])
+            log.info(
+                "Recorded quest %d completion in session %s", quest_id, session_id[:8]
+            )
         else:
             log.info("Recorded manual completion for quest %d", quest_id)
 
@@ -1021,7 +1131,9 @@ class QuestService:
         self._conn.execute("DELETE FROM quest_claims WHERE id = ?", (row[0],))
         return True
 
-    def _delete_latest_quest_reward_entry(self, quest_name: str, reward_ped: float) -> bool:
+    def _delete_latest_quest_reward_entry(
+        self, quest_name: str, reward_ped: float
+    ) -> bool:
         row = self._conn.execute(
             """SELECT id FROM ledger_entries
                WHERE type = 'markup'
@@ -1062,7 +1174,11 @@ class QuestService:
             if stripped.isdigit():
                 return int(stripped)
             return stripped
-        return int(value) if isinstance(value, bool) or hasattr(value, "__int__") else value
+        return (
+            int(value)
+            if isinstance(value, bool) or hasattr(value, "__int__")
+            else value
+        )
 
     def _scalar_from_row(self, row, key: str):
         """Extract a single scalar from varying sqlite row shapes, or None if malformed."""
@@ -1117,7 +1233,12 @@ class QuestService:
         reward_is_skill: bool | int | None,
         expected_markup: float | None,
     ) -> float | None:
-        if reward_is_skill or reward_ped is None or reward_ped <= 0 or expected_markup is None:
+        if (
+            reward_is_skill
+            or reward_ped is None
+            or reward_ped <= 0
+            or expected_markup is None
+        ):
             return None
         return float(expected_markup)
 
@@ -1170,7 +1291,9 @@ class QuestService:
                 playlist_ids.append(self._normalize_db_id(playlist_id))
         return playlist_ids
 
-    def _get_playlist_quest_ids(self, playlist_id: int, group_type: str | None = None) -> list[int]:
+    def _get_playlist_quest_ids(
+        self, playlist_id: int, group_type: str | None = None
+    ) -> list[int]:
         sql = "SELECT quest_id FROM quest_playlist_items WHERE playlist_id = ?"
         params: list[object] = [playlist_id]
         if group_type is not None:
@@ -1194,7 +1317,9 @@ class QuestService:
                ORDER BY group_type = ?, sort_order""",
             (playlist_id, PLAYLIST_GROUP_LONG_HORIZON),
         ).fetchall()
-        return [{"quest_id": r[0], "description": r[1], "group_type": r[2]} for r in rows]
+        return [
+            {"quest_id": r[0], "description": r[1], "group_type": r[2]} for r in rows
+        ]
 
     def _set_playlist_items(self, playlist_id: int, items: list) -> None:
         """Set playlist items with explicit grouping."""
@@ -1211,7 +1336,10 @@ class QuestService:
                 qid = item
                 desc = None
                 group_type = PLAYLIST_GROUP_IMMEDIATE
-            if group_type not in {PLAYLIST_GROUP_IMMEDIATE, PLAYLIST_GROUP_LONG_HORIZON}:
+            if group_type not in {
+                PLAYLIST_GROUP_IMMEDIATE,
+                PLAYLIST_GROUP_LONG_HORIZON,
+            }:
                 raise ValueError(f"Invalid playlist group type: {group_type}")
             self._conn.execute(
                 """INSERT INTO quest_playlist_items
@@ -1240,7 +1368,17 @@ class QuestService:
             for quest_id in data.get("quest_ids", [])
         ]
 
-    def _split_playlist_item_groups(self, items: list[dict]) -> tuple[list[int], list[int]]:
-        immediate_ids = [i["quest_id"] for i in items if i.get("group_type") != PLAYLIST_GROUP_LONG_HORIZON]
-        long_horizon_ids = [i["quest_id"] for i in items if i.get("group_type") == PLAYLIST_GROUP_LONG_HORIZON]
+    def _split_playlist_item_groups(
+        self, items: list[dict]
+    ) -> tuple[list[int], list[int]]:
+        immediate_ids = [
+            i["quest_id"]
+            for i in items
+            if i.get("group_type") != PLAYLIST_GROUP_LONG_HORIZON
+        ]
+        long_horizon_ids = [
+            i["quest_id"]
+            for i in items
+            if i.get("group_type") == PLAYLIST_GROUP_LONG_HORIZON
+        ]
         return immediate_ids, long_horizon_ids

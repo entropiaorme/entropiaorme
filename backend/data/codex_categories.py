@@ -11,11 +11,31 @@ REWARD_DIVISORS: dict[str, int] = {
 
 # Rank 1-25 kill-cost multipliers (index 0 = rank 1)
 CODEX_MULTIPLIERS: list[int] = [
-    1, 2, 3, 4, 6,
-    8, 10, 12, 14, 16,
-    18, 20, 24, 28, 32,
-    36, 40, 44, 48, 56,
-    64, 72, 80, 90, 100,
+    1,
+    2,
+    3,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    18,
+    20,
+    24,
+    28,
+    32,
+    36,
+    40,
+    44,
+    48,
+    56,
+    64,
+    72,
+    80,
+    90,
+    100,
 ]
 
 CODEX_SKILL_CATEGORIES: dict[str, list[str]] = {
@@ -119,9 +139,7 @@ def get_reward_ped(rank: int, base_cost: float, category: str) -> float:
     return round(cost / divisor, 4)
 
 
-def build_rank_breakdown(
-    base_cost: float, codex_type: str | None
-) -> list[dict]:
+def build_rank_breakdown(base_cost: float, codex_type: str | None) -> list[dict]:
     """Build a 25-item list with all derived fields per rank.
 
     Returns list of dicts with: rank, category, cost, reward_ped,
@@ -135,14 +153,16 @@ def build_rank_breakdown(
         cat4 = is_cat4_rank(rank, codex_type)
         cat4_reward = get_reward_ped(rank, base_cost, "cat4") if cat4 else None
 
-        result.append({
-            "rank": rank,
-            "category": category,
-            "cost": round(cost, 2),
-            "rewardPed": reward,
-            "cat4Bonus": cat4,
-            "cat4RewardPed": cat4_reward,
-            "skills": list(CODEX_SKILL_CATEGORIES[category]),
-            "cat4Skills": list(CODEX_SKILL_CATEGORIES["cat4"]) if cat4 else [],
-        })
+        result.append(
+            {
+                "rank": rank,
+                "category": category,
+                "cost": round(cost, 2),
+                "rewardPed": reward,
+                "cat4Bonus": cat4,
+                "cat4RewardPed": cat4_reward,
+                "skills": list(CODEX_SKILL_CATEGORIES[category]),
+                "cat4Skills": list(CODEX_SKILL_CATEGORIES["cat4"]) if cat4 else [],
+            }
+        )
     return result

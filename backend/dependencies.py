@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from backend.services.repair_ocr import RepairOcrService
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 
+
 @dataclass
 class Services:
     """Container for all backend services. Created once at startup."""
@@ -40,11 +41,14 @@ class Services:
     repair_ocr: RepairOcrService
     spacebar_capture_listener: SpacebarCaptureListener
 
+
 _services: Services | None = None
+
 
 def set_services(s: Services) -> None:
     global _services
     _services = s
+
 
 def get_services() -> Services:
     assert _services is not None, "Services not initialised — lifespan not started"

@@ -43,21 +43,41 @@ class RepairOcrService:
 
             x, y, w, h = tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]
             if w <= 0 or h <= 0:
-                return {"error": "Invalid region", "cost_ped": 0.0, "raw_text": "", "confidence": 0.0}
+                return {
+                    "error": "Invalid region",
+                    "cost_ped": 0.0,
+                    "raw_text": "",
+                    "confidence": 0.0,
+                }
 
             capturer = ScreenCapturer()
             frame = capturer.capture_region(x, y, w, h)
             if frame is None:
-                return {"error": "Capture failed", "cost_ped": 0.0, "raw_text": "", "confidence": 0.0}
+                return {
+                    "error": "Capture failed",
+                    "cost_ped": 0.0,
+                    "raw_text": "",
+                    "confidence": 0.0,
+                }
 
             engine = local_ocr.get_engine()
             if engine is None:
-                return {"error": "Local OCR engine unavailable", "cost_ped": 0.0, "raw_text": "", "confidence": 0.0}
+                return {
+                    "error": "Local OCR engine unavailable",
+                    "cost_ped": 0.0,
+                    "raw_text": "",
+                    "confidence": 0.0,
+                }
 
             text, confidence = engine.read_text(frame)
             cost = self._parse_cost(text)
 
-            log.info("Repair OCR: raw='%s' confidence=%.2f parsed=%.2f", text, confidence, cost)
+            log.info(
+                "Repair OCR: raw='%s' confidence=%.2f parsed=%.2f",
+                text,
+                confidence,
+                cost,
+            )
             return {
                 "cost_ped": cost,
                 "raw_text": text,

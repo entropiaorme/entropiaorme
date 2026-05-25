@@ -13,7 +13,11 @@ from backend.services.character_calc import (
     profession_skill_optimizer,
     skill_rank,
 )
-from backend.data.tt_value_curve import max_tt_curve_level, tt_value_at, tt_value_of_gain
+from backend.data.tt_value_curve import (
+    max_tt_curve_level,
+    tt_value_at,
+    tt_value_of_gain,
+)
 from backend.data.codex_categories import get_codex_category
 
 
@@ -73,10 +77,12 @@ def test_effective_points_normal_skill():
 def test_profession_level_basic():
     # Profession with two skills, each weight 50
     # Catalogue payload nests skill name at Skills[].Skill.Name
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-        {"skill": {"name": "Aim"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+            {"skill": {"name": "Aim"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 1000.0, "Aim": 1000.0}
     level = profession_level(skill_levels, profession)
     # (1000 * 50 + 1000 * 50) / 10000 = 10.0
@@ -111,10 +117,12 @@ def test_profession_level_null_weight():
 
 def test_optimizer_skills_sorted_by_ped_cost():
     """Lower-level skills with high weight should cost less PED to next prof level."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 60},
-        {"skill": {"name": "Aim"}, "weight": 40},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 60},
+            {"skill": {"name": "Aim"}, "weight": 40},
+        ]
+    }
     # Rifle at high level (expensive), Aim at low level (cheap)
     skill_levels = {"Rifle": 5000.0, "Aim": 100.0}
     result = profession_skill_optimizer(skill_levels, profession)
@@ -129,10 +137,12 @@ def test_optimizer_skills_sorted_by_ped_cost():
 
 def test_optimizer_attributes_separate():
     """Attributes should be in the attributes list, not skills."""
-    profession = {"skills": [
-        {"skill": {"name": "Agility"}, "weight": 10},
-        {"skill": {"name": "Rifle"}, "weight": 60},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Agility"}, "weight": 10},
+            {"skill": {"name": "Rifle"}, "weight": 60},
+        ]
+    }
     skill_levels = {"Agility": 50.0, "Rifle": 1000.0}
     result = profession_skill_optimizer(skill_levels, profession)
     assert len(result["skills"]) == 1
@@ -144,9 +154,11 @@ def test_optimizer_attributes_separate():
 
 def test_optimizer_gap_and_next_level():
     """Should report correct gap to next integer profession level."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 100},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 100},
+        ]
+    }
     # Rifle at level 500 → prof level = 500 * 100 / 10000 = 5.0
     skill_levels = {"Rifle": 500.0}
     result = profession_skill_optimizer(skill_levels, profession)
@@ -165,17 +177,28 @@ def test_skill_rank_below_first_threshold():
 
 
 def test_skill_rank_exact_threshold():
-    ranks = [{"name": "Newbie", "skill": 1}, {"name": "Inept", "skill": 10}, {"name": "Competent", "skill": 100}]
+    ranks = [
+        {"name": "Newbie", "skill": 1},
+        {"name": "Inept", "skill": 10},
+        {"name": "Competent", "skill": 100},
+    ]
     assert skill_rank(10, ranks) == "Inept"
 
 
 def test_skill_rank_between_thresholds():
-    ranks = [{"name": "Newbie", "skill": 1}, {"name": "Inept", "skill": 10}, {"name": "Competent", "skill": 100}]
+    ranks = [
+        {"name": "Newbie", "skill": 1},
+        {"name": "Inept", "skill": 10},
+        {"name": "Competent", "skill": 100},
+    ]
     assert skill_rank(50, ranks) == "Inept"
 
 
 def test_skill_rank_above_all():
-    ranks = [{"name": "Newbie", "skill": 1}, {"name": "Entropia Master", "skill": 20000}]
+    ranks = [
+        {"name": "Newbie", "skill": 1},
+        {"name": "Entropia Master", "skill": 20000},
+    ]
     assert skill_rank(99999, ranks) == "Entropia Master"
 
 
@@ -287,8 +310,8 @@ def test_calculate_hp_multiple_skills():
 def test_hp_optimizer_skills_sorted_by_ped_per_hp():
     """Skills should be sorted by PED/HP ascending (cheapest first)."""
     skills_data = [
-        _make_skill("Rifle", 1600),      # 1600 levels per HP
-        _make_skill("Commando", 200),     # 200 levels per HP
+        _make_skill("Rifle", 1600),  # 1600 levels per HP
+        _make_skill("Commando", 200),  # 200 levels per HP
     ]
     # Commando at low level = cheap PED per HP; Rifle at high level = expensive
     skill_levels = {"Rifle": 5000.0, "Commando": 100.0}
@@ -346,10 +369,12 @@ def test_hp_optimizer_no_hp_skills():
 
 def test_path_optimizer_target_basic():
     """Two equal-weight skills at 0, target +1 level: both should get allocation."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-        {"skill": {"name": "Aim"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+            {"skill": {"name": "Aim"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 0.0, "Aim": 0.0}
     result = profession_path_optimizer(skill_levels, profession, target_level=1.0)
     assert result["mode"] == "target"
@@ -364,10 +389,12 @@ def test_path_optimizer_target_basic():
 
 def test_path_optimizer_target_prefers_cheaper_skill():
     """Low-level skill should receive more allocation than high-level skill."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-        {"skill": {"name": "Aim"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+            {"skill": {"name": "Aim"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 0.0, "Aim": 5000.0}
     # Target high enough that both skills must contribute
     result = profession_path_optimizer(skill_levels, profession, target_level=60.0)
@@ -378,10 +405,12 @@ def test_path_optimizer_target_prefers_cheaper_skill():
 
 def test_path_optimizer_target_respects_weight():
     """High-weight skill yields more prof points per level, so it dominates."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 100},
-        {"skill": {"name": "Aim"}, "weight": 10},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 100},
+            {"skill": {"name": "Aim"}, "weight": 10},
+        ]
+    }
     skill_levels = {"Rifle": 0.0, "Aim": 0.0}
     result = profession_path_optimizer(skill_levels, profession, target_level=1.0)
     allocs = {a["name"]: a for a in result["allocations"]}
@@ -392,10 +421,12 @@ def test_path_optimizer_target_respects_weight():
 
 def test_path_optimizer_budget_basic():
     """Budget mode: spend 1 PED across two skills."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-        {"skill": {"name": "Aim"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+            {"skill": {"name": "Aim"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 0.0, "Aim": 0.0}
     result = profession_path_optimizer(skill_levels, profession, ped_budget=1.0)
     assert result["mode"] == "budget"
@@ -405,9 +436,11 @@ def test_path_optimizer_budget_basic():
 
 def test_path_optimizer_budget_exhausts():
     """Total PED allocated should be close to the budget."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 0.0}
     result = profession_path_optimizer(skill_levels, profession, ped_budget=5.0)
     assert result["totalPed"] == pytest.approx(5.0, abs=0.05)
@@ -415,10 +448,12 @@ def test_path_optimizer_budget_exhausts():
 
 def test_path_optimizer_excludes_attributes():
     """Attribute skills should appear in attributes, not allocations."""
-    profession = {"skills": [
-        {"skill": {"name": "Agility"}, "weight": 10},
-        {"skill": {"name": "Rifle"}, "weight": 60},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Agility"}, "weight": 10},
+            {"skill": {"name": "Rifle"}, "weight": 60},
+        ]
+    }
     skill_levels = {"Rifle": 0.0, "Agility": 0.0}
     result = profession_path_optimizer(skill_levels, profession, target_level=1.0)
     alloc_names = {a["name"] for a in result["allocations"]}
@@ -430,10 +465,12 @@ def test_path_optimizer_excludes_attributes():
 
 def test_path_optimizer_excludes_unlocked_skills():
     """Skills not in skill_levels should be excluded, not optimised."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 50},
-        {"skill": {"name": "Aim"}, "weight": 50},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 50},
+            {"skill": {"name": "Aim"}, "weight": 50},
+        ]
+    }
     skill_levels = {"Rifle": 100.0}  # Aim not unlocked
     result = profession_path_optimizer(skill_levels, profession, target_level=2.0)
     alloc_names = {a["name"] for a in result["allocations"]}
@@ -446,9 +483,11 @@ def test_path_optimizer_excludes_unlocked_skills():
 
 def test_path_optimizer_target_already_reached():
     """Target at or below current level: zero allocation."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 100},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 100},
+        ]
+    }
     skill_levels = {"Rifle": 500.0}  # prof level = 5.0
     result = profession_path_optimizer(skill_levels, profession, target_level=4.0)
     assert result["totalPed"] == 0
@@ -457,9 +496,11 @@ def test_path_optimizer_target_already_reached():
 
 def test_path_optimizer_can_allocate_past_15000_skill_level():
     """Path optimizer should follow the TT curve ceiling."""
-    profession = {"skills": [
-        {"skill": {"name": "Rifle"}, "weight": 100},
-    ]}
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 100},
+        ]
+    }
     skill_levels = {"Rifle": 14990.0}
     result = profession_path_optimizer(skill_levels, profession, target_level=151.5)
     alloc = result["allocations"][0]
@@ -472,6 +513,8 @@ def test_path_optimizer_mutual_exclusion():
     """Both or neither params should raise ValueError."""
     profession = {"skills": [{"skill": {"name": "Rifle"}, "weight": 50}]}
     with pytest.raises(ValueError):
-        profession_path_optimizer({"Rifle": 0.0}, profession, target_level=5.0, ped_budget=10.0)
+        profession_path_optimizer(
+            {"Rifle": 0.0}, profession, target_level=5.0, ped_budget=10.0
+        )
     with pytest.raises(ValueError):
         profession_path_optimizer({"Rifle": 0.0}, profession)

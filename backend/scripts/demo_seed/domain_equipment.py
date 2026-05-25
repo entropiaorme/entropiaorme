@@ -134,23 +134,29 @@ _HEAL_RESOLUTIONS: dict[str, dict[str, Any]] = {
 # Allow-list of canonical item names — used by validate_synthetic_data.
 # 9 items (5 weapons + 3 healings + 1 consumable). Hedoc Mayhem is classified
 # as a healing tool here.
-_ALLOWED_ITEM_NAMES: frozenset[str] = frozenset({
-    "Emik Enigma L1 (L)",
-    "Korss H400",
-    "Herman CAP-7 Jungle (L)",
-    "Jester D-1",
-    "Castorian Pioneer EnBlade-2 (L)",
-    "Hedoc Mayhem, Adjusted",
-    "Vivo T1",
-    "Vivo T5",
-    "H-DNA",
-})
+_ALLOWED_ITEM_NAMES: frozenset[str] = frozenset(
+    {
+        "Emik Enigma L1 (L)",
+        "Korss H400",
+        "Herman CAP-7 Jungle (L)",
+        "Jester D-1",
+        "Castorian Pioneer EnBlade-2 (L)",
+        "Hedoc Mayhem, Adjusted",
+        "Vivo T1",
+        "Vivo T5",
+        "H-DNA",
+    }
+)
 
 
 def _find_exact(gds: GameDataStore, endpoint: str, name: str) -> dict | None:
     """Return the entity dict whose display name exactly matches ``name``."""
     for entity in gds.get_entities(endpoint):
-        ent_name = entity.get("name") if endpoint != "mobs" else (entity.get("species") or {}).get("name")
+        ent_name = (
+            entity.get("name")
+            if endpoint != "mobs"
+            else (entity.get("species") or {}).get("name")
+        )
         if ent_name == name:
             return entity
     return None
@@ -220,15 +226,17 @@ def _unresolved_props(item_type: str, name: str, profession: str | None = None) 
     if profession:
         base["_demo_profession"] = profession
     if item_type == "weapon":
-        base.update({
-            "weapon_entity": None,
-            "amp_entity": None,
-            "scope_entity": None,
-            "absorber_entity": None,
-            "damage_enhancers": 0,
-            "weapon_markup": 100,
-            "amp_markup": 100,
-        })
+        base.update(
+            {
+                "weapon_entity": None,
+                "amp_entity": None,
+                "scope_entity": None,
+                "absorber_entity": None,
+                "damage_enhancers": 0,
+                "weapon_markup": 100,
+                "amp_markup": 100,
+            }
+        )
     elif item_type == "healing":
         base.update({"tool_entity": None, "markup": 100})
     elif item_type == "armour":
@@ -249,7 +257,9 @@ class EquipmentSeeder:
     depends_on: tuple[str, ...] = ("core",)
 
     def seed(self, refs: CanonicalRefs, db: sqlite3.Connection, data_dir: Path) -> None:
-        snapshot_dir = Path(__file__).resolve().parents[3] / "backend" / "data" / "snapshot"
+        snapshot_dir = (
+            Path(__file__).resolve().parents[3] / "backend" / "data" / "snapshot"
+        )
         gds = GameDataStore(snapshot_dir)
 
         resolved = 0
@@ -263,7 +273,9 @@ class EquipmentSeeder:
                 outcome = _resolve_weapon(gds, item.name)
                 if outcome is None:
                     unresolved.append(item.name)
-                    log.warning("equipment seeder: weapon %r unresolved in game-data", item.name)
+                    log.warning(
+                        "equipment seeder: weapon %r unresolved in game-data", item.name
+                    )
                     props = _unresolved_props("weapon", item.name, item.profession)
                 else:
                     catalog_id, props = outcome
@@ -280,7 +292,10 @@ class EquipmentSeeder:
             elif item.item_type == "armour":
                 # Snapshot has no armours endpoint — leave unresolved but valid.
                 unresolved.append(item.name)
-                log.warning("equipment seeder: armour %r unresolved (no armours endpoint)", item.name)
+                log.warning(
+                    "equipment seeder: armour %r unresolved (no armours endpoint)",
+                    item.name,
+                )
                 props = _unresolved_props("armour", item.name)
             elif item.item_type == "consumable":
                 stim_match = _find_exact(gds, "stimulants", item.name)
@@ -293,7 +308,11 @@ class EquipmentSeeder:
                     unresolved.append(item.name)
                     props = _consumable_props_unresolved(item.name)
             else:
-                log.warning("equipment seeder: unknown item_type %r for %r — skipping enrichment", item.item_type, item.name)
+                log.warning(
+                    "equipment seeder: unknown item_type %r for %r — skipping enrichment",
+                    item.item_type,
+                    item.name,
+                )
                 continue
 
             db.execute(
@@ -303,10 +322,15 @@ class EquipmentSeeder:
 
         log.info(
             "equipment seeder: UPDATEd %d rows (%d resolved, %d unresolved).",
-            len(refs.items), resolved, len(unresolved),
+            len(refs.items),
+            resolved,
+            len(unresolved),
         )
         if unresolved:
-            log.info("equipment seeder: unresolved canonical items: %s", ", ".join(unresolved))
+            log.info(
+                "equipment seeder: unresolved canonical items: %s",
+                ", ".join(unresolved),
+            )
 
     def validate_synthetic_data(self, refs: CanonicalRefs) -> list[str]:
         violations: list[str] = []
@@ -330,7 +354,9 @@ if __name__ == "__main__":
     import shutil
     import tempfile
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
 
     from backend.scripts.demo_seed.driver import format_report, run
 
@@ -341,6 +367,7 @@ if __name__ == "__main__":
 
         # Quick post-run inspection: verify catalog_id + properties_json shape.
         import sqlite3 as _sq
+
         conn = _sq.connect(tmp / "entropia_orme.db")
         conn.row_factory = _sq.Row
         rows = conn.execute(
@@ -352,8 +379,21 @@ if __name__ == "__main__":
             props = json.loads(r["properties_json"])
             stub_marker = props.get("_demo_seed_stub")
             unresolved_marker = props.get("_unresolved")
-            entity_keys = [k for k in ("weapon_entity", "tool_entity", "armour_entity", "stim_entity") if props.get(k)]
-            mark = "stub!" if stub_marker else ("unresolved" if unresolved_marker else "resolved")
+            entity_keys = [
+                k
+                for k in (
+                    "weapon_entity",
+                    "tool_entity",
+                    "armour_entity",
+                    "stim_entity",
+                )
+                if props.get(k)
+            ]
+            mark = (
+                "stub!"
+                if stub_marker
+                else ("unresolved" if unresolved_marker else "resolved")
+            )
             print(
                 f"  [{r['item_type']:10s}] {r['name']:25s} catalog_id={r['catalog_id'] or '-':14s} "
                 f"{mark:11s} entities={entity_keys}"

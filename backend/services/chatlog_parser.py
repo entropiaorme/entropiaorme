@@ -76,7 +76,9 @@ def _amount(group: int = 1) -> Extractor:
 SYSTEM_RULES: tuple[_Rule, ...] = (
     _Rule(
         EventType.CRITICAL_HIT,
-        re.compile(r"Critical hit - Additional damage! You inflicted ([\d.]+) points of damage"),
+        re.compile(
+            r"Critical hit - Additional damage! You inflicted ([\d.]+) points of damage"
+        ),
         _amount(),
         "Critical hit",
     ),
@@ -86,16 +88,66 @@ SYSTEM_RULES: tuple[_Rule, ...] = (
         _amount(),
         "You inflicted",
     ),
-    _Rule(EventType.TARGET_JAM, re.compile(r"The target Jammed your attack"), lambda _: {}, "The target Jammed"),
-    _Rule(EventType.TARGET_DODGE, re.compile(r"The target Dodged your attack"), lambda _: {}, "The target Dodged"),
-    _Rule(EventType.TARGET_EVADE, re.compile(r"The target Evaded your attack"), lambda _: {}, "The target Evaded"),
-    _Rule(EventType.DAMAGE_RECEIVED, re.compile(r"You took ([\d.]+) points of damage"), _amount(), "You took"),
-    _Rule(EventType.DEFLECT, re.compile(r"Damage deflected!"), lambda _: {}, "Damage deflected"),
-    _Rule(EventType.PLAYER_EVADE, re.compile(r"You Evaded the attack"), lambda _: {}, "You Evaded"),
-    _Rule(EventType.PLAYER_DODGE, re.compile(r"You Dodged the attack"), lambda _: {}, "You Dodged"),
-    _Rule(EventType.PLAYER_JAM, re.compile(r"You Jammed the attack"), lambda _: {}, "You Jammed"),
-    _Rule(EventType.MOB_MISS, re.compile(r"The attack missed you"), lambda _: {}, "The attack missed"),
-    _Rule(EventType.SELF_HEAL, re.compile(r"You healed yourself ([\d.]+) points"), _amount(), "You healed"),
+    _Rule(
+        EventType.TARGET_JAM,
+        re.compile(r"The target Jammed your attack"),
+        lambda _: {},
+        "The target Jammed",
+    ),
+    _Rule(
+        EventType.TARGET_DODGE,
+        re.compile(r"The target Dodged your attack"),
+        lambda _: {},
+        "The target Dodged",
+    ),
+    _Rule(
+        EventType.TARGET_EVADE,
+        re.compile(r"The target Evaded your attack"),
+        lambda _: {},
+        "The target Evaded",
+    ),
+    _Rule(
+        EventType.DAMAGE_RECEIVED,
+        re.compile(r"You took ([\d.]+) points of damage"),
+        _amount(),
+        "You took",
+    ),
+    _Rule(
+        EventType.DEFLECT,
+        re.compile(r"Damage deflected!"),
+        lambda _: {},
+        "Damage deflected",
+    ),
+    _Rule(
+        EventType.PLAYER_EVADE,
+        re.compile(r"You Evaded the attack"),
+        lambda _: {},
+        "You Evaded",
+    ),
+    _Rule(
+        EventType.PLAYER_DODGE,
+        re.compile(r"You Dodged the attack"),
+        lambda _: {},
+        "You Dodged",
+    ),
+    _Rule(
+        EventType.PLAYER_JAM,
+        re.compile(r"You Jammed the attack"),
+        lambda _: {},
+        "You Jammed",
+    ),
+    _Rule(
+        EventType.MOB_MISS,
+        re.compile(r"The attack missed you"),
+        lambda _: {},
+        "The attack missed",
+    ),
+    _Rule(
+        EventType.SELF_HEAL,
+        re.compile(r"You healed yourself ([\d.]+) points"),
+        _amount(),
+        "You healed",
+    ),
     _Rule(
         EventType.ENHANCER_BREAK,
         re.compile(
@@ -126,13 +178,19 @@ SYSTEM_RULES: tuple[_Rule, ...] = (
     _Rule(
         EventType.SKILL_GAIN,
         re.compile(r"^You have gained ([\d.]+) experience in your (.+) skill$"),
-        lambda match: {"amount": float(match.group(1)), "skill_name": match.group(2).strip()},
+        lambda match: {
+            "amount": float(match.group(1)),
+            "skill_name": match.group(2).strip(),
+        },
         "You have gained",
     ),
     _Rule(
         EventType.SKILL_GAIN,
         re.compile(r"^You have gained ([\d.]+) ([A-Z][A-Za-z ]+)$"),
-        lambda match: {"amount": float(match.group(1)), "skill_name": match.group(2).strip()},
+        lambda match: {
+            "amount": float(match.group(1)),
+            "skill_name": match.group(2).strip(),
+        },
         "You have gained",
     ),
     _Rule(
@@ -152,12 +210,22 @@ GLOBAL_RULES: tuple[_Rule, ...] = (
             r"\[Globals\] \[\] (.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED! "
             r"A record has been added to the Hall of Fame!"
         ),
-        lambda match: {"player": match.group(1), "creature": match.group(2), "value": float(match.group(3))},
+        lambda match: {
+            "player": match.group(1),
+            "creature": match.group(2),
+            "value": float(match.group(3)),
+        },
     ),
     _Rule(
         EventType.GLOBAL_KILL,
-        re.compile(r"\[Globals\] \[\] (.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED!"),
-        lambda match: {"player": match.group(1), "creature": match.group(2), "value": float(match.group(3))},
+        re.compile(
+            r"\[Globals\] \[\] (.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED!"
+        ),
+        lambda match: {
+            "player": match.group(1),
+            "creature": match.group(2),
+            "value": float(match.group(3)),
+        },
     ),
     _Rule(
         EventType.HOF_ITEM,
@@ -165,7 +233,11 @@ GLOBAL_RULES: tuple[_Rule, ...] = (
             r"\[Globals\] \[\] (.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]! "
             r"A record has been added to the Hall of Fame!"
         ),
-        lambda match: {"player": match.group(1), "item": match.group(2), "value": float(match.group(3))},
+        lambda match: {
+            "player": match.group(1),
+            "item": match.group(2),
+            "value": float(match.group(3)),
+        },
     ),
     _Rule(
         EventType.GLOBAL_ITEM,
@@ -173,7 +245,11 @@ GLOBAL_RULES: tuple[_Rule, ...] = (
             r"\[Globals\] \[\] (.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]!"
             r"(?! A record)"
         ),
-        lambda match: {"player": match.group(1), "item": match.group(2), "value": float(match.group(3))},
+        lambda match: {
+            "player": match.group(1),
+            "item": match.group(2),
+            "value": float(match.group(3)),
+        },
     ),
 )
 
@@ -184,7 +260,9 @@ def parse_line(line: str) -> ChatEvent | None:
         return None
 
     timestamp = datetime.strptime(matched.group(1), "%Y-%m-%d %H:%M:%S")
-    content = unescape(matched.group(2)) if "&" in matched.group(2) else matched.group(2)
+    content = (
+        unescape(matched.group(2)) if "&" in matched.group(2) else matched.group(2)
+    )
 
     if SYSTEM_MARKER in content:
         return _parse_system(timestamp, content, line)

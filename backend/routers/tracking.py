@@ -34,24 +34,33 @@ def _validate_attribution(config, conn) -> tuple[bool, str | None]:
     ready, message = validate_trifecta(conn, active_trifecta_preset(config))
     if ready:
         return True, None
-    return False, message or "Configure the trifecta in the Equipment page before tracking."
+    return (
+        False,
+        message or "Configure the trifecta in the Equipment page before tracking.",
+    )
+
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
+
 class ManualMobLockRequest(BaseModel):
     species: str
     maturity: str = ""
 
+
 class TagLockRequest(BaseModel):
     tag: str
+
 
 def _weapon_attribution(config) -> str:
     return "trifecta" if not config.hotbar_hooks_enabled else "hotbar"
 
+
 def _is_tag_mode(config, mob_tracking_mode: str | None = None) -> bool:
     return (mob_tracking_mode or config.mob_tracking_mode) == "tag"
+
 
 def _configured_manual_label(config) -> tuple[str | None, str | None]:
     if _is_tag_mode(config):
@@ -68,11 +77,13 @@ def _configured_manual_label(config) -> tuple[str | None, str | None]:
     display = f"{maturity} {species}" if maturity else species
     return display, "manual"
 
+
 def _ts_to_iso(ts: float | None) -> str | None:
     """Convert a Unix timestamp (SQLite REAL) to an ISO 8601 string."""
     if ts is None:
         return None
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
 
 def _notable_event_category(event_type: str) -> str:
     if event_type.startswith("quest_"):
@@ -80,6 +91,7 @@ def _notable_event_category(event_type: str) -> str:
     if event_type.startswith("hof_"):
         return "hof"
     return "global"
+
 
 def _notable_event_label(event_type: str) -> str:
     labels = {
@@ -98,11 +110,15 @@ def _notable_event_label(event_type: str) -> str:
         return "HoF"
     return category.capitalize()
 
-def _notable_event_description(event_type: str, mob_or_item: str, value_ped: float) -> str:
+
+def _notable_event_description(
+    event_type: str, mob_or_item: str, value_ped: float
+) -> str:
     label = _notable_event_label(event_type)
     if event_type.startswith("quest_"):
         return f"{label}: {mob_or_item}"
     return f"{label}: {mob_or_item} ({value_ped:.2f} PED)"
+
 
 def _notable_event_payload(
     event_type: str,
@@ -122,6 +138,7 @@ def _notable_event_payload(
         payload["timestamp"] = timestamp
     return payload
 
+
 def _trifecta_attribution_summary(svc) -> dict | None:
     config = svc.config_service.get()
     active = active_trifecta_preset(config)
@@ -130,7 +147,9 @@ def _trifecta_attribution_summary(svc) -> dict | None:
         "bigWeapon": active.big_weapon_id if active else None,
         "healTool": active.heal_id if active else None,
     }
-    presets = [{"id": preset.id, "name": preset.name} for preset in config.trifecta_presets]
+    presets = [
+        {"id": preset.id, "name": preset.name} for preset in config.trifecta_presets
+    ]
 
     if not presets and all(value is None for value in ids.values()):
         return None
@@ -159,6 +178,7 @@ def _trifecta_attribution_summary(svc) -> dict | None:
             summary[key] = row[0]
     return summary
 
+
 @router.post("/start")
 def start_tracking():
     """Start a new tracking session."""
@@ -180,6 +200,7 @@ def start_tracking():
         "status": "active",
     }
 
+
 @router.post("/stop")
 def stop_tracking():
     """Stop the active tracking session."""
@@ -197,6 +218,7 @@ def stop_tracking():
         "ended_at": session.end_time.isoformat() if session.end_time else None,
         "kill_count": len(session.kills),
     }
+
 
 @router.get("/status")
 def tracking_status():
@@ -243,7 +265,11 @@ def tracking_status_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = svc.tracker._session_heal_cost if hasattr(svc.tracker, '_session_heal_cost') else 0.0
+    heal_cost = (
+        svc.tracker._session_heal_cost
+        if hasattr(svc.tracker, "_session_heal_cost")
+        else 0.0
+    )
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
 
@@ -259,7 +285,9 @@ def tracking_status_impl(svc):
     latest_kill_loot = kills[-1].loot_total_ped if kills else None
     # Multipliers use kill.cost_ped (weapon cost only) per EU community convention.
     mult_per_kill = [k.loot_total_ped / k.cost_ped for k in kills if k.cost_ped > 0]
-    multiplier_avg = (sum(mult_per_kill) / len(mult_per_kill)) if mult_per_kill else None
+    multiplier_avg = (
+        (sum(mult_per_kill) / len(mult_per_kill)) if mult_per_kill else None
+    )
     multiplier_max = max(mult_per_kill, default=None) if mult_per_kill else None
     multiplier_last = (
         kills[-1].loot_total_ped / kills[-1].cost_ped
@@ -313,10 +341,18 @@ def tracking_status_impl(svc):
         "maxDamage": round(max_damage, 1),
         "globalsCount": globals_count,
         "hofsCount": hofs_count,
-        "latestKillLoot": round(latest_kill_loot, 2) if latest_kill_loot is not None else None,
-        "multiplierLast": round(multiplier_last, 4) if multiplier_last is not None else None,
-        "multiplierAvg": round(multiplier_avg, 4) if multiplier_avg is not None else None,
-        "multiplierMax": round(multiplier_max, 4) if multiplier_max is not None else None,
+        "latestKillLoot": round(latest_kill_loot, 2)
+        if latest_kill_loot is not None
+        else None,
+        "multiplierLast": round(multiplier_last, 4)
+        if multiplier_last is not None
+        else None,
+        "multiplierAvg": round(multiplier_avg, 4)
+        if multiplier_avg is not None
+        else None,
+        "multiplierMax": round(multiplier_max, 4)
+        if multiplier_max is not None
+        else None,
         "multiplierHistory": multiplier_history,
         "cumulativeNetHistory": cumulative_net_history,
         "hotbarListenerActive": hotbar_listener_active,
@@ -325,8 +361,11 @@ def tracking_status_impl(svc):
         "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
         "mobEntryMode": svc.tracker._session_mob_tracking_mode,
         "currentMob": svc.tracker._confirmed_mob_name or None,
-        "mobSource": svc.tracker._mob_source if svc.tracker._confirmed_mob_name else None,
+        "mobSource": svc.tracker._mob_source
+        if svc.tracker._confirmed_mob_name
+        else None,
     }
+
 
 @router.post("/release-mob")
 def release_mob():
@@ -350,18 +389,23 @@ def release_mob():
         released = None
         if species:
             released = f"{maturity} {species}" if maturity else species
-        svc.config_service.update({
-            "manual_mob_species": "",
-            "manual_mob_maturity": "",
-        })
+        svc.config_service.update(
+            {
+                "manual_mob_species": "",
+                "manual_mob_maturity": "",
+            }
+        )
         return {"released": released}
 
     released = tracker.release_current_mob()
-    svc.config_service.update({
-        "manual_mob_species": "",
-        "manual_mob_maturity": "",
-    })
+    svc.config_service.update(
+        {
+            "manual_mob_species": "",
+            "manual_mob_maturity": "",
+        }
+    )
     return {"released": released}
+
 
 @router.get("/manual-mob-suggestions")
 def manual_mob_suggestions(q: str = "", limit: int = 10):
@@ -369,9 +413,13 @@ def manual_mob_suggestions(q: str = "", limit: int = 10):
     svc = get_services()
     config = svc.config_service.get()
     if svc.tracker.is_tracking and svc.tracker.is_session_tag_mode():
-        raise HTTPException(status_code=409, detail="Tag mode disables manual mob selection")
+        raise HTTPException(
+            status_code=409, detail="Tag mode disables manual mob selection"
+        )
     if not svc.tracker.is_tracking and config.mob_tracking_mode == "tag":
-        raise HTTPException(status_code=409, detail="Tag mode disables manual mob selection")
+        raise HTTPException(
+            status_code=409, detail="Tag mode disables manual mob selection"
+        )
 
     query = q.strip()
     if not query:
@@ -379,29 +427,39 @@ def manual_mob_suggestions(q: str = "", limit: int = 10):
 
     return svc.mob_lookup.search_mob_names(query, limit=max(1, min(limit, 20)))
 
+
 @router.post("/manual-mob-lock")
 def manual_mob_lock(req: ManualMobLockRequest):
     """Immediately lock the selected catalogue mob for manual kill stamping."""
     svc = get_services()
     config = svc.config_service.get()
     if svc.tracker.is_tracking and svc.tracker.is_session_tag_mode():
-        raise HTTPException(status_code=409, detail="Tag mode disables manual mob selection")
+        raise HTTPException(
+            status_code=409, detail="Tag mode disables manual mob selection"
+        )
     if not svc.tracker.is_tracking and config.mob_tracking_mode == "tag":
-        raise HTTPException(status_code=409, detail="Tag mode disables manual mob selection")
+        raise HTTPException(
+            status_code=409, detail="Tag mode disables manual mob selection"
+        )
 
     species = req.species.strip()
     maturity = req.maturity.strip()
     if not svc.mob_lookup.has_mob_name(species, maturity):
-        raise HTTPException(status_code=400, detail="Mob is not present in the catalogue")
+        raise HTTPException(
+            status_code=400, detail="Mob is not present in the catalogue"
+        )
 
     display = f"{maturity} {species}" if maturity else species
-    svc.config_service.update({
-        "manual_mob_species": species,
-        "manual_mob_maturity": maturity,
-    })
+    svc.config_service.update(
+        {
+            "manual_mob_species": species,
+            "manual_mob_maturity": maturity,
+        }
+    )
     if svc.tracker.is_tracking:
         svc.tracker.set_manual_mob(display, species, maturity)
     return {"mobName": display, "species": species, "maturity": maturity}
+
 
 @router.post("/tag-lock")
 def tag_lock(req: TagLockRequest):
@@ -410,7 +468,9 @@ def tag_lock(req: TagLockRequest):
     config = svc.config_service.get()
     if svc.tracker.is_tracking:
         if not svc.tracker.is_session_tag_mode():
-            raise HTTPException(status_code=409, detail="Active session is not in tag mode")
+            raise HTTPException(
+                status_code=409, detail="Active session is not in tag mode"
+            )
     elif config.mob_tracking_mode != "tag":
         raise HTTPException(status_code=409, detail="Tag mode is not enabled")
 
@@ -422,6 +482,7 @@ def tag_lock(req: TagLockRequest):
     if svc.tracker.is_tracking:
         svc.tracker.set_manual_tag(tag)
     return {"tag": tag}
+
 
 @router.get("/tag-suggestions")
 def tag_suggestions(q: str = "", limit: int = 10):
@@ -445,6 +506,7 @@ def tag_suggestions(q: str = "", limit: int = 10):
         (f"%{query.lower()}%", max(1, min(limit, 20))),
     ).fetchall()
     return [row[0] for row in rows]
+
 
 @router.get("/live")
 def tracking_live():
@@ -495,7 +557,11 @@ def tracking_live_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = svc.tracker._session_heal_cost if hasattr(svc.tracker, '_session_heal_cost') else 0.0
+    heal_cost = (
+        svc.tracker._session_heal_cost
+        if hasattr(svc.tracker, "_session_heal_cost")
+        else 0.0
+    )
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
     kills = len(session.kills)
@@ -513,17 +579,21 @@ def tracking_live_impl(svc):
     recent_events_list = []
 
     # Warnings from the tracker (e.g., heal tool not equipped)
-    if hasattr(svc.tracker, '_session_warnings'):
+    if hasattr(svc.tracker, "_session_warnings"):
         for msg in svc.tracker._session_warnings:
-            recent_events_list.append({
-                "type": "warning",
-                "description": msg,
-                "value": 0,
-            })
+            recent_events_list.append(
+                {
+                    "type": "warning",
+                    "description": msg,
+                    "value": 0,
+                }
+            )
 
     for i, r in enumerate(notable):
         event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
-        recent_events_list.append(_notable_event_payload(event_type, mob_or_item, value_ped, timestamp))
+        recent_events_list.append(
+            _notable_event_payload(event_type, mob_or_item, value_ped, timestamp)
+        )
 
     # Skill TT from this session
     skill_tt = svc.app_db.conn.execute(
@@ -563,6 +633,7 @@ def tracking_live_impl(svc):
         )
     return payload
 
+
 @router.get("/recent-events")
 def recent_events():
     """Recent notable events for the latest tracking session — dashboard activity feed.
@@ -591,12 +662,15 @@ def recent_events_impl(svc):
     for i, r in enumerate(rows):
         event_type, mob_or_item, value_ped, ts = r
         payload = _notable_event_payload(event_type, mob_or_item, value_ped)
-        events.append({
-            "id": f"ne-{i}",
-            **payload,
-            "timestamp": _ts_to_iso(ts),
-        })
+        events.append(
+            {
+                "id": f"ne-{i}",
+                **payload,
+                "timestamp": _ts_to_iso(ts),
+            }
+        )
     return events
+
 
 @router.get("/sessions")
 def list_sessions():
@@ -647,7 +721,13 @@ def list_sessions_impl(conn):
         heal_cost_val = sess_costs[1]
         dangling_cost = sess_costs[2]
 
-        cost = weapon_cost + heal_cost_val + enhancer_cost_val + armour_cost + dangling_cost
+        cost = (
+            weapon_cost
+            + heal_cost_val
+            + enhancer_cost_val
+            + armour_cost
+            + dangling_cost
+        )
 
         # Returns: sum of loot
         returns = conn.execute(
@@ -692,21 +772,24 @@ def list_sessions_impl(conn):
             (sid,),
         ).fetchone()
 
-        sessions.append({
-            "id": sid,
-            "startTime": _ts_to_iso(started_at),
-            "endTime": _ts_to_iso(ended_at),
-            "duration": duration,
-            "primaryMobs": primary_mobs,
-            "primaryWeapons": primary_weapons,
-            "cost": round(cost, 2),
-            "returns": round(returns, 2),
-            "net": round(net, 2),
-            "returnRate": round(return_rate, 4),
-            "globals": notable_counts[0],
-            "hofs": notable_counts[1],
-        })
+        sessions.append(
+            {
+                "id": sid,
+                "startTime": _ts_to_iso(started_at),
+                "endTime": _ts_to_iso(ended_at),
+                "duration": duration,
+                "primaryMobs": primary_mobs,
+                "primaryWeapons": primary_weapons,
+                "cost": round(cost, 2),
+                "returns": round(returns, 2),
+                "net": round(net, 2),
+                "returnRate": round(return_rate, 4),
+                "globals": notable_counts[0],
+                "hofs": notable_counts[1],
+            }
+        )
     return sessions
+
 
 @router.delete("/session/{session_id}")
 def delete_session(session_id: str):
@@ -716,7 +799,8 @@ def delete_session(session_id: str):
 
     # Verify session exists
     row = conn.execute(
-        "SELECT id, is_active FROM tracking_sessions WHERE id = ?", (session_id,),
+        "SELECT id, is_active FROM tracking_sessions WHERE id = ?",
+        (session_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -724,9 +808,13 @@ def delete_session(session_id: str):
         raise HTTPException(status_code=409, detail="Cannot delete an active session")
 
     # Get kill IDs for child table cleanup
-    kill_ids = [r[0] for r in conn.execute(
-        "SELECT id FROM kills WHERE session_id = ?", (session_id,),
-    ).fetchall()]
+    kill_ids = [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM kills WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+    ]
 
     if kill_ids:
         ph = ",".join("?" * len(kill_ids))
@@ -741,6 +829,7 @@ def delete_session(session_id: str):
     conn.commit()
 
     return {"status": "deleted", "sessionId": session_id}
+
 
 @router.get("/session/{session_id}")
 def get_session(session_id: str):
@@ -772,6 +861,7 @@ class RestoreMobRequest(BaseModel):
 # `kills.mob_name` at write time, so the same endpoint covers tag edits
 # transparently (frontend labels the affordance based on session mode).
 
+
 def _validate_session_exists(conn, session_id: str) -> None:
     """Validate that the session exists and is not still active.
 
@@ -784,7 +874,8 @@ def _validate_session_exists(conn, session_id: str) -> None:
     after the session has ended.
     """
     row = conn.execute(
-        "SELECT id, is_active FROM tracking_sessions WHERE id = ?", (session_id,),
+        "SELECT id, is_active FROM tracking_sessions WHERE id = ?",
+        (session_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -891,7 +982,8 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
             (to_mob, to_mob, session_id, from_mob),
         )
         conn.execute(
-            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+            "DELETE FROM session_summaries WHERE session_id = ?",
+            (session_id,),
         )
         conn.commit()
     except HTTPException:
@@ -981,7 +1073,8 @@ def _restore_session_mob_impl(conn, session_id: str, current_mob: str):
         restored_to = next(iter(distinct_originals))
 
         conn.execute(
-            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+            "DELETE FROM session_summaries WHERE session_id = ?",
+            (session_id,),
         )
         conn.commit()
     except HTTPException:
@@ -1142,7 +1235,8 @@ def _bulk_flip_loot_item(
                 (delta_sign * kill_delta, kill_id),
             )
         conn.execute(
-            "DELETE FROM session_summaries WHERE session_id = ?", (session_id,),
+            "DELETE FROM session_summaries WHERE session_id = ?",
+            (session_id,),
         )
         conn.commit()
     except HTTPException:
@@ -1152,7 +1246,11 @@ def _bulk_flip_loot_item(
         raise
 
     return _build_loot_item_edit_response(
-        conn, session_id, item_name, len(flipped), delta_sign * total_delta,
+        conn,
+        session_id,
+        item_name,
+        len(flipped),
+        delta_sign * total_delta,
     )
 
 
@@ -1201,7 +1299,11 @@ def get_session_impl(conn, session_id: str):
     if not session_row:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    started_at, ended_at, is_active = session_row[1], session_row[2], bool(session_row[3])
+    started_at, ended_at, is_active = (
+        session_row[1],
+        session_row[2],
+        bool(session_row[3]),
+    )
     mob_entry_mode = session_row[4] or "mob"
 
     # Duration
@@ -1318,7 +1420,13 @@ def get_session_impl(conn, session_id: str):
         for row in mob_breakdown_rows
     ]
 
-    total_cost = weapon_cost + session_heal_cost + total_enhancer_cost + armour_cost + dangling_cost
+    total_cost = (
+        weapon_cost
+        + session_heal_cost
+        + total_enhancer_cost
+        + armour_cost
+        + dangling_cost
+    )
 
     detail_skill_tt = conn.execute(
         "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
@@ -1333,7 +1441,10 @@ def get_session_impl(conn, session_id: str):
 
     # Build loot breakdown sorted by TT value descending
     loot_breakdown = sorted(
-        [{"name": k, "quantity": v["quantity"], "ttValue": round(v["ttValue"], 2)} for k, v in merged_loot.items()],
+        [
+            {"name": k, "quantity": v["quantity"], "ttValue": round(v["ttValue"], 2)}
+            for k, v in merged_loot.items()
+        ],
         key=lambda x: x["ttValue"],
         reverse=True,
     )
@@ -1373,13 +1484,15 @@ def get_session_impl(conn, session_id: str):
     for nr in notable_rows:
         evt_type = nr[0]
         payload = _notable_event_payload(evt_type, nr[1], nr[2])
-        notable_events.append({
-            "type": payload["type"],
-            "eventType": payload["eventType"],
-            "target": nr[1],
-            "item": nr[1],
-            "value": nr[2],
-        })
+        notable_events.append(
+            {
+                "type": payload["type"],
+                "eventType": payload["eventType"],
+                "target": nr[1],
+                "item": nr[1],
+                "value": nr[2],
+            }
+        )
 
     return {
         "sessionId": session_id,
@@ -1407,6 +1520,7 @@ def get_session_impl(conn, session_id: str):
         "toolStats": tool_stats,
         "skillGains": _session_skill_gains(conn, session_id),
     }
+
 
 def _session_skill_gains(conn, session_id: str) -> list[dict]:
     """Aggregate skill gains for a session, with current calibrated level."""
@@ -1449,9 +1563,11 @@ def _session_skill_gains(conn, session_id: str) -> list[dict]:
         for r in rows
     ]
 
+
 # ------------------------------------------------------------------
 # Repair OCR — post-session armour cost capture
 # ------------------------------------------------------------------
+
 
 @router.post("/session/{session_id}/repair-scan")
 def repair_scan(session_id: str):
@@ -1462,15 +1578,18 @@ def repair_scan(session_id: str):
         raise HTTPException(status_code=400, detail="Repair OCR is disabled")
     return svc.repair_ocr.scan_repair_cost()
 
+
 class ArmourCostBody(BaseModel):
     cost: float
+
 
 @router.post("/session/{session_id}/armour-cost")
 def set_armour_cost(session_id: str, body: ArmourCostBody):
     """Save armour repair cost to a session."""
     svc = get_services()
     row = svc.app_db.conn.execute(
-        "SELECT id FROM tracking_sessions WHERE id = ?", (session_id,),
+        "SELECT id FROM tracking_sessions WHERE id = ?",
+        (session_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1482,8 +1601,10 @@ def set_armour_cost(session_id: str, body: ArmourCostBody):
     svc.app_db.conn.commit()
     return {"sessionId": session_id, "armourCost": round(body.cost, 2)}
 
+
 class SessionQuestLinkDecisionBody(BaseModel):
     action: str
+
 
 @router.get("/session/{session_id}/quest-link-suggestion")
 def get_session_quest_link_suggestion(session_id: str):
@@ -1501,11 +1622,16 @@ def get_session_quest_link_suggestion(session_id: str):
         "sessionId": session_id,
         "suggestionType": suggestion["suggestion_type"],
         "reason": suggestion["reason"],
-        "questId": str(suggestion["quest_id"]) if suggestion["quest_id"] is not None else None,
+        "questId": str(suggestion["quest_id"])
+        if suggestion["quest_id"] is not None
+        else None,
         "questName": suggestion["quest_name"],
-        "playlistId": str(suggestion["playlist_id"]) if suggestion["playlist_id"] is not None else None,
+        "playlistId": str(suggestion["playlist_id"])
+        if suggestion["playlist_id"] is not None
+        else None,
         "playlistName": suggestion["playlist_name"],
     }
+
 
 @router.post("/session/{session_id}/quest-link")
 def decide_session_quest_link(session_id: str, body: SessionQuestLinkDecisionBody):
@@ -1528,9 +1654,13 @@ def decide_session_quest_link(session_id: str, body: SessionQuestLinkDecisionBod
             "sessionId": session_id,
             "status": "linked",
             "linkType": suggestion["suggestion_type"],
-            "questId": str(suggestion["quest_id"]) if suggestion["quest_id"] is not None else None,
+            "questId": str(suggestion["quest_id"])
+            if suggestion["quest_id"] is not None
+            else None,
             "questName": suggestion["quest_name"],
-            "playlistId": str(suggestion["playlist_id"]) if suggestion["playlist_id"] is not None else None,
+            "playlistId": str(suggestion["playlist_id"])
+            if suggestion["playlist_id"] is not None
+            else None,
             "playlistName": suggestion["playlist_name"],
         }
 

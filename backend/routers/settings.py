@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 APP_VERSION = "0.1.0"
 
+
 def _build_trifecta_response(config, conn) -> dict:
     presets = []
     active_ready = False
@@ -44,6 +45,7 @@ def _build_trifecta_response(config, conn) -> dict:
         "message": active_message,
     }
 
+
 def _build_response(svc) -> dict:
     """Assemble AppSettings shape for the frontend."""
     config = svc.config_service.get()
@@ -68,21 +70,26 @@ def _build_response(svc) -> dict:
         "appVersion": APP_VERSION,
     }
 
+
 def _validate_chatlog_path(value: str) -> str:
     if not value:
         raise HTTPException(status_code=400, detail="chat.log path is required")
     path = Path(value).expanduser()
     if path.name.lower() != "chat.log":
-        raise HTTPException(status_code=400, detail="chat.log path must point to a chat.log file")
+        raise HTTPException(
+            status_code=400, detail="chat.log path must point to a chat.log file"
+        )
     if not path.is_file():
         raise HTTPException(status_code=400, detail="chat.log path does not exist")
     return str(path)
+
 
 @router.get("")
 def get_settings():
     """Return full settings including live cache stats."""
     svc = get_services()
     return _build_response(svc)
+
 
 class SettingsPatch(BaseModel):
     chatlog_path: str | None = None
@@ -96,6 +103,7 @@ class SettingsPatch(BaseModel):
     active_trifecta_preset_id: str | None = None
     trifecta_presets: list[dict] | None = None
     loot_filter_blacklist: list[str] | None = None
+
 
 @router.patch("")
 def update_settings(patch: SettingsPatch):
@@ -131,6 +139,7 @@ def update_settings(patch: SettingsPatch):
 
     return _build_response(svc)
 
+
 @router.post("/reset")
 def reset_settings():
     """Reset all settings to defaults."""
@@ -142,14 +151,17 @@ def reset_settings():
     svc.tracker.reload_config()
     return _build_response(svc)
 
+
 class OverlayPositionPatch(BaseModel):
     x: int
     y: int
+
 
 @router.get("/overlay-position")
 def get_overlay_position():
     config = get_services().config_service.get()
     return {"x": config.overlay_x, "y": config.overlay_y}
+
 
 @router.put("/overlay-position")
 def set_overlay_position(body: OverlayPositionPatch):

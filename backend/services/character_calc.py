@@ -18,7 +18,14 @@ from backend.data.tt_value_curve import (
 from backend.data.codex_categories import get_codex_category, REWARD_DIVISORS
 
 # Attribute skills receive a ×20 multiplier in profession calculations
-ATTRIBUTE_SKILLS = {"Agility", "Health", "Intelligence", "Psyche", "Stamina", "Strength"}
+ATTRIBUTE_SKILLS = {
+    "Agility",
+    "Health",
+    "Intelligence",
+    "Psyche",
+    "Stamina",
+    "Strength",
+}
 
 
 def effective_points(skill_name: str, level: float) -> float:
@@ -177,12 +184,14 @@ def profession_skill_optimizer(
 
         if is_attr:
             # Attributes: rank by raw contribution factor only
-            attributes.append({
-                "name": name,
-                "weight": weight,
-                "currentLevel": current_level,
-                "contributionFactor": weight * 20,
-            })
+            attributes.append(
+                {
+                    "name": name,
+                    "weight": weight,
+                    "currentLevel": current_level,
+                    "contributionFactor": weight * 20,
+                }
+            )
         else:
             # Regular skills: compute PED to next profession level
             # Skill levels needed: gap * 10000 / weight
@@ -194,15 +203,17 @@ def profession_skill_optimizer(
             codex_cat = get_codex_category(name)
             codex_divisor = REWARD_DIVISORS.get(codex_cat) if codex_cat else None
 
-            skills.append({
-                "name": name,
-                "weight": weight,
-                "currentLevel": current_level,
-                "levelsNeeded": round(levels_needed, 1),
-                "pedToNextLevel": round(ped_cost, 2),
-                "codexCategory": codex_cat,
-                "codexDivisor": codex_divisor,
-            })
+            skills.append(
+                {
+                    "name": name,
+                    "weight": weight,
+                    "currentLevel": current_level,
+                    "levelsNeeded": round(levels_needed, 1),
+                    "pedToNextLevel": round(ped_cost, 2),
+                    "codexCategory": codex_cat,
+                    "codexDivisor": codex_divisor,
+                }
+            )
 
     # Skills: cheapest PED cost first
     skills.sort(key=lambda x: x["pedToNextLevel"])
@@ -250,22 +261,26 @@ def profession_path_optimizer(
             continue
         if name in ATTRIBUTE_SKILLS:
             current_level = skill_levels.get(name, 0.0)
-            attributes.append({
-                "name": name,
-                "weight": weight,
-                "currentLevel": current_level,
-                "contributionFactor": weight * 20,
-            })
+            attributes.append(
+                {
+                    "name": name,
+                    "weight": weight,
+                    "currentLevel": current_level,
+                    "contributionFactor": weight * 20,
+                }
+            )
         elif name not in skill_levels:
             excluded.append({"name": name, "weight": weight, "reason": "not unlocked"})
         else:
-            skills.append({
-                "name": name,
-                "weight": weight,
-                "currentLevel": skill_levels[name],
-                "allocated": 0.0,
-                "ped": 0.0,
-            })
+            skills.append(
+                {
+                    "name": name,
+                    "weight": weight,
+                    "currentLevel": skill_levels[name],
+                    "allocated": 0.0,
+                    "ped": 0.0,
+                }
+            )
     attributes.sort(key=lambda x: x["contributionFactor"], reverse=True)
     excluded.sort(key=lambda x: x["name"])
 
@@ -274,8 +289,16 @@ def profession_path_optimizer(
 
     if mode == "target":
         if target_level <= current_prof:
-            return _path_result(mode, target_level, ped_budget, current_prof,
-                                current_prof, skills, attributes, excluded)
+            return _path_result(
+                mode,
+                target_level,
+                ped_budget,
+                current_prof,
+                current_prof,
+                skills,
+                attributes,
+                excluded,
+            )
         points_remaining = (target_level - current_prof) * 10000
 
         while points_remaining > 0:
@@ -354,27 +377,45 @@ def profession_path_optimizer(
         end_prof += effective_points(a["name"], a["currentLevel"]) * a["weight"]
     end_prof /= 10000
 
-    return _path_result(mode, target_level, ped_budget, current_prof,
-                        end_prof, skills, attributes, excluded)
+    return _path_result(
+        mode,
+        target_level,
+        ped_budget,
+        current_prof,
+        end_prof,
+        skills,
+        attributes,
+        excluded,
+    )
 
 
-def _path_result(mode, target_level, ped_budget, current_prof, end_prof,
-                 skills, attributes, excluded=None):
+def _path_result(
+    mode,
+    target_level,
+    ped_budget,
+    current_prof,
+    end_prof,
+    skills,
+    attributes,
+    excluded=None,
+):
     """Build the path optimizer return dict."""
     allocations = []
     for s in skills:
         codex_cat = get_codex_category(s["name"])
         codex_divisor = REWARD_DIVISORS.get(codex_cat) if codex_cat else None
-        allocations.append({
-            "name": s["name"],
-            "weight": s["weight"],
-            "currentLevel": s["currentLevel"],
-            "levelsToGain": round(s["allocated"], 2),
-            "pedCost": round(s["ped"], 2),
-            "newLevel": round(s["currentLevel"] + s["allocated"], 2),
-            "codexCategory": codex_cat,
-            "codexDivisor": codex_divisor,
-        })
+        allocations.append(
+            {
+                "name": s["name"],
+                "weight": s["weight"],
+                "currentLevel": s["currentLevel"],
+                "levelsToGain": round(s["allocated"], 2),
+                "pedCost": round(s["ped"], 2),
+                "newLevel": round(s["currentLevel"] + s["allocated"], 2),
+                "codexCategory": codex_cat,
+                "codexDivisor": codex_divisor,
+            }
+        )
 
     # Sort: allocated skills first (by pedCost desc), then unallocated alphabetical
     allocated = [a for a in allocations if a["levelsToGain"] > 0]
@@ -441,14 +482,20 @@ def hp_skill_optimizer(skill_levels: dict[str, float], skills_data: list[dict]) 
         if is_attr:
             # Attributes: ×20 multiplier means levelsPerHp = hp_increase / 20
             levels_per_hp = hp_inc / 20
-            hp_contributed = (effective_points(name, current_level) / hp_inc) if current_level > 0 else 0.0
-            attributes.append({
-                "name": name,
-                "hpIncrease": hp_inc,
-                "currentLevel": current_level,
-                "levelsPerHp": round(levels_per_hp, 2),
-                "hpContribution": round(hp_contributed, 2),
-            })
+            hp_contributed = (
+                (effective_points(name, current_level) / hp_inc)
+                if current_level > 0
+                else 0.0
+            )
+            attributes.append(
+                {
+                    "name": name,
+                    "hpIncrease": hp_inc,
+                    "currentLevel": current_level,
+                    "levelsPerHp": round(levels_per_hp, 2),
+                    "hpContribution": round(hp_contributed, 2),
+                }
+            )
         else:
             # Regular skills: levels for 1 HP = hp_increase (no multiplier)
             levels_per_hp = hp_inc
@@ -459,16 +506,18 @@ def hp_skill_optimizer(skill_levels: dict[str, float], skills_data: list[dict]) 
             codex_cat = get_codex_category(name)
             codex_divisor = REWARD_DIVISORS.get(codex_cat) if codex_cat else None
 
-            skills.append({
-                "name": name,
-                "hpIncrease": hp_inc,
-                "currentLevel": current_level,
-                "levelsPerHp": round(levels_per_hp, 1),
-                "pedPerHp": round(ped_per_hp, 2),
-                "hpPerPed": round(hp_per_ped, 4),
-                "codexCategory": codex_cat,
-                "codexDivisor": codex_divisor,
-            })
+            skills.append(
+                {
+                    "name": name,
+                    "hpIncrease": hp_inc,
+                    "currentLevel": current_level,
+                    "levelsPerHp": round(levels_per_hp, 1),
+                    "pedPerHp": round(ped_per_hp, 2),
+                    "hpPerPed": round(hp_per_ped, 4),
+                    "codexCategory": codex_cat,
+                    "codexDivisor": codex_divisor,
+                }
+            )
 
     # Sort skills by PED per HP ascending (cheapest first)
     skills.sort(key=lambda x: x["pedPerHp"])

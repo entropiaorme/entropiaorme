@@ -25,7 +25,9 @@ class MobLookupService:
         seen: set[tuple[str, str]] = set()
 
         for mob in self.game_data.get_entities("mobs"):
-            species = ((mob.get("species") or {}).get("name") or mob.get("name") or "").strip()
+            species = (
+                (mob.get("species") or {}).get("name") or mob.get("name") or ""
+            ).strip()
             if not species:
                 continue
 
@@ -34,9 +36,13 @@ class MobLookupService:
                 key = (species, "")
                 display = species
                 display_lower = display.lower()
-                if key not in seen and (q in display_lower or all(part in display_lower for part in q_parts)):
+                if key not in seen and (
+                    q in display_lower or all(part in display_lower for part in q_parts)
+                ):
                     seen.add(key)
-                    results.append({"display": display, "species": species, "maturity": ""})
+                    results.append(
+                        {"display": display, "species": species, "maturity": ""}
+                    )
                 continue
 
             for maturity_entry in maturities:
@@ -44,12 +50,19 @@ class MobLookupService:
                 display = f"{maturity} {species}" if maturity else species
                 key = (species, maturity)
                 display_lower = display.lower()
-                if key in seen or (q not in display_lower and not all(part in display_lower for part in q_parts)):
+                if key in seen or (
+                    q not in display_lower
+                    and not all(part in display_lower for part in q_parts)
+                ):
                     continue
                 seen.add(key)
-                results.append({"display": display, "species": species, "maturity": maturity})
+                results.append(
+                    {"display": display, "species": species, "maturity": maturity}
+                )
 
-        results.sort(key=lambda r: (0 if r["display"].lower().startswith(q) else 1, r["display"]))
+        results.sort(
+            key=lambda r: (0 if r["display"].lower().startswith(q) else 1, r["display"])
+        )
         return results[:limit]
 
     def has_mob_name(self, species: str, maturity: str) -> bool:
@@ -60,7 +73,9 @@ class MobLookupService:
             return False
 
         for mob in self.game_data.get_entities("mobs"):
-            cached_species = ((mob.get("species") or {}).get("name") or mob.get("name") or "").strip()
+            cached_species = (
+                (mob.get("species") or {}).get("name") or mob.get("name") or ""
+            ).strip()
             if cached_species != species:
                 continue
 

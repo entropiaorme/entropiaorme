@@ -93,7 +93,9 @@ class _DamageEnhancerState:
             return
         per_slot = total // slot_count
         remainder = total % slot_count
-        self.stacks = [per_slot + (1 if idx < remainder else 0) for idx in range(slot_count)]
+        self.stacks = [
+            per_slot + (1 if idx < remainder else 0) for idx in range(slot_count)
+        ]
         self._cached_cost_ped = None
 
     def apply_break(self, remaining: int | None = None) -> bool:
@@ -111,10 +113,13 @@ class _DamageEnhancerState:
 
     def current_cost_ped(self) -> float:
         if self._cached_cost_ped is None:
-            self._cached_cost_ped = cost_per_shot_from_props(
-                self.props,
-                damage_enhancers=self.active_slots,
-            )["totalCostPerUse"] / 100.0
+            self._cached_cost_ped = (
+                cost_per_shot_from_props(
+                    self.props,
+                    damage_enhancers=self.active_slots,
+                )["totalCostPerUse"]
+                / 100.0
+            )
         return self._cached_cost_ped
 
 
@@ -230,6 +235,7 @@ class HuntTracker:
                 from backend.scripts.demo_seed.live_injection import (
                     maybe_prime_tracker_from_env,
                 )
+
                 maybe_prime_tracker_from_env(self)
             except ImportError:
                 pass
@@ -276,6 +282,7 @@ class HuntTracker:
             self._create_shrapnel_ledger_entry(session_id, end_dt)
 
             from backend.services.session_summary import write_session_summary
+
             write_session_summary(self._db, session_id)
 
             self._db.commit()
@@ -290,7 +297,8 @@ class HuntTracker:
             log.warning(
                 "Recovered orphaned session %s: %d kills preserved, "
                 "in-progress accumulator at crash time was lost",
-                session_id[:8], kill_count,
+                session_id[:8],
+                kill_count,
             )
 
     # ------------------------------------------------------------------
@@ -365,7 +373,9 @@ class HuntTracker:
         self._active_weapon_observed_name = tool_name
         return state
 
-    def _current_cost_for_tool(self, tool_name: str, inferred_cost: float = 0.0) -> float:
+    def _current_cost_for_tool(
+        self, tool_name: str, inferred_cost: float = 0.0
+    ) -> float:
         state = self._ensure_weapon_state(tool_name)
         if state is not None:
             return state.current_cost_ped()
@@ -388,7 +398,11 @@ class HuntTracker:
             if abs(stats.cost_per_shot - cost_per_shot) < 1e-9:
                 return stats
 
-        phase_count = sum(1 for stats in self._accumulator.tool_stats.values() if stats.tool_name == tool_name)
+        phase_count = sum(
+            1
+            for stats in self._accumulator.tool_stats.values()
+            if stats.tool_name == tool_name
+        )
         key = tool_name if phase_count == 0 else f"{tool_name}#{phase_count + 1}"
         stats = ToolStats(tool_name=tool_name, cost_per_shot=cost_per_shot)
         self._accumulator.tool_stats[key] = stats
@@ -417,7 +431,9 @@ class HuntTracker:
         tool = None
         if self._is_weapon_attribution_trifecta():
             if allow_damage_inference:
-                attribution = self._damage_attributor.match_damage(amount, critical=is_crit)
+                attribution = self._damage_attributor.match_damage(
+                    amount, critical=is_crit
+                )
                 if attribution is None and not self._trifecta_unmatched_warning_emitted:
                     msg = "Trifecta attribution: damage fell outside both weapon ranges"
                     self._session_warnings.append(msg)
@@ -437,7 +453,9 @@ class HuntTracker:
         current_cost = 0.0
         if tool is not None:
             lookup_started = _time.perf_counter() if debug_perf else 0.0
-            current_cost = self._current_cost_for_tool(tool, inferred_cost=inferred_cost)
+            current_cost = self._current_cost_for_tool(
+                tool, inferred_cost=inferred_cost
+            )
             if debug_perf:
                 self._perf_cost_lookup_seconds += _time.perf_counter() - lookup_started
 
@@ -449,7 +467,11 @@ class HuntTracker:
                 self._accumulator.tool_stats[phase_key] = ToolStats(tool_name=tool_key)
             ts = self._accumulator.tool_stats[phase_key]
             if ts.cost_per_shot == 0.0:
-                fallback_cost = inferred_cost if inferred_cost > 0 else self._equipment_cost_lookup(tool_key)
+                fallback_cost = (
+                    inferred_cost
+                    if inferred_cost > 0
+                    else self._equipment_cost_lookup(tool_key)
+                )
                 if fallback_cost > 0:
                     ts.cost_per_shot = fallback_cost
         ts.shots_fired += 1
@@ -460,11 +482,15 @@ class HuntTracker:
         if debug_perf:
             self._record_shot_perf(
                 tool is None,
-                self._is_weapon_attribution_trifecta() and allow_damage_inference and tool is None,
+                self._is_weapon_attribution_trifecta()
+                and allow_damage_inference
+                and tool is None,
                 shot_started,
             )
 
-    def _record_shot_perf(self, unknown_tool: bool, inference_miss: bool, shot_started: float) -> None:
+    def _record_shot_perf(
+        self, unknown_tool: bool, inference_miss: bool, shot_started: float
+    ) -> None:
         self._perf_shot_count += 1
         if unknown_tool:
             self._perf_unknown_tool_shots += 1
@@ -479,7 +505,9 @@ class HuntTracker:
 
         shots = self._perf_shot_count
         avg_shot_ms = (self._perf_shot_seconds / shots * 1000.0) if shots else 0.0
-        avg_cost_lookup_ms = (self._perf_cost_lookup_seconds / shots * 1000.0) if shots else 0.0
+        avg_cost_lookup_ms = (
+            (self._perf_cost_lookup_seconds / shots * 1000.0) if shots else 0.0
+        )
         log.debug(
             "Tracker combat perf: %.1fs shots=%d unknown=%d inference_misses=%d avg_shot_ms=%.3f avg_cost_lookup_ms=%.3f",
             elapsed,
@@ -579,7 +607,9 @@ class HuntTracker:
         self._event_bus.subscribe(EVENT_COMBAT, self._on_combat)
         self._event_bus.subscribe(EVENT_LOOT_GROUP, self._on_loot)
         self._event_bus.subscribe(EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed)
-        self._event_bus.subscribe(EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed)
+        self._event_bus.subscribe(
+            EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
+        )
         self._event_bus.subscribe(EVENT_GLOBAL, self._on_global)
         self._event_bus.subscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
 
@@ -663,7 +693,9 @@ class HuntTracker:
         self._event_bus.unsubscribe(EVENT_COMBAT, self._on_combat)
         self._event_bus.unsubscribe(EVENT_LOOT_GROUP, self._on_loot)
         self._event_bus.unsubscribe(EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed)
-        self._event_bus.unsubscribe(EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed)
+        self._event_bus.unsubscribe(
+            EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
+        )
         self._event_bus.unsubscribe(EVENT_GLOBAL, self._on_global)
         self._event_bus.unsubscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
 
@@ -673,15 +705,22 @@ class HuntTracker:
         self._db.execute(
             "UPDATE tracking_sessions SET ended_at = ?, is_active = 0, "
             "heal_cost = ?, dangling_cost = ? WHERE id = ?",
-            (self._session.end_time.timestamp(), self._session_heal_cost,
-             dangling_cost, self._session.id),
+            (
+                self._session.end_time.timestamp(),
+                self._session_heal_cost,
+                dangling_cost,
+                self._session.id,
+            ),
         )
 
         # Auto-generate ledger gains derived from persisted loot rows.
-        self._create_enhancer_rebate_ledger_entry(self._session.id, self._session.end_time)
+        self._create_enhancer_rebate_ledger_entry(
+            self._session.id, self._session.end_time
+        )
         self._create_shrapnel_ledger_entry(self._session.id, self._session.end_time)
 
         from backend.services.session_summary import write_session_summary
+
         write_session_summary(self._db, self._session.id)
 
         self._db.commit()
@@ -689,7 +728,9 @@ class HuntTracker:
         session = self._session
         log.info(
             "Session stopped: %s (%d kills, %.2f PED dangling cost)",
-            session.id[:8], len(session.kills), dangling_cost,
+            session.id[:8],
+            len(session.kills),
+            dangling_cost,
         )
         self._event_bus.publish(EVENT_SESSION_STOPPED, {"session_id": session.id})
 
@@ -757,15 +798,13 @@ class HuntTracker:
 
     def release_current_mob(self) -> str | None:
         """Clear the current/confirmed mob state."""
-        released = (
-            self._confirmed_mob_name
-            or self._current_mob_name
-            or None
-        )
+        released = self._confirmed_mob_name or self._current_mob_name or None
         self._clear_mob_state()
         return released
 
-    def _create_shrapnel_ledger_entry(self, session_id: str, end_time: datetime) -> None:
+    def _create_shrapnel_ledger_entry(
+        self, session_id: str, end_time: datetime
+    ) -> None:
         """Create a ledger entry for the shrapnel→ammo conversion margin.
 
         Shrapnel looted during a session is crafted into ammo at a 100:101 rate,
@@ -791,14 +830,24 @@ class HuntTracker:
         self._db.execute(
             "INSERT INTO ledger_entries (id, date, type, description, amount, tag) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (entry_id, date_str, "markup", "Shrapnel Conversion", margin_ped, "convert"),
+            (
+                entry_id,
+                date_str,
+                "markup",
+                "Shrapnel Conversion",
+                margin_ped,
+                "convert",
+            ),
         )
         log.info(
             "Shrapnel conversion: %.2f PED shrapnel → %.4f PED margin",
-            shrapnel_ped, margin_ped,
+            shrapnel_ped,
+            margin_ped,
         )
 
-    def _create_enhancer_rebate_ledger_entry(self, session_id: str, end_time: datetime) -> None:
+    def _create_enhancer_rebate_ledger_entry(
+        self, session_id: str, end_time: datetime
+    ) -> None:
         """Create a ledger entry for enhancer shrapnel refunded during the session."""
         row = self._db.execute(
             "SELECT COALESCE(SUM(kli.value_ped), 0) "
@@ -863,16 +912,25 @@ class HuntTracker:
             if timestamp:
                 is_new_heal_activation = (
                     self._last_heal_time is None
-                    or (timestamp - self._last_heal_time).total_seconds() >= self._heal_reload_seconds
+                    or (timestamp - self._last_heal_time).total_seconds()
+                    >= self._heal_reload_seconds
                 )
                 if is_new_heal_activation:
-                    if self._is_weapon_attribution_trifecta() and not self._heal_amount_matches_trifecta_tool(amount):
+                    if (
+                        self._is_weapon_attribution_trifecta()
+                        and not self._heal_amount_matches_trifecta_tool(amount)
+                    ):
                         return
-                    if self._active_heal_tool_name is None and not self._heal_warning_emitted:
+                    if (
+                        self._active_heal_tool_name is None
+                        and not self._heal_warning_emitted
+                    ):
                         msg = "Healing detected — no heal tool equipped via hotbar"
                         self._session_warnings.append(msg)
                         self._heal_warning_emitted = True
-                        log.warning("Healing detected with no heal tool equipped via hotbar")
+                        log.warning(
+                            "Healing detected with no heal tool equipped via hotbar"
+                        )
                     if self._heal_cost_per_use_ped > 0:
                         self._session_heal_cost += self._heal_cost_per_use_ped
                     self._last_heal_time = timestamp
@@ -893,9 +951,11 @@ class HuntTracker:
         # Loot deduplication (same fingerprint within 2s window)
         first_item = items_raw[0].get("item_name", "") if items_raw else ""
         fingerprint = (round(total_ped, 4), len(items_raw), first_item)
-        if (self._last_loot_fingerprint == fingerprint
-                and self._last_loot_time is not None
-                and (now - self._last_loot_time) < self.LOOT_DEDUP_WINDOW):
+        if (
+            self._last_loot_fingerprint == fingerprint
+            and self._last_loot_time is not None
+            and (now - self._last_loot_time) < self.LOOT_DEDUP_WINDOW
+        ):
             return
         self._last_loot_fingerprint = fingerprint
         self._last_loot_time = now
@@ -905,12 +965,16 @@ class HuntTracker:
         for item in items_raw:
             name = item.get("item_name", "")
             if is_tracked_loot(name, self._loot_blacklist):
-                items.append(LootItem(
-                    item_name=name,
-                    quantity=item.get("quantity", 1),
-                    value_ped=item.get("value_ped", 0.0),
-                    is_enhancer_shrapnel=bool(item.get("is_enhancer_shrapnel", False)),
-                ))
+                items.append(
+                    LootItem(
+                        item_name=name,
+                        quantity=item.get("quantity", 1),
+                        value_ped=item.get("value_ped", 0.0),
+                        is_enhancer_shrapnel=bool(
+                            item.get("is_enhancer_shrapnel", False)
+                        ),
+                    )
+                )
         filtered_total_ped = round(
             sum(item.value_ped for item in items if not item.is_enhancer_shrapnel),
             4,
@@ -948,7 +1012,12 @@ class HuntTracker:
         self._last_kill = kill
         self._persist_kill(kill)
 
-        log.debug("Kill recorded: %s %.2f PED loot → %s", kill.mob_name, filtered_total_ped, kill.id[:8])
+        log.debug(
+            "Kill recorded: %s %.2f PED loot → %s",
+            kill.mob_name,
+            filtered_total_ped,
+            kill.id[:8],
+        )
 
     def _on_tool_changed(self, data: dict) -> None:
         """Handle hotbar-driven weapon tool change.
@@ -973,7 +1042,9 @@ class HuntTracker:
                 real = self._tool_stats_for_phase(tool_name, current_cost)
             else:
                 if tool_name not in self._accumulator.tool_stats:
-                    self._accumulator.tool_stats[tool_name] = ToolStats(tool_name=tool_name)
+                    self._accumulator.tool_stats[tool_name] = ToolStats(
+                        tool_name=tool_name
+                    )
                 real = self._accumulator.tool_stats[tool_name]
             real.shots_fired += unknown.shots_fired
             real.damage_dealt += unknown.damage_dealt
@@ -996,7 +1067,9 @@ class HuntTracker:
 
         log.info(
             "Heal tool equipped: %s (cost=%.4f PED, reload=%.1fs)",
-            name, cost, reload_s,
+            name,
+            cost,
+            reload_s,
         )
 
     def _heal_amount_matches_trifecta_tool(self, amount: float) -> bool:
@@ -1013,11 +1086,18 @@ class HuntTracker:
             return False
         item_norm = "".join(ch.lower() for ch in item_name if ch.isalnum())
         tool_norm = "".join(ch.lower() for ch in state.tool_name if ch.isalnum())
-        observed_norm = "".join(ch.lower() for ch in (self._active_weapon_observed_name or "") if ch.isalnum())
+        observed_norm = "".join(
+            ch.lower()
+            for ch in (self._active_weapon_observed_name or "")
+            if ch.isalnum()
+        )
         return bool(item_norm) and (
             item_norm in tool_norm
             or tool_norm in item_norm
-            or (observed_norm and (item_norm in observed_norm or observed_norm in item_norm))
+            or (
+                observed_norm
+                and (item_norm in observed_norm or observed_norm in item_norm)
+            )
         )
 
     def _on_global(self, data: dict) -> None:
@@ -1054,12 +1134,15 @@ class HuntTracker:
             )
             log.info(
                 "Global/HoF correlated: %s %.2f PED → kill %s",
-                event_type, value_ped, target.id[:8],
+                event_type,
+                value_ped,
+                target.id[:8],
             )
         else:
             log.warning(
                 "Global/HoF with no recent kill to correlate: %s %.2f PED",
-                event_type, value_ped,
+                event_type,
+                value_ped,
             )
 
         self._db.execute(
@@ -1082,7 +1165,9 @@ class HuntTracker:
 
         log.debug(
             "Enhancer break: %s — shrapnel=%.2f, remaining=%s",
-            enhancer_name, shrapnel_ped, remaining,
+            enhancer_name,
+            shrapnel_ped,
+            remaining,
         )
 
         state = self._active_weapon_state()
@@ -1094,7 +1179,9 @@ class HuntTracker:
         ):
             return
 
-        slot_changed = state.apply_break(remaining if isinstance(remaining, int) else None)
+        slot_changed = state.apply_break(
+            remaining if isinstance(remaining, int) else None
+        )
         if slot_changed:
             log.info(
                 "Damage enhancer slot depleted on %s: %d active slot(s) remain",
@@ -1116,13 +1203,21 @@ class HuntTracker:
                 loot_total_ped, is_global, is_hof)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                kill.id, kill.session_id, kill.mob_name,
-                kill.mob_species, kill.mob_maturity,
+                kill.id,
+                kill.session_id,
+                kill.mob_name,
+                kill.mob_species,
+                kill.mob_maturity,
                 kill.timestamp,
-                kill.shots_fired, kill.damage_dealt, kill.damage_taken,
-                kill.critical_hits, kill.cost_ped, kill.enhancer_cost,
+                kill.shots_fired,
+                kill.damage_dealt,
+                kill.damage_taken,
+                kill.critical_hits,
+                kill.cost_ped,
+                kill.enhancer_cost,
                 kill.loot_total_ped,
-                int(kill.is_global), int(kill.is_hof),
+                int(kill.is_global),
+                int(kill.is_hof),
             ),
         )
 
@@ -1133,8 +1228,14 @@ class HuntTracker:
                    (kill_id, tool_name, shots_fired, damage_dealt,
                     critical_hits, cost_per_shot)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                (kill.id, stats.tool_name, stats.shots_fired, stats.damage_dealt,
-                 stats.critical_hits, stats.cost_per_shot),
+                (
+                    kill.id,
+                    stats.tool_name,
+                    stats.shots_fired,
+                    stats.damage_dealt,
+                    stats.critical_hits,
+                    stats.cost_per_shot,
+                ),
             )
 
         # Loot items

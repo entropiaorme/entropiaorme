@@ -99,7 +99,8 @@ def run(data_dir: Path, extra_seeders: list[Seeder] | None = None) -> SeedRunRep
 
         while pending:
             ready = [
-                s for s in pending.values()
+                s
+                for s in pending.values()
                 if all(dep in completed for dep in s.depends_on)
             ]
             if not ready:

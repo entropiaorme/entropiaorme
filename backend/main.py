@@ -12,12 +12,14 @@ from pathlib import Path
 # precedence over the file.
 if not getattr(sys, "frozen", False):
     from dotenv import load_dotenv
+
     load_dotenv(Path(__file__).parent.parent / ".env.local")
 
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
     # Set entire process to below-normal priority so we don't compete with game
     import ctypes
+
     BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
     ctypes.windll.kernel32.SetPriorityClass(
         ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS
@@ -50,6 +52,7 @@ else:
     PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
 
 # Port configuration: the backend listens on ENTROPIAORME_BACKEND_PORT
 # (default 8421) and the matching CORS origins / Host-header entries derive
@@ -132,9 +135,19 @@ from backend.services.quest_service import QuestService
 from backend.services.hotbar_listener import HotbarListener
 from backend.services.repair_ocr import RepairOcrService
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
-from backend.routers import health, character, equipment, settings, tracking, analytics, codex, quests
+from backend.routers import (
+    health,
+    character,
+    equipment,
+    settings,
+    tracking,
+    analytics,
+    codex,
+    quests,
+)
 from backend.routers import scan_manual
 from backend.routers import demo
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -169,10 +182,16 @@ async def lifespan(app: FastAPI):
 
     def _equipment_profile_lookup(tool_name: str) -> dict | None:
         import json
+
         # Escape LIKE wildcards in the user-supplied fragment so embedded
         # `%` / `_` / `\\` cannot widen the match. Catalogue names today
         # contain none of these, but the escape closes the smell.
-        safe = tool_name.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        safe = (
+            tool_name.strip()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
         row = app_db.conn.execute(
             "SELECT properties_json, item_type FROM equipment_library "
             "WHERE item_type = 'weapon' AND name LIKE ? ESCAPE '\\'",
@@ -194,6 +213,7 @@ async def lifespan(app: FastAPI):
     def _heal_tool_cost_lookup(equip_id: int) -> tuple[float, float]:
         """Returns (cost_per_use_ped, reload_seconds) for a healing tool by library ID."""
         import json
+
         if equip_id in _heal_cost_cache:
             return _heal_cost_cache[equip_id]
         row = app_db.conn.execute(
@@ -232,6 +252,7 @@ async def lifespan(app: FastAPI):
         return float(tt)
 
     config = config_service.get()
+
     # Hotbar resolver: slot key → (name, cost, item_type) or None
     # Reads the hotbar config and looks up equipment from the library
     def _hotbar_resolver(slot_key: str):
@@ -275,17 +296,22 @@ async def lifespan(app: FastAPI):
         return (species, maturity)
 
     def _resolve_trifecta():
-        trifecta, _error = describe_trifecta(app_db.conn, active_trifecta_preset(config_service.get()))
+        trifecta, _error = describe_trifecta(
+            app_db.conn, active_trifecta_preset(config_service.get())
+        )
         return trifecta
 
     tracker = HuntTracker(
-        event_bus, app_db.conn,
+        event_bus,
+        app_db.conn,
         equipment_cost_lookup=_equipment_cost_lookup,
         equipment_profile_lookup=_equipment_profile_lookup,
         player_name=config.player_name,
         enhancer_tt_lookup=_enhancer_tt_lookup,
         loot_filter_blacklist=config.loot_filter_blacklist,
-        loot_filter_blacklist_provider=lambda: config_service.get().loot_filter_blacklist,
+        loot_filter_blacklist_provider=lambda: (
+            config_service.get().loot_filter_blacklist
+        ),
         weapon_attribution_trifecta_provider=_is_weapon_attribution_trifecta,
         mob_tracking_mode_provider=_get_mob_tracking_mode,
         mob_tracking_tag_provider=_get_mob_tracking_tag,
@@ -296,7 +322,8 @@ async def lifespan(app: FastAPI):
 
     quest_service = QuestService(app_db, event_bus)
     chatlog_watcher = ChatlogWatcher(
-        event_bus, config.chatlog_path,
+        event_bus,
+        config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
     )
 
@@ -311,7 +338,8 @@ async def lifespan(app: FastAPI):
 
     # Manual skill scan service
     skill_scan_manual = SkillScanManual(
-        config_service, data_dir,
+        config_service,
+        data_dir,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
     )
@@ -366,6 +394,7 @@ async def lifespan(app: FastAPI):
     chatlog_watcher.stop()
     app_db.close()
 
+
 def create_app() -> FastAPI:
     app = FastAPI(title="EntropiaOrme API", version="0.1.0", lifespan=lifespan)
 
@@ -395,7 +424,9 @@ def create_app() -> FastAPI:
         # non-browser process omitting Origin should not be able to mutate state.
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             if not origin or origin not in ALLOWED_API_ORIGINS:
-                return JSONResponse({"detail": "Origin header required"}, status_code=403)
+                return JSONResponse(
+                    {"detail": "Origin header required"}, status_code=403
+                )
         elif origin and origin not in ALLOWED_API_ORIGINS:
             return JSONResponse({"detail": "Invalid Origin header"}, status_code=403)
 
@@ -413,6 +444,7 @@ def create_app() -> FastAPI:
     app.include_router(demo.router, prefix="/api")
 
     return app
+
 
 app = create_app()
 

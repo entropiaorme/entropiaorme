@@ -43,40 +43,53 @@ _COST_PER_SHOT: dict[str, float] = {
 # Approx shots-to-kill ranges for the canonical mob species + maturity combos
 # the corpus uses, scaled to the dominant weapon for the session profile.
 _SHOTS_TO_KILL: dict[tuple[str, str], tuple[int, int]] = {
-    ("Caboria", "Young"):    (10, 18),
-    ("Caboria", "Mature"):   (14, 22),
-    ("Caboria", "Old"):      (20, 32),
+    ("Caboria", "Young"): (10, 18),
+    ("Caboria", "Mature"): (14, 22),
+    ("Caboria", "Old"): (20, 32),
     ("Caboria", "Provider"): (28, 42),
-    ("Atrox", "Young"):      (16, 24),
-    ("Atrox", "Mature"):     (22, 32),
-    ("Atrox", "Old"):        (24, 38),
-    ("Atrox", "Stalker"):    (32, 48),
-    ("Argonaut", "Young"):   (12, 20),
-    ("Argonaut", "Mature"):  (18, 28),
-    ("Argonaut", "Old"):     (22, 34),
-    ("Argonaut", "Provider"):(28, 42),
-    ("Combibo", "Young"):    (8, 14),
-    ("Combibo", "Mature"):   (10, 16),
-    ("Combibo", "Old"):      (14, 20),
-    ("Daikiba", "Young"):    (10, 18),
-    ("Daikiba", "Mature"):   (14, 22),
-    ("Daikiba", "Old"):      (18, 28),
+    ("Atrox", "Young"): (16, 24),
+    ("Atrox", "Mature"): (22, 32),
+    ("Atrox", "Old"): (24, 38),
+    ("Atrox", "Stalker"): (32, 48),
+    ("Argonaut", "Young"): (12, 20),
+    ("Argonaut", "Mature"): (18, 28),
+    ("Argonaut", "Old"): (22, 34),
+    ("Argonaut", "Provider"): (28, 42),
+    ("Combibo", "Young"): (8, 14),
+    ("Combibo", "Mature"): (10, 16),
+    ("Combibo", "Old"): (14, 20),
+    ("Daikiba", "Young"): (10, 18),
+    ("Daikiba", "Mature"): (14, 22),
+    ("Daikiba", "Old"): (18, 28),
     ("Daikiba", "Provider"): (24, 36),
-    ("Snablesnot Male", "Young"):    (10, 16),
-    ("Snablesnot Male", "Old"):      (16, 24),
+    ("Snablesnot Male", "Young"): (10, 16),
+    ("Snablesnot Male", "Old"): (16, 24),
     ("Snablesnot Male", "Provider"): (22, 32),
 }
 
 # Combat skill pools (subsets of canonical SKILL_NAMES).
 _RANGED_SKILLS = (
-    "Hit Ability", "Damage Ability", "Combat Reflexes", "Combat Sense",
-    "Ranged Laser (Hit)", "Ranged Laser (Dmg)", "Ranged Blp (Hit)",
-    "Ranged Blp (Dmg)", "Aim", "Anatomy", "Inflict Ranged Damage",
+    "Hit Ability",
+    "Damage Ability",
+    "Combat Reflexes",
+    "Combat Sense",
+    "Ranged Laser (Hit)",
+    "Ranged Laser (Dmg)",
+    "Ranged Blp (Hit)",
+    "Ranged Blp (Dmg)",
+    "Aim",
+    "Anatomy",
+    "Inflict Ranged Damage",
 )
 _MELEE_SKILLS = (
-    "Hit Ability", "Damage Ability", "Combat Reflexes",
-    "Melee Combat (Hit)", "Melee Combat (Dmg)", "Power Catch",
-    "Lightweight Melee Weapons", "Inflict Melee Damage",
+    "Hit Ability",
+    "Damage Ability",
+    "Combat Reflexes",
+    "Melee Combat (Hit)",
+    "Melee Combat (Dmg)",
+    "Power Catch",
+    "Lightweight Melee Weapons",
+    "Inflict Melee Damage",
 )
 _SUPPORT_SKILLS = ("Evade", "Dodge", "Athletics", "Wounded", "Serendipity")
 
@@ -91,20 +104,42 @@ _ATTRIBUTES_FAVOURED = ("Stamina", "Strength", "Agility")
 # stones / nexus components fill the long tail.
 _NAMED_LOOT_ITEMS: tuple[str, ...] = (
     # bulk creature-residue drops (top of any real animal-loot histogram)
-    "Animal Oil Residue", "Animal Oil Residue", "Animal Oil Residue",
-    "Animal Muscle Oil", "Animal Muscle Oil",
-    "Animal Hide", "Animal Hide",
+    "Animal Oil Residue",
+    "Animal Oil Residue",
+    "Animal Oil Residue",
+    "Animal Muscle Oil",
+    "Animal Muscle Oil",
+    "Animal Hide",
+    "Animal Hide",
     # creature-part drops (bones / claws / teeth — Argonaut/Caboria/Daikiba style)
-    "Bone", "Soft Hide", "Fine Hide",
-    "Jagged Tooth", "Lesser Claw", "Argonaut Bone", "Argonaut Claw Small",
+    "Bone",
+    "Soft Hide",
+    "Fine Hide",
+    "Jagged Tooth",
+    "Lesser Claw",
+    "Argonaut Bone",
+    "Argonaut Claw Small",
     # less-common oils + stackables
-    "Animal Eye Oil", "Animal Liver Oil", "Animal Thyroid Oil",
-    "Animal Adrenal Oil", "Wool", "Lysterium Stone", "Belkar Stone",
-    "Diluted Sweat", "Paint Can (Olive)", "Socket 1 Component",
+    "Animal Eye Oil",
+    "Animal Liver Oil",
+    "Animal Thyroid Oil",
+    "Animal Adrenal Oil",
+    "Wool",
+    "Lysterium Stone",
+    "Belkar Stone",
+    "Diluted Sweat",
+    "Paint Can (Olive)",
+    "Socket 1 Component",
 )
 _RARE_LOOT_ITEMS: tuple[str, ...] = (
-    "Dunkel Element", "Robust Oil", "Ares Component", "Nexus", "Kerm Stone",
-    "Force Nexus", "Easter Strongbox", "Mayhem Token",
+    "Dunkel Element",
+    "Robust Oil",
+    "Ares Component",
+    "Nexus",
+    "Kerm Stone",
+    "Force Nexus",
+    "Easter Strongbox",
+    "Mayhem Token",
 )
 
 # Session profiles: (weapon, dominant_species, dominant_maturity, mode).
@@ -112,24 +147,24 @@ _RARE_LOOT_ITEMS: tuple[str, ...] = (
 # session_summary dominance check (>= 60%) reliably populates dominant_mob
 # and dominant_weapon.
 _PROFILES: tuple[tuple[str, str, str, str], ...] = (
-    ("Emik Enigma L1 (L)",              "Caboria",         "Young",    "ranged"),
-    ("Emik Enigma L1 (L)",              "Caboria",         "Mature",   "ranged"),
-    ("Emik Enigma L1 (L)",              "Combibo",         "Mature",   "ranged"),
-    ("Korss H400",                      "Caboria",         "Old",      "ranged"),
-    ("Korss H400",                      "Caboria",         "Provider", "ranged"),
-    ("Korss H400",                      "Argonaut",        "Mature",   "ranged"),
-    ("Korss H400",                      "Argonaut",        "Old",      "ranged"),
+    ("Emik Enigma L1 (L)", "Caboria", "Young", "ranged"),
+    ("Emik Enigma L1 (L)", "Caboria", "Mature", "ranged"),
+    ("Emik Enigma L1 (L)", "Combibo", "Mature", "ranged"),
+    ("Korss H400", "Caboria", "Old", "ranged"),
+    ("Korss H400", "Caboria", "Provider", "ranged"),
+    ("Korss H400", "Argonaut", "Mature", "ranged"),
+    ("Korss H400", "Argonaut", "Old", "ranged"),
     # Big-mob ranged work runs on Korss H400 (Hedoc Mayhem is a heal tool here).
-    ("Korss H400",                      "Atrox",           "Old",      "ranged"),
-    ("Korss H400",                      "Atrox",           "Stalker",  "ranged"),
-    ("Korss H400",                      "Argonaut",        "Provider", "ranged"),
-    ("Herman CAP-7 Jungle (L)",         "Daikiba",         "Old",      "ranged"),
-    ("Herman CAP-7 Jungle (L)",         "Daikiba",         "Provider", "ranged"),
-    ("Herman CAP-7 Jungle (L)",         "Snablesnot Male", "Old",      "ranged"),
-    ("Jester D-1",                      "Combibo",         "Mature",   "ranged"),
-    ("Jester D-1",                      "Combibo",         "Old",      "ranged"),
-    ("Castorian Pioneer EnBlade-2 (L)", "Snablesnot Male", "Old",      "melee"),
-    ("Castorian Pioneer EnBlade-2 (L)", "Combibo",         "Old",      "melee"),
+    ("Korss H400", "Atrox", "Old", "ranged"),
+    ("Korss H400", "Atrox", "Stalker", "ranged"),
+    ("Korss H400", "Argonaut", "Provider", "ranged"),
+    ("Herman CAP-7 Jungle (L)", "Daikiba", "Old", "ranged"),
+    ("Herman CAP-7 Jungle (L)", "Daikiba", "Provider", "ranged"),
+    ("Herman CAP-7 Jungle (L)", "Snablesnot Male", "Old", "ranged"),
+    ("Jester D-1", "Combibo", "Mature", "ranged"),
+    ("Jester D-1", "Combibo", "Old", "ranged"),
+    ("Castorian Pioneer EnBlade-2 (L)", "Snablesnot Male", "Old", "melee"),
+    ("Castorian Pioneer EnBlade-2 (L)", "Combibo", "Old", "melee"),
 )
 
 # 25 sessions, distributed:
@@ -156,9 +191,9 @@ class SessionsSeeder:
         notable_pool = sorted(rng.sample(range(n), 4))
         notable_assignments: dict[int, tuple[str, float]] = {
             notable_pool[0]: ("global_kill", rng.uniform(55.0, 90.0)),
-            notable_pool[1]: ("hof_kill",    rng.uniform(380.0, 720.0)),
+            notable_pool[1]: ("hof_kill", rng.uniform(380.0, 720.0)),
             notable_pool[2]: ("global_item", rng.uniform(60.0, 95.0)),
-            notable_pool[3]: ("multiplier",  rng.uniform(22.0, 55.0)),
+            notable_pool[3]: ("multiplier", rng.uniform(22.0, 55.0)),
         }
 
         kill_total = 0
@@ -179,11 +214,13 @@ class SessionsSeeder:
             # HoF/global sessions bump separately on the bearer kill below.
             roll = rng.random()
             if roll < 0.65:
-                session_return = rng.uniform(0.78, 1.10)   # typical (chip-down + small wins)
+                session_return = rng.uniform(
+                    0.78, 1.10
+                )  # typical (chip-down + small wins)
             elif roll < 0.85:
-                session_return = rng.uniform(0.55, 0.82)   # loss session
+                session_return = rng.uniform(0.55, 0.82)  # loss session
             else:
-                session_return = rng.uniform(1.10, 1.35)   # gain session
+                session_return = rng.uniform(1.10, 1.35)  # gain session
 
             notable = notable_assignments.get(idx)
             notable_kill_idx = rng.randrange(len(kills)) if notable else None
@@ -224,8 +261,14 @@ class SessionsSeeder:
                 "INSERT INTO tracking_sessions "
                 "(id, started_at, ended_at, is_active, armour_cost, heal_cost, dangling_cost) "
                 "VALUES (?, ?, ?, 0, ?, ?, ?)",
-                (sess["id"], sess["started_at"], sess["ended_at"],
-                 armour_cost, heal_cost, dangling_cost),
+                (
+                    sess["id"],
+                    sess["started_at"],
+                    sess["ended_at"],
+                    armour_cost,
+                    heal_cost,
+                    dangling_cost,
+                ),
             )
 
             # Insert kills + tool_stats + loot rows.
@@ -236,20 +279,35 @@ class SessionsSeeder:
                     "cost_ped, enhancer_cost, loot_total_ped, is_global, is_hof) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
-                        k["id"], k["session_id"], k["mob_name"], k["mob_species"],
-                        k["mob_maturity"], k["timestamp"], k["shots_fired"],
-                        round(k["damage_dealt"], 2), round(k["damage_taken"], 2),
-                        k["critical_hits"], k["cost_ped"], k["enhancer_cost"],
+                        k["id"],
+                        k["session_id"],
+                        k["mob_name"],
+                        k["mob_species"],
+                        k["mob_maturity"],
+                        k["timestamp"],
+                        k["shots_fired"],
+                        round(k["damage_dealt"], 2),
+                        round(k["damage_taken"], 2),
+                        k["critical_hits"],
+                        k["cost_ped"],
+                        k["enhancer_cost"],
                         k["loot_total_ped"],
-                        1 if k.get("is_global") else 0, 1 if k.get("is_hof") else 0,
+                        1 if k.get("is_global") else 0,
+                        1 if k.get("is_hof") else 0,
                     ),
                 )
                 db.execute(
                     "INSERT INTO kill_tool_stats "
                     "(kill_id, tool_name, shots_fired, damage_dealt, critical_hits, cost_per_shot) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (k["id"], k["weapon"], k["shots_fired"],
-                     round(k["damage_dealt"], 2), k["critical_hits"], k["cps"]),
+                    (
+                        k["id"],
+                        k["weapon"],
+                        k["shots_fired"],
+                        round(k["damage_dealt"], 2),
+                        k["critical_hits"],
+                        k["cps"],
+                    ),
                 )
                 # Loot rows: a dominant Shrapnel filler + 0-3 named items.
                 self._write_loot_rows(db, k, rng)
@@ -272,8 +330,14 @@ class SessionsSeeder:
                     "INSERT INTO notable_events "
                     "(session_id, kill_id, event_type, mob_or_item, value_ped, timestamp) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (sess["id"], target_kill["id"], evt_type, mob_or_item,
-                     round(evt_val, 2), target_kill["timestamp"]),
+                    (
+                        sess["id"],
+                        target_kill["id"],
+                        evt_type,
+                        mob_or_item,
+                        round(evt_val, 2),
+                        target_kill["timestamp"],
+                    ),
                 )
                 notable_total += 1
 
@@ -282,8 +346,12 @@ class SessionsSeeder:
 
         log.info(
             "%s seeder: %d sessions, %d kills, %d loot rows, %d skill_gains, %d notable_events",
-            self.name, len(sessions), kill_total, loot_row_total,
-            skill_gain_total, notable_total,
+            self.name,
+            len(sessions),
+            kill_total,
+            loot_row_total,
+            skill_gain_total,
+            notable_total,
         )
 
     # ─── helpers ────────────────────────────────────────────────────────────
@@ -310,18 +378,23 @@ class SessionsSeeder:
                     duration_h = rng.uniform(2.6, 4.0)
                 ended_at = started_at + duration_h * _HOUR
                 profile = rng.choice(_PROFILES)
-                sessions.append({
-                    "id": str(uuid.uuid4()),
-                    "started_at": started_at,
-                    "ended_at": ended_at,
-                    "duration_hours": duration_h,
-                    "profile": profile,
-                })
+                sessions.append(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "started_at": started_at,
+                        "ended_at": ended_at,
+                        "duration_hours": duration_h,
+                        "profile": profile,
+                    }
+                )
         sessions.sort(key=lambda s: s["started_at"])
         return sessions
 
     def _generate_kills(
-        self, sess: dict, rng: random.Random, mobs: tuple,
+        self,
+        sess: dict,
+        rng: random.Random,
+        mobs: tuple,
     ) -> list[dict]:
         """Generate the per-kill list for one session.
 
@@ -358,7 +431,11 @@ class SessionsSeeder:
                         species = dom_species
                         maturity = dom_maturity
                 else:
-                    other = rng.choice(other_species_pool) if other_species_pool else dom_obj
+                    other = (
+                        rng.choice(other_species_pool)
+                        if other_species_pool
+                        else dom_obj
+                    )
                     species = other.species
                     maturity = rng.choice(other.maturities)
 
@@ -374,25 +451,27 @@ class SessionsSeeder:
 
             # Even-ish time placement across the session window.
             slot += 1
-            kills.append({
-                "id": str(uuid.uuid4()),
-                "session_id": sess["id"],
-                "mob_name": f"{species} {maturity}",
-                "mob_species": species,
-                "mob_maturity": maturity,
-                "timestamp": 0.0,  # filled below once total count known
-                "shots_fired": shots,
-                "damage_dealt": damage,
-                "damage_taken": damage_taken,
-                "critical_hits": crits,
-                "cost_ped": cost,
-                "enhancer_cost": 0.0,    # filled in seed() once loot is rolled
-                "loot_total_ped": 0.0,   # filled in seed()
-                "is_global": False,
-                "is_hof": False,
-                "weapon": weapon,
-                "cps": cps,
-            })
+            kills.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "session_id": sess["id"],
+                    "mob_name": f"{species} {maturity}",
+                    "mob_species": species,
+                    "mob_maturity": maturity,
+                    "timestamp": 0.0,  # filled below once total count known
+                    "shots_fired": shots,
+                    "damage_dealt": damage,
+                    "damage_taken": damage_taken,
+                    "critical_hits": crits,
+                    "cost_ped": cost,
+                    "enhancer_cost": 0.0,  # filled in seed() once loot is rolled
+                    "loot_total_ped": 0.0,  # filled in seed()
+                    "is_global": False,
+                    "is_hof": False,
+                    "weapon": weapon,
+                    "cps": cps,
+                }
+            )
 
         # Stamp timestamps evenly across the session window (small jitter).
         if kills:
@@ -404,7 +483,10 @@ class SessionsSeeder:
         return kills
 
     def _write_loot_rows(
-        self, db: sqlite3.Connection, kill: dict, rng: random.Random,
+        self,
+        db: sqlite3.Connection,
+        kill: dict,
+        rng: random.Random,
     ) -> None:
         """Write 1-4 kill_loot_items rows for one kill, splitting loot_total_ped."""
         loot_total = kill["loot_total_ped"]
@@ -447,7 +529,10 @@ class SessionsSeeder:
         kill["_loot_row_count"] = len(rows)
 
     def _write_skill_gains(
-        self, db: sqlite3.Connection, sess: dict, kills: list[dict],
+        self,
+        db: sqlite3.Connection,
+        sess: dict,
+        kills: list[dict],
         rng: random.Random,
     ) -> int:
         """Write 8-14 skill_gains rows per session: combat + support + attribute.
@@ -464,8 +549,12 @@ class SessionsSeeder:
         n_attr = rng.randint(1, 3)
 
         chosen_combat = rng.sample(combat_pool, k=min(n_combat, len(combat_pool)))
-        chosen_support = rng.sample(_SUPPORT_SKILLS, k=min(n_support, len(_SUPPORT_SKILLS)))
-        chosen_attrs = rng.sample(_ATTRIBUTES_FAVOURED, k=min(n_attr, len(_ATTRIBUTES_FAVOURED)))
+        chosen_support = rng.sample(
+            _SUPPORT_SKILLS, k=min(n_support, len(_SUPPORT_SKILLS))
+        )
+        chosen_attrs = rng.sample(
+            _ATTRIBUTES_FAVOURED, k=min(n_attr, len(_ATTRIBUTES_FAVOURED))
+        )
 
         # Time-stamp gains across the session window so analytics charts
         # don't see all gains stacked at start/end.
@@ -529,9 +618,7 @@ class SessionsSeeder:
         # Every weapon in our profiles must exist in the canonical item list, or
         # kill_tool_stats will reference a name no equipment_library row matches.
         weapon_names = {w.name for w in weapons}
-        missing_profile_weapons = sorted(
-            {p[0] for p in _PROFILES} - weapon_names
-        )
+        missing_profile_weapons = sorted({p[0] for p in _PROFILES} - weapon_names)
         if missing_profile_weapons:
             violations.append(
                 f"sessions: profile weapons not in refs.items: {missing_profile_weapons}"
@@ -547,7 +634,9 @@ if __name__ == "__main__":
     import shutil
     import tempfile
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
 
     from backend.scripts.demo_seed.driver import format_report, run
 

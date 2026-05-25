@@ -4,15 +4,46 @@ EntropiaOrme ships with an integrated Python test suite under `backend/tests/`. 
 
 ## Running the suite
 
-From the repo root:
+The test tooling is installed from `backend/requirements-dev.txt`. From the repo root:
 
 ```bash
-.venv/Scripts/python.exe -m pytest backend/tests/ -q
+.venv/Scripts/python.exe -m pytest -q
 ```
 
-The Linux / macOS invocation is `.venv/bin/python -m pytest backend/tests/ -q`.
+The Linux / macOS invocation is `.venv/bin/python -m pytest -q`.
 
-Expected: 319 tests pass in roughly 3 seconds. The suite is deterministic; no flaky tests, no network access, no on-disk state outside `tmp_path` fixtures.
+Expected: 381 tests pass in roughly 3 seconds. The suite is deterministic; no flaky tests, no network access, no on-disk state outside `tmp_path` fixtures. Test order is randomised (via `pytest-randomly`) to surface any accidental coupling between tests.
+
+### Runtime tiers
+
+Tests are tagged by runtime tier so the right subset runs in the right place:
+
+| Tier | Covers | Command |
+| ---- | ------ | ------- |
+| `fast` | Pure-logic, in-memory, sub-second (162 tests) | `pytest -m fast` |
+| `standard` | Database / filesystem / in-process state (219 tests) | `pytest -m standard` |
+| `full` | Device / screen-capture / slow checks (none yet) | `pytest -m full` |
+
+Each module's tier is set in `backend/tests/conftest.py`; a module with no entry defaults to `standard`.
+
+### Linting and formatting
+
+```bash
+.venv/Scripts/python.exe -m ruff check .
+.venv/Scripts/python.exe -m ruff format --check .
+```
+
+`ruff format` owns code style and line length; `ruff check` enforces the lint rules configured in `pyproject.toml`.
+
+## Continuous integration
+
+Every pull request and push to `main` runs three jobs (`.github/workflows/ci.yml`):
+
+- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier.
+- **Lint**: `ruff check` and `ruff format --check`.
+- **Frontend**: the type-check and production build.
+
+The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
 
 ## Test layout
 
@@ -36,10 +67,11 @@ The suite uses pytest. No fixtures live outside the test files themselves; each 
 Conventions:
 
 - One module per system under test, located at `backend/tests/test_<module>.py`.
+- Add the new module to the tier map in `backend/tests/conftest.py` (it defaults to `standard` otherwise).
 - Helpers are file-local (`_make_*`, `_seed_*`) rather than shared fixtures, to keep each file self-contained.
 - Use `tmp_path` for any test that touches `AppDatabase`; do not use a persistent location.
 - Avoid wall-clock dependencies; use explicit timestamps passed to `bus.publish` or seeded directly into rows.
 
 ## Posture
 
-This suite is v0.1.0's core integrated coverage: the pipelines, formulas, and database contracts the rest of the app composes against. Router-level tests, OCR-pipeline tests, and broader unit coverage are deliberately scoped for post-launch expansion. Coverage extension is part of the project's post-1.0 work, not a launch blocker.
+This suite is the core integrated coverage: the pipelines, formulas, and database contracts the rest of the app composes against, gated on every change by continuous integration. Router-level tests, OCR-pipeline tests, property-based tests, and broader unit coverage are being expanded on top of this foundation.

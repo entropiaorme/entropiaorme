@@ -30,9 +30,7 @@ _TYPE_ENDPOINT = {
 }
 
 
-def _resolve_consumable_identity(
-    req, game_data
-) -> tuple[str, str | None, dict | None]:
+def _resolve_consumable_identity(req, game_data) -> tuple[str, str | None, dict | None]:
     """Return (name, stored_id, entity) for a consumable add/update request.
 
     Catalogue pick: req.catalog_id resolves in the stimulants catalogue; the
@@ -83,7 +81,13 @@ def _compute_enrichment(props: dict) -> int:
     return 1
 
 
-def _weapon_search_result_from_entity(catalog_id: str | None, entity: dict, markup_percent: int, *, damage_enhancers: int = 0) -> dict:
+def _weapon_search_result_from_entity(
+    catalog_id: str | None,
+    entity: dict,
+    markup_percent: int,
+    *,
+    damage_enhancers: int = 0,
+) -> dict:
     eco = entity.get("economy") or {}
     return {
         "catalogId": catalog_id,
@@ -112,8 +116,6 @@ def _library_row_to_equipment(row) -> dict:
     if item_type == "weapon":
         weapon_e = props["weapon_entity"]
         amp_e = props.get("amp_entity")
-        scope_e = props.get("scope_entity")
-        absorber_e = props.get("absorber_entity")
         damage_enhancers = max(0, int(props.get("damage_enhancers", 0) or 0))
         cost_result = cost_per_shot_from_props(props)
         damage_profile = get_weapon_damage_profile(
@@ -127,8 +129,12 @@ def _library_row_to_equipment(row) -> dict:
             "type": "weapon",
             "amplifierName": amp_e["name"] if amp_e else None,
             "costPerUse": cost_result["totalCostPerUse"],
-            "damageMin": round(damage_profile["damageMin"], 2) if damage_profile else None,
-            "damageMax": round(damage_profile["damageMax"], 2) if damage_profile else None,
+            "damageMin": round(damage_profile["damageMin"], 2)
+            if damage_profile
+            else None,
+            "damageMax": round(damage_profile["damageMax"], 2)
+            if damage_profile
+            else None,
             "reloadSeconds": None,
             "isLimited": is_limited(weapon_e),
             "enrichmentLevel": _compute_enrichment(props),
@@ -218,7 +224,8 @@ def _library_row_to_detail(row) -> dict:
         return {
             "id": item_id,
             "weapon": {
-                "catalogId": props.get("weapon_catalog_id") or _row_optional_value(row, "catalog_id"),
+                "catalogId": props.get("weapon_catalog_id")
+                or _row_optional_value(row, "catalog_id"),
                 "name": weapon_e["name"],
                 "decay": weapon_eco.get("decay") or 0.0,
                 "ammoBurn": (weapon_eco.get("ammo_burn") or 0.0) / 100.0,
@@ -262,7 +269,9 @@ def _library_row_to_detail(row) -> dict:
             "component": "Decay",
             "costPec": tool_eco.get("decay") or 0.0,
             "markupMultiplier": markup_pct / 100.0,
-            "effectiveCostPec": round((tool_eco.get("decay") or 0.0) * markup_pct / 100.0, 4),
+            "effectiveCostPec": round(
+                (tool_eco.get("decay") or 0.0) * markup_pct / 100.0, 4
+            ),
         }
     ]
     ammo_pec = (tool_eco.get("ammo_burn") or 0.0) / 100.0
@@ -279,7 +288,8 @@ def _library_row_to_detail(row) -> dict:
     return {
         "id": item_id,
         "weapon": {
-            "catalogId": props.get("tool_catalog_id") or _row_optional_value(row, "catalog_id"),
+            "catalogId": props.get("tool_catalog_id")
+            or _row_optional_value(row, "catalog_id"),
             "name": tool_e["name"],
             "decay": tool_eco.get("decay") or 0.0,
             "ammoBurn": ammo_pec,
@@ -363,17 +373,25 @@ def add_to_library(req: AddWeaponRequest):
 
     if req.type == "weapon":
         if not req.catalog_id:
-            raise HTTPException(status_code=400, detail="catalog_id required for weapon")
+            raise HTTPException(
+                status_code=400, detail="catalog_id required for weapon"
+            )
         weapon_e = _fetch_entity(svc.game_data, "weapons", req.catalog_id)
         amp_e = None
         if req.amp_catalog_id:
-            amp_e = _fetch_entity(svc.game_data, "weapon_amplifiers", req.amp_catalog_id)
+            amp_e = _fetch_entity(
+                svc.game_data, "weapon_amplifiers", req.amp_catalog_id
+            )
         scope_e = None
         if req.scope_catalog_id:
-            scope_e = _fetch_entity(svc.game_data, "weapon_vision_attachments", req.scope_catalog_id)
+            scope_e = _fetch_entity(
+                svc.game_data, "weapon_vision_attachments", req.scope_catalog_id
+            )
         absorber_e = None
         if req.absorber_catalog_id:
-            absorber_e = _fetch_entity(svc.game_data, "absorbers", req.absorber_catalog_id)
+            absorber_e = _fetch_entity(
+                svc.game_data, "absorbers", req.absorber_catalog_id
+            )
 
         props = {
             "weapon_entity": weapon_e,
@@ -395,7 +413,9 @@ def add_to_library(req: AddWeaponRequest):
 
     elif req.type == "healing":
         if not req.catalog_id:
-            raise HTTPException(status_code=400, detail="catalog_id required for healing")
+            raise HTTPException(
+                status_code=400, detail="catalog_id required for healing"
+            )
         tool_e = _fetch_entity(svc.game_data, "medical_tools", req.catalog_id)
         props = {
             "tool_entity": tool_e,
@@ -406,7 +426,9 @@ def add_to_library(req: AddWeaponRequest):
         stored_catalog_id = req.catalog_id
 
     else:  # consumable
-        name, stored_catalog_id, entity = _resolve_consumable_identity(req, svc.game_data)
+        name, stored_catalog_id, entity = _resolve_consumable_identity(
+            req, svc.game_data
+        )
         props = {"catalog_id": stored_catalog_id, "entity": entity}
 
     cursor = svc.app_db.conn.execute(
@@ -432,17 +454,35 @@ def update_library_item(item_id: int, req: AddWeaponRequest):
         (item_id,),
     ).fetchone()
     if existing is None:
-        raise HTTPException(status_code=404, detail=f"Equipment item {item_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Equipment item {item_id} not found"
+        )
     if existing["item_type"] != req.type:
         raise HTTPException(status_code=400, detail="Cannot change equipment type")
 
     if req.type == "weapon":
         if not req.catalog_id:
-            raise HTTPException(status_code=400, detail="catalog_id required for weapon")
+            raise HTTPException(
+                status_code=400, detail="catalog_id required for weapon"
+            )
         weapon_e = _fetch_entity(svc.game_data, "weapons", req.catalog_id)
-        amp_e = _fetch_entity(svc.game_data, "weapon_amplifiers", req.amp_catalog_id) if req.amp_catalog_id else None
-        scope_e = _fetch_entity(svc.game_data, "weapon_vision_attachments", req.scope_catalog_id) if req.scope_catalog_id else None
-        absorber_e = _fetch_entity(svc.game_data, "absorbers", req.absorber_catalog_id) if req.absorber_catalog_id else None
+        amp_e = (
+            _fetch_entity(svc.game_data, "weapon_amplifiers", req.amp_catalog_id)
+            if req.amp_catalog_id
+            else None
+        )
+        scope_e = (
+            _fetch_entity(
+                svc.game_data, "weapon_vision_attachments", req.scope_catalog_id
+            )
+            if req.scope_catalog_id
+            else None
+        )
+        absorber_e = (
+            _fetch_entity(svc.game_data, "absorbers", req.absorber_catalog_id)
+            if req.absorber_catalog_id
+            else None
+        )
 
         props = {
             "weapon_entity": weapon_e,
@@ -463,7 +503,9 @@ def update_library_item(item_id: int, req: AddWeaponRequest):
         stored_catalog_id: str | None = req.catalog_id
     elif req.type == "healing":
         if not req.catalog_id:
-            raise HTTPException(status_code=400, detail="catalog_id required for healing")
+            raise HTTPException(
+                status_code=400, detail="catalog_id required for healing"
+            )
         tool_e = _fetch_entity(svc.game_data, "medical_tools", req.catalog_id)
         props = {
             "tool_entity": tool_e,
@@ -473,7 +515,9 @@ def update_library_item(item_id: int, req: AddWeaponRequest):
         name = tool_e["name"]
         stored_catalog_id = req.catalog_id
     else:  # consumable
-        name, stored_catalog_id, entity = _resolve_consumable_identity(req, svc.game_data)
+        name, stored_catalog_id, entity = _resolve_consumable_identity(
+            req, svc.game_data
+        )
         props = {"catalog_id": stored_catalog_id, "entity": entity}
 
     svc.app_db.conn.execute(
@@ -496,7 +540,9 @@ def remove_from_library(item_id: int):
     config = svc.config_service.get()
     trifecta_ids: set[int | None] = set()
     for preset in config.trifecta_presets:
-        trifecta_ids.update({preset.small_weapon_id, preset.big_weapon_id, preset.heal_id})
+        trifecta_ids.update(
+            {preset.small_weapon_id, preset.big_weapon_id, preset.heal_id}
+        )
 
     if item_id in trifecta_ids:
         raise HTTPException(
@@ -517,7 +563,9 @@ def get_library_detail(item_id: int):
         (item_id,),
     ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail=f"Equipment item {item_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Equipment item {item_id} not found"
+        )
     return _library_row_to_detail(row)
 
 
@@ -537,7 +585,9 @@ def calculate_cost(req: CalculateCostRequest):
         amp_e = _fetch_entity(svc.game_data, "weapon_amplifiers", req.amp_catalog_id)
     scope_e = None
     if req.scope_catalog_id:
-        scope_e = _fetch_entity(svc.game_data, "weapon_vision_attachments", req.scope_catalog_id)
+        scope_e = _fetch_entity(
+            svc.game_data, "weapon_vision_attachments", req.scope_catalog_id
+        )
     absorber_e = None
     if req.absorber_catalog_id:
         absorber_e = _fetch_entity(svc.game_data, "absorbers", req.absorber_catalog_id)

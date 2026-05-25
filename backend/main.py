@@ -1,7 +1,8 @@
 """FastAPI backend for EntropiaOrme — serves REST API to Svelte frontend."""
 
-import sys
+import contextlib
 import os
+import sys
 from pathlib import Path
 
 # Load .env.local at startup so direct invocations (python -m backend.main,
@@ -12,32 +13,33 @@ from pathlib import Path
 # precedence over the file.
 if not getattr(sys, "frozen", False):
     from dotenv import load_dotenv
+
     load_dotenv(Path(__file__).parent.parent / ".env.local")
 
 if sys.platform == "win32":
     os.environ.setdefault("PYTHONUTF8", "1")
     # Set entire process to below-normal priority so we don't compete with game
     import ctypes
+
     BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
     ctypes.windll.kernel32.SetPriorityClass(
         ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS
     )
 elif sys.platform == "linux":
-    # Equivalent: nice the process down so it doesn't compete with the game
-    try:
+    # Equivalent: nice the process down so it doesn't compete with the game.
+    # os.nice may fail without the right permissions; that is non-critical.
+    with contextlib.suppress(OSError):
         os.nice(5)
-    except OSError:
-        pass  # May fail without permissions — non-critical
 
 import logging
 
 log = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -50,6 +52,7 @@ else:
     PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
 
 # Port configuration: the backend listens on ENTROPIAORME_BACKEND_PORT
 # (default 8421) and the matching CORS origins / Host-header entries derive
@@ -106,35 +109,44 @@ if _per_checkout_hostname:
 
 ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 
-from backend.dependencies import Services, set_services
-from backend.db.app_database import AppDatabase
-from backend.services.game_data_store import GameDataStore
-from backend.services.mob_lookup_service import MobLookupService
-from backend.services.config_service import ConfigService
 from backend.core.event_bus import EventBus
-from backend.tracking.tracker import HuntTracker
+from backend.db.app_database import AppDatabase
+from backend.dependencies import Services, set_services
+from backend.routers import (
+    analytics,
+    character,
+    codex,
+    demo,
+    equipment,
+    health,
+    quests,
+    scan_manual,
+    settings,
+    tracking,
+)
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.services.codex_service import CodexService
+from backend.services.config_service import ConfigService, active_trifecta_preset
 from backend.services.cost_engine import (
     cost_per_shot_from_props,
     heal_cost_per_use,
     heal_reload_seconds,
 )
-from backend.services.config_service import active_trifecta_preset
-from backend.services.trifecta_service import describe_trifecta
-from backend.services.skill_tracker import SkillTracker
-from backend.services.skill_scan_manual import SkillScanManual
+from backend.services.game_data_store import GameDataStore
+from backend.services.hotbar_listener import HotbarListener
+from backend.services.mob_lookup_service import MobLookupService
+from backend.services.quest_service import QuestService
+from backend.services.repair_ocr import RepairOcrService
 from backend.services.scan_completion import (
     hydrate_skill_scan_state,
     make_skill_scan_completion,
 )
-from backend.services.codex_service import CodexService
-from backend.services.quest_service import QuestService
-from backend.services.hotbar_listener import HotbarListener
-from backend.services.repair_ocr import RepairOcrService
+from backend.services.skill_scan_manual import SkillScanManual
+from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
-from backend.routers import health, character, equipment, settings, tracking, analytics, codex, quests
-from backend.routers import scan_manual
-from backend.routers import demo
+from backend.services.trifecta_service import describe_trifecta
+from backend.tracking.tracker import HuntTracker
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -169,10 +181,16 @@ async def lifespan(app: FastAPI):
 
     def _equipment_profile_lookup(tool_name: str) -> dict | None:
         import json
+
         # Escape LIKE wildcards in the user-supplied fragment so embedded
         # `%` / `_` / `\\` cannot widen the match. Catalogue names today
         # contain none of these, but the escape closes the smell.
-        safe = tool_name.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        safe = (
+            tool_name.strip()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
         row = app_db.conn.execute(
             "SELECT properties_json, item_type FROM equipment_library "
             "WHERE item_type = 'weapon' AND name LIKE ? ESCAPE '\\'",
@@ -194,6 +212,7 @@ async def lifespan(app: FastAPI):
     def _heal_tool_cost_lookup(equip_id: int) -> tuple[float, float]:
         """Returns (cost_per_use_ped, reload_seconds) for a healing tool by library ID."""
         import json
+
         if equip_id in _heal_cost_cache:
             return _heal_cost_cache[equip_id]
         row = app_db.conn.execute(
@@ -232,6 +251,7 @@ async def lifespan(app: FastAPI):
         return float(tt)
 
     config = config_service.get()
+
     # Hotbar resolver: slot key → (name, cost, item_type) or None
     # Reads the hotbar config and looks up equipment from the library
     def _hotbar_resolver(slot_key: str):
@@ -275,17 +295,22 @@ async def lifespan(app: FastAPI):
         return (species, maturity)
 
     def _resolve_trifecta():
-        trifecta, _error = describe_trifecta(app_db.conn, active_trifecta_preset(config_service.get()))
+        trifecta, _error = describe_trifecta(
+            app_db.conn, active_trifecta_preset(config_service.get())
+        )
         return trifecta
 
     tracker = HuntTracker(
-        event_bus, app_db.conn,
+        event_bus,
+        app_db.conn,
         equipment_cost_lookup=_equipment_cost_lookup,
         equipment_profile_lookup=_equipment_profile_lookup,
         player_name=config.player_name,
         enhancer_tt_lookup=_enhancer_tt_lookup,
         loot_filter_blacklist=config.loot_filter_blacklist,
-        loot_filter_blacklist_provider=lambda: config_service.get().loot_filter_blacklist,
+        loot_filter_blacklist_provider=lambda: (
+            config_service.get().loot_filter_blacklist
+        ),
         weapon_attribution_trifecta_provider=_is_weapon_attribution_trifecta,
         mob_tracking_mode_provider=_get_mob_tracking_mode,
         mob_tracking_tag_provider=_get_mob_tracking_tag,
@@ -296,7 +321,8 @@ async def lifespan(app: FastAPI):
 
     quest_service = QuestService(app_db, event_bus)
     chatlog_watcher = ChatlogWatcher(
-        event_bus, config.chatlog_path,
+        event_bus,
+        config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
     )
 
@@ -311,7 +337,8 @@ async def lifespan(app: FastAPI):
 
     # Manual skill scan service
     skill_scan_manual = SkillScanManual(
-        config_service, data_dir,
+        config_service,
+        data_dir,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
     )
@@ -366,6 +393,7 @@ async def lifespan(app: FastAPI):
     chatlog_watcher.stop()
     app_db.close()
 
+
 def create_app() -> FastAPI:
     app = FastAPI(title="EntropiaOrme API", version="0.1.0", lifespan=lifespan)
 
@@ -395,7 +423,9 @@ def create_app() -> FastAPI:
         # non-browser process omitting Origin should not be able to mutate state.
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             if not origin or origin not in ALLOWED_API_ORIGINS:
-                return JSONResponse({"detail": "Origin header required"}, status_code=403)
+                return JSONResponse(
+                    {"detail": "Origin header required"}, status_code=403
+                )
         elif origin and origin not in ALLOWED_API_ORIGINS:
             return JSONResponse({"detail": "Invalid Origin header"}, status_code=403)
 
@@ -413,6 +443,7 @@ def create_app() -> FastAPI:
     app.include_router(demo.router, prefix="/api")
 
     return app
+
 
 app = create_app()
 

@@ -80,7 +80,10 @@ refuse to act unless developer mode is enabled, independent of the UI.
 5. Click **Finalise scenario**. The bundle is moved atomically into
    `corpus/recorded/<scenario_name>/`, its `expected/` goldens are generated
    from the first replay, and the determinism check runs (see below).
-6. Review the result surfaced in the panel, then commit the new directory.
+6. Review the result surfaced in the panel. The bundle is now a local working
+   fixture: keep it for replay and promote it into the maintainer's central
+   store (see "Where recorded bundles live" below) rather than committing it to
+   the public repo.
 
 **Discard** aborts an in-progress recording and deletes the staging directory
 without finalising; use it for a bad take.
@@ -118,12 +121,37 @@ test under `backend/tests/e2e/` that loads it and calls
 `goldens.assert_matches(...)`, following the scripted-scenario convention in
 `AUTHORING.md`.
 
-## Privacy note
+## Where recorded bundles live
+
+Recorded bundles are **local-by-default**. A finalised bundle is a real slice
+of live gameplay (your own chat, scan images of your account's panels,
+keystroke timings), so it is not committed to the public project repo. Instead:
+
+- The synthetic `placeholder_recorded_hunt` is the one tracked, public
+  recorded-flavour fixture; it keeps the recorded-scenario replay path green
+  for any reader or CI without exposing real gameplay.
+- `corpus/recorded/*` is gitignored in the project repo (everything except the
+  placeholder), so a real bundle sitting on disk never reaches the public
+  remote.
+- Real bundles are kept in a local, un-pushed store outside the project repo
+  and copied back into `corpus/recorded/` when the development environment is
+  set up. That store is their durable home and the input the later
+  screen-capture and keystroke replay layers build against.
+
+Publishing a real bundle is a deliberate act, reserved for a genuine shared-CI
+need (for example, multiple collaborators needing to run the same recorded
+regression). At that point, and only then, do the privacy pass below before
+committing it to a public surface.
+
+## Privacy note (before any deliberate publication)
 
 `chat_replay.log` is a verbatim slice of the live chat.log and may contain
-chat from other channels (global, local, private messages) that happened to be
-written during the recording window. Review a recorded bundle before committing
-it and trim anything you would not want in a public fixture.
+chat from other channels (global, local, society, private messages) that
+happened to be written during the recording window; `scan_captures/` are images
+of your own account's panels. While a bundle stays local (the default) this is
+simply your own data on your own disk. Before ever promoting a bundle to a
+public surface, review it and trim anything you would not want public, then
+regenerate its goldens (see below).
 
 ## What not to do
 

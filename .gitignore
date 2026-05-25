@@ -79,9 +79,13 @@ data/demo/*
 tmp/
 /calibration/
 
-# In-flight session-recording staging; finalised bundles under
-# corpus/recorded/ are committed, the staging dir never is.
+# Session-recording bundles. The synthetic placeholder is the tracked public
+# stand-in; real recorded bundles are local-by-default (kept in a local,
+# un-pushed store and copied in when the environment is set up), never pushed
+# to the public remote. The in-flight staging dir is never committed.
 backend/tests/e2e/corpus/recording_in_progress/
+backend/tests/e2e/corpus/recorded/*
+!backend/tests/e2e/corpus/recorded/placeholder_recorded_hunt/
 
 # Local dev scratch dirs
 /agents/

@@ -4,11 +4,14 @@ Replays a scenario from ``corpus/recorded/`` through the real watcher → parser
 → tick-buffer → bus → tracker → SQLite path and asserts the full event/DB
 fingerprint matches its goldens, exactly as the scripted-scenario tests do.
 
-The recorded corpus is grown by recording mode during live gameplay. Until the
-first real recording lands, this test runs against ``placeholder_recorded_hunt``
-(a synthetic DSL-authored stand-in). When a real recording is captured, point
-this test at it (or add a sibling test) so the precious-event capture becomes a
-permanent regression fixture.
+The recorded corpus is grown by recording mode during live gameplay, but real
+recorded bundles are local-by-default and are not committed to the public repo
+(see ``backend/testing/RECORDING.md``). This public test therefore runs
+permanently against ``placeholder_recorded_hunt`` (a synthetic DSL-authored
+stand-in): it keeps the recorded-scenario replay path green for any reader or
+CI without exposing real gameplay. A real bundle, once seeded locally into
+``corpus/recorded/``, can be pinned by an opt-in/local sibling test pointed at
+it.
 """
 
 from __future__ import annotations

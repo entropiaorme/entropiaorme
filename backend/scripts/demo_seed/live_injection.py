@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 ENV_VAR = "ENTROPIAORME_DEMO_SCENARIO"
 
 
-def maybe_prime_tracker_from_env(tracker: "HuntTracker") -> bool:
+def maybe_prime_tracker_from_env(tracker: HuntTracker) -> bool:
     """If the env var is set, prime the tracker. Returns True if attempted."""
     scenario_name = os.environ.get(ENV_VAR, "").strip()
     if not scenario_name:
@@ -66,11 +66,13 @@ def maybe_prime_tracker_from_env(tracker: "HuntTracker") -> bool:
     return prime_tracker(tracker, scenario_name)
 
 
-def prime_tracker(tracker: "HuntTracker", scenario_name: str) -> bool:
+def prime_tracker(tracker: HuntTracker, scenario_name: str) -> bool:
     """Prime tracker in-memory state for ``scenario_name``."""
     scenario = next((s for s in LIVE_SCENARIOS if s.name == scenario_name), None)
     if scenario is None:
-        log.warning("Demo scenario %r not recognised — skipping priming.", scenario_name)
+        log.warning(
+            "Demo scenario %r not recognised — skipping priming.", scenario_name
+        )
         return False
 
     handler = _SCENARIO_HANDLERS.get(scenario_name)
@@ -85,7 +87,9 @@ def prime_tracker(tracker: "HuntTracker", scenario_name: str) -> bool:
     try:
         handler(tracker, scenario.payload)
     except Exception:
-        log.exception("Demo scenario %r priming raised — leaving tracker as-is.", scenario_name)
+        log.exception(
+            "Demo scenario %r priming raised — leaving tracker as-is.", scenario_name
+        )
         return False
     return True
 
@@ -107,11 +111,17 @@ _MID_HUNT_KILL_COUNT = 100
 _MID_HUNT_AVG_COST_PED = 1.52
 _MID_HUNT_TOTAL_COST_PED = _MID_HUNT_KILL_COUNT * _MID_HUNT_AVG_COST_PED  # 152.00
 _MID_HUNT_TARGET_RATE = 1.052
-_MID_HUNT_TOTAL_LOOT_PED = round(_MID_HUNT_TOTAL_COST_PED * _MID_HUNT_TARGET_RATE, 2)  # 159.90
-_MID_HUNT_TARGET_PES_PER_100 = 3.26  # → PES = realised_cost × 3.26 / 100, ~5.19 at cost 159.20
+_MID_HUNT_TOTAL_LOOT_PED = round(
+    _MID_HUNT_TOTAL_COST_PED * _MID_HUNT_TARGET_RATE, 2
+)  # 159.90
+_MID_HUNT_TARGET_PES_PER_100 = (
+    3.26  # → PES = realised_cost × 3.26 / 100, ~5.19 at cost 159.20
+)
 _MID_HUNT_TARGET_DPP = 3.05  # → total damage = realised_cost × 100 × DPP
 _MID_HUNT_LAST_KILL_LOOT = 0.80
-_MID_HUNT_HIGH_MULT_IDX = 47  # mid-session "global" kill carries the literal loot composition
+_MID_HUNT_HIGH_MULT_IDX = (
+    47  # mid-session "global" kill carries the literal loot composition
+)
 
 # The Korss H400 demo weapon, used as the sole tool for this synthetic
 # session. cost_per_shot in PED matches the canonical equipment library
@@ -127,16 +137,18 @@ _KORSS_CPS_PED = 0.398
 # (Shrapnel from 99 normal kills) + (these 8 items from the global kill).
 _MID_HUNT_COMPOSITION: tuple[tuple[str, int, float], ...] = (
     # (item_name, quantity, value_ped)
-    ("Shrapnel",            51_878, 5.18),
-    ("Robot Filter",            77, 2.77),
-    ("Animal Oil Residue",      48, 0.48),
-    ("Animal Muscle Oil",       13, 0.39),
-    ("Bone",                     1, 0.03),
-    ("Jagged Tooth",             1, 0.02),
-    ("Lesser Claw",              1, 0.02),
-    ("Diluted Sweat",            1, 0.01),
+    ("Shrapnel", 51_878, 5.18),
+    ("Robot Filter", 77, 2.77),
+    ("Animal Oil Residue", 48, 0.48),
+    ("Animal Muscle Oil", 13, 0.39),
+    ("Bone", 1, 0.03),
+    ("Jagged Tooth", 1, 0.02),
+    ("Lesser Claw", 1, 0.02),
+    ("Diluted Sweat", 1, 0.01),
 )
-_MID_HUNT_COMPOSITION_TOTAL = round(sum(v for _, _, v in _MID_HUNT_COMPOSITION), 2)  # 8.90 PED
+_MID_HUNT_COMPOSITION_TOTAL = round(
+    sum(v for _, _, v in _MID_HUNT_COMPOSITION), 2
+)  # 8.90 PED
 
 # A small pool of skill names to spread the PES gains across. Picked from
 # canonical.SKILL_NAMES (Ranged + general combat + survival) so the
@@ -212,10 +224,10 @@ def _build_kill_stream(
         else:
             raw_loot.append(rng.uniform(1.40, 3.00))
     loot_scale = other_loot_total / sum(raw_loot)
-    other_loot_scaled = [round(l * loot_scale, 4) for l in raw_loot]
+    other_loot_scaled = [round(v * loot_scale, 4) for v in raw_loot]
 
     per_kill_loot = [0.0] * n
-    for idx, value in zip(other_indices, other_loot_scaled):
+    for idx, value in zip(other_indices, other_loot_scaled, strict=True):
         per_kill_loot[idx] = value
     per_kill_loot[_MID_HUNT_HIGH_MULT_IDX] = _MID_HUNT_COMPOSITION_TOTAL
     per_kill_loot[n - 1] = _MID_HUNT_LAST_KILL_LOOT
@@ -313,11 +325,21 @@ def _write_demo_session_to_db(
             "cost_ped, enhancer_cost, loot_total_ped, is_global, is_hof) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                kill.id, session_id, kill.mob_name, kill.mob_species, kill.mob_maturity,
-                kill.timestamp, kill.shots_fired, round(kill.damage_dealt, 2),
-                kill.damage_taken, kill.critical_hits, round(kill.cost_ped, 4),
-                kill.enhancer_cost, round(kill.loot_total_ped, 4),
-                1 if kill.is_global else 0, 1 if kill.is_hof else 0,
+                kill.id,
+                session_id,
+                kill.mob_name,
+                kill.mob_species,
+                kill.mob_maturity,
+                kill.timestamp,
+                kill.shots_fired,
+                round(kill.damage_dealt, 2),
+                kill.damage_taken,
+                kill.critical_hits,
+                round(kill.cost_ped, 4),
+                kill.enhancer_cost,
+                round(kill.loot_total_ped, 4),
+                1 if kill.is_global else 0,
+                1 if kill.is_hof else 0,
             ),
         )
         for tool_name, ts in kill.tool_stats.items():
@@ -325,8 +347,14 @@ def _write_demo_session_to_db(
                 "INSERT INTO kill_tool_stats "
                 "(kill_id, tool_name, shots_fired, damage_dealt, critical_hits, cost_per_shot) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (kill.id, tool_name, ts.shots_fired,
-                 round(ts.damage_dealt, 2), ts.critical_hits, ts.cost_per_shot),
+                (
+                    kill.id,
+                    tool_name,
+                    ts.shots_fired,
+                    round(ts.damage_dealt, 2),
+                    ts.critical_hits,
+                    ts.cost_per_shot,
+                ),
             )
 
     # Loot composition: only the literal 8 items on the high-mult kill, no
@@ -358,13 +386,17 @@ def _write_demo_session_to_db(
     # the ~0.45 from the canonical sessions seeder so the per-skill
     # records look familiar to the rest of the demo.
     realised_total_cost = sum(k.cost_ped for k in kills)
-    target_pes_total = round(realised_total_cost * _MID_HUNT_TARGET_PES_PER_100 / 100, 4)
+    target_pes_total = round(
+        realised_total_cost * _MID_HUNT_TARGET_PES_PER_100 / 100, 4
+    )
     n_gains = 12
     raw_pes = [rng.uniform(0.20, 0.70) for _ in range(n_gains)]
     pes_scale = target_pes_total / sum(raw_pes)
     pes_values = [round(v * pes_scale, 4) for v in raw_pes]
     skill_window = _MID_HUNT_SKILL_POOL[:n_gains]
-    for i, (skill_name, ped_value) in enumerate(zip(skill_window, pes_values)):
+    for i, (skill_name, ped_value) in enumerate(
+        zip(skill_window, pes_values, strict=True)
+    ):
         ts = started_at_epoch + (i + 0.5) * (elapsed_seconds / n_gains)
         amount = round(ped_value * rng.uniform(2.0, 2.4), 5)
         db.execute(
@@ -383,15 +415,19 @@ def _write_demo_session_to_db(
         "(session_id, kill_id, event_type, mob_or_item, value_ped, timestamp) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (
-            session_id, high_mult_kill.id, "global_kill",
-            high_mult_kill.mob_name, _MID_HUNT_GLOBAL_VALUE_PED, event_ts,
+            session_id,
+            high_mult_kill.id,
+            "global_kill",
+            high_mult_kill.mob_name,
+            _MID_HUNT_GLOBAL_VALUE_PED,
+            event_ts,
         ),
     )
 
     db.commit()
 
 
-def _prime_mid_hunt(tracker: "HuntTracker", payload: dict) -> None:
+def _prime_mid_hunt(tracker: HuntTracker, payload: dict) -> None:
     """Mid-hunt scenario: synthesise a fully populated active session.
 
     Builds an in-memory ``TrackingSession`` with 100 kills hitting the
@@ -417,8 +453,12 @@ def _prime_mid_hunt(tracker: "HuntTracker", payload: dict) -> None:
         kill.session_id = session_id
 
     _write_demo_session_to_db(
-        tracker._db, session_id, started_at_epoch, elapsed_seconds,
-        kills, rng,
+        tracker._db,
+        session_id,
+        started_at_epoch,
+        elapsed_seconds,
+        kills,
+        rng,
     )
 
     # Build the in-memory session and assign to tracker. Setting the
@@ -452,7 +492,9 @@ def _prime_mid_hunt(tracker: "HuntTracker", payload: dict) -> None:
     log.info(
         "Demo mid_hunt primed: %d kills, total cost %.2f PED, total loot %.2f PED, "
         "rate %.1f%%, last loot %.2f PED, max mult %.2fx, target PES/100 %.2f, DPP %.2f.",
-        len(kills), realised_cost, realised_loot,
+        len(kills),
+        realised_cost,
+        realised_loot,
         100.0 * realised_loot / max(realised_cost, 1e-9),
         kills[-1].loot_total_ped,
         max((k.loot_total_ped / k.cost_ped) for k in kills if k.cost_ped > 0),

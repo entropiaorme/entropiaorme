@@ -13,7 +13,9 @@ from backend.services.cost_engine import (
 )
 
 
-def _ranges_overlap(first_min: float, first_max: float, second_min: float, second_max: float) -> bool:
+def _ranges_overlap(
+    first_min: float, first_max: float, second_min: float, second_max: float
+) -> bool:
     return max(first_min, second_min) <= min(first_max, second_max)
 
 
@@ -31,7 +33,10 @@ def describe_trifecta(conn, preset) -> tuple[dict | None, str | None]:
         "heal_tool": preset.heal_id,
     }
     if any(value is None for value in ids.values()):
-        return None, "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
+        return (
+            None,
+            "Trifecta attribution requires a configured small weapon, big weapon, and healing tool",
+        )
 
     result: dict[str, dict] = {}
 
@@ -41,7 +46,10 @@ def describe_trifecta(conn, preset) -> tuple[dict | None, str | None]:
             (ids[key],),
         ).fetchone()
         if row is None:
-            return None, f"Trifecta attribution {label} is not found in the equipment library"
+            return (
+                None,
+                f"Trifecta attribution {label} is not found in the equipment library",
+            )
 
         props = json.loads(row["properties_json"])
         damage_enhancers = max(0, int(props.get("damage_enhancers", 0) or 0))
@@ -51,7 +59,10 @@ def describe_trifecta(conn, preset) -> tuple[dict | None, str | None]:
             damage_enhancers=damage_enhancers,
         )
         if damage_profile is None:
-            return None, f"Trifecta attribution {label} does not expose a usable damage range"
+            return (
+                None,
+                f"Trifecta attribution {label} does not expose a usable damage range",
+            )
 
         cost_result = cost_per_shot_from_props(props)
         result[key] = {
@@ -84,7 +95,10 @@ def describe_trifecta(conn, preset) -> tuple[dict | None, str | None]:
         (ids["heal_tool"],),
     ).fetchone()
     if heal_row is None:
-        return None, "Trifecta attribution healing tool is not found in the equipment library"
+        return (
+            None,
+            "Trifecta attribution healing tool is not found in the equipment library",
+        )
 
     heal_props = json.loads(heal_row["properties_json"])
     markup = heal_props.get("markup", 100) / 100.0
@@ -92,7 +106,8 @@ def describe_trifecta(conn, preset) -> tuple[dict | None, str | None]:
     result["heal_tool"] = {
         "id": heal_row["id"],
         "name": heal_row["name"],
-        "cost_per_use_ped": heal_cost_per_use(heal_props["tool_entity"], markup) / 100.0,
+        "cost_per_use_ped": heal_cost_per_use(heal_props["tool_entity"], markup)
+        / 100.0,
         "reload_seconds": heal_reload_seconds(heal_props["tool_entity"]),
         "heal_min": heal_interval["min"] if heal_interval else None,
         "heal_max": heal_interval["max"] if heal_interval else None,

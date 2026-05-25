@@ -18,18 +18,18 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_COMBAT,
-    EVENT_LOOT_GROUP,
-    EVENT_SKILL_GAIN,
     EVENT_ENHANCER_BREAK,
     EVENT_GLOBAL,
+    EVENT_LOOT_GROUP,
     EVENT_MISSION_RECEIVED,
+    EVENT_SKILL_GAIN,
 )
 from backend.services.chatlog_parser import ChatEvent, EventType, parse_line
 
@@ -68,9 +68,11 @@ _EVENT_MAP: dict[EventType, str] = {
 # Event types that need tick buffering for internal processing but do not
 # publish on the event bus (e.g. MISSION_COMPLETE drives the quest-reward
 # filter callback without broadcasting to external subscribers).
-_INTERNAL_BUFFER_TYPES: frozenset[EventType] = frozenset({
-    EventType.MISSION_COMPLETE,
-})
+_INTERNAL_BUFFER_TYPES: frozenset[EventType] = frozenset(
+    {
+        EventType.MISSION_COMPLETE,
+    }
+)
 
 TAIL_INTERVAL = 0.1  # seconds between reads
 PERF_LOG_INTERVAL_S = 15.0
@@ -149,7 +151,9 @@ class ChatlogWatcher:
 
         self._running = True
         self._thread = threading.Thread(
-            target=self._tail_loop, daemon=True, name="chatlog-watcher",
+            target=self._tail_loop,
+            daemon=True,
+            name="chatlog-watcher",
         )
         self._thread.start()
         log.info("Started watching: %s", self._path)
@@ -173,7 +177,7 @@ class ChatlogWatcher:
     def _tail_loop(self) -> None:
         """Main loop: seek to end, then read new lines as they appear."""
         try:
-            with open(self._path, "r", encoding="utf-8", errors="replace") as f:
+            with open(self._path, encoding="utf-8", errors="replace") as f:
                 # Seek to end — don't replay history
                 f.seek(0, os.SEEK_END)
 
@@ -235,7 +239,7 @@ class ChatlogWatcher:
         idx = line.find(marker)
         if idx == -1:
             return False
-        msg = line[idx + len(marker):]
+        msg = line[idx + len(marker) :]
         return msg.startswith(_COMBAT_MESSAGE_PREFIXES)
 
     def _flush_tick(self) -> None:
@@ -269,25 +273,33 @@ class ChatlogWatcher:
                 other_events.append(event)
 
         # ── Quest-reward suppression ────────────────────────────────────────
-        mission_completes = [e for e in mission_events if e.type == EventType.MISSION_COMPLETE]
+        mission_completes = [
+            e for e in mission_events if e.type == EventType.MISSION_COMPLETE
+        ]
 
         if mission_completes and self._quest_reward_filter:
             for mc in mission_completes:
                 mission_name = mc.data["mission_name"]
                 loot_data = [
-                    {"item_name": e.data.get("item_name", ""),
-                     "quantity": e.data.get("quantity", 1),
-                     "value": e.data.get("value", 0.0)}
+                    {
+                        "item_name": e.data.get("item_name", ""),
+                        "quantity": e.data.get("quantity", 1),
+                        "value": e.data.get("value", 0.0),
+                    }
                     for e in loot_events
                 ]
                 skill_data = [
-                    {"skill_name": e.data.get("skill_name", ""),
-                     "amount": e.data.get("amount", 0.0)}
+                    {
+                        "skill_name": e.data.get("skill_name", ""),
+                        "amount": e.data.get("amount", 0.0),
+                    }
                     for e in skill_events
                 ]
 
                 try:
-                    result = self._quest_reward_filter(mission_name, loot_data, skill_data)
+                    result = self._quest_reward_filter(
+                        mission_name, loot_data, skill_data
+                    )
                 except Exception:
                     log.exception("Quest reward filter error for '%s'", mission_name)
                     result = None
@@ -316,11 +328,14 @@ class ChatlogWatcher:
 
         # ── Emit enhancer breaks before loot finalisation ───────────────────
         for event in enhancer_events:
-            self._event_bus.publish(EVENT_ENHANCER_BREAK, {
-                "type": event.type.value,
-                "timestamp": event.timestamp,
-                **event.data,
-            })
+            self._event_bus.publish(
+                EVENT_ENHANCER_BREAK,
+                {
+                    "type": event.type.value,
+                    "timestamp": event.timestamp,
+                    **event.data,
+                },
+            )
 
         # ── Emit loot group ─────────────────────────────────────────────────
         if loot_events:
@@ -328,48 +343,62 @@ class ChatlogWatcher:
             total = 0.0
             for idx, e in enumerate(loot_events):
                 val = e.data.get("value", 0.0)
-                items.append({
-                    "item_name": e.data.get("item_name", ""),
-                    "quantity": e.data.get("quantity", 1),
-                    "value_ped": val,
-                    "is_enhancer_shrapnel": refund_matches[idx],
-                })
+                items.append(
+                    {
+                        "item_name": e.data.get("item_name", ""),
+                        "quantity": e.data.get("quantity", 1),
+                        "value_ped": val,
+                        "is_enhancer_shrapnel": refund_matches[idx],
+                    }
+                )
                 total += val
-            self._event_bus.publish(EVENT_LOOT_GROUP, {
-                "type": EventType.LOOT.value,
-                "timestamp": self._tick_ts,
-                "items": items,
-                "total_ped": round(total, 4),
-            })
+            self._event_bus.publish(
+                EVENT_LOOT_GROUP,
+                {
+                    "type": EventType.LOOT.value,
+                    "timestamp": self._tick_ts,
+                    "items": items,
+                    "total_ped": round(total, 4),
+                },
+            )
 
         # ── Emit mission events ─────────────────────────────────────────────
         for event in mission_events:
             bus_event = _EVENT_MAP.get(event.type)
             if not bus_event:
                 continue
-            self._event_bus.publish(bus_event, {
-                "type": event.type.value,
-                "timestamp": event.timestamp,
-                **event.data,
-            })
+            self._event_bus.publish(
+                bus_event,
+                {
+                    "type": event.type.value,
+                    "timestamp": event.timestamp,
+                    **event.data,
+                },
+            )
 
         # ── Emit skill events ───────────────────────────────────────────────
         for event in skill_events:
-            self._event_bus.publish(EVENT_SKILL_GAIN, {
-                "type": event.type.value,
-                "timestamp": event.timestamp,
-                **event.data,
-            })
+            self._event_bus.publish(
+                EVENT_SKILL_GAIN,
+                {
+                    "type": event.type.value,
+                    "timestamp": event.timestamp,
+                    **event.data,
+                },
+            )
 
         # ── Emit everything else ────────────────────────────────────────────
         for event in other_events:
             bus_event = _EVENT_MAP.get(event.type)
             if bus_event:
-                self._event_bus.publish(bus_event, {
-                    "type": event.type.value,
-                    "timestamp": event.timestamp,
-                    **event.data,
-                })
+                self._event_bus.publish(
+                    bus_event,
+                    {
+                        "type": event.type.value,
+                        "timestamp": event.timestamp,
+                        **event.data,
+                    },
+                )
 
         # Reset tick
         self._tick_ts = None
@@ -403,7 +432,8 @@ class ChatlogWatcher:
 
     @staticmethod
     def _match_enhancer_shrapnel(
-        loot_events: list[ChatEvent], enhancer_events: list[ChatEvent],
+        loot_events: list[ChatEvent],
+        enhancer_events: list[ChatEvent],
     ) -> list[bool]:
         """Flag same-tick shrapnel loot that matches enhancer refund values."""
         matches = [False] * len(loot_events)

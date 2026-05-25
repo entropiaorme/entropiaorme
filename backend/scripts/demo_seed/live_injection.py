@@ -227,7 +227,7 @@ def _build_kill_stream(
     other_loot_scaled = [round(v * loot_scale, 4) for v in raw_loot]
 
     per_kill_loot = [0.0] * n
-    for idx, value in zip(other_indices, other_loot_scaled, strict=False):
+    for idx, value in zip(other_indices, other_loot_scaled, strict=True):
         per_kill_loot[idx] = value
     per_kill_loot[_MID_HUNT_HIGH_MULT_IDX] = _MID_HUNT_COMPOSITION_TOTAL
     per_kill_loot[n - 1] = _MID_HUNT_LAST_KILL_LOOT
@@ -395,7 +395,7 @@ def _write_demo_session_to_db(
     pes_values = [round(v * pes_scale, 4) for v in raw_pes]
     skill_window = _MID_HUNT_SKILL_POOL[:n_gains]
     for i, (skill_name, ped_value) in enumerate(
-        zip(skill_window, pes_values, strict=False)
+        zip(skill_window, pes_values, strict=True)
     ):
         ts = started_at_epoch + (i + 0.5) * (elapsed_seconds / n_gains)
         amount = round(ped_value * rng.uniform(2.0, 2.4), 5)

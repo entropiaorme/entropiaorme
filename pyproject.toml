@@ -88,6 +88,12 @@ fail_under = 44
 
 [tool.mypy]
 python_version = "3.11"
+# EntropiaOrme is a Windows-only desktop app, so mypy targets win32: platform
+# guards (`if sys.platform == "win32":`) are evaluated as live, and the Windows
+# code paths (e.g. the ctypes window-geometry helpers) are type-checked rather
+# than treated as unreachable. Without this, a non-Windows checker skips those
+# branches and reports their use sites as undefined.
+platform = "win32"
 # The Pydantic v2 plugin teaches mypy about model construction / validators;
 # without it, model instantiation produces false positives.
 plugins = ["pydantic.mypy"]

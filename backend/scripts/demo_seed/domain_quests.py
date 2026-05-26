@@ -281,8 +281,8 @@ class QuestsSeeder:
         completion_count = 0
         seen_pairs: set[tuple[str, int]] = set()
         for sid, sstart, _send in chosen_for_completion:
-            mob = dominant_mob(sid)
-            candidate_quest_ids = mob_to_quests.get(mob, []) if mob else []
+            dom_mob = dominant_mob(sid)
+            candidate_quest_ids = mob_to_quests.get(dom_mob, []) if dom_mob else []
             if not candidate_quest_ids:
                 # Random match — analytics still works.
                 candidate_quest_ids = [q.db_id for q in refs.quests]
@@ -349,8 +349,10 @@ class QuestsSeeder:
                     )
                 else:
                     # Prefer a quest that matches this session's dominant mob.
-                    mob = dominant_mob(sid)
-                    candidate_quest_ids = mob_to_quests.get(mob, []) if mob else []
+                    dom_mob = dominant_mob(sid)
+                    candidate_quest_ids = (
+                        mob_to_quests.get(dom_mob, []) if dom_mob else []
+                    )
                     if not candidate_quest_ids:
                         candidate_quest_ids = [q.db_id for q in refs.quests]
                     qid = rng.choice(candidate_quest_ids)

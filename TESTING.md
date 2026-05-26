@@ -47,12 +47,29 @@ The run must hold a total branch-coverage floor (currently 44%). The floor sits 
 
 On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time.
 
+### Typing
+
+The backend is type-checked with [mypy](https://mypy.readthedocs.io) (configuration under `[tool.mypy]` in `pyproject.toml`):
+
+```bash
+.venv/Scripts/python.exe -m mypy backend
+```
+
+The gate is clean at a defined, honest level and tightens over time rather than all at once. Three things set that level:
+
+- **A lenient, fully-clean base.** Every module is checked with `check_untyped_defs` on, so the bodies of as-yet-unannotated functions are still verified for real type errors (bad indexing, mismatched operands, wrong return types). The base is held at zero errors.
+- **A strict allow-list.** A small set of pure-logic modules is additionally held to `disallow_untyped_defs` (every function fully annotated): `cost_engine`, `scan_drift`, `loot_filter`, `codex_categories`, and `tt_value_curve`. This list only grows.
+- **Scoped third-party ignores.** The C-extension dependencies that ship no type information (`cv2`, `mss`, `pynput`, `onnxruntime`, `openocr`, `rapidfuzz`) have missing-import errors suppressed per module, so a genuinely missing first-party import still surfaces. The suppression is never global.
+
+To promote a module into the strict set: annotate it fully, confirm `mypy backend` stays green, then add it to the `disallow_untyped_defs` override in `pyproject.toml`. The gate only ever ratchets towards stricter checking; a landed strictness level is never relaxed to make a red check pass.
+
 ## Continuous integration
 
-Every pull request and push to `main` runs three jobs (`.github/workflows/ci.yml`):
+Every pull request and push to `main` runs four jobs (`.github/workflows/ci.yml`):
 
 - **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines.
 - **Lint**: `ruff check` and `ruff format --check`.
+- **Typing**: `mypy backend`.
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.

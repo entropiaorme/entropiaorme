@@ -8,6 +8,7 @@ session is active; otherwise the listener thread is torn down.
 """
 
 import logging
+from typing import Any
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
@@ -38,7 +39,8 @@ class HotbarListener:
         # Hotbar resolver: callable(slot_key: str) -> (name, cost, item_type, reload_s) | None
         self._hotbar_resolver = hotbar_resolver
 
-        self._key_listener = None
+        # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
+        self._key_listener: Any = None
 
         event_bus.subscribe(EVENT_SESSION_STARTED, self._on_session_started)
         event_bus.subscribe(EVENT_SESSION_STOPPED, self._on_session_stopped)

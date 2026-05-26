@@ -584,9 +584,11 @@ class CoreSeeder:
                 "VALUES (?, ?, ?, ?)",
                 (name, item_type, None, json.dumps(props)),
             )
+            row_id = cur.lastrowid
+            assert row_id is not None  # a successful INSERT always yields a rowid
             items_with_ids.append(
                 ItemRef(
-                    library_id=int(cur.lastrowid),
+                    library_id=row_id,
                     name=name,
                     item_type=item_type,
                     catalog_id=None,
@@ -596,7 +598,7 @@ class CoreSeeder:
 
         # 2) Quests inserts.
         quests_with_ids: list[QuestRef] = []
-        for _orig, qs in zip(refs.quests, _QUEST_SEEDS, strict=False):
+        for _orig_quest, qs in zip(refs.quests, _QUEST_SEEDS, strict=False):
             cur = db.execute(
                 """
                 INSERT INTO quests (
@@ -619,7 +621,8 @@ class CoreSeeder:
                     None,
                 ),
             )
-            qid = int(cur.lastrowid)
+            assert cur.lastrowid is not None  # INSERT always yields a rowid
+            qid = cur.lastrowid
             for mob in qs["mobs"]:
                 db.execute(
                     "INSERT INTO quest_mobs (quest_id, mob_name) VALUES (?, ?)",
@@ -648,7 +651,8 @@ class CoreSeeder:
                 "VALUES (?, ?, ?, 1)",
                 (ps["name"], ps["planet"], ps["estimated_minutes"]),
             )
-            pid = int(cur.lastrowid)
+            assert cur.lastrowid is not None  # INSERT always yields a rowid
+            pid = cur.lastrowid
 
             sort_order = 0
             immediate_ids: list[int] = []

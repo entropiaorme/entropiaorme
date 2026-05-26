@@ -23,6 +23,8 @@ jobs:
         with:
           # Full history so diff-cover can find the merge-base with the PR base.
           fetch-depth: 0
+          # Don't persist the auth token in .git/config for later steps.
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -47,15 +49,21 @@ jobs:
       - name: Diff coverage
         if: matrix.python-version == '3.14' && github.event_name == 'pull_request'
         shell: bash
+        # Pass the base ref through env rather than inline interpolation so a
+        # crafted branch name cannot inject into the shell.
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
-          diff-cover coverage.xml --compare-branch="origin/${{ github.event.pull_request.base.ref }}" --fail-under=85
+          git fetch --no-tags origin "$PR_BASE_REF"
+          diff-cover coverage.xml --compare-branch="origin/$PR_BASE_REF" --fail-under=85
 
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -72,6 +80,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

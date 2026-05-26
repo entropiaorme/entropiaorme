@@ -18,6 +18,8 @@ mypy>=1.13
 # advisory database, in CI and nightly, so a newly published advisory in a
 # runtime or dev dependency fails fast.
 pip-audit>=2.7
+# Property-based testing for the pure-logic core.
+hypothesis>=6.100
 
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.

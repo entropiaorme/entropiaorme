@@ -11,6 +11,11 @@
 # environment, both provided to GitHub Actions jobs by default.
 set -euo pipefail
 
+if [[ $# -ne 1 ]]; then
+	echo "Usage: $0 <badge-json-file>" >&2
+	exit 2
+fi
+
 src="$1"
 name="$(basename "$src")"
 # Default to the token-authenticated GitHub remote; BADGE_REMOTE_URL overrides it

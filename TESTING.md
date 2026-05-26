@@ -63,16 +63,31 @@ The gate is clean at a defined, honest level and tightens over time rather than 
 
 To promote a module into the strict set: annotate it fully, confirm `mypy backend` stays green, then add it to the `disallow_untyped_defs` override in `pyproject.toml`. The gate only ever ratchets towards stricter checking; a landed strictness level is never relaxed to make a red check pass.
 
+### Dependency advisories
+
+Dependencies are scanned for known advisories with [pip-audit](https://pypi.org/project/pip-audit/) against the PyPA advisory database:
+
+```bash
+.venv/Scripts/python.exe -m pip_audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
+```
+
+The audit reads the pinned requirements rather than the ambient environment, so only the project's own runtime and development dependencies are in scope (the installer and other incidental tooling in the virtual environment are not). `--strict` fails the run if any dependency cannot be fully audited. The gate is clean today and acts as a forward regression guard: the advisory database is updated continuously, so a run that is green now can later turn red with no change on our side, which is the gate working as intended rather than a flake.
+
+If an advisory has no available fix and does not affect how the application uses the dependency, it can be suppressed with `pip-audit --ignore-vuln <ID>`, accompanied by an inline note recording the advisory identifier and the reason, and tracked until a fix is published. A suppression is always scoped to a single advisory; the gate is never disabled wholesale.
+
 ## Continuous integration
 
-Every pull request and push to `main` runs four jobs (`.github/workflows/ci.yml`):
+Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`):
 
 - **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines.
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
+- **Dependency audit**: `pip-audit` against the pinned requirements.
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
+
+A separate scheduled workflow (`.github/workflows/nightly.yml`) re-runs the dependency audit once a day, so an advisory published after a change has landed is surfaced without waiting for the next pull request.
 
 ## Test layout
 

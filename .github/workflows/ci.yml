@@ -37,7 +37,7 @@ jobs:
       # The supported-floor leg runs the suite without coverage.
       - name: Run backend test suite
         if: matrix.python-version == '3.11'
-        # Everything except the device / slow `full` tier, which runs nightly.
+        # Everything except the device / slow `full` tier.
         run: python -m pytest -m "not full"
       # Coverage is measured on one leg only (3.14) to avoid double-counting
       # and racing coverage files; the floor lives in pyproject.toml.
@@ -94,6 +94,24 @@ jobs:
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - name: Type-check the backend
         run: python -m mypy backend
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Version mirrors backend/requirements-dev.txt.
+      - run: python -m pip install "pip-audit>=2.7"
+      # Audit the pinned manifests rather than the ambient environment, so only
+      # the project's own runtime and dev dependencies are in scope. --strict
+      # fails the job if any dependency cannot be fully audited.
+      - name: Audit dependencies
+        run: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
 
   frontend:
     name: Frontend (build + check)

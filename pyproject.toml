@@ -59,6 +59,9 @@ relative_files = true
 omit = [
     "backend/tests/*",
     "backend/scripts/demo_seed/*",
+    # Maintainer utility: run in the nightly mutation workflow, not imported by
+    # the suite, so it is exercised in CI rather than under pytest-cov.
+    "backend/scripts/mutation_score.py",
     "backend/build_app.py",
     "backend/ocr/capturer.py",
     "backend/services/eu_window.py",
@@ -141,3 +144,57 @@ module = [
     "backend.data.tt_value_curve",
 ]
 disallow_untyped_defs = true
+
+[tool.mutmut]
+# Mutation testing: the effectiveness metric. Coverage proves a line ran;
+# mutation proves a test would notice if that line were wrong. The campaign is
+# slow, so it runs nightly and on demand, never per-PR (see nightly.yml). The
+# engine requires a POSIX host (it has no native Windows support), so the job
+# runs on Linux; the targets below are pure-logic and platform-independent.
+#
+# Targets: the pure-logic core only. Device, IO, and router glue carry little
+# mutation value and would slow the campaign for no signal.
+paths_to_mutate = [
+    "backend/services/cost_engine.py",
+    "backend/services/character_calc.py",
+    "backend/data/codex_categories.py",
+    "backend/data/tt_value_curve.py",
+    "backend/services/scan_drift.py",
+    "backend/tracking/loot_filter.py",
+    "backend/tracking/tool_inference.py",
+]
+# The engine works in a copied `mutants/` tree, so the package it imports at
+# test time (sources, the curated data tables, the test files, conftest) must
+# travel with it. The default copy set only covers a top-level tests/ folder;
+# this project keeps tests under backend/, so copy the whole package.
+also_copy = ["backend"]
+# Only the pure-logic test files are run per mutant. Selecting them by name
+# keeps the device-touching modules (which import cv2 at collection time and
+# only run on Windows) out of the Linux campaign, and runs each mutant against
+# just the tests that exercise it.
+pytest_add_cli_args_test_selection = [
+    "backend/tests/test_cost_engine.py",
+    "backend/tests/test_cost_engine_properties.py",
+    "backend/tests/test_character_calc.py",
+    "backend/tests/test_character_calc_properties.py",
+    "backend/tests/test_codex_formulas.py",
+    "backend/tests/test_codex_properties.py",
+    "backend/tests/test_tt_curve_properties.py",
+    "backend/tests/test_scan_drift.py",
+    "backend/tests/test_loot_filter.py",
+    "backend/tests/test_tool_inference.py",
+]
+# Keep the device tier out (redundant with the explicit selection above, but it
+# keeps the intent legible and guards against a selected file growing a slow
+# case). The Hypothesis profile is pinned via HYPOTHESIS_PROFILE in the runner
+# environment to the bounded, derandomised `mutation` profile (see conftest.py):
+# the run must be reproducible to gate on, and a 1000-example nightly profile
+# times thousands of mutants would be intractable.
+pytest_add_cli_args = ["-m", "not full"]
+# Mutate every line in the targeted modules rather than restricting to
+# coverage-filtered lines. The coverage-filtered path runs a pre-mutation
+# coverage pass in the same process, which imports the unmutated modules and
+# leaves them cached; the later run then cannot match tests to mutants. Mutating
+# every line is also the franker measure: a mutant on an unexercised line simply
+# survives, which is the gap showing up where it should.
+mutate_only_covered_lines = false

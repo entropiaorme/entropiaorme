@@ -22,6 +22,12 @@ from hypothesis import settings
 settings.register_profile("dev", max_examples=100, deadline=None)
 settings.register_profile("ci", max_examples=300, deadline=None, print_blob=True)
 settings.register_profile("nightly", max_examples=1000, deadline=None)
+# The mutation campaign re-runs the property suites once per mutant and gates on
+# the resulting score, so the run must be reproducible: derandomize fixes example
+# generation, so a given mutant is killed (or not) identically on every run and
+# the score cannot wobble across the floor. A slightly higher example budget than
+# `dev` strengthens the kills without the nightly profile's intractable volume.
+settings.register_profile("mutation", max_examples=200, deadline=None, derandomize=True)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 # Test-module stem -> runtime tier.
@@ -38,6 +44,7 @@ _MODULE_TIERS = {
     "test_loot_filter": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
+    "test_tool_inference": "fast",
     "test_tt_curve_properties": "fast",
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",

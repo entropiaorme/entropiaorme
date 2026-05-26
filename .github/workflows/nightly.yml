@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default; the mutation job widens to contents: write only so the
+# mutation-score badge can be published to the badges branch.
+permissions:
+  contents: read
+
 jobs:
   audit:
     name: Dependency audit (pip-audit)
@@ -27,3 +32,50 @@ jobs:
       # green, with no code change required to surface them.
       - name: Audit dependencies
         run: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
+
+  mutation:
+    name: Mutation testing (mutmut)
+    # The mutation engine has no native Windows support, so the campaign runs on
+    # Linux. The targeted modules are pure logic, so the platform is immaterial
+    # to the result.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      # Bounded Hypothesis profile: a high-example profile times thousands of
+      # mutants would be intractable. The campaign config lives in pyproject.toml
+      # ([tool.mutmut]); it mutates the pure-logic core and runs each mutant
+      # against just the tests that exercise it.
+      - name: Run mutation campaign
+        env:
+          HYPOTHESIS_PROFILE: mutation
+        run: mutmut run
+      # Reduce the campaign to a single score and a shields.io endpoint badge.
+      - name: Compute mutation score
+        run: |
+          mutmut export-cicd-stats
+          python -m backend.scripts.mutation_score --badge-out mutation.json
+      # Publish the badge from the trunk only, so the figure tracks main.
+      - name: Publish mutation-score badge
+        if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/publish-badge.sh mutation.json
+      # Ratchet: fail if the score has regressed below the published floor. Runs
+      # after publishing, so the badge still reflects reality on a regression.
+      # Floor set a few points below the measured baseline (75.1%) for headroom;
+      # raise it as survivors are killed, never lower it to make a red run pass.
+      - name: Enforce the mutation-score floor
+        run: python -m backend.scripts.mutation_score --fail-under 72

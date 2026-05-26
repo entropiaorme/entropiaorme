@@ -9,10 +9,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default; the backend job widens to contents: write only so the
+# coverage badge can be published to the badges branch on a push to main.
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (tests, Python ${{ matrix.python-version }})
     runs-on: windows-latest
+    permissions:
+      contents: write
     # Run the property-based suites with more examples than the local default.
     env:
       HYPOTHESIS_PROFILE: ci
@@ -66,6 +73,28 @@ jobs:
         run: |
           git fetch --no-tags origin "$PR_BASE_REF"
           diff-cover coverage.xml --compare-branch="origin/$PR_BASE_REF" --fail-under=85
+      # Refresh the coverage badge from the just-measured report. Only on a push
+      # to main (not PRs), so the published figure tracks the trunk.
+      - name: Publish coverage badge
+        if: matrix.python-version == '3.14' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+
+          rate = float(ET.parse("coverage.xml").getroot().get("line-rate"))
+          pct = round(rate * 100, 1)
+          bands = [(90, "brightgreen"), (80, "green"), (70, "yellowgreen"), (60, "yellow"), (50, "orange")]
+          colour = next((c for floor, c in bands if pct >= floor), "red")
+          badge = {"schemaVersion": 1, "label": "coverage", "message": f"{pct}%", "color": colour}
+          with open("coverage.json", "w", encoding="utf-8") as f:
+              json.dump(badge, f)
+          print("coverage", pct)
+          PY
+          bash .github/scripts/publish-badge.sh coverage.json
 
   lint:
     name: Lint (ruff)

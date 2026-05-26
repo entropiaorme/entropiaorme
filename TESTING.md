@@ -86,6 +86,7 @@ Three settings profiles are registered in `conftest.py` and selected with the `H
 | `dev` | 100 | local runs (default) |
 | `ci` | 300 | the CI backend job |
 | `nightly` | 1000 | reserved for the scheduled workflow |
+| `mutation` | 200 | the mutation campaign (derandomised, so the score is reproducible) |
 
 Deadlines are disabled on every profile: example timing varies on shared runners, and a deterministic property must never fail merely because one example ran slowly. A failing property prints a minimal, shrunk counterexample (with a reproduction blob under the `ci` profile) so it can be replayed exactly.
 
@@ -114,6 +115,26 @@ A few deliberate scoping choices keep the run honest and reproducible:
 
 The suite covers the read surface; mutating endpoints need request fixtures and stateful setup and stay on the existing integration tests.
 
+### Mutation testing
+
+Coverage proves a line ran; it cannot prove a test would notice if that line were wrong. [Mutation testing](https://mutmut.readthedocs.io) closes that gap: [mutmut](https://github.com/boxed/mutmut) makes small changes to the code (a `<` becomes `<=`, a `+` a `-`, a constant shifts) and re-runs the tests against each one. A mutant the tests catch is *killed*; one that slips through *survives* and marks a weak spot. The **mutation score** (the share of mutants killed) is the suite's effectiveness metric, and the headline quality signal for the pure-logic core.
+
+The campaign targets that core (`cost_engine`, `character_calc`, `codex_categories`, `tt_value_curve`, `scan_drift`, `loot_filter`, `tool_inference`); device, IO, and router glue carry little mutation value. The configuration lives in `[tool.mutmut]` in `pyproject.toml`. Because a campaign is slow (it re-runs tests once per mutant), it runs nightly and on demand rather than on every pull request (`.github/workflows/nightly.yml`); the engine has no native Windows support, so it runs on a Linux runner, which the pure-logic targets are indifferent to.
+
+The current baseline is **75.1%** across the seven modules, measured under the derandomised profile so it is reproducible (floor **72%**, with headroom to ratchet upward). `codex_categories` is strongest at 95%; `character_calc` carries most of the survivors (its profession-path heuristics admit many behaviour-preserving mutants). Run a campaign on a POSIX environment with:
+
+```bash
+HYPOTHESIS_PROFILE=mutation mutmut run   # run the campaign (derandomised, so the score is reproducible)
+mutmut results                           # list surviving mutants
+mutmut show <mutant>                     # inspect one survivor's diff
+mutmut export-cicd-stats                 # write mutants/mutmut-cicd-stats.json
+python -m backend.scripts.mutation_score # reduce that to a score (and, with --badge-out, a badge)
+```
+
+**Triaging a survivor** is a two-way choice: either add or strengthen a test until it is killed, or, if the mutation is provably equivalent (it cannot change observable behaviour), mark the line with `# pragma: no mutate` and a one-line reason so it leaves the denominator honestly. The floor only ever rises; never lower it to make a regressed run pass.
+
+The metric has teeth precisely because it is not coverage: a test that executes a function but asserts nothing about the result leaves every behaviour-changing mutant of that function alive, dropping the score even though the line stayed "covered".
+
 ## Continuous integration
 
 Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`):
@@ -126,7 +147,7 @@ Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
 
-A separate scheduled workflow (`.github/workflows/nightly.yml`) re-runs the dependency audit once a day, so an advisory published after a change has landed is surfaced without waiting for the next pull request.
+A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request) and runs the mutation campaign, publishing the mutation score and refreshing the coverage figure as the badges at the top of the README.
 
 ## Test layout
 
@@ -136,6 +157,7 @@ A separate scheduled workflow (`.github/workflows/nightly.yml`) re-runs the depe
 | `test_chatlog_parser.py` | Every EventType has at least one parametrised case. Critical-hit vs damage-dealt, HoF vs Global, quantity extraction, verbose vs direct skill formats. |
 | `test_cost_engine.py` | Per-shot cost breakdown: weapon, amp, scope, absorber, damage enhancers, markups. Heal cost, heal range, damage range, weapon total damage. |
 | `test_character_calc.py` | TT value curve anchors, profession level math, skill rank lookup, codex category resolution, HP formula, HP optimiser, profession path optimiser (target and budget modes). |
+| `test_tool_inference.py` | Damage-based weapon attribution: band containment, narrowest-band selection with name tie-break, critical-hit band widening and the big-weapon preference rule, profile bookkeeping. |
 | `test_codex_service.py` | Species listing with dedup and progress cross-ref, rank breakdowns, claim recording, calibrate, skill-option ranking by profession or HP target, meta claims. |
 | `test_skill_tracker.py` | Session-scoped recording, TT-value computation, codex claim suppression (one-shot, with-observation, expiry handling). |
 | `test_scan_completion.py` | Scan-time anchor archival: prior `scan` rows move to the archive table, non-`scan` rows (codex / chatlog) stay live. |

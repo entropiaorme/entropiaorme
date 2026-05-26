@@ -75,6 +75,24 @@ The audit reads the pinned requirements rather than the ambient environment, so 
 
 If an advisory has no available fix and does not affect how the application uses the dependency, it can be suppressed with `pip-audit --ignore-vuln <ID>`, accompanied by an inline note recording the advisory identifier and the reason, and tracked until a fix is published. A suppression is always scoped to a single advisory; the gate is never disabled wholesale.
 
+### Property-based tests
+
+The pure-logic core is also checked with [Hypothesis](https://hypothesis.readthedocs.io) (`backend/tests/test_*_properties.py`, the net-new `test_scan_drift.py` / `test_loot_filter.py` units, and the `test_tracker_stateful.py` state machine). Rather than asserting fixed examples, these assert invariants (conservation, monotonicity, round-trips, bounds) over generated inputs; a `RuleBasedStateMachine` additionally drives the hunt tracker through the event bus, asserting its accumulator and kill-model invariants after every step.
+
+Three settings profiles are registered in `conftest.py` and selected with the `HYPOTHESIS_PROFILE` environment variable (default `dev`):
+
+| Profile | Examples | Used by |
+| ------- | -------- | ------- |
+| `dev` | 100 | local runs (default) |
+| `ci` | 300 | the CI backend job |
+| `nightly` | 1000 | reserved for the scheduled workflow |
+
+Deadlines are disabled on every profile: example timing varies on shared runners, and a deterministic property must never fail merely because one example ran slowly. A failing property prints a minimal, shrunk counterexample (with a reproduction blob under the `ci` profile) so it can be replayed exactly.
+
+```bash
+HYPOTHESIS_PROFILE=ci .venv/Scripts/python.exe -m pytest -m "not full"
+```
+
 ## Continuous integration
 
 Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`):

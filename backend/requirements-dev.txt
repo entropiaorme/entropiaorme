@@ -7,6 +7,10 @@ pytest>=8.0.0
 pytest-xdist>=3.6.0
 # Randomised test ordering, to surface inter-test coupling.
 pytest-randomly>=3.15.0
+# Branch-coverage measurement and reporting (config in pyproject.toml).
+pytest-cov>=5.0
+# Per-PR diff coverage: holds new / changed lines to a high bar.
+diff-cover>=9.0
 
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.

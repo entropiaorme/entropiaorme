@@ -129,13 +129,16 @@ class QuestService:
             ),
         )
         quest_id = cur.lastrowid
+        assert quest_id is not None  # a successful INSERT always yields a rowid
 
         mobs = data.get("mobs", [])
         if mobs:
             self._set_quest_mobs(quest_id, mobs)
 
         self._conn.commit()
-        return self.get_quest(quest_id)
+        created = self.get_quest(quest_id)
+        assert created is not None  # the row was just inserted
+        return created
 
     def update_quest(self, quest_id: int, data: dict) -> dict | None:
         """Update a quest's fields. Returns updated quest or None if not found."""
@@ -498,12 +501,15 @@ class QuestService:
             ),
         )
         playlist_id = cur.lastrowid
+        assert playlist_id is not None  # a successful INSERT always yields a rowid
 
         items = self._normalize_playlist_items(data)
         self._set_playlist_items(playlist_id, items)
         self._conn.commit()
 
-        return self.get_playlist(playlist_id)
+        created = self.get_playlist(playlist_id)
+        assert created is not None  # the row was just inserted
+        return created
 
     def update_playlist(self, playlist_id: int, data: dict) -> dict | None:
         """Update a playlist's fields and/or classified quest groups."""

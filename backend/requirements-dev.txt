@@ -11,6 +11,9 @@ pytest-randomly>=3.15.0
 pytest-cov>=5.0
 # Per-PR diff coverage: holds new / changed lines to a high bar.
 diff-cover>=9.0
+# Static type checker (config in pyproject.toml). Ratchets from a lenient-clean
+# baseline toward strict via a per-module allow-list.
+mypy>=1.13
 
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.

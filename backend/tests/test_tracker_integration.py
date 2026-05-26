@@ -47,6 +47,7 @@ class TestFullPipeline:
         assert session.id
 
         result = tracker.stop_session()
+        assert result is not None
         assert not tracker.is_tracking
         assert result.end_time is not None
         assert len(result.kills) == 0
@@ -81,6 +82,7 @@ class TestFullPipeline:
         assert acc.critical_hits == 1
 
         result = tracker.stop_session()
+        assert result is not None
         assert len(result.kills) == 0
         # Dangling cost persisted (weapon cost = 0 since no equipment lookup)
         assert result.dangling_cost == 0.0  # No cost_per_shot configured
@@ -115,6 +117,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         assert len(result.kills) == 1
 
         kill = result.kills[0]
@@ -179,6 +182,7 @@ class TestFullPipeline:
             )
 
         result = tracker.stop_session()
+        assert result is not None
         assert len(result.kills) == 3
 
         # Verify DB
@@ -205,6 +209,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         assert len(result.kills) == 0
         assert abs(result.dangling_cost - 1.00) < 1e-6  # 2 shots × 0.50
 
@@ -229,6 +234,7 @@ class TestFullPipeline:
         bus.publish(EVENT_COMBAT, {"type": "target_jam", "timestamp": now})
 
         result = tracker.stop_session()
+        assert result is not None
         assert result.dangling_cost == 0.50
 
         row = db.execute(
@@ -257,6 +263,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert len(kill.loot_items) == 0  # Universal Ammo is blacklisted
         assert kill.loot_total_ped == 0.0
@@ -297,6 +304,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert len(kill.loot_items) == 1
         assert kill.loot_items[0].item_name == "Shrapnel"
@@ -321,6 +329,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert kill.mob_name == "Unknown"
 
@@ -360,6 +369,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert "Unknown" not in kill.tool_stats
         assert "Opalo" in kill.tool_stats
@@ -438,6 +448,7 @@ class TestFullPipeline:
         )
 
         result = tracker.stop_session()
+        assert result is not None
 
         assert len(result.kills) == 1
         assert result.kills[0].loot_total_ped == 10.00
@@ -544,6 +555,7 @@ class TestTrifectaInferredManualMobLock:
 
         _make_kill(bus)
         result = tracker.stop_session()
+        assert result is not None
 
         assert result.kills[0].mob_name == "Young Atrox"
         assert result.kills[0].mob_species == "Atrox"
@@ -563,6 +575,7 @@ class TestTrifectaInferredManualMobLock:
 
         _make_kill(bus)
         result = tracker.stop_session()
+        assert result is not None
 
         assert result.kills[0].mob_name == "Young Atrox"
         assert result.kills[0].mob_species == "Atrox"
@@ -579,6 +592,7 @@ class TestTrifectaInferredManualMobLock:
         _make_kill(bus)
 
         result = tracker.stop_session()
+        assert result is not None
         assert [kill.mob_name for kill in result.kills] == ["Unknown", "Young Atrox"]
         assert result.kills[1].mob_species == "Atrox"
         assert result.kills[1].mob_maturity == "Young"
@@ -593,6 +607,7 @@ class TestTrifectaInferredManualMobLock:
         _make_kill(bus)
 
         result = tracker.stop_session()
+        assert result is not None
         assert [kill.mob_name for kill in result.kills] == ["Young Atrox", "Unknown"]
 
 
@@ -610,6 +625,7 @@ class TestSessionTagMode:
 
         _make_kill(bus)
         result = tracker.stop_session()
+        assert result is not None
 
         assert result.kills[0].mob_name == "Easter Mayhem"
         assert result.kills[0].mob_species == ""
@@ -628,6 +644,7 @@ class TestSessionTagMode:
 
         _make_kill(bus)
         result = tracker.stop_session()
+        assert result is not None
 
         assert result.kills[0].mob_name == "Unknown"
         assert result.kills[0].mob_species == ""
@@ -647,6 +664,7 @@ class TestSessionTagMode:
 
         _make_kill(bus)
         result = tracker.stop_session()
+        assert result is not None
 
         assert result.kills[0].mob_name == "Easter Mayhem"
         assert result.kills[0].mob_species == ""
@@ -669,6 +687,7 @@ class TestSessionTagMode:
         _make_kill(bus)
 
         result = tracker.stop_session()
+        assert result is not None
         assert [kill.mob_name for kill in result.kills] == ["Easter Mayhem", "Unknown"]
 
 
@@ -718,6 +737,7 @@ class TestGlobalCorrelation:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert kill.is_global is True
         assert kill.is_hof is False
@@ -759,6 +779,7 @@ class TestGlobalCorrelation:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert kill.is_global is True
         assert kill.is_hof is True
@@ -793,6 +814,7 @@ class TestGlobalCorrelation:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
         assert kill.is_global is False
 
@@ -827,6 +849,7 @@ class TestGlobalCorrelation:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         kill = result.kills[0]
 
         notable = db.execute(
@@ -2526,11 +2549,11 @@ class TestMobTrackingModePersistence:
             db,
             mob_tracking_mode_provider=lambda: "mob",
         )
-        tracker.start_session()
+        session = tracker.start_session()
         try:
             mode = db.execute(
                 "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
-                (tracker._session.id,),
+                (session.id,),
             ).fetchone()[0]
             assert mode == "mob"
         finally:
@@ -2547,11 +2570,11 @@ class TestMobTrackingModePersistence:
             db,
             mob_tracking_mode_provider=lambda: "tag",
         )
-        tracker.start_session()
+        session = tracker.start_session()
         try:
             mode = db.execute(
                 "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
-                (tracker._session.id,),
+                (session.id,),
             ).fetchone()[0]
             assert mode == "tag"
         finally:

@@ -233,7 +233,7 @@ class SessionsSeeder:
             for k_i, k in enumerate(kills):
                 noise = rng.uniform(0.55, 1.55)
                 loot_val = k["cost_ped"] * session_return * noise
-                if k_i == notable_kill_idx:
+                if notable is not None and k_i == notable_kill_idx:
                     loot_val += notable_value
                     if notable[0] == "hof_kill":
                         k["is_hof"] = True
@@ -322,6 +322,8 @@ class SessionsSeeder:
             # Notable event row (if any).
             if notable:
                 evt_type, evt_val = notable
+                # notable_kill_idx is set to a valid index whenever notable is truthy.
+                assert notable_kill_idx is not None
                 target_kill = kills[notable_kill_idx]
                 mob_or_item = target_kill["mob_name"]
                 if evt_type == "global_item":
@@ -412,7 +414,9 @@ class SessionsSeeder:
         target = max(4, min(target, 18))
 
         species_by_name = {m.species: m for m in mobs}
+        # The dominant species is always one of the seeded mobs.
         dom_obj = species_by_name.get(dom_species)
+        assert dom_obj is not None
         other_species_pool = [m for m in mobs if m.species != dom_species]
 
         kills: list[dict] = []

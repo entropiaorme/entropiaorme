@@ -58,6 +58,7 @@ def test_capture_region_png_round_trips_rgb_to_bgr():
     png = cap.capture_region_png(0, 0, width, height)
 
     decoded = cv2.imdecode(np.frombuffer(png, dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded is not None
     assert decoded.shape == (height, width, 3)
     assert decoded[0, 0].tolist() == [30, 20, 10]  # RGB (10,20,30) -> BGR
 

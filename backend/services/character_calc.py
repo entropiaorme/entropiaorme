@@ -9,6 +9,7 @@ the math layer so the public functions read as straight formulas.
 
 import bisect
 from collections.abc import Iterator
+from typing import Any
 
 from backend.data.codex_categories import REWARD_DIVISORS, get_codex_category
 from backend.data.tt_value_curve import (
@@ -172,8 +173,10 @@ def profession_skill_optimizer(
     next_level = int(current_prof) + 1
     gap = next_level - current_prof  # profession levels to gain
 
-    skills = []
-    attributes = []
+    # Heterogeneous JSON-shaped record dicts (str names, float metrics, optional
+    # codex fields), so the value type is Any rather than a single scalar.
+    skills: list[dict[str, Any]] = []
+    attributes: list[dict[str, Any]] = []
 
     for name, weight in _iter_profession_skills(profession):
         if weight <= 0:
@@ -253,9 +256,9 @@ def profession_path_optimizer(
 
     # Build working list of regular (non-attribute) skills
     # Skills not present in skill_levels are excluded (not yet unlocked)
-    skills = []
-    excluded = []
-    attributes = []
+    skills: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    attributes: list[dict[str, Any]] = []
     for name, weight in _iter_profession_skills(profession):
         if weight <= 0:
             continue
@@ -287,7 +290,7 @@ def profession_path_optimizer(
     mode = "target" if target_level is not None else "budget"
     max_skill_level = float(max_tt_curve_level())
 
-    if mode == "target":
+    if target_level is not None:
         if target_level <= current_prof:
             return _path_result(
                 mode,
@@ -334,6 +337,10 @@ def profession_path_optimizer(
                 points_remaining -= s["weight"]
 
     else:  # budget mode
+        # The XOR validated at the top of the function guarantees ped_budget is
+        # set whenever target_level is None; assert it so the arithmetic below
+        # narrows from float | None to float.
+        assert ped_budget is not None
         budget_remaining = ped_budget
 
         while budget_remaining > 1e-6:
@@ -390,17 +397,17 @@ def profession_path_optimizer(
 
 
 def _path_result(
-    mode,
-    target_level,
-    ped_budget,
-    current_prof,
-    end_prof,
-    skills,
-    attributes,
-    excluded=None,
-):
+    mode: str,
+    target_level: float | None,
+    ped_budget: float | None,
+    current_prof: float,
+    end_prof: float,
+    skills: list[dict[str, Any]],
+    attributes: list[dict[str, Any]],
+    excluded: list[dict[str, Any]] | None = None,
+) -> dict:
     """Build the path optimizer return dict."""
-    allocations = []
+    allocations: list[dict[str, Any]] = []
     for s in skills:
         codex_cat = get_codex_category(s["name"])
         codex_divisor = REWARD_DIVISORS.get(codex_cat) if codex_cat else None
@@ -472,8 +479,8 @@ def hp_skill_optimizer(skill_levels: dict[str, float], skills_data: list[dict]) 
     """
     current_hp = calculate_hp(skill_levels, skills_data)
 
-    skills = []
-    attributes = []
+    skills: list[dict[str, Any]] = []
+    attributes: list[dict[str, Any]] = []
 
     for name, hp_inc in _iter_hp_skills(skills_data):
         current_level = skill_levels.get(name, 0.0)

@@ -7,6 +7,7 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -670,7 +671,7 @@ def _build_activity_slice_rows(
         if value:
             grouped[value].append(session)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for value, matched_sessions in grouped.items():
         sessions_count = len(matched_sessions)
         kills = sum(int(session.get(kills_key) or 0) for session in matched_sessions)
@@ -725,7 +726,7 @@ def activity_impl(conn):
         if dominant_weapon:
             weapon_groups[dominant_weapon].append(session)
 
-    weapon_comparisons = []
+    weapon_comparisons: list[dict[str, Any]] = []
     for weapon_name, matched_sessions in weapon_groups.items():
         sessions_count = len(matched_sessions)
         kills = sum(int(session["kills"]) for session in matched_sessions)

@@ -38,6 +38,7 @@ _MODULE_TIERS = {
     "test_loot_filter": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
+    "test_tool_inference": "fast",
     "test_tt_curve_properties": "fast",
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",

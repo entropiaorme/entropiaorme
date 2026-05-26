@@ -93,11 +93,32 @@ Deadlines are disabled on every profile: example timing varies on shared runners
 HYPOTHESIS_PROFILE=ci .venv/Scripts/python.exe -m pytest -m "not full"
 ```
 
+### API contract tests
+
+The API's read surface is checked against its own OpenAPI schema with [schemathesis](https://schemathesis.readthedocs.io) (`backend/tests/test_api_contract.py`). It loads the running app's schema in-process and, for every `GET` operation, generates requests and asserts two properties:
+
+- **No server errors** (`not_a_server_error`): no generated input drives an endpoint into an unhandled `5xx`.
+- **Schema conformance** (`response_schema_conformance`): successful (`2xx`) responses match the Pydantic `response_model` the endpoint declares.
+
+The prioritised endpoints carry response models so this has teeth: the polymorphic `tracking/status` and `tracking/live` shapes (`unavailable` / `idle` / `active`), the analytics overview, the character prospect forecast, and the notable-event feed, plus their demo equivalents. Those routes serialise with `response_model_exclude_unset=True`, so the lean shapes keep only the keys the handler actually set rather than gaining a wall of nulls; the models allow extra keys, so adding one can only ever describe a response, never truncate it.
+
+```bash
+.venv/Scripts/python.exe -m pytest -m contract
+```
+
+A few deliberate scoping choices keep the run honest and reproducible:
+
+- **Conformance is asserted on `2xx` responses.** Request-validation failures return FastAPI's standard `HTTPValidationError` (a `detail` array), while a few handlers raise a `422` with a string `detail` for business-rule violations: a pre-existing dual shape under one status code. Strictly conforming those error bodies is out of scope for describing current behaviour, so they are held to the no-server-error bar instead.
+- **The demo surface is seeded into a temporary directory for the run**, so the bundled demo routes are exercised identically here and in CI without depending on a checked-in database.
+- **Generated integer ids are clamped to the storable 64-bit range.** A value beyond it cannot match a stored row and trips a driver-level overflow rather than a clean `404`; that robustness gap on out-of-range ids is tracked separately and is outside a change that only describes current behaviour.
+
+The suite covers the read surface; mutating endpoints need request fixtures and stateful setup and stay on the existing integration tests.
+
 ## Continuous integration
 
 Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines.
+- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, rather than on both legs).
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.

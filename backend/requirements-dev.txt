@@ -20,6 +20,11 @@ mypy>=1.13
 pip-audit>=2.7
 # Property-based testing for the pure-logic core.
 hypothesis>=6.100
+# API contract testing: drives the FastAPI app against its own OpenAPI schema
+# (no unhandled server errors, responses conform to the declared models). The
+# 4.x line requires pytest>=9 and leaves starlette to FastAPI's own pin, so it
+# stays clear of the advisory-bearing versions older releases dragged in.
+schemathesis>=4.20,<5
 
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.

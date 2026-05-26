@@ -43,3 +43,45 @@ markers = [
     "standard: db / filesystem / in-process-stateful tests (run on every PR)",
     "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
 ]
+
+[tool.coverage.run]
+# Branch coverage (not just line coverage): partial branches count, so the
+# branch figure sits below the line figure by design.
+branch = true
+source = ["backend"]
+# Store paths relative to the repo root so the coverage.xml that diff-cover
+# reads resolves identically on a CI runner and a local checkout.
+relative_files = true
+# Device / IO / script modules that cannot be unit-covered without a real
+# device or display, plus the test files themselves. These are run but not
+# measured, so the floor reflects testable logic rather than hardware glue.
+omit = [
+    "backend/tests/*",
+    "backend/scripts/demo_seed/*",
+    "backend/build_app.py",
+    "backend/ocr/capturer.py",
+    "backend/services/eu_window.py",
+    "backend/services/hotbar_listener.py",
+    "backend/services/spacebar_capture_listener.py",
+    "backend/services/local_ocr.py",
+    "backend/services/repair_ocr.py",
+    "backend/services/scan_presets.py",
+    "backend/services/skill_scan_manual.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Defensive / unreachable lines that should not count against the floor.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",
+]
+# Floor set 3 points below the measured branch coverage (47%) of the
+# testable surface, leaving ratchet headroom and avoiding a day-one red. The
+# router layer and main.py sit in the denominator uncovered for now; as their
+# tests land, this figure climbs and the floor is tightened to track it.
+# Never lower a landed floor to make a red gate pass.
+fail_under = 44

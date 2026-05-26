@@ -35,11 +35,23 @@ Each module's tier is set in `backend/tests/conftest.py`; a module with no entry
 
 `ruff format` owns code style and line length; `ruff check` enforces the lint rules configured in `pyproject.toml`.
 
+### Coverage
+
+Branch coverage is measured with `pytest-cov` (configuration under `[tool.coverage]` in `pyproject.toml`):
+
+```bash
+.venv/Scripts/python.exe -m pytest -m "not full" --cov=backend --cov-branch --cov-report=term-missing
+```
+
+The run must hold a total branch-coverage floor (currently 44%). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
+
+On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time.
+
 ## Continuous integration
 
 Every pull request and push to `main` runs three jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier.
+- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines.
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Frontend**: the type-check and production build.
 

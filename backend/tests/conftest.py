@@ -41,6 +41,7 @@ _MODULE_TIERS = {
     "test_tt_curve_properties": "fast",
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
+    "test_api_contract": "standard",  # boots the app lifespan + ASGI schemathesis run
     "test_character_endpoints": "standard",
     "test_chatlog_watcher": "standard",
     "test_codex_service": "standard",

@@ -11,6 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import (
+    NotableEvent,
+    TrackingLive,
+    TrackingStatus,
+)
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.config_service import active_trifecta_preset
 from backend.services.trifecta_service import validate_trifecta
@@ -221,7 +226,11 @@ def stop_tracking():
     }
 
 
-@router.get("/status")
+@router.get(
+    "/status",
+    response_model=TrackingStatus,
+    response_model_exclude_unset=True,
+)
 def tracking_status():
     """Get current tracking status."""
     return tracking_status_impl(get_services())
@@ -509,7 +518,11 @@ def tag_suggestions(q: str = "", limit: int = 10):
     return [row[0] for row in rows]
 
 
-@router.get("/live")
+@router.get(
+    "/live",
+    response_model=TrackingLive,
+    response_model_exclude_unset=True,
+)
 def tracking_live():
     """Live session data for the overlay — compact stats + current mob."""
     return tracking_live_impl(get_services())
@@ -635,7 +648,11 @@ def tracking_live_impl(svc):
     return payload
 
 
-@router.get("/recent-events")
+@router.get(
+    "/recent-events",
+    response_model=list[NotableEvent],
+    response_model_exclude_unset=True,
+)
 def recent_events():
     """Recent notable events for the latest tracking session — dashboard activity feed.
 

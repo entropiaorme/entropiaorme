@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import AnalyticsOverview
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 ACTIVITY_DOMINANCE_THRESHOLD = 0.6
@@ -166,7 +167,7 @@ def _rate_from_metrics(m: dict) -> float:
     return total_gains / total_losses if total_losses > 0 else 0.0
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=AnalyticsOverview)
 def analytics_overview(period: str = "all"):
     """Cross-session sustainability metrics.
 

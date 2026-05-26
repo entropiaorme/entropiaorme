@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from backend.data.codex_categories import get_codex_category
 from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
 from backend.dependencies import get_services
+from backend.routers.response_models import CharacterProspect
 from backend.services.character_calc import (
     ATTRIBUTE_SKILLS,
     all_profession_levels,
@@ -631,7 +632,11 @@ def get_character_prospect_options():
     }
 
 
-@router.get("/prospect")
+@router.get(
+    "/prospect",
+    response_model=CharacterProspect,
+    response_model_exclude_unset=True,
+)
 def get_character_prospect(
     profession: str,
     target_level: float,

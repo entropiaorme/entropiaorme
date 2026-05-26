@@ -28,12 +28,16 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 _MODULE_TIERS = {
     "test_capturer": "fast",  # mss session is stubbed; no real device touched
     "test_character_calc": "fast",
+    "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",
     "test_codex_formulas": "fast",
+    "test_codex_properties": "fast",
     "test_cost_engine": "fast",
+    "test_cost_engine_properties": "fast",
     "test_loot_filter": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
+    "test_tt_curve_properties": "fast",
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
     "test_character_endpoints": "standard",

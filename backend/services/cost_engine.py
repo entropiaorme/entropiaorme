@@ -153,7 +153,6 @@ def cost_per_shot(
         absorber_decay = weapon_decay * absorption
         weapon_decay -= absorber_decay
 
-    has_amp = amp is not None
     amp_decay = 0.0
     amp_ammo = 0.0
     if amp is not None:
@@ -181,16 +180,16 @@ def cost_per_shot(
         add_line("Absorber decay", absorber_decay, absorber_markup)
 
     add_line("Weapon decay", weapon_decay, weapon_markup)
-    if has_amp:
+    if amp is not None:
         add_line("Amp decay", amp_decay, amp_markup)
     if scope:
         scope_decay = _economy(scope).get("decay") or 0.0
         add_line("Scope decay", scope_decay, scope_markup)
 
     if weapon_ammo > 0:
-        label = "Ammo (weapon)" if has_amp else "Ammo"
+        label = "Ammo (weapon)" if amp is not None else "Ammo"
         add_line(label, weapon_ammo, 1.0)
-    if has_amp and amp_ammo > 0:
+    if amp is not None and amp_ammo > 0:
         add_line("Ammo (amp)", amp_ammo, 1.0)
 
     return {

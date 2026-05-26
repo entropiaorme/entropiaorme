@@ -30,6 +30,7 @@ _MODULE_TIERS = {
     "test_character_calc": "fast",
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",
+    "test_chatlog_parser_properties": "fast",
     "test_codex_formulas": "fast",
     "test_codex_properties": "fast",
     "test_cost_engine": "fast",
@@ -47,6 +48,7 @@ _MODULE_TIERS = {
     "test_skill_tracker": "standard",
     "test_tracker_integration": "standard",
     "test_tracking_endpoints": "standard",
+    "test_tracker_stateful": "standard",
 }
 
 

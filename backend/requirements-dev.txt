@@ -14,6 +14,10 @@ diff-cover>=9.0
 # Static type checker (config in pyproject.toml). Ratchets from a lenient-clean
 # baseline toward strict via a per-module allow-list.
 mypy>=1.13
+# Dependency-advisory scanner: audits the pinned requirements against the PyPA
+# advisory database, in CI and nightly, so a newly published advisory in a
+# runtime or dev dependency fails fast.
+pip-audit>=2.7
 
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.

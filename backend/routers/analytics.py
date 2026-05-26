@@ -227,6 +227,7 @@ def overview_impl(conn, period: str = "all"):
     sess_cost_by_day = dict(conn.execute(
         f"""SELECT date(s.started_at, 'unixepoch') as day,
                    COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0)
+                   + COALESCE(SUM(s.dangling_cost), 0)
             FROM tracking_sessions s WHERE {sess_w2} GROUP BY day""", sess_p2,
     ).fetchall())
     cost_by_day = {}
@@ -304,6 +305,7 @@ def overview_impl(conn, period: str = "all"):
     sess_cost_by_month = dict(conn.execute(
         f"""SELECT strftime('%Y-%m', s.started_at, 'unixepoch') as month,
                    COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0)
+                   + COALESCE(SUM(s.dangling_cost), 0)
             FROM tracking_sessions s WHERE {sess_w2} GROUP BY month""", sess_p2,
     ).fetchall())
     cost_by_month = {}

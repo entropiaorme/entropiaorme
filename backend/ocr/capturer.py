@@ -9,8 +9,9 @@ import numpy as np
 try:
     import mss
     import mss.tools
-except ImportError:
-    mss = None
+except ImportError:  # pragma: no cover - mss is a packaged runtime dependency
+    # Optional-import fallback: callers guard on `mss is None` before use.
+    mss = None  # type: ignore[assignment]
 
 
 __all__ = ["ScreenCapturer"]
@@ -67,4 +68,8 @@ class ScreenCapturer:
         shot = self._sct().grab(
             {"left": int(x), "top": int(y), "width": int(width), "height": int(height)}
         )
-        return mss.tools.to_png(shot.rgb, shot.size)
+        png = mss.tools.to_png(shot.rgb, shot.size)
+        # to_png returns None only when given an output path to write to; with
+        # no path it returns the encoded bytes.
+        assert png is not None
+        return png

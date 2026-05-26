@@ -62,6 +62,7 @@ class TestQuestCRUD:
         updated = quest_service.update_quest(
             q["id"], {"name": "Updated", "planet": "Arkadia"}
         )
+        assert updated is not None
         assert updated["name"] == "Updated"
         assert updated["planet"] == "Arkadia"
 
@@ -76,6 +77,7 @@ class TestQuestCRUD:
             }
         )
         updated = quest_service.update_quest(q["id"], {"reward_is_skill": True})
+        assert updated is not None
         assert updated["reward_is_skill"] == 1
         assert updated["expected_reward_markup_percent"] is None
 
@@ -83,6 +85,7 @@ class TestQuestCRUD:
         q = quest_service.create_quest({"name": "Test", "mobs": ["Atrox"]})
         assert q["mobs"] == ["Atrox"]
         updated = quest_service.update_quest(q["id"], {"mobs": ["Foul", "Snablesnot"]})
+        assert updated is not None
         assert updated["mobs"] == ["Foul", "Snablesnot"]
 
     def test_delete_quest(self, quest_service: QuestService):
@@ -127,12 +130,14 @@ class TestQuestActions:
         q = quest_service.create_quest({"name": "Test"})
         assert q["started_at"] is None
         started = quest_service.start_quest(q["id"])
+        assert started is not None
         assert started["started_at"] is not None
 
     def test_cancel_started_quest(self, quest_service: QuestService):
         q = quest_service.create_quest({"name": "Test"})
         quest_service.start_quest(q["id"])
         cancelled = quest_service.cancel_quest(q["id"])
+        assert cancelled is not None
         assert cancelled["started_at"] is None
 
     def test_complete_quest(self, quest_service: QuestService):
@@ -145,6 +150,7 @@ class TestQuestActions:
         )
         quest_service.start_quest(q["id"])
         completed = quest_service.complete_quest(q["id"])
+        assert completed is not None
         assert completed["started_at"] is None
         assert completed["last_completed_at"] is not None
         assert completed["cooldown_expires_at"] is not None
@@ -243,6 +249,7 @@ class TestQuestActions:
             }
         )
         completed = quest_service.complete_quest(q["id"])
+        assert completed is not None
         assert completed["cooldown_expires_at"] is not None
 
         row = quest_service._conn.execute(
@@ -267,6 +274,7 @@ class TestQuestSchemaMigration:
         quest_service.complete_quest(q["id"])
 
         cancelled = quest_service.cancel_quest(q["id"], undo_reward=False)
+        assert cancelled is not None
         assert cancelled["cooldown_expires_at"] is None
         assert cancelled["started_at"] is None
 
@@ -289,6 +297,7 @@ class TestQuestSchemaMigration:
         quest_service.complete_quest(q["id"])
 
         cancelled = quest_service.cancel_quest(q["id"], undo_reward=True)
+        assert cancelled is not None
         assert cancelled["cooldown_expires_at"] is None
 
         row = quest_service._conn.execute(
@@ -336,6 +345,7 @@ class TestQuestSchemaMigration:
         quest_service._conn.commit()
         q = quest_service.create_quest({"name": "No Session", "cooldown_hours": 1})
         completed = quest_service.complete_quest(q["id"])
+        assert completed is not None
         assert completed["cooldown_expires_at"] is not None
 
         row = quest_service._conn.execute(
@@ -354,6 +364,7 @@ class TestCooldown:
         q = quest_service.create_quest({"name": "Test", "cooldown_hours": 24})
         quest_service.complete_quest(q["id"])
         q2 = quest_service.get_quest(q["id"])
+        assert q2 is not None
         assert q2["cooldown_expires_at"] is not None
         # Expires ~24h from now
         from datetime import datetime
@@ -368,6 +379,7 @@ class TestCooldown:
         q = quest_service.create_quest({"name": "Test"})
         quest_service.complete_quest(q["id"])
         q2 = quest_service.get_quest(q["id"])
+        assert q2 is not None
         assert q2["cooldown_expires_at"] is None
 
     def test_cancel_completed_quest_removes_current_session_link(self, tmp_path: Path):
@@ -464,6 +476,7 @@ class TestPlaylists:
                 "quest_ids": [q2["id"], q1["id"]],
             },
         )
+        assert updated is not None
         assert updated["quest_ids"] == [q2["id"], q1["id"]]
 
     def test_update_playlist_reclassify_group(self, quest_service: QuestService):
@@ -484,6 +497,7 @@ class TestPlaylists:
                 ],
             },
         )
+        assert updated is not None
         assert updated["immediate_quest_ids"] == [q1["id"]]
         assert updated["long_horizon_quest_ids"] == [q2["id"]]
 
@@ -501,6 +515,7 @@ class TestPlaylists:
             }
         )
         q2 = quest_service.get_quest(q["id"])
+        assert q2 is not None
         assert pl["id"] in q2["playlist_ids"]
 
     def test_delete_quest_removes_from_playlist(self, quest_service: QuestService):
@@ -513,6 +528,7 @@ class TestPlaylists:
         )
         quest_service.delete_quest(q["id"])
         pl2 = quest_service.get_playlist(pl["id"])
+        assert pl2 is not None
         assert pl2["quest_ids"] == []
 
 
@@ -744,6 +760,7 @@ class TestAutoStartQuest:
         assert q["started_at"] is None
         quest_service.start_quest_from_mission("Paneleon Hunter (repeatable)")
         updated = quest_service.get_quest(q["id"])
+        assert updated is not None
         assert updated["started_at"] is not None
 
     def test_auto_start_no_match_is_noop(self, quest_service: QuestService):
@@ -757,8 +774,10 @@ class TestAutoStartQuest:
         q = quest_service.create_quest({"name": "Paneleon Hunter"})
         quest_service.start_quest(q["id"])
         original = quest_service.get_quest(q["id"])
+        assert original is not None
         quest_service.start_quest_from_mission("Paneleon Hunter")
         updated = quest_service.get_quest(q["id"])
+        assert updated is not None
         assert updated["started_at"] == original["started_at"]
 
     def test_event_bus_triggers_auto_start(self, tmp_path: Path):
@@ -778,6 +797,7 @@ class TestAutoStartQuest:
             },
         )
         updated = svc.get_quest(q["id"])
+        assert updated is not None
         assert updated["started_at"] is not None
 
 

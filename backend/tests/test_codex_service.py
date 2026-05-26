@@ -111,7 +111,8 @@ def test_get_species_ranks_returns_25(service):
 def test_get_species_ranks_unknown(tmp_path):
     """Unknown species returns None."""
     app_db = AppDatabase(tmp_path / "empty_app.db")
-    svc = CodexService(app_db, _StubGameData())
+    # _StubGameData is a deliberate minimal stand-in for the heavy GameDataStore.
+    svc = CodexService(app_db, _StubGameData())  # type: ignore[arg-type]
     assert svc.get_species_ranks("Nonexistent") is None
     app_db.close()
 

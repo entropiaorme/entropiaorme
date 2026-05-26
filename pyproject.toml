@@ -85,3 +85,52 @@ exclude_also = [
 # tests land, this figure climbs and the floor is tightened to track it.
 # Never lower a landed floor to make a red gate pass.
 fail_under = 44
+
+[tool.mypy]
+python_version = "3.11"
+# The Pydantic v2 plugin teaches mypy about model construction / validators;
+# without it, model instantiation produces false positives.
+plugins = ["pydantic.mypy"]
+files = ["backend"]
+# Check the bodies of unannotated functions too. This is the single
+# highest-value flag short of full strict: it surfaces real bugs (bad indexing,
+# wrong operands, mismatched returns) in code that has no signature yet.
+check_untyped_defs = true
+# An argument defaulting to None must be typed Optional explicitly.
+no_implicit_optional = true
+# A `# type: ignore` that no longer suppresses anything is itself an error, so
+# the ignore set cannot rot as the code is annotated.
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# C-extension dependencies ship no type information (no stubs, no py.typed).
+# Ignore missing imports for these specific modules rather than globally, so a
+# genuinely-missing first-party import still surfaces as an error.
+[[tool.mypy.overrides]]
+module = [
+    "cv2",
+    "mss",
+    "mss.*",
+    "pynput",
+    "pynput.*",
+    "onnxruntime",
+    "openocr",
+    "openocr.*",
+    "rapidfuzz",
+]
+ignore_missing_imports = true
+
+# Strict beachhead: small, pure-logic modules held to full annotation
+# (disallow_untyped_defs). The typing gate ratchets outward from here as more
+# modules are annotated; a module is only ever added to this list, never
+# removed. To promote a module: annotate it fully, confirm `mypy backend` stays
+# green, then add it here.
+[[tool.mypy.overrides]]
+module = [
+    "backend.services.cost_engine",
+    "backend.services.scan_drift",
+    "backend.tracking.loot_filter",
+    "backend.data.codex_categories",
+    "backend.data.tt_value_curve",
+]
+disallow_untyped_defs = true

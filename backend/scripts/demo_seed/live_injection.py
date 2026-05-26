@@ -397,13 +397,13 @@ def _write_demo_session_to_db(
     for i, (skill_name, ped_value) in enumerate(
         zip(skill_window, pes_values, strict=True)
     ):
-        ts = started_at_epoch + (i + 0.5) * (elapsed_seconds / n_gains)
+        gain_ts = started_at_epoch + (i + 0.5) * (elapsed_seconds / n_gains)
         amount = round(ped_value * rng.uniform(2.0, 2.4), 5)
         db.execute(
             "INSERT INTO skill_gains "
             "(session_id, timestamp, skill_name, amount, ped_value) "
             "VALUES (?, ?, ?, ?, ?)",
-            (session_id, ts, skill_name, amount, ped_value),
+            (session_id, gain_ts, skill_name, amount, ped_value),
         )
 
     # Recent-events synthetic global. Value (60.5 PED) is deliberately

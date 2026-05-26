@@ -948,7 +948,7 @@ class HuntTracker:
         total_ped = data.get("total_ped", 0.0)
         timestamp = data.get("timestamp")
         now = timestamp or datetime.now(tz=None)
-        now_epoch = now.timestamp() if hasattr(now, "timestamp") else now
+        now_epoch = now.timestamp() if isinstance(now, datetime) else float(now)
 
         # Loot deduplication (same fingerprint within 2s window)
         first_item = items_raw[0].get("item_name", "") if items_raw else ""
@@ -1093,12 +1093,15 @@ class HuntTracker:
             for ch in (self._active_weapon_observed_name or "")
             if ch.isalnum()
         )
-        return bool(item_norm) and (
-            item_norm in tool_norm
-            or tool_norm in item_norm
-            or (
-                observed_norm
-                and (item_norm in observed_norm or observed_norm in item_norm)
+        return bool(
+            item_norm
+            and (
+                item_norm in tool_norm
+                or tool_norm in item_norm
+                or (
+                    observed_norm
+                    and (item_norm in observed_norm or observed_norm in item_norm)
+                )
             )
         )
 

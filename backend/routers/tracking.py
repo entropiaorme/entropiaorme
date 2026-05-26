@@ -212,6 +212,7 @@ def stop_tracking():
         raise HTTPException(status_code=409, detail="No active session")
 
     session = svc.tracker.stop_session()
+    assert session is not None  # guaranteed by the is_tracking check above
     return {
         "session_id": session.id,
         "started_at": session.start_time.isoformat(),

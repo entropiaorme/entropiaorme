@@ -13,7 +13,9 @@ set -euo pipefail
 
 src="$1"
 name="$(basename "$src")"
-remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+# Default to the token-authenticated GitHub remote; BADGE_REMOTE_URL overrides it
+# (used by the script's own test against a local repository).
+remote="${BADGE_REMOTE_URL:-https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git}"
 
 git config --global user.name "github-actions[bot]"
 git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"

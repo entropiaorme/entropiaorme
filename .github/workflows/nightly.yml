@@ -60,7 +60,7 @@ jobs:
       # against just the tests that exercise it.
       - name: Run mutation campaign
         env:
-          HYPOTHESIS_PROFILE: dev
+          HYPOTHESIS_PROFILE: mutation
         run: mutmut run
       # Reduce the campaign to a single score and a shields.io endpoint badge.
       - name: Compute mutation score
@@ -75,7 +75,7 @@ jobs:
         run: bash .github/scripts/publish-badge.sh mutation.json
       # Ratchet: fail if the score has regressed below the published floor. Runs
       # after publishing, so the badge still reflects reality on a regression.
-      # Floor set a few points below the measured baseline (75.5%) for headroom;
+      # Floor set a few points below the measured baseline (75.1%) for headroom;
       # raise it as survivors are killed, never lower it to make a red run pass.
       - name: Enforce the mutation-score floor
         run: python -m backend.scripts.mutation_score --fail-under 72

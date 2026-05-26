@@ -186,9 +186,10 @@ pytest_add_cli_args_test_selection = [
 ]
 # Keep the device tier out (redundant with the explicit selection above, but it
 # keeps the intent legible and guards against a selected file growing a slow
-# case). The Hypothesis profile is pinned to a bounded one via HYPOTHESIS_PROFILE
-# in the runner environment: a 1000-example nightly profile times thousands of
-# mutants is intractable, so the campaign uses the bounded dev/ci profile.
+# case). The Hypothesis profile is pinned via HYPOTHESIS_PROFILE in the runner
+# environment to the bounded, derandomised `mutation` profile (see conftest.py):
+# the run must be reproducible to gate on, and a 1000-example nightly profile
+# times thousands of mutants would be intractable.
 pytest_add_cli_args = ["-m", "not full"]
 # Mutate every line in the targeted modules rather than restricting to
 # coverage-filtered lines. The coverage-filtered path runs a pre-mutation

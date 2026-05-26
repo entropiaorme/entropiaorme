@@ -86,6 +86,7 @@ Three settings profiles are registered in `conftest.py` and selected with the `H
 | `dev` | 100 | local runs (default) |
 | `ci` | 300 | the CI backend job |
 | `nightly` | 1000 | reserved for the scheduled workflow |
+| `mutation` | 200 | the mutation campaign (derandomised, so the score is reproducible) |
 
 Deadlines are disabled on every profile: example timing varies on shared runners, and a deterministic property must never fail merely because one example ran slowly. A failing property prints a minimal, shrunk counterexample (with a reproduction blob under the `ci` profile) so it can be replayed exactly.
 
@@ -120,10 +121,10 @@ Coverage proves a line ran; it cannot prove a test would notice if that line wer
 
 The campaign targets that core (`cost_engine`, `character_calc`, `codex_categories`, `tt_value_curve`, `scan_drift`, `loot_filter`, `tool_inference`); device, IO, and router glue carry little mutation value. The configuration lives in `[tool.mutmut]` in `pyproject.toml`. Because a campaign is slow (it re-runs tests once per mutant), it runs nightly and on demand rather than on every pull request (`.github/workflows/nightly.yml`); the engine has no native Windows support, so it runs on a Linux runner, which the pure-logic targets are indifferent to.
 
-The current baseline is **75.5%** across the seven modules (floor **72%**, with headroom to ratchet upward). `loot_filter` and `tool_inference` sit at 100%; `character_calc` carries most of the survivors (its profession-path heuristics admit many behaviour-preserving mutants). Run a campaign on a POSIX environment with:
+The current baseline is **75.1%** across the seven modules, measured under the derandomised profile so it is reproducible (floor **72%**, with headroom to ratchet upward). `codex_categories` is strongest at 95%; `character_calc` carries most of the survivors (its profession-path heuristics admit many behaviour-preserving mutants). Run a campaign on a POSIX environment with:
 
 ```bash
-HYPOTHESIS_PROFILE=dev mutmut run        # run the campaign (bounded profile keeps it tractable)
+HYPOTHESIS_PROFILE=mutation mutmut run   # run the campaign (derandomised, so the score is reproducible)
 mutmut results                           # list surviving mutants
 mutmut show <mutant>                     # inspect one survivor's diff
 mutmut export-cicd-stats                 # write mutants/mutmut-cicd-stats.json

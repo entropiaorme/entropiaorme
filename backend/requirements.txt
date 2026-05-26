@@ -1,4 +1,7 @@
-fastapi>=0.115.0
+# Exclude fastapi 0.136.3: security advisory MAL-2026-4750 flags that release
+# for adding an undocumented package to its optional "standard" extra. Drop the
+# exclusion once a fixed release is published.
+fastapi>=0.115.0,!=0.136.3
 uvicorn[standard]>=0.32.0
 pydantic>=2.0
 python-dotenv>=1.0

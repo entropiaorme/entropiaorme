@@ -3,6 +3,7 @@
 import time
 from collections import defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -546,7 +547,7 @@ def get_skills():
 
     skill_map = {s["name"]: s for s in skills_data}
 
-    result = []
+    result: list[dict[str, Any]] = []
     for name, level in skill_levels.items():
         entity = skill_map.get(name, {})
         category_obj = entity.get("category") or {}
@@ -770,7 +771,7 @@ def get_codex():
     svc = get_services()
     skill_levels = _get_skill_calibrations(svc.app_db)
 
-    result = []
+    result: list[dict[str, Any]] = []
     for name, level in skill_levels.items():
         if get_codex_category(name) is None:
             continue

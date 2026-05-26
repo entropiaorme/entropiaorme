@@ -156,7 +156,7 @@ def cost_per_shot(
     has_amp = amp is not None
     amp_decay = 0.0
     amp_ammo = 0.0
-    if has_amp:
+    if amp is not None:
         amp_eco = _economy(amp)
         amp_decay = amp_eco.get("decay") or 0.0
         amp_ammo = (amp_eco.get("ammo_burn") or 0.0) / 100.0

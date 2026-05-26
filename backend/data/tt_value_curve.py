@@ -14,9 +14,9 @@ from pathlib import Path
 _CSV_PATH = Path(__file__).parent / "tt_value_curve.csv"
 
 
-def _load_curve():
-    levels = []
-    tt_values = []
+def _load_curve() -> tuple[list[int], list[float]]:
+    levels: list[int] = []
+    tt_values: list[float] = []
     with open(_CSV_PATH, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             levels.append(int(row["level"]))

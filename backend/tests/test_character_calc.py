@@ -206,7 +206,7 @@ def test_skill_rank_empty():
 
 
 def test_skill_rank_ignores_invalid_threshold_rows():
-    ranks = [
+    ranks: list[dict] = [
         {"name": "Broken", "skill": None},
         {"name": "Newbie", "skill": 1},
         {"name": "Inept", "skill": 10},

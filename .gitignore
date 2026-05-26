@@ -7,6 +7,11 @@ __pycache__/
 pytest-cache-files-*/
 .ruff_cache/
 .mypy_cache/
+# Coverage measurement artefacts (pytest-cov / coverage.py output).
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 dist/
 # PyInstaller working dir (sibling of dist/ at repo root for the backend sidecar build)
 /build/

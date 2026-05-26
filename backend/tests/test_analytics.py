@@ -5,7 +5,7 @@ session-level cost component that feeds the headline ``trackingCost`` must
 also feed the per-bucket series, so the bars reconcile with the total.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.db.app_database import AppDatabase
@@ -14,7 +14,7 @@ from backend.tracking.schema import init_tracking_tables
 
 
 def _epoch(year: int, month: int, day: int) -> float:
-    return datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+    return datetime(year, month, day, 12, 0, 0, tzinfo=UTC).timestamp()
 
 
 def _seed_conn(tmp_path: Path):

@@ -21,6 +21,7 @@ _MODULE_TIERS = {
     "test_codex_formulas": "fast",
     "test_cost_engine": "fast",
     "test_scan_completion": "fast",
+    "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
     "test_character_endpoints": "standard",
     "test_chatlog_watcher": "standard",

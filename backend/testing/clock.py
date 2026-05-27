@@ -2,9 +2,9 @@
 
 Production services that read wall-clock or monotonic time go through
 a ``Clock`` so test scenarios can freeze and advance time
-deterministically. The first round lands the interface and the two
-concrete implementations; subsequent rounds wire individual services
-to take a ``Clock`` at construction.
+deterministically. This module lands the interface and the two
+concrete implementations; individual services are wired to take a
+``Clock`` at construction as the harness is built out.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class Clock(ABC):
         """Return the current wall-clock instant.
 
         Naive by default (matches the existing ``datetime.now()``
-        callers in services); rounds that want timezone-awareness opt
+        callers in services); callers that want timezone-awareness opt
         in by passing ``tz`` at construction.
         """
 

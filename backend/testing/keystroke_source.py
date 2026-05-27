@@ -1,13 +1,14 @@
 """Keystroke source abstraction for harness tests.
 
 Production listeners (``HotbarListener``, ``SpacebarCaptureListener``)
-currently call into ``pynput`` directly. A later round extracts a
-``KeystrokeSource`` interface that those listeners depend on; tests
-inject a ``MockKeystrokeSource`` and dispatch synthetic key events.
+currently call into ``pynput`` directly. A ``KeystrokeSource`` interface
+that those listeners depend on is extracted as that surface is built
+out; tests inject a ``MockKeystrokeSource`` and dispatch synthetic key
+events.
 
-The first round lands the interface and the mock so downstream rounds
-can build scenarios against a stable shape. Production wire-through
-follows in the round that extracts the seam from the listeners.
+This lands the interface and the mock so scenarios can be built against
+a stable shape. The production wire-through follows when the seam is
+extracted from the listeners.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 A snapshot runs a fixed catalogue of SELECT queries against the
 tracking schema and renders the rows into a single JSON document under
 the same normalisation rules as the event-stream fingerprint. The
-catalogue is the contract: rounds that introduce a new
-externally-observable table append a ``TableSpec`` here, and existing
+catalogue is the contract: a change that introduces a new
+externally-observable table appends a ``TableSpec`` here, and existing
 goldens grow to cover the new surface on the next ``--update-fingerprints``
 pass.
 
@@ -41,7 +41,7 @@ class TableSpec:
     order_by: tuple[str, ...] = ()
 
 
-# Catalogue of tables the R1 scenario touches. Extend per round as new
+# Catalogue of tables the initial scenario touches. Extend as new
 # scenarios bring fresh tables into scope.
 #
 # Each ``order_by`` is chosen for cross-run determinism: rows must

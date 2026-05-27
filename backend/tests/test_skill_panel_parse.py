@@ -173,12 +173,11 @@ def test_fuzzy_resolve_caps_candidate_list():
     assert len(cands) == sp._FUZZ_TOP_N
 
 
-def test_fuzzy_resolve_uses_substring_aware_scorer():
-    """The WRatio scorer rewards the substring match the default scorer misses.
+def test_fuzzy_resolve_substring_query_resolves_to_container():
+    """A substring query resolves to the entry that contains it.
 
-    `Tech` is a substring of `Food Technology`; WRatio ranks it top, whereas a
-    plain ratio scorer (the default if the scorer argument were dropped) is
-    dominated by the length mismatch and picks something else.
+    `Tech` is a substring of `Food Technology`; the WRatio scorer's partial
+    component ranks it top despite the length mismatch.
     """
     canonical, _, _ = sp.fuzzy_resolve("Tech", VOCAB)
     assert canonical == "Food Technology"
@@ -226,6 +225,9 @@ def test_slice_panel_cells_interpolates_row_offsets():
 
     assert [(c.row, c.cell) for c in crops] == [(0, "name"), (1, "name"), (2, "name")]
     assert [int(c.image[0, 0, 0]) for c in crops] == [2, 7, 12]
+    # Each crop spans exactly `height` rows (a missing y_bot would run to the
+    # panel's bottom edge instead).
+    assert [c.image.shape[0] for c in crops] == [2, 2, 2]
 
 
 def test_slice_panel_cells_interpolates_only_when_multi_row():

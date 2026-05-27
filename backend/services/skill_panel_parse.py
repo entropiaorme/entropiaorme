@@ -106,6 +106,9 @@ def fuzzy_resolve(
     for entry in vocab:
         if _norm_name(entry) == norm_query:
             return entry, 100.0, [(entry, 100.0)]
+    # WRatio is also rapidfuzz's default scorer, so passing it explicitly is
+    # behaviour-equivalent today; it is kept explicit so the choice is robust to
+    # a future change in the library default.
     results = process.extract(cleaned, vocab, scorer=_FUZZ_SCORER, limit=_FUZZ_TOP_N)
     cands = [(canon, float(score)) for canon, score, _ in results]
     if not cands:

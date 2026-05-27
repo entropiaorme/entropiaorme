@@ -75,7 +75,9 @@ jobs:
         run: bash .github/scripts/publish-badge.sh mutation.json
       # Ratchet: fail if the score has regressed below the published floor. Runs
       # after publishing, so the badge still reflects reality on a regression.
-      # Floor set a few points below the measured baseline (75.1%) for headroom;
-      # raise it as survivors are killed, never lower it to make a red run pass.
+      # Floor set a few points below the measured baseline (76.8% across the
+      # pure-logic core plus the skill-panel OCR parsing) for headroom, including
+      # margin for a load-sensitive timeout drifting to survived; raise it as
+      # survivors are killed, never lower it to make a red run pass.
       - name: Enforce the mutation-score floor
-        run: python -m backend.scripts.mutation_score --fail-under 72
+        run: python -m backend.scripts.mutation_score --fail-under 74

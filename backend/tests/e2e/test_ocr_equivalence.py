@@ -9,16 +9,16 @@ structurally distinct cases (a full page, the partial last page, and the
 multi-page aggregation across the whole scan).
 
 Local-by-default, like the recorded bundle it draws from. The panels are a real
-account's data, so they are not committed; the bundle seeds into the worktree
-from the canonical out-of-tree copy, and the golden files this test writes are
-gitignored alongside it. With the bundle absent (a fresh clone, CI), the whole
-module skips, so the public surface and CI stay green without the real captures.
-The ``full`` marker keeps it off the per-PR leg regardless; it runs locally and
-on demand.
+account's data, so they are not committed: they are supplied locally and the
+golden files this test writes are gitignored alongside them. With the panels
+absent (a fresh clone, CI), the whole module skips, so the public surface and CI
+stay green without the real captures. The ``full`` marker keeps it off the
+per-PR leg regardless; it runs locally and on demand.
 
 A model or device change that legitimately shifts a reading is a deliberate
 re-ratification: regenerate the goldens with ``--force-regen`` and review the
-diff. Inference drift across GPUs is out of scope (see the lane's OCR boundary).
+diff. Inference drift across GPUs is out of scope: the goldens are pinned to
+this host's recogniser output.
 """
 
 from __future__ import annotations

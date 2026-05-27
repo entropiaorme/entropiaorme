@@ -18,8 +18,13 @@ mypy>=1.13
 # advisory database, in CI and nightly, so a newly published advisory in a
 # runtime or dev dependency fails fast.
 pip-audit>=2.7
-# Property-based testing for the pure-logic core.
-hypothesis>=6.100
+# Property-based testing for the pure-logic core. Pinned exactly: the set of
+# examples a version generates (for a fixed seed) is part of its output, so a
+# floating version can shift which inputs the contract suite exercises and make
+# a gating run's outcome depend on whichever release the runner happened to
+# resolve. A fixed version keeps the local and CI runs reproducible; bump it
+# deliberately, re-running the suite, rather than letting it drift.
+hypothesis==6.153.0
 # API contract testing: drives the FastAPI app against its own OpenAPI schema
 # (no unhandled server errors, responses conform to the declared models). The
 # 4.x line requires pytest>=9 and leaves starlette to FastAPI's own pin, so it

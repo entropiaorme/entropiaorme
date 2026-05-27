@@ -29,7 +29,10 @@ _FUZZ_TOP_N = 3
 _FUZZ_SCORER = fuzz.WRatio
 
 
-@dataclass(frozen=True)
+# eq=False: the image field is an ndarray, whose element-wise ``==`` and
+# unhashability would make a generated __eq__/__hash__ raise; identity
+# equality is all this crop holder needs.
+@dataclass(frozen=True, eq=False)
 class CellCrop:
     row: int
     cell: str

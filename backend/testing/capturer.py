@@ -44,10 +44,15 @@ class FixtureCapturer:
 
         Decodes the bound PNG via ``cv2.imdecode(IMREAD_COLOR)``: the inverse
         of the RGB-to-PNG encode the capturer used at record time, so the
-        frame is the original grab. The region is ignored (the fixture is the
-        recorded region).
+        frame is the original grab. The ``x`` / ``y`` position is ignored (the
+        fixture is the recorded region); ``width`` / ``height`` are validated
+        the same way :class:`ScreenCapturer` validates them, so a non-positive
+        region fails here as it would in production rather than silently
+        serving the fixture.
         """
-        del x, y, width, height  # accepted for parity; the fixture is the region
+        del x, y  # screen position is ignored; the fixture is the region
+        if width <= 0 or height <= 0:
+            raise ValueError("capture dimensions must be positive")
 
         import cv2
         import numpy as np
@@ -63,8 +68,12 @@ class FixtureCapturer:
 
         These are bit-identical to ``ScreenCapturer.capture_region_png``'s
         output at record time, so the skill-scan decode path sees exactly the
-        bytes it saw live. The region is ignored (the fixture is the recorded
-        region).
+        bytes it saw live. The ``x`` / ``y`` position is ignored (the fixture
+        is the recorded region); ``width`` / ``height`` are validated the same
+        way :class:`ScreenCapturer` validates them, so a non-positive region
+        fails here as it would in production.
         """
-        del x, y, width, height  # accepted for parity; the fixture is the region
+        del x, y  # screen position is ignored; the fixture is the region
+        if width <= 0 or height <= 0:
+            raise ValueError("capture dimensions must be positive")
         return self._png_bytes

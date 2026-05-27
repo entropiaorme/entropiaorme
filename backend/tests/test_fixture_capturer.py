@@ -55,6 +55,21 @@ def test_region_arguments_are_ignored(tmp_path):
     assert cap.capture_region_png(0, 0, 1, 1) == cap.capture_region_png(99, 99, 5, 5)
 
 
+@pytest.mark.parametrize("width,height", [(0, 5), (5, 0), (-1, 5), (5, -1)])
+def test_capture_rejects_nonpositive_dims(tmp_path, width, height):
+    """The double rejects a non-positive region as the real capturer does, so a
+    broken region calculation fails in tests instead of silently passing."""
+    img = np.full((2, 2, 3), 128, dtype=np.uint8)
+    png_path = tmp_path / "panel.png"
+    _write_png(png_path, img)
+    cap = FixtureCapturer(png_path)
+
+    with pytest.raises(ValueError):
+        cap.capture_region(0, 0, width, height)
+    with pytest.raises(ValueError):
+        cap.capture_region_png(0, 0, width, height)
+
+
 def test_missing_fixture_fails_fast(tmp_path):
     with pytest.raises(FileNotFoundError):
         FixtureCapturer(tmp_path / "does-not-exist.png")

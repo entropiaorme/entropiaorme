@@ -37,6 +37,7 @@ _MODULE_TIERS = {
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",
     "test_chatlog_parser_properties": "fast",
+    "test_codex_endpoints": "fast",  # request-validation only; no lifespan or DB
     "test_codex_formulas": "fast",
     "test_codex_properties": "fast",
     "test_cost_engine": "fast",

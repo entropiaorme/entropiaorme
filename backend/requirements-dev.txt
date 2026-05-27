@@ -28,6 +28,12 @@ pip-audit>=2.7
 # resolve. A fixed version keeps the local and CI runs reproducible; bump it
 # deliberately, re-running the suite, rather than letting it drift.
 hypothesis==6.153.0
+# Golden-file regression testing: data_regression / num_regression pin
+# structured outputs (the OCR pipeline's recognised skill levels and repair
+# cost) against committed reference files, with per-field numeric tolerance for
+# values that legitimately wobble. A deliberate golden change is re-ratified via
+# its --force-regen flow, surfaced as a reviewable diff.
+pytest-regressions>=2.5
 # API contract testing: drives the FastAPI app against its own OpenAPI schema
 # (no unhandled server errors, responses conform to the declared models). The
 # 4.x line requires pytest>=9 and leaves starlette to FastAPI's own pin, so it

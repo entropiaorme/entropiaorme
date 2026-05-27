@@ -1,13 +1,25 @@
 """Fixture-backed screen capturer for OCR tests.
 
-Production OCR consumes ``ScreenCapturer`` (``backend/ocr/capturer.py``)
-which grabs frames via ``mss``. In test mode, ``FixtureCapturer`` serves
-pre-loaded PNG fixtures from a scenario's ``scan_captures/`` directory
-so the OCR pipeline can be exercised without a live game client.
+Production OCR consumes :class:`~backend.ocr.capturer.ScreenCapturer`
+(``backend/ocr/capturer.py``), which grabs frames via ``mss``. In a test,
+``FixtureCapturer`` stands in for it and serves a pre-recorded panel PNG so
+the OCR pipeline runs end to end without a live game client.
 
-This is the scaffolding shape; the production seam (a factory swap at
-composition time) and the OCR ground-truth corpus the fixtures pair
-with are wired in as that surface is built out.
+It mirrors the two methods the OCR consumers call, returning the same types
+off the bound fixture:
+
+* :meth:`capture_region_png` returns the fixture PNG bytes verbatim, so they
+  are bit-identical to what ``ScreenCapturer.capture_region_png`` produced
+  when the panel was recorded (the skill-scan path).
+* :meth:`capture_region` decodes those bytes back to a BGR ``uint8`` ndarray
+  via ``cv2.imdecode(IMREAD_COLOR)``, the inverse of the RGB-to-PNG encode, so
+  the frame matches the original grab (the repair-cost path).
+
+The region arguments are accepted for signature parity and ignored: the
+fixture itself is the recorded region. A test injects the capturer by
+swapping the ``ScreenCapturer`` symbol the consumer holds, e.g.
+``monkeypatch.setattr("backend.services.skill_scan_core.ScreenCapturer",
+lambda: FixtureCapturer(panel_png))``.
 """
 
 from __future__ import annotations
@@ -15,67 +27,44 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:  # avoid a hard Pillow dependency at import time
-    from PIL.Image import Image
-
-
-class FixtureSequenceExhausted(RuntimeError):
-    """Raised when a scenario asks for more captures than were queued."""
+if TYPE_CHECKING:  # numpy is a runtime dep; the import stays out of the hot path
+    import numpy as np
 
 
 class FixtureCapturer:
-    """Serves PNG fixtures in scenario-defined order.
+    """Serves one recorded panel PNG through the ``ScreenCapturer`` interface."""
 
-    A scenario queues a sequence of filenames (resolved relative to
-    ``fixture_dir``) via :meth:`set_sequence`; each :meth:`capture`
-    call returns the next fixture in the queue. Out-of-bounds calls
-    raise :class:`FixtureSequenceExhausted` rather than silently
-    looping: a scenario asking for an unexpected number of captures is
-    a test-authoring bug worth surfacing.
+    def __init__(self, fixture_path: str | Path):
+        """Bind to a fixture PNG, reading its bytes once so a missing file fails fast."""
+        self._fixture_path = Path(fixture_path)
+        self._png_bytes = self._fixture_path.read_bytes()
 
-    This is the scaffold only; the production seam (swap in lieu of
-    ``ScreenCapturer`` under test mode) is wired in alongside the OCR
-    ground-truth corpus.
-    """
+    def capture_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
+        """Return the fixture as a BGR uint8 ndarray, as ``mss`` would have.
 
-    def __init__(self, fixture_dir: Path):
-        """Bind the capturer to a fixture directory; the queue starts empty."""
-        self._fixture_dir = fixture_dir
-        self._sequence: list[str] = []
-        self._next_index = 0
-
-    def set_sequence(self, filenames: list[str]) -> None:
-        """Reset the queue to ``filenames`` in order."""
-        self._sequence = list(filenames)
-        self._next_index = 0
-
-    def capture(self, region: dict | None = None) -> Image:
-        """Return the next queued fixture as a detached Pillow ``Image``.
-
-        ``region`` mirrors the production ``ScreenCapturer.capture``
-        signature and is ignored in test mode: the fixture itself is
-        the recorded region.
-
-        The returned image is detached (via ``Image.copy()``) so no
-        file handle is held open across the call; this matches the
-        production ``ScreenCapturer`` shape, which returns a
-        fully-realised in-memory frame rather than a lazy file
-        reference.
+        Decodes the bound PNG via ``cv2.imdecode(IMREAD_COLOR)``: the inverse
+        of the RGB-to-PNG encode the capturer used at record time, so the
+        frame is the original grab. The region is ignored (the fixture is the
+        recorded region).
         """
-        del region  # accepted for signature parity, unused in test mode
+        del x, y, width, height  # accepted for parity; the fixture is the region
 
-        if self._next_index >= len(self._sequence):
-            raise FixtureSequenceExhausted(
-                f"FixtureCapturer queue exhausted at index {self._next_index}; "
-                f"queued {len(self._sequence)} fixtures."
-            )
+        import cv2
+        import numpy as np
 
-        # Pillow is in backend deps but the import lives inside the
-        # call so importing this module does not pull Pillow at backend
-        # startup when test mode is off.
-        from PIL import Image
+        arr = np.frombuffer(self._png_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError(f"Fixture PNG failed to decode: {self._fixture_path}")
+        return frame
 
-        path = self._fixture_dir / self._sequence[self._next_index]
-        self._next_index += 1
-        with Image.open(path) as image:
-            return image.copy()
+    def capture_region_png(self, x: int, y: int, width: int, height: int) -> bytes:
+        """Return the fixture PNG bytes verbatim.
+
+        These are bit-identical to ``ScreenCapturer.capture_region_png``'s
+        output at record time, so the skill-scan decode path sees exactly the
+        bytes it saw live. The region is ignored (the fixture is the recorded
+        region).
+        """
+        del x, y, width, height  # accepted for parity; the fixture is the region
+        return self._png_bytes

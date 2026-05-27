@@ -162,6 +162,15 @@ paths_to_mutate = [
     "backend/services/scan_drift.py",
     "backend/tracking/loot_filter.py",
     "backend/tracking/tool_inference.py",
+    # OCR post-processing. These modules mix pure post-processing (the skill
+    # panel name/level/bar-fill parse, the per-page level extraction) with
+    # device-bound capture and engine glue. Only the post-processing carries
+    # mutation value; the device glue is annotated `# pragma: no mutate` where
+    # it survives, the same boundary the coverage `omit` list already draws.
+    # (`repair_ocr._parse_cost` is a `@staticmethod`, which mutmut skips, so it
+    # is not listed here; it is pinned by exhaustive unit tests instead.)
+    "backend/services/local_ocr.py",
+    "backend/services/skill_scan_core.py",
 ]
 # The engine works in a copied `mutants/` tree, so the package it imports at
 # test time (sources, the curated data tables, the test files, conftest) must
@@ -183,6 +192,8 @@ pytest_add_cli_args_test_selection = [
     "backend/tests/test_scan_drift.py",
     "backend/tests/test_loot_filter.py",
     "backend/tests/test_tool_inference.py",
+    "backend/tests/test_local_ocr_postprocess.py",
+    "backend/tests/test_skill_scan_core_extract.py",
 ]
 # Keep the device tier out (redundant with the explicit selection above, but it
 # keeps the intent legible and guards against a selected file growing a slow

@@ -7,9 +7,9 @@ dependencies (mock keystroke source, fixture capturer, redirected
 chatlog path) for the lifetime of the process. No service has a
 runtime ``if test_mode`` branch in its hot path.
 
-The first round lands the dataclass shape and the env-var loader;
-later rounds wire the seam through ``backend/main.py``'s composition
-root as each consuming service adopts its part of the harness.
+This module lands the dataclass shape and the env-var loader; the seam
+is wired through ``backend/main.py``'s composition root as each
+consuming service adopts its part of the harness.
 """
 
 from __future__ import annotations

@@ -76,9 +76,8 @@ the production tracker handles the accumulator semantics.
 
 The DSL is silent on event surfaces that are not chatlog-sourced
 in the current parser: repair tooling and profession panel
-events surface via screen-capture and keystroke seams in later
-harness layers, and scenarios needing those surfaces use the
-corresponding layers. Player-state lines (death, revive, item
+events surface via the screen-capture and keystroke harness layers,
+and scenarios needing those surfaces use the corresponding layers. Player-state lines (death, revive, item
 tier-up) are also out of scope: the parser recognises no such
 lines today, so the DSL has no sub-namespace for them.
 

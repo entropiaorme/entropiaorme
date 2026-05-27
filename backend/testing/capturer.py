@@ -5,9 +5,9 @@ which grabs frames via ``mss``. In test mode, ``FixtureCapturer`` serves
 pre-loaded PNG fixtures from a scenario's ``scan_captures/`` directory
 so the OCR pipeline can be exercised without a live game client.
 
-The first round lands the scaffolding shape; a later round wires the
-production seam (factory swap at composition time) and curates the OCR
-ground-truth corpus the fixtures pair with.
+This is the scaffolding shape; the production seam (a factory swap at
+composition time) and the OCR ground-truth corpus the fixtures pair
+with are wired in as that surface is built out.
 """
 
 from __future__ import annotations
@@ -33,9 +33,9 @@ class FixtureCapturer:
     looping: a scenario asking for an unexpected number of captures is
     a test-authoring bug worth surfacing.
 
-    The first round ships the scaffold only; the production seam
-    (swap in lieu of ``ScreenCapturer`` under test mode) lands in a
-    later round alongside the OCR ground-truth corpus.
+    This is the scaffold only; the production seam (swap in lieu of
+    ``ScreenCapturer`` under test mode) is wired in alongside the OCR
+    ground-truth corpus.
     """
 
     def __init__(self, fixture_dir: Path):

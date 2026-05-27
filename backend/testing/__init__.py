@@ -13,7 +13,7 @@ This package holds the apparatus the backend leans on at test time:
 - ``replay``: helpers for streaming a scenario's chat replay into a
   watcher-tailed file and draining the watcher's tick buffer.
 
-The harness is built round-by-round per the lane working doc:
-the first round lands the scaffolding plus the chatlog-redirection
-scenario; later rounds wire each seam into production callers.
+The harness is built incrementally: the initial work lands the
+scaffolding plus the chatlog-redirection scenario, and later work
+wires each seam into its production callers.
 """

@@ -25,7 +25,6 @@ import pytest
 from backend.services.chatlog_parser import EventType, parse_line
 from backend.testing.dsl import Scenario
 
-
 # === fixture ========================================================
 
 

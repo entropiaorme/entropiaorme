@@ -127,6 +127,13 @@ def contract_env():
         # Entering the context runs the lifespan startup, which populates the
         # service container the handlers resolve through.
         with TestClient(app, base_url=BASE_URL):
+            # The recording router is dev-gated (server-side 403 unless developer
+            # mode is on). Enable it for the contract run so GET
+            # /api/recording/status is exercised against its schema rather than
+            # answering the 403 the origin-guard assertion below is meant to catch.
+            from backend.dependencies import get_services
+
+            get_services().config_service.update({"developer_mode_enabled": True})
             yield
     finally:
         demo_module._resolve_demo_db_path = original_resolver

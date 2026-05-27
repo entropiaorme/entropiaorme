@@ -28,10 +28,22 @@ class _FakeController:
 
     def start(self):
         self.calls.append("start")
-        return {"state": "recording", "started_at": "t", "lines": 0, "captures": 0, "keystrokes": 0}
+        return {
+            "state": "recording",
+            "started_at": "t",
+            "lines": 0,
+            "captures": 0,
+            "keystrokes": 0,
+        }
 
     def status(self):
-        return {"state": "idle", "started_at": None, "lines": 0, "captures": 0, "keystrokes": 0}
+        return {
+            "state": "idle",
+            "started_at": None,
+            "lines": 0,
+            "captures": 0,
+            "keystrokes": 0,
+        }
 
     def stop(self, meta):
         if self._stop_raises is not None:
@@ -56,7 +68,7 @@ def _client(developer_mode: bool, controller) -> TestClient:
     app.include_router(recording.router, prefix="/api")
     config = SimpleNamespace(developer_mode_enabled=developer_mode)
     deps.set_services(
-        SimpleNamespace(
+        SimpleNamespace(  # type: ignore[arg-type]
             config_service=SimpleNamespace(get=lambda: config),
             recording_controller=controller,
         )
@@ -96,7 +108,10 @@ def test_status_forbidden_when_off(restore_services):
 def test_stop_passes_body_through(restore_services):
     fake = _FakeController()
     client = _client(True, fake)
-    resp = client.post("/api/recording/stop", json={"scenario_name": "rec_one", "surfaces": ["tracking"]})
+    resp = client.post(
+        "/api/recording/stop",
+        json={"scenario_name": "rec_one", "surfaces": ["tracking"]},
+    )
     assert resp.status_code == 200
     assert resp.json()["determinism"] == "ok"
     (_tag, meta) = fake.calls[0]

@@ -100,10 +100,7 @@ CATALOGUE: tuple[TableSpec, ...] = (
     ),
     TableSpec(
         name="ledger_entries",
-        query=(
-            "SELECT id, date, type, description, amount, tag "
-            "FROM ledger_entries"
-        ),
+        query=("SELECT id, date, type, description, amount, tag FROM ledger_entries"),
         order_by=("rowid",),
     ),
     TableSpec(
@@ -165,7 +162,7 @@ def _fetch_rows(db: sqlite3.Connection, spec: TableSpec) -> list[dict[str, Any]]
         query += " ORDER BY " + ", ".join(spec.order_by)
     cursor = db.execute(query)
     columns = [c[0] for c in cursor.description]
-    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
 
 
 def _table_exists(db: sqlite3.Connection, name: str) -> bool:

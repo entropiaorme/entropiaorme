@@ -49,7 +49,7 @@ class FixtureCapturer:
         self._sequence = list(filenames)
         self._next_index = 0
 
-    def capture(self, region: dict | None = None) -> "Image":
+    def capture(self, region: dict | None = None) -> Image:
         """Return the next queued fixture as a detached Pillow ``Image``.
 
         ``region`` mirrors the production ``ScreenCapturer.capture``

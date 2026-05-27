@@ -66,7 +66,7 @@ def _make_controller(tmp_path):
         _FakeKeys(),
     )
     ctrl = RecordingController(
-        chatlog_watcher=chatlog,
+        chatlog_watcher=chatlog,  # type: ignore[arg-type]
         skill_scan_manual=skill,
         repair_ocr=repair,
         hotbar_listener=hotbar,
@@ -105,15 +105,19 @@ def test_stop_finalises_bundle_and_verifies_determinism(tmp_path):
     ctrl.start()
     _feed(chatlog)
 
-    result = ctrl.stop({
-        "scenario_name": "my_recording",
-        "description": "a worked recording",
-        "surfaces": ["tracking-kill-creation"],
-    })
+    result = ctrl.stop(
+        {
+            "scenario_name": "my_recording",
+            "description": "a worked recording",
+            "surfaces": ["tracking-kill-creation"],
+        }
+    )
 
     assert result["determinism"] == "ok"
     target = tmp_path / "corpus" / "recorded" / "my_recording"
-    assert (target / "chat_replay.log").read_text(encoding="utf-8") == "".join(CHAT_LINES)
+    assert (target / "chat_replay.log").read_text(encoding="utf-8") == "".join(
+        CHAT_LINES
+    )
     assert (target / "expected" / "fingerprint.jsonl").exists()
     assert (target / "expected" / "db_state.json").exists()
 

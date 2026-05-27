@@ -51,7 +51,7 @@ class TestModeConfig:
     fixture_dir: Path | None = None
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> "TestModeConfig":
+    def from_env(cls, env: dict[str, str] | None = None) -> TestModeConfig:
         """Build a config from process environment.
 
         ``env`` defaults to ``os.environ`` but is overridable for
@@ -66,11 +66,15 @@ class TestModeConfig:
         fixtures = source.get("ENTROPIA_TEST_FIXTURE_DIR")
 
         scenario_path = Path(scenario) if scenario else None
-        chatlog_path = Path(chatlog) if chatlog else (
-            scenario_path / "chat_replay.log" if scenario_path else None
+        chatlog_path = (
+            Path(chatlog)
+            if chatlog
+            else (scenario_path / "chat_replay.log" if scenario_path else None)
         )
-        fixture_path = Path(fixtures) if fixtures else (
-            scenario_path / "scan_captures" if scenario_path else None
+        fixture_path = (
+            Path(fixtures)
+            if fixtures
+            else (scenario_path / "scan_captures" if scenario_path else None)
         )
 
         return cls(

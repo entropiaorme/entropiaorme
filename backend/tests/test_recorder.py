@@ -133,7 +133,9 @@ def test_keystroke_tap_appends_jsonl(tmp_path):
     tap.record_key("space", "release")
     tap.close()
 
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    records = [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+    ]
     assert [(r["key"], r["kind"]) for r in records] == [
         ("1", "press"),
         ("space", "press"),

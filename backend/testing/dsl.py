@@ -40,7 +40,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
-
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -90,7 +89,7 @@ class Scenario:
 
     # --- time management ----------------------------------------------
 
-    def at(self, timestamp: str | datetime) -> "Scenario":
+    def at(self, timestamp: str | datetime) -> Scenario:
         """Set the current timestamp for subsequent builders.
 
         Returns ``self`` so authoring scripts can chain a starting
@@ -100,7 +99,7 @@ class Scenario:
         self._now = _coerce_ts(timestamp)
         return self
 
-    def tick(self, seconds: int = 1) -> "Scenario":
+    def tick(self, seconds: int = 1) -> Scenario:
         """Advance the current timestamp by ``seconds`` (default 1).
 
         Authors use ``tick()`` as a visual flush marker between
@@ -118,9 +117,7 @@ class Scenario:
                 "set an initial timestamp first."
             )
         if seconds < 1:
-            raise ValueError(
-                f"Scenario.tick() requires seconds >= 1, got {seconds}."
-            )
+            raise ValueError(f"Scenario.tick() requires seconds >= 1, got {seconds}.")
         self._now = self._now + timedelta(seconds=seconds)
         return self
 
@@ -139,9 +136,7 @@ class Scenario:
                 "Scenario builder called before Scenario.at(...); "
                 "set an initial timestamp first."
             )
-        self._lines.append(
-            f"{_format_ts(self._now)} [{channel}] [] {message}\n"
-        )
+        self._lines.append(f"{_format_ts(self._now)} [{channel}] [] {message}\n")
 
     def write(self, scenario_dir: str | Path) -> Path:
         """Write ``chat_replay.log`` into ``scenario_dir``.
@@ -173,7 +168,7 @@ class Scenario:
 class _CombatBuilders:
     """Combat-line builders (offensive + defensive)."""
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def damage_dealt(self, amount: float) -> None:
@@ -249,7 +244,7 @@ class _CombatBuilders:
 class _LootBuilders:
     """Loot-line builders."""
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def received(
@@ -269,10 +264,7 @@ class _LootBuilders:
         if quantity == 1:
             body = f"You received {item_name} Value: {value_ped:.2f} PED"
         else:
-            body = (
-                f"You received {item_name} x ({quantity}) "
-                f"Value: {value_ped:.2f} PED"
-            )
+            body = f"You received {item_name} x ({quantity}) Value: {value_ped:.2f} PED"
         self._s._emit("System", body)
 
 
@@ -287,7 +279,7 @@ class _SkillBuilders:
     builders if a scenario specifically wants to pin them.
     """
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def gained(self, amount: float, skill: str) -> None:
@@ -305,7 +297,7 @@ class _SkillBuilders:
 class _EnhancerBuilders:
     """Enhancer-line builders."""
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def broken(
@@ -342,7 +334,7 @@ class _GlobalsBuilders:
     exercised by scripted scenarios that pin the HoF path.
     """
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def kill(
@@ -393,7 +385,7 @@ class _GlobalsBuilders:
 class _MissionBuilders:
     """Mission-line builders."""
 
-    def __init__(self, scenario: "Scenario") -> None:
+    def __init__(self, scenario: Scenario) -> None:
         self._s = scenario
 
     def received(self, mission_name: str) -> None:

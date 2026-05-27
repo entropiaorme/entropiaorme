@@ -35,7 +35,7 @@ def diff_fingerprint_files(
     actual_lines = [ln for ln in actual_text.splitlines() if ln.strip()]
     if len(expected_lines) != len(actual_lines):
         return _length_mismatch_message(expected_lines, actual_lines, context)
-    for idx, (exp, act) in enumerate(zip(expected_lines, actual_lines)):
+    for idx, (exp, act) in enumerate(zip(expected_lines, actual_lines, strict=True)):
         if exp == act:
             continue
         return _event_divergence_message(idx, expected_lines, actual_lines, context)
@@ -116,8 +116,7 @@ def _event_divergence_message(
     exp_obj = json.loads(expected[idx])
     act_obj = json.loads(actual[idx])
     lines = [
-        f"Event {idx} of {len(expected)} diverged "
-        f"(topic={exp_obj.get('topic')!r}):"
+        f"Event {idx} of {len(expected)} diverged (topic={exp_obj.get('topic')!r}):"
     ]
     field_diff = _first_divergence(
         exp_obj.get("payload"),
@@ -133,8 +132,7 @@ def _event_divergence_message(
         )
     elif exp_obj.get("topic") != act_obj.get("topic"):
         lines.append(
-            f"  topic expected={exp_obj.get('topic')!r}, "
-            f"got={act_obj.get('topic')!r}"
+            f"  topic expected={exp_obj.get('topic')!r}, got={act_obj.get('topic')!r}"
         )
     else:
         # Should not happen since the line-level strings differed, but
@@ -174,9 +172,7 @@ def _first_divergence(
         for extra in sorted(actual_keys - expected_keys):
             return _format_path(path + [str(extra)]), None, actual[extra]
         for key in sorted(expected_keys):
-            sub = _first_divergence(
-                expected[key], actual[key], path + [str(key)]
-            )
+            sub = _first_divergence(expected[key], actual[key], path + [str(key)])
             if sub is not None:
                 return sub
         return None
@@ -187,7 +183,7 @@ def _first_divergence(
                 len(expected),
                 len(actual),
             )
-        for idx, (exp_item, act_item) in enumerate(zip(expected, actual)):
+        for idx, (exp_item, act_item) in enumerate(zip(expected, actual, strict=True)):
             sub = _first_divergence(exp_item, act_item, path + [f"[{idx}]"])
             if sub is not None:
                 return sub

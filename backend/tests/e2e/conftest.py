@@ -22,8 +22,8 @@ assert-against-golden mode (default) and write-new-golden mode
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Callable, Iterator
 
 import pytest
 
@@ -31,7 +31,6 @@ from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.golden import GoldenSet
 from backend.tracking.tracker import HuntTracker
-
 
 E2E_DIR = Path(__file__).parent
 CORPUS_ROOT = E2E_DIR / "corpus"
@@ -93,9 +92,7 @@ def e2e_pipeline(
 def make_e2e_pipeline(
     in_memory_db: sqlite3.Connection,
     temp_chatlog: Path,
-) -> Iterator[
-    Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
-]:
+) -> Iterator[Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]]:
     """Factory variant of ``e2e_pipeline`` accepting custom tracker args.
 
     A scenario that needs a non-default tracker configuration

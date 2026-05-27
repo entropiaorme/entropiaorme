@@ -1,0 +1,68 @@
+# Local pre-commit hooks mirroring the continuous-integration gates, so a
+# contributor catches the same failures before pushing. Hook versions are
+# pinned to the versions the CI workflow uses; keeping them in step is the
+# point (a hook that lints with a different version than CI defeats the
+# purpose). Run `pre-commit install` once after setting up the virtual
+# environment. See TESTING.md for the full description.
+#
+# The ruff and hygiene hooks run in pre-commit's own isolated environments.
+# mypy and the test tier run as system hooks against the project virtual
+# environment, because both need the installed runtime dependencies (the
+# Pydantic plugin and the typed third-party imports) to resolve exactly as the
+# CI typing and backend jobs do; reproducing that dependency tree inside an
+# isolated hook environment would be the version drift this file exists to
+# avoid.
+minimum_pre_commit_version: "3.8.0"
+
+repos:
+  # Lint and format, matching the CI lint job's ruff version exactly.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.14
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # General hygiene. These read the working tree; line-ending enforcement is
+  # left to .gitattributes (which sets eol per file type), so mixed-line-ending
+  # only reports a file that mixes both within itself rather than rewriting one
+  # convention to another.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=no]
+
+  # Type-check and the fast test tier run against the project virtual
+  # environment (activate it, or run through `just`), so they behave like the
+  # CI typing and backend jobs. pip-audit is heavy, so it is reserved for the
+  # manual stage rather than every commit.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend)
+        entry: python -m mypy backend
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+      - id: pytest-fast
+        name: pytest (fast tier)
+        entry: python -m pytest -m fast
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
+      - id: pip-audit
+        name: pip-audit (manual stage)
+        entry: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]

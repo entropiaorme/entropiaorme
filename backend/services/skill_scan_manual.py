@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from backend.services.scan_presets import skill_region
 from backend.services.skill_scan_core import PAGE_COUNT, SkillScanCore
@@ -58,7 +59,9 @@ class SkillScanManual:
         self._last_skills_count: int = initial_skills_count
         self._on_complete: Callable[[dict[str, float]], None] | None = None
 
-    def set_completion_callback(self, callback: Callable[[dict[str, float]], None]) -> None:
+    def set_completion_callback(
+        self, callback: Callable[[dict[str, float]], None]
+    ) -> None:
         self._on_complete = callback
 
     def shutdown(self) -> None:
@@ -103,14 +106,19 @@ class SkillScanManual:
         region = skill_region()
         if region is None:
             return {"error": "Entropia Universe window not found: start the game first"}
-        if page_count is not None:
-            if not isinstance(page_count, int) or page_count < 1 or page_count > MAX_PAGE_COUNT:
-                return {"error": f"page_count must be between 1 and {MAX_PAGE_COUNT}"}
+        if page_count is not None and (
+            not isinstance(page_count, int)
+            or page_count < 1
+            or page_count > MAX_PAGE_COUNT
+        ):
+            return {"error": f"page_count must be between 1 and {MAX_PAGE_COUNT}"}
         with self._lock:
             if self._processing:
                 return {"error": "Scan currently processing: wait for it to finish"}
             if self._pending_result is not None:
-                return {"error": "Pending scan result awaiting review: accept or reject first"}
+                return {
+                    "error": "Pending scan result awaiting review: accept or reject first"
+                }
             if page_count is not None:
                 self._expected_pages = page_count
             self._active = True
@@ -165,7 +173,9 @@ class SkillScanManual:
             if self._processing:
                 return {"error": "Cannot undo while processing: wait for completion"}
             if self._pending_result is not None:
-                return {"error": "Pending result awaiting review: accept or reject first"}
+                return {
+                    "error": "Pending result awaiting review: accept or reject first"
+                }
             if not self._captures:
                 return {"error": "No captures to undo"}
             popped_idx = len(self._captures)
@@ -182,7 +192,9 @@ class SkillScanManual:
 
     def get_pending_result(self) -> dict[str, float] | None:
         with self._lock:
-            return dict(self._pending_result) if self._pending_result is not None else None
+            return (
+                dict(self._pending_result) if self._pending_result is not None else None
+            )
 
     # ── Process / accept / reject ──
 
@@ -192,7 +204,9 @@ class SkillScanManual:
             if self._processing:
                 return {"error": "Scan currently processing: wait for it to finish"}
             if self._pending_result is not None:
-                return {"error": "Pending result awaiting review: accept or reject first"}
+                return {
+                    "error": "Pending result awaiting review: accept or reject first"
+                }
             if not self._active:
                 return {"error": "No active scan to process"}
             captures = list(self._captures)
@@ -245,6 +259,7 @@ class SkillScanManual:
                 return {"error": f"Persist failed: {exc}"}
 
         import time
+
         with self._lock:
             self._last_scan_time = time.time()
             self._last_skills_count = len(skills)
@@ -296,7 +311,11 @@ class SkillScanManual:
             with self._lock:
                 done, total = self._processing_progress
                 self._processing_progress = (done + 1, total)
-            log.info("Manual skill scan: page %d → %d skills extracted", page_num, len(levels))
+            log.info(
+                "Manual skill scan: page %d → %d skills extracted",
+                page_num,
+                len(levels),
+            )
 
         if not all_skills:
             return {"error": "No skills extracted from any page"}

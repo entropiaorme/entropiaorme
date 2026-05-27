@@ -3,15 +3,17 @@
 Returns shapes matching the frontend analytics types.
 """
 
-from collections import defaultdict
 import time
 import uuid
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import AnalyticsOverview
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 ACTIVITY_DOMINANCE_THRESHOLD = 0.6
@@ -23,6 +25,7 @@ INVENTORY_SALE_TAG = "inventory_sale"
 # Overview
 # ------------------------------------------------------------------
 
+
 def _period_epoch(period: str | None) -> float | None:
     """Return epoch start for a named period, or None for all-time."""
     if not period or period == "all":
@@ -32,7 +35,7 @@ def _period_epoch(period: str | None) -> float | None:
 
 
 def _epoch_to_iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _where(col: str, epoch_start: float | None, epoch_end: float | None):
@@ -103,7 +106,9 @@ def _compute_metrics(conn, epoch_start: float | None, epoch_end: float | None) -
     heal_cost = sess_costs[1]
     dangling_cost = sess_costs[2]
 
-    tracking_cost = weapon_cost + heal_cost + enhancer_cost + armour_cost + dangling_cost
+    tracking_cost = (
+        weapon_cost + heal_cost + enhancer_cost + armour_cost + dangling_cost
+    )
 
     skill_tt = conn.execute(
         f"SELECT COALESCE(SUM(sg.ped_value), 0) FROM skill_gains sg WHERE {sg_w}",
@@ -162,7 +167,7 @@ def _rate_from_metrics(m: dict) -> float:
     return total_gains / total_losses if total_losses > 0 else 0.0
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=AnalyticsOverview)
 def analytics_overview(period: str = "all"):
     """Cross-session sustainability metrics.
 
@@ -208,53 +213,81 @@ def overview_impl(conn, period: str = "all"):
     sg_w, sg_p = _where("sg.timestamp", epoch_start, None)
     led_w, led_p = _where_iso("le.date", epoch_start, None)
 
-    loot_by_day = dict(conn.execute(
-        f"""SELECT date(k.timestamp, 'unixepoch') as day, COALESCE(SUM(k.loot_total_ped), 0)
-            FROM kills k WHERE {enc_w} GROUP BY day""", enc_p,
-    ).fetchall())
+    loot_by_day = dict(
+        conn.execute(
+            f"""SELECT date(k.timestamp, 'unixepoch') as day, COALESCE(SUM(k.loot_total_ped), 0)
+            FROM kills k WHERE {enc_w} GROUP BY day""",
+            enc_p,
+        ).fetchall()
+    )
 
-    weapon_cost_by_day = dict(conn.execute(
-        f"""SELECT date(k.timestamp, 'unixepoch') as day, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0)
+    weapon_cost_by_day = dict(
+        conn.execute(
+            f"""SELECT date(k.timestamp, 'unixepoch') as day, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0)
             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id
-            WHERE {enc_w} GROUP BY day""", enc_p,
-    ).fetchall())
-    enhancer_cost_by_day = dict(conn.execute(
-        f"""SELECT date(k.timestamp, 'unixepoch') as day,
+            WHERE {enc_w} GROUP BY day""",
+            enc_p,
+        ).fetchall()
+    )
+    enhancer_cost_by_day = dict(
+        conn.execute(
+            f"""SELECT date(k.timestamp, 'unixepoch') as day,
                    COALESCE(SUM(k.enhancer_cost), 0)
-            FROM kills k WHERE {enc_w} GROUP BY day""", enc_p,
-    ).fetchall())
+            FROM kills k WHERE {enc_w} GROUP BY day""",
+            enc_p,
+        ).fetchall()
+    )
     sess_w2, sess_p2 = _where("s.started_at", epoch_start, None)
-    sess_cost_by_day = dict(conn.execute(
-        f"""SELECT date(s.started_at, 'unixepoch') as day,
+    sess_cost_by_day = dict(
+        conn.execute(
+            f"""SELECT date(s.started_at, 'unixepoch') as day,
                    COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0)
                    + COALESCE(SUM(s.dangling_cost), 0)
-            FROM tracking_sessions s WHERE {sess_w2} GROUP BY day""", sess_p2,
-    ).fetchall())
+            FROM tracking_sessions s WHERE {sess_w2} GROUP BY day""",
+            sess_p2,
+        ).fetchall()
+    )
     cost_by_day = {}
-    for day in set(list(weapon_cost_by_day) + list(enhancer_cost_by_day) + list(sess_cost_by_day)):
-        cost_by_day[day] = weapon_cost_by_day.get(day, 0) + enhancer_cost_by_day.get(day, 0) + sess_cost_by_day.get(day, 0)
+    for day in set(
+        list(weapon_cost_by_day) + list(enhancer_cost_by_day) + list(sess_cost_by_day)
+    ):
+        cost_by_day[day] = (
+            weapon_cost_by_day.get(day, 0)
+            + enhancer_cost_by_day.get(day, 0)
+            + sess_cost_by_day.get(day, 0)
+        )
 
-    skill_by_day = dict(conn.execute(
-        f"""SELECT date(sg.timestamp, 'unixepoch') as day, COALESCE(SUM(sg.ped_value), 0)
-            FROM skill_gains sg WHERE {sg_w} GROUP BY day""", sg_p,
-    ).fetchall())
+    skill_by_day = dict(
+        conn.execute(
+            f"""SELECT date(sg.timestamp, 'unixepoch') as day, COALESCE(SUM(sg.ped_value), 0)
+            FROM skill_gains sg WHERE {sg_w} GROUP BY day""",
+            sg_p,
+        ).fetchall()
+    )
 
     cc_w_overview, cc_p_overview = _where("cc.claimed_at", epoch_start, None)
-    codex_by_day = dict(conn.execute(
-        f"""SELECT date(cc.claimed_at, 'unixepoch') as day, COALESCE(SUM(cc.ped_value), 0)
-            FROM codex_claims cc WHERE {cc_w_overview} GROUP BY day""", cc_p_overview,
-    ).fetchall())
+    codex_by_day = dict(
+        conn.execute(
+            f"""SELECT date(cc.claimed_at, 'unixepoch') as day, COALESCE(SUM(cc.ped_value), 0)
+            FROM codex_claims cc WHERE {cc_w_overview} GROUP BY day""",
+            cc_p_overview,
+        ).fetchall()
+    )
 
     qc_w_overview, qc_p_overview = _where("qc.claimed_at", epoch_start, None)
-    quest_by_day = dict(conn.execute(
-        f"""SELECT date(qc.claimed_at, 'unixepoch') as day, COALESCE(SUM(qc.ped_value), 0)
-            FROM quest_claims qc WHERE {qc_w_overview} GROUP BY day""", qc_p_overview,
-    ).fetchall())
+    quest_by_day = dict(
+        conn.execute(
+            f"""SELECT date(qc.claimed_at, 'unixepoch') as day, COALESCE(SUM(qc.ped_value), 0)
+            FROM quest_claims qc WHERE {qc_w_overview} GROUP BY day""",
+            qc_p_overview,
+        ).fetchall()
+    )
 
     ledger_gain_day_rows = conn.execute(
         f"""SELECT le.date as day, le.tag, COALESCE(SUM(le.amount), 0)
             FROM ledger_entries le WHERE le.type = 'markup' AND {led_w}
-            GROUP BY day, le.tag""", led_p,
+            GROUP BY day, le.tag""",
+        led_p,
     ).fetchall()
     ledger_gains_by_day: dict[str, dict[str, float]] = {}
     for day, tag, amount in ledger_gain_day_rows:
@@ -263,74 +296,114 @@ def overview_impl(conn, period: str = "all"):
     ledger_loss_day_rows = conn.execute(
         f"""SELECT le.date as day, le.tag, COALESCE(SUM(le.amount), 0)
             FROM ledger_entries le WHERE le.type = 'expense' AND {led_w}
-            GROUP BY day, le.tag""", led_p,
+            GROUP BY day, le.tag""",
+        led_p,
     ).fetchall()
     ledger_losses_by_day: dict[str, dict[str, float]] = {}
     for day, tag, amount in ledger_loss_day_rows:
         ledger_losses_by_day.setdefault(day, {})[tag] = round(amount, 2)
 
-    all_days = sorted(set(
-        list(loot_by_day) + list(cost_by_day) + list(skill_by_day) + list(codex_by_day)
-        + list(quest_by_day) + list(ledger_gains_by_day) + list(ledger_losses_by_day)
-    ))
+    all_days = sorted(
+        set(
+            list(loot_by_day)
+            + list(cost_by_day)
+            + list(skill_by_day)
+            + list(codex_by_day)
+            + list(quest_by_day)
+            + list(ledger_gains_by_day)
+            + list(ledger_losses_by_day)
+        )
+    )
     timeline = []
     for day in all_days:
-        timeline.append({
-            "date": day,
-            "lootTt": round(loot_by_day.get(day, 0), 4),
-            "pes": round(skill_by_day.get(day, 0), 4),
-            "codexPes": round(codex_by_day.get(day, 0), 4),
-            "questPes": round(quest_by_day.get(day, 0), 4),
-            "ledgerGains": ledger_gains_by_day.get(day, {}),
-            "trackingCost": round(cost_by_day.get(day, 0), 4),
-            "ledgerLosses": ledger_losses_by_day.get(day, {}),
-        })
+        timeline.append(
+            {
+                "date": day,
+                "lootTt": round(loot_by_day.get(day, 0), 4),
+                "pes": round(skill_by_day.get(day, 0), 4),
+                "codexPes": round(codex_by_day.get(day, 0), 4),
+                "questPes": round(quest_by_day.get(day, 0), 4),
+                "ledgerGains": ledger_gains_by_day.get(day, {}),
+                "trackingCost": round(cost_by_day.get(day, 0), 4),
+                "ledgerLosses": ledger_losses_by_day.get(day, {}),
+            }
+        )
 
     # --- Monthly breakdown (per-source) ---
-    loot_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month, COALESCE(SUM(k.loot_total_ped), 0)
-            FROM kills k WHERE {enc_w} GROUP BY month""", enc_p,
-    ).fetchall())
+    loot_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month, COALESCE(SUM(k.loot_total_ped), 0)
+            FROM kills k WHERE {enc_w} GROUP BY month""",
+            enc_p,
+        ).fetchall()
+    )
 
-    weapon_cost_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0)
+    weapon_cost_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0)
             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id
-            WHERE {enc_w} GROUP BY month""", enc_p,
-    ).fetchall())
-    enhancer_cost_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month,
+            WHERE {enc_w} GROUP BY month""",
+            enc_p,
+        ).fetchall()
+    )
+    enhancer_cost_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', k.timestamp, 'unixepoch') as month,
                    COALESCE(SUM(k.enhancer_cost), 0)
-            FROM kills k WHERE {enc_w} GROUP BY month""", enc_p,
-    ).fetchall())
-    sess_cost_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', s.started_at, 'unixepoch') as month,
+            FROM kills k WHERE {enc_w} GROUP BY month""",
+            enc_p,
+        ).fetchall()
+    )
+    sess_cost_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', s.started_at, 'unixepoch') as month,
                    COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0)
                    + COALESCE(SUM(s.dangling_cost), 0)
-            FROM tracking_sessions s WHERE {sess_w2} GROUP BY month""", sess_p2,
-    ).fetchall())
+            FROM tracking_sessions s WHERE {sess_w2} GROUP BY month""",
+            sess_p2,
+        ).fetchall()
+    )
     cost_by_month = {}
-    for month in set(list(weapon_cost_by_month) + list(enhancer_cost_by_month) + list(sess_cost_by_month)):
-        cost_by_month[month] = weapon_cost_by_month.get(month, 0) + enhancer_cost_by_month.get(month, 0) + sess_cost_by_month.get(month, 0)
+    for month in set(
+        list(weapon_cost_by_month)
+        + list(enhancer_cost_by_month)
+        + list(sess_cost_by_month)
+    ):
+        cost_by_month[month] = (
+            weapon_cost_by_month.get(month, 0)
+            + enhancer_cost_by_month.get(month, 0)
+            + sess_cost_by_month.get(month, 0)
+        )
 
-    skill_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', sg.timestamp, 'unixepoch') as month, COALESCE(SUM(sg.ped_value), 0)
-            FROM skill_gains sg WHERE {sg_w} GROUP BY month""", sg_p,
-    ).fetchall())
+    skill_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', sg.timestamp, 'unixepoch') as month, COALESCE(SUM(sg.ped_value), 0)
+            FROM skill_gains sg WHERE {sg_w} GROUP BY month""",
+            sg_p,
+        ).fetchall()
+    )
 
-    codex_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', cc.claimed_at, 'unixepoch') as month, COALESCE(SUM(cc.ped_value), 0)
-            FROM codex_claims cc WHERE {cc_w_overview} GROUP BY month""", cc_p_overview,
-    ).fetchall())
+    codex_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', cc.claimed_at, 'unixepoch') as month, COALESCE(SUM(cc.ped_value), 0)
+            FROM codex_claims cc WHERE {cc_w_overview} GROUP BY month""",
+            cc_p_overview,
+        ).fetchall()
+    )
 
-    quest_by_month = dict(conn.execute(
-        f"""SELECT strftime('%Y-%m', qc.claimed_at, 'unixepoch') as month, COALESCE(SUM(qc.ped_value), 0)
-            FROM quest_claims qc WHERE {qc_w_overview} GROUP BY month""", qc_p_overview,
-    ).fetchall())
+    quest_by_month = dict(
+        conn.execute(
+            f"""SELECT strftime('%Y-%m', qc.claimed_at, 'unixepoch') as month, COALESCE(SUM(qc.ped_value), 0)
+            FROM quest_claims qc WHERE {qc_w_overview} GROUP BY month""",
+            qc_p_overview,
+        ).fetchall()
+    )
 
     ledger_gain_month_rows = conn.execute(
         f"""SELECT strftime('%Y-%m', le.date) as month, le.tag, COALESCE(SUM(le.amount), 0)
             FROM ledger_entries le WHERE le.type = 'markup' AND {led_w}
-            GROUP BY month, le.tag""", led_p,
+            GROUP BY month, le.tag""",
+        led_p,
     ).fetchall()
     ledger_gains_by_month: dict[str, dict[str, float]] = {}
     for month, tag, amount in ledger_gain_month_rows:
@@ -339,28 +412,38 @@ def overview_impl(conn, period: str = "all"):
     ledger_loss_month_rows = conn.execute(
         f"""SELECT strftime('%Y-%m', le.date) as month, le.tag, COALESCE(SUM(le.amount), 0)
             FROM ledger_entries le WHERE le.type = 'expense' AND {led_w}
-            GROUP BY month, le.tag""", led_p,
+            GROUP BY month, le.tag""",
+        led_p,
     ).fetchall()
     ledger_losses_by_month: dict[str, dict[str, float]] = {}
     for month, tag, amount in ledger_loss_month_rows:
         ledger_losses_by_month.setdefault(month, {})[tag] = round(amount, 2)
 
-    all_months = sorted(set(
-        list(loot_by_month) + list(cost_by_month) + list(skill_by_month) + list(codex_by_month)
-        + list(quest_by_month) + list(ledger_gains_by_month) + list(ledger_losses_by_month)
-    ))
+    all_months = sorted(
+        set(
+            list(loot_by_month)
+            + list(cost_by_month)
+            + list(skill_by_month)
+            + list(codex_by_month)
+            + list(quest_by_month)
+            + list(ledger_gains_by_month)
+            + list(ledger_losses_by_month)
+        )
+    )
     monthly = []
     for month in all_months:
-        monthly.append({
-            "month": month,
-            "lootTt": round(loot_by_month.get(month, 0), 4),
-            "pes": round(skill_by_month.get(month, 0), 4),
-            "codexPes": round(codex_by_month.get(month, 0), 4),
-            "questPes": round(quest_by_month.get(month, 0), 4),
-            "ledgerGains": ledger_gains_by_month.get(month, {}),
-            "trackingCost": round(cost_by_month.get(month, 0), 4),
-            "ledgerLosses": ledger_losses_by_month.get(month, {}),
-        })
+        monthly.append(
+            {
+                "month": month,
+                "lootTt": round(loot_by_month.get(month, 0), 4),
+                "pes": round(skill_by_month.get(month, 0), 4),
+                "codexPes": round(codex_by_month.get(month, 0), 4),
+                "questPes": round(quest_by_month.get(month, 0), 4),
+                "ledgerGains": ledger_gains_by_month.get(month, {}),
+                "trackingCost": round(cost_by_month.get(month, 0), 4),
+                "ledgerLosses": ledger_losses_by_month.get(month, {}),
+            }
+        )
 
     return {
         "totalReturnRate": round(return_rate, 4),
@@ -496,12 +579,14 @@ def _load_activity_sessions(conn) -> list[dict]:
 
     groups_by_session: dict[str, list[dict]] = defaultdict(list)
     for row in group_rows:
-        groups_by_session[row[0]].append({
-            "name": row[1],
-            "species": row[2],
-            "maturity": row[3],
-            "kills": int(row[4] or 0),
-        })
+        groups_by_session[row[0]].append(
+            {
+                "name": row[1],
+                "species": row[2],
+                "maturity": row[3],
+                "kills": int(row[4] or 0),
+            }
+        )
 
     for session_id, groups in groups_by_session.items():
         session = sessions.get(session_id)
@@ -535,10 +620,12 @@ def _load_activity_sessions(conn) -> list[dict]:
     ).fetchall()
     weapons_by_session: dict[str, list[dict]] = defaultdict(list)
     for row in weapon_groups:
-        weapons_by_session[row[0]].append({
-            "name": row[1],
-            "shots": float(row[2] or 0),
-        })
+        weapons_by_session[row[0]].append(
+            {
+                "name": row[1],
+                "shots": float(row[2] or 0),
+            }
+        )
 
     for session_id, groups in weapons_by_session.items():
         session = sessions.get(session_id)
@@ -585,7 +672,7 @@ def _build_activity_slice_rows(
         if value:
             grouped[value].append(session)
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for value, matched_sessions in grouped.items():
         sessions_count = len(matched_sessions)
         kills = sum(int(session.get(kills_key) or 0) for session in matched_sessions)
@@ -593,18 +680,23 @@ def _build_activity_slice_rows(
         cycled = sum(float(session["cycledPed"]) for session in matched_sessions)
         loot_tt = sum(float(session["lootTt"]) for session in matched_sessions)
         skill_tt = sum(float(session["skillTt"]) for session in matched_sessions)
-        rows.append({
-            name_field: value,
-            "sessions": sessions_count,
-            "kills": kills,
-            "hours": round(hours, 2),
-            "cycled": round(cycled, 2),
-            "pesPer100Ped": round((skill_tt / cycled) * 100, 2) if cycled > 0 else 0.0,
-            "lootRate": round(loot_tt / cycled, 4) if cycled > 0 else 0.0,
-        })
+        rows.append(
+            {
+                name_field: value,
+                "sessions": sessions_count,
+                "kills": kills,
+                "hours": round(hours, 2),
+                "cycled": round(cycled, 2),
+                "pesPer100Ped": round((skill_tt / cycled) * 100, 2)
+                if cycled > 0
+                else 0.0,
+                "lootRate": round(loot_tt / cycled, 4) if cycled > 0 else 0.0,
+            }
+        )
 
     rows.sort(key=lambda row: (-row["kills"], -row["cycled"], row[name_field]))
     return rows
+
 
 @router.get("/activity")
 def analytics_activity():
@@ -635,7 +727,7 @@ def activity_impl(conn):
         if dominant_weapon:
             weapon_groups[dominant_weapon].append(session)
 
-    weapon_comparisons = []
+    weapon_comparisons: list[dict[str, Any]] = []
     for weapon_name, matched_sessions in weapon_groups.items():
         sessions_count = len(matched_sessions)
         kills = sum(int(session["kills"]) for session in matched_sessions)
@@ -644,17 +736,23 @@ def activity_impl(conn):
         loot_tt = sum(float(session["lootTt"]) for session in matched_sessions)
         skill_tt = sum(float(session["skillTt"]) for session in matched_sessions)
 
-        weapon_comparisons.append({
-            "weaponName": weapon_name,
-            "sessions": sessions_count,
-            "kills": kills,
-            "hours": round(hours, 2),
-            "cycled": round(cycled, 2),
-            "pesPer100Ped": round((skill_tt / cycled) * 100, 2) if cycled > 0 else 0.0,
-            "lootRate": round(loot_tt / cycled, 4) if cycled > 0 else 0.0,
-        })
+        weapon_comparisons.append(
+            {
+                "weaponName": weapon_name,
+                "sessions": sessions_count,
+                "kills": kills,
+                "hours": round(hours, 2),
+                "cycled": round(cycled, 2),
+                "pesPer100Ped": round((skill_tt / cycled) * 100, 2)
+                if cycled > 0
+                else 0.0,
+                "lootRate": round(loot_tt / cycled, 4) if cycled > 0 else 0.0,
+            }
+        )
 
-    weapon_comparisons.sort(key=lambda row: (-row["kills"], -row["cycled"], row["weaponName"]))
+    weapon_comparisons.sort(
+        key=lambda row: (-row["kills"], -row["cycled"], row["weaponName"])
+    )
 
     return {
         "mobComparisons": mob_comparisons,
@@ -666,6 +764,7 @@ def activity_impl(conn):
 # ------------------------------------------------------------------
 # Ledger
 # ------------------------------------------------------------------
+
 
 class LedgerEntryCreate(BaseModel):
     date: str
@@ -694,8 +793,14 @@ def list_ledger_impl(conn):
            ORDER BY date DESC, id DESC""",
     ).fetchall()
     return [
-        {"id": r[0], "date": r[1], "type": r[2], "description": r[3],
-         "amount": r[4], "tag": r[5]}
+        {
+            "id": r[0],
+            "date": r[1],
+            "type": r[2],
+            "description": r[3],
+            "amount": r[4],
+            "tag": r[5],
+        }
         for r in rows
     ]
 
@@ -710,8 +815,14 @@ def create_ledger_entry(entry: LedgerEntryCreate):
         (entry_id, entry.date, entry.type, entry.description, entry.amount, entry.tag),
     )
     svc.app_db.conn.commit()
-    return {"id": entry_id, "date": entry.date, "type": entry.type,
-            "description": entry.description, "amount": entry.amount, "tag": entry.tag}
+    return {
+        "id": entry_id,
+        "date": entry.date,
+        "type": entry.type,
+        "description": entry.description,
+        "amount": entry.amount,
+        "tag": entry.tag,
+    }
 
 
 @router.delete("/ledger/{entry_id}")
@@ -719,7 +830,8 @@ def delete_ledger_entry(entry_id: str):
     """Delete a ledger entry."""
     svc = get_services()
     result = svc.app_db.conn.execute(
-        "DELETE FROM ledger_entries WHERE id = ?", (entry_id,),
+        "DELETE FROM ledger_entries WHERE id = ?",
+        (entry_id,),
     )
     svc.app_db.conn.commit()
     if result.rowcount == 0:
@@ -730,6 +842,7 @@ def delete_ledger_entry(entry_id: str):
 # ------------------------------------------------------------------
 # Ledger Quick-Entry Presets
 # ------------------------------------------------------------------
+
 
 class LedgerPresetCreate(BaseModel):
     name: str
@@ -768,13 +881,22 @@ def list_ledger_presets_impl(conn):
 def create_ledger_preset(preset: LedgerPresetCreate):
     """Create a new ledger quick-entry preset."""
     if preset.type not in ("expense", "markup"):
-        raise HTTPException(status_code=400, detail="type must be 'expense' or 'markup'")
+        raise HTTPException(
+            status_code=400, detail="type must be 'expense' or 'markup'"
+        )
     svc = get_services()
     preset_id = str(uuid.uuid4())
     svc.app_db.conn.execute(
         "INSERT INTO ledger_presets (id, name, type, description, amount, tag) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (preset_id, preset.name, preset.type, preset.description, preset.amount, preset.tag),
+        (
+            preset_id,
+            preset.name,
+            preset.type,
+            preset.description,
+            preset.amount,
+            preset.tag,
+        ),
     )
     svc.app_db.conn.commit()
     return {
@@ -792,7 +914,8 @@ def delete_ledger_preset(preset_id: str):
     """Delete a ledger quick-entry preset."""
     svc = get_services()
     result = svc.app_db.conn.execute(
-        "DELETE FROM ledger_presets WHERE id = ?", (preset_id,),
+        "DELETE FROM ledger_presets WHERE id = ?",
+        (preset_id,),
     )
     svc.app_db.conn.commit()
     if result.rowcount == 0:
@@ -807,6 +930,7 @@ def delete_ledger_preset(preset_id: str):
 # loot buys) whose value falls outside current cost-per-shot / loot tracking.
 # Purchases and sales do NOT touch ledger_entries directly; only the realised
 # gain/loss delta on sale is emitted with tag=inventory_sale.
+
 
 class InventoryItemCreate(BaseModel):
     name: str
@@ -859,7 +983,7 @@ def create_inventory_item(item: InventoryItemCreate):
     """Create a new inventory item."""
     svc = get_services()
     item_id = str(uuid.uuid4())
-    acquired_at = item.acquired_at or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    acquired_at = item.acquired_at or datetime.now(UTC).strftime("%Y-%m-%d")
     svc.app_db.conn.execute(
         "INSERT INTO inventory_items (id, name, tt_value, markup_paid, notes, acquired_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -879,7 +1003,8 @@ def update_inventory_item(item_id: str, patch: InventoryItemPatch):
     """Edit fields on an inventory item. Bumps updated_at."""
     svc = get_services()
     existing = svc.app_db.conn.execute(
-        "SELECT id FROM inventory_items WHERE id = ?", (item_id,),
+        "SELECT id FROM inventory_items WHERE id = ?",
+        (item_id,),
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="Inventory item not found")
@@ -921,7 +1046,8 @@ def delete_inventory_item(item_id: str):
     """Hard delete an inventory item (correction path, no ledger entry emitted)."""
     svc = get_services()
     result = svc.app_db.conn.execute(
-        "DELETE FROM inventory_items WHERE id = ?", (item_id,),
+        "DELETE FROM inventory_items WHERE id = ?",
+        (item_id,),
     )
     svc.app_db.conn.commit()
     if result.rowcount == 0:
@@ -948,7 +1074,7 @@ def sell_inventory_item(item_id: str, payload: InventoryItemSell):
 
     cost_basis = row["tt_value"] + row["markup_paid"]
     delta = payload.sale_price - cost_basis
-    sold_at = payload.sold_at or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sold_at = payload.sold_at or datetime.now(UTC).strftime("%Y-%m-%d")
     sold_item = _inventory_row_to_dict(row)
 
     ledger_entry: dict | None = None
@@ -961,7 +1087,14 @@ def sell_inventory_item(item_id: str, payload: InventoryItemSell):
             conn.execute(
                 "INSERT INTO ledger_entries (id, date, type, description, amount, tag) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (entry_id, sold_at, entry_type, description, amount, INVENTORY_SALE_TAG),
+                (
+                    entry_id,
+                    sold_at,
+                    entry_type,
+                    description,
+                    amount,
+                    INVENTORY_SALE_TAG,
+                ),
             )
             ledger_entry = {
                 "id": entry_id,

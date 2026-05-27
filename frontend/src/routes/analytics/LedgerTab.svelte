@@ -551,7 +551,7 @@
 						{/each}
 					</tbody>
 				</table>
-				
+
 				{#if totalPages > 1}
 					<div class="flex items-center justify-between mt-4">
 						<span class="text-xs text-text-tertiary">

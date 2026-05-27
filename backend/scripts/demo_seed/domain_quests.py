@@ -79,16 +79,16 @@ class QuestsSeeder:
         # Hand-picked distribution. 3 in-flight, 3 cooling, 4 ready.
         # In-flight quests get started_at = demo_now - random(15min..2h).
         in_flight = [
-            "Codex: Caboria II",        # chain mid-progress
-            "Atrox Cull (Daily)",       # active daily
-            "Codex Master: Caboria",    # long-horizon engaged
+            "Codex: Caboria II",  # chain mid-progress
+            "Atrox Cull (Daily)",  # active daily
+            "Codex Master: Caboria",  # long-horizon engaged
         ]
         # Cooling quests get a synthetic recent completion row so the
         # cooldown derivation fires. All must have cooldown_hours not NULL.
         cooling = [
-            "Argonaut Hunt (Daily)",      # 22h cooldown, recently done
-            "Bounty: Atrox Stalker",      # 168h cooldown, mid-cycle
-            "Combibo Patrol",             # 22h cooldown, recently done
+            "Argonaut Hunt (Daily)",  # 22h cooldown, recently done
+            "Bounty: Atrox Stalker",  # 168h cooldown, mid-cycle
+            "Combibo Patrol",  # 22h cooldown, recently done
         ]
         # Everything else stays ready (started_at NULL, no recent completion):
         # Codex I (chain done), Codex III (chain front),
@@ -97,7 +97,9 @@ class QuestsSeeder:
         for name in in_flight:
             q = by_name.get(name)
             if q is None:
-                log.warning("In-flight quest %r not in canonical refs — skipping.", name)
+                log.warning(
+                    "In-flight quest %r not in canonical refs — skipping.", name
+                )
                 continue
             offset_seconds = rng.uniform(15 * 60, 2 * 3600)
             started = demo_now - offset_seconds
@@ -178,9 +180,12 @@ class QuestsSeeder:
         # Codex Master quests are progressive — each claim is a single rank
         # tick (sub-PES to a few PES, lognormal-weighted small).
         claim_plan: dict[str, tuple[int, tuple[float, float]]] = {
-            "Codex: Caboria I": (1, (22.5, 27.5)),       # chain prize at completion (~headline)
-            "Codex: Caboria II": (0, (0.0, 0.0)),        # in-flight, not yet claimed
-            "Codex: Caboria III": (0, (0.0, 0.0)),       # ready, not yet claimed
+            "Codex: Caboria I": (
+                1,
+                (22.5, 27.5),
+            ),  # chain prize at completion (~headline)
+            "Codex: Caboria II": (0, (0.0, 0.0)),  # in-flight, not yet claimed
+            "Codex: Caboria III": (0, (0.0, 0.0)),  # ready, not yet claimed
             "Codex Master: Caboria": (6, (0.20, 2.50)),  # long horizon; bigger ticks
             "Codex Master: Daikiba": (5, (0.20, 2.50)),  # long horizon; bigger ticks
         }
@@ -235,8 +240,7 @@ class QuestsSeeder:
         guarantees sessions_domain runs first when integrated.
         """
         rows = db.execute(
-            "SELECT id, started_at, ended_at "
-            "FROM tracking_sessions ORDER BY started_at"
+            "SELECT id, started_at, ended_at FROM tracking_sessions ORDER BY started_at"
         ).fetchall()
         if not rows:
             log.warning(
@@ -248,9 +252,7 @@ class QuestsSeeder:
             )
             return
 
-        session_records = [
-            (r[0], r[1], r[2]) for r in rows if r[0] is not None
-        ]
+        session_records = [(r[0], r[1], r[2]) for r in rows if r[0] is not None]
         if not session_records:
             log.warning("%s seeder: tracking_sessions present but no IDs.", self.name)
             return
@@ -274,17 +276,13 @@ class QuestsSeeder:
             return row[0] if row else None
 
         # ── session_quest_completions: 5–10 sessions × 1–2 quests each ───
-        target_completion_sessions = min(
-            len(session_records), rng.randint(5, 10)
-        )
-        chosen_for_completion = rng.sample(
-            session_records, target_completion_sessions
-        )
+        target_completion_sessions = min(len(session_records), rng.randint(5, 10))
+        chosen_for_completion = rng.sample(session_records, target_completion_sessions)
         completion_count = 0
         seen_pairs: set[tuple[str, int]] = set()
         for sid, sstart, _send in chosen_for_completion:
-            mob = dominant_mob(sid)
-            candidate_quest_ids = mob_to_quests.get(mob, []) if mob else []
+            dom_mob = dominant_mob(sid)
+            candidate_quest_ids = mob_to_quests.get(dom_mob, []) if dom_mob else []
             if not candidate_quest_ids:
                 # Random match — analytics still works.
                 candidate_quest_ids = [q.db_id for q in refs.quests]
@@ -324,7 +322,7 @@ class QuestsSeeder:
         chosen_for_links = rng.sample(session_records, target_links)
         link_count = 0
         playlist_ids = [p.db_id for p in refs.playlists]
-        for idx, (sid, _sstart, _send) in enumerate(chosen_for_links):
+        for sid, _sstart, _send in chosen_for_links:
             roll = rng.random()
             if roll < 0.15:
                 kind = "declined"
@@ -351,8 +349,10 @@ class QuestsSeeder:
                     )
                 else:
                     # Prefer a quest that matches this session's dominant mob.
-                    mob = dominant_mob(sid)
-                    candidate_quest_ids = mob_to_quests.get(mob, []) if mob else []
+                    dom_mob = dominant_mob(sid)
+                    candidate_quest_ids = (
+                        mob_to_quests.get(dom_mob, []) if dom_mob else []
+                    )
                     if not candidate_quest_ids:
                         candidate_quest_ids = [q.db_id for q in refs.quests]
                     qid = rng.choice(candidate_quest_ids)
@@ -369,7 +369,10 @@ class QuestsSeeder:
         log.info(
             "%s seeder: wrote %d session_quest_completions + %d "
             "session_quest_analytics_links across %d sessions.",
-            self.name, completion_count, link_count, len(session_records),
+            self.name,
+            completion_count,
+            link_count,
+            len(session_records),
         )
 
     def validate_synthetic_data(self, refs: CanonicalRefs) -> list[str]:
@@ -405,7 +408,9 @@ if __name__ == "__main__":
     # in the self-test, so this seeder gracefully no-ops on the session-tied
     # rows. To let it actually run alongside core, we patch its depends_on
     # to drop "sessions_domain" for the self-test only.
-    SEEDER.depends_on = ("core",)  # self-test only; the real depends_on is the class-level tuple above
+    SEEDER.depends_on = (
+        "core",
+    )  # self-test only; the real depends_on is the class-level tuple above
 
     tmp = Path(tempfile.mkdtemp(prefix="demoseed_quests_"))
     try:

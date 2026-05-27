@@ -1,26 +1,28 @@
 """Character stats endpoints — computed from calibrated skill levels + the bundled game-data catalogue."""
 
-from collections import defaultdict
-from datetime import datetime, timezone
 import time
+from collections import defaultdict
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from backend.data.codex_categories import get_codex_category
+from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
 from backend.dependencies import get_services
+from backend.routers.response_models import CharacterProspect
 from backend.services.character_calc import (
     ATTRIBUTE_SKILLS,
     all_profession_levels,
     codex_next_reward,
     codex_tier_progress,
-    hp_skill_optimizer,
     effective_points,
+    hp_skill_optimizer,
     profession_level,
     profession_path_optimizer,
     profession_skill_optimizer,
     skill_rank,
 )
-from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
-from backend.data.codex_categories import get_codex_category
 from backend.services.session_summary import load_prospect_sessions
 
 router = APIRouter(prefix="/character", tags=["character"])
@@ -152,7 +154,9 @@ def _prospect_sample(sessions: list[dict]) -> dict:
         "cycledPed": round(sum(session["cycledPed"] for session in sessions), 4),
         "lootTt": round(sum(session["lootTt"] for session in sessions), 4),
         "pes": round(sum(session["regularSkillTt"] for session in sessions), 4),
-        "attributeLevels": round(sum(session["attributeLevelsTotal"] for session in sessions), 4),
+        "attributeLevels": round(
+            sum(session["attributeLevelsTotal"] for session in sessions), 4
+        ),
     }
 
     for session in sessions:
@@ -162,8 +166,12 @@ def _prospect_sample(sessions: list[dict]) -> dict:
             attribute_levels[name] += amount
 
     cycled = sample["cycledPed"]
-    sample["cycledPerHour"] = round(sample["cycledPed"] / sample["hours"], 4) if sample["hours"] > 0 else 0.0
-    sample["lootPerHour"] = round(sample["lootTt"] / sample["hours"], 4) if sample["hours"] > 0 else 0.0
+    sample["cycledPerHour"] = (
+        round(sample["cycledPed"] / sample["hours"], 4) if sample["hours"] > 0 else 0.0
+    )
+    sample["lootPerHour"] = (
+        round(sample["lootTt"] / sample["hours"], 4) if sample["hours"] > 0 else 0.0
+    )
     sample["returnRate"] = round(sample["lootTt"] / cycled, 4) if cycled > 0 else 0.0
     sample["pesPerPed"] = round(sample["pes"] / cycled, 6) if cycled > 0 else 0.0
     sample["lootTtPerPed"] = round(sample["lootTt"] / cycled, 6) if cycled > 0 else 0.0
@@ -190,16 +198,20 @@ def _prospect_option_list(sessions: list[dict], key: str) -> list[dict]:
     options = []
     for value, grouped_sessions in grouped.items():
         sample = _prospect_sample(grouped_sessions)
-        options.append({
-            "value": value,
-            "label": value,
-            "sessions": sample["sessions"],
-            "kills": sample["kills"],
-            "hours": round(sample["hours"], 2),
-            "cycledPed": round(sample["cycledPed"], 2),
-        })
+        options.append(
+            {
+                "value": value,
+                "label": value,
+                "sessions": sample["sessions"],
+                "kills": sample["kills"],
+                "hours": round(sample["hours"], 2),
+                "cycledPed": round(sample["cycledPed"], 2),
+            }
+        )
 
-    options.sort(key=lambda option: (-option["sessions"], -option["cycledPed"], option["label"]))
+    options.sort(
+        key=lambda option: (-option["sessions"], -option["cycledPed"], option["label"])
+    )
     return options
 
 
@@ -233,7 +245,9 @@ def _build_prospect_warnings(sample: dict, projected_cycled_ped: float) -> list[
     if sample["cycledPed"] < PROSPECT_SAMPLE_WARN_CYCLED_PED:
         warnings.append("Thin sample: less than 50 PED of matching cycling.")
     if sample["cycledPed"] > 0 and projected_cycled_ped > sample["cycledPed"] * 20:
-        warnings.append("Long extrapolation: forecast extends far beyond the observed sample.")
+        warnings.append(
+            "Long extrapolation: forecast extends far beyond the observed sample."
+        )
     return warnings
 
 
@@ -335,12 +349,16 @@ def _build_prospect_result(
 
         lower = 0.0
         upper = max(sample["cycledPed"], 1.0)
-        projected_levels, projected_gains = _project_prospect_levels(skill_levels, sample, upper)
+        projected_levels, projected_gains = _project_prospect_levels(
+            skill_levels, sample, upper
+        )
         upper_level = profession_level(projected_levels, profession)
         while upper_level < target_level and upper < 1_000_000_000:
             lower = upper
             upper *= 2
-            projected_levels, projected_gains = _project_prospect_levels(skill_levels, sample, upper)
+            projected_levels, projected_gains = _project_prospect_levels(
+                skill_levels, sample, upper
+            )
             upper_level = profession_level(projected_levels, profession)
 
         if upper_level < target_level:
@@ -372,14 +390,20 @@ def _build_prospect_result(
                 lower = mid
 
         projected_cycled_ped = round(upper, 2)
-        projected_levels, projected_gains = _project_prospect_levels(skill_levels, sample, projected_cycled_ped)
+        projected_levels, projected_gains = _project_prospect_levels(
+            skill_levels, sample, projected_cycled_ped
+        )
 
     expected_loot_tt = round(projected_cycled_ped * sample["lootTtPerPed"], 2)
     expected_net_tt_burn = round(projected_cycled_ped - expected_loot_tt, 2)
-    projected_hours = round(
-        projected_cycled_ped * (sample["hours"] / sample["cycledPed"]),
-        2,
-    ) if sample["cycledPed"] > 0 else 0.0
+    projected_hours = (
+        round(
+            projected_cycled_ped * (sample["hours"] / sample["cycledPed"]),
+            2,
+        )
+        if sample["cycledPed"] > 0
+        else 0.0
+    )
 
     speculative_loot_tt = None
     speculative_net_tt_burn = None
@@ -388,7 +412,9 @@ def _build_prospect_result(
         speculative_net_tt_burn = round(projected_cycled_ped - speculative_loot_tt, 2)
 
     weights = {
-        (skill_entry.get("skill") or {}).get("name", ""): float(skill_entry.get("weight") or 0)
+        (skill_entry.get("skill") or {}).get("name", ""): float(
+            skill_entry.get("weight") or 0
+        )
         for skill_entry in profession.get("skills", [])
     }
 
@@ -400,21 +426,33 @@ def _build_prospect_result(
         projected_end_level = float(projected_levels.get(name, current_skill_level))
         weight = float(weights.get(name, 0.0))
         is_attribute = name in ATTRIBUTE_SKILLS
-        contribution = (effective_points(name, projected_gain) * weight) / 10000 if weight > 0 else 0.0
-        rows.append({
-            "name": name,
-            "isAttribute": is_attribute,
-            "weight": weight,
-            "currentLevel": round(current_skill_level, 2),
-            "observedShare": round(sample["skillShares"].get(name, 0.0), 4),
-            "observedRate": round(sample["attributeRates"].get(name, 0.0), 6),
-            "projectedGain": round(projected_gain, 2),
-            "projectedEndLevel": round(projected_end_level, 2),
-            "professionContribution": round(contribution, 4),
-            "relevant": weight > 0,
-        })
+        contribution = (
+            (effective_points(name, projected_gain) * weight) / 10000
+            if weight > 0
+            else 0.0
+        )
+        rows.append(
+            {
+                "name": name,
+                "isAttribute": is_attribute,
+                "weight": weight,
+                "currentLevel": round(current_skill_level, 2),
+                "observedShare": round(sample["skillShares"].get(name, 0.0), 4),
+                "observedRate": round(sample["attributeRates"].get(name, 0.0), 6),
+                "projectedGain": round(projected_gain, 2),
+                "projectedEndLevel": round(projected_end_level, 2),
+                "professionContribution": round(contribution, 4),
+                "relevant": weight > 0,
+            }
+        )
 
-    rows.sort(key=lambda row: (-row["professionContribution"], row["isAttribute"], row["name"]))
+    rows.sort(
+        key=lambda row: (
+            -row["professionContribution"],
+            row["isAttribute"],
+            row["name"],
+        )
+    )
 
     return {
         "profession": profession_name,
@@ -453,7 +491,7 @@ def get_calibration():
     return {
         "calibrated": True,
         "lastCalibration": (
-            datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat()
+            datetime.fromtimestamp(last_ts, tz=UTC).isoformat()
             if last_ts is not None
             else None
         ),
@@ -480,7 +518,9 @@ def get_character_stats():
         level = levels_by_name.get(prof["name"], 0.0)
         if level > 0:
             category = prof.get("category", "General")
-            prof_levels.append({"name": prof["name"], "level": level, "category": category})
+            prof_levels.append(
+                {"name": prof["name"], "level": level, "category": category}
+            )
 
     prof_levels.sort(key=lambda p: p["level"], reverse=True)
     top = prof_levels[:5]
@@ -508,25 +548,31 @@ def get_skills():
 
     skill_map = {s["name"]: s for s in skills_data}
 
-    result = []
+    result: list[dict[str, Any]] = []
     for name, level in skill_levels.items():
         entity = skill_map.get(name, {})
         category_obj = entity.get("category") or {}
-        category = category_obj.get("name", "General") if isinstance(category_obj, dict) else "General"
+        category = (
+            category_obj.get("name", "General")
+            if isinstance(category_obj, dict)
+            else "General"
+        )
         rank_name = skill_rank(level, ranks)
         tt = tt_value_at(level)
         anchor = anchor_levels.get(name)
         gain = round(level - anchor, 4) if anchor is not None else None
-        result.append({
-            "name": name,
-            "category": category,
-            "level": level,
-            "anchorLevel": anchor,
-            "gainSinceAnchor": gain,
-            "rankName": rank_name,
-            "ttValue": round(tt, 2),
-            "isAttribute": name in ATTRIBUTE_SKILLS,
-        })
+        result.append(
+            {
+                "name": name,
+                "category": category,
+                "level": level,
+                "anchorLevel": anchor,
+                "gainSinceAnchor": gain,
+                "rankName": rank_name,
+                "ttValue": round(tt, 2),
+                "isAttribute": name in ATTRIBUTE_SKILLS,
+            }
+        )
 
     result.sort(key=lambda s: s["level"], reverse=True)
     return result
@@ -560,13 +606,15 @@ def get_professions():
         category = prof.get("category", "General")
         anchor = anchor_levels.get(name, 0.0) if has_anchor else None
         gain = round(level - anchor, 4) if anchor is not None else None
-        result.append({
-            "name": name,
-            "level": level,
-            "anchorLevel": anchor,
-            "gainSinceAnchor": gain,
-            "category": category,
-        })
+        result.append(
+            {
+                "name": name,
+                "level": level,
+                "anchorLevel": anchor,
+                "gainSinceAnchor": gain,
+                "category": category,
+            }
+        )
 
     result.sort(key=lambda p: p["level"], reverse=True)
     return result
@@ -584,7 +632,11 @@ def get_character_prospect_options():
     }
 
 
-@router.get("/prospect")
+@router.get(
+    "/prospect",
+    response_model=CharacterProspect,
+    response_model_exclude_unset=True,
+)
 def get_character_prospect(
     profession: str,
     target_level: float,
@@ -596,16 +648,26 @@ def get_character_prospect(
     if target_level <= 0:
         raise HTTPException(status_code=422, detail="target_level must be positive")
     if markup_uplift < 0:
-        raise HTTPException(status_code=422, detail="markup_uplift must be zero or positive")
+        raise HTTPException(
+            status_code=422, detail="markup_uplift must be zero or positive"
+        )
     if slice_type not in {"global", "tag", "mob", "weapon"}:
-        raise HTTPException(status_code=422, detail="slice_type must be global, tag, mob, or weapon")
+        raise HTTPException(
+            status_code=422, detail="slice_type must be global, tag, mob, or weapon"
+        )
     if slice_type != "global" and not slice_value:
-        raise HTTPException(status_code=422, detail="slice_value is required for non-global slices")
+        raise HTTPException(
+            status_code=422, detail="slice_value is required for non-global slices"
+        )
 
     svc = get_services()
     profession_entity = _get_profession_entity(svc.game_data, profession)
     if profession_entity is None:
-        return {"error": f"Profession '{profession}' not found", "rows": [], "warnings": []}
+        return {
+            "error": f"Profession '{profession}' not found",
+            "rows": [],
+            "warnings": [],
+        }
 
     skill_levels = _get_skill_calibrations(svc.app_db)
     sessions = _load_prospect_sessions(svc.app_db)
@@ -641,7 +703,11 @@ def get_profession_optimizer(profession: str):
             break
 
     if prof_entity is None:
-        return {"error": f"Profession '{profession}' not found", "skills": [], "attributes": []}
+        return {
+            "error": f"Profession '{profession}' not found",
+            "skills": [],
+            "attributes": [],
+        }
 
     skill_levels = _get_skill_calibrations(svc.app_db)
     result = profession_skill_optimizer(skill_levels, prof_entity)
@@ -673,12 +739,18 @@ def get_profession_path_optimizer(
             break
 
     if prof_entity is None:
-        return {"error": f"Profession '{profession}' not found", "allocations": [], "attributes": []}
+        return {
+            "error": f"Profession '{profession}' not found",
+            "allocations": [],
+            "attributes": [],
+        }
 
     skill_levels = _get_skill_calibrations(svc.app_db)
     result = profession_path_optimizer(
-        skill_levels, prof_entity,
-        target_level=target_level, ped_budget=ped_budget,
+        skill_levels,
+        prof_entity,
+        target_level=target_level,
+        ped_budget=ped_budget,
     )
     result["profession"] = profession
     return result
@@ -704,19 +776,21 @@ def get_codex():
     svc = get_services()
     skill_levels = _get_skill_calibrations(svc.app_db)
 
-    result = []
+    result: list[dict[str, Any]] = []
     for name, level in skill_levels.items():
         if get_codex_category(name) is None:
             continue
         next_reward = codex_next_reward(name, level)
         progress = codex_tier_progress(name, level)
         if next_reward is not None and progress is not None:
-            result.append({
-                "skillName": name,
-                "currentLevel": level,
-                "nextRewardValue": round(next_reward, 2),
-                "progress": progress,
-            })
+            result.append(
+                {
+                    "skillName": name,
+                    "currentLevel": level,
+                    "nextRewardValue": round(next_reward, 2),
+                    "progress": progress,
+                }
+            )
 
     result.sort(key=lambda c: c["currentLevel"], reverse=True)
     return result

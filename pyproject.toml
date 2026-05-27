@@ -1,0 +1,200 @@
+# Tool configuration for the EntropiaOrme Python backend.
+#
+# Tool config only: runtime dependencies live in backend/requirements.txt (the
+# manifest the PyInstaller freeze consumes) and dev/test tooling in
+# backend/requirements-dev.txt. There is intentionally no [project] or
+# [build-system] table: the backend ships as a PyInstaller-frozen sidecar, not
+# an installable wheel, so adding packaging metadata would only risk confusing
+# that pipeline.
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["."]
+
+[tool.ruff.lint]
+# A curated, high-signal rule set: pycodestyle/pyflakes (E, F), import sorting
+# (I), pyupgrade (UP), bugbear (B), comprehensions (C4), and simplify (SIM).
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # FastAPI's dependency-injection idiom puts Depends()/Query()/Path() in
+    # argument defaults by design; bugbear's function-call-in-default check is
+    # a false positive for it.
+    "B008",
+    # `ruff format` owns line length: it wraps code to line-length but leaves
+    # strings, comments, and SQL literals intact rather than forcing breaks.
+    # Enforcing E501 on top would only nag about those un-splittable lines.
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["backend"]
+
+[tool.ruff.lint.per-file-ignores]
+# main.py loads .env.local and sets process priority / UTF-8 mode before the
+# heavy module imports run, so its imports are deliberately not all at the top.
+"backend/main.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "fast: pure-logic, in-memory, sub-second tests (run on every PR)",
+    "standard: db / filesystem / in-process-stateful tests (run on every PR)",
+    "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
+    "contract: schemathesis API contract tests (run once, on the coverage leg)",
+]
+
+[tool.coverage.run]
+# Branch coverage (not just line coverage): partial branches count, so the
+# branch figure sits below the line figure by design.
+branch = true
+source = ["backend"]
+# Store paths relative to the repo root so the coverage.xml that diff-cover
+# reads resolves identically on a CI runner and a local checkout.
+relative_files = true
+# Device / IO / script modules that cannot be unit-covered without a real
+# device or display, plus the test files themselves. These are run but not
+# measured, so the floor reflects testable logic rather than hardware glue.
+omit = [
+    "backend/tests/*",
+    "backend/scripts/demo_seed/*",
+    # Maintainer utility: run in the nightly mutation workflow, not imported by
+    # the suite, so it is exercised in CI rather than under pytest-cov.
+    "backend/scripts/mutation_score.py",
+    "backend/build_app.py",
+    "backend/ocr/capturer.py",
+    "backend/services/eu_window.py",
+    "backend/services/hotbar_listener.py",
+    "backend/services/spacebar_capture_listener.py",
+    "backend/services/local_ocr.py",
+    "backend/services/repair_ocr.py",
+    "backend/services/scan_presets.py",
+    "backend/services/skill_scan_manual.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Defensive / unreachable lines that should not count against the floor.
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.",
+]
+# Floor set 3 points below the measured branch coverage (47%) of the
+# testable surface, leaving ratchet headroom and avoiding a day-one red. The
+# router layer and main.py sit in the denominator uncovered for now; as their
+# tests land, this figure climbs and the floor is tightened to track it.
+# Never lower a landed floor to make a red gate pass.
+fail_under = 44
+
+[tool.mypy]
+python_version = "3.11"
+# EntropiaOrme is a Windows-only desktop app, so mypy targets win32: platform
+# guards (`if sys.platform == "win32":`) are evaluated as live, and the Windows
+# code paths (e.g. the ctypes window-geometry helpers) are type-checked rather
+# than treated as unreachable. Without this, a non-Windows checker skips those
+# branches and reports their use sites as undefined.
+platform = "win32"
+# The Pydantic v2 plugin teaches mypy about model construction / validators;
+# without it, model instantiation produces false positives.
+plugins = ["pydantic.mypy"]
+files = ["backend"]
+# Check the bodies of unannotated functions too. This is the single
+# highest-value flag short of full strict: it surfaces real bugs (bad indexing,
+# wrong operands, mismatched returns) in code that has no signature yet.
+check_untyped_defs = true
+# An argument defaulting to None must be typed Optional explicitly.
+no_implicit_optional = true
+# A `# type: ignore` that no longer suppresses anything is itself an error, so
+# the ignore set cannot rot as the code is annotated.
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# C-extension dependencies ship no type information (no stubs, no py.typed).
+# Ignore missing imports for these specific modules rather than globally, so a
+# genuinely-missing first-party import still surfaces as an error.
+[[tool.mypy.overrides]]
+module = [
+    "cv2",
+    "mss",
+    "mss.*",
+    "pynput",
+    "pynput.*",
+    "onnxruntime",
+    "openocr",
+    "openocr.*",
+    "rapidfuzz",
+]
+ignore_missing_imports = true
+
+# Strict beachhead: small, pure-logic modules held to full annotation
+# (disallow_untyped_defs). The typing gate ratchets outward from here as more
+# modules are annotated; a module is only ever added to this list, never
+# removed. To promote a module: annotate it fully, confirm `mypy backend` stays
+# green, then add it here.
+[[tool.mypy.overrides]]
+module = [
+    "backend.services.cost_engine",
+    "backend.services.scan_drift",
+    "backend.tracking.loot_filter",
+    "backend.data.codex_categories",
+    "backend.data.tt_value_curve",
+]
+disallow_untyped_defs = true
+
+[tool.mutmut]
+# Mutation testing: the effectiveness metric. Coverage proves a line ran;
+# mutation proves a test would notice if that line were wrong. The campaign is
+# slow, so it runs nightly and on demand, never per-PR (see nightly.yml). The
+# engine requires a POSIX host (it has no native Windows support), so the job
+# runs on Linux; the targets below are pure-logic and platform-independent.
+#
+# Targets: the pure-logic core only. Device, IO, and router glue carry little
+# mutation value and would slow the campaign for no signal.
+paths_to_mutate = [
+    "backend/services/cost_engine.py",
+    "backend/services/character_calc.py",
+    "backend/data/codex_categories.py",
+    "backend/data/tt_value_curve.py",
+    "backend/services/scan_drift.py",
+    "backend/tracking/loot_filter.py",
+    "backend/tracking/tool_inference.py",
+]
+# The engine works in a copied `mutants/` tree, so the package it imports at
+# test time (sources, the curated data tables, the test files, conftest) must
+# travel with it. The default copy set only covers a top-level tests/ folder;
+# this project keeps tests under backend/, so copy the whole package.
+also_copy = ["backend"]
+# Only the pure-logic test files are run per mutant. Selecting them by name
+# keeps the device-touching modules (which import cv2 at collection time and
+# only run on Windows) out of the Linux campaign, and runs each mutant against
+# just the tests that exercise it.
+pytest_add_cli_args_test_selection = [
+    "backend/tests/test_cost_engine.py",
+    "backend/tests/test_cost_engine_properties.py",
+    "backend/tests/test_character_calc.py",
+    "backend/tests/test_character_calc_properties.py",
+    "backend/tests/test_codex_formulas.py",
+    "backend/tests/test_codex_properties.py",
+    "backend/tests/test_tt_curve_properties.py",
+    "backend/tests/test_scan_drift.py",
+    "backend/tests/test_loot_filter.py",
+    "backend/tests/test_tool_inference.py",
+]
+# Keep the device tier out (redundant with the explicit selection above, but it
+# keeps the intent legible and guards against a selected file growing a slow
+# case). The Hypothesis profile is pinned via HYPOTHESIS_PROFILE in the runner
+# environment to the bounded, derandomised `mutation` profile (see conftest.py):
+# the run must be reproducible to gate on, and a 1000-example nightly profile
+# times thousands of mutants would be intractable.
+pytest_add_cli_args = ["-m", "not full"]
+# Mutate every line in the targeted modules rather than restricting to
+# coverage-filtered lines. The coverage-filtered path runs a pre-mutation
+# coverage pass in the same process, which imports the unmutated modules and
+# leaves them cached; the later run then cannot match tests to mutants. Mutating
+# every line is also the franker measure: a mutant on an unexercised line simply
+# survives, which is the gap showing up where it should.
+mutate_only_covered_lines = false

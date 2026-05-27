@@ -5,7 +5,189 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only by default; the backend job widens to contents: write only so the
+# coverage badge can be published to the badges branch on a push to main.
+permissions:
+  contents: read
+
 jobs:
+  backend:
+    name: Backend (tests, Python ${{ matrix.python-version }})
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    # Run the property-based suites with more examples than the local default.
+    env:
+      HYPOTHESIS_PROFILE: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lower bound (the supported floor) and the development version.
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so diff-cover can find the merge-base with the PR base.
+          fetch-depth: 0
+          # Don't persist the auth token in .git/config for later steps.
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      # The supported-floor leg runs the suite without coverage. The contract
+      # tier runs once, on the coverage leg below, so it is excluded here.
+      - name: Run backend test suite
+        if: matrix.python-version == '3.11'
+        # Everything except the device / slow `full` tier and the contract tier.
+        run: python -m pytest -m "not full and not contract"
+      # Coverage is measured on one leg only (3.14) to avoid double-counting and
+      # racing coverage files; the floor lives in pyproject.toml. Coverage data
+      # is accumulated here and across the contract run below, then reported once
+      # (see "Combine and report coverage"), so the report and the diff-coverage
+      # gate credit the router surface the contract suite exercises. Test order
+      # is pinned on the coverage legs so the measured figure is reproducible run
+      # to run; the 3.11 leg keeps randomised order to surface inter-test coupling.
+      - name: Run backend test suite with coverage
+        if: matrix.python-version == '3.14'
+        run: python -m pytest -m "not full and not contract" -p no:randomly --cov=backend --cov-branch --cov-report=
+      # API contract tests (schemathesis from_asgi) drive the read surface
+      # against the app's own OpenAPI schema. Run on the coverage leg only so the
+      # slower schemathesis pass executes once per CI run; its coverage is
+      # appended to the run above. schemathesis runs in deterministic mode against
+      # a pinned Hypothesis, with order pinned, so this contribution is stable.
+      - name: Run API contract tests
+        if: matrix.python-version == '3.14'
+        run: python -m pytest -m contract -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
+      # Report once over the combined data: enforce the total floor and write the
+      # XML the diff-coverage gate and the badge step consume.
+      - name: Combine and report coverage
+        if: matrix.python-version == '3.14'
+        shell: bash
+        run: |
+          python -m coverage report --show-missing
+          python -m coverage xml
+      # New / changed lines on a PR must clear the diff-coverage floor. Compares
+      # against the PR base, so it works for the trunk-landing PR too.
+      - name: Diff coverage
+        if: matrix.python-version == '3.14' && github.event_name == 'pull_request'
+        shell: bash
+        # Pass the base ref through env rather than inline interpolation so a
+        # crafted branch name cannot inject into the shell.
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags origin "$PR_BASE_REF"
+          diff-cover coverage.xml --compare-branch="origin/$PR_BASE_REF" --fail-under=85
+      # Refresh the coverage badge from the just-measured report. Only on a push
+      # to main (not PRs), so the published figure tracks the trunk.
+      - name: Publish coverage badge
+        if: matrix.python-version == '3.14' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+
+          rate = float(ET.parse("coverage.xml").getroot().get("line-rate"))
+          pct = round(rate * 100, 1)
+          bands = [(90, "brightgreen"), (80, "green"), (70, "yellowgreen"), (60, "yellow"), (50, "orange")]
+          colour = next((c for floor, c in bands if pct >= floor), "red")
+          badge = {"schemaVersion": 1, "label": "coverage", "message": f"{pct}%", "color": colour}
+          with open("coverage.json", "w", encoding="utf-8") as f:
+              json.dump(badge, f)
+          print("coverage", pct)
+          PY
+          bash .github/scripts/publish-badge.sh coverage.json
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Version mirrors backend/requirements-dev.txt so formatting is deterministic.
+      - run: python -m pip install ruff==0.15.14
+      - run: ruff check .
+      - run: ruff format --check .
+
+  typing:
+    name: Typing (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      # mypy reads first-party source directly, but the runtime deps must be
+      # installed so the Pydantic plugin and the typed third-party imports
+      # (fastapi, numpy, pydantic) resolve. The C-extension deps are
+      # import-ignored in pyproject.toml, so a display-free runner is fine.
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Type-check the backend
+        run: python -m mypy backend
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Version mirrors backend/requirements-dev.txt.
+      - run: python -m pip install "pip-audit>=2.7"
+      # Audit the pinned manifests rather than the ambient environment, so only
+      # the project's own runtime and dev dependencies are in scope. --strict
+      # fails the job if any dependency cannot be fully audited.
+      - name: Audit dependencies
+        run: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
+
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install "pre-commit>=3.8"
+      # The mypy and fast-test hooks run against the project virtual
+      # environment; the dedicated typing and backend jobs already enforce those
+      # checks, so they are skipped here to keep this job to the hooks pre-commit
+      # manages itself (ruff and the hygiene hooks) without installing the full
+      # dependency tree a second time.
+      - name: Run pre-commit hooks
+        env:
+          SKIP: mypy,pytest-fast
+        run: pre-commit run --all-files --show-diff-on-failure
+
   frontend:
     name: Frontend (build + check)
     runs-on: ubuntu-latest
@@ -14,6 +196,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'

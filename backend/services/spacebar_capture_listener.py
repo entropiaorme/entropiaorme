@@ -29,7 +29,8 @@ class SpacebarCaptureListener:
         self._skill = skill_scan_manual
 
         self._enabled = False
-        self._key_listener = None
+        # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
+        self._key_listener: Any = None
         self._space_down = False
 
     @property

@@ -111,7 +111,8 @@ def test_get_species_ranks_returns_25(service):
 def test_get_species_ranks_unknown(tmp_path):
     """Unknown species returns None."""
     app_db = AppDatabase(tmp_path / "empty_app.db")
-    svc = CodexService(app_db, _StubGameData())
+    # _StubGameData is a deliberate minimal stand-in for the heavy GameDataStore.
+    svc = CodexService(app_db, _StubGameData())  # type: ignore[arg-type]
     assert svc.get_species_ranks("Nonexistent") is None
     app_db.close()
 
@@ -153,6 +154,7 @@ def test_claim_rank_cat4_skill_on_rank_5(service):
     for i in range(1, 5):
         cat_skills = {"cat1": "Aim", "cat2": "Clubs"}
         from backend.data.codex_categories import get_category_for_rank
+
         cat = get_category_for_rank(i)
         service.claim_rank("Atrox", i, cat_skills[cat])
 
@@ -254,6 +256,7 @@ def test_get_skill_options_rank1(service):
     options = service.get_skill_options("Atrox", 1)
     # Rank 1 = cat1 skills
     from backend.data.codex_categories import CODEX_SKILL_CATEGORIES
+
     cat1_names = set(CODEX_SKILL_CATEGORIES["cat1"])
     option_names = {o["skillName"] for o in options}
     assert option_names == cat1_names
@@ -263,6 +266,7 @@ def test_get_skill_options_rank5_mob_looter(service):
     """Rank 5 MobLooter should include both cat3 and cat4 skills."""
     options = service.get_skill_options("Atrox", 5)
     from backend.data.codex_categories import CODEX_SKILL_CATEGORIES
+
     expected = set(CODEX_SKILL_CATEGORIES["cat3"]) | set(CODEX_SKILL_CATEGORIES["cat4"])
     actual = {o["skillName"] for o in options}
     assert actual == expected
@@ -272,6 +276,7 @@ def test_get_skill_options_rank5_regular_mob(service):
     """Rank 5 regular Mob should only have cat3 skills."""
     options = service.get_skill_options("Feffoid", 5)
     from backend.data.codex_categories import CODEX_SKILL_CATEGORIES
+
     expected = set(CODEX_SKILL_CATEGORIES["cat3"])
     actual = {o["skillName"] for o in options}
     assert actual == expected
@@ -280,16 +285,22 @@ def test_get_skill_options_rank5_regular_mob(service):
 def test_get_skill_options_with_profession(service, game_data, app_db):
     """Profession contribution should be computed and drive sorting."""
     # Seed a dummy profession
-    game_data.store("professions", [{
-        "name": "Laser Sniper (Hit)",
-        "skills": [
-            {"skill": {"name": "Aim"}, "weight": 50},
-            {"skill": {"name": "Rifle"}, "weight": 30},
+    game_data.store(
+        "professions",
+        [
+            {
+                "name": "Laser Sniper (Hit)",
+                "skills": [
+                    {"skill": {"name": "Aim"}, "weight": 50},
+                    {"skill": {"name": "Rifle"}, "weight": 30},
+                ],
+            }
         ],
-    }])
+    )
 
     # Calibrate: Aim at high level (diminishing returns), Rifle at low level
     import time
+
     now = time.time()
     app_db.conn.execute(
         "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) VALUES (?, ?, 'scan', ?)",

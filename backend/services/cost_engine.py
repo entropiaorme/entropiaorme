@@ -22,8 +22,15 @@ def _economy(entity: dict) -> dict:
 
 
 _DAMAGE_TYPES = (
-    "impact", "cut", "stab", "penetration", "shrapnel",
-    "burn", "cold", "acid", "electric",
+    "impact",
+    "cut",
+    "stab",
+    "penetration",
+    "shrapnel",
+    "burn",
+    "cold",
+    "acid",
+    "electric",
 )
 
 
@@ -146,10 +153,9 @@ def cost_per_shot(
         absorber_decay = weapon_decay * absorption
         weapon_decay -= absorber_decay
 
-    has_amp = amp is not None
     amp_decay = 0.0
     amp_ammo = 0.0
-    if has_amp:
+    if amp is not None:
         amp_eco = _economy(amp)
         amp_decay = amp_eco.get("decay") or 0.0
         amp_ammo = (amp_eco.get("ammo_burn") or 0.0) / 100.0
@@ -174,16 +180,16 @@ def cost_per_shot(
         add_line("Absorber decay", absorber_decay, absorber_markup)
 
     add_line("Weapon decay", weapon_decay, weapon_markup)
-    if has_amp:
+    if amp is not None:
         add_line("Amp decay", amp_decay, amp_markup)
     if scope:
         scope_decay = _economy(scope).get("decay") or 0.0
         add_line("Scope decay", scope_decay, scope_markup)
 
     if weapon_ammo > 0:
-        label = "Ammo (weapon)" if has_amp else "Ammo"
+        label = "Ammo (weapon)" if amp is not None else "Ammo"
         add_line(label, weapon_ammo, 1.0)
-    if has_amp and amp_ammo > 0:
+    if amp is not None and amp_ammo > 0:
         add_line("Ammo (amp)", amp_ammo, 1.0)
 
     return {
@@ -194,7 +200,11 @@ def cost_per_shot(
 
 def cost_per_shot_from_props(props: dict, damage_enhancers: int | None = None) -> dict:
     """Calculate weapon cost from an ``equipment_library`` ``properties_json`` payload."""
-    configured_damage = props.get("damage_enhancers", 0) if damage_enhancers is None else damage_enhancers
+    configured_damage = (
+        props.get("damage_enhancers", 0)
+        if damage_enhancers is None
+        else damage_enhancers
+    )
     return cost_per_shot(
         weapon=props["weapon_entity"],
         amp=props.get("amp_entity"),

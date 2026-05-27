@@ -108,7 +108,9 @@ def _format_playlist(pl: dict) -> dict:
         "estimatedMinutes": pl["estimated_minutes"],
         "questIds": [str(qid) for qid in pl.get("quest_ids", [])],
         "immediateQuestIds": [str(qid) for qid in pl.get("immediate_quest_ids", [])],
-        "longHorizonQuestIds": [str(qid) for qid in pl.get("long_horizon_quest_ids", [])],
+        "longHorizonQuestIds": [
+            str(qid) for qid in pl.get("long_horizon_quest_ids", [])
+        ],
         "items": [
             {
                 "questId": str(i["quest_id"]),
@@ -210,7 +212,9 @@ def _format_playlist_analytics(row: dict) -> dict:
         "totalImmediatePesReward": round(row["total_immediate_skill_reward_ped"], 2),
         "totalBonusPesReward": round(row["total_bonus_skill_reward_ped"], 2),
         "totalExpectedRewardPed": round(row["total_expected_reward_ped"], 2),
-        "totalExpectedImmediateRewardPed": round(row["total_expected_immediate_reward_ped"], 2),
+        "totalExpectedImmediateRewardPed": round(
+            row["total_expected_immediate_reward_ped"], 2
+        ),
         "totalExpectedBonusRewardPed": round(row["total_expected_bonus_reward_ped"], 2),
         "totalDurationSec": round(row["total_duration"], 1),
         "totalWeaponCost": round(row["weapon_cost"], 4),

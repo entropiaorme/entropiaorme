@@ -40,4 +40,3 @@ export interface AppSettings {
 	dbPath: string;
 	appVersion: string;
 }
-

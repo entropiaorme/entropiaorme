@@ -1,6 +1,8 @@
 ![EntropiaOrme](assets/entropiaorme-github-banner.png)
 
 [![CI](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MikelWL/entropiaorme/badges/coverage.json)](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml)
+[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MikelWL/entropiaorme/badges/mutation.json)](https://github.com/MikelWL/entropiaorme/actions/workflows/nightly.yml)
 
 An analytical desktop tool for Entropia Universe.
 
@@ -34,6 +36,8 @@ pip install -r backend/requirements-dev.txt   # pytest (`just test-backend`) and
 cd frontend
 npm install
 cd ..
+
+pre-commit install   # local hooks mirroring the CI gates (see TESTING.md)
 ```
 
 ### Run

@@ -8,6 +8,7 @@ session is active; otherwise the listener thread is torn down.
 """
 
 import logging
+from typing import Any
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
@@ -38,7 +39,8 @@ class HotbarListener:
         # Hotbar resolver: callable(slot_key: str) -> (name, cost, item_type, reload_s) | None
         self._hotbar_resolver = hotbar_resolver
 
-        self._key_listener = None
+        # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
+        self._key_listener: Any = None
 
         event_bus.subscribe(EVENT_SESSION_STARTED, self._on_session_started)
         event_bus.subscribe(EVENT_SESSION_STOPPED, self._on_session_stopped)
@@ -110,6 +112,7 @@ class HotbarListener:
                 if ch in HOTBAR_SLOT_KEYS and self._hotbar_resolver:
                     # Keep on_press short — do all work off the listener thread.
                     import threading
+
                     threading.Thread(
                         target=self._resolve_hotbar_slot,
                         args=(ch,),
@@ -134,21 +137,27 @@ class HotbarListener:
             name, cost, item_type, reload_s = result
             log.debug("Hotbar slot %s: %r (%s)", slot, name, item_type)
             if item_type == "healing":
-                self._event_bus.publish(EVENT_ACTIVE_HEAL_TOOL_CHANGED, {
-                    "tool_name": name,
-                    "cost_per_use_ped": cost,
-                    "reload_seconds": reload_s,
-                    "source": f"hotbar:{slot}",
-                })
+                self._event_bus.publish(
+                    EVENT_ACTIVE_HEAL_TOOL_CHANGED,
+                    {
+                        "tool_name": name,
+                        "cost_per_use_ped": cost,
+                        "reload_seconds": reload_s,
+                        "source": f"hotbar:{slot}",
+                    },
+                )
             elif item_type == "consumable":
                 # Consumables are one-off actions — do NOT switch the active
                 # weapon in cost tracking.
                 pass
             else:
-                self._event_bus.publish(EVENT_ACTIVE_TOOL_CHANGED, {
-                    "tool_name": name,
-                    "source": f"hotbar:{slot}",
-                })
+                self._event_bus.publish(
+                    EVENT_ACTIVE_TOOL_CHANGED,
+                    {
+                        "tool_name": name,
+                        "source": f"hotbar:{slot}",
+                    },
+                )
 
     def _stop_key_listener(self):
         if self._key_listener:

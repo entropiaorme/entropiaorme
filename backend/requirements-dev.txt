@@ -3,3 +3,47 @@ pyinstaller>=6.20.0
 
 # Test runner for backend/tests/.
 pytest>=8.0.0
+# Parallel test execution.
+pytest-xdist>=3.6.0
+# Randomised test ordering, to surface inter-test coupling.
+pytest-randomly>=3.15.0
+# Branch-coverage measurement and reporting (config in pyproject.toml).
+pytest-cov>=5.0
+# Per-PR diff coverage: holds new / changed lines to a high bar.
+diff-cover>=9.0
+# Static type checker (config in pyproject.toml). Ratchets from a lenient-clean
+# baseline toward strict via a per-module allow-list.
+mypy>=1.13
+# Dependency-advisory scanner: audits the pinned requirements against the PyPA
+# advisory database, in CI and nightly, so a newly published advisory in a
+# runtime or dev dependency fails fast.
+pip-audit>=2.7
+# Property-based testing for the pure-logic core. Pinned exactly: the set of
+# examples a version generates (for a fixed seed) is part of its output, so a
+# floating version can shift which inputs the contract suite exercises and make
+# a gating run's outcome depend on whichever release the runner happened to
+# resolve. A fixed version keeps the local and CI runs reproducible; bump it
+# deliberately, re-running the suite, rather than letting it drift.
+hypothesis==6.153.0
+# API contract testing: drives the FastAPI app against its own OpenAPI schema
+# (no unhandled server errors, responses conform to the declared models). The
+# 4.x line requires pytest>=9 and leaves starlette to FastAPI's own pin, so it
+# stays clear of the advisory-bearing versions older releases dragged in.
+schemathesis>=4.20,<5
+# Mutation testing: the effectiveness metric, run nightly (see nightly.yml).
+# Pinned exactly because the set of mutants a version generates is part of its
+# output: a different release shifts the mutation score and churns the badge, so
+# a fixed version keeps the local campaign, CI, and the published score aligned.
+# The engine is POSIX-only, so the campaign runs on a Linux runner; it is not
+# imported by the app or the rest of the suite, so the Windows dev loop is
+# unaffected.
+mutmut==3.5.0
+
+# Linter + formatter. Pinned exactly: the formatter's output is
+# version-sensitive, so a fixed version keeps local and CI runs identical.
+ruff==0.15.14
+
+# Local pre-commit hooks mirroring the CI gates (config in
+# .pre-commit-config.yaml). Run `pre-commit install` once after creating the
+# virtual environment so the same checks run before every commit.
+pre-commit>=3.8

@@ -40,6 +40,12 @@ from fastapi import APIRouter, HTTPException
 from backend.core.event_bus import EventBus
 from backend.routers import analytics as analytics_router
 from backend.routers import tracking as tracking_router
+from backend.routers.response_models import (
+    AnalyticsOverview,
+    NotableEvent,
+    TrackingLive,
+    TrackingStatus,
+)
 
 log = logging.getLogger(__name__)
 
@@ -102,8 +108,8 @@ def _ensure_svc():
             return _state["svc"]
 
         try:
-            from backend.tracking.tracker import HuntTracker
             from backend.scripts.demo_seed.live_injection import prime_tracker
+            from backend.tracking.tracker import HuntTracker
         except ImportError as exc:
             raise HTTPException(
                 status_code=503,
@@ -111,7 +117,7 @@ def _ensure_svc():
                     "Demo tracker priming not available in this build. "
                     f"Underlying error: {exc}"
                 ),
-            )
+            ) from exc
 
         tracker = HuntTracker(event_bus=EventBus(), db_conn=conn)
         primed = prime_tracker(tracker, "mid_hunt")
@@ -170,7 +176,8 @@ def _ensure_svc():
 
 # ── Analytics ──────────────────────────────────────────────────────────────
 
-@router.get("/analytics/overview")
+
+@router.get("/analytics/overview", response_model=AnalyticsOverview)
 def demo_analytics_overview(period: str = "all"):
     return analytics_router.overview_impl(_ensure_conn(), period)
 
@@ -197,6 +204,7 @@ def demo_list_inventory_items():
 
 # ── Tracking ───────────────────────────────────────────────────────────────
 
+
 @router.get("/tracking/sessions")
 def demo_list_sessions():
     return tracking_router.list_sessions_impl(_ensure_conn())
@@ -207,16 +215,28 @@ def demo_get_session(session_id: str):
     return tracking_router.get_session_impl(_ensure_conn(), session_id)
 
 
-@router.get("/tracking/status")
+@router.get(
+    "/tracking/status",
+    response_model=TrackingStatus,
+    response_model_exclude_unset=True,
+)
 def demo_tracking_status():
     return tracking_router.tracking_status_impl(_ensure_svc())
 
 
-@router.get("/tracking/live")
+@router.get(
+    "/tracking/live",
+    response_model=TrackingLive,
+    response_model_exclude_unset=True,
+)
 def demo_tracking_live():
     return tracking_router.tracking_live_impl(_ensure_svc())
 
 
-@router.get("/tracking/recent-events")
+@router.get(
+    "/tracking/recent-events",
+    response_model=list[NotableEvent],
+    response_model_exclude_unset=True,
+)
 def demo_recent_events():
     return tracking_router.recent_events_impl(_ensure_svc())

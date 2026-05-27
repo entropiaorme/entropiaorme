@@ -13,7 +13,7 @@ from pathlib import Path
 
 from backend.db.app_database import AppDatabase
 from backend.scripts.demo_seed.canonical import CoreSeeder
-from backend.scripts.demo_seed.contract import CanonicalRefs, Seeder, SeedRunReport
+from backend.scripts.demo_seed.contract import Seeder, SeedRunReport
 from backend.tracking.schema import init_tracking_tables
 
 log = logging.getLogger(__name__)
@@ -99,7 +99,8 @@ def run(data_dir: Path, extra_seeders: list[Seeder] | None = None) -> SeedRunRep
 
         while pending:
             ready = [
-                s for s in pending.values()
+                s
+                for s in pending.values()
                 if all(dep in completed for dep in s.depends_on)
             ]
             if not ready:
@@ -139,7 +140,7 @@ def run(data_dir: Path, extra_seeders: list[Seeder] | None = None) -> SeedRunRep
 def format_report(report: SeedRunReport) -> str:
     """Human-readable report."""
     lines = [
-        f"Demo seed run summary",
+        "Demo seed run summary",
         f"  data_dir         : {report.data_dir}",
         f"  demo_now (epoch) : {report.demo_now:.0f}",
         f"  seeders          : {', '.join(report.seeders_run) or '(none)'}",

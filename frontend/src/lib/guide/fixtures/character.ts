@@ -174,4 +174,3 @@ export const characterDemoCodexSkillOptions: CodexSkillOption[] = [
 	{ skillName: 'Combat Reflexes', category: 'cat2', rewardPed: 2.50, currentLevel: 41.10, levelsGained: 7.30, professionWeight: 4, profContribution: 0.0018, hpIncrease: null, hpGain: 0, recommendRank: 4 },
 	{ skillName: 'Wounded', category: 'cat2', rewardPed: 2.50, currentLevel: 37.55, levelsGained: 8.50, professionWeight: 2, profContribution: 0.0008, hpIncrease: null, hpGain: 0, recommendRank: 5 }
 ];
-

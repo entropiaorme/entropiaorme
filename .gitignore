@@ -95,6 +95,13 @@ backend/tests/e2e/corpus/recording_in_progress/
 backend/tests/e2e/corpus/recorded/*
 !backend/tests/e2e/corpus/recorded/placeholder_recorded_hunt/
 
+# OCR equivalence goldens. They encode a real account's recognised skill levels
+# (derived from the local-by-default recorded panels), so they are local-by-
+# default too: regenerated locally with --force-regen and never pushed. The
+# equivalence test skips when the panels are absent, so the public surface and
+# CI stay green without them.
+backend/tests/e2e/test_ocr_equivalence/
+
 # Local dev scratch dirs
 /agents/
 /.venv-*/

@@ -41,8 +41,8 @@ class TestModeConfig:
         ``chat_replay.log``, ``scan_captures/``, ``keystrokes.jsonl``,
         and ``expected/`` golden files.
     fixture_dir:
-        Directory the ``FixtureCapturer`` reads screenshots from.
-        Defaults to ``scenario_dir / "scan_captures"`` when unset.
+        Directory holding the recorded panel PNGs the OCR fixtures are
+        drawn from. Defaults to ``scenario_dir / "scan_captures"`` when unset.
     """
 
     enabled: bool = False

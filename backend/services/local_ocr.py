@@ -30,17 +30,20 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sys
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import onnxruntime as ort
-from rapidfuzz import fuzz, process
+
+from backend.services.skill_panel_parse import (
+    fuzzy_resolve,
+    parse_bar_fill,
+    parse_level,
+    slice_panel_cells,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +53,6 @@ SNAPSHOT_DIR = Path(__file__).resolve().parents[1] / "data" / "snapshot"
 # Sub-threshold cells log a warning but still flow through; user catches
 # misreads in the diff-review accept/reject screen.
 OCR_CONFIDENCE_WARN = 0.85
-
-# Fuzzy lookup tunables — match the bench's TOP_N + WRatio scorer.
-_FUZZ_TOP_N = 3
-_FUZZ_SCORER = fuzz.WRatio
-
-_LEVEL_RE = re.compile(r"\d+")
 
 
 def _bundled_model_path() -> Path:
@@ -263,121 +260,6 @@ def _load_skill_vocab() -> list[str]:
     return [entry["name"] for entry in data]
 
 
-# --- Splicing ----------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class CellCrop:
-    row: int
-    cell: str
-    image: np.ndarray
-
-
-def slice_panel_cells(panel_bgr: np.ndarray, panel_key: str) -> list[CellCrop]:
-    """Slice a captured panel into per-cell BGR crops via the calibrated grid.
-
-    Iterates rows top-to-bottom, then cells in geometry-defined order so
-    callers can group per-row downstream. ``bar`` cells flow through as
-    crops; the caller chooses whether to OCR them or read fill ratio.
-    """
-    geom = _load_geometry(panel_key)
-    n_rows: int = geom["n_rows"]
-    cells: dict[str, dict] = geom["cells"]
-    out: list[CellCrop] = []
-    for r in range(n_rows):
-        for cell_name, cell in cells.items():
-            first = cell["first_y_top"]
-            last = cell["last_y_top"]
-            y_top = (
-                round(first + r * (last - first) / (n_rows - 1))
-                if n_rows > 1
-                else first
-            )
-            y_bot = y_top + cell["height"]
-            crop = panel_bgr[y_top:y_bot, cell["x_left"] : cell["x_right"]]
-            out.append(CellCrop(row=r, cell=cell_name, image=crop))
-    return out
-
-
-# --- Post-process rules ------------------------------------------------------
-
-
-def _norm_name(s: str) -> str:
-    """Whitespace + case insensitive name key for tolerant matching."""
-    return re.sub(r"\s+", "", s or "").lower()
-
-
-def parse_level(text: str | None) -> int | None:
-    if not text:
-        return None
-    m = _LEVEL_RE.search(text)
-    return int(m.group()) if m else None
-
-
-def parse_bar_fill(crop_bgr: np.ndarray) -> float:
-    """Estimate fractional fill in [0, 1) of a skill bar crop.
-
-    Per-column mean luminance, threshold at midpoint of column-mean
-    range, rightmost bright column / width. Resolution ~1% on a 95-px
-    bar. A reading of 1.0 is impossible mid-bar (the in-game bar would
-    have just levelled up); it always means the contrast-low fallback
-    misread an empty bar, so it flips to 0.0.
-    """
-    if crop_bgr is None or crop_bgr.size == 0:
-        return 0.0
-    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-    col_mean = gray.mean(axis=0)
-    lo, hi = float(col_mean.min()), float(col_mean.max())
-    width = gray.shape[1]
-    if width <= 0:
-        return 0.0
-    if (hi - lo) < 15:
-        # Low contrast: no detectable fill edge. Empty bars land here
-        # and would otherwise hit the 1.0 -> 0.0 flip below; just bail
-        # to 0.0 directly.
-        return 0.0
-    threshold = (lo + hi) / 2.0
-    bright_indices = np.where(col_mean >= threshold)[0]
-    if bright_indices.size == 0:
-        return 0.0
-    rightmost = int(bright_indices.max())
-    fill = (rightmost + 1) / width
-    if fill >= 1.0:
-        return 0.0
-    return fill
-
-
-def fuzzy_resolve(
-    ocr_text: str, vocab: list[str]
-) -> tuple[str | None, float, list[tuple[str, float]]]:
-    """Resolve an OCR name to its canonical vocab entry.
-
-    Tries (in order):
-    1. Exact match.
-    2. Case + whitespace insensitive match (covers ``whip`` vs ``Whip``,
-       ``FoodTechnology`` vs ``Food Technology``).
-    3. rapidfuzz WRatio top-1 against the vocab.
-
-    Returns ``(canonical_or_None, top1_score, top_n_candidates)``. The
-    canonical is what gets persisted; the OCR text is a lookup key, not
-    display text.
-    """
-    cleaned = (ocr_text or "").strip()
-    if not cleaned:
-        return None, 0.0, []
-    if cleaned in vocab:
-        return cleaned, 100.0, [(cleaned, 100.0)]
-    norm_query = _norm_name(cleaned)
-    for entry in vocab:
-        if _norm_name(entry) == norm_query:
-            return entry, 100.0, [(entry, 100.0)]
-    results = process.extract(cleaned, vocab, scorer=_FUZZ_SCORER, limit=_FUZZ_TOP_N)
-    cands = [(canon, float(score)) for canon, score, _ in results]
-    if not cands:
-        return None, 0.0, []
-    return cands[0][0], cands[0][1], cands
-
-
 # --- Per-panel readers -------------------------------------------------------
 
 
@@ -407,7 +289,7 @@ def read_skill_panel(panel_bgr: np.ndarray) -> list[dict[str, Any]]:
     if engine is None:
         raise RuntimeError("Local OCR engine unavailable; cannot read skill panel.")
     vocab = _load_skill_vocab()
-    crops = slice_panel_cells(panel_bgr, "skill")
+    crops = slice_panel_cells(panel_bgr, _load_geometry("skill"))
 
     rows: dict[int, dict[str, Any]] = {}
     for crop in crops:
@@ -434,19 +316,3 @@ def read_skill_panel(panel_bgr: np.ndarray) -> list[dict[str, Any]]:
         level = float(int_level) + row["_bar_fill"] if int_level is not None else None
         out.append({"name": row["name"], "level": level})
     return out
-
-
-# --- PNG → ndarray helper for the existing capture surface -------------------
-
-
-def decode_panel_png(png_bytes: bytes) -> np.ndarray:
-    """Decode a PNG byte-string captured by mss into a BGR ndarray.
-
-    The manual scan flows store captures as PNG bytes for preview /
-    persistence; OCR decodes lazily when ``process`` is invoked.
-    """
-    arr = np.frombuffer(png_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        raise ValueError("Failed to decode panel PNG bytes")
-    return img

@@ -42,3 +42,8 @@ mutmut==3.5.0
 # Linter + formatter. Pinned exactly: the formatter's output is
 # version-sensitive, so a fixed version keeps local and CI runs identical.
 ruff==0.15.14
+
+# Local pre-commit hooks mirroring the CI gates (config in
+# .pre-commit-config.yaml). Run `pre-commit install` once after creating the
+# virtual environment so the same checks run before every commit.
+pre-commit>=3.8

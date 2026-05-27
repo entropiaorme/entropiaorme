@@ -384,4 +384,3 @@ export interface HpOptimizerResult {
 	skills: HpOptimizerSkill[];
 	attributes: HpOptimizerAttribute[];
 }
-

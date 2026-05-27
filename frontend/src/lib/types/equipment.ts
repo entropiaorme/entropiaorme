@@ -72,4 +72,3 @@ export interface HealingTool {
 	costPerHeal: Pec;
 	isLimited: boolean;
 }
-

@@ -24,7 +24,7 @@ from rapidfuzz import fuzz, process
 
 _LEVEL_RE = re.compile(r"\d+")
 
-# Fuzzy lookup tunables: match the bench's TOP_N + WRatio scorer.
+# Fuzzy lookup tunables: the top-N candidates to return and the WRatio scorer.
 _FUZZ_TOP_N = 3
 _FUZZ_SCORER = fuzz.WRatio
 

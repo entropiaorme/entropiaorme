@@ -16,7 +16,6 @@ from backend.core.event_bus import EventBus
 from backend.testing.diff import diff_fingerprint_files, diff_snapshot_dicts
 from backend.testing.fingerprint import FingerprintRecorder, Normalizer
 
-
 # --- Normalizer ----------------------------------------------------------
 
 
@@ -175,8 +174,7 @@ def test_recorder_serialise_emits_jsonl_with_sorted_keys() -> None:
     serialised = recorder.serialize()
     # Single line ending with newline, keys lexically sorted at JSON level.
     assert serialised == (
-        '{"payload": {"amount": 10.5, "type": "damage_dealt"}, '
-        '"topic": "combat"}\n'
+        '{"payload": {"amount": 10.5, "type": "damage_dealt"}, "topic": "combat"}\n'
     )
 
 
@@ -236,10 +234,7 @@ def test_diff_fingerprint_matches_returns_none() -> None:
 
 def test_diff_fingerprint_length_mismatch_surfaces_extras() -> None:
     expected = '{"payload": {}, "topic": "a"}\n'
-    actual = (
-        '{"payload": {}, "topic": "a"}\n'
-        '{"payload": {}, "topic": "b"}\n'
-    )
+    actual = '{"payload": {}, "topic": "a"}\n{"payload": {}, "topic": "b"}\n'
     msg = diff_fingerprint_files(expected, actual)
     assert msg is not None
     assert "length mismatch" in msg

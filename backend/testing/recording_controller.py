@@ -99,7 +99,9 @@ class RecordingController:
         """Begin a recording: clear stale staging, install taps, start capture."""
         with self._lock:
             if self._state != "idle":
-                raise RecordingStateError(f"Cannot start: recording state is {self._state!r}")
+                raise RecordingStateError(
+                    f"Cannot start: recording state is {self._state!r}"
+                )
             self._clear_in_progress()
             self._recorder = Recorder(self._in_progress_dir)
             self._install_taps(self._recorder)
@@ -124,7 +126,9 @@ class RecordingController:
         scenario_name = _validate_slug(metadata.get("scenario_name", ""))
         with self._lock:
             if self._state != "recording":
-                raise RecordingStateError(f"Cannot stop: recording state is {self._state!r}")
+                raise RecordingStateError(
+                    f"Cannot stop: recording state is {self._state!r}"
+                )
             target = self._recorded_dir / scenario_name
             if target.exists():
                 raise RecordingStateError(f"Scenario {scenario_name!r} already exists")

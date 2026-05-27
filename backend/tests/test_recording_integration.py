@@ -67,7 +67,7 @@ def restore_services():
 def test_recording_round_trip_over_http(tmp_path, restore_services):
     chatlog = _FakeChatlog()
     controller = RecordingController(
-        chatlog_watcher=chatlog,
+        chatlog_watcher=chatlog,  # type: ignore[arg-type]
         skill_scan_manual=_FakeScan(),
         repair_ocr=_FakeScan(),
         hotbar_listener=_FakeKeys(),
@@ -76,7 +76,7 @@ def test_recording_round_trip_over_http(tmp_path, restore_services):
     )
     config = SimpleNamespace(developer_mode_enabled=True)
     deps.set_services(
-        SimpleNamespace(
+        SimpleNamespace(  # type: ignore[arg-type]
             config_service=SimpleNamespace(get=lambda: config),
             recording_controller=controller,
         )
@@ -114,7 +114,9 @@ def test_recording_round_trip_over_http(tmp_path, restore_services):
     assert stopped.json()["determinism"] == "ok"
 
     target = tmp_path / "corpus" / "recorded" / "smoke_capture"
-    assert (target / "chat_replay.log").read_text(encoding="utf-8") == "".join(CHAT_LINES)
+    assert (target / "chat_replay.log").read_text(encoding="utf-8") == "".join(
+        CHAT_LINES
+    )
     assert (target / "expected" / "fingerprint.jsonl").exists()
     assert (target / "expected" / "db_state.json").exists()
     assert (target / "metadata.yaml").exists()

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable
+from collections.abc import Callable
 
 from backend.services.scan_presets import repair_region
 

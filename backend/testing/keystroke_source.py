@@ -13,10 +13,10 @@ follows in the round that extracts the seam from the listeners.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Literal
-
+from typing import Literal
 
 KeystrokeKind = Literal["press", "release"]
 

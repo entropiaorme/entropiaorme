@@ -23,6 +23,8 @@ from pathlib import Path
 
 from backend.testing.db_snapshot import (
     capture as capture_snapshot,
+)
+from backend.testing.db_snapshot import (
     serialize as serialize_snapshot,
 )
 from backend.testing.diff import diff_fingerprint_files, diff_snapshot_dicts
@@ -121,9 +123,7 @@ class GoldenSet:
             )
 
         expected_fingerprint = self.fingerprint_path.read_text(encoding="utf-8")
-        expected_snapshot = json.loads(
-            self.snapshot_path.read_text(encoding="utf-8")
-        )
+        expected_snapshot = json.loads(self.snapshot_path.read_text(encoding="utf-8"))
 
         fingerprint_diff = diff_fingerprint_files(
             expected_fingerprint, actual_fingerprint
@@ -156,9 +156,7 @@ class GoldenSet:
             else {}
         )
 
-        fingerprint_diff = diff_fingerprint_files(
-            prior_fingerprint, fingerprint_text
-        )
+        fingerprint_diff = diff_fingerprint_files(prior_fingerprint, fingerprint_text)
         snapshot_diff = diff_snapshot_dicts(prior_snapshot, snapshot)
 
         if fingerprint_diff or snapshot_diff:
@@ -181,6 +179,4 @@ class GoldenSet:
 
         self.expected_dir.mkdir(parents=True, exist_ok=True)
         self.fingerprint_path.write_text(fingerprint_text, encoding="utf-8")
-        self.snapshot_path.write_text(
-            serialize_snapshot(snapshot), encoding="utf-8"
-        )
+        self.snapshot_path.write_text(serialize_snapshot(snapshot), encoding="utf-8")

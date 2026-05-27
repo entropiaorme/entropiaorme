@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
@@ -77,7 +77,11 @@ def calibrate(req: CalibrateRequest):
 @router.get("/recommend")
 def recommend(
     species_name: str,
-    rank: int,
+    # Codex ranks run 1..25. Out-of-range values index past the reward and cost
+    # tables (a negative rank wraps to the wrong row, zero and over-range values
+    # overflow), so constrain the input to its valid domain and reject anything
+    # else with a 422 rather than letting it reach those lookups.
+    rank: int = Query(..., ge=1, le=25),
     profession: str | None = None,
     target: Literal["profession", "hp"] = "profession",
 ):

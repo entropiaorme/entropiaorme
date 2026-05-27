@@ -20,7 +20,10 @@ from backend.tracking.tracker import HuntTracker
 def tracker():
     bus = EventBus()
     conn = sqlite3.connect(":memory:", check_same_thread=False)
-    return HuntTracker(bus, conn)
+    try:
+        yield HuntTracker(bus, conn)
+    finally:
+        conn.close()
 
 
 def test_stop_tracking_returns_session_summary(tracker, monkeypatch):
@@ -47,3 +50,16 @@ def test_stop_tracking_without_active_session_raises_409(tracker, monkeypatch):
         tracking.stop_tracking()
 
     assert exc.value.status_code == 409
+
+
+def test_stop_tracking_raises_500_when_session_unexpectedly_missing(monkeypatch):
+    """The post-`is_tracking` guard surfaces a clean 500 if the tracker reports
+    active but yields no session (an invariant breach), rather than an
+    AttributeError on the None session."""
+    fake = SimpleNamespace(is_tracking=True, stop_session=lambda: None)
+    monkeypatch.setattr(tracking, "get_services", lambda: SimpleNamespace(tracker=fake))
+
+    with pytest.raises(HTTPException) as exc:
+        tracking.stop_tracking()
+
+    assert exc.value.status_code == 500

@@ -43,6 +43,7 @@ _MODULE_TIERS = {
     "test_cost_engine": "fast",
     "test_cost_engine_properties": "fast",
     "test_loot_filter": "fast",
+    "test_mob_lookup_service": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
     "test_tool_inference": "fast",
@@ -53,10 +54,13 @@ _MODULE_TIERS = {
     "test_character_endpoints": "standard",
     "test_chatlog_watcher": "standard",
     "test_codex_service": "standard",
+    "test_config_service": "standard",
+    "test_equipment_endpoints": "standard",
     "test_quests": "standard",
     "test_skill_tracker": "standard",
     "test_tracker_integration": "standard",
     "test_tracking_endpoints": "standard",
+    "test_trifecta_service": "standard",
     "test_tracker_stateful": "standard",
 }
 

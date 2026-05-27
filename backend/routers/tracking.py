@@ -217,7 +217,11 @@ def stop_tracking():
         raise HTTPException(status_code=409, detail="No active session")
 
     session = svc.tracker.stop_session()
-    assert session is not None  # guaranteed by the is_tracking check above
+    if session is None:
+        # Guaranteed non-None by the is_tracking check above; guard explicitly
+        # rather than assert (asserts are stripped under -O) so a broken
+        # invariant surfaces as a clean error, not an AttributeError.
+        raise HTTPException(status_code=500, detail="Failed to stop the active session")
     return {
         "session_id": session.id,
         "started_at": session.start_time.isoformat(),

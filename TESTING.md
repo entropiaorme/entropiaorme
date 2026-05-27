@@ -45,6 +45,8 @@ Branch coverage is measured with `pytest-cov` (configuration under `[tool.covera
 
 The run must hold a total branch-coverage floor (currently 44%). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
 
+The API contract suite contributes to coverage as well, since it exercises the HTTP router surface. It runs in deterministic mode against a pinned generator, so its contribution is reproducible; in CI it runs as a separate step whose coverage is accumulated into the same report (`coverage` with `--cov-append`), and both coverage passes pin the test order so the measured figure does not vary run to run. The single local command above already covers it (the contract tier is part of `not full`).
+
 On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time.
 
 ### Typing

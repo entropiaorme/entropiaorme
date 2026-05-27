@@ -50,17 +50,32 @@ jobs:
         if: matrix.python-version == '3.11'
         # Everything except the device / slow `full` tier and the contract tier.
         run: python -m pytest -m "not full and not contract"
-      # Coverage is measured on one leg only (3.14) to avoid double-counting
-      # and racing coverage files; the floor lives in pyproject.toml.
+      # Coverage is measured on one leg only (3.14) to avoid double-counting and
+      # racing coverage files; the floor lives in pyproject.toml. Coverage data
+      # is accumulated here and across the contract run below, then reported once
+      # (see "Combine and report coverage"), so the report and the diff-coverage
+      # gate credit the router surface the contract suite exercises. Test order
+      # is pinned on the coverage legs so the measured figure is reproducible run
+      # to run; the 3.11 leg keeps randomised order to surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
-        run: python -m pytest -m "not full and not contract" --cov=backend --cov-branch --cov-report=xml --cov-report=term-missing
+        run: python -m pytest -m "not full and not contract" -p no:randomly --cov=backend --cov-branch --cov-report=
       # API contract tests (schemathesis from_asgi) drive the read surface
       # against the app's own OpenAPI schema. Run on the coverage leg only so the
-      # slower schemathesis pass executes once per CI run.
+      # slower schemathesis pass executes once per CI run; its coverage is
+      # appended to the run above. schemathesis runs in deterministic mode against
+      # a pinned Hypothesis, with order pinned, so this contribution is stable.
       - name: Run API contract tests
         if: matrix.python-version == '3.14'
-        run: python -m pytest -m contract
+        run: python -m pytest -m contract -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
+      # Report once over the combined data: enforce the total floor and write the
+      # XML the diff-coverage gate and the badge step consume.
+      - name: Combine and report coverage
+        if: matrix.python-version == '3.14'
+        shell: bash
+        run: |
+          python -m coverage report --show-missing
+          python -m coverage xml
       # New / changed lines on a PR must clear the diff-coverage floor. Compares
       # against the PR base, so it works for the trunk-landing PR too.
       - name: Diff coverage

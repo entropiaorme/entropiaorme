@@ -36,6 +36,8 @@ pip install -r backend/requirements-dev.txt   # pytest (`just test-backend`) and
 cd frontend
 npm install
 cd ..
+
+pre-commit install   # local hooks mirroring the CI gates (see TESTING.md)
 ```
 
 ### Run

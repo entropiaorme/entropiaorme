@@ -152,6 +152,27 @@ jobs:
       - name: Audit dependencies
         run: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
 
+  pre-commit:
+    name: Pre-commit hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install "pre-commit>=3.8"
+      # The mypy and fast-test hooks run against the project virtual
+      # environment; the dedicated typing and backend jobs already enforce those
+      # checks, so they are skipped here to keep this job to the hooks pre-commit
+      # manages itself (ruff and the hygiene hooks) without installing the full
+      # dependency tree a second time.
+      - name: Run pre-commit hooks
+        env:
+          SKIP: mypy,pytest-fast
+        run: pre-commit run --all-files --show-diff-on-failure
+
   frontend:
     name: Frontend (build + check)
     runs-on: ubuntu-latest

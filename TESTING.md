@@ -137,17 +137,47 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 ## Continuous integration
 
-Every pull request and push to `main` runs five jobs (`.github/workflows/ci.yml`):
+Every pull request and push to `main` runs six jobs (`.github/workflows/ci.yml`):
 
 - **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, rather than on both legs).
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
+- **Pre-commit hooks**: `pre-commit run --all-files`, validating the hook configuration the local development loop uses (see "Local checks" below).
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
 
 A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request) and runs the mutation campaign, publishing the mutation score and refreshing the coverage figure as the badges at the top of the README.
+
+## Local checks (pre-commit)
+
+A [pre-commit](https://pre-commit.com/) configuration (`.pre-commit-config.yaml`) mirrors the CI gates into the local development loop, so the same failures surface before a push rather than after. Install the git hook once, after creating the virtual environment:
+
+```bash
+pre-commit install
+```
+
+The hooks then run on each commit. To run them across the whole tree on demand:
+
+```bash
+pre-commit run --all-files
+```
+
+The configured hooks are:
+
+- **ruff** (lint with autofix) and **ruff-format**, pinned to the same ruff version as the lint job, reading the same configuration.
+- **mypy** over `backend`, run against the project virtual environment so it resolves dependencies exactly as the typing job does.
+- the **fast test tier** (`pytest -m fast`), the quick pure-logic subset.
+- general hygiene: end-of-file and trailing-whitespace fixers, YAML and TOML validity, merge-conflict markers, and a mixed-line-ending check (line-ending policy itself is set per file type in `.gitattributes`).
+
+The dependency audit is slower, so it is reserved for the manual stage rather than every commit; run it explicitly when checking dependencies:
+
+```bash
+pre-commit run --hook-stage manual pip-audit
+```
+
+The mypy and test hooks run against the active virtual environment; the lint and hygiene hooks run in environments pre-commit manages itself, so the CI `pre-commit` job exercises those without reinstalling the dependency tree the typing and backend jobs already cover.
 
 ## Test layout
 

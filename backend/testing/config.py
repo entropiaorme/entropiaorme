@@ -45,6 +45,10 @@ class TestModeConfig:
         drawn from. Defaults to ``scenario_dir / "scan_captures"`` when unset.
     """
 
+    # Not a pytest test class despite the ``Test`` name prefix; the attribute
+    # is unannotated so it stays a plain class flag rather than a dataclass field.
+    __test__ = False
+
     enabled: bool = False
     chatlog_path: Path | None = None
     scenario_dir: Path | None = None

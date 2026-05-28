@@ -1,0 +1,351 @@
+"""Walk over the write surface of the HTTP API.
+
+The contract suite is GET-only, so the routers' mutation handlers (create
+/ update / delete and their validation branches) are otherwise unexercised
+end to end. Each test boots the full app and drives a create-read-mutate
+-delete lifecycle through the live HTTP surface, so the adapter paths, the
+service calls behind them, and the obvious validation errors all execute
+against a real database.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from backend.dependencies import get_services
+from backend.testing.replay import replay_scenario, wait_for_drain
+
+E2E_DIR = Path(__file__).parent
+SCENARIO = E2E_DIR / "corpus" / "scripted" / "multi_mob_hunt_loot_grouping"
+
+
+def test_settings_mutations(e2e_http_pipeline):
+    """PATCH / PUT / reset settings, including the validation branches."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    # State-changing methods require an allowed Origin (the app's origin guard);
+    # the Tauri webview always sends one, so mirror it here.
+    client.headers["Origin"] = "tauri://localhost"
+
+    # No-op patch is rejected.
+    assert client.patch("/api/settings", json={}).status_code == 400
+
+    # A field-level update round-trips.
+    patched = client.patch(
+        "/api/settings",
+        json={
+            "player_name": "Walker",
+            "hotbar_hooks_enabled": True,
+            "repair_ocr_enabled": True,
+            "mob_tracking_mode": "tag",
+            "mob_tracking_tag": "Atrox",
+            "loot_filter_blacklist": ["Shrapnel"],
+        },
+    )
+    assert patched.status_code == 200
+    assert patched.json()["gameConnection"]["playerName"] == "Walker"
+
+    # Unknown tracking mode is a 400.
+    assert (
+        client.patch(
+            "/api/settings", json={"mob_tracking_mode": "nonsense"}
+        ).status_code
+        == 400
+    )
+    # A chat.log path that does not resolve is a 400.
+    assert (
+        client.patch(
+            "/api/settings", json={"chatlog_path": "/nope/not-a-chat.log"}
+        ).status_code
+        == 400
+    )
+
+    # Overlay position round-trips.
+    assert (
+        client.put(
+            "/api/settings/overlay-position", json={"x": 12, "y": 34}
+        ).status_code
+        == 200
+    )
+    pos = client.get("/api/settings/overlay-position")
+    assert pos.json() == {"x": 12, "y": 34}
+
+    # Reset returns the rebuilt settings shape.
+    assert client.post("/api/settings/reset").status_code == 200
+
+
+def test_quest_and_playlist_lifecycle(e2e_http_pipeline):
+    """Create, read, update, run, and delete a quest and a playlist."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    # State-changing methods require an allowed Origin (the app's origin guard);
+    # the Tauri webview always sends one, so mirror it here.
+    client.headers["Origin"] = "tauri://localhost"
+
+    created = client.post(
+        "/api/quests",
+        json={"name": "Walker Hunt", "mobs": ["Atrox"], "reward_ped": 1.5},
+    )
+    assert created.status_code == 200
+    quest_id = created.json()["id"]
+
+    assert client.get(f"/api/quests/{quest_id}").status_code == 200
+    assert client.get("/api/quests/99999").status_code == 404
+
+    assert (
+        client.put(
+            f"/api/quests/{quest_id}", json={"notes": "edited", "cooldown_hours": 24}
+        ).status_code
+        == 200
+    )
+
+    assert client.post(f"/api/quests/{quest_id}/start").status_code == 200
+    assert client.post(f"/api/quests/{quest_id}/complete").status_code == 200
+    assert (
+        client.post(
+            f"/api/quests/{quest_id}/cancel", json={"undo_reward": True}
+        ).status_code
+        == 200
+    )
+
+    playlist = client.post(
+        "/api/quests/playlists",
+        json={"name": "Walker Playlist", "quest_ids": [quest_id]},
+    )
+    assert playlist.status_code == 200
+    playlist_id = playlist.json()["id"]
+    assert (
+        client.put(
+            f"/api/quests/playlists/{playlist_id}", json={"estimated_minutes": 45}
+        ).status_code
+        == 200
+    )
+    assert client.get("/api/quests/playlists/analytics").status_code == 200
+    assert client.delete(f"/api/quests/playlists/{playlist_id}").status_code in (
+        200,
+        204,
+    )
+    assert client.delete(f"/api/quests/{quest_id}").status_code in (200, 204)
+
+
+def test_equipment_library_crud(e2e_http_pipeline):
+    """Add a custom consumable, read its detail, edit it, then remove it."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    # State-changing methods require an allowed Origin (the app's origin guard);
+    # the Tauri webview always sends one, so mirror it here.
+    client.headers["Origin"] = "tauri://localhost"
+
+    added = client.post(
+        "/api/equipment/library",
+        json={"type": "consumable", "name": "Walker Token"},
+    )
+    assert added.status_code == 200
+    item_id = added.json()["id"]
+
+    assert client.get(f"/api/equipment/library/{item_id}/detail").status_code == 200
+    assert (
+        client.put(
+            f"/api/equipment/library/{item_id}",
+            json={"type": "consumable", "name": "Walker Token v2"},
+        ).status_code
+        == 200
+    )
+    assert client.delete(f"/api/equipment/library/{item_id}").status_code in (200, 204)
+
+
+def test_analytics_ledger_and_inventory(e2e_http_pipeline):
+    """Create and remove ledger entries, presets, and inventory items."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    # State-changing methods require an allowed Origin (the app's origin guard);
+    # the Tauri webview always sends one, so mirror it here.
+    client.headers["Origin"] = "tauri://localhost"
+
+    entry = client.post(
+        "/api/analytics/ledger",
+        json={
+            "date": "2026-05-01",
+            "type": "expense",
+            "description": "Ammo",
+            "amount": 12.5,
+            "tag": "ammo",
+        },
+    )
+    assert entry.status_code == 200
+    entry_id = entry.json()["id"]
+    assert client.delete(f"/api/analytics/ledger/{entry_id}").status_code in (200, 204)
+
+    preset = client.post(
+        "/api/analytics/ledger/presets",
+        json={
+            "name": "Daily ammo",
+            "type": "expense",
+            "description": "Ammo",
+            "amount": 10.0,
+            "tag": "ammo",
+        },
+    )
+    assert preset.status_code == 200
+    preset_id = preset.json()["id"]
+    assert client.delete(f"/api/analytics/ledger/presets/{preset_id}").status_code in (
+        200,
+        204,
+    )
+
+    item = client.post(
+        "/api/analytics/inventory",
+        json={"name": "Loot Stack", "tt_value": 5.0, "markup_paid": 1.0},
+    )
+    assert item.status_code == 200
+    item_id = item.json()["id"]
+    assert (
+        client.patch(
+            f"/api/analytics/inventory/{item_id}", json={"tt_value": 6.0}
+        ).status_code
+        == 200
+    )
+    assert client.post(
+        f"/api/analytics/inventory/{item_id}/sell", json={"sale_price": 7.5}
+    ).status_code in (200, 204)
+    # The sell may have consumed the row; deletion is then a clean 404.
+    assert client.delete(f"/api/analytics/inventory/{item_id}").status_code in (
+        200,
+        204,
+        404,
+    )
+
+
+def test_codex_mutations(e2e_http_pipeline):
+    """Drive calibrate / claim / meta-claim against a real species."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    # State-changing methods require an allowed Origin (the app's origin guard);
+    # the Tauri webview always sends one, so mirror it here.
+    client.headers["Origin"] = "tauri://localhost"
+
+    species = client.get("/api/codex/species")
+    assert species.status_code == 200
+    names = [s.get("name") for s in species.json() if isinstance(s, dict)]
+    if names:
+        name = names[0]
+        # Calibrate is a pure state write; claim needs a valid skill, so a
+        # bad skill is allowed to surface as a handled 4xx rather than a 500.
+        assert (
+            client.post(
+                "/api/codex/calibrate", json={"species_name": name, "rank": 1}
+            ).status_code
+            < 500
+        )
+        assert (
+            client.post(
+                "/api/codex/claim",
+                json={"species_name": name, "rank": 1, "skill_name": "Courage"},
+            ).status_code
+            < 500
+        )
+
+    # The meta attribute claim drives the repeatable-reward path.
+    assert (
+        client.post(
+            "/api/codex/meta/claim", json={"attribute_name": "Health"}
+        ).status_code
+        < 500
+    )
+
+
+def test_tracking_session_mutations(e2e_http_pipeline):
+    """Drive the per-session edit endpoints against a recorded session.
+
+    Exercises the rename / restore / armour-cost / loot-toggle / quest-link
+    / repair-scan / delete surface, which runs the tracking router's session
+    handlers and the tracker mutators behind them.
+    """
+    client, chatlog, watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    tracker = get_services().tracker
+    session = tracker.start_session()
+    replay_scenario(SCENARIO, chatlog)
+    wait_for_drain(watcher, chatlog)
+    tracker.stop_session()
+    session_id = session.id
+
+    detail = client.get(f"/api/tracking/session/{session_id}").json()
+    mob_name = detail["mobBreakdown"][0]["currentName"]
+    loot_name = next(
+        (item["name"] for item in detail["lootBreakdown"] if " " not in item["name"]),
+        "Shrapnel",
+    )
+
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/rename-mob",
+            json={"fromMobName": mob_name, "toMobName": "Atrox Young"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/restore-mob",
+            json={"currentMobName": "Atrox Young"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/armour-cost", json={"cost": 1.5}
+        ).status_code
+        == 200
+    )
+
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/loot-item/{loot_name}/deactivate"
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/loot-item/{loot_name}/activate"
+        ).status_code
+        == 200
+    )
+
+    # Valid body reaches the handler; the decision branch runs regardless of
+    # whether a suggestion exists to dismiss.
+    assert (
+        client.post(
+            f"/api/tracking/session/{session_id}/quest-link", json={"action": "dismiss"}
+        ).status_code
+        < 500
+    )
+    # Repair OCR is disabled by default, so this exercises the disabled guard
+    # without touching a capture device.
+    assert (
+        client.post(f"/api/tracking/session/{session_id}/repair-scan").status_code
+        == 400
+    )
+
+    assert client.delete(f"/api/tracking/session/{session_id}").status_code in (
+        200,
+        204,
+    )
+
+
+def test_tracking_live_mob_controls(e2e_http_pipeline):
+    """Exercise the live mob-lock / tag-lock / release controls.
+
+    These check tracking state internally, so a valid request body reaches
+    the handler whether or not a session is live; the bar is that the
+    handlers run without a server error.
+    """
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    assert (
+        client.post("/api/tracking/tag-lock", json={"tag": "Atrox"}).status_code < 500
+    )
+    assert (
+        client.post(
+            "/api/tracking/manual-mob-lock",
+            json={"species": "Atrox", "maturity": "Young"},
+        ).status_code
+        < 500
+    )
+    assert client.post("/api/tracking/release-mob").status_code < 500

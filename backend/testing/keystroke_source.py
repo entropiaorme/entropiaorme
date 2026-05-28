@@ -1,23 +1,26 @@
-"""Keystroke source abstraction for harness tests.
+"""Keystroke source abstraction.
 
-Production listeners (``HotbarListener``, ``SpacebarCaptureListener``)
-currently call into ``pynput`` directly. A ``KeystrokeSource`` interface
-that those listeners depend on is extracted as that surface is built
-out; tests inject a ``MockKeystrokeSource`` and dispatch synthetic key
-events.
+``HotbarListener`` and ``SpacebarCaptureListener`` consume a
+``KeystrokeSource`` rather than calling ``pynput`` themselves;
+production wires in ``PynputKeystrokeSource``, tests inject
+``MockKeystrokeSource``.
 
-This lands the interface and the mock so scenarios can be built against
-a stable shape. The production wire-through follows when the seam is
-extracted from the listeners.
+The source also enforces the input-listening minimisation policy
+structurally: a constructor-passed ``key_allowlist`` filters at the
+OS-hook boundary so out-of-scope keystrokes never enter the
+application's event stream in the first place.
 """
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+log = logging.getLogger(__name__)
 
 KeystrokeKind = Literal["press", "release"]
 
@@ -60,8 +63,15 @@ class KeystrokeSource(ABC):
         """Register ``callback`` to receive every dispatched event."""
 
     @abstractmethod
-    def start(self) -> None:
-        """Begin delivering events to subscribers."""
+    def start(self) -> bool:
+        """Begin delivering events to subscribers.
+
+        Returns ``True`` if the source is now actively listening (or was
+        already listening), ``False`` if the underlying mechanism is
+        unavailable (e.g. ``pynput`` not installed) and the source
+        remains inert. Callers should treat ``False`` as "no events
+        will arrive" and propagate that into their own running state.
+        """
 
     @abstractmethod
     def stop(self) -> None:
@@ -87,9 +97,14 @@ class MockKeystrokeSource(KeystrokeSource):
         """Append ``callback`` to the dispatch list."""
         self._callbacks.append(callback)
 
-    def start(self) -> None:
-        """Mark the source as running so injected events propagate."""
+    def start(self) -> bool:
+        """Mark the source as running so injected events propagate.
+
+        Always returns ``True``; the mock has no external dependency
+        that could leave it inert.
+        """
         self._running = True
+        return True
 
     def stop(self) -> None:
         """Mark the source as halted; subsequent ``inject()`` calls
@@ -113,3 +128,107 @@ class MockKeystrokeSource(KeystrokeSource):
         event = KeystrokeEvent(key=key, timestamp=timestamp, kind=kind)
         for callback in self._callbacks:
             callback(event)
+
+
+def _pynput_key_name(key: Any) -> str | None:
+    """Normalise a ``pynput`` key object to the source's string vocabulary.
+
+    Alphanumerics return ``key.char`` (``"1"``, ``"a"``); named keys return
+    ``key.name`` (``"space"``, ``"f1"``). Returns ``None`` when the key has
+    neither attribute (an unmappable virtual key).
+    """
+    char = getattr(key, "char", None)
+    if isinstance(char, str) and char:
+        return char
+    name = getattr(key, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    return None
+
+
+class PynputKeystrokeSource(KeystrokeSource):
+    """Production keystroke source backed by ``pynput``.
+
+    An optional ``key_allowlist`` filters at the OS-hook boundary so
+    only keys named in the set ever enter the dispatch path. This is
+    how the input-listening minimisation policy is enforced structurally
+    rather than each consumer trusting itself to filter after the fact.
+
+    ``start()`` is idempotent (no-op when already running); ``stop()`` is
+    likewise. ``ImportError`` on ``pynput`` (e.g. headless CI) leaves
+    the source inert with a single warning; this matches the prior
+    listener behaviour where missing ``pynput`` disabled the feature
+    without crashing the app.
+    """
+
+    def __init__(self, key_allowlist: set[str] | None = None) -> None:
+        """Build an idle source. ``key_allowlist=None`` admits every key."""
+        self._allowlist: set[str] | None = (
+            set(key_allowlist) if key_allowlist is not None else None
+        )
+        self._callbacks: list[KeystrokeCallback] = []
+        # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
+        self._listener: Any = None
+
+    def subscribe(self, callback: KeystrokeCallback) -> None:
+        """Append ``callback`` to the dispatch list."""
+        self._callbacks.append(callback)
+
+    def start(self) -> bool:
+        """Begin observing the OS keyboard hook; idempotent.
+
+        Allow-list filtering applies inside the ``pynput`` callbacks so
+        non-admitted keys never reach a subscriber. ``ImportError`` is
+        logged at WARNING and the source stays inert (legacy behaviour
+        preserved from the pre-seam listeners); the return value
+        distinguishes "now listening" (``True``) from "stayed inert"
+        (``False``) so callers can avoid claiming to be running when
+        no listener was attached.
+        """
+        if self._listener is not None:
+            return True
+        try:
+            from pynput import keyboard
+        except ImportError:
+            log.warning(
+                "pynput not installed; keystroke source inert. "
+                "Install with: pip install pynput"
+            )
+            return False
+
+        def on_press(key: Any) -> None:
+            self._dispatch(key, "press")
+
+        def on_release(key: Any) -> None:
+            self._dispatch(key, "release")
+
+        listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+        listener.daemon = True
+        listener.start()
+        self._listener = listener
+        return True
+
+    def stop(self) -> None:
+        """Halt OS-hook observation; subscribers remain registered."""
+        if self._listener is None:
+            return
+        self._listener.stop()
+        self._listener = None
+
+    def _dispatch(self, key: Any, kind: KeystrokeKind) -> None:
+        """Filter against the allow-list and deliver to subscribers."""
+        name = _pynput_key_name(key)
+        if name is None:
+            return
+        if self._allowlist is not None and name not in self._allowlist:
+            return
+        event = KeystrokeEvent(
+            key=name,
+            timestamp=datetime.now(UTC),
+            kind=kind,
+        )
+        for callback in self._callbacks:
+            try:
+                callback(event)
+            except Exception:
+                log.exception("Keystroke callback failed")

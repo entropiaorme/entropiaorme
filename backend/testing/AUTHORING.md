@@ -73,11 +73,11 @@ the production tracker handles the accumulator semantics.
 | `s.enhancer` | `broken(enhancer_name, item_name, shrapnel_ped, remaining=0)` | Default `remaining=0` matches the most-observed "last enhancer just broke" shape. |
 | `s.globals` | `kill(player, creature, value_ped, hof=False)`, `item(player, item, value_ped, hof=False)` | Set `hof=True` to append the Hall-of-Fame suffix and promote the parse to `HOF_KILL` / `HOF_ITEM`. |
 | `s.mission` | `received(mission_name)`, `completed(mission_name)` | Mission lifecycle lines. |
+| `s.keystroke` | `press(key)`, `release(key)` | Records a keystroke edge at the scenario's current timestamp. Not a chat-line builder: writes to `keystrokes.jsonl` (see Emission below), matching the recorder's shape. Hotbar slot keys use digit strings (`"1"`-`"9"`, `"0"`); the manual-scan key uses `"space"`. |
 
 The DSL is silent on event surfaces that are not chatlog-sourced
-in the current parser: repair tooling and profession panel
-events surface via the screen-capture and keystroke harness layers,
-and scenarios needing those surfaces use the corresponding layers. Player-state lines (death, revive, item
+in the current parser: repair tooling and the profession panel
+surface via the screen-capture harness layer instead. Player-state lines (death, revive, item
 tier-up) are also out of scope: the parser recognises no such
 lines today, so the DSL has no sub-namespace for them.
 
@@ -85,10 +85,17 @@ lines today, so the DSL has no sub-namespace for them.
 
 - `s.write(scenario_dir)` writes `chat_replay.log` into
   `scenario_dir` (created if absent) and returns the resolved
-  path. One line per recorded event, in source order.
-- `s.lines()` returns the in-memory line list without writing;
-  used by the round-trip property test and by ad-hoc author
-  debugging.
+  path. One line per recorded event, in source order. When the
+  scenario also recorded keystrokes (`s.keystroke.press(...)` /
+  `s.keystroke.release(...)`), `keystrokes.jsonl` is written
+  alongside in the same JSON shape the recorder emits
+  (`{key, kind, offset_s, wall}`, one record per line,
+  `sort_keys=True`), so scripted and recorded scenarios are
+  indistinguishable at the harness layer.
+- `s.lines()` returns the in-memory chat-line list without
+  writing; `s.keystrokes()` likewise returns the in-memory
+  keystroke records. Both are used by the round-trip property
+  test and by ad-hoc author debugging.
 
 ## Workflow for a new scenario
 

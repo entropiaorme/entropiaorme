@@ -23,13 +23,16 @@ Emission:
 
 - :meth:`Scenario.write` writes ``chat_replay.log`` into the given
   scenario directory (created if absent), with one line per
-  recorded event in source order.
+  recorded event in source order. When the scenario also recorded
+  keystrokes via ``s.keystroke.press(...)`` / ``s.keystroke.release(...)``,
+  it additionally writes ``keystrokes.jsonl`` in the same shape
+  the recorder emits, so scripted and recorded scenarios are
+  indistinguishable at the harness layer.
 
 Every parser :class:`backend.services.chatlog_parser.EventType`
-is covered by at least one builder. Repair tooling and profession
-panel events are not chatlog-sourced and land via the
-screen-capture and keystroke harness layers; the DSL is silent
-on those.
+is covered by at least one builder. Repair tooling and the
+profession panel are not chatlog-sourced and land via the
+screen-capture harness layer; the DSL is silent on those.
 
 See ``backend/testing/AUTHORING.md`` for the full authoring
 convention and worked examples.
@@ -37,10 +40,14 @@ convention and worked examples.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 _TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+KeystrokeKind = Literal["press", "release"]
 
 
 def _coerce_ts(value: str | datetime) -> datetime:
@@ -75,7 +82,13 @@ class Scenario:
     def __init__(self, name: str) -> None:
         self.name = name
         self._lines: list[str] = []
+        # Keystroke records mirror the recorder's ``KeystrokeTap`` shape so a
+        # scripted scenario's keystrokes.jsonl is indistinguishable from a
+        # recorded one at the harness layer.
+        self._keystrokes: list[dict[str, object]] = []
         self._now: datetime | None = None
+        # The first :meth:`at` call pins the recording epoch (offset_s = 0 there).
+        self._epoch: datetime | None = None
 
         # Sub-namespaces back-reference the scenario so each builder
         # method can append through ``_emit`` while reading clean at
@@ -86,6 +99,7 @@ class Scenario:
         self.enhancer = _EnhancerBuilders(self)
         self.globals = _GlobalsBuilders(self)
         self.mission = _MissionBuilders(self)
+        self.keystroke = _KeystrokeBuilders(self)
 
     # --- time management ----------------------------------------------
 
@@ -94,9 +108,16 @@ class Scenario:
 
         Returns ``self`` so authoring scripts can chain a starting
         ``.at(...)`` onto the constructor (``Scenario("x").at(...)``).
+
+        The first call also pins the keystroke-recording epoch: every
+        subsequent :meth:`_record_keystroke` records ``offset_s`` as a
+        delta from this point, mirroring the recorder's monotonic-clock
+        reference at recording start.
         """
 
         self._now = _coerce_ts(timestamp)
+        if self._epoch is None:
+            self._epoch = self._now
         return self
 
     def tick(self, seconds: int = 1) -> Scenario:
@@ -138,18 +159,55 @@ class Scenario:
             )
         self._lines.append(f"{_format_ts(self._now)} [{channel}] [] {message}\n")
 
+    def _record_keystroke(self, key: str, kind: KeystrokeKind) -> None:
+        """Append one keystroke edge at the current timestamp.
+
+        Internal entry point for the ``keystroke`` sub-namespace builder.
+        ``offset_s`` is the seconds delta from the scenario's first
+        :meth:`at` (the epoch), matching the recorder's monotonic clock
+        reference. ``wall`` is the current timestamp interpreted as UTC
+        and emitted in ISO-8601 form, again matching the recorder.
+        """
+
+        if self._now is None or self._epoch is None:
+            raise RuntimeError(
+                "Scenario.keystroke.* called before Scenario.at(...); "
+                "set an initial timestamp first."
+            )
+        offset_s = round((self._now - self._epoch).total_seconds(), 6)
+        wall = self._now.replace(tzinfo=UTC).isoformat()
+        self._keystrokes.append(
+            {
+                "key": key,
+                "kind": kind,
+                "offset_s": offset_s,
+                "wall": wall,
+            }
+        )
+
     def write(self, scenario_dir: str | Path) -> Path:
         """Write ``chat_replay.log`` into ``scenario_dir``.
 
-        The directory is created if absent so an authoring script
-        can be a single ``Scenario(...).write(path)`` pipeline.
-        Returns the resolved path for the emitted file.
+        Also emits ``keystrokes.jsonl`` next to it whenever any
+        keystroke builder fired, with the same JSON shape the recorder
+        writes (one record per line, ``sort_keys=True``, trailing
+        newline), so scripted and recorded scenarios are
+        indistinguishable at the harness layer.
+
+        The directory is created if absent so an authoring script can
+        be a single ``Scenario(...).write(path)`` pipeline. Returns the
+        resolved path for ``chat_replay.log``.
         """
 
         target_dir = Path(scenario_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
         out = target_dir / "chat_replay.log"
         out.write_text("".join(self._lines), encoding="utf-8")
+        if self._keystrokes:
+            keystrokes_path = target_dir / "keystrokes.jsonl"
+            with keystrokes_path.open("w", encoding="utf-8", newline="") as fh:
+                for record in self._keystrokes:
+                    fh.write(json.dumps(record, sort_keys=True) + "\n")
         return out.resolve()
 
     def lines(self) -> list[str]:
@@ -160,6 +218,15 @@ class Scenario:
         """
 
         return list(self._lines)
+
+    def keystrokes(self) -> list[dict[str, object]]:
+        """Return the accumulated keystroke records without writing.
+
+        Used by tests and ad-hoc inspection; production builds use
+        :meth:`write`.
+        """
+
+        return list(self._keystrokes)
 
 
 # === sub-namespaces =================================================
@@ -397,3 +464,29 @@ class _MissionBuilders:
         """A mission completed (triggers reward-suppression elsewhere)."""
 
         self._s._emit("System", f"Mission completed ({mission_name})")
+
+
+class _KeystrokeBuilders:
+    """Keystroke-event builders.
+
+    Records press / release edges into the scenario's keystroke stream,
+    written to ``keystrokes.jsonl`` alongside ``chat_replay.log`` at
+    :meth:`Scenario.write` time in the same JSON shape the recorder's
+    ``KeystrokeTap`` emits.
+
+    Hotbar slots use the digit-key vocabulary (``"1"`` to ``"9"`` plus
+    ``"0"``); the manual-scan space key uses the literal ``"space"``.
+    These are the keys the production source filters on, so authoring
+    matches what a recorded session would have captured.
+    """
+
+    def __init__(self, scenario: Scenario) -> None:
+        self._s = scenario
+
+    def press(self, key: str) -> None:
+        """Record a press edge for ``key`` at the current timestamp."""
+        self._s._record_keystroke(key, "press")
+
+    def release(self, key: str) -> None:
+        """Record a release edge for ``key`` at the current timestamp."""
+        self._s._record_keystroke(key, "release")

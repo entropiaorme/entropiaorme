@@ -1,0 +1,30 @@
+name: quest_automation_with_playlist_match
+flavour: scripted
+description: >
+  Full chat-driven quest-automation lifecycle: two missions (both
+  members of the same playlist) are received, hunted, and completed
+  within a single tracking session. The QuestService auto-starts each
+  quest on its received line and auto-completes it on its completed
+  line; the session's completed quests resolve to an exact-playlist
+  match, which the analytics-link suggestion API surfaces.
+surfaces:
+  - quest-service-auto-start
+  - quest-service-auto-complete
+  - quest-reward-suppression
+  - session-link-suggestion-playlist-exact-match
+  - quest-playlist-membership
+events: 8
+expected_kills: 2
+expected_total_loot_ped: 5.00
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  The two quests ("Alpha Hunt" and "Beta Hunt") are pre-populated
+  in the test's AppDatabase and added to one playlist
+  ("Alpha + Beta") before chat replay. Each mission carries a
+  ``reward_ped`` so completion writes a ledger row. After
+  ``stop_session``, ``get_session_link_suggestion`` returns
+  ``{suggestion_type: "playlist", reason: "exact_playlist"}``;
+  pinned via pytest-regressions.

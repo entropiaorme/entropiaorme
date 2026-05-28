@@ -47,6 +47,7 @@ _MODULE_TIERS = {
     "test_codex_properties": "fast",
     "test_cost_engine": "fast",
     "test_cost_engine_properties": "fast",
+    "test_keystroke_source": "fast",  # pure-logic; pynput hook never started
     "test_loot_filter": "fast",
     "test_mob_lookup_service": "fast",
     "test_scan_completion": "fast",
@@ -61,12 +62,19 @@ _MODULE_TIERS = {
     "test_codex_service": "standard",
     "test_config_service": "standard",
     "test_equipment_endpoints": "standard",
+    "test_hotbar_listener": "standard",  # off-thread resolver + threading.Event waits
     "test_quests": "standard",
     "test_skill_tracker": "standard",
+    "test_spacebar_capture_listener": "standard",  # threading.Event waits on capture
     "test_tracker_integration": "standard",
     "test_tracking_endpoints": "standard",
     "test_trifecta_service": "standard",
     "test_tracker_stateful": "standard",
+    # E2E scenario tests: AppDatabase / ChatlogWatcher / off-thread joins.
+    "test_hotbar_slot_use": "standard",
+    "test_spacebar_scan_capture": "standard",
+    "test_quest_automation_with_playlist_match": "standard",
+    "test_input_listening_minimisation": "standard",
 }
 
 

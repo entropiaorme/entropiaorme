@@ -43,6 +43,13 @@ markers = [
     "standard: db / filesystem / in-process-stateful tests (run on every PR)",
     "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
     "contract: schemathesis API contract tests (run once, on the coverage leg)",
+    # Serial-only escape hatch for parallel runs. The PR legs distribute with
+    # --dist=loadfile, which keeps each file on one worker, so a test only needs
+    # this if it cannot run concurrently with tests in OTHER files (binds a fixed
+    # OS port, mutates a process-wide global another file reads). No test carries
+    # it today (see backend/testing/TESTING.md "Parallelism and serial-only
+    # tests"); it is registered so the convention exists when one does.
+    "no_xdist: must not run concurrently with tests in other files; pinned onto a single worker under --dist=loadgroup",
 ]
 
 [tool.coverage.run]

@@ -110,8 +110,25 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_collection_modifyitems(items):
-    """Tag every collected test with its module's runtime tier."""
+def pytest_collection_modifyitems(config, items):
+    """Tag every collected test with its module's runtime tier, and (only under
+    the ``loadgroup`` scheduler) assign xdist groups so the ``no_xdist`` escape
+    hatch is honoured.
+
+    The PR legs parallelise with ``--dist=loadfile``, where each file is the
+    grouping unit and these xdist-group markers are ignored, so the loop below
+    is inert for the everyday run. Switching a leg to ``--dist=loadgroup``
+    activates the grouping: an unmarked test keeps file-level grouping (parity
+    with loadfile), while every ``no_xdist`` test collapses onto one shared
+    ``serial`` worker so it never runs concurrently with a test in another file.
+    Activating the escape hatch is therefore a one-flag change, not a code
+    change. No test is marked ``no_xdist`` today (see the survey in
+    ``backend/testing/TESTING.md``).
+    """
+    loadgroup = config.getoption("dist", "no") == "loadgroup"
     for item in items:
         tier = _MODULE_TIERS.get(item.path.stem, "standard")
         item.add_marker(getattr(pytest.mark, tier))
+        if loadgroup:
+            group = "serial" if item.get_closest_marker("no_xdist") else item.path.stem
+            item.add_marker(pytest.mark.xdist_group(group))

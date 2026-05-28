@@ -77,6 +77,9 @@ _MODULE_TIERS = {
     "test_input_listening_minimisation": "standard",
     "test_consistency_tracking_hunt_midpoint": "standard",
     "test_consistency_negative_control": "standard",
+    "test_consistency_quests_mission_lifecycle_midpoint": "standard",
+    "test_consistency_scan_isolation_midpoint": "standard",
+    "test_consistency_codex_isolation_midpoint": "standard",
 }
 
 

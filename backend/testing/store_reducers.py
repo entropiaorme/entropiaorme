@@ -29,6 +29,7 @@ event streams land.
 
 from __future__ import annotations
 
+import sqlite3
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -38,9 +39,11 @@ from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_COMBAT,
     EVENT_LOOT_GROUP,
+    EVENT_MISSION_RECEIVED,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
 )
+from backend.services.quest_service import QuestService
 from backend.tracking.tracker import HuntTracker
 
 
@@ -360,4 +363,258 @@ def tracking_view_state(ctx: TrackingViewContext) -> dict[str, Any]:
         "damage_dealt_total": round(damage_total, 4),
         "critical_hits_total": crits_total,
         "returns": round(returns, 4),
+    }
+
+
+# ── Quests surface ───────────────────────────────────────────────────────────
+
+
+class QuestsReducer(Reducer):
+    """Hydration projection of chat-driven quest auto-start state.
+
+    The production ``QuestService`` subscribes to ``mission_received``
+    events on the bus and auto-starts the matching quest by name when
+    one fires inside an active session. ``QuestsReducer`` projects the
+    same observation: the per-session ordered list of mission names
+    that landed via the chat stream. The hydrating client's view of
+    "which quests would auto-start if this session were replayed" is
+    derivable from the bus events alone, which makes this a genuine
+    event-stream-driven property.
+
+    The projection is mission names rather than quest ids because the
+    name surface is what the chat stream carries; resolving the name to
+    a quest id is a ``QuestService`` responsibility that the view side
+    runs but the reducer does not need to duplicate.
+    """
+
+    def topics(self) -> Iterable[str]:
+        """Session lifecycle plus chat-driven mission receipts."""
+        return (
+            EVENT_SESSION_STARTED,
+            EVENT_SESSION_STOPPED,
+            EVENT_MISSION_RECEIVED,
+        )
+
+    def initial_state(self) -> dict[str, Any]:
+        """Defaults mirror the shape ``quests_view_state`` returns."""
+        return {
+            "session_id": None,
+            "mission_names_received": [],
+        }
+
+    def on_event(self, topic: str, payload: Any) -> None:
+        """Dispatch to the per-topic fold helper."""
+        if topic == EVENT_SESSION_STARTED:
+            self._on_session_started(payload)
+        elif topic == EVENT_SESSION_STOPPED:
+            self._on_session_stopped(payload)
+        elif topic == EVENT_MISSION_RECEIVED:
+            self._on_mission_received(payload)
+
+    def _on_session_started(self, payload: Any) -> None:
+        """Stamp the active session id from the event payload."""
+        if isinstance(payload, dict):
+            session_id = payload.get("session_id")
+            if session_id:
+                self._state["session_id"] = session_id
+
+    def _on_session_stopped(self, payload: Any) -> None:
+        """Session stop is informational; the reducer's projection
+        keeps the mission name log so a snapshot taken after stop
+        still reflects what landed during the session."""
+        del payload
+
+    def _on_mission_received(self, payload: Any) -> None:
+        """Append the mission name to the running list.
+
+        Payload shape: ``{type: 'mission_received', mission_name: str,
+        timestamp: datetime, ...}``. Names append in arrival order so
+        the reducer's projection mirrors the order the production
+        ``QuestService`` would auto-start them.
+        """
+        if not isinstance(payload, dict):
+            return
+        name = payload.get("mission_name")
+        if not name:
+            return
+        names = list(self._state["mission_names_received"])
+        names.append(str(name))
+        self._state["mission_names_received"] = names
+
+
+@dataclass(frozen=True)
+class QuestsViewContext:
+    """Services-shaped context the quests view composes its dict from.
+
+    The view reads the ``QuestService``'s session-scoped notable
+    events from the DB, so the context carries both handles. ``conn``
+    is the same connection the service writes through; passing it
+    explicitly keeps the view function pure (no global lookup) and
+    composable from the test fixture.
+    """
+
+    quest_service: QuestService
+    conn: sqlite3.Connection
+    session_id: str | None
+
+
+def quests_view_state(ctx: QuestsViewContext) -> dict[str, Any]:
+    """Compose the quests surface's hydration view from live state.
+
+    The view reads ``notable_events`` rows of type ``quest_started``
+    for the active session: ``QuestService._record_notable_event``
+    inserts one row per auto-started quest, capturing the canonical
+    mission name. The order-by-rowid clause preserves chat-order so
+    the view's list matches the order the reducer accumulated in.
+
+    For an inactive session (no ``session_id``), the projection is
+    empty: the live backend has nothing to hydrate from, and a
+    reducer hydrated with the empty view starting from there would
+    accumulate names as events arrive.
+    """
+    if ctx.session_id is None:
+        return {
+            "session_id": None,
+            "mission_names_received": [],
+        }
+    rows = ctx.conn.execute(
+        "SELECT mob_or_item FROM notable_events "
+        "WHERE session_id = ? AND event_type = 'quest_started' "
+        "ORDER BY rowid",
+        (ctx.session_id,),
+    ).fetchall()
+    return {
+        "session_id": ctx.session_id,
+        "mission_names_received": [row[0] for row in rows],
+    }
+
+
+# ── Scan and codex surfaces (forward-positioning) ────────────────────────────
+
+
+class _IsolatedSurfaceReducer(Reducer):
+    """Shared base for surfaces with no event-stream contract today.
+
+    Scan completions and codex claims are HTTP-mutated rather than
+    bus-driven in the current backend: no event flows on the bus that
+    a reducer could fold into a projection. This reducer subscribes to
+    nothing, folds nothing, and projects the empty state. A test
+    wiring it against the snapshot view of those surfaces holds the
+    consistency property trivially today, and the test exists to pin
+    the apparatus's shape for the day a bus contract for the surface
+    lands and the reducer grows real subscriptions.
+
+    Until that point the value of the test is structural: it documents
+    that the apparatus admits the surface and exercises the
+    ``SurfaceAdapter`` plumbing end-to-end. The companion negative-
+    control test on the tracking surface is what pins the property's
+    apparatus catches genuine reducer regressions; replicating that
+    control on every surface would be redundant.
+    """
+
+    def topics(self) -> Iterable[str]:
+        """No event-stream contract yet, so no subscriptions."""
+        return ()
+
+    def initial_state(self) -> dict[str, Any]:
+        """Empty pre-hydration shape; the snapshot the reducer is
+        hydrated with carries the surface's full key set, and
+        ``hydrate`` adopts it wholesale rather than filtering through
+        a per-surface key list the reducer would otherwise have to
+        duplicate from the view function."""
+        return {}
+
+    def hydrate(self, snapshot: dict[str, Any]) -> None:
+        """Adopt the snapshot wholesale; an isolation reducer projects
+        whatever the view emits at hydration time and folds nothing
+        thereafter, so the running state and the hydrated snapshot are
+        the same dict by construction."""
+        self._state = dict(snapshot)
+
+    def on_event(self, topic: str, payload: Any) -> None:
+        """No subscriptions, so this is unreachable in normal flow;
+        kept as a no-op for the ABC contract."""
+        del topic, payload
+
+
+class ScanReducer(_IsolatedSurfaceReducer):
+    """Forward-positioning reducer for the scan surface.
+
+    Skill scans complete via a ``SkillScanManual`` callback rather
+    than a bus event; the snapshot view reads the
+    ``skill_calibrations`` table the callback wrote into. No bus
+    consumption to fold against today. Slots into the apparatus so
+    that when a bus contract for scan completion lands, the
+    subscription set + ``on_event`` handler extend in place.
+    """
+
+
+class CodexReducer(_IsolatedSurfaceReducer):
+    """Forward-positioning reducer for the codex surface.
+
+    Codex claims and rank progression are HTTP-mutated via
+    ``/codex/claim`` and ``/codex/calibrate``; no bus event flows
+    today. Same forward-positioning role as ``ScanReducer``.
+    """
+
+
+@dataclass(frozen=True)
+class ScanViewContext:
+    """Connection-shaped context for the scan snapshot view.
+
+    The scan view reads ``skill_calibrations`` rows for the latest
+    scanned skills. Carries only the connection because no other
+    service handle contributes to the projected fields.
+    """
+
+    conn: sqlite3.Connection
+
+
+def scan_view_state(ctx: ScanViewContext) -> dict[str, Any]:
+    """Compose the scan surface's hydration view from live state.
+
+    Returns the deterministic, DB-backed subset of the scan view: the
+    count of unique calibrated skills and the count of calibration
+    rows. Both are zero for a fresh DB and unchanged across a hunt
+    session that does not run a scan, which is the invariant the
+    forward-positioning consistency test asserts.
+
+    Fields the production scan status surface derives from runtime
+    handles (the ``skill_region()`` window detection, the OCR engine's
+    presence, the in-memory capture buffer) are out of the projection:
+    they are not bus-driven and not DB-resident, so they belong to the
+    HTTP-state-mutation event surface a later change will introduce.
+    """
+    rows = ctx.conn.execute(
+        "SELECT COUNT(DISTINCT skill_name), COUNT(*) FROM skill_calibrations"
+    ).fetchone()
+    distinct_skills = int(rows[0] or 0) if rows else 0
+    total_rows = int(rows[1] or 0) if rows else 0
+    return {
+        "distinct_calibrated_skills": distinct_skills,
+        "calibration_row_count": total_rows,
+    }
+
+
+@dataclass(frozen=True)
+class CodexViewContext:
+    """Connection-shaped context for the codex snapshot view."""
+
+    conn: sqlite3.Connection
+
+
+def codex_view_state(ctx: CodexViewContext) -> dict[str, Any]:
+    """Compose the codex surface's hydration view from live state.
+
+    Returns the DB-backed counts of codex progress rows and claim
+    rows. Zero on a fresh DB; advanced only by HTTP calls to
+    ``/codex/claim`` and ``/codex/calibrate``, which the harness does
+    not exercise. The forward-positioning consistency test pins that
+    a chat-driven event stream leaves these counts unchanged.
+    """
+    progress_row = ctx.conn.execute("SELECT COUNT(*) FROM codex_progress").fetchone()
+    claims_row = ctx.conn.execute("SELECT COUNT(*) FROM codex_claims").fetchone()
+    return {
+        "codex_progress_row_count": int(progress_row[0] or 0) if progress_row else 0,
+        "codex_claim_row_count": int(claims_row[0] or 0) if claims_row else 0,
     }

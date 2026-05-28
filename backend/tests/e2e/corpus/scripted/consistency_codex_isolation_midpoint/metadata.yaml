@@ -1,0 +1,30 @@
+name: consistency_codex_isolation_midpoint
+flavour: scripted
+description: >
+  Two-segment hunt scenario whose post-midpoint segment contains
+  combat plus a loot tick. Drives the codex-surface forward-positioning
+  consistency test: the codex view's DB-backed projection
+  (codex_progress + codex_claims row counts) must stay identical
+  across an interval the chat stream populates with tracking events.
+  Pinning the isolation invariant today positions the apparatus to
+  admit a real codex event-stream contract when one lands.
+surfaces:
+  - codex-hydration-consistency
+  - codex-isolation-from-chat-event-stream
+segments:
+  pre: chat_replay.log
+  post: chat_replay_after.log
+events_pre: 1
+events_post: 3
+expected_codex_changes: 0
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. The pre-segment lays down a single
+  combat shot so the snapshot at T0 captures a session-active state;
+  the post-segment drives a kill closed by a loot tick. The codex
+  projection (counts of codex_progress and codex_claims rows) is
+  untouched by chat events because codex state is mutated via the
+  /codex/claim HTTP path, not via the bus.

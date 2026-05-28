@@ -17,19 +17,35 @@ snapshot with a scenario's ``expected/`` directory, switching between
 assert-against-golden mode (default) and write-new-golden mode
 (``--update-fingerprints``) per the pytest CLI option registered in
 ``backend/tests/conftest.py``.
+
+The HTTP pipeline fixture boots the full FastAPI lifespan against a
+throwaway data directory whose ``settings.json`` redirects the
+``ChatlogWatcher`` onto a temp file. Scenarios drive the live HTTP
+surface through a ``TestClient`` while replaying chat lines into the
+same temp file the in-lifespan watcher tails. The
+http-fingerprinter factory builds an ``HttpFingerprinter`` bound to
+the named scenario directory, sharing the run's update-mode flag.
 """
 
 from __future__ import annotations
 
+import io
+import json
+import os
 import sqlite3
+import tempfile
 from collections.abc import Callable, Iterator
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.fingerprint import Normalizer
 from backend.testing.golden import GoldenSet
+from backend.testing.http_fingerprint import HttpFingerprinter
 from backend.tracking.tracker import HuntTracker
 
 E2E_DIR = Path(__file__).parent
@@ -145,5 +161,93 @@ def golden_set(update_fingerprints: bool) -> Callable[[Path], GoldenSet]:
 
     def _make(scenario_dir: Path) -> GoldenSet:
         return GoldenSet(scenario_dir, update=update_fingerprints)
+
+    return _make
+
+
+@pytest.fixture
+def e2e_http_pipeline(
+    tmp_path: Path,
+) -> Iterator[tuple[TestClient, Path]]:
+    """Boot the full FastAPI lifespan against a temp data dir + chatlog.
+
+    ``settings.json`` is pre-seeded so the in-lifespan ``ChatlogWatcher``
+    tails the temp file the scenario will write into; the demo router's
+    DB resolver is pointed at a seeded throwaway, so ``/api/demo/*``
+    GETs are reachable during the contract substrate. Developer mode is
+    enabled on the live config so the recording router's dev-gated
+    surface is exercised in the same shape the contract suite sees.
+
+    Yields ``(client, chatlog_path)``. The watcher inside the lifespan
+    is started during ``with TestClient(app)``; the test streams the
+    scenario's chat lines into the temp file via the existing
+    ``replay_scenario`` helper. Teardown stops the lifespan, restores
+    env, and removes the temp data dirs.
+    """
+    data_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_data_"))
+    demo_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_demo_"))
+    chatlog = tmp_path / "chat_testing.log"
+    chatlog.touch()
+
+    # Pre-seed settings.json so the lifespan-built ChatlogWatcher tails
+    # the scenario's temp file rather than ~/Documents/Entropia/chat.log.
+    (data_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "chatlog_path": str(chatlog),
+                "developer_mode_enabled": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Import lazily so the env override is in place when backend.main's
+    # lifespan reads ENTROPIAORME_DATA_DIR on TestClient enter.
+    import backend.routers.demo as demo_module
+    from backend.main import BACKEND_PORT, app
+    from backend.scripts.demo_seed.__main__ import main as seed_demo
+
+    with redirect_stdout(io.StringIO()):
+        seed_demo(["--reseed", "--out", str(demo_dir)])
+    demo_db = demo_dir / "entropia_orme.db"
+    original_resolver = demo_module._resolve_demo_db_path
+    demo_module._resolve_demo_db_path = lambda: demo_db
+    demo_module._state["conn"] = None
+    demo_module._state["svc"] = None
+
+    original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
+    os.environ["ENTROPIAORME_DATA_DIR"] = str(data_dir)
+
+    try:
+        with TestClient(app, base_url=f"http://localhost:{BACKEND_PORT}") as client:
+            yield client, chatlog
+    finally:
+        demo_module._resolve_demo_db_path = original_resolver
+        demo_module._state["conn"] = None
+        demo_module._state["svc"] = None
+        if original_data_dir is None:
+            os.environ.pop("ENTROPIAORME_DATA_DIR", None)
+        else:
+            os.environ["ENTROPIAORME_DATA_DIR"] = original_data_dir
+
+
+@pytest.fixture
+def http_fingerprinter(
+    update_fingerprints: bool,
+) -> Callable[[Path], HttpFingerprinter]:
+    """Factory: build an ``HttpFingerprinter`` for the scenario directory.
+
+    Shares the run's update-mode flag with the existing ``golden_set``
+    factory so a single ``--update-fingerprints`` invocation rewrites
+    both the per-scenario fingerprint.jsonl + db_state.json goldens
+    and the per-endpoint HTTP-response goldens.
+    """
+
+    def _make(scenario_dir: Path) -> HttpFingerprinter:
+        return HttpFingerprinter(
+            scenario_dir,
+            Normalizer(),
+            update=update_fingerprints,
+        )
 
     return _make

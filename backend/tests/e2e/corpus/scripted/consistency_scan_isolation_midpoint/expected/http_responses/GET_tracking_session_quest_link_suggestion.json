@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>/quest-link-suggestion",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "playlistId": null,
+      "playlistName": null,
+      "questId": null,
+      "questName": null,
+      "reason": "no_completions",
+      "sessionId": "<UUID_1>",
+      "suggestionType": "none"
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

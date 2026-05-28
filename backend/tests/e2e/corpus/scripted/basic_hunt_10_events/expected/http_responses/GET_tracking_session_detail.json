@@ -1,0 +1,77 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "deactivatedLootBreakdown": [],
+      "effectiveLoot": 8.62,
+      "lootBreakdown": [
+        {
+          "name": "Shrapnel",
+          "quantity": 700,
+          "ttValue": 7.0
+        },
+        {
+          "name": "Wool",
+          "quantity": 3,
+          "ttValue": 1.5
+        },
+        {
+          "name": "Animal Muscle Oil",
+          "quantity": 1,
+          "ttValue": 0.12
+        }
+      ],
+      "mobBreakdown": [
+        {
+          "currentName": "Unknown",
+          "killCount": 3,
+          "originalName": null
+        }
+      ],
+      "mobEntryMode": "mob",
+      "notableEvents": [],
+      "sessionId": "<UUID_1>",
+      "skillGains": [
+        {
+          "level": 0,
+          "skillName": "Bioregenesis",
+          "ttValueGained": 0
+        }
+      ],
+      "summary": {
+        "cost": 0.0,
+        "costBreakdown": {
+          "armourCost": 0.0,
+          "enhancerCost": 0.0,
+          "healCost": 0.0,
+          "weaponCost": 0.0
+        },
+        "duration": 0,
+        "kills": 3,
+        "net": 8.62,
+        "pes": 0.0,
+        "returnRate": 0.0,
+        "returns": 8.62
+      },
+      "toolStats": [
+        {
+          "costAttributed": 0.0,
+          "crits": 0,
+          "damageDealt": 100.5,
+          "shotsFired": 5,
+          "weaponName": "Unknown"
+        }
+      ]
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

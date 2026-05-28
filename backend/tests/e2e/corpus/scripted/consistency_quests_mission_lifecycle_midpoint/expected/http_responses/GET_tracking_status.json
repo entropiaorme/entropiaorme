@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/status",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "currentMob": null,
+      "endOfSessionArmourReminderEnabled": false,
+      "hotbarListenerActive": false,
+      "mobEntryMode": "mob",
+      "mobSource": null,
+      "repairOcrEnabled": false,
+      "status": "idle",
+      "weaponAttribution": "trifecta"
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

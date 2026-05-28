@@ -1,0 +1,5595 @@
+{
+  "components": {
+    "schemas": {
+      "AddWeaponRequest": {
+        "properties": {
+          "absorber_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absorber Catalog Id"
+          },
+          "absorber_markup": {
+            "default": 100,
+            "title": "Absorber Markup",
+            "type": "integer"
+          },
+          "amp_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amp Catalog Id"
+          },
+          "amp_markup": {
+            "default": 100,
+            "title": "Amp Markup",
+            "type": "integer"
+          },
+          "catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Id"
+          },
+          "damage_enhancers": {
+            "default": 0,
+            "title": "Damage Enhancers",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "scope_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Catalog Id"
+          },
+          "scope_markup": {
+            "default": 100,
+            "title": "Scope Markup",
+            "type": "integer"
+          },
+          "type": {
+            "enum": [
+              "weapon",
+              "healing",
+              "consumable"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "weapon_markup": {
+            "default": 100,
+            "title": "Weapon Markup",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "AddWeaponRequest",
+        "type": "object"
+      },
+      "AnalyticsOverview": {
+        "additionalProperties": true,
+        "properties": {
+          "lossesBreakdown": {
+            "$ref": "#/components/schemas/LossesBreakdown"
+          },
+          "monthlyBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/MonthlyPoint"
+            },
+            "title": "Monthlybreakdown",
+            "type": "array"
+          },
+          "returnsBreakdown": {
+            "$ref": "#/components/schemas/ReturnsBreakdown"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/TimelinePoint"
+            },
+            "title": "Timeline",
+            "type": "array"
+          },
+          "totalGains": {
+            "title": "Totalgains",
+            "type": "number"
+          },
+          "totalLosses": {
+            "title": "Totallosses",
+            "type": "number"
+          },
+          "totalReturnRate": {
+            "title": "Totalreturnrate",
+            "type": "number"
+          },
+          "trend": {
+            "title": "Trend",
+            "type": "string"
+          }
+        },
+        "required": [
+          "totalReturnRate",
+          "trend",
+          "returnsBreakdown",
+          "lossesBreakdown",
+          "totalGains",
+          "totalLosses",
+          "timeline",
+          "monthlyBreakdown"
+        ],
+        "title": "AnalyticsOverview",
+        "type": "object"
+      },
+      "ArmourCostBody": {
+        "properties": {
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "cost"
+        ],
+        "title": "ArmourCostBody",
+        "type": "object"
+      },
+      "CalculateCostRequest": {
+        "properties": {
+          "absorber_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Absorber Catalog Id"
+          },
+          "absorber_markup": {
+            "default": 100,
+            "title": "Absorber Markup",
+            "type": "integer"
+          },
+          "amp_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amp Catalog Id"
+          },
+          "amp_markup": {
+            "default": 100,
+            "title": "Amp Markup",
+            "type": "integer"
+          },
+          "catalog_id": {
+            "title": "Catalog Id",
+            "type": "string"
+          },
+          "damage_enhancers": {
+            "default": 0,
+            "title": "Damage Enhancers",
+            "type": "integer"
+          },
+          "scope_catalog_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Catalog Id"
+          },
+          "scope_markup": {
+            "default": 100,
+            "title": "Scope Markup",
+            "type": "integer"
+          },
+          "type": {
+            "default": "weapon",
+            "enum": [
+              "weapon",
+              "healing"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "weapon_markup": {
+            "default": 100,
+            "title": "Weapon Markup",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "catalog_id"
+        ],
+        "title": "CalculateCostRequest",
+        "type": "object"
+      },
+      "CalibrateRequest": {
+        "properties": {
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "species_name": {
+            "title": "Species Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "species_name",
+          "rank"
+        ],
+        "title": "CalibrateRequest",
+        "type": "object"
+      },
+      "CharacterProspect": {
+        "additionalProperties": true,
+        "description": "Forecast result or a not-found error shape.\n\nThe error branch sets ``error``/``rows``/``warnings``; the result branch\nomits ``error`` and carries its forecast keys (passed through via\n``extra=\"allow\"``). Served with ``response_model_exclude_unset=True`` so the\ntwo branches keep their distinct shapes.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "rows": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rows"
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warnings"
+          }
+        },
+        "title": "CharacterProspect",
+        "type": "object"
+      },
+      "ClaimRequest": {
+        "properties": {
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "skill_name": {
+            "title": "Skill Name",
+            "type": "string"
+          },
+          "species_name": {
+            "title": "Species Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "species_name",
+          "rank",
+          "skill_name"
+        ],
+        "title": "ClaimRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InventoryItemCreate": {
+        "properties": {
+          "acquired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acquired At"
+          },
+          "markup_paid": {
+            "title": "Markup Paid",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "tt_value": {
+            "title": "Tt Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "tt_value",
+          "markup_paid"
+        ],
+        "title": "InventoryItemCreate",
+        "type": "object"
+      },
+      "InventoryItemPatch": {
+        "properties": {
+          "markup_paid": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markup Paid"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "tt_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tt Value"
+          }
+        },
+        "title": "InventoryItemPatch",
+        "type": "object"
+      },
+      "InventoryItemSell": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "sale_price": {
+            "title": "Sale Price",
+            "type": "number"
+          },
+          "sold_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sold At"
+          }
+        },
+        "required": [
+          "sale_price"
+        ],
+        "title": "InventoryItemSell",
+        "type": "object"
+      },
+      "LedgerEntryCreate": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerEntryCreate",
+        "type": "object"
+      },
+      "LedgerPresetCreate": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerPresetCreate",
+        "type": "object"
+      },
+      "LossesBreakdown": {
+        "additionalProperties": true,
+        "properties": {
+          "cycledBreakdown": {
+            "title": "Cycledbreakdown"
+          },
+          "ledger": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Ledger",
+            "type": "object"
+          },
+          "trackingCost": {
+            "title": "Trackingcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "trackingCost",
+          "cycledBreakdown",
+          "ledger"
+        ],
+        "title": "LossesBreakdown",
+        "type": "object"
+      },
+      "ManualMobLockRequest": {
+        "properties": {
+          "maturity": {
+            "default": "",
+            "title": "Maturity",
+            "type": "string"
+          },
+          "species": {
+            "title": "Species",
+            "type": "string"
+          }
+        },
+        "required": [
+          "species"
+        ],
+        "title": "ManualMobLockRequest",
+        "type": "object"
+      },
+      "MetaClaimRequest": {
+        "properties": {
+          "attribute_name": {
+            "title": "Attribute Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attribute_name"
+        ],
+        "title": "MetaClaimRequest",
+        "type": "object"
+      },
+      "MonthlyPoint": {
+        "additionalProperties": true,
+        "properties": {
+          "codexPes": {
+            "title": "Codexpes",
+            "type": "number"
+          },
+          "ledgerGains": {
+            "additionalProperties": true,
+            "title": "Ledgergains",
+            "type": "object"
+          },
+          "ledgerLosses": {
+            "additionalProperties": true,
+            "title": "Ledgerlosses",
+            "type": "object"
+          },
+          "lootTt": {
+            "title": "Loottt",
+            "type": "number"
+          },
+          "month": {
+            "title": "Month",
+            "type": "string"
+          },
+          "pes": {
+            "title": "Pes",
+            "type": "number"
+          },
+          "questPes": {
+            "title": "Questpes",
+            "type": "number"
+          },
+          "trackingCost": {
+            "title": "Trackingcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "month",
+          "lootTt",
+          "pes",
+          "codexPes",
+          "questPes",
+          "ledgerGains",
+          "trackingCost",
+          "ledgerLosses"
+        ],
+        "title": "MonthlyPoint",
+        "type": "object"
+      },
+      "NotableEvent": {
+        "additionalProperties": true,
+        "description": "A dashboard activity-feed entry.\n\nCovers both the notable-event payload (global/HoF/quest) and the tracker\nwarning entry, which share ``type``/``description``/``value`` and differ in\nthe optional ``eventType``/``timestamp``/``id`` keys.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "eventType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eventtype"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "description",
+          "value"
+        ],
+        "title": "NotableEvent",
+        "type": "object"
+      },
+      "OverlayPositionPatch": {
+        "properties": {
+          "x": {
+            "title": "X",
+            "type": "integer"
+          },
+          "y": {
+            "title": "Y",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "OverlayPositionPatch",
+        "type": "object"
+      },
+      "PlaylistCreate": {
+        "properties": {
+          "estimated_minutes": {
+            "default": 30,
+            "title": "Estimated Minutes",
+            "type": "integer"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PlaylistItemInput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "planet": {
+            "default": "Calypso",
+            "title": "Planet",
+            "type": "string"
+          },
+          "quest_ids": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Quest Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PlaylistCreate",
+        "type": "object"
+      },
+      "PlaylistItemInput": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "group_type": {
+            "default": "immediate",
+            "title": "Group Type",
+            "type": "string"
+          },
+          "quest_id": {
+            "title": "Quest Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quest_id"
+        ],
+        "title": "PlaylistItemInput",
+        "type": "object"
+      },
+      "PlaylistUpdate": {
+        "properties": {
+          "estimated_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Minutes"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PlaylistItemInput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Items"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "planet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planet"
+          },
+          "quest_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quest Ids"
+          }
+        },
+        "title": "PlaylistUpdate",
+        "type": "object"
+      },
+      "QuestCancel": {
+        "properties": {
+          "undo_reward": {
+            "default": false,
+            "title": "Undo Reward",
+            "type": "boolean"
+          }
+        },
+        "title": "QuestCancel",
+        "type": "object"
+      },
+      "QuestCreate": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "chain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Name"
+          },
+          "chain_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Position"
+          },
+          "chain_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Total"
+          },
+          "cooldown_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldown Hours"
+          },
+          "expected_reward_markup_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Reward Markup Percent"
+          },
+          "mobs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Mobs",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "planet": {
+            "default": "Calypso",
+            "title": "Planet",
+            "type": "string"
+          },
+          "reward_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward Description"
+          },
+          "reward_is_skill": {
+            "default": false,
+            "title": "Reward Is Skill",
+            "type": "boolean"
+          },
+          "reward_ped": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward Ped"
+          },
+          "waypoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waypoint"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "QuestCreate",
+        "type": "object"
+      },
+      "QuestUpdate": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "chain_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Name"
+          },
+          "chain_position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Position"
+          },
+          "chain_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chain Total"
+          },
+          "cooldown_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldown Hours"
+          },
+          "expected_reward_markup_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Reward Markup Percent"
+          },
+          "mobs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobs"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "planet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planet"
+          },
+          "reward_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward Description"
+          },
+          "reward_is_skill": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward Is Skill"
+          },
+          "reward_ped": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward Ped"
+          },
+          "waypoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waypoint"
+          }
+        },
+        "title": "QuestUpdate",
+        "type": "object"
+      },
+      "RenameMobRequest": {
+        "properties": {
+          "fromMobName": {
+            "title": "Frommobname",
+            "type": "string"
+          },
+          "toMobName": {
+            "title": "Tomobname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromMobName",
+          "toMobName"
+        ],
+        "title": "RenameMobRequest",
+        "type": "object"
+      },
+      "RestoreMobRequest": {
+        "properties": {
+          "currentMobName": {
+            "title": "Currentmobname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currentMobName"
+        ],
+        "title": "RestoreMobRequest",
+        "type": "object"
+      },
+      "ReturnsBreakdown": {
+        "additionalProperties": true,
+        "properties": {
+          "codexPes": {
+            "title": "Codexpes",
+            "type": "number"
+          },
+          "ledger": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Ledger",
+            "type": "object"
+          },
+          "lootTt": {
+            "title": "Loottt",
+            "type": "number"
+          },
+          "pes": {
+            "title": "Pes",
+            "type": "number"
+          },
+          "questPes": {
+            "title": "Questpes",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lootTt",
+          "pes",
+          "codexPes",
+          "questPes",
+          "ledger"
+        ],
+        "title": "ReturnsBreakdown",
+        "type": "object"
+      },
+      "SessionQuestLinkDecisionBody": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "SessionQuestLinkDecisionBody",
+        "type": "object"
+      },
+      "SettingsPatch": {
+        "properties": {
+          "active_trifecta_preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Trifecta Preset Id"
+          },
+          "chatlog_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chatlog Path"
+          },
+          "developer_mode_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Developer Mode Enabled"
+          },
+          "end_of_session_armour_reminder_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Of Session Armour Reminder Enabled"
+          },
+          "hotbar": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotbar"
+          },
+          "hotbar_hooks_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotbar Hooks Enabled"
+          },
+          "loot_filter_blacklist": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loot Filter Blacklist"
+          },
+          "mob_tracking_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mob Tracking Mode"
+          },
+          "mob_tracking_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mob Tracking Tag"
+          },
+          "player_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player Name"
+          },
+          "repair_ocr_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repair Ocr Enabled"
+          },
+          "trifecta_presets": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trifecta Presets"
+          }
+        },
+        "title": "SettingsPatch",
+        "type": "object"
+      },
+      "StopRecordingBody": {
+        "properties": {
+          "character_context": {
+            "additionalProperties": true,
+            "title": "Character Context",
+            "type": "object"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          },
+          "rare_event_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rare Event Flags",
+            "type": "array"
+          },
+          "scenario_name": {
+            "title": "Scenario Name",
+            "type": "string"
+          },
+          "surfaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Surfaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scenario_name"
+        ],
+        "title": "StopRecordingBody",
+        "type": "object"
+      },
+      "TagLockRequest": {
+        "properties": {
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "title": "TagLockRequest",
+        "type": "object"
+      },
+      "TimelinePoint": {
+        "additionalProperties": true,
+        "properties": {
+          "codexPes": {
+            "title": "Codexpes",
+            "type": "number"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "ledgerGains": {
+            "additionalProperties": true,
+            "title": "Ledgergains",
+            "type": "object"
+          },
+          "ledgerLosses": {
+            "additionalProperties": true,
+            "title": "Ledgerlosses",
+            "type": "object"
+          },
+          "lootTt": {
+            "title": "Loottt",
+            "type": "number"
+          },
+          "pes": {
+            "title": "Pes",
+            "type": "number"
+          },
+          "questPes": {
+            "title": "Questpes",
+            "type": "number"
+          },
+          "trackingCost": {
+            "title": "Trackingcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "lootTt",
+          "pes",
+          "codexPes",
+          "questPes",
+          "ledgerGains",
+          "trackingCost",
+          "ledgerLosses"
+        ],
+        "title": "TimelinePoint",
+        "type": "object"
+      },
+      "TrackingLive": {
+        "additionalProperties": true,
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "currentMob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentmob"
+          },
+          "currentTool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currenttool"
+          },
+          "elapsed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed"
+          },
+          "endOfSessionArmourReminderEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endofsessionarmourreminderenabled"
+          },
+          "killCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Killcount"
+          },
+          "kills": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kills"
+          },
+          "mobEntryMode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobentrymode"
+          },
+          "mobSource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobsource"
+          },
+          "net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net"
+          },
+          "pes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pes"
+          },
+          "recentEvents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NotableEvent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recentevents"
+          },
+          "repairOcrEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repairocrenabled"
+          },
+          "returnRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returnrate"
+          },
+          "returns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returns"
+          },
+          "sessionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessionid"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trifectaAttribution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trifectaattribution"
+          },
+          "weaponAttribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weaponattribution"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "TrackingLive",
+        "type": "object"
+      },
+      "TrackingStatus": {
+        "additionalProperties": true,
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "criticalHitsTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criticalhitstotal"
+          },
+          "cumulativeNetHistory": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulativenethistory"
+          },
+          "currentMob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentmob"
+          },
+          "damageDealtTotal": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagedealttotal"
+          },
+          "endOfSessionArmourReminderEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endofsessionarmourreminderenabled"
+          },
+          "globalsCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Globalscount"
+          },
+          "hofsCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hofscount"
+          },
+          "hotbarListenerActive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotbarlisteneractive"
+          },
+          "kill_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kill Count"
+          },
+          "latestKillLoot": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latestkillloot"
+          },
+          "maxDamage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxdamage"
+          },
+          "mobEntryMode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobentrymode"
+          },
+          "mobSource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobsource"
+          },
+          "multiplierAvg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplieravg"
+          },
+          "multiplierHistory": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplierhistory"
+          },
+          "multiplierLast": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplierlast"
+          },
+          "multiplierMax": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multipliermax"
+          },
+          "pes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pes"
+          },
+          "repairOcrEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repairocrenabled"
+          },
+          "returnRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returnrate"
+          },
+          "returns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returns"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "shotsFiredTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shotsfiredtotal"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "weaponAttribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weaponattribution"
+          },
+          "weaponCost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weaponcost"
+          },
+          "weaponDamageDealt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weapondamagedealt"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "TrackingStatus",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EntropiaOrme API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/analytics/activity": {
+      "get": {
+        "description": "Per-mob, per-tag, and per-weapon activity comparisons.",
+        "operationId": "analytics_activity_api_analytics_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Analytics Activity",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/inventory": {
+      "get": {
+        "description": "List all inventory items, newest first.",
+        "operationId": "list_inventory_items_api_analytics_inventory_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Inventory Items",
+        "tags": [
+          "analytics"
+        ]
+      },
+      "post": {
+        "description": "Create a new inventory item.",
+        "operationId": "create_inventory_item_api_analytics_inventory_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryItemCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Inventory Item",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/inventory/{item_id}": {
+      "delete": {
+        "description": "Hard delete an inventory item (correction path, no ledger entry emitted).",
+        "operationId": "delete_inventory_item_api_analytics_inventory__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Inventory Item",
+        "tags": [
+          "analytics"
+        ]
+      },
+      "patch": {
+        "description": "Edit fields on an inventory item. Bumps updated_at.",
+        "operationId": "update_inventory_item_api_analytics_inventory__item_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryItemPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Inventory Item",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/inventory/{item_id}/sell": {
+      "post": {
+        "description": "Sell an inventory item: emit realised delta to ledger + remove row, atomically.\n\nZero-delta sales skip ledger emission (no noise row); the item is still\nremoved from the inventory ledger and ledgerEntry is returned as null.",
+        "operationId": "sell_inventory_item_api_analytics_inventory__item_id__sell_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryItemSell"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sell Inventory Item",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/ledger": {
+      "get": {
+        "description": "List all ledger entries.\n\nThe activity ledger is liquid economy only. Codex rewards live in\n`codex_claims` and skill-typed quest rewards live in `quest_claims`.\nNew writes never produce PES-tagged ledger rows, so no read-side\nfilter is needed.",
+        "operationId": "list_ledger_api_analytics_ledger_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Ledger",
+        "tags": [
+          "analytics"
+        ]
+      },
+      "post": {
+        "description": "Create a new ledger entry.",
+        "operationId": "create_ledger_entry_api_analytics_ledger_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LedgerEntryCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Ledger Entry",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/ledger/presets": {
+      "get": {
+        "description": "List all ledger quick-entry presets.",
+        "operationId": "list_ledger_presets_api_analytics_ledger_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Ledger Presets",
+        "tags": [
+          "analytics"
+        ]
+      },
+      "post": {
+        "description": "Create a new ledger quick-entry preset.",
+        "operationId": "create_ledger_preset_api_analytics_ledger_presets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LedgerPresetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Ledger Preset",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/ledger/presets/{preset_id}": {
+      "delete": {
+        "description": "Delete a ledger quick-entry preset.",
+        "operationId": "delete_ledger_preset_api_analytics_ledger_presets__preset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Ledger Preset",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/ledger/{entry_id}": {
+      "delete": {
+        "description": "Delete a ledger entry.",
+        "operationId": "delete_ledger_entry_api_analytics_ledger__entry_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Ledger Entry",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/overview": {
+      "get": {
+        "description": "Cross-session sustainability metrics.\n\nTotal Return = (Loot TT + Skill TT + Ledger markup) / (Tracking cost + Ledger expenses).\n?period= all | 30d | 90d | 1y",
+        "operationId": "analytics_overview_api_analytics_overview_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsOverview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analytics Overview",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/character/calibration": {
+      "get": {
+        "description": "Return skill calibration status.",
+        "operationId": "get_calibration_api_character_calibration_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Calibration",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/codex": {
+      "get": {
+        "description": "Return codex progress predictions for calibrated skills in codex categories.",
+        "operationId": "get_codex_api_character_codex_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Codex",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/hp-optimizer": {
+      "get": {
+        "description": "Return skills ranked by PED cost per +1 HP.\n\nRegular skills are ranked by how much PED of skill TT it costs to gain\n1 HP through that skill alone at the player's current level.\nAttributes are listed separately by HP contribution factor.",
+        "operationId": "get_hp_optimizer_api_character_hp_optimizer_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Hp Optimizer",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/profession-optimizer": {
+      "get": {
+        "description": "Return skills ranked by PED cost to next profession level.\n\nRegular skills are ranked by how much PED of skill TT it would take\nfor that skill alone to push the profession to its next integer level.\nAttributes are listed separately by raw contribution factor.",
+        "operationId": "get_profession_optimizer_api_character_profession_optimizer_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profession",
+            "required": true,
+            "schema": {
+              "title": "Profession",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Profession Optimizer",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/profession-path-optimizer": {
+      "get": {
+        "description": "Find the cheapest skill allocation to reach a target profession level,\nor the best allocation for a given PED budget.",
+        "operationId": "get_profession_path_optimizer_api_character_profession_path_optimizer_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profession",
+            "required": true,
+            "schema": {
+              "title": "Profession",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Level"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ped_budget",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ped Budget"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Profession Path Optimizer",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/professions": {
+      "get": {
+        "description": "Return profession levels with anchor and gain-since-anchor breakdown.\n\nBoth `level` (believed-current) and `anchorLevel` (last scan) are computed\nvia `profession_level()` against believed-current and anchor skills\nrespectively, so the running-sum's contribution is visible per profession.\nThe optimizer / prospect / codex paths compute the same way; the formula\nis the canonical source for profession levels.",
+        "operationId": "get_professions_api_character_professions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Professions",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/prospect": {
+      "get": {
+        "description": "Forecast profession progression using observed session skill composition.",
+        "operationId": "get_character_prospect_api_character_prospect_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "profession",
+            "required": true,
+            "schema": {
+              "title": "Profession",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_level",
+            "required": true,
+            "schema": {
+              "title": "Target Level",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slice_type",
+            "required": false,
+            "schema": {
+              "default": "global",
+              "title": "Slice Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slice_value",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Slice Value"
+            }
+          },
+          {
+            "in": "query",
+            "name": "markup_uplift",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Markup Uplift",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterProspect"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Character Prospect",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/prospect-options": {
+      "get": {
+        "description": "Return slice values available for Prospect forecasts.",
+        "operationId": "get_character_prospect_options_api_character_prospect_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Character Prospect Options",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/skills": {
+      "get": {
+        "description": "Return calibrated skill levels with ranks and TT values.\n\nEach row carries `level` (believed-current — anchor + chatlog/codex gains\nsince), `anchorLevel` (latest source='scan' row, or null if never scanned),\nand `gainSinceAnchor` (level - anchorLevel, or null when no anchor exists).",
+        "operationId": "get_skills_api_character_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Skills",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/character/stats": {
+      "get": {
+        "description": "Return HP and top profession levels.\n\nHP is read directly from the scanned Health attribute level\n(Health is an attribute whose in-game value equals the player's HP).",
+        "operationId": "get_character_stats_api_character_stats_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Character Stats",
+        "tags": [
+          "character"
+        ]
+      }
+    },
+    "/api/codex/calibrate": {
+      "post": {
+        "description": "Set codex rank directly (manual calibration, no side effects).",
+        "operationId": "calibrate_api_codex_calibrate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalibrateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Calibrate",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/claim": {
+      "post": {
+        "description": "Claim a codex rank reward.",
+        "operationId": "claim_rank_api_codex_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Rank",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/meta/attributes": {
+      "get": {
+        "description": "Return the 6 attributes with current levels.",
+        "operationId": "meta_attributes_api_codex_meta_attributes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Meta Attributes",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/meta/claim": {
+      "post": {
+        "description": "Claim a meta codex reward (1 PED into an attribute).",
+        "operationId": "meta_claim_api_codex_meta_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetaClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Meta Claim",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/recommend": {
+      "get": {
+        "description": "Skill options for a rank, ranked by profession or HP gain.",
+        "operationId": "recommend_api_codex_recommend_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "species_name",
+            "required": true,
+            "schema": {
+              "title": "Species Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rank",
+            "required": true,
+            "schema": {
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Rank",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "profession",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Profession"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "default": "profession",
+              "enum": [
+                "profession",
+                "hp"
+              ],
+              "title": "Target",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recommend",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/species": {
+      "get": {
+        "description": "All mob species with codex base cost and player rank.",
+        "operationId": "list_species_api_codex_species_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Species",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/species/{name}/ranks": {
+      "get": {
+        "description": "25-rank breakdown for a species.",
+        "operationId": "species_ranks_api_codex_species__name__ranks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Species Ranks",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/demo/analytics/activity": {
+      "get": {
+        "operationId": "demo_analytics_activity_api_demo_analytics_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Analytics Activity",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/analytics/inventory": {
+      "get": {
+        "operationId": "demo_list_inventory_items_api_demo_analytics_inventory_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo List Inventory Items",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/analytics/ledger": {
+      "get": {
+        "operationId": "demo_list_ledger_api_demo_analytics_ledger_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo List Ledger",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/analytics/ledger/presets": {
+      "get": {
+        "operationId": "demo_list_ledger_presets_api_demo_analytics_ledger_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo List Ledger Presets",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/analytics/overview": {
+      "get": {
+        "operationId": "demo_analytics_overview_api_demo_analytics_overview_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsOverview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Demo Analytics Overview",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/live": {
+      "get": {
+        "operationId": "demo_tracking_live_api_demo_tracking_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingLive"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Tracking Live",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/recent-events": {
+      "get": {
+        "operationId": "demo_recent_events_api_demo_tracking_recent_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotableEvent"
+                  },
+                  "title": "Response Demo Recent Events Api Demo Tracking Recent Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Recent Events",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/session/{session_id}": {
+      "get": {
+        "operationId": "demo_get_session_api_demo_tracking_session__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Demo Get Session",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/sessions": {
+      "get": {
+        "operationId": "demo_list_sessions_api_demo_tracking_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo List Sessions",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/status": {
+      "get": {
+        "operationId": "demo_tracking_status_api_demo_tracking_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Tracking Status",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/equipment/cost/calculate": {
+      "post": {
+        "description": "Calculate cost breakdown for a weapon configuration without saving.",
+        "operationId": "calculate_cost_api_equipment_cost_calculate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CalculateCostRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Calculate Cost",
+        "tags": [
+          "equipment"
+        ]
+      }
+    },
+    "/api/equipment/library": {
+      "get": {
+        "description": "Return all items in the user's equipment library with computed costs.",
+        "operationId": "get_library_api_equipment_library_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Library",
+        "tags": [
+          "equipment"
+        ]
+      },
+      "post": {
+        "description": "Add an item to the equipment library.",
+        "operationId": "add_to_library_api_equipment_library_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddWeaponRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add To Library",
+        "tags": [
+          "equipment"
+        ]
+      }
+    },
+    "/api/equipment/library/{item_id}": {
+      "delete": {
+        "description": "Remove an item from the equipment library.",
+        "operationId": "remove_from_library_api_equipment_library__item_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove From Library",
+        "tags": [
+          "equipment"
+        ]
+      },
+      "put": {
+        "description": "Update an existing equipment library entry.",
+        "operationId": "update_library_item_api_equipment_library__item_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddWeaponRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Library Item",
+        "tags": [
+          "equipment"
+        ]
+      }
+    },
+    "/api/equipment/library/{item_id}/detail": {
+      "get": {
+        "description": "Return full detail with cost breakdown for a library item.",
+        "operationId": "get_library_detail_api_equipment_library__item_id__detail_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Library Detail",
+        "tags": [
+          "equipment"
+        ]
+      }
+    },
+    "/api/equipment/search": {
+      "get": {
+        "description": "Search the bundled equipment catalogue by name and type.\n\ntype: weapon | amp | healer | scope | absorber | consumable\nReturns items with ammoBurn already converted to PEC.",
+        "operationId": "search_items_api_equipment_search_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "default": "weapon",
+              "title": "Type",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Items",
+        "tags": [
+          "equipment"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_check_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health Check",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/quests": {
+      "get": {
+        "description": "List all active quests.",
+        "operationId": "list_quests_api_quests_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Quests",
+        "tags": [
+          "quests"
+        ]
+      },
+      "post": {
+        "description": "Create a new quest.",
+        "operationId": "create_quest_api_quests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Quest",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/analytics": {
+      "get": {
+        "description": "Per-quest sustainability metrics from curated linked sessions.",
+        "operationId": "quest_analytics_api_quests_analytics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Quest Analytics",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/mobs": {
+      "get": {
+        "description": "All distinct mob names for autocomplete.",
+        "operationId": "list_mob_names_api_quests_mobs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Mob Names",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/playlists": {
+      "get": {
+        "description": "List all active playlists.",
+        "operationId": "list_playlists_api_quests_playlists_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Playlists",
+        "tags": [
+          "quests"
+        ]
+      },
+      "post": {
+        "description": "Create a new playlist.",
+        "operationId": "create_playlist_api_quests_playlists_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Playlist",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/playlists/analytics": {
+      "get": {
+        "description": "Per-playlist sustainability metrics from curated linked sessions.",
+        "operationId": "playlist_analytics_api_quests_playlists_analytics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Playlist Analytics",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/playlists/{playlist_id}": {
+      "delete": {
+        "description": "Soft-delete a playlist.",
+        "operationId": "delete_playlist_api_quests_playlists__playlist_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "playlist_id",
+            "required": true,
+            "schema": {
+              "title": "Playlist Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Playlist",
+        "tags": [
+          "quests"
+        ]
+      },
+      "put": {
+        "description": "Update a playlist.",
+        "operationId": "update_playlist_api_quests_playlists__playlist_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "playlist_id",
+            "required": true,
+            "schema": {
+              "title": "Playlist Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Playlist",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/{quest_id}": {
+      "delete": {
+        "description": "Soft-delete a quest.",
+        "operationId": "delete_quest_api_quests__quest_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Quest",
+        "tags": [
+          "quests"
+        ]
+      },
+      "get": {
+        "description": "Get a single quest.",
+        "operationId": "get_quest_api_quests__quest_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Quest",
+        "tags": [
+          "quests"
+        ]
+      },
+      "put": {
+        "description": "Update a quest.",
+        "operationId": "update_quest_api_quests__quest_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Quest",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/{quest_id}/cancel": {
+      "post": {
+        "description": "Cancel a started quest or undo an active cooldown reset.",
+        "operationId": "cancel_quest_api_quests__quest_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/QuestCancel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Req"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Quest",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/{quest_id}/complete": {
+      "post": {
+        "description": "Complete a quest — resets cooldown, increments counter, auto-creates ledger entry.",
+        "operationId": "complete_quest_api_quests__quest_id__complete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Quest",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/quests/{quest_id}/start": {
+      "post": {
+        "description": "Mark a quest as in-progress.",
+        "operationId": "start_quest_api_quests__quest_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quest_id",
+            "required": true,
+            "schema": {
+              "title": "Quest Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Quest",
+        "tags": [
+          "quests"
+        ]
+      }
+    },
+    "/api/recording/abort": {
+      "post": {
+        "description": "Discard the in-flight recording without finalising.",
+        "operationId": "abort_recording_api_recording_abort_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Abort Recording",
+        "tags": [
+          "recording"
+        ]
+      }
+    },
+    "/api/recording/start": {
+      "post": {
+        "description": "Begin a recording session.",
+        "operationId": "start_recording_api_recording_start_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start Recording",
+        "tags": [
+          "recording"
+        ]
+      }
+    },
+    "/api/recording/status": {
+      "get": {
+        "description": "Current recording state plus live capture counters.",
+        "operationId": "recording_status_api_recording_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recording Status",
+        "tags": [
+          "recording"
+        ]
+      }
+    },
+    "/api/recording/stop": {
+      "post": {
+        "description": "Finalise the recording into the recorded-scenario corpus.",
+        "operationId": "stop_recording_api_recording_stop_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopRecordingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Recording",
+        "tags": [
+          "recording"
+        ]
+      }
+    },
+    "/api/scan/skills/accept": {
+      "post": {
+        "operationId": "skill_accept_api_scan_skills_accept_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Accept",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/cancel": {
+      "post": {
+        "operationId": "skill_cancel_api_scan_skills_cancel_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Cancel",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/capture": {
+      "post": {
+        "operationId": "skill_capture_api_scan_skills_capture_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Capture",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/capture/{page}": {
+      "get": {
+        "operationId": "skill_capture_png_api_scan_skills_capture__page__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "page",
+            "required": true,
+            "schema": {
+              "title": "Page",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Skill Capture Png",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/pending": {
+      "get": {
+        "operationId": "skill_pending_api_scan_skills_pending_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Pending",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/process": {
+      "post": {
+        "operationId": "skill_process_api_scan_skills_process_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Process",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/reject": {
+      "post": {
+        "operationId": "skill_reject_api_scan_skills_reject_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Reject",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/start": {
+      "post": {
+        "operationId": "skill_start_api_scan_skills_start_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page_count",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Count"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Skill Start",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/status": {
+      "get": {
+        "operationId": "skill_status_api_scan_skills_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Status",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/skills/undo": {
+      "post": {
+        "operationId": "skill_undo_api_scan_skills_undo_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Skill Undo",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/scan/spacebar-capture": {
+      "post": {
+        "operationId": "set_spacebar_capture_api_scan_spacebar_capture_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": true,
+            "schema": {
+              "title": "Enabled",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Spacebar Capture",
+        "tags": [
+          "scan-manual"
+        ]
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "description": "Return full settings including live cache stats.",
+        "operationId": "get_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "Partial update — only provided fields are written.",
+        "operationId": "update_settings_api_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/overlay-position": {
+      "get": {
+        "operationId": "get_overlay_position_api_settings_overlay_position_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Overlay Position",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "set_overlay_position_api_settings_overlay_position_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayPositionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Overlay Position",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/reset": {
+      "post": {
+        "description": "Reset all settings to defaults.",
+        "operationId": "reset_settings_api_settings_reset_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Reset Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/tracking/live": {
+      "get": {
+        "description": "Live session data for the overlay — compact stats + current mob.",
+        "operationId": "tracking_live_api_tracking_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingLive"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Tracking Live",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/manual-mob-lock": {
+      "post": {
+        "description": "Immediately lock the selected catalogue mob for manual kill stamping.",
+        "operationId": "manual_mob_lock_api_tracking_manual_mob_lock_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualMobLockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Manual Mob Lock",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/manual-mob-suggestions": {
+      "get": {
+        "description": "Autocomplete suggestions for manual mob lock.",
+        "operationId": "manual_mob_suggestions_api_tracking_manual_mob_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Manual Mob Suggestions",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/recent-events": {
+      "get": {
+        "description": "Recent notable events for the latest tracking session — dashboard activity feed.\n\nScoped to the most recent session (by started_at) so starting a fresh session\nclears the dashboard feed; events populate again as they occur in-session.",
+        "operationId": "recent_events_api_tracking_recent_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotableEvent"
+                  },
+                  "title": "Response Recent Events Api Tracking Recent Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Recent Events",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/release-mob": {
+      "post": {
+        "description": "Release the currently locked mob.",
+        "operationId": "release_mob_api_tracking_release_mob_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Release Mob",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}": {
+      "delete": {
+        "description": "Delete a tracking session and all associated data.",
+        "operationId": "delete_session_api_tracking_session__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Session",
+        "tags": [
+          "tracking"
+        ]
+      },
+      "get": {
+        "description": "Get full session detail with aggregated summary.\n\nReturns shape matching the frontend SessionDetail type.",
+        "operationId": "get_session_api_tracking_session__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/armour-cost": {
+      "post": {
+        "description": "Save armour repair cost to a session.",
+        "operationId": "set_armour_cost_api_tracking_session__session_id__armour_cost_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArmourCostBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Armour Cost",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/loot-item/{item_name}/activate": {
+      "post": {
+        "description": "Bulk-activate every previously-deactivated `kill_loot_items`\nrow matching `item_name` in this session. Inverse of\nbulk_deactivate.",
+        "operationId": "bulk_activate_loot_item_api_tracking_session__session_id__loot_item__item_name__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_name",
+            "required": true,
+            "schema": {
+              "title": "Item Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Activate Loot Item",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/loot-item/{item_name}/deactivate": {
+      "post": {
+        "description": "Bulk-deactivate every `kill_loot_items` row matching `item_name`\nin this session (item-name is URL-path encoded so spaces survive).\n\nAtomically flips all active matching rows + rewrites each parent\nkill's `loot_total_ped` + invalidates `session_summaries`. 404 if\nthe item isn't in this session at all; 409 if every matching row is\nalready deactivated.",
+        "operationId": "bulk_deactivate_loot_item_api_tracking_session__session_id__loot_item__item_name__deactivate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_name",
+            "required": true,
+            "schema": {
+              "title": "Item Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Deactivate Loot Item",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/quest-link": {
+      "post": {
+        "description": "Persist the curated quest analytics linkage decision for a session.",
+        "operationId": "decide_session_quest_link_api_tracking_session__session_id__quest_link_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionQuestLinkDecisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Session Quest Link",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/quest-link-suggestion": {
+      "get": {
+        "description": "Get the curated post-session quest analytics linkage suggestion.",
+        "operationId": "get_session_quest_link_suggestion_api_tracking_session__session_id__quest_link_suggestion_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session Quest Link Suggestion",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/rename-mob": {
+      "post": {
+        "description": "Rewrite kills.mob_name for matching kills in this session.\n\nAtomically: preserves the pre-edit `mob_name` into\n`original_mob_name` via COALESCE (first-original semantics), rewrites\n`mob_name` for every matching kill in the session, invalidates the\n`session_summaries` cache row. 404 on missing session. 409 if the\n`fromMobName` value has no matching kills in the session, or if\n`fromMobName == toMobName` (the no-op rename would silently succeed\notherwise).",
+        "operationId": "rename_session_mob_api_tracking_session__session_id__rename_mob_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameMobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename Session Mob",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/repair-scan": {
+      "post": {
+        "description": "Run OCR on the bundled-anchor repair region. Returns result without saving.",
+        "operationId": "repair_scan_api_tracking_session__session_id__repair_scan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Repair Scan",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/session/{session_id}/restore-mob": {
+      "post": {
+        "description": "Revert kills in this session whose current mob_name matches the\nrequest and carry a preserved `original_mob_name`.\n\nInverse of rename-mob. Atomically: rewrites `mob_name` back to\n`original_mob_name`, clears `original_mob_name`, invalidates the\n`session_summaries` cache. 404 on missing session. 409 if no kills\nin the session match the request (either nothing has been renamed\nto that current name, or no preserved original exists to restore).",
+        "operationId": "restore_session_mob_api_tracking_session__session_id__restore_mob_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreMobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Session Mob",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/sessions": {
+      "get": {
+        "description": "List recent tracking sessions with aggregated stats.\n\nReturns shapes matching the frontend TrackingSession type.",
+        "operationId": "list_sessions_api_tracking_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Sessions",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/start": {
+      "post": {
+        "description": "Start a new tracking session.",
+        "operationId": "start_tracking_api_tracking_start_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Start Tracking",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/status": {
+      "get": {
+        "description": "Get current tracking status.",
+        "operationId": "tracking_status_api_tracking_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Tracking Status",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/stop": {
+      "post": {
+        "description": "Stop the active tracking session.",
+        "operationId": "stop_tracking_api_tracking_stop_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stop Tracking",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/tag-lock": {
+      "post": {
+        "description": "Immediately set the active free-text tag for tag-mode kill stamping.",
+        "operationId": "tag_lock_api_tracking_tag_lock_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagLockRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tag Lock",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/tag-suggestions": {
+      "get": {
+        "description": "Autocomplete suggestions for free-text session mob tags.",
+        "operationId": "tag_suggestions_api_tracking_tag_suggestions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tag Suggestions",
+        "tags": [
+          "tracking"
+        ]
+      }
+    }
+  }
+}

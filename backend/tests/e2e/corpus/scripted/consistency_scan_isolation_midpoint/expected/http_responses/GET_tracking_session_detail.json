@@ -1,0 +1,61 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "deactivatedLootBreakdown": [],
+      "effectiveLoot": 4.2,
+      "lootBreakdown": [
+        {
+          "name": "Animal Hide",
+          "quantity": 1,
+          "ttValue": 4.2
+        }
+      ],
+      "mobBreakdown": [
+        {
+          "currentName": "Unknown",
+          "killCount": 1,
+          "originalName": null
+        }
+      ],
+      "mobEntryMode": "mob",
+      "notableEvents": [],
+      "sessionId": "<UUID_1>",
+      "skillGains": [],
+      "summary": {
+        "cost": 0.0,
+        "costBreakdown": {
+          "armourCost": 0.0,
+          "enhancerCost": 0.0,
+          "healCost": 0.0,
+          "weaponCost": 0.0
+        },
+        "duration": 1,
+        "kills": 1,
+        "net": 4.2,
+        "pes": 0.0,
+        "returnRate": 0.0,
+        "returns": 4.2
+      },
+      "toolStats": [
+        {
+          "costAttributed": 0.0,
+          "crits": 1,
+          "damageDealt": 72.0,
+          "shotsFired": 3,
+          "weaponName": "Unknown"
+        }
+      ]
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

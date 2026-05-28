@@ -112,6 +112,7 @@ ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 from backend.core.event_bus import EventBus
 from backend.db.app_database import AppDatabase
 from backend.dependencies import Services, set_services
+from backend.middleware.etag import install_etag_middleware
 from backend.routers import (
     analytics,
     character,
@@ -458,6 +459,8 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "Invalid Origin header"}, status_code=403)
 
         return await call_next(request)
+
+    install_etag_middleware(app)
 
     app.include_router(health.router, prefix="/api")
     app.include_router(character.router, prefix="/api")

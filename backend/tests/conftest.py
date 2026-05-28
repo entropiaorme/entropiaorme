@@ -57,6 +57,7 @@ _MODULE_TIERS = {
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
     "test_api_contract": "standard",  # boots the app lifespan + ASGI schemathesis run
+    "test_api_contract_with_state": "standard",  # contract suite over replayed state
     "test_character_endpoints": "standard",
     "test_chatlog_watcher": "standard",
     "test_codex_service": "standard",
@@ -80,6 +81,9 @@ _MODULE_TIERS = {
     "test_consistency_quests_mission_lifecycle_midpoint": "standard",
     "test_consistency_scan_isolation_midpoint": "standard",
     "test_consistency_codex_isolation_midpoint": "standard",
+    "test_etag": "standard",  # boots the app lifespan via TestClient
+    "test_openapi_drift": "fast",  # introspects app.openapi() at module load
+    "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
 }
 
 

@@ -1,0 +1,71 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "deactivatedLootBreakdown": [],
+      "effectiveLoot": 12.05,
+      "lootBreakdown": [
+        {
+          "name": "Shrapnel",
+          "quantity": 1020,
+          "ttValue": 10.2
+        },
+        {
+          "name": "Wool",
+          "quantity": 3,
+          "ttValue": 1.2
+        },
+        {
+          "name": "Animal Muscle Oil",
+          "quantity": 1,
+          "ttValue": 0.65
+        }
+      ],
+      "mobBreakdown": [
+        {
+          "currentName": "Unknown",
+          "killCount": 3,
+          "originalName": null
+        }
+      ],
+      "mobEntryMode": "mob",
+      "notableEvents": [],
+      "sessionId": "<UUID_1>",
+      "skillGains": [],
+      "summary": {
+        "cost": 0.0,
+        "costBreakdown": {
+          "armourCost": 0.0,
+          "enhancerCost": 0.0,
+          "healCost": 0.0,
+          "weaponCost": 0.0
+        },
+        "duration": 0,
+        "kills": 3,
+        "net": 12.05,
+        "pes": 0.0,
+        "returnRate": 0.0,
+        "returns": 12.05
+      },
+      "toolStats": [
+        {
+          "costAttributed": 0.0,
+          "crits": 1,
+          "damageDealt": 106.0,
+          "shotsFired": 6,
+          "weaponName": "Unknown"
+        }
+      ]
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

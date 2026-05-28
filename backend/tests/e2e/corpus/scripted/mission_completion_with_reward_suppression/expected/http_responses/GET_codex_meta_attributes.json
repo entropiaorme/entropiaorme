@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/codex/meta/attributes",
+    "query": {}
+  },
+  "response": {
+    "body": [
+      {
+        "currentLevel": null,
+        "name": "Agility"
+      },
+      {
+        "currentLevel": null,
+        "name": "Health"
+      },
+      {
+        "currentLevel": null,
+        "name": "Intelligence"
+      },
+      {
+        "currentLevel": null,
+        "name": "Psyche"
+      },
+      {
+        "currentLevel": null,
+        "name": "Stamina"
+      },
+      {
+        "currentLevel": null,
+        "name": "Strength"
+      }
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

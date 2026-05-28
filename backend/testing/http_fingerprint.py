@@ -39,7 +39,7 @@ from backend.testing.fingerprint import Normalizer
 
 STRONG_ETAG_RE = re.compile(r'^"[0-9a-f]{64}"$')
 
-# Inline UUID pattern (anchored to a path segment) — the ``UUID_PATTERN``
+# Inline UUID pattern (anchored to a path segment); the ``UUID_PATTERN``
 # imported above is the full-string match used by the body walker.
 _UUID_IN_PATH_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"

@@ -42,6 +42,7 @@ from backend.middleware.etag import (
     CACHE_CONTROL_VALUE,
     ETAG_PREFIXES,
     covered_get_routes,
+    if_none_match_matches,
     path_is_in_etag_scope,
 )
 
@@ -269,6 +270,82 @@ def test_routes_outside_the_hydration_prefixes_carry_no_etag(
             f"{route} returned 2xx with an ETag; the substrate should leave "
             "non-hydration routes untouched"
         )
+
+
+def test_if_none_match_weak_validator_matches_strong_etag(
+    client: TestClient,
+) -> None:
+    """Per RFC 7232 §2.3.2, conditional GET uses the weak-comparison
+    function: a client sending ``W/"<hex>"`` against the server's
+    strong ``"<hex>"`` still gets a 304."""
+    route = "/api/tracking/status"
+    first = _get(client, route)
+    assert first.status_code == 200
+    strong_etag = first.headers["etag"]
+    assert strong_etag.startswith('"'), strong_etag
+    weak_form = f"W/{strong_etag}"
+
+    response = _get(client, route, **{"If-None-Match": weak_form})
+    assert response.status_code == 304, (
+        f"Weak If-None-Match {weak_form!r} should match strong "
+        f"{strong_etag!r}; got {response.status_code}: {response.text!r}"
+    )
+    assert response.content == b""
+
+
+def test_if_none_match_comma_separated_list_matches(client: TestClient) -> None:
+    """A multi-tag If-None-Match header matches when any candidate
+    matches the current ETag (common shape from clients holding
+    multiple cached representations)."""
+    route = "/api/tracking/status"
+    first = _get(client, route)
+    etag = first.headers["etag"]
+    bogus = '"' + ("a" * 64) + '"'
+    response = _get(client, route, **{"If-None-Match": f"{bogus}, {etag}"})
+    assert response.status_code == 304, (
+        f"{route} should 304 on comma-list containing the current ETag; "
+        f"got {response.status_code}"
+    )
+
+
+def test_if_none_match_wildcard_matches(client: TestClient) -> None:
+    """The ``*`` wildcard matches any current representation."""
+    route = "/api/tracking/status"
+    response = _get(client, route, **{"If-None-Match": "*"})
+    assert response.status_code == 304, (
+        f"If-None-Match: * should 304; got {response.status_code}"
+    )
+    assert response.content == b""
+
+
+def test_if_none_match_matches_unit_classification() -> None:
+    """Unit-level coverage of the header-parsing predicate without an HTTP
+    round-trip: classification of all the documented input shapes."""
+    current = '"abc123"'
+
+    # Non-match shapes.
+    assert if_none_match_matches(None, current) is False
+    assert if_none_match_matches("", current) is False
+    assert if_none_match_matches('"xyz"', current) is False
+    assert if_none_match_matches('"xyz", "qrs"', current) is False
+
+    # Strong match.
+    assert if_none_match_matches(current, current) is True
+
+    # Weak comparison: W/"abc123" matches "abc123" under conditional GET.
+    assert if_none_match_matches(f"W/{current}", current) is True
+
+    # Wildcard.
+    assert if_none_match_matches("*", current) is True
+    assert if_none_match_matches("  *  ", current) is True
+
+    # Comma-separated list with whitespace variants.
+    assert if_none_match_matches(f'"xyz", {current}', current) is True
+    assert if_none_match_matches(f'  "xyz" ,   {current}  ', current) is True
+    assert if_none_match_matches(f'"xyz",W/{current}', current) is True
+
+    # Empty list entries are skipped, not treated as a wildcard.
+    assert if_none_match_matches(",,", current) is False
 
 
 def test_path_is_in_etag_scope_classification() -> None:

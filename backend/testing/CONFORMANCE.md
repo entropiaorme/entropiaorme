@@ -24,10 +24,10 @@ prefixes:
 
 A 2xx response is wrapped with:
 
-- `ETag: "<sha256-hex>"` — strong, RFC 7232 quoted form, computed over
+- `ETag: "<sha256-hex>"`: strong, RFC 7232 quoted form, computed over
   the serialised response body. Equal bodies yield equal ETags
   regardless of route or process.
-- `Cache-Control: no-cache` — mandate revalidation. The substrate's
+- `Cache-Control: no-cache`: mandate revalidation. The substrate's
   goal is body-skip, not network-skip; the frontend still polls, and
   the backend still computes, but `304 Not Modified` carries no body.
 
@@ -55,7 +55,7 @@ in either the event-stream or the HTTP response view.
 The response projection:
 
 - **Status code**: literal.
-- **Headers**: a curated set — `Content-Type`, `Cache-Control`, `ETag`.
+- **Headers**: a curated set: `Content-Type`, `Cache-Control`, `ETag`.
   ETag is projected as the sentinel `"<STRONG_ETAG>"` when it matches
   the strong-format pattern; any other shape (weak, malformed, empty)
   is kept verbatim so an unexpected shape surfaces as a divergence.
@@ -126,8 +126,8 @@ scenario hits the snapshot endpoint, captures its ETag, then issues
 status is 304. The current goldens already pin the substrate is
 engaged on every snapshot endpoint, so the only new contract at that
 point is the frontend's discipline at sending `If-None-Match`. The
-deeper closing signal — "FastAPI access log stays empty after the
-dashboard mounts" — needs no new harness piece either: a router
+deeper closing signal ("FastAPI access log stays empty after the
+dashboard mounts") needs no new harness piece either: a router
 access-log probe in the e2e fixture, hit-counted at the test's
 boundary, will close that property.
 

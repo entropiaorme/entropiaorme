@@ -54,6 +54,41 @@ def compute_strong_etag(body: bytes) -> str:
     return f'"{hashlib.sha256(body).hexdigest()}"'
 
 
+def if_none_match_matches(header_value: str | None, current_etag: str) -> bool:
+    """Return whether ``If-None-Match`` indicates the client already holds
+    the resource representation identified by ``current_etag``.
+
+    Implements RFC 7232 §3.2 + §2.3.2 weak-comparison semantics:
+
+    - An absent or empty header is a non-match.
+    - The wildcard ``*`` matches any current representation.
+    - Otherwise the header is a comma-separated list of entity-tags
+      (``"opaque"`` or ``W/"opaque"``); the request matches if any
+      candidate's opaque part equals ``current_etag``'s opaque part.
+      Weak/strong prefix is ignored by the weak-comparison function the
+      RFC mandates for conditional GETs, so a client sending
+      ``W/"<hex>"`` against a server-strong ``"<hex>"`` still gets 304.
+
+    Whitespace between list items and around the ``W/`` prefix is
+    tolerated; clients in the wild produce all three of
+    ``"a","b"``, ``"a", "b"``, ``W/"a", "b"``.
+    """
+    if not header_value:
+        return False
+    stripped = header_value.strip()
+    if stripped == "*":
+        return True
+    current_opaque = current_etag.removeprefix("W/").strip()
+    for raw in stripped.split(","):
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        candidate_opaque = candidate.removeprefix("W/").strip()
+        if candidate_opaque == current_opaque:
+            return True
+    return False
+
+
 async def _read_streaming_body(
     iterator: AsyncIterable[str | bytes | memoryview],
 ) -> bytes:
@@ -118,7 +153,7 @@ async def etag_dispatch(
     headers["ETag"] = etag_value
     headers["Cache-Control"] = CACHE_CONTROL_VALUE
 
-    if request.headers.get("if-none-match") == etag_value:
+    if if_none_match_matches(request.headers.get("if-none-match"), etag_value):
         # 304 carries the same validator + cross-cutting headers a 200
         # response would (per RFC 7232 §4.1), so CORS / Vary / Date
         # added by inner middleware remain available to the client.

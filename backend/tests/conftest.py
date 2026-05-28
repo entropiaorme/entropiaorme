@@ -75,6 +75,8 @@ _MODULE_TIERS = {
     "test_spacebar_scan_capture": "standard",
     "test_quest_automation_with_playlist_match": "standard",
     "test_input_listening_minimisation": "standard",
+    "test_consistency_tracking_hunt_midpoint": "standard",
+    "test_consistency_negative_control": "standard",
 }
 
 

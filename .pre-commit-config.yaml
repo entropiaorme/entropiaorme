@@ -52,6 +52,14 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+      # The fast tier only: pure-logic, in-memory, sub-second tests, for quick
+      # local feedback before a commit. It is deliberately NOT the PR gate. The
+      # continuous-integration backend job runs `fast or standard`, which is a
+      # strict superset, so re-running the fast tier inside CI's pre-commit job
+      # would burn cycles for a subset CI already covers; that job SKIPs this
+      # hook for exactly that reason. The standard tier (db / filesystem /
+      # in-process stateful) is left to CI rather than the commit loop to keep
+      # the hook sub-second.
       - id: pytest-fast
         name: pytest (fast tier)
         entry: python -m pytest -m fast

@@ -160,7 +160,8 @@ regenerate its goldens (see below).
 - Don't hand-edit a recorded `chat_replay.log` to "clean it up" beyond the
   privacy trim above; the goldens are derived from it, and silent edits desync
   the fixture from what the pipeline actually produced. Regenerate the goldens
-  if you do trim it.
+  if you do trim it, following the goldens-regeneration commit-message
+  convention in [TESTING.md](../../TESTING.md#commit-message-convention).
 - Don't treat the presence of `scan_captures/` or `keystrokes.jsonl` as proof
   those surfaces are verified. Until their replay layers land, they are
   preserved but unasserted.

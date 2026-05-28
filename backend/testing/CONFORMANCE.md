@@ -117,6 +117,9 @@ Three guardrails push back against reflex ratification: the default
 mode fails on diff, update mode is gated behind an explicit CLI flag,
 and update mode prints the diff before writing.
 
+A regeneration commit follows the goldens-regeneration commit-message
+convention in [TESTING.md](../../TESTING.md#commit-message-convention).
+
 ## Future event-driven hydration hook
 
 When the frontend store layer adopts an event-driven hydration model,

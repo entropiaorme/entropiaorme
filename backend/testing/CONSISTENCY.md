@@ -143,4 +143,5 @@ pytest backend/tests/e2e/test_consistency_*.py --force-regen
 
 Review the diff against the prior golden before committing, the same
 guardrail the surrounding harness's `--update-fingerprints` workflow
-applies.
+applies, and follow the goldens-regeneration commit-message convention
+in [TESTING.md](../../TESTING.md#commit-message-convention).

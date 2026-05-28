@@ -313,3 +313,86 @@ def test_tick_with_non_positive_seconds_raises() -> None:
         s.tick(seconds=0)
     with pytest.raises(ValueError, match=r"seconds >= 1"):
         s.tick(seconds=-5)
+
+
+# === keystroke ======================================================
+
+
+def test_keystroke_press_records_at_current_timestamp() -> None:
+    """A ``keystroke.press`` records (key, kind, offset_s, wall) at the
+    scenario's current timestamp, with ``offset_s`` measured from the
+    epoch (first :meth:`Scenario.at` call)."""
+    s = Scenario("ks").at("2026-05-28 12:00:00")
+    s.keystroke.press("1")
+    s.tick(3)
+    s.keystroke.press("2")
+
+    records = s.keystrokes()
+    assert records == [
+        {
+            "key": "1",
+            "kind": "press",
+            "offset_s": 0.0,
+            "wall": "2026-05-28T12:00:00+00:00",
+        },
+        {
+            "key": "2",
+            "kind": "press",
+            "offset_s": 3.0,
+            "wall": "2026-05-28T12:00:03+00:00",
+        },
+    ]
+
+
+def test_keystroke_release_records_release_kind() -> None:
+    """``keystroke.release`` records ``kind="release"``."""
+    s = Scenario("ks").at("2026-05-28 12:00:00")
+    s.keystroke.press("space")
+    s.keystroke.release("space")
+
+    records = s.keystrokes()
+    assert [(r["key"], r["kind"]) for r in records] == [
+        ("space", "press"),
+        ("space", "release"),
+    ]
+
+
+def test_keystroke_before_at_raises() -> None:
+    """Building a keystroke without a timestamp anchor fails fast,
+    mirroring the chat-line builders' contract."""
+    s = Scenario("ks")
+    with pytest.raises(RuntimeError, match=r"before Scenario\.at"):
+        s.keystroke.press("1")
+
+
+def test_scenario_write_emits_keystrokes_jsonl(tmp_path) -> None:
+    """``Scenario.write`` writes a recorder-shaped ``keystrokes.jsonl``
+    next to ``chat_replay.log`` when any keystrokes were recorded."""
+    import json
+
+    s = Scenario("ks").at("2026-05-28 12:00:00")
+    s.keystroke.press("1")
+    s.tick()
+    s.keystroke.press("2")
+    s.write(tmp_path / "scenario")
+
+    keystrokes_path = tmp_path / "scenario" / "keystrokes.jsonl"
+    assert keystrokes_path.exists()
+    lines = keystrokes_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    # Recorder writes records with sort_keys=True; mirror that here.
+    assert list(first.keys()) == ["key", "kind", "offset_s", "wall"]
+    assert first["key"] == "1"
+    assert first["kind"] == "press"
+
+
+def test_scenario_write_skips_keystrokes_jsonl_when_unused(tmp_path) -> None:
+    """No ``keystrokes.jsonl`` is written when the scenario recorded
+    no keystrokes (chat-only scenarios stay clean)."""
+    s = Scenario("chat_only").at("2026-05-28 12:00:00")
+    s.combat.damage_dealt(10.0)
+    s.write(tmp_path / "scenario")
+
+    assert (tmp_path / "scenario" / "chat_replay.log").exists()
+    assert not (tmp_path / "scenario" / "keystrokes.jsonl").exists()

@@ -1,0 +1,8 @@
+completed_quest_ids_order:
+- Alpha Hunt
+- Beta Hunt
+kill_count: 2
+suggestion:
+  playlist_name: Alpha + Beta
+  reason: exact_playlist
+  suggestion_type: playlist

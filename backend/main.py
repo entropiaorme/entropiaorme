@@ -134,7 +134,7 @@ from backend.services.cost_engine import (
     heal_reload_seconds,
 )
 from backend.services.game_data_store import GameDataStore
-from backend.services.hotbar_listener import HotbarListener
+from backend.services.hotbar_listener import HOTBAR_SLOT_KEYS, HotbarListener
 from backend.services.mob_lookup_service import MobLookupService
 from backend.services.quest_service import QuestService
 from backend.services.repair_ocr import RepairOcrService
@@ -146,6 +146,7 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
+from backend.testing.keystroke_source import PynputKeystrokeSource
 from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
 
@@ -348,19 +349,28 @@ async def lifespan(app: FastAPI):
 
     codex_service = CodexService(app_db, game_data)
 
-    # Hotbar key listener — pynput hotbar-slot hook. Subscribes to session
-    # lifecycle events on the bus; only runs while a tracking session is
-    # active AND the user-facing toggle is on.
-    hotbar_listener = HotbarListener(event_bus, hotbar_resolver=_hotbar_resolver)
+    # Hotbar key listener. Consumes a PynputKeystrokeSource filtered to the
+    # number-row hotbar keys at the OS-hook boundary (input minimisation made
+    # structural); subscribes to session lifecycle events on the bus; only
+    # runs while a tracking session is active AND the user-facing toggle is on.
+    hotbar_keystroke_source = PynputKeystrokeSource(key_allowlist=HOTBAR_SLOT_KEYS)
+    hotbar_listener = HotbarListener(
+        event_bus,
+        keystroke_source=hotbar_keystroke_source,
+        hotbar_resolver=_hotbar_resolver,
+    )
     hotbar_listener.apply_config(hotbar_hooks_enabled=config.hotbar_hooks_enabled)
 
     repair_ocr = RepairOcrService(config_service)
 
-    # Spacebar capture listener — pynput Space hook that fires capture on the
-    # active skill scan when the user opts in via the scan-overlay toggle.
-    # Off until the frontend explicitly enables it.
+    # Spacebar capture listener. Consumes a PynputKeystrokeSource filtered to
+    # the space key only; fires capture on the active skill scan when the user
+    # opts in via the scan-overlay toggle. Off until the frontend explicitly
+    # enables it.
+    spacebar_keystroke_source = PynputKeystrokeSource(key_allowlist={"space"})
     spacebar_capture_listener = SpacebarCaptureListener(
         skill_scan_manual=skill_scan_manual,
+        keystroke_source=spacebar_keystroke_source,
     )
 
     # Developer-only session recorder. Constructed unconditionally (cheap, no

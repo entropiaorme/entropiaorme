@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Any
 
 from backend.core.event_bus import EventBus
-from backend.testing.replay import wait_for_drain
+from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.replay import DRAIN_TIMEOUT_S, wait_for_drain
 from backend.testing.store_reducers import Reducer
 
 
@@ -83,8 +84,9 @@ def replay_segment(
     scenario_dir: Path,
     segment_name: str,
     chatlog_path: Path,
+    watcher: ChatlogWatcher,
     *,
-    drain_seconds: float = 0.6,
+    timeout: float = DRAIN_TIMEOUT_S,
 ) -> None:
     """Stream one segment file into the watcher's chatlog and drain.
 
@@ -93,9 +95,9 @@ def replay_segment(
     ``ChatlogWatcher`` reads each line through its real tail loop. A
     missing segment file is a contract error rather than a silent
     no-op: a consistency scenario authoring mistake should surface
-    loudly, not skip events. After every write completes, ``drain``
-    sleeps long enough for the tail loop to read the last line and
-    flush its idle tick (default 0.6s, matching ``replay.wait_for_drain``).
+    loudly, not skip events. After every write completes, the segment
+    waits on ``watcher`` until the tail loop has read the last line and
+    flushed its idle tick (see ``replay.wait_for_drain``).
     """
     source = scenario_dir / segment_name
     if not source.exists():
@@ -110,7 +112,7 @@ def replay_segment(
         for line in lines:
             sink.write(line)
             sink.flush()
-    wait_for_drain(drain_seconds)
+    wait_for_drain(watcher, chatlog_path, timeout=timeout)
 
 
 def _diff_state(
@@ -166,18 +168,20 @@ class ConsistencyHarness:
         self,
         bus: EventBus,
         chatlog_path: Path,
+        watcher: ChatlogWatcher,
         *,
-        drain_seconds: float = 0.6,
+        timeout: float = DRAIN_TIMEOUT_S,
     ) -> None:
-        """Bind the harness to the e2e pipeline's bus and chatlog.
+        """Bind the harness to the e2e pipeline's bus, chatlog, and watcher.
 
-        ``drain_seconds`` is forwarded to every ``replay_segment``
-        call so a slower CI runner can lengthen the drain without
-        touching every scenario test.
+        ``timeout`` is forwarded to every ``replay_segment`` call as the
+        ceiling on its drain wait; the wait returns the instant the watcher
+        is idle, so the ceiling is reached only when a watcher never drains.
         """
         self._bus = bus
         self._chatlog_path = chatlog_path
-        self._drain_seconds = drain_seconds
+        self._watcher = watcher
+        self._timeout = timeout
 
     def run(
         self,
@@ -215,7 +219,8 @@ class ConsistencyHarness:
             scenario_dir,
             "chat_replay.log",
             self._chatlog_path,
-            drain_seconds=self._drain_seconds,
+            self._watcher,
+            timeout=self._timeout,
         )
 
         # Defensively copy the captured snapshots and the reducer's
@@ -232,7 +237,8 @@ class ConsistencyHarness:
             scenario_dir,
             "chat_replay_after.log",
             self._chatlog_path,
-            drain_seconds=self._drain_seconds,
+            self._watcher,
+            timeout=self._timeout,
         )
 
         snapshot_t1 = dict(adapter.view_fn(view_context))

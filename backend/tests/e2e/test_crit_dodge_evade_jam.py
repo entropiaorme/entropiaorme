@@ -21,7 +21,7 @@ def test_full_offensive_combat_surface_yields_one_kill(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "crit_dodge_evade_jam"
     goldens = golden_set(scenario)
@@ -29,7 +29,7 @@ def test_full_offensive_combat_surface_yields_one_kill(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Damage shots: 14.0 + 17.0 + crit 30.0 + 12.0 = 73.0 dmg.

@@ -52,7 +52,7 @@ def test_chatlog_tap_records_verbatim_and_keeps_publishing(tmp_path):
     watcher.start()
     try:
         _stream(chatlog, COMBAT_LINES)
-        wait_for_drain()
+        wait_for_drain(watcher, chatlog)
     finally:
         watcher.stop()
         recorder.close()
@@ -76,7 +76,7 @@ def test_chatlog_tap_clear_reverts_to_no_capture(tmp_path):
     watcher.start()
     try:
         _stream(chatlog, COMBAT_LINES)
-        wait_for_drain()
+        wait_for_drain(watcher, chatlog)
     finally:
         watcher.stop()
         recorder.close()

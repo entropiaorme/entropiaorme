@@ -21,7 +21,7 @@ def test_enhancer_break_does_not_disrupt_kill(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "enhancer_break_during_hunt"
     goldens = golden_set(scenario)
@@ -29,7 +29,7 @@ def test_enhancer_break_does_not_disrupt_kill(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Single kill: 13.0 + 17.0 + 21.0 = 51.0 dmg across three shots,

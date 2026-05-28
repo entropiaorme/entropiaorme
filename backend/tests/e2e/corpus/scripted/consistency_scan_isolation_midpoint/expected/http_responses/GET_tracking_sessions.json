@@ -8,7 +8,7 @@
     "body": [
       {
         "cost": 0.0,
-        "duration": 1,
+        "duration": "<SESSION_DURATION>",
         "endTime": "<TS_1>",
         "globals": 0,
         "hofs": 0,

@@ -21,7 +21,7 @@ def test_defensive_only_produces_no_kills(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "defensive_combat_round"
     goldens = golden_set(scenario)
@@ -29,7 +29,7 @@ def test_defensive_only_produces_no_kills(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     assert len(result.kills) == 0, (

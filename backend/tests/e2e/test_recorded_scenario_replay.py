@@ -31,7 +31,7 @@ def test_placeholder_recorded_hunt_replays_against_goldens(
 ) -> None:
     """Replay the placeholder recorded hunt; assert two kills and the full
     event/DB state matches the goldens."""
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "recorded" / "placeholder_recorded_hunt"
     goldens = golden_set(scenario)
@@ -39,7 +39,7 @@ def test_placeholder_recorded_hunt_replays_against_goldens(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     assert len(result.kills) == 2, (

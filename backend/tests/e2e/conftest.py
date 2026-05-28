@@ -169,7 +169,7 @@ def golden_set(update_fingerprints: bool) -> Callable[[Path], GoldenSet]:
 @pytest.fixture
 def e2e_http_pipeline(
     tmp_path: Path,
-) -> Iterator[tuple[TestClient, Path]]:
+) -> Iterator[tuple[TestClient, Path, ChatlogWatcher]]:
     """Boot the full FastAPI lifespan against a temp data dir + chatlog.
 
     ``settings.json`` is pre-seeded so the in-lifespan ``ChatlogWatcher``
@@ -179,11 +179,12 @@ def e2e_http_pipeline(
     enabled on the live config so the recording router's dev-gated
     surface is exercised in the same shape the contract suite sees.
 
-    Yields ``(client, chatlog_path)``. The watcher inside the lifespan
-    is started during ``with TestClient(app)``; the test streams the
-    scenario's chat lines into the temp file via the existing
-    ``replay_scenario`` helper. Teardown stops the lifespan, restores
-    env, and removes the temp data dirs.
+    Yields ``(client, chatlog_path, watcher)``. The watcher inside the
+    lifespan is started during ``with TestClient(app)``; the test streams
+    the scenario's chat lines into the temp file via the existing
+    ``replay_scenario`` helper and drains against the yielded watcher.
+    Teardown stops the lifespan, restores env, and removes the temp data
+    dirs.
     """
     data_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_data_"))
     demo_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_demo_"))
@@ -205,6 +206,7 @@ def e2e_http_pipeline(
     # Import lazily so the env override is in place when backend.main's
     # lifespan reads ENTROPIAORME_DATA_DIR on TestClient enter.
     import backend.routers.demo as demo_module
+    from backend.dependencies import get_services
     from backend.main import BACKEND_PORT, app
     from backend.scripts.demo_seed.__main__ import main as seed_demo
 
@@ -221,7 +223,7 @@ def e2e_http_pipeline(
 
     try:
         with TestClient(app, base_url=f"http://localhost:{BACKEND_PORT}") as client:
-            yield client, chatlog
+            yield client, chatlog, get_services().chatlog_watcher
     finally:
         demo_module._resolve_demo_db_path = original_resolver
         demo_module._state["conn"] = None

@@ -62,12 +62,12 @@ def test_codex_isolation_invariant_holds_across_chat_event_stream(
 ) -> None:
     """Chat events leave the codex view's projection unchanged."""
 
-    bus, tracker, _watcher, chatlog, app_db = codex_consistency_pipeline
+    bus, tracker, watcher, chatlog, app_db = codex_consistency_pipeline
     scenario_dir = corpus_root / "scripted" / "consistency_codex_isolation_midpoint"
 
     tracker.start_session()
     try:
-        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog)
+        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog, watcher=watcher)
         adapter = SurfaceAdapter(
             name="codex",
             view_fn=codex_view_state,

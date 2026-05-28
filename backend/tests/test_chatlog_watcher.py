@@ -501,3 +501,75 @@ class TestQuestRewardSuppression:
         # Events should still be emitted despite exception
         loot_events = [e for e in events if e[0] == "loot"]
         assert len(loot_events) == 1
+
+
+class TestDrainSeams:
+    """The condition-drain seams the replay helpers depend on.
+
+    These pin the watcher contract the e2e/recorder drain helpers rely on:
+    ``start()`` is ready to tail before it returns, ``wait_until_drained``
+    blocks on the tail loop's progress rather than a clock, and a watcher that
+    never reaches the requested line count raises rather than passing silently.
+    """
+
+    def _write(self, path, lines: list[str]) -> None:
+        with path.open("a", encoding="utf-8") as sink:
+            for line in lines:
+                sink.write(line)
+                sink.flush()
+
+    def test_start_is_ready_to_tail_before_returning(self, tmp_path):
+        """Lines written immediately after start() are tailed, not missed.
+
+        The readiness barrier means start() has opened the file and seeked to
+        end by the time it returns, so a write that lands right after cannot
+        slip past a not-yet-seeked watcher.
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        bus = EventBus()
+        loot: list = []
+        bus.subscribe(EVENT_LOOT_GROUP, loot.append)
+        watcher = ChatlogWatcher(bus, chatlog)
+        watcher.start()
+        try:
+            line = _make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12")
+            self._write(chatlog, [line])
+            watcher.wait_until_drained(1, timeout=5.0)
+        finally:
+            watcher.stop()
+
+        assert watcher.lines_seen == 1
+        assert not watcher.has_pending_tick
+        assert len(loot) == 1
+
+    def test_wait_until_drained_raises_when_target_unreached(self, tmp_path):
+        """A watcher that never reads the requested lines raises TimeoutError.
+
+        A drain that the watcher cannot satisfy is a bug to surface, never a
+        wait to sleep through; the helper raises rather than returning.
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        watcher = ChatlogWatcher(EventBus(), chatlog)
+        watcher.start()
+        try:
+            with pytest.raises(TimeoutError):
+                # Nothing is ever written, so line one never arrives.
+                watcher.wait_until_drained(1, timeout=0.3)
+        finally:
+            watcher.stop()
+
+    def test_pending_tick_reflects_buffer_state(self):
+        """has_pending_tick tracks the tick buffer across process and flush."""
+        bus = EventBus()
+        bus.subscribe(EVENT_LOOT_GROUP, lambda _d: None)
+        watcher = ChatlogWatcher(bus, "dummy.log")
+
+        assert not watcher.has_pending_tick
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12")
+        )
+        assert watcher.has_pending_tick
+        watcher._flush_tick()
+        assert not watcher.has_pending_tick

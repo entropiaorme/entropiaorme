@@ -289,7 +289,7 @@ class RecordingController:
                 try:
                     tracker.start_session()
                     replay_scenario(scenario_dir, chatlog)
-                    wait_for_drain()
+                    wait_for_drain(watcher, chatlog)
                 finally:
                     watcher.stop()
                 tracker.stop_session()

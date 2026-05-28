@@ -12,8 +12,15 @@ scenario tests stay short.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
+
+from backend.services.chatlog_watcher import ChatlogWatcher
+
+# Ceiling on a drain wait. The condition wait returns the instant the watcher
+# is genuinely idle, so this is only reached when a watcher never drains (a
+# bug), never a routine wait duration. Generous enough to absorb worst-case
+# thread-scheduling latency on a saturated parallel runner.
+DRAIN_TIMEOUT_S = 10.0
 
 
 def replay_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
@@ -36,16 +43,22 @@ def replay_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
             sink.flush()
 
 
-def wait_for_drain(seconds: float = 0.6) -> None:
-    """Sleep long enough for the watcher's tail loop to read every
-    pending line and idle-flush the final tick.
+def wait_for_drain(
+    watcher: ChatlogWatcher,
+    chatlog_path: Path,
+    *,
+    timeout: float = DRAIN_TIMEOUT_S,
+) -> None:
+    """Block until ``watcher`` has tailed every line currently in
+    ``chatlog_path`` and flushed its final idle tick.
 
-    The watcher polls at ``TAIL_INTERVAL = 0.1s``. After a write burst
-    the loop needs one cycle to read each remaining line and one more
-    to observe a quiescent file and flush. The default of 0.6s leaves
-    generous headroom over the minimum (~0.2s) so the helper stays
-    deterministic under CI scheduling jitter without slowing the fast
-    tier noticeably.
+    The watcher seeks to end-of-file when it starts, so the cumulative line
+    count it reports equals the number of lines a scenario has appended to the
+    (initially empty) chatlog. This waits on that condition rather than
+    sleeping a fixed interval: it converges the instant the tail loop is
+    genuinely idle, and stays correct when heavy parallel load delays the
+    watcher thread. ``TimeoutError`` propagates if the watcher never drains.
     """
 
-    time.sleep(seconds)
+    target_lines = len(chatlog_path.read_text(encoding="utf-8").splitlines())
+    watcher.wait_until_drained(target_lines, timeout=timeout)

@@ -56,6 +56,15 @@ PROJECTED_HEADERS: tuple[str, ...] = (
 
 ETAG_SENTINEL = "<STRONG_ETAG>"
 
+# A tracking session's ``duration`` is ``ended_at - started_at`` in whole
+# seconds, both captured from wall-clock at session start / stop, so its value
+# reflects how long the test happened to run (its replay-drain latency) rather
+# than any contract the response should pin. The sibling ``startTime`` /
+# ``endTime`` are already symbolised by the shared Normalizer; this projects
+# the derived delta the same way so the golden stays deterministic regardless
+# of how quickly the watcher drained the scenario.
+SESSION_DURATION_SENTINEL = "<SESSION_DURATION>"
+
 
 @dataclass(frozen=True)
 class HttpRequest:
@@ -170,8 +179,32 @@ def normalise_body(
         return None
     if content_type and "application/json" in content_type.lower():
         decoded = json.loads(raw_body.decode("utf-8"))
-        return normalizer.normalize(decoded)
+        return _project_session_duration(normalizer.normalize(decoded))
     return {"_binary": True, "byte_length": len(raw_body)}
+
+
+def _project_session_duration(value: Any) -> Any:
+    """Symbolise the wall-clock session ``duration`` to a stable sentinel.
+
+    Walks the normalised body and replaces any numeric ``duration`` with
+    ``SESSION_DURATION_SENTINEL``. Across the hydration surface the goldens
+    capture, ``duration`` is only ever a tracking session's wall-clock length
+    (in the sessions list and in session detail's summary), so a value-level
+    pin would encode replay-drain latency rather than a contract; the sentinel
+    keeps the presence-and-shape assertion without the non-determinism. A
+    future endpoint that emits a genuinely deterministic ``duration`` would
+    surface the sentinel here and can refine this projection then.
+    """
+    if isinstance(value, dict):
+        projected = {k: _project_session_duration(v) for k, v in value.items()}
+        if isinstance(projected.get("duration"), int | float) and not isinstance(
+            projected.get("duration"), bool
+        ):
+            projected["duration"] = SESSION_DURATION_SENTINEL
+        return projected
+    if isinstance(value, list):
+        return [_project_session_duration(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)

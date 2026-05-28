@@ -83,7 +83,7 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
 ) -> None:
     """Two missions, same playlist, single session → ``exact_playlist``."""
 
-    bus, tracker, quest_service, _watcher, chatlog, _app_db = quest_automation_pipeline
+    bus, tracker, quest_service, watcher, chatlog, _app_db = quest_automation_pipeline
 
     # Pre-populate two quests, each carrying a small liquid reward so
     # completion writes a deterministic ledger row, and bundle them
@@ -103,7 +103,7 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
 
     scenario = corpus_root / "scripted" / "quest_automation_with_playlist_match"
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Chat-side sanity: one kill per mission.

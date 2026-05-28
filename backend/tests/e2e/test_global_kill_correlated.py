@@ -24,7 +24,7 @@ def test_global_kill_correlates_to_recent_kill(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
 
     scenario = corpus_root / "scripted" / "global_kill_correlated"
     goldens = golden_set(scenario)
@@ -32,7 +32,7 @@ def test_global_kill_correlates_to_recent_kill(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Single kill: 40.0 + 35.0 = 75.0 dmg across two shots, loot 15.0.

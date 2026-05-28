@@ -29,7 +29,7 @@ def test_single_mob_hunt_produces_one_kill_via_real_tail_loop(
     goldens.
     """
 
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "single_mob_hunt"
     goldens = golden_set(scenario)
@@ -37,7 +37,7 @@ def test_single_mob_hunt_produces_one_kill_via_real_tail_loop(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Combat at 10:00:00 (12.0) + 10:00:01 (18.0 + crit 35.0) +

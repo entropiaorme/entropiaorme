@@ -40,7 +40,7 @@
           "healCost": 0.0,
           "weaponCost": 0.0
         },
-        "duration": 0,
+        "duration": "<SESSION_DURATION>",
         "kills": 1,
         "net": 2.5,
         "pes": 0.0,

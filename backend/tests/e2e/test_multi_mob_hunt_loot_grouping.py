@@ -21,7 +21,7 @@ def test_multi_mob_hunt_produces_three_kills(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "multi_mob_hunt_loot_grouping"
     goldens = golden_set(scenario)
@@ -29,7 +29,7 @@ def test_multi_mob_hunt_produces_three_kills(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     assert len(result.kills) == 3, (

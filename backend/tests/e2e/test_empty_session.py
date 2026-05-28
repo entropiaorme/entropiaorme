@@ -31,7 +31,7 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
     goldens.
     """
 
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "empty_session"
     goldens = golden_set(scenario)
@@ -39,7 +39,7 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     assert len(result.kills) == 0, (

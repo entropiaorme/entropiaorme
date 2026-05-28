@@ -40,12 +40,12 @@ def test_tracking_snapshot_event_stream_consistency(
 ) -> None:
     """Hydrate from T0 + apply post-midpoint events == fresh T1 snapshot."""
 
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
     scenario_dir = corpus_root / "scripted" / "consistency_tracking_hunt_midpoint"
 
     tracker.start_session()
     try:
-        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog)
+        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog, watcher=watcher)
         adapter = SurfaceAdapter(
             name="tracking",
             view_fn=tracking_view_state,

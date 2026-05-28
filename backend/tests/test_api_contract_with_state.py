@@ -130,15 +130,16 @@ def contract_state_env():
     try:
         with TestClient(app, base_url=BASE_URL):
             tracker = get_services().tracker
+            watcher = get_services().chatlog_watcher
             for scenario_name in REPLAYED_SCENARIOS:
                 scenario_dir = corpus_root / scenario_name
                 tracker.start_session()
                 _stream_segment(scenario_dir / "chat_replay.log", chatlog)
-                wait_for_drain()
+                wait_for_drain(watcher, chatlog)
                 secondary = scenario_dir / "chat_replay_after.log"
                 if secondary.exists():
                     _stream_segment(secondary, chatlog)
-                    wait_for_drain()
+                    wait_for_drain(watcher, chatlog)
                 tracker.stop_session()
             yield
     finally:

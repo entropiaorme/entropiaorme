@@ -133,6 +133,20 @@ class ChatlogWatcher:
         self._tick_ts: datetime | None = None
         self._tick_events: list[ChatEvent] = []
 
+        # Signalled on every idle cycle (the tail loop has caught up to
+        # end-of-file and flushed any pending tick) and on loop exit. The
+        # drain helpers wait on it instead of sleeping a fixed interval, so a
+        # scenario converges as soon as the watcher is genuinely idle rather
+        # than after a worst-case sleep, and stays correct when heavy parallel
+        # load delays the watcher thread.
+        self._idle = threading.Condition()
+
+        # Set once the tail loop has opened the file and seeked to its end.
+        # start() blocks on it so a caller that writes immediately afterwards
+        # cannot have its lines missed by a watcher whose seek-to-end has not
+        # run yet (a startup race that surfaces under heavy parallel load).
+        self._ready = threading.Event()
+
         # Rate-limited watcher perf counters. These stay debug-only.
         self._perf_window_started = time.monotonic()
         self._perf_lines_seen = 0
@@ -154,6 +168,45 @@ class ChatlogWatcher:
         """Remove the line observer; the watcher reverts to normal operation."""
         self._line_tap = None
 
+    @property
+    def lines_seen(self) -> int:
+        """Cumulative count of chat lines the tail loop has read since start.
+
+        The watcher seeks to end-of-file when it starts, so against a file
+        that was empty at start this equals the number of lines appended
+        since: the drain helpers compare it to the line count of the chatlog
+        to know when every streamed line has been consumed.
+        """
+        return self._perf_lines_seen
+
+    @property
+    def has_pending_tick(self) -> bool:
+        """True while parsed events are buffered awaiting a tick flush."""
+        return self._tick_ts is not None or bool(self._tick_events)
+
+    def wait_until_drained(self, min_lines: int, *, timeout: float = 10.0) -> None:
+        """Block until the tail loop has read at least ``min_lines`` lines and
+        flushed any pending tick, then return.
+
+        Waits on the idle-cycle condition rather than sleeping a fixed
+        interval, so it converges the moment the watcher is caught up to
+        end-of-file and stays correct when heavy parallel load delays the
+        watcher thread. Raises ``TimeoutError`` if the watcher does not reach
+        that state within ``timeout`` seconds: a watcher that never drains is
+        a bug to surface, not a flake to sleep through.
+        """
+        deadline = time.monotonic() + timeout
+        with self._idle:
+            while self._perf_lines_seen < min_lines or self.has_pending_tick:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"chatlog watcher did not drain to {min_lines} line(s) "
+                        f"within {timeout:g}s (read {self._perf_lines_seen}, "
+                        f"pending tick={self.has_pending_tick})"
+                    )
+                self._idle.wait(remaining)
+
     def start(self) -> None:
         """Start tailing chat.log in a background thread."""
         if self._running:
@@ -162,6 +215,7 @@ class ChatlogWatcher:
             log.warning("Chat.log not found: %s — watcher not started", self._path)
             return
 
+        self._ready.clear()
         self._running = True
         self._thread = threading.Thread(
             target=self._tail_loop,
@@ -169,6 +223,10 @@ class ChatlogWatcher:
             name="chatlog-watcher",
         )
         self._thread.start()
+        # Block until the tail loop has opened the file and seeked to its end,
+        # so writes issued right after start() are guaranteed to be tailed.
+        if not self._ready.wait(timeout=5.0):
+            log.warning("Chatlog watcher did not signal ready within 5s")
         log.info("Started watching: %s", self._path)
 
     def stop(self) -> None:
@@ -193,6 +251,9 @@ class ChatlogWatcher:
             with open(self._path, encoding="utf-8", errors="replace") as f:
                 # Seek to end — don't replay history
                 f.seek(0, os.SEEK_END)
+                # Tailing from end now: unblock start() so a caller writing
+                # immediately after it cannot have its lines missed.
+                self._ready.set()
 
                 while self._running:
                     line = f.readline()
@@ -206,6 +267,7 @@ class ChatlogWatcher:
                         self._process_line(line)
                     else:
                         self._flush_tick()
+                        self._signal_idle()
                         time.sleep(TAIL_INTERVAL)
 
                 # Flush any remaining tick on shutdown
@@ -213,6 +275,17 @@ class ChatlogWatcher:
         except Exception as e:
             log.error("Watcher error: %s", e)
             self._running = False
+        finally:
+            # Unblock start() and wake any drain waiters even if the loop
+            # never reached its seek (e.g. the file vanished), so a stopped or
+            # crashed watcher surfaces as a failed re-check rather than a hang.
+            self._ready.set()
+            self._signal_idle()
+
+    def _signal_idle(self) -> None:
+        """Wake any drain waiters: the tail loop has reached end-of-file."""
+        with self._idle:
+            self._idle.notify_all()
 
     def _process_line(self, line: str) -> None:
         """Parse a line and add it to the current tick buffer.

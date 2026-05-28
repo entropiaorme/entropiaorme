@@ -25,7 +25,7 @@ def test_hof_item_drop_correlates_to_recent_kill(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
 
     scenario = corpus_root / "scripted" / "hof_item_drop"
     goldens = golden_set(scenario)
@@ -33,7 +33,7 @@ def test_hof_item_drop_correlates_to_recent_kill(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Single kill: 28.0 + 33.0 = 61.0 dmg across two shots, loot 12.00.

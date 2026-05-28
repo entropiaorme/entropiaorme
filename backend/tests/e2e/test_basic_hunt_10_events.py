@@ -43,7 +43,7 @@ def test_basic_hunt_produces_three_kills_via_real_tail_loop(
     ``stop_session`` so the ledger-entry rows created at session-stop
     time appear in the golden too.
     """
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "basic_hunt_10_events"
     goldens = golden_set(scenario)
@@ -51,7 +51,7 @@ def test_basic_hunt_produces_three_kills_via_real_tail_loop(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Three loot ticks (10:00:02, 10:00:06, 10:00:10) each close an

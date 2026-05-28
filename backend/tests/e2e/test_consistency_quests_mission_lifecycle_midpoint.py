@@ -64,9 +64,7 @@ def test_quests_snapshot_event_stream_consistency(
 ) -> None:
     """Hydrate from T0 + apply post-midpoint mission_received == fresh T1 snapshot."""
 
-    bus, tracker, quest_service, _watcher, chatlog, _app_db = (
-        quests_consistency_pipeline
-    )
+    bus, tracker, quest_service, watcher, chatlog, _app_db = quests_consistency_pipeline
     scenario_dir = (
         corpus_root / "scripted" / "consistency_quests_mission_lifecycle_midpoint"
     )
@@ -77,7 +75,7 @@ def test_quests_snapshot_event_stream_consistency(
     session = tracker.start_session()
     session_id = session.id
     try:
-        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog)
+        harness = ConsistencyHarness(bus=bus, chatlog_path=chatlog, watcher=watcher)
         adapter = SurfaceAdapter(
             name="quests",
             view_fn=quests_view_state,

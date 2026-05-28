@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from backend.dependencies import get_services
+from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.http_fingerprint import HttpFingerprinter
 from backend.testing.replay import wait_for_drain
 
@@ -60,7 +61,9 @@ def _stream_segment(source: Path, destination: Path) -> None:
             sink.flush()
 
 
-def _replay_full_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
+def _replay_full_scenario(
+    scenario_dir: Path, chatlog_path: Path, watcher: ChatlogWatcher
+) -> None:
     """Stream every chat segment (one or two) for ``scenario_dir``."""
     primary = scenario_dir / "chat_replay.log"
     if not primary.exists():
@@ -68,12 +71,12 @@ def _replay_full_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
             f"Scenario {scenario_dir.name!r} is missing chat_replay.log"
         )
     _stream_segment(primary, chatlog_path)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog_path)
 
     secondary = scenario_dir / "chat_replay_after.log"
     if secondary.exists():
         _stream_segment(secondary, chatlog_path)
-        wait_for_drain()
+        wait_for_drain(watcher, chatlog_path)
 
 
 def _capture_hydration_set(
@@ -142,13 +145,13 @@ def test_http_fingerprint(
     test is on the read surface, which the tracker shape exercises
     identically.
     """
-    client, chatlog = e2e_http_pipeline
+    client, chatlog, watcher = e2e_http_pipeline
     scenario = corpus_root / "scripted" / scenario_name
 
     tracker = get_services().tracker
     session = tracker.start_session()
     try:
-        _replay_full_scenario(scenario, chatlog)
+        _replay_full_scenario(scenario, chatlog, watcher)
         tracker.stop_session()
     finally:
         if tracker.is_tracking:

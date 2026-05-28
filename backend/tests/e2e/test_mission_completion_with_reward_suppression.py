@@ -24,7 +24,7 @@ def test_mission_lifecycle_with_skill_gain(
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, _watcher, chatlog = e2e_pipeline
+    bus, tracker, watcher, chatlog = e2e_pipeline
 
     scenario = corpus_root / "scripted" / "mission_completion_with_reward_suppression"
     goldens = golden_set(scenario)
@@ -32,7 +32,7 @@ def test_mission_lifecycle_with_skill_gain(
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
-    wait_for_drain()
+    wait_for_drain(watcher, chatlog)
     result = tracker.stop_session()
 
     # Single kill in the middle of the mission lifecycle.

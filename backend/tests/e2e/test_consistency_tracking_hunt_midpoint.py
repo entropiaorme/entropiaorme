@@ -62,11 +62,6 @@ def test_tracking_snapshot_event_stream_consistency(
         if tracker.is_tracking:
             tracker.stop_session()
 
-    # Property: the reducer's hydrated-and-folded state equals the
-    # fresh T1 snapshot. ``divergence`` is the list of differing keys;
-    # an empty list means the property held. The assertion message
-    # spells out the surface so a failure points the reader at both
-    # the reducer logic and the view composition.
     assert result.holds, (
         "Tracking-surface consistency property failed; the following "
         f"keys diverged between the hydrated-and-folded reducer state "
@@ -75,10 +70,8 @@ def test_tracking_snapshot_event_stream_consistency(
         f"snapshot_t1={result.snapshot_t1!r}"
     )
 
-    # Sanity-check the property meaningfully advances state from T0 to
-    # T1: a vacuous T0 == T1 == reducer_state run would trivially hold
-    # the assertion above. Pinning a real delta forbids that
-    # degenerate case from sneaking in if the scenario is ever edited.
+    # Guard against a vacuous T0 == T1 run trivially satisfying the
+    # property assertion above if the scenario is later edited.
     assert result.snapshot_t0["kill_count"] == 1
     assert result.snapshot_t1["kill_count"] == 2
     assert (
@@ -86,11 +79,6 @@ def test_tracking_snapshot_event_stream_consistency(
         > result.snapshot_t0["shots_fired_total"]
     )
 
-    # Pin the hydrated-and-folded state via pytest-regressions so a
-    # future projection change surfaces for explicit review. The
-    # hydrated state is the property's payload (reducer-derived); the
-    # fresh T1 snapshot equals it by the assertion above, so one of
-    # them is sufficient as the golden surface.
     data_regression.check(_normalise(result.hydrated_state))
 
 

@@ -100,10 +100,6 @@ def test_consistency_property_catches_a_broken_reducer(
         if tracker.is_tracking:
             tracker.stop_session()
 
-    # The broken reducer ignored every loot_group event, so the fresh
-    # T1 snapshot and the hydrated-and-folded state must diverge on at
-    # least ``kill_count`` (the loot tick is what increments it) and
-    # ``returns`` (the loot tick is what credits it).
     assert not result.holds, (
         "Negative-control reducer drops loot events but the consistency "
         "harness reported no divergence; this means the property is no "

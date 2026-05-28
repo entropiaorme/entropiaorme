@@ -28,13 +28,15 @@ Each module's tier is set in `backend/tests/conftest.py`; a module with no entry
 
 ### Parallelism
 
-The per-PR run parallelises with [pytest-xdist](https://pytest-xdist.readthedocs.io) under the `loadfile` scheduler, which is what continuous integration runs:
+On a multi-core machine the local suite parallelises with [pytest-xdist](https://pytest-xdist.readthedocs.io) under the `loadfile` scheduler:
 
 ```bash
 .venv/Scripts/python.exe -m pytest -m "fast or standard" -n auto --dist=loadfile
 ```
 
 `loadfile` sends each whole test file to a single worker. That keeps the module-scoped lifespan-boot fixtures (the contract, ETag, and HTTP-fingerprint scenario suites each boot the FastAPI lifespan against a temporary data directory) booting once per file rather than once per worker, and never splits a file's tests across workers. A parallel run reproduces the serial pass count exactly; no test is dropped by worker collection.
+
+**Continuous integration runs the suite serially, not under xdist.** The parallel form is a local accelerator only. Measured on the hosted Windows runner, the supported-floor leg took roughly three minutes serially but about fourteen and a half minutes under `-n auto`: with only a handful of cores, each xdist worker re-pays the heavy import cost (onnxruntime, OpenCV, FastAPI) and the per-process spawn, and that overhead dwarfs the parallelism gain on a suite this size. A many-core developer machine sees the opposite (the full leg finishes in well under a minute under xdist), so the split is deliberate: xdist locally, serial on CI. The markers and the scheduler wiring below stay in place so the local form and the serial-only opt-out both keep working.
 
 The suite parallelises safely because every test isolates its own external state: xdist workers are separate processes, so no in-memory singleton is shared between them; no test binds a real OS socket (the HTTP suites drive the app in-process through Starlette's `TestClient`, and `BACKEND_PORT` only builds the origin-checked `base_url` string); per-test state runs through `tmp_path` / `mkdtemp` and fresh in-memory SQLite; and the one direct `os.environ` mutation (the data-directory override in the e2e HTTP fixture) is save-and-restore guarded and per-process. `pytest-randomly` already shuffles order within each worker, so intra-process ordering coupling would surface regardless of how files are distributed.
 

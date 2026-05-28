@@ -53,12 +53,13 @@ jobs:
         # leg until it is deliberately classified, so an unclassified slow or
         # device test cannot silently join the per-PR run. `--strict-markers`
         # plus the conftest tier-map keep the markers honest at collection time.
-        # Parallelised with xdist; `--dist=loadfile` keeps each file on one
-        # worker, so the module-scoped lifespan-boot fixtures (the contract,
-        # ETag, and HTTP-fingerprint scenario suites each boot the FastAPI
-        # lifespan against a temp data dir) boot once per file rather than once
-        # per worker. The contract tier opts out of parallelism below.
-        run: python -m pytest -m "fast or standard" -n auto --dist=loadfile
+        # Run serially: this leg was measured at ~3 min serial but ~14.5 min
+        # under `-n auto` on the few-core hosted Windows runner, where each
+        # xdist worker re-pays the heavy import cost (onnxruntime, OpenCV,
+        # FastAPI) and per-process spawn dwarfs the parallelism gain. xdist
+        # stays a local-only accelerator on multi-core machines (see
+        # TESTING.md "Parallelism"); it is not wired into CI.
+        run: python -m pytest -m "fast or standard"
       # Coverage is measured on one leg only (3.14) to avoid double-counting and
       # racing coverage files; the floor lives in pyproject.toml. Coverage data
       # is accumulated here and across the contract run below, then reported once
@@ -68,10 +69,10 @@ jobs:
       # to run; the 3.11 leg keeps randomised order to surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
-        # Same positive tier selection and xdist `loadfile` distribution as the
-        # floor leg above. Coverage totals are invariant to how xdist spreads
-        # the files across workers; pytest-cov collects per worker and combines.
-        run: python -m pytest -m "fast or standard" -n auto --dist=loadfile -p no:randomly --cov=backend --cov-branch --cov-report=
+        # Same positive tier selection as the floor leg above, run serially for
+        # the same wall-clock reason, with pinned order so the measured coverage
+        # is reproducible run to run.
+        run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report=
       # API contract tests (schemathesis from_asgi) drive the read surface
       # against the app's own OpenAPI schema. Run on the coverage leg only so the
       # slower schemathesis pass executes once per CI run; its coverage is

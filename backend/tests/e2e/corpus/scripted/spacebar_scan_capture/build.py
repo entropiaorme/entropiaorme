@@ -25,12 +25,12 @@ def build() -> Path:
 
     s.at("2026-05-19 10:00:00")
 
-    # Press-release while the scan is capturing — first edge fires.
+    # Press-release while the scan is capturing: the first press-edge fires.
     s.keystroke.press("space")
     s.tick()
     s.keystroke.release("space")
 
-    # Idle-phase press — tap records, capture does not fire.
+    # Idle-phase press: the tap still records, capture does not fire.
     s.tick()
     s.keystroke.press("space")
     s.tick()

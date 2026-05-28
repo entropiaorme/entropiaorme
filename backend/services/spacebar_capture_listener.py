@@ -91,11 +91,16 @@ class SpacebarCaptureListener:
         if self._keystroke_source is None or self._source_running:
             return
         try:
-            self._keystroke_source.start()
-            self._source_running = True
-            log.info("Spacebar capture listener: started")
+            # The source signals through its return value whether the
+            # underlying mechanism actually attached (e.g. pynput is
+            # installed); only mark ourselves running when it did, so
+            # is_running honestly reflects whether events will arrive.
+            self._source_running = self._keystroke_source.start()
+            if self._source_running:
+                log.info("Spacebar capture listener: started")
         except Exception:
             log.exception("Failed to start spacebar keystroke source")
+            self._source_running = False
 
     def _stop_source(self) -> None:
         if self._keystroke_source is None or not self._source_running:

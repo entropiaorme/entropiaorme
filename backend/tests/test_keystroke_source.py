@@ -254,7 +254,7 @@ def test_listener_on_release_routes_to_dispatch(fake_pynput) -> None:
 
     fake_pynput.listener.on_release(_NamedKey("space"))
 
-    assert received == [received[0]]
+    assert len(received) == 1
     assert received[0].key == "space"
     assert received[0].kind == "release"
 

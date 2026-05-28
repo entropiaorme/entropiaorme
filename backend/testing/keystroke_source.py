@@ -63,8 +63,15 @@ class KeystrokeSource(ABC):
         """Register ``callback`` to receive every dispatched event."""
 
     @abstractmethod
-    def start(self) -> None:
-        """Begin delivering events to subscribers."""
+    def start(self) -> bool:
+        """Begin delivering events to subscribers.
+
+        Returns ``True`` if the source is now actively listening (or was
+        already listening), ``False`` if the underlying mechanism is
+        unavailable (e.g. ``pynput`` not installed) and the source
+        remains inert. Callers should treat ``False`` as "no events
+        will arrive" and propagate that into their own running state.
+        """
 
     @abstractmethod
     def stop(self) -> None:
@@ -90,9 +97,14 @@ class MockKeystrokeSource(KeystrokeSource):
         """Append ``callback`` to the dispatch list."""
         self._callbacks.append(callback)
 
-    def start(self) -> None:
-        """Mark the source as running so injected events propagate."""
+    def start(self) -> bool:
+        """Mark the source as running so injected events propagate.
+
+        Always returns ``True``; the mock has no external dependency
+        that could leave it inert.
+        """
         self._running = True
+        return True
 
     def stop(self) -> None:
         """Mark the source as halted; subsequent ``inject()`` calls
@@ -162,16 +174,19 @@ class PynputKeystrokeSource(KeystrokeSource):
         """Append ``callback`` to the dispatch list."""
         self._callbacks.append(callback)
 
-    def start(self) -> None:
+    def start(self) -> bool:
         """Begin observing the OS keyboard hook; idempotent.
 
         Allow-list filtering applies inside the ``pynput`` callbacks so
         non-admitted keys never reach a subscriber. ``ImportError`` is
         logged at WARNING and the source stays inert (legacy behaviour
-        preserved from the pre-seam listeners).
+        preserved from the pre-seam listeners); the return value
+        distinguishes "now listening" (``True``) from "stayed inert"
+        (``False``) so callers can avoid claiming to be running when
+        no listener was attached.
         """
         if self._listener is not None:
-            return
+            return True
         try:
             from pynput import keyboard
         except ImportError:
@@ -179,7 +194,7 @@ class PynputKeystrokeSource(KeystrokeSource):
                 "pynput not installed; keystroke source inert. "
                 "Install with: pip install pynput"
             )
-            return
+            return False
 
         def on_press(key: Any) -> None:
             self._dispatch(key, "press")
@@ -191,6 +206,7 @@ class PynputKeystrokeSource(KeystrokeSource):
         listener.daemon = True
         listener.start()
         self._listener = listener
+        return True
 
     def stop(self) -> None:
         """Halt OS-hook observation; subscribers remain registered."""

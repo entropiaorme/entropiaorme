@@ -36,13 +36,14 @@ RECORDED_BUNDLE = (
 )
 
 
-def test_recorded_keystrokes_are_within_input_listening_allowlist() -> None:
-    """Every recorded keystroke must lie within the listener allow-lists.
+@pytest.fixture
+def recorded_keystrokes() -> list[dict]:
+    """Load the recorded keystroke bundle.
 
-    A failure here indicates either an out-of-policy capture (the
-    recorder grew a tap onto a listener whose allow-list does not
-    constrain it) or a real-world allow-list expansion that the
-    policy needs to ratify deliberately.
+    Skips the calling test when the bundle is absent (fresh checkouts,
+    public CI, other contributors). Asserts the bundle is non-empty so
+    a present-but-empty file cannot silently pass downstream
+    assertions over an empty input.
     """
     if not RECORDED_BUNDLE.exists():
         pytest.skip(
@@ -56,9 +57,25 @@ def test_recorded_keystrokes_are_within_input_listening_allowlist() -> None:
         if line.strip()
     ]
     assert records, "recorded bundle present but empty"
+    return records
 
+
+def test_recorded_keystrokes_are_within_input_listening_allowlist(
+    recorded_keystrokes: list[dict],
+) -> None:
+    """Every recorded keystroke must lie within the listener allow-lists.
+
+    A failure here indicates either an out-of-policy capture (the
+    recorder grew a tap onto a listener whose allow-list does not
+    constrain it) or a real-world allow-list expansion that the
+    policy needs to ratify deliberately.
+    """
     out_of_policy = sorted(
-        {record["key"] for record in records if record["key"] not in ALLOWED_KEYS}
+        {
+            record["key"]
+            for record in recorded_keystrokes
+            if record["key"] not in ALLOWED_KEYS
+        }
     )
     assert not out_of_policy, (
         "Recorded keystrokes outside the production allow-lists: "
@@ -67,27 +84,18 @@ def test_recorded_keystrokes_are_within_input_listening_allowlist() -> None:
     )
 
 
-def test_recorded_keystrokes_kinds_are_press_or_release() -> None:
+def test_recorded_keystrokes_kinds_are_press_or_release(
+    recorded_keystrokes: list[dict],
+) -> None:
     """Every record carries a recognised edge kind.
 
-    A drift here means a recorder format change — the fingerprint
+    A drift here means a recorder format change; the fingerprint
     contract caught the change before any consumer broke.
     """
-    if not RECORDED_BUNDLE.exists():
-        pytest.skip(
-            "Recorded bundle absent (local-by-default fixture); "
-            f"path: {RECORDED_BUNDLE}"
-        )
-
-    records = [
-        json.loads(line)
-        for line in RECORDED_BUNDLE.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
     unrecognised = sorted(
         {
             record["kind"]
-            for record in records
+            for record in recorded_keystrokes
             if record["kind"] not in {"press", "release"}
         }
     )

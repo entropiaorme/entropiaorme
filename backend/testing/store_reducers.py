@@ -419,20 +419,31 @@ class QuestsReducer(Reducer):
                 self._state["session_id"] = session_id
 
     def _on_session_stopped(self, payload: Any) -> None:
-        """Session stop is informational; the reducer's projection
-        keeps the mission name log so a snapshot taken after stop
-        still reflects what landed during the session."""
+        """Clear the active session id; the accumulated mission name
+        log is preserved so a snapshot taken after stop still reflects
+        what landed during the session, but later ``mission_received``
+        events no longer fold in -- the production ``QuestService``
+        likewise stops recording ``quest_started`` notable events once
+        the session ends, so an unconditional fold would diverge from
+        the view."""
         del payload
+        self._state["session_id"] = None
 
     def _on_mission_received(self, payload: Any) -> None:
-        """Append the mission name to the running list.
+        """Append the mission name to the running list, gated on an
+        active session.
 
         Payload shape: ``{type: 'mission_received', mission_name: str,
         timestamp: datetime, ...}``. Names append in arrival order so
         the reducer's projection mirrors the order the production
-        ``QuestService`` would auto-start them.
+        ``QuestService`` would auto-start them. ``QuestService`` only
+        records ``quest_started`` notable events while a session is
+        active; the gate keeps the reducer aligned with the view for
+        events fired pre-start or post-stop.
         """
         if not isinstance(payload, dict):
+            return
+        if not self._state.get("session_id"):
             return
         name = payload.get("mission_name")
         if not name:

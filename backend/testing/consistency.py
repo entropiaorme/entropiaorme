@@ -218,10 +218,15 @@ class ConsistencyHarness:
             drain_seconds=self._drain_seconds,
         )
 
-        snapshot_t0 = adapter.view_fn(view_context)
+        # Defensively copy the captured snapshots and the reducer's
+        # hydrated state so a downstream comparison or assertion is not
+        # aliased onto live dicts the reducer holds an internal
+        # reference to. Without the copies, a later fold on the reducer
+        # could mutate the T0 snapshot through the same dict identity.
+        snapshot_t0 = dict(adapter.view_fn(view_context))
         reducer = adapter.reducer_factory()
         reducer.install(self._bus)
-        reducer.hydrate(snapshot_t0)
+        reducer.hydrate(dict(snapshot_t0))
 
         replay_segment(
             scenario_dir,
@@ -230,8 +235,8 @@ class ConsistencyHarness:
             drain_seconds=self._drain_seconds,
         )
 
-        snapshot_t1 = adapter.view_fn(view_context)
-        hydrated = reducer.state
+        snapshot_t1 = dict(adapter.view_fn(view_context))
+        hydrated = dict(reducer.state)
         divergence = _diff_state(snapshot_t1, hydrated)
 
         return ConsistencyResult(

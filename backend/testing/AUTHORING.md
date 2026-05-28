@@ -144,9 +144,9 @@ lines today, so the DSL has no sub-namespace for them.
   regenerate the goldens via
   `pytest --update-fingerprints` (narrow with ordinary pytest
   path filters), review the diff in the PR, and commit the
-  golden update alongside the code change with a commit message
-  in the form `e2e: update golden fingerprints for <scope>:
-  <reason>`.
+  golden update alongside the code change following the
+  goldens-regeneration commit-message convention in
+  [TESTING.md](../../TESTING.md#commit-message-convention).
 
 ## Determinism notes
 

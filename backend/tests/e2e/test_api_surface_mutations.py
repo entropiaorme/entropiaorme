@@ -442,3 +442,30 @@ def test_tracking_live_mob_controls(e2e_http_pipeline):
         < 500
     )
     assert client.post("/api/tracking/release-mob").status_code < 500
+
+
+def test_tracking_session_mutations_on_unknown_session_are_404(e2e_http_pipeline):
+    """Every per-session edit rejects an unknown session id with a clean 404."""
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+    missing = "00000000-0000-0000-0000-000000000000"
+    base = f"/api/tracking/session/{missing}"
+
+    assert client.get(base).status_code == 404
+    assert client.get(f"{base}/quest-link-suggestion").status_code == 404
+    assert client.delete(base).status_code == 404
+    assert (
+        client.post(
+            f"{base}/rename-mob", json={"fromMobName": "A", "toMobName": "B"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(f"{base}/restore-mob", json={"currentMobName": "B"}).status_code
+        == 404
+    )
+    assert client.post(f"{base}/armour-cost", json={"cost": 1.0}).status_code == 404
+    assert (
+        client.post(f"{base}/quest-link", json={"action": "dismiss"}).status_code == 404
+    )
+    assert client.post(f"{base}/loot-item/Shrapnel/deactivate").status_code == 404

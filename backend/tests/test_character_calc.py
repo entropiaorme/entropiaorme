@@ -536,7 +536,7 @@ def test_profession_level_skips_malformed_skill_entries():
 
 def test_calculate_hp_skips_malformed_skill_rows():
     """HP iteration drops non-dict, non-positive, unparseable, and nameless rows."""
-    skills_data = [
+    skills_data: list = [
         {"name": "Anatomy", "hp_increase": 1.0},
         "not-a-dict",  # skipped
         {"name": "Z", "hp_increase": "bad"},  # unparseable -> skipped

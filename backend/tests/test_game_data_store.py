@@ -76,7 +76,8 @@ def test_search_honours_the_limit(tmp_path):
 
 def test_find_entity_and_introspection(tmp_path):
     store = _store(tmp_path)
-    assert store.find_entity("weapons", "w2")["name"] == "Sollomate Justifier"
+    found = store.find_entity("weapons", "w2")
+    assert found is not None and found["name"] == "Sollomate Justifier"
     assert store.find_entity("weapons", "absent") is None
     assert store.endpoint_counts()["weapons"] == 2
     assert store.total_entities() == 2 + 1 + 1 + 0

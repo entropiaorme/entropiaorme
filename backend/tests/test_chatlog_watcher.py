@@ -581,7 +581,7 @@ class TestDrainSeams:
         chatlog = tmp_path / "chat.log"
         chatlog.touch()
         watcher = ChatlogWatcher(EventBus(), chatlog)
-        watcher._ready = _NeverReady()
+        watcher._ready = _NeverReady()  # type: ignore[assignment]
         watcher.start()
         try:
             assert watcher.is_running

@@ -2716,6 +2716,7 @@ class TestWeaponCostAttribution:
         )
 
         result = tracker.stop_session()
+        assert result is not None
         assert len(result.kills) == 1
         kill = result.kills[0]
         # The weapon was attributed (not "Unknown") with a non-zero cost per shot.

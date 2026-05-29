@@ -444,6 +444,39 @@ def test_tracking_live_mob_controls(e2e_http_pipeline):
     assert client.post("/api/tracking/release-mob").status_code < 500
 
 
+def test_settings_change_during_active_session_reloads_tracker(e2e_http_pipeline):
+    """A settings PATCH while a session is live re-applies tracker config.
+
+    Drives ``HuntTracker.reload_config``'s active-session branches (the
+    standard-mode attribution reset and the manual-mob refresh), which the
+    no-session settings PATCH short-circuits past.
+    """
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    tracker = get_services().tracker
+    tracker.start_session()
+    try:
+        # Standard (mob) mode reload: clears the attributor and weapon state.
+        assert (
+            client.patch(
+                "/api/settings",
+                json={"mob_tracking_mode": "mob", "hotbar_hooks_enabled": True},
+            ).status_code
+            == 200
+        )
+        # Switch to tag mode while live (the tag-mode early return in reload).
+        assert (
+            client.patch(
+                "/api/settings",
+                json={"mob_tracking_mode": "tag", "mob_tracking_tag": "Atrox"},
+            ).status_code
+            == 200
+        )
+    finally:
+        tracker.stop_session()
+
+
 def test_tracking_session_mutations_on_unknown_session_are_404(e2e_http_pipeline):
     """Every per-session edit rejects an unknown session id with a clean 404."""
     client, _chatlog, _watcher = e2e_http_pipeline

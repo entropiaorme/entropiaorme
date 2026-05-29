@@ -98,6 +98,36 @@ def test_read_surface_with_seeded_state(e2e_http_pipeline):
     link = client.get(f"/api/tracking/session/{session_id}/quest-link-suggestion")
     assert link.status_code == 200
 
+    # Prospect forecasts over the recorded session: the global slice plus a
+    # mob/tag/weapon slice if the recorded session offers one, driving the
+    # slice-matching and projection branches that empty state does not reach.
+    options = client.get("/api/character/prospect-options").json()
+    assert client.get(
+        "/api/character/prospect", params={"sliceType": "global", "cycledPed": 200}
+    ).status_code in (200, 400, 422)
+    if isinstance(options, list) and options:
+        opt = options[0]
+        slice_type = opt.get("sliceType") or opt.get("type") or "mob"
+        slice_value = opt.get("value") or opt.get("label")
+        if slice_value:
+            assert client.get(
+                "/api/character/prospect",
+                params={
+                    "sliceType": slice_type,
+                    "sliceValue": slice_value,
+                    "cycledPed": 200,
+                },
+            ).status_code in (200, 400, 422)
+
+    # Analytics ledger over a monthly grouping, the alternate aggregation path.
+    assert (
+        client.get("/api/analytics/ledger", params={"groupBy": "month"}).status_code
+        == 200
+    )
+    assert client.get(
+        "/api/analytics/overview", params={"window": "all"}
+    ).status_code in (200, 422)
+
 
 def test_session_detail_unknown_id_is_404(e2e_http_pipeline):
     """A read for a session that does not exist is a clean 404, not a 500."""

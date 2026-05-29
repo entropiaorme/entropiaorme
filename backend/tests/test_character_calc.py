@@ -517,3 +517,34 @@ def test_path_optimizer_mutual_exclusion():
         )
     with pytest.raises(ValueError):
         profession_path_optimizer({"Rifle": 0.0}, profession)
+
+
+def test_profession_level_skips_malformed_skill_entries():
+    """Non-dict entries, missing names, and unparseable weights are ignored."""
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 2.0},
+            "not-a-dict",  # skipped
+            {"skill": {}, "weight": 1.0},  # no name -> skipped
+            {"skill": {"name": "Aim"}, "weight": "bad"},  # weight defaults to 0.0
+        ]
+    }
+    # Computes without raising; the malformed rows contribute nothing.
+    level = profession_level({"Rifle": 50.0, "Aim": 50.0}, profession)
+    assert isinstance(level, float)
+
+
+def test_calculate_hp_skips_malformed_skill_rows():
+    """HP iteration drops non-dict, non-positive, unparseable, and nameless rows."""
+    skills_data = [
+        {"name": "Anatomy", "hp_increase": 1.0},
+        "not-a-dict",  # skipped
+        {"name": "Z", "hp_increase": "bad"},  # unparseable -> skipped
+        {"name": "N", "hp_increase": 0},  # non-positive -> skipped
+        {"hp_increase": 1.0},  # no name -> skipped
+    ]
+    hp = calculate_hp({"Anatomy": 100.0}, skills_data)
+    assert isinstance(hp, float)
+    # The optimizer walks the same iterator and returns a structured result.
+    result = hp_skill_optimizer({"Anatomy": 100.0}, skills_data)
+    assert isinstance(result, dict)

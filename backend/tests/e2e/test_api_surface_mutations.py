@@ -177,14 +177,33 @@ def test_equipment_weapon_and_cost_paths(e2e_http_pipeline):
         "bundled weapon catalogue is unexpectedly empty"
     )
 
-    added = client.post(
-        "/api/equipment/library",
-        json={"type": "weapon", "catalog_id": weapon_catalog_id, "weapon_markup": 105},
-    )
+    # Attach an amplifier if the catalogue has one, exercising the amp branch.
+    amp_catalog_id = _first_catalog_id(client, "amp")
+    weapon_body = {
+        "type": "weapon",
+        "catalog_id": weapon_catalog_id,
+        "weapon_markup": 105,
+        "damage_enhancers": 2,
+    }
+    if amp_catalog_id is not None:
+        weapon_body["amp_catalog_id"] = amp_catalog_id
+    added = client.post("/api/equipment/library", json=weapon_body)
     assert added.status_code == 200
     weapon_item_id = added.json()["id"]
     assert (
         client.get(f"/api/equipment/library/{weapon_item_id}/detail").status_code == 200
+    )
+    # Update the weapon in place (the PUT weapon-resolution branch).
+    assert (
+        client.put(
+            f"/api/equipment/library/{weapon_item_id}",
+            json={
+                "type": "weapon",
+                "catalog_id": weapon_catalog_id,
+                "weapon_markup": 120,
+            },
+        ).status_code
+        == 200
     )
     assert client.delete(f"/api/equipment/library/{weapon_item_id}").status_code in (
         200,
@@ -207,9 +226,22 @@ def test_equipment_weapon_and_cost_paths(e2e_http_pipeline):
             json={"type": "healing", "catalog_id": heal_catalog_id},
         )
         assert heal.status_code == 200
-        assert client.delete(
-            f"/api/equipment/library/{heal.json()['id']}"
-        ).status_code in (200, 204)
+        heal_id = heal.json()["id"]
+        assert (
+            client.put(
+                f"/api/equipment/library/{heal_id}",
+                json={
+                    "type": "healing",
+                    "catalog_id": heal_catalog_id,
+                    "weapon_markup": 110,
+                },
+            ).status_code
+            == 200
+        )
+        assert client.delete(f"/api/equipment/library/{heal_id}").status_code in (
+            200,
+            204,
+        )
 
 
 def test_analytics_ledger_and_inventory(e2e_http_pipeline):

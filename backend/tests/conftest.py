@@ -42,6 +42,7 @@ _MODULE_TIERS = {
     "test_testing_config": "fast",  # env-loader logic; no real env touched
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",
+    "test_http_fingerprint": "fast",  # pure projection helpers
     "test_character_calc": "fast",
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",

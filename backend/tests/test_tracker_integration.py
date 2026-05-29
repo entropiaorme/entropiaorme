@@ -27,7 +27,51 @@ from backend.routers.tracking import (
     get_session_impl,
 )
 from backend.tracking.schema import init_tracking_tables
-from backend.tracking.tracker import HuntTracker
+from backend.tracking.tracker import HuntTracker, _DamageEnhancerState
+
+
+def _enhancer_props(slots: int) -> dict:
+    """A weapon props payload carrying ``slots`` damage enhancers."""
+    return {
+        "weapon_entity": {
+            "damage": {"impact": 10.0},
+            "economy": {"decay": 1.0, "ammo_burn": 50},
+        },
+        "weapon_markup": 100,
+        "damage_enhancers": slots,
+    }
+
+
+class TestDamageEnhancerState:
+    """The per-weapon damage-enhancer depletion / cost model."""
+
+    def test_from_props_arms_one_stack_per_configured_enhancer(self):
+        state = _DamageEnhancerState.from_props("Weapon", _enhancer_props(3))
+        assert len(state.stacks) == 3
+        assert state.active_slots == 3
+        assert state.current_cost_ped() > 0
+
+    def test_apply_break_depletes_a_slot_and_reports_the_drop(self):
+        state = _DamageEnhancerState.from_props("Weapon", _enhancer_props(1))
+        state.set_total(1)
+        assert state.active_slots == 1
+        cost_armed = state.current_cost_ped()
+        depleted = state.apply_break()  # 1 -> 0 active: a slot is lost
+        assert depleted is True
+        assert state.active_slots == 0
+        # Cost recomputes (cache invalidated) and does not rise without the enhancer.
+        assert state.current_cost_ped() <= cost_armed
+
+    def test_apply_break_with_remaining_total_redistributes(self):
+        state = _DamageEnhancerState.from_props("Weapon", _enhancer_props(2))
+        changed = state.apply_break(remaining=1)
+        assert state.active_slots == 1
+        assert changed is True
+
+    def test_set_total_is_a_no_op_without_slots(self):
+        state = _DamageEnhancerState.from_props("Weapon", _enhancer_props(0))
+        state.set_total(5)  # no slots to distribute across
+        assert state.active_slots == 0
 
 
 @pytest.fixture

@@ -560,6 +560,34 @@ class TestDrainSeams:
         finally:
             watcher.stop()
 
+    def test_start_does_not_hang_when_readiness_times_out(self, tmp_path):
+        """If the readiness signal never fires, start() warns and returns.
+
+        The barrier must not turn a slow or failed startup into a hang; the
+        wait is bounded and start() proceeds (the watcher thread is still
+        live) rather than blocking the caller indefinitely.
+        """
+
+        class _NeverReady:
+            def clear(self):
+                pass
+
+            def set(self):
+                pass
+
+            def wait(self, timeout=None):
+                return False
+
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        watcher = ChatlogWatcher(EventBus(), chatlog)
+        watcher._ready = _NeverReady()
+        watcher.start()
+        try:
+            assert watcher.is_running
+        finally:
+            watcher.stop()
+
     def test_pending_tick_reflects_buffer_state(self):
         """has_pending_tick tracks the tick buffer across process and flush."""
         bus = EventBus()

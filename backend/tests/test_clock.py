@@ -7,7 +7,7 @@ scenario can walk wall-clock and monotonic streams without real time.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -22,8 +22,8 @@ class TestRealClock:
         assert clock.now().tzinfo is None
 
     def test_now_honours_a_fixed_timezone(self):
-        clock = RealClock(tz=timezone.utc)
-        assert clock.now().tzinfo is timezone.utc
+        clock = RealClock(tz=UTC)
+        assert clock.now().tzinfo is UTC
 
     def test_monotonic_is_non_decreasing(self):
         clock = RealClock()

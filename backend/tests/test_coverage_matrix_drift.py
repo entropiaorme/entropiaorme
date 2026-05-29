@@ -16,7 +16,8 @@ import difflib
 
 import pytest
 
-from backend.scripts.coverage_matrix import OUTPUT, render_matrix
+from backend.scripts import coverage_matrix
+from backend.scripts.coverage_matrix import OUTPUT, main, render_matrix
 
 
 @pytest.fixture
@@ -58,3 +59,20 @@ def test_coverage_matrix_matches_generator(update_fingerprints: bool) -> None:
         + "\n\nRerun `python backend/scripts/coverage_matrix.py` (or pytest "
         "--update-fingerprints) and review the change."
     )
+
+
+def test_main_writes_the_matrix(tmp_path, monkeypatch, capsys):
+    """``main`` writes the rendered matrix to the configured output path."""
+    target = tmp_path / "COVERAGE.md"
+    monkeypatch.setattr(coverage_matrix, "OUTPUT", target)
+    main()
+    assert target.exists()
+    assert target.read_text(encoding="utf-8").startswith("# Service coverage matrix")
+    assert "Wrote" in capsys.readouterr().out
+
+
+def test_missing_behaviour_summary_is_a_generation_error(monkeypatch):
+    """A service without a behaviour summary fails generation, not silently."""
+    monkeypatch.setattr(coverage_matrix, "BEHAVIOUR", {})
+    with pytest.raises(SystemExit, match="no behaviour summary"):
+        render_matrix()

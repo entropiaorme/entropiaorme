@@ -224,7 +224,7 @@ def render_matrix() -> str:
 def main() -> None:
     """Write the rendered matrix to ``backend/testing/COVERAGE.md``."""
     OUTPUT.write_text(render_matrix(), encoding="utf-8")
-    print(f"Wrote {OUTPUT.relative_to(REPO_ROOT).as_posix()}")
+    print(f"Wrote {OUTPUT}")
 
 
 if __name__ == "__main__":

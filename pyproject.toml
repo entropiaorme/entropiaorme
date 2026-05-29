@@ -90,12 +90,16 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",
 ]
-# Floor set 3 points below the measured branch coverage (47%) of the
-# testable surface, leaving ratchet headroom and avoiding a day-one red. The
-# router layer and main.py sit in the denominator uncovered for now; as their
-# tests land, this figure climbs and the floor is tightened to track it.
+# Floor set ~3 points below the measured branch coverage, leaving ratchet
+# headroom and avoiding a brittle zero-margin gate. The HTTP read/write
+# surface and the harness modules are now exercised end to end (the seeded
+# surface walk, the mutation walk, the clock/config unit tests), lifting
+# measured branch coverage to ~87%. The remaining uncovered surface is
+# concentrated in the tracker's equipment-cost attribution paths (which need a
+# configured loadout to exercise) and main.py's lifespan wiring; as those land
+# the figure climbs and the floor is tightened to track it.
 # Never lower a landed floor to make a red gate pass.
-fail_under = 44
+fail_under = 84
 
 [tool.mypy]
 python_version = "3.11"

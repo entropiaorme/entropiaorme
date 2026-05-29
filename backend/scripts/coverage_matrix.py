@@ -36,6 +36,7 @@ OUTPUT = REPO_ROOT / "backend" / "testing" / "COVERAGE.md"
 # maintained by hand; a new service without an entry surfaces as a generation
 # error rather than a silently-blank row.
 BEHAVIOUR: dict[str, str] = {
+    "__init__": "Package marker (no runtime behaviour).",
     "character_calc": "Skill / profession / HP optimisers and prospect forecasts.",
     "chatlog_parser": "Parses chat.log lines into typed gameplay events.",
     "chatlog_watcher": "Tails chat.log, buffers ticks, publishes events on the bus.",
@@ -63,10 +64,10 @@ BEHAVIOUR: dict[str, str] = {
 
 
 def _service_modules() -> list[str]:
-    """Return the service module stems, sorted, excluding the package init."""
-    return sorted(
-        path.stem for path in SERVICES_DIR.glob("*.py") if path.stem != "__init__"
-    )
+    """Return every service module stem, sorted (including the package init,
+    so the matrix accounts for all files under ``backend/services/`` and none
+    is silently dropped)."""
+    return sorted(path.stem for path in SERVICES_DIR.glob("*.py"))
 
 
 def _load_classification() -> tuple[set[str], set[str]]:
@@ -214,8 +215,9 @@ def render_matrix() -> str:
     )
     lines.append("")
     lines.append(
-        "The 23 service modules above are every non-empty module under "
-        "`backend/services/` (the package `__init__` is empty)."
+        "The rows above are every module under `backend/services/`, including "
+        "the empty package `__init__` (listed so the matrix accounts for the "
+        "whole directory and no file is silently dropped)."
     )
     lines.append("")
     return "\n".join(lines)

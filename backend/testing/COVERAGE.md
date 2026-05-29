@@ -4,10 +4,11 @@ Every backend service mapped to the tests and scenarios that exercise its extern
 
 The mechanical gates are the source of truth for *how much* is covered: branch coverage (the floor in `pyproject.toml`, the published badge) and the nightly mutation score over the pure-logic core. This matrix is the human-readable layer on top: it shows *that* every service has at least one exercising test, and names the device/IO modules that are exempt from the coverage floor by design (they need a real display, capture device, or OS hook, so they are exercised through seams and fixtures rather than measured).
 
-Services: 23.
+Services: 24.
 
 | Service | Externally-observable behaviour | Covering tests | Held to account by |
 | --- | --- | --- | --- |
+| `__init__` | Package marker (no runtime behaviour). | exercised transitively (see notes) | branch coverage |
 | `character_calc` | Skill / profession / HP optimisers and prospect forecasts. | `test_character_calc.py`<br>`test_character_calc_properties.py` | branch coverage + mutation |
 | `chatlog_parser` | Parses chat.log lines into typed gameplay events. | `test_chatlog_parser.py`<br>`test_chatlog_parser_properties.py`<br>`test_dsl.py` | branch coverage |
 | `chatlog_watcher` | Tails chat.log, buffers ticks, publishes events on the bus. | `e2e/test_consistency_codex_isolation_midpoint.py`<br>`e2e/test_consistency_negative_control.py`<br>`e2e/test_consistency_quests_mission_lifecycle_midpoint.py`<br>`e2e/test_consistency_scan_isolation_midpoint.py`<br>`e2e/test_consistency_tracking_hunt_midpoint.py`<br>`e2e/test_http_fingerprint_scenarios.py`<br>`e2e/test_quest_automation_with_playlist_match.py`<br>`test_chatlog_watcher.py`<br>`test_recorder.py` | branch coverage |
@@ -45,4 +46,4 @@ The services marked *branch coverage + mutation* are in the nightly mutation cam
 - **Transitively-covered services** (`game_data_store`, `session_summary`) are not imported by any test directly: they are dependencies the other services compose (the game-data tables behind codex / mob lookup, the summary projection behind the tracking and analytics surfaces), so they execute under those services' tests and the e2e pipeline and their branch coverage is counted there.
 - **Recorded-corpus coverage** of the OCR surface is local-by-default (real account panels stay off the public repo); the scripted corpus plus the placeholder recorded bundle keep the public test surface green without it.
 
-The 23 service modules above are every non-empty module under `backend/services/` (the package `__init__` is empty).
+The rows above are every module under `backend/services/`, including the empty package `__init__` (listed so the matrix accounts for the whole directory and no file is silently dropped).

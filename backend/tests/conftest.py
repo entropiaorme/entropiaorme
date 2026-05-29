@@ -40,6 +40,8 @@ _MODULE_TIERS = {
     "test_capturer": "fast",  # mss session is stubbed; no real device touched
     "test_clock": "fast",
     "test_testing_config": "fast",  # env-loader logic; no real env touched
+    "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
+    "test_diff_renderer": "fast",
     "test_character_calc": "fast",
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",

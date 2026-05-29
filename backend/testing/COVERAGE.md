@@ -16,7 +16,7 @@ Services: 24.
 | `config_service` | Loads, validates, and persists the app settings overlay. | `test_config_service.py` | branch coverage |
 | `cost_engine` | Per-shot weapon / amp / heal cost from the equipment catalogue. | `test_cost_engine.py`<br>`test_cost_engine_properties.py` | branch coverage + mutation |
 | `eu_window` | Locates the Entropia Universe window for screen capture. | exercised through seams / fixtures (see notes) | device / IO (exempt from the coverage floor) |
-| `game_data_store` | Read-only access to the bundled game-data tables. | exercised transitively (see notes) | branch coverage |
+| `game_data_store` | Read-only access to the bundled game-data tables. | `test_game_data_store.py` | branch coverage |
 | `hotbar_listener` | Maps hotbar keystrokes to active-tool change events. | `e2e/test_hotbar_slot_use.py`<br>`e2e/test_input_listening_minimisation.py`<br>`test_hotbar_listener.py` | device / IO (exempt from the coverage floor) |
 | `local_ocr` | ONNX skill-panel OCR engine, screen grab, and orchestration. | `test_local_ocr_postprocess.py` | device / IO (exempt from the coverage floor) |
 | `mob_lookup_service` | Resolves mob names to species / maturity metadata. | `test_mob_lookup_service.py` | branch coverage |

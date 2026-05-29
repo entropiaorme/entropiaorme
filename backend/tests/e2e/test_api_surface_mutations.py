@@ -151,6 +151,67 @@ def test_equipment_library_crud(e2e_http_pipeline):
     assert client.delete(f"/api/equipment/library/{item_id}").status_code in (200, 204)
 
 
+def _first_catalog_id(client, search_type: str) -> str | None:
+    """Find a real catalogue id for a search type, or None if the bundled
+    data has nothing matching the probe substrings."""
+    for probe in ("er", "on", "in", "al", "ar"):
+        results = client.get(
+            "/api/equipment/search", params={"q": probe, "type": search_type}
+        ).json()
+        if results:
+            return results[0]["catalogId"]
+    return None
+
+
+def test_equipment_weapon_and_cost_paths(e2e_http_pipeline):
+    """Add a catalogue weapon and a healing tool, and price a weapon.
+
+    Drives the catalogue-resolution branches of the library add / detail /
+    cost-calculate handlers, which the custom-consumable path does not reach.
+    """
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    weapon_catalog_id = _first_catalog_id(client, "weapon")
+    assert weapon_catalog_id is not None, (
+        "bundled weapon catalogue is unexpectedly empty"
+    )
+
+    added = client.post(
+        "/api/equipment/library",
+        json={"type": "weapon", "catalog_id": weapon_catalog_id, "weapon_markup": 105},
+    )
+    assert added.status_code == 200
+    weapon_item_id = added.json()["id"]
+    assert (
+        client.get(f"/api/equipment/library/{weapon_item_id}/detail").status_code == 200
+    )
+    assert client.delete(f"/api/equipment/library/{weapon_item_id}").status_code in (
+        200,
+        204,
+    )
+
+    # Cost calculation against the same catalogue weapon.
+    assert (
+        client.post(
+            "/api/equipment/cost/calculate",
+            json={"catalog_id": weapon_catalog_id, "type": "weapon"},
+        ).status_code
+        == 200
+    )
+
+    heal_catalog_id = _first_catalog_id(client, "healer")
+    if heal_catalog_id is not None:
+        heal = client.post(
+            "/api/equipment/library",
+            json={"type": "healing", "catalog_id": heal_catalog_id},
+        )
+        assert heal.status_code == 200
+        assert client.delete(
+            f"/api/equipment/library/{heal.json()['id']}"
+        ).status_code in (200, 204)
+
+
 def test_analytics_ledger_and_inventory(e2e_http_pipeline):
     """Create and remove ledger entries, presets, and inventory items."""
     client, _chatlog, _watcher = e2e_http_pipeline

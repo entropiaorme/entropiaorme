@@ -142,6 +142,13 @@ def test_isolated_surface_reducers_adopt_the_snapshot_on_hydrate() -> None:
     # Scan and codex surfaces are HTTP-mutated: their reducers carry no
     # subscriptions and simply adopt the snapshot wholesale on hydrate.
     for reducer in (ScanReducer(), CodexReducer()):
+        # The isolation guarantee itself: no bus subscriptions and an
+        # empty pre-hydration shape, so a mutation handing one of these
+        # surfaces a real topic set or a non-empty initial state is caught
+        # rather than slipping past the wholesale-adopt assertions below.
+        assert tuple(reducer.topics()) == ()
+        assert reducer.initial_state() == {}
+
         snapshot = {"calibrations": 3, "claims": 2, "extra": "kept"}
         reducer.hydrate(snapshot)
         assert reducer.state == snapshot

@@ -49,7 +49,6 @@ _MODULE_TIERS = {
     "test_chatlog_parser_properties": "fast",
     "test_codex_endpoints": "fast",  # request-validation only; no lifespan or DB
     "test_codex_formulas": "fast",
-    "test_codex_properties": "fast",
     "test_cost_engine": "fast",
     "test_cost_engine_properties": "fast",
     "test_keystroke_source": "fast",  # pure-logic; pynput hook never started
@@ -59,6 +58,17 @@ _MODULE_TIERS = {
     "test_scan_drift": "fast",
     "test_tool_inference": "fast",
     "test_tt_curve_properties": "fast",
+    # Property suites over pure-logic services (in-memory, sub-second).
+    "test_scan_drift_properties": "fast",
+    "test_mob_lookup_service_properties": "fast",
+    "test_tool_inference_properties": "fast",
+    "test_skill_panel_parse_properties": "fast",
+    "test_repair_ocr_properties": "fast",
+    "test_trifecta_service_properties": "fast",
+    "test_scan_presets_properties": "fast",
+    "test_eu_window_properties": "fast",
+    "test_loot_filter_properties": "fast",
+    "test_golden_ratification_guard": "fast",  # pure stdlib + git, no app
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
     "test_api_contract": "standard",  # boots the app lifespan + ASGI schemathesis run
@@ -92,6 +102,19 @@ _MODULE_TIERS = {
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
+    # Property and metamorphic suites that touch a db / filesystem / the app path.
+    "test_codex_properties": "standard",  # now drives CodexService over a temp db
+    "test_consistency_property": "standard",  # generated sequences through the watcher
+    "test_metamorphic": "standard",  # threaded pipeline + in-memory db
+    "test_scan_completion_properties": "standard",
+    "test_session_summary_properties": "standard",
+    "test_config_service_properties": "standard",  # filesystem persistence
+    "test_quest_service_properties": "standard",
+    "test_game_data_store_properties": "standard",  # filesystem snapshots
+    "test_analytics_properties": "standard",
+    "test_character_properties": "standard",
+    "test_store_reducers_properties": "standard",
+    "test_equipment_properties": "standard",
 }
 
 

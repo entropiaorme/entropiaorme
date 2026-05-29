@@ -40,6 +40,16 @@ def test_stop_tracking_returns_session_summary(tracker, monkeypatch):
     assert result["ended_at"] is not None
     assert not tracker.is_tracking
 
+    # Stopping a session also runs the prospect-summary write through
+    # write_session_summary. This session has no kills and no skill gains,
+    # so it fails the qualifying filters: the decline branch must leave no
+    # session_summaries row behind (rather than persisting an empty one).
+    summary_row = tracker._db.execute(
+        "SELECT 1 FROM session_summaries WHERE session_id = ?",
+        (started.id,),
+    ).fetchone()
+    assert summary_row is None
+
 
 def test_stop_tracking_without_active_session_raises_409(tracker, monkeypatch):
     monkeypatch.setattr(

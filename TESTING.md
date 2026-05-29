@@ -157,13 +157,14 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 ## Continuous integration
 
-Every pull request and push to `main` runs six jobs (`.github/workflows/ci.yml`):
+Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml`):
 
 - **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, parallelised with `pytest-xdist` (`-n auto --dist=loadfile`). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, single-worker, rather than on both legs).
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
 - **Pre-commit hooks**: `pre-commit run --all-files`, validating the hook configuration the local development loop uses (see "Local checks" below).
+- **Golden ratification** (pull requests only): fails when a commit moves a golden file without the `test: regenerate goldens` marker, so a regression cannot be ratified silently (see "Goldens regeneration" above).
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
@@ -225,7 +226,22 @@ Regenerated alongside the loot-value rounding fix:
 The OpenAPI snapshot and the consistency goldens are unchanged.
 ```
 
-The regeneration may sit in its own commit alongside the behaviour-change commit, or be the sole content of a goldens-only maintenance pull request; the convention is the same either way. No extra continuous-integration gate guards regeneration: the goldens diff is reviewed on the pull request like any other change, which is where a golden that moved for the wrong reason is caught.
+The regeneration may sit in its own commit alongside the behaviour-change commit, or be the sole content of a goldens-only maintenance pull request; the convention is the same either way.
+
+### Ratification guard
+
+The marker is not merely a courtesy to reviewers: it is enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate rather than accidental, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
+
+The guard inspects the pull request's diff against its base. If any commit modifies a golden file (anything under a `backend/tests` `expected/` directory: the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens, the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix) without the `test: regenerate goldens` subject prefix on the relevant commit(s), the job fails and surfaces the golden diff for review. A change that carries the marker passes; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
+
+Run it locally before pushing a goldens change, against the staged / working-tree diff or an explicit range:
+
+```bash
+.venv/Scripts/python.exe -m backend.scripts.check_golden_ratification              # staged vs HEAD
+.venv/Scripts/python.exe -m backend.scripts.check_golden_ratification --range origin/main..HEAD
+```
+
+Pass `--warn-only` to surface the diff without failing. The goldens diff is still reviewed on the pull request like any other change, where a golden that moved for the wrong reason is caught; the guard adds a mechanical backstop so an unmarked move cannot slip through unremarked.
 
 ## Test layout
 

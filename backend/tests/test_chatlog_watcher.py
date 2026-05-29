@@ -296,6 +296,12 @@ class TestLootGrouping:
 
         items = events[1][1]["items"]
         assert [item["is_enhancer_shrapnel"] for item in items] == [True, False]
+        # The flagged stack must be the one whose value matches the refund;
+        # pin both values so a mutant cannot flip the flag onto the wrong stack.
+        assert items[0]["value_ped"] == pytest.approx(0.80)
+        assert items[0]["is_enhancer_shrapnel"] is True
+        assert items[1]["value_ped"] == pytest.approx(1.73)
+        assert items[1]["is_enhancer_shrapnel"] is False
 
     def test_mission_received_event_emitted(self):
         """New Mission received line emits EVENT_MISSION_RECEIVED."""
@@ -355,6 +361,12 @@ class TestQuestRewardSuppression:
         assert len(items) == 3  # Shrapnel, Shrapnel, Animal Eye Oil (UA suppressed)
         names = [i["item_name"] for i in items]
         assert "Universal Ammo" not in names
+        # Pin order and per-item values, not just the sum: a mutant that drops a
+        # different item (or keeps Universal Ammo) can still hit the same total.
+        assert names == ["Shrapnel", "Shrapnel", "Animal Eye Oil"]
+        assert items[0]["value_ped"] == pytest.approx(0.0825)
+        assert items[1]["value_ped"] == pytest.approx(0.7247)
+        assert items[2]["value_ped"] == pytest.approx(0.80)
         assert loot_events[0][1]["total_ped"] == pytest.approx(0.0825 + 0.7247 + 0.80)
 
     def test_zero_ped_reward_suppresses_lowest_value(self):
@@ -428,7 +440,10 @@ class TestQuestRewardSuppression:
 
         loot_events = [e for e in events if e[0] == "loot"]
         assert len(loot_events) == 1
-        assert len(loot_events[0][1]["items"]) == 2  # Both items pass through
+        items = loot_events[0][1]["items"]
+        assert len(items) == 2  # Both items pass through
+        assert {i["item_name"] for i in items} == {"Universal Ammo", "Shrapnel"}
+        assert loot_events[0][1]["total_ped"] == pytest.approx(2.0)
 
     def test_filter_returns_none_all_events_pass(self):
         """Filter returning None means no suppression."""
@@ -542,6 +557,11 @@ class TestDrainSeams:
         assert watcher.lines_seen == 1
         assert not watcher.has_pending_tick
         assert len(loot) == 1
+        # Pin the parsed payload, not just the count: a mutant that drops the
+        # value or mislabels the item would keep the count but corrupt the event.
+        assert loot[0]["timestamp"] == datetime(2026, 3, 27, 10, 0, 0)
+        assert loot[0]["items"][0]["item_name"] == "Animal Muscle Oil"
+        assert loot[0]["total_ped"] == 0.12
 
     def test_wait_until_drained_raises_when_target_unreached(self, tmp_path):
         """A watcher that never reads the requested lines raises TimeoutError.
@@ -554,7 +574,11 @@ class TestDrainSeams:
         watcher = ChatlogWatcher(EventBus(), chatlog)
         watcher.start()
         try:
-            with pytest.raises(TimeoutError):
+            # The message must surface both the unmet target and the actual
+            # progress so a stuck drain is diagnosable from the traceback alone.
+            with pytest.raises(
+                TimeoutError, match=r"did not drain to 1 line.*within 0\.3s.*read 0"
+            ):
                 # Nothing is ever written, so line one never arrives.
                 watcher.wait_until_drained(1, timeout=0.3)
         finally:

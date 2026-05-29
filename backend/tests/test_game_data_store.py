@@ -58,15 +58,33 @@ def test_load_classifies_payload_shapes(tmp_path):
 def test_search_matches_by_display_name_with_mob_special_case(tmp_path):
     store = _store(tmp_path)
     weapons = store.search_entities("sollomate", endpoint="weapons")
-    assert {row["item_name"] for row in weapons} == {
-        "Sollomate Opalo",
-        "Sollomate Justifier",
-    }
-    # Mobs expose their name under species.name.
+    # Pin the full row list: count, ordering, item_id, item_name, endpoint,
+    # and the attached data payload, so a mutant that duplicates rows or
+    # mis-sets item_id/data survives no existential gap.
+    assert weapons == [
+        {
+            "endpoint": "weapons",
+            "item_id": "w1",
+            "item_name": "Sollomate Opalo",
+            "data": {"id": "w1", "name": "Sollomate Opalo"},
+        },
+        {
+            "endpoint": "weapons",
+            "item_id": "w2",
+            "item_name": "Sollomate Justifier",
+            "data": {"id": "w2", "name": "Sollomate Justifier"},
+        },
+    ]
+    # Mobs expose their name under species.name; pin the single exact row.
     mobs = store.search_entities("atrox")
-    assert any(
-        row["endpoint"] == "mobs" and row["item_name"] == "Atrox" for row in mobs
-    )
+    assert mobs == [
+        {
+            "endpoint": "mobs",
+            "item_id": "m1",
+            "item_name": "Atrox",
+            "data": {"id": "m1", "species": {"name": "Atrox"}},
+        }
+    ]
 
 
 def test_search_honours_the_limit(tmp_path):

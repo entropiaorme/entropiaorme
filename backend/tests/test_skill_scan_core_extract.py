@@ -8,6 +8,8 @@ PNG-decode failure path are pinned without the ONNX model, giving the mutation
 campaign over ``skill_scan_core.py`` assertions to fail against.
 """
 
+import logging
+
 import cv2
 import numpy as np
 
@@ -26,9 +28,22 @@ def _png_bytes() -> bytes:
     return buf.tobytes()
 
 
-def test_extract_page_levels_returns_empty_on_decode_failure(tmp_path):
-    """Undecodable bytes are a clean empty page, not a crash."""
-    assert _core(tmp_path).extract_page_levels(b"not a png") == {}
+def test_extract_page_levels_returns_empty_on_decode_failure(tmp_path, caplog):
+    """Undecodable bytes are a clean empty page, not a crash.
+
+    Asserting on the warning pins that the ``ValueError`` decode path was
+    actually exercised: an empty map alone would also pass if the try/except
+    were removed and the exception silently swallowed elsewhere.
+    """
+    with caplog.at_level(logging.WARNING, logger="backend.services.skill_scan_core"):
+        assert _core(tmp_path).extract_page_levels(b"not a png") == {}
+
+    decode_warnings = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING and "PNG decode failed" in rec.getMessage()
+    ]
+    assert len(decode_warnings) == 1
 
 
 def test_extract_page_levels_keeps_named_levelled_rows(tmp_path, monkeypatch):

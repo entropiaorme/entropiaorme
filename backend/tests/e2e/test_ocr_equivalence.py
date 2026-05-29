@@ -24,6 +24,7 @@ this host's recogniser output.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,22 @@ def _stable_levels(levels: dict[str, float]) -> dict[str, float]:
     return {name: round(level, 2) for name, level in sorted(levels.items())}
 
 
+def _assert_well_formed_levels(levels: dict) -> None:
+    """A {skill: level} map must be string keys and finite, non-negative floats.
+
+    No fixed upper bound: the panel reports accumulated skill points, which run
+    into the tens of thousands for a mature account, so any ceiling below that
+    would reject correct readings. The golden pins the exact values; this only
+    guards the per-entry shape so a mutant that swaps a level's type or sign (or
+    a key's type) is caught even when the count survives.
+    """
+    assert isinstance(levels, dict)
+    for name, level in levels.items():
+        assert isinstance(name, str) and name, name
+        assert isinstance(level, float) and not isinstance(level, bool), name
+        assert math.isfinite(level) and level >= 0, (name, level)
+
+
 # ── Repair window: the full capture -> OCR -> parse pipeline through the seam ──
 
 
@@ -103,7 +120,18 @@ def test_repair_cost_equivalence(data_regression, monkeypatch, ocr_engine):
     result = RepairOcrService(config_service=None).scan_repair_cost()
 
     assert "error" not in result
-    data_regression.check({"cost_ped": round(result["cost_ped"], 2)})
+    # Pin the success-shape contract, not just the cost: a corruption that
+    # returns the right number while blanking or renaming raw_text/confidence
+    # must not survive.
+    assert set(result) == {"cost_ped", "raw_text", "confidence"}
+    cost = result["cost_ped"]
+    assert isinstance(cost, (int, float)) and not isinstance(cost, bool)
+    assert cost > 0  # the recorded repair panel reads a non-zero cost
+    assert isinstance(result["raw_text"], str) and result["raw_text"]
+    assert isinstance(result["confidence"], (int, float)) and not isinstance(
+        result["confidence"], bool
+    )
+    data_regression.check({"cost_ped": round(cost, 2), "raw_text": result["raw_text"]})
 
 
 # ── Skill panel: structured level output per distinct case ────────────────────
@@ -116,6 +144,7 @@ def test_skill_full_page_equivalence(data_regression, ocr_engine, tmp_path):
     )
 
     assert levels, "expected a full page to yield at least one skill"
+    _assert_well_formed_levels(levels)
     data_regression.check(_stable_levels(levels))
 
 
@@ -126,6 +155,7 @@ def test_skill_last_page_equivalence(data_regression, ocr_engine, tmp_path):
     )
 
     assert levels, "expected the last page to yield at least one skill"
+    _assert_well_formed_levels(levels)
     data_regression.check(_stable_levels(levels))
 
 
@@ -135,7 +165,14 @@ def test_skill_multipage_aggregation_equivalence(data_regression, ocr_engine, tm
     result = SkillScanManual(None, tmp_path)._extract_levels(captures)
 
     assert "skills" in result, result.get("error")
-    data_regression.check(_stable_levels(result["skills"]))
+    skills = result["skills"]
+    assert skills, "expected aggregation to yield at least one skill"
+    _assert_well_formed_levels(skills)
+    # Every input page is accounted for, so a mutant that drops or double-counts
+    # a capture is caught.
+    assert result["pages_processed"] == len(captures)
+
+    data_regression.check(_stable_levels(skills))
 
 
 # ── Seam transparency: capture through the FixtureCapturer == direct bytes ────

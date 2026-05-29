@@ -89,6 +89,33 @@ def test_start_installs_taps_and_reports_recording(tmp_path):
     for svc in (chatlog, skill, repair, hotbar, spacebar):
         assert svc.tap is not None
 
+    # Each service must receive its own surface's record_* sink, not just
+    # "a callable": a mutant that crosses the wires (e.g. feeds chat lines to
+    # the scan tap) keeps every svc.tap non-None but corrupts the recording.
+    assert chatlog.tap.__name__ == "record_line"
+    assert type(chatlog.tap.__self__).__name__ == "ChatlogTap"
+    for svc in (skill, repair):
+        assert svc.tap.__name__ == "record_capture"
+        assert type(svc.tap.__self__).__name__ == "ScanCaptureTap"
+    for svc in (hotbar, spacebar):
+        assert svc.tap.__name__ == "record_key"
+        assert type(svc.tap.__self__).__name__ == "KeystrokeTap"
+
+    # The two scan sources and the two key sources each fan into one shared
+    # tap instance, so their captures interleave into a single ordered stream.
+    assert skill.tap.__self__ is repair.tap.__self__
+    assert hotbar.tap.__self__ is spacebar.tap.__self__
+    assert skill.tap.__self__ is not hotbar.tap.__self__
+
+    # The wired sinks are live: driving the scan and key taps advances the
+    # recording's counters, proving they point at the active bundle's recorder.
+    skill.tap("skill", {"x": 0}, b"\x89PNG")
+    hotbar.tap("Key.space", "press")
+    counts = ctrl.status()
+    assert counts["captures"] == 1
+    assert counts["keystrokes"] == 1
+    ctrl.abort()
+
 
 def test_double_start_raises(tmp_path):
     ctrl, *_ = _make_controller(tmp_path)
@@ -101,7 +128,7 @@ def test_double_start_raises(tmp_path):
 
 
 def test_stop_finalises_bundle_and_verifies_determinism(tmp_path):
-    ctrl, chatlog, skill, *_ = _make_controller(tmp_path)
+    ctrl, chatlog, skill, repair, hotbar, spacebar = _make_controller(tmp_path)
     ctrl.start()
     _feed(chatlog)
 
@@ -126,9 +153,19 @@ def test_stop_finalises_bundle_and_verifies_determinism(tmp_path):
     assert meta["flavour"] == "recorded"
     assert meta["counts"]["chat_lines"] == len(CHAT_LINES)
 
-    assert ctrl.status()["state"] == "idle"
-    # Taps cleared on finalise.
-    assert chatlog.tap is None and skill.tap is None
+    final_status = ctrl.status()
+    assert final_status["state"] == "idle"
+    # Every tap (not just the two we read) is uninstalled on finalise, so a
+    # later live event cannot dribble into a closed bundle.
+    for svc in (chatlog, skill, repair, hotbar, spacebar):
+        assert svc.tap is None
+    # The recorder is fully released: an idle controller reports zero live
+    # counters, so a mutant that leaves the finished recorder attached (still
+    # answering with its end-of-recording counts) is caught.
+    assert final_status["lines"] == 0
+    assert final_status["captures"] == 0
+    assert final_status["keystrokes"] == 0
+    assert final_status["started_at"] is None
 
 
 def test_stop_refuses_existing_scenario_name(tmp_path):

@@ -83,7 +83,7 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
 ) -> None:
     """Two missions, same playlist, single session → ``exact_playlist``."""
 
-    bus, tracker, quest_service, watcher, chatlog, _app_db = quest_automation_pipeline
+    bus, tracker, quest_service, watcher, chatlog, app_db = quest_automation_pipeline
 
     # Pre-populate two quests, each carrying a small liquid reward so
     # completion writes a deterministic ledger row, and bundle them
@@ -117,6 +117,32 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
     refreshed_beta = quest_service.get_quest(beta["id"])
     assert refreshed_alpha is not None and refreshed_alpha["started_at"] is None
     assert refreshed_beta is not None and refreshed_beta["started_at"] is None
+
+    # started_at is None also describes a quest that never started or one
+    # whose state was cleared without recording a completion or its reward,
+    # so pin the completion side effects directly. Each quest must leave
+    # exactly one session_quest_completions row keyed to this session, and
+    # each 1.50-PED liquid reward must leave exactly one quest_reward ledger
+    # row at the expected amount, so a mutant that drops either write while
+    # still clearing started_at is caught.
+    conn = app_db.conn
+    for quest_id in (alpha["id"], beta["id"]):
+        completion_count = conn.execute(
+            "SELECT COUNT(*) FROM session_quest_completions "
+            "WHERE session_id = ? AND quest_id = ?",
+            (session_id, quest_id),
+        ).fetchone()[0]
+        assert completion_count == 1
+
+    for quest_name in ("Alpha Hunt", "Beta Hunt"):
+        reward_rows = conn.execute(
+            "SELECT amount, type FROM ledger_entries "
+            "WHERE tag = 'quest_reward' AND description = ?",
+            (f"Quest: {quest_name}",),
+        ).fetchall()
+        assert len(reward_rows) == 1
+        assert reward_rows[0]["amount"] == pytest.approx(1.50)
+        assert reward_rows[0]["type"] == "markup"
 
     # Acceptance: the session resolves to the playlist by exact match.
     suggestion = quest_service.get_session_link_suggestion(session_id)

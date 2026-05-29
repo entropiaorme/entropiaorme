@@ -102,7 +102,19 @@ def test_spacebar_scan_capture_drives_listener_via_keystroke_source(
 
     time.sleep(0.05)
 
+    # Value-level pins so a mutant that preserves the capture count but
+    # corrupts the dispatched edges (e.g. drops a release, mislabels a
+    # press, or fires capture on the idle-phase press) is still caught.
     assert skill.capture_calls == 1
+    assert skill.get_status() == {"phase": "idle"}, "phase flips before the idle pair"
+    # Both press-release pairs flow through the tap observer regardless of
+    # phase; gating only governs capture, not the pass-through tap.
+    assert taps == [
+        {"key": "space", "kind": "press"},
+        {"key": "space", "kind": "release"},
+        {"key": "space", "kind": "press"},
+        {"key": "space", "kind": "release"},
+    ]
     data_regression.check(
         {
             "capture_calls": skill.capture_calls,

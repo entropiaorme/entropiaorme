@@ -7,7 +7,7 @@ backup-on-overwrite save branch.
 
 from pathlib import Path
 
-from backend.services.config_service import ConfigService
+from backend.services.config_service import AppConfig, ConfigService
 
 
 def test_update_normalises_hotbar_and_defaults_trifecta_presets(tmp_path: Path):
@@ -19,8 +19,16 @@ def test_update_normalises_hotbar_and_defaults_trifecta_presets(tmp_path: Path):
     # emptied trifecta-preset list back to the default preset.
     result = svc.update({"trifecta_presets": []})
 
-    assert result.trifecta_presets  # emptied list normalised to the default preset
-    assert result.hotbar  # filled to the full slot shape
+    # Emptied list normalised back to exactly the default preset (id + name).
+    assert [p.id for p in result.trifecta_presets] == ["default"]
+    assert result.trifecta_presets[0].name == "Default"
+    # Hotbar filled to the full 1-9,0 slot shape, keeping the set value and
+    # leaving untouched slots empty (None), not shifted or dropped.
+    assert sorted(result.hotbar.keys()) == sorted(
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    )
+    assert result.hotbar["1"] == 5
+    assert result.hotbar["2"] is None
     assert (tmp_path / "settings.bak").exists()  # the overwrite kept a backup
 
 
@@ -34,7 +42,13 @@ def test_corrupt_config_falls_back_to_defaults(tmp_path: Path):
     (tmp_path / "settings.json").write_text("{ this is not json", encoding="utf-8")
     svc = ConfigService(tmp_path)
     assert svc.get().mob_tracking_mode == "mob"  # default config materialised
-    assert (tmp_path / "settings.json").exists()  # default re-saved over corruption
+    # The re-save must have replaced the corruption with valid default JSON,
+    # not just left the (still-corrupt) file in place.
+    import json
+
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["mob_tracking_mode"] == "mob"
+    assert saved["chatlog_path"] == AppConfig.default_chatlog_path()
 
 
 def test_trifecta_preset_normalisation_skips_and_dedupes(tmp_path: Path):

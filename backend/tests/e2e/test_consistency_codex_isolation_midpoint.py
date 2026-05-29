@@ -94,4 +94,21 @@ def test_codex_isolation_invariant_holds_across_chat_event_stream(
     # across T0 and T1.
     assert result.snapshot_t0 == result.snapshot_t1
 
+    # Pin the projected keys and values explicitly, not just their
+    # cross-segment stability: a view that swapped the two COUNT(*)
+    # queries, counted the wrong table, or collapsed to a constant
+    # would still report equal snapshots. The fresh codex tables hold
+    # zero rows because the harness drives no /codex/claim or
+    # /codex/calibrate HTTP mutation.
+    expected_projection = {
+        "codex_progress_row_count": 0,
+        "codex_claim_row_count": 0,
+    }
+    assert result.snapshot_t0 == expected_projection
+    assert result.snapshot_t1 == expected_projection
+    # The hydrated state is rebuilt by the reducer from snapshot_t0 and
+    # must match the live snapshot_t1 field-for-field for the invariant
+    # to hold; pin it against the same concrete projection.
+    assert result.hydrated_state == expected_projection
+
     data_regression.check(result.hydrated_state)

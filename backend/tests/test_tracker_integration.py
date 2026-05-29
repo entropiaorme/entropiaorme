@@ -169,15 +169,30 @@ class TestFullPipeline:
         assert kill.loot_total_ped == 0.53
         assert kill.shots_fired == 2
         assert kill.damage_dealt == 25.0
+        assert kill.critical_hits == 0  # no critical_hit event fired
 
-        # Check loot in DB
+        # Check loot in DB: pin every (name, quantity, value) triple, not
+        # just the row count and one name, so a mutant swapping the
+        # quantity/value columns or dropping a value in the insert is caught.
         loot_rows = db.execute(
             "SELECT item_name, quantity, value_ped FROM kill_loot_items WHERE kill_id = ?",
             (kill.id,),
         ).fetchall()
-        assert len(loot_rows) == 2
-        names = {r[0] for r in loot_rows}
-        assert "Shrapnel" in names
+        assert {(r[0], r[1], r[2]) for r in loot_rows} == {
+            ("Shrapnel", 50, 0.50),
+            ("Animal Oil Residue", 3, 0.03),
+        }
+
+        # The denormalised kills row mirrors the in-memory aggregates.
+        persisted = db.execute(
+            "SELECT shots_fired, damage_dealt, critical_hits, loot_total_ped "
+            "FROM kills WHERE id = ?",
+            (kill.id,),
+        ).fetchone()
+        assert persisted[0] == 2
+        assert persisted[1] == pytest.approx(25.0)
+        assert persisted[2] == 0
+        assert persisted[3] == pytest.approx(0.53)
 
     def test_accumulator_resets_on_loot(self, pipeline):
         """After a kill, accumulator starts fresh."""
@@ -230,12 +245,21 @@ class TestFullPipeline:
         assert result is not None
         assert len(result.kills) == 3
 
-        # Verify DB
+        # Verify DB: not just the row count, but each kill's per-row
+        # values, so a mutant mis-stamping shots/loot/timestamp survives
+        # only if it also corrupts the count.
         db_kills = db.execute(
-            "SELECT id FROM kills WHERE session_id = ?",
+            "SELECT shots_fired, loot_total_ped, timestamp FROM kills "
+            "WHERE session_id = ? ORDER BY timestamp",
             (result.id,),
         ).fetchall()
         assert len(db_kills) == 3
+        for row in db_kills:
+            assert row[0] == 1  # one shot per kill
+            assert row[1] == pytest.approx(0.10)  # loot_total_ped per kill
+        timestamps = [row[2] for row in db_kills]
+        assert timestamps == sorted(timestamps)
+        assert len(set(timestamps)) == 3  # distinct, monotonically increasing
 
     def test_dangling_cost_with_equipment(self, pipeline):
         """Shots without loot → dangling cost includes weapon cost."""
@@ -387,12 +411,14 @@ class TestFullPipeline:
 
         now = datetime.now(tz=None)
 
-        # Shots before tool detection go to "Unknown"
+        # Shots before tool detection go to "Unknown"; one of them is a
+        # critical hit, so the merge of Unknown's critical_hits into the
+        # real tool is observable (a mutant dropping that merge line dies).
         bus.publish(
             EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
         )
         bus.publish(
-            EVENT_COMBAT, {"type": "damage_dealt", "amount": 15.0, "timestamp": now}
+            EVENT_COMBAT, {"type": "critical_hit", "amount": 15.0, "timestamp": now}
         )
 
         # Tool detected → merge
@@ -420,6 +446,18 @@ class TestFullPipeline:
         assert "Opalo" in kill.tool_stats
         assert kill.tool_stats["Opalo"].shots_fired == 3
         assert kill.tool_stats["Opalo"].damage_dealt == 45.0
+        assert kill.tool_stats["Opalo"].critical_hits == 1
+
+        # Persisted kill_tool_stats row carries the merged figures, so a
+        # mutant corrupting the INSERT column mapping in _persist_kill dies.
+        ts_row = db.execute(
+            "SELECT shots_fired, damage_dealt, critical_hits FROM kill_tool_stats "
+            "WHERE kill_id = ? AND tool_name = 'Opalo'",
+            (kill.id,),
+        ).fetchone()
+        assert ts_row[0] == 3
+        assert ts_row[1] == pytest.approx(45.0)
+        assert ts_row[2] == 1
 
     def test_shrapnel_conversion_ledger_entry(self, pipeline):
         """Shrapnel looted during a session creates a 1% margin ledger entry."""
@@ -828,6 +866,21 @@ class TestGlobalCorrelation:
         kill = result.kills[0]
         assert kill.is_global is True
         assert kill.is_hof is True
+
+        # The HoF path's persistence is otherwise unchecked: pin both the
+        # kills UPDATE and the notable_events row, so a mutant writing the
+        # wrong is_hof int or omitting the DB write in _on_global dies.
+        row = db.execute(
+            "SELECT is_global, is_hof FROM kills WHERE id = ?", (kill.id,)
+        ).fetchone()
+        assert row[0] == 1
+        assert row[1] == 1
+
+        notable = db.execute(
+            "SELECT kill_id FROM notable_events WHERE event_type = 'hof_kill'"
+        ).fetchone()
+        assert notable is not None
+        assert notable[0] == kill.id
 
     def test_other_player_global_ignored(self, pipeline_with_player):
         bus, tracker, db = pipeline_with_player
@@ -2579,10 +2632,33 @@ class TestMobTrackingModePersistence:
         the canonical default."""
         db = _setup_orphan_db()
         cols = {
-            row[1]
+            row[1]: row
             for row in db.execute("PRAGMA table_info(tracking_sessions)").fetchall()
         }
         assert "mob_tracking_mode" in cols
+
+        # The default literal is canonical: the tracker relies on 'mob'
+        # and post-hoc UI reads it for label vocabulary. PRAGMA row shape
+        # is (cid, name, type, notnull, dflt_value, pk).
+        col = cols["mob_tracking_mode"]
+        assert col[2] == "TEXT"
+        assert col[3] == 1  # NOT NULL
+        assert col[4] == "'mob'"
+
+        # A row inserted without the column lands the canonical default,
+        # confirming the declaration is enforced at the row level.
+        session_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active) "
+            "VALUES (?, ?, 0)",
+            (session_id, time.time()),
+        )
+        db.commit()
+        stored = db.execute(
+            "SELECT mob_tracking_mode FROM tracking_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        assert stored == "mob"
 
     def test_tracker_persists_mob_mode_at_session_start(self):
         """A tracker initialised with a 'mob' mode provider writes 'mob'
@@ -2671,6 +2747,100 @@ class TestMobTrackingModePersistence:
         finally:
             app_db.close()
         assert detail["mobEntryMode"] == "tag"
+
+
+class TestTrackingSchemaConstraints:
+    """The active DDL behaviour beyond table creation: the updated_at
+    backfill trigger and the dedup / not-null constraints the tracker
+    leans on. These guards have no other covering test, so a relaxed or
+    dropped constraint would otherwise pass the suite silently."""
+
+    def test_updated_at_backfilled_when_caller_omits_it(self):
+        """The AFTER INSERT trigger stamps updated_at = unixepoch('now')
+        when the caller leaves it NULL."""
+        db = _setup_orphan_db()
+        before = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active) "
+            "VALUES (?, ?, 0)",
+            (str(uuid.uuid4()), before),
+        )
+        db.commit()
+        updated_at = db.execute("SELECT updated_at FROM tracking_sessions").fetchone()[
+            0
+        ]
+        assert updated_at is not None
+        # unixepoch('now') is integer seconds; allow a few seconds slack.
+        assert abs(updated_at - before) < 5
+
+    def test_updated_at_not_overwritten_when_caller_supplies_it(self):
+        """The WHEN NEW.updated_at IS NULL guard means a caller-supplied
+        timestamp is preserved, not clobbered by the trigger."""
+        db = _setup_orphan_db()
+        explicit = 1_700_000_000.0
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active, updated_at) "
+            "VALUES (?, ?, 0, ?)",
+            (str(uuid.uuid4()), time.time(), explicit),
+        )
+        db.commit()
+        stored = db.execute("SELECT updated_at FROM tracking_sessions").fetchone()[0]
+        assert stored == pytest.approx(explicit)
+
+    def test_kill_tool_stats_dedup_unique_constraint(self):
+        """UNIQUE(kill_id, tool_name, cost_per_shot) rejects a duplicate
+        tool-stat row; this is the dedup invariant the tracker relies on."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        kill_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active) "
+            "VALUES (?, ?, 0)",
+            (session_id, now),
+        )
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp) "
+            "VALUES (?, ?, 'Atrox', ?)",
+            (kill_id, session_id, now),
+        )
+        db.execute(
+            "INSERT INTO kill_tool_stats (kill_id, tool_name, cost_per_shot) "
+            "VALUES (?, 'Opalo', 0.5)",
+            (kill_id,),
+        )
+        db.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, cost_per_shot) "
+                "VALUES (?, 'Opalo', 0.5)",
+                (kill_id,),
+            )
+
+    def test_kill_loot_items_value_ped_not_null(self):
+        """kill_loot_items.value_ped is NOT NULL; a NULL loot value is
+        rejected at insert time."""
+        db = _setup_orphan_db()
+        session_id = str(uuid.uuid4())
+        kill_id = str(uuid.uuid4())
+        now = time.time()
+        db.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active) "
+            "VALUES (?, ?, 0)",
+            (session_id, now),
+        )
+        db.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp) "
+            "VALUES (?, ?, 'Atrox', ?)",
+            (kill_id, session_id, now),
+        )
+        db.commit()
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped) "
+                "VALUES (?, 'Shrapnel', 1, NULL)",
+                (kill_id,),
+            )
 
 
 class TestWeaponCostAttribution:

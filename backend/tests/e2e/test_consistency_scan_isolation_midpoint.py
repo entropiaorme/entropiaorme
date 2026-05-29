@@ -30,7 +30,9 @@ from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     ScanReducer,
     ScanViewContext,
+    TrackingViewContext,
     scan_view_state,
+    tracking_view_state,
 )
 from backend.tracking.tracker import HuntTracker
 
@@ -78,6 +80,10 @@ def test_scan_isolation_invariant_holds_across_chat_event_stream(
             adapter=adapter,
             view_context=ScanViewContext(conn=app_db.conn),
         )
+        # Captured before teardown stops the session so the cross-check
+        # below can confirm the chat stream actually moved an unrelated
+        # surface (see the non-vacuity assertion).
+        tracking_after = tracking_view_state(TrackingViewContext(tracker=tracker))
     finally:
         if tracker.is_tracking:
             tracker.stop_session()
@@ -91,7 +97,24 @@ def test_scan_isolation_invariant_holds_across_chat_event_stream(
 
     # Both snapshots project zero rows since neither segment touches
     # the scan tables; the invariant under test is the equality across
-    # T0 and T1, not the absolute value.
+    # T0 and T1. Pin the absolute projection independently of the golden
+    # so a view that read the wrong table, returned constants, or swapped
+    # the two COUNT columns produces equal-but-wrong snapshots that fail
+    # here rather than passing on stability alone.
+    empty_scan_projection = {
+        "distinct_calibrated_skills": 0,
+        "calibration_row_count": 0,
+    }
+    assert result.snapshot_t0 == empty_scan_projection
+    assert result.snapshot_t1 == empty_scan_projection
     assert result.snapshot_t0 == result.snapshot_t1
+    assert result.hydrated_state == empty_scan_projection
+
+    # Non-vacuity guard: the same chat stream that left the scan view at
+    # zero did move the tracking surface (the post-midpoint segment
+    # resolves one loot group into one kill and fires shots), so the
+    # scan view's stillness reflects genuine isolation, not a dead stream.
+    assert tracking_after["kill_count"] == 1
+    assert tracking_after["shots_fired_total"] > 0
 
     data_regression.check(result.hydrated_state)

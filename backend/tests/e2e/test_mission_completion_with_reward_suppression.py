@@ -2,11 +2,14 @@
 
 The chatlog lifecycle is: mission_received -> brief hunt
 (one kill) -> mission_completed -> the would-be skill-gain
-reward line. The golden pins whatever the tracker +
-quest_service currently do with this surface; fuller
-reward-suppression coverage involving the junction table and
-playlist matching lands with the keystroke / quest-automation
-harness layer.
+reward line. The kill totals, the mission name and the reward
+line's concrete skill + amount are pinned against the recorded
+event stream alongside the golden DB snapshot. Active
+reward-suppression (the gain being dropped from the stream)
+needs ``QuestService.quest_reward_filter`` threaded into the
+watcher and is exercised by the playlist-match acceptance test;
+this pipeline boots the tracker without that filter, so the
+gain here is emitted unchanged.
 """
 
 from __future__ import annotations
@@ -15,7 +18,10 @@ from pathlib import Path
 
 import pytest
 
+from backend.core.events import EVENT_MISSION_RECEIVED, EVENT_SKILL_GAIN
 from backend.testing.replay import replay_scenario, wait_for_drain
+
+MISSION_NAME = "Codex Argonaut Stage 1"
 
 
 def test_mission_lifecycle_with_skill_gain(
@@ -41,5 +47,32 @@ def test_mission_lifecycle_with_skill_gain(
     assert kill.shots_fired == 2
     assert kill.damage_dealt == pytest.approx(35.0)
     assert kill.loot_total_ped == pytest.approx(2.50)
+
+    # Pin the value-level shape of the recorded event stream, not just
+    # its row counts: a mutation that corrupted the mission name or the
+    # reward line's skill/amount while leaving every event count intact
+    # would otherwise slip past a status-only check.
+    events = goldens.recorder.events
+    by_topic: dict[str, list] = {}
+    for topic, payload in events:
+        by_topic.setdefault(topic, []).append(payload)
+
+    mission_lines = by_topic.get(EVENT_MISSION_RECEIVED, [])
+    assert [p["mission_name"] for p in mission_lines] == [MISSION_NAME]
+
+    # The skill-gain line that follows the mission completion is the
+    # would-be quest reward. This pipeline boots the tracker without a
+    # ``quest_reward_filter`` wired in (the shared ``e2e_pipeline``
+    # fixture passes none), so the watcher's tick-time suppression path
+    # never fires and the gain is emitted unchanged. Pinning the
+    # concrete skill_name + amount here catches a mutant that corrupts
+    # the reward value; the absent-from-stream form of suppression is
+    # exercised where ``QuestService.quest_reward_filter`` is actually
+    # threaded into the watcher (the playlist-match acceptance test).
+    skill_lines = by_topic.get(EVENT_SKILL_GAIN, [])
+    assert len(skill_lines) == 1
+    reward = skill_lines[0]
+    assert reward["skill_name"] == "Bioregenesis"
+    assert reward["amount"] == pytest.approx(0.05)
 
     goldens.assert_matches(in_memory_db)

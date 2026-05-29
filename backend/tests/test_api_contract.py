@@ -126,7 +126,7 @@ def contract_env():
     try:
         # Entering the context runs the lifespan startup, which populates the
         # service container the handlers resolve through.
-        with TestClient(app, base_url=BASE_URL):
+        with TestClient(app, base_url=BASE_URL) as client:
             # The recording router is dev-gated (server-side 403 unless developer
             # mode is on). Enable it for the contract run so GET
             # /api/recording/status is exercised against its schema rather than
@@ -134,7 +134,9 @@ def contract_env():
             from backend.dependencies import get_services
 
             get_services().config_service.update({"developer_mode_enabled": True})
-            yield
+            # Schemathesis cases reach the app directly and ignore the yielded
+            # client; the value-pinning tests below use it for real requests.
+            yield client
     finally:
         demo_module._resolve_demo_db_path = original_resolver
         demo_module._state["conn"] = None
@@ -177,3 +179,85 @@ def test_get_endpoints_conform(case, contract_env):
     if 200 <= response.status_code < 300:
         checks.append(response_schema_conformance)
     case.validate_response(response, checks=tuple(checks))
+
+
+# ---------------------------------------------------------------------------
+# Value-level oracles.
+#
+# Schema conformance pins each response to its declared shape but never to a
+# computed value: a mutant that returns a structurally-valid but semantically
+# wrong body (health flipped to a different string, recording state frozen,
+# demo bodies served all-zero from a wrong DB or a failed priming step) still
+# conforms and survives the schema-driven walk above. These tests assert the
+# concrete values alongside that walk so such a corruption is caught.
+# ---------------------------------------------------------------------------
+
+
+def test_health_body_is_ok(contract_env):
+    """``/api/health`` returns exactly ``{"status": "ok"}``, not just a string."""
+    client = contract_env
+    response = client.get("/api/health", headers=REQUEST_HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "ok"}
+
+
+def test_recording_status_is_idle_before_any_session(contract_env):
+    """Pre-session recording status pins the idle state and zeroed counters.
+
+    Developer mode is on for the contract run, so the handler is reached (not
+    a 403). No recording has been started, so the controller is in its initial
+    ``idle`` state with every live counter at zero and no start timestamp. A
+    mutant that hard-codes ``recording`` or freezes the counters conforms to
+    the schema but is caught here.
+    """
+    client = contract_env
+    response = client.get("/api/recording/status", headers=REQUEST_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "idle"
+    assert body["started_at"] is None
+    assert body["lines"] == 0
+    assert body["captures"] == 0
+    assert body["keystrokes"] == 0
+
+
+def test_demo_analytics_overview_serves_seeded_non_zero_totals(contract_env):
+    """The demo overview reflects the seeded career, not an all-zero body.
+
+    The seeded demo DB holds a populated synthetic career, so the overview
+    totals are strictly positive and the timeline + monthly breakdowns are
+    non-empty. A demo clone served from a wrong or empty DB conforms to the
+    ``AnalyticsOverview`` shape with zeroed totals and empty series; pinning
+    the totals as positive and the series as non-empty rejects that.
+    """
+    client = contract_env
+    response = client.get("/api/demo/analytics/overview", headers=REQUEST_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["totalGains"] > 0
+    assert body["totalLosses"] > 0
+    assert body["totalReturnRate"] > 0
+    assert body["timeline"], "seeded demo career should yield a non-empty timeline"
+    assert body["monthlyBreakdown"], (
+        "seeded demo career should yield a non-empty monthly breakdown"
+    )
+
+
+def test_demo_tracking_status_reflects_primed_mid_hunt_session(contract_env):
+    """The demo tracking status reflects the primed mid-hunt session.
+
+    Hitting a demo tracker-state endpoint triggers the live-injection priming
+    of the parallel HuntTracker (the ``mid_hunt`` scenario), which seeds an
+    active session with a fixed kill count against a canonical mob. Pinning
+    the active state, the seeded kill count, and a non-empty current mob
+    rejects a clone that fails to prime (idle / zero kills / no mob) yet still
+    conforms to the ``TrackingStatus`` shape.
+    """
+    client = contract_env
+    response = client.get("/api/demo/tracking/status", headers=REQUEST_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "active"
+    # The mid_hunt live-injection scenario primes a fixed 100-kill session.
+    assert body["kill_count"] == 100
+    assert body["currentMob"]

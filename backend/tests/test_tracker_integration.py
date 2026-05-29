@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from backend.core.event_bus import EventBus
 from backend.core.events import (
+    EVENT_ACTIVE_TOOL_CHANGED,
     EVENT_COMBAT,
     EVENT_ENHANCER_BREAK,
     EVENT_GLOBAL,
@@ -2670,3 +2671,54 @@ class TestMobTrackingModePersistence:
         finally:
             app_db.close()
         assert detail["mobEntryMode"] == "tag"
+
+
+class TestWeaponCostAttribution:
+    """Cost attribution through the hotbar tool + enhancer-break path."""
+
+    def test_active_weapon_with_enhancers_attributes_cost_and_depletes(self):
+        db = sqlite3.connect(":memory:", check_same_thread=False)
+        bus = EventBus()
+        profile = _enhancer_props(2)
+        tracker = HuntTracker(
+            bus,
+            db,
+            equipment_profile_lookup=lambda name: profile if name == "MyGun" else None,
+            equipment_cost_lookup=lambda _name: 0.5,
+        )
+        tracker.start_session()
+        now = datetime.now(tz=None)
+
+        # Equipping the weapon resolves its profile and arms the enhancer state.
+        bus.publish(EVENT_ACTIVE_TOOL_CHANGED, {"tool_name": "MyGun"})
+
+        # A shot attributes cost to the active weapon (the enhancer state path).
+        bus.publish(
+            EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+        )
+        # An enhancer break for the active weapon updates its depletion state.
+        bus.publish(
+            EVENT_ENHANCER_BREAK,
+            {
+                "enhancer_name": "Weapon Damage Enhancer",
+                "item_name": "MyGun",
+                "remaining": 1,
+                "shrapnel_ped": 0.5,
+            },
+        )
+        bus.publish(
+            EVENT_LOOT_GROUP,
+            {
+                "items": [{"item_name": "Shrapnel", "quantity": 1, "value_ped": 0.5}],
+                "total_ped": 0.5,
+                "timestamp": now,
+            },
+        )
+
+        result = tracker.stop_session()
+        assert len(result.kills) == 1
+        kill = result.kills[0]
+        # The weapon was attributed (not "Unknown") with a non-zero cost per shot.
+        assert "Unknown" not in kill.tool_stats
+        assert "MyGun" in kill.tool_stats
+        assert kill.tool_stats["MyGun"].cost_per_shot > 0

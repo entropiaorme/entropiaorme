@@ -37,3 +37,22 @@ def test_has_mob_name_checks_exact_pair():
 
     assert isinstance(svc.has_mob_name("Atrox", "Young"), bool)
     assert svc.has_mob_name("Nonexistent", "Young") is False
+
+
+def test_has_mob_name_branches():
+    mobs = [
+        {
+            "species": {"name": "Atrox"},
+            "maturities": [{"name": "Young"}, {"name": "Old"}],
+        },
+        {"name": "Berycled", "maturities": []},  # no maturities -> bare species
+    ]
+    svc = MobLookupService(_game_data(mobs))
+
+    assert svc.has_mob_name("", "Young") is False  # empty species short-circuits
+    assert svc.has_mob_name("Atrox", "Young") is True  # exact maturity match
+    assert svc.has_mob_name("Atrox", "Ancient") is False  # maturities present, no match
+    assert (
+        svc.has_mob_name("Berycled", "") is True
+    )  # no-maturity species, empty maturity
+    assert svc.has_mob_name("Berycled", "Young") is False  # no-maturity species, named

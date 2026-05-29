@@ -136,6 +136,27 @@ def test_session_detail_unknown_id_is_404(e2e_http_pipeline):
     assert missing.status_code == 404
 
 
+def test_live_reads_while_a_session_is_active(e2e_http_pipeline):
+    """Read the live surface mid-session, before it is stopped.
+
+    The status / live / recent-events handlers carry active-session
+    projection branches (the running cumulative net history and in-flight
+    totals) that the stopped-session reads in the seeded walk do not reach.
+    """
+    client, chatlog, watcher = e2e_http_pipeline
+    tracker = get_services().tracker
+    tracker.start_session()
+    try:
+        replay_scenario(SCENARIO, chatlog)
+        wait_for_drain(watcher, chatlog)
+        assert client.get("/api/tracking/status").status_code == 200
+        live = client.get("/api/tracking/live")
+        assert live.status_code == 200
+        assert client.get("/api/tracking/recent-events").status_code == 200
+    finally:
+        tracker.stop_session()
+
+
 def test_parametric_character_and_equipment_reads(e2e_http_pipeline):
     """Reads that take query parameters: optimizers, prospect, equipment search.
 

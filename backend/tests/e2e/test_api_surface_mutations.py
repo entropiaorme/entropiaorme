@@ -126,6 +126,74 @@ def test_quest_and_playlist_lifecycle(e2e_http_pipeline):
     assert client.delete(f"/api/quests/{quest_id}").status_code in (200, 204)
 
 
+def test_skill_scan_lifecycle_endpoints(e2e_http_pipeline):
+    """Drive the manual skill-scan control endpoints.
+
+    The scan handlers are thin adapters over the scan service; calling them
+    (without a real capture device) exercises the router endpoints and the
+    service's no-active-scan handling. The capture endpoint itself is skipped
+    here: it grabs a screen region and is covered by the OCR equivalence pair.
+    """
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    assert client.post("/api/scan/skills/start").status_code < 500
+    assert client.get("/api/scan/skills/status").status_code == 200
+    assert client.post("/api/scan/skills/undo").status_code < 500
+    assert client.post("/api/scan/skills/process").status_code < 500
+    assert client.post("/api/scan/skills/accept").status_code < 500
+    assert client.post("/api/scan/skills/reject").status_code < 500
+    assert client.post("/api/scan/skills/cancel").status_code < 500
+    # The capture PNG for a page that was never captured is a clean 404.
+    assert client.get("/api/scan/skills/capture/0").status_code == 404
+    # Spacebar-capture toggle (a query-param flag).
+    assert (
+        client.post("/api/scan/spacebar-capture", params={"enabled": True}).status_code
+        == 200
+    )
+
+
+def test_quest_cooldown_and_chain(e2e_http_pipeline):
+    """Drive the cooldown and chain branches of the quest service.
+
+    A quest with a cooldown that is completed and re-started exercises the
+    cooldown gate, and a chained quest exercises the chain-position fields,
+    neither of which the basic create-complete lifecycle reaches.
+    """
+    client, _chatlog, _watcher = e2e_http_pipeline
+    client.headers["Origin"] = "tauri://localhost"
+
+    cooldown_quest = client.post(
+        "/api/quests",
+        json={"name": "Daily Sweat", "cooldown_hours": 24, "reward_ped": 0.5},
+    )
+    assert cooldown_quest.status_code == 200
+    qid = cooldown_quest.json()["id"]
+    assert client.post(f"/api/quests/{qid}/start").status_code == 200
+    assert client.post(f"/api/quests/{qid}/complete").status_code == 200
+    # A completed cooldown quest re-read reflects its cooldown state.
+    assert client.get(f"/api/quests/{qid}").status_code == 200
+
+    chained = client.post(
+        "/api/quests",
+        json={
+            "name": "Chain Step 1",
+            "chain_name": "Iron Challenge",
+            "chain_position": 1,
+            "chain_total": 3,
+        },
+    )
+    assert chained.status_code == 200
+    # Analytics and mob views aggregate over the quests now present.
+    assert client.get("/api/quests/analytics").status_code == 200
+    assert client.get("/api/quests/mobs").status_code == 200
+    assert client.delete(f"/api/quests/{qid}").status_code in (200, 204)
+    assert client.delete(f"/api/quests/{chained.json()['id']}").status_code in (
+        200,
+        204,
+    )
+
+
 def test_equipment_library_crud(e2e_http_pipeline):
     """Add a custom consumable, read its detail, edit it, then remove it."""
     client, _chatlog, _watcher = e2e_http_pipeline

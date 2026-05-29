@@ -8,13 +8,14 @@ Uses an in-memory-ish SQLite (tmp file) AppDatabase plus a stub GameDataStore,
 mirroring backend/tests/test_codex_service.py.
 """
 
-import time
+from typing import cast
 
 import pytest
 
 from backend.data.codex_categories import CODEX_SKILL_CATEGORIES
 from backend.db.app_database import AppDatabase
 from backend.services.codex_service import CodexService
+from backend.services.game_data_store import GameDataStore
 
 
 class _StubGameData:
@@ -183,7 +184,7 @@ def test_find_species_skips_mob_without_species(app_db):
         ],
     )
     gd.store("skills", [])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
 
     ranks = svc.get_species_ranks("Daikiba")
     assert ranks is not None
@@ -356,10 +357,10 @@ def hp_game_data() -> "_StubGameData":
     store.store(
         "skills",
         [
-            {"name": "Aim", "hp_increase": 1600},        # integer hp
-            {"name": "Rifle", "hp_increase": 12.344},    # fractional → rounding probes
-            {"name": "Anatomy", "hp_increase": 0.5},     # 0<h<=1 → guard probes
-            {"name": "Dexterity"},                       # missing hp_increase → None
+            {"name": "Aim", "hp_increase": 1600},  # integer hp
+            {"name": "Rifle", "hp_increase": 12.344},  # fractional → rounding probes
+            {"name": "Anatomy", "hp_increase": 0.5},  # 0<h<=1 → guard probes
+            {"name": "Dexterity"},  # missing hp_increase → None
         ],
     )
     return store
@@ -418,11 +419,11 @@ def test_get_skill_options_hp_sort_tiebreak_does_not_crash(app_db):
     gd.store(
         "skills",
         [
-            {"name": "Aim", "hp_increase": 311.995},   # uncalibrated → hpGain 1.0
-            {"name": "Rifle", "hp_increase": 3.333},   # calibrated 5000 → hpGain 1.0
+            {"name": "Aim", "hp_increase": 311.995},  # uncalibrated → hpGain 1.0
+            {"name": "Rifle", "hp_increase": 3.333},  # calibrated 5000 → hpGain 1.0
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     _cal(app_db, "Rifle", 5000.0)
 
     options = svc.get_skill_options("Atrox", 1, target="hp")
@@ -447,7 +448,7 @@ def test_get_skill_options_profession_weight_tiebreak(app_db):
     gd = _StubGameData()
     gd.store("mobs", [_make_mob("Atrox", 100, "MobLooter")])
     gd.store("skills", [])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     _cal(app_db, "Rifle", 192.0)
     gd.store(
         "professions",

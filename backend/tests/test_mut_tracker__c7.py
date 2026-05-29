@@ -17,9 +17,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from backend.core.event_bus import EventBus
-from backend.tracking.schema import init_tracking_tables
 from backend.tracking.tracker import HuntTracker, _Accumulator
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -457,7 +455,11 @@ class TestOnCombatHealDedup:
         tracker._on_combat({"type": "self_heal", "amount": 50.0, "timestamp": t0})
         # Second tick 1s later -> inside the 2.5s window -> deduplicated.
         tracker._on_combat(
-            {"type": "self_heal", "amount": 50.0, "timestamp": t0 + timedelta(seconds=1)}
+            {
+                "type": "self_heal",
+                "amount": 50.0,
+                "timestamp": t0 + timedelta(seconds=1),
+            }
         )
         assert tracker._session_heal_cost == pytest.approx(0.5)
 
@@ -471,7 +473,11 @@ class TestOnCombatHealDedup:
         t0 = datetime(2024, 1, 1, 0, 0, 0)
         tracker._on_combat({"type": "self_heal", "amount": 50.0, "timestamp": t0})
         tracker._on_combat(
-            {"type": "self_heal", "amount": 50.0, "timestamp": t0 + timedelta(seconds=5)}
+            {
+                "type": "self_heal",
+                "amount": 50.0,
+                "timestamp": t0 + timedelta(seconds=5),
+            }
         )
         assert tracker._session_heal_cost == pytest.approx(1.0)
 
@@ -566,7 +572,11 @@ class TestOnCombatHealWarning:
         t0 = datetime(2024, 1, 1, 0, 0, 0)
         tracker._on_combat({"type": "self_heal", "amount": 50.0, "timestamp": t0})
         tracker._on_combat(
-            {"type": "self_heal", "amount": 50.0, "timestamp": t0 + timedelta(seconds=5)}
+            {
+                "type": "self_heal",
+                "amount": 50.0,
+                "timestamp": t0 + timedelta(seconds=5),
+            }
         )
         assert tracker._session_warnings == [
             "Healing detected \u2014 no heal tool equipped via hotbar"

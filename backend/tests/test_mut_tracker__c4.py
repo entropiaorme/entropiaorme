@@ -20,8 +20,6 @@ import logging
 import sqlite3
 from datetime import datetime
 
-import pytest
-
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_ACTIVE_HEAL_TOOL_CHANGED,
@@ -132,7 +130,11 @@ class TestTrifectaUnmatchedWarning:
         tracker.start_session()
         bus.publish(
             EVENT_COMBAT,
-            {"type": "damage_dealt", "amount": 12.3, "timestamp": datetime.now(tz=None)},
+            {
+                "type": "damage_dealt",
+                "amount": 12.3,
+                "timestamp": datetime.now(tz=None),
+            },
         )
         assert tracker._session_warnings == [
             "Trifecta attribution: damage fell outside both weapon ranges"
@@ -260,7 +262,9 @@ class TestEnhancerBreakSubscription:
             },
         )
         # The break handler must have run and applied the depletion.
-        assert tracker._active_weapon_state().active_slots == 1
+        state = tracker._active_weapon_state()
+        assert state is not None
+        assert state.active_slots == 1
 
 
 # ---------------------------------------------------------------------------

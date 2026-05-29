@@ -16,7 +16,6 @@ import pytest
 
 import backend.data.tt_value_curve as ttc
 
-
 # ── _load_curve: exact CSV parse ─────────────────────────────────────────────
 #
 # Kills the mutants that either raise (None list / None open args / bad key /
@@ -60,8 +59,8 @@ def test_module_level_curve_matches_load_curve():
     # The import-time binding must equal a fresh parse (guards the wrong-data
     # mutants that still return a list, e.g. append(None)).
     levels, tt_values = ttc._load_curve()
-    assert ttc._LEVELS == levels
-    assert ttc._TT_VALUES == tt_values
+    assert levels == ttc._LEVELS
+    assert tt_values == ttc._TT_VALUES
 
 
 # ── tt_value_at ──────────────────────────────────────────────────────────────
@@ -96,9 +95,7 @@ def test_tt_value_of_gain_is_a_difference():
     # Pins the difference (kills any add/arg-swap had they survived) and the
     # 4-dp rounding contract of the public result.
     g = ttc.tt_value_of_gain(100.0, 200.0)
-    assert g == pytest.approx(
-        ttc.tt_value_at(200.0) - ttc.tt_value_at(100.0), abs=1e-9
-    )
+    assert g == pytest.approx(ttc.tt_value_at(200.0) - ttc.tt_value_at(100.0), abs=1e-9)
     assert g > 0.0
 
 

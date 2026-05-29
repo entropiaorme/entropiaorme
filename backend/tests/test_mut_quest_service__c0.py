@@ -143,6 +143,7 @@ def test_on_mission_received_starts_matching_quest(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Kill Atrox"})
     quest_service._on_mission_received({"mission_name": "Kill Atrox"})
     started = quest_service.get_quest(q["id"])
+    assert started is not None
     assert started["started_at"] is not None
 
 
@@ -150,7 +151,9 @@ def test_on_mission_received_empty_name_is_noop(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Kill Atrox"})
     # Empty mission name is falsy -> the guard must skip start_quest_from_mission.
     quest_service._on_mission_received({"mission_name": ""})
-    assert quest_service.get_quest(q["id"])["started_at"] is None
+    fetched = quest_service.get_quest(q["id"])
+    assert fetched is not None
+    assert fetched["started_at"] is None
 
 
 def test_on_mission_received_missing_name_is_noop(quest_service: QuestService):
@@ -158,14 +161,18 @@ def test_on_mission_received_missing_name_is_noop(quest_service: QuestService):
     # Missing key -> default "" -> falsy -> noop. A wrong default or inverted
     # guard would attempt a match/start.
     quest_service._on_mission_received({})
-    assert quest_service.get_quest(q["id"])["started_at"] is None
+    fetched = quest_service.get_quest(q["id"])
+    assert fetched is not None
+    assert fetched["started_at"] is None
 
 
 def test_on_mission_received_reads_mission_name_key(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Kill Atrox"})
     # Right key must be read; a wrong key would yield "" and skip the start.
     quest_service._on_mission_received({"mission_name": "Kill Atrox", "x": "ignore"})
-    assert quest_service.get_quest(q["id"])["started_at"] is not None
+    fetched = quest_service.get_quest(q["id"])
+    assert fetched is not None
+    assert fetched["started_at"] is not None
 
 
 # ── get_quests ────────────────────────────────────────────────────────────
@@ -268,14 +275,16 @@ def test_create_quest_persists_all_scalar_fields(quest_service: QuestService):
 
 
 def test_create_quest_reward_is_skill_true_stored_as_one(quest_service: QuestService):
-    q = quest_service.create_quest({"name": "Skill", "reward_ped": 3.0,
-                                    "reward_is_skill": True})
+    q = quest_service.create_quest(
+        {"name": "Skill", "reward_ped": 3.0, "reward_is_skill": True}
+    )
     assert q["reward_is_skill"] == 1
 
 
 def test_create_quest_reward_is_skill_false_stored_as_zero(quest_service: QuestService):
-    q = quest_service.create_quest({"name": "Liquid", "reward_ped": 3.0,
-                                    "reward_is_skill": False})
+    q = quest_service.create_quest(
+        {"name": "Liquid", "reward_ped": 3.0, "reward_is_skill": False}
+    )
     assert q["reward_is_skill"] == 0
 
 
@@ -364,6 +373,7 @@ def test_update_quest_not_found_returns_none(quest_service: QuestService):
 def test_update_quest_changes_name(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Old"})
     updated = quest_service.update_quest(q["id"], {"name": "New"})
+    assert updated is not None
     assert updated["name"] == "New"
 
 
@@ -372,6 +382,7 @@ def test_update_quest_only_allowed_fields(quest_service: QuestService):
     # "id" and unknown keys are not in the allowed set; they must be ignored,
     # not written. The update should still succeed and not move the row.
     updated = quest_service.update_quest(q["id"], {"bogus": "nope", "planet": "Ark"})
+    assert updated is not None
     assert updated["id"] == q["id"]
     assert updated["planet"] == "Ark"
 
@@ -379,13 +390,16 @@ def test_update_quest_only_allowed_fields(quest_service: QuestService):
 def test_update_quest_reward_is_skill_true_to_one(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "reward_ped": 5.0})
     updated = quest_service.update_quest(q["id"], {"reward_is_skill": True})
+    assert updated is not None
     assert updated["reward_is_skill"] == 1
 
 
 def test_update_quest_reward_is_skill_false_to_zero(quest_service: QuestService):
-    q = quest_service.create_quest({"name": "Q", "reward_ped": 5.0,
-                                    "reward_is_skill": True})
+    q = quest_service.create_quest(
+        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": True}
+    )
     updated = quest_service.update_quest(q["id"], {"reward_is_skill": False})
+    assert updated is not None
     assert updated["reward_is_skill"] == 0
 
 
@@ -395,6 +409,7 @@ def test_update_quest_skill_reward_clears_expected_markup(quest_service: QuestSe
     )
     assert q["expected_reward_markup_percent"] == 140.0
     updated = quest_service.update_quest(q["id"], {"reward_is_skill": True})
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] is None
 
 
@@ -403,10 +418,15 @@ def test_update_quest_change_reward_ped_recomputes_markup(quest_service: QuestSe
     # branch fires (because reward_ped is in data) and pulls reward_is_skill /
     # expected_markup from existing, keeping the markup non-null.
     q = quest_service.create_quest(
-        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": False,
-         "expected_reward_markup_percent": 130.0}
+        {
+            "name": "Q",
+            "reward_ped": 5.0,
+            "reward_is_skill": False,
+            "expected_reward_markup_percent": 130.0,
+        }
     )
     updated = quest_service.update_quest(q["id"], {"reward_ped": 8.0})
+    assert updated is not None
     assert updated["reward_ped"] == 8.0
     assert updated["expected_reward_markup_percent"] == 130.0
 
@@ -414,21 +434,31 @@ def test_update_quest_change_reward_ped_recomputes_markup(quest_service: QuestSe
 def test_update_quest_set_reward_ped_to_zero_nulls_markup(quest_service: QuestService):
     # reward_ped <= 0 -> normalize returns None even with markup present.
     q = quest_service.create_quest(
-        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": False,
-         "expected_reward_markup_percent": 130.0}
+        {
+            "name": "Q",
+            "reward_ped": 5.0,
+            "reward_is_skill": False,
+            "expected_reward_markup_percent": 130.0,
+        }
     )
     updated = quest_service.update_quest(q["id"], {"reward_ped": 0})
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] is None
 
 
 def test_update_quest_change_markup_only(quest_service: QuestService):
     q = quest_service.create_quest(
-        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": False,
-         "expected_reward_markup_percent": 130.0}
+        {
+            "name": "Q",
+            "reward_ped": 5.0,
+            "reward_is_skill": False,
+            "expected_reward_markup_percent": 130.0,
+        }
     )
     updated = quest_service.update_quest(
         q["id"], {"expected_reward_markup_percent": 200.0}
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] == 200.0
 
 
@@ -438,10 +468,15 @@ def test_update_quest_no_reward_keys_leaves_markup_untouched(
     # Updating only an unrelated field must NOT trigger the markup recompute
     # branch; the stored markup stays exactly as created.
     q = quest_service.create_quest(
-        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": False,
-         "expected_reward_markup_percent": 130.0}
+        {
+            "name": "Q",
+            "reward_ped": 5.0,
+            "reward_is_skill": False,
+            "expected_reward_markup_percent": 130.0,
+        }
     )
     updated = quest_service.update_quest(q["id"], {"notes": "changed"})
+    assert updated is not None
     assert updated["notes"] == "changed"
     assert updated["expected_reward_markup_percent"] == 130.0
 
@@ -458,6 +493,7 @@ def test_update_quest_recompute_uses_existing_reward_is_skill(
     updated = quest_service.update_quest(
         q["id"], {"expected_reward_markup_percent": 175.0}
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] is None
 
 
@@ -472,6 +508,7 @@ def test_update_quest_recompute_uses_new_reward_ped_over_existing(
     updated = quest_service.update_quest(
         q["id"], {"reward_ped": 8.0, "expected_reward_markup_percent": 110.0}
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] == 110.0
 
 
@@ -486,12 +523,14 @@ def test_update_quest_recompute_skill_via_new_value_nulls_markup(
         q["id"],
         {"reward_is_skill": True, "expected_reward_markup_percent": 145.0},
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] is None
 
 
 def test_update_quest_sets_mobs(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "mobs": ["Atrox"]})
     updated = quest_service.update_quest(q["id"], {"mobs": ["Foul", "Snable"]})
+    assert updated is not None
     assert updated["mobs"] == ["Foul", "Snable"]
 
 
@@ -499,6 +538,7 @@ def test_update_quest_empty_mobs_clears(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "mobs": ["Atrox"]})
     # "mobs" key present (even empty) -> _set_quest_mobs called -> cleared.
     updated = quest_service.update_quest(q["id"], {"mobs": []})
+    assert updated is not None
     assert updated["mobs"] == []
 
 
@@ -506,6 +546,7 @@ def test_update_quest_no_mobs_key_keeps_mobs(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "mobs": ["Atrox"]})
     # No "mobs" key -> mobs untouched.
     updated = quest_service.update_quest(q["id"], {"name": "Renamed"})
+    assert updated is not None
     assert updated["mobs"] == ["Atrox"]
 
 
@@ -513,8 +554,11 @@ def test_update_quest_returns_refetched_quest(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q"})
     updated = quest_service.update_quest(q["id"], {"planet": "Next"})
     # Returned value is the fresh enriched get_quest, reflecting the write.
+    assert updated is not None
     assert updated["planet"] == "Next"
-    assert quest_service.get_quest(q["id"])["planet"] == "Next"
+    refetched = quest_service.get_quest(q["id"])
+    assert refetched is not None
+    assert refetched["planet"] == "Next"
 
 
 def test_update_quest_empty_data_returns_unchanged_quest(quest_service: QuestService):
@@ -532,6 +576,7 @@ def test_update_quest_persists_multiple_fields(quest_service: QuestService):
     updated = quest_service.update_quest(
         q["id"], {"name": "N", "planet": "P", "category": "C", "notes": "X"}
     )
+    assert updated is not None
     assert updated["name"] == "N"
     assert updated["planet"] == "P"
     assert updated["category"] == "C"
@@ -549,68 +594,77 @@ def test_update_quest_persists_multiple_fields(quest_service: QuestService):
 def test_update_quest_field_waypoint(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "waypoint": "/wp old"})
     updated = quest_service.update_quest(q["id"], {"waypoint": "/wp NEW"})
+    assert updated is not None
     assert updated["waypoint"] == "/wp NEW"
 
 
 def test_update_quest_field_cooldown_hours(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "cooldown_hours": 10})
     updated = quest_service.update_quest(q["id"], {"cooldown_hours": 24})
+    assert updated is not None
     assert updated["cooldown_hours"] == 24
 
 
 def test_update_quest_field_chain_name(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "chain_name": "old"})
     updated = quest_service.update_quest(q["id"], {"chain_name": "NEWCHAIN"})
+    assert updated is not None
     assert updated["chain_name"] == "NEWCHAIN"
 
 
 def test_update_quest_field_chain_position(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "chain_position": 1})
     updated = quest_service.update_quest(q["id"], {"chain_position": 7})
+    assert updated is not None
     assert updated["chain_position"] == 7
 
 
 def test_update_quest_field_chain_total(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "chain_total": 3})
     updated = quest_service.update_quest(q["id"], {"chain_total": 9})
+    assert updated is not None
     assert updated["chain_total"] == 9
 
 
 def test_update_quest_field_reward_description(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "reward_description": "old"})
-    updated = quest_service.update_quest(
-        q["id"], {"reward_description": "NEWDESC"}
-    )
+    updated = quest_service.update_quest(q["id"], {"reward_description": "NEWDESC"})
+    assert updated is not None
     assert updated["reward_description"] == "NEWDESC"
 
 
 def test_update_quest_field_reward_ped(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "reward_ped": 1.0})
     updated = quest_service.update_quest(q["id"], {"reward_ped": 42.0})
+    assert updated is not None
     assert updated["reward_ped"] == 42.0
 
 
 def test_update_quest_field_name(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q"})
     updated = quest_service.update_quest(q["id"], {"name": "RenamedField"})
+    assert updated is not None
     assert updated["name"] == "RenamedField"
 
 
 def test_update_quest_field_planet(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "planet": "Calypso"})
     updated = quest_service.update_quest(q["id"], {"planet": "Arkadia"})
+    assert updated is not None
     assert updated["planet"] == "Arkadia"
 
 
 def test_update_quest_field_notes(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "notes": "old"})
     updated = quest_service.update_quest(q["id"], {"notes": "NEWNOTES"})
+    assert updated is not None
     assert updated["notes"] == "NEWNOTES"
 
 
 def test_update_quest_field_category(quest_service: QuestService):
     q = quest_service.create_quest({"name": "Q", "category": "old"})
     updated = quest_service.update_quest(q["id"], {"category": "NEWCAT"})
+    assert updated is not None
     assert updated["category"] == "NEWCAT"
 
 
@@ -618,12 +672,17 @@ def test_update_quest_field_expected_markup_persists(quest_service: QuestService
     # The allowed-set entry "expected_reward_markup_percent" must be honoured.
     # With a liquid reward present, updating only the markup persists it.
     q = quest_service.create_quest(
-        {"name": "Q", "reward_ped": 5.0, "reward_is_skill": False,
-         "expected_reward_markup_percent": 100.0}
+        {
+            "name": "Q",
+            "reward_ped": 5.0,
+            "reward_is_skill": False,
+            "expected_reward_markup_percent": 100.0,
+        }
     )
     updated = quest_service.update_quest(
         q["id"], {"expected_reward_markup_percent": 250.0}
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] == 250.0
 
 
@@ -636,6 +695,7 @@ def test_update_quest_reward_is_skill_truthy_non_one_coerced_to_one(
     # would differ from the coerced 1.
     q = quest_service.create_quest({"name": "Q", "reward_ped": 5.0})
     updated = quest_service.update_quest(q["id"], {"reward_is_skill": 2})
+    assert updated is not None
     assert updated["reward_is_skill"] == 1
 
 
@@ -658,6 +718,7 @@ def test_update_quest_all_reward_keys_skill_recompute_nulls_markup(
             "expected_reward_markup_percent": 140.0,
         },
     )
+    assert updated is not None
     assert updated["expected_reward_markup_percent"] is None
     assert updated["reward_is_skill"] == 1
     assert updated["reward_ped"] == 10.0
@@ -676,7 +737,9 @@ def test_on_mission_received_missing_name_does_not_start_phantom_quest(
     # falsy default leaves everything unstarted.
     phantom = quest_service.create_quest({"name": "XXXX"})
     quest_service._on_mission_received({})  # no mission_name key
-    assert quest_service.get_quest(phantom["id"])["started_at"] is None
+    fetched = quest_service.get_quest(phantom["id"])
+    assert fetched is not None
+    assert fetched["started_at"] is None
 
 
 # ── _on_session_start log line (caplog) ───────────────────────────────────

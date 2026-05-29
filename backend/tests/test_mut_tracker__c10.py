@@ -14,8 +14,6 @@ caught either by a wrong cost on the post-break shot or by the log fingerprint.
 import logging
 import sqlite3
 
-import pytest
-
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_ACTIVE_TOOL_CHANGED,
@@ -59,7 +57,9 @@ def _arm(bus, tracker):
 
 
 def _shot(bus):
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": None})
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": None}
+    )
 
 
 def _break(bus, **overrides):
@@ -102,6 +102,7 @@ def _active_slots(tracker):
 # Reference costs by active_slots (anchors the cost-based kills below).
 # --------------------------------------------------------------------------
 
+
 def _cost_for_active(slots_total: int, active: int) -> float:
     s = _DamageEnhancerState.from_props("MyGun", _enhancer_props(slots_total))
     s.set_total({2: 200, 1: 1, 0: 0}[active])
@@ -124,6 +125,7 @@ def test_reference_costs_are_distinct():
 # --------------------------------------------------------------------------
 # mutmut_1: `if not self._accumulator` -> `if self._accumulator`
 # --------------------------------------------------------------------------
+
 
 def test_break_with_remaining_depletes_to_one_slot():
     """A break carrying remaining=1 on a 2-slot weapon redistributes to one
@@ -157,6 +159,7 @@ def test_break_with_no_session_is_silent_noop():
 # mutmut_10..17: enhancer_name = data.get("enhancer_name", "")
 # enhancer_name feeds  `"damage" not in enhancer_name.lower()`.
 # --------------------------------------------------------------------------
+
 
 def test_non_damage_enhancer_name_does_not_deplete():
     """An enhancer whose name lacks 'damage' must be ignored (the guard
@@ -207,6 +210,7 @@ def test_missing_enhancer_name_uses_empty_default_and_is_ignored():
 # item_name feeds _break_matches_active_weapon(item_name).
 # --------------------------------------------------------------------------
 
+
 def test_break_for_other_item_does_not_deplete_active_weapon():
     """A break whose item_name does not match the active weapon is ignored
     (`not self._break_matches_active_weapon(item_name)`)."""
@@ -255,6 +259,7 @@ def test_missing_item_name_uses_empty_default_and_is_ignored():
 # --------------------------------------------------------------------------
 # mutmut_26..29, 53, 54: remaining = data.get("remaining"); apply_break(...)
 # --------------------------------------------------------------------------
+
 
 def test_integer_remaining_redistributes_total_not_single_decrement():
     """remaining=1 on a 2-slot weapon redistributes total to one active slot
@@ -316,6 +321,7 @@ def test_apply_break_actually_called_changes_state():
 # mutmut_41..52: state resolution and the guard boolean structure.
 # --------------------------------------------------------------------------
 
+
 def test_break_with_no_active_weapon_is_noop():
     """With no active weapon resolved (no profile match), state is None and the
     break returns early. mutmut_41 (state=None) and mutmut_45 (is None -> is not
@@ -362,6 +368,7 @@ def test_zero_enhancer_weapon_break_is_noop_not_crash():
 # or vice versa, observed via whether the break depletes.
 # --------------------------------------------------------------------------
 
+
 def test_guard_rejects_when_only_name_fails_but_others_pass():
     """Real guard: state present, stacks present, item matches, but the
     enhancer name lacks 'damage' -> the `"damage" not in ...` term is True ->
@@ -394,6 +401,7 @@ def test_guard_rejects_when_only_item_match_fails():
 # Verified via caplog: message present + correctly formatted with tool name.
 # --------------------------------------------------------------------------
 
+
 def test_slot_depleted_logs_info_with_tool_name_and_count(caplog):
     """When a break depletes a slot, an INFO line names the weapon and the
     remaining active-slot count. Kills the log message/arg mutants (55-63)
@@ -406,7 +414,7 @@ def test_slot_depleted_logs_info_with_tool_name_and_count(caplog):
     depleted = [m for m in msgs if "slot depleted" in m.lower()]
     assert depleted, f"expected a slot-depleted INFO log, got: {msgs}"
     line = depleted[0]
-    assert "MyGun" in line          # state.tool_name arg (mutmut_56/59)
+    assert "MyGun" in line  # state.tool_name arg (mutmut_56/59)
     assert "1 active slot" in line  # state.active_slots arg (mutmut_57/60)
     # Exact prefix pins the literal (mutmut_61/62/63: XX.., lower, UPPER).
     assert line.startswith("Damage enhancer slot depleted on MyGun:")
@@ -428,6 +436,7 @@ def test_no_slot_depleted_log_when_slot_not_lost(caplog):
 # Captured at DEBUG level so %-formatting executes and the message renders.
 # --------------------------------------------------------------------------
 
+
 def test_debug_log_renders_with_all_fields(caplog):
     """The DEBUG trace embeds enhancer_name, shrapnel_ped (%.2f) and remaining.
     Capturing at DEBUG forces the lazy %-format; the arg/message mutants
@@ -436,17 +445,16 @@ def test_debug_log_renders_with_all_fields(caplog):
     bus, tracker, db = _make_tracker(2)
     _arm(bus, tracker)
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
-        _break(bus, enhancer_name="Weapon Damage Enhancer", shrapnel_ped=0.5,
-               remaining=1)
-    debug_msgs = [
-        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
-    ]
+        _break(
+            bus, enhancer_name="Weapon Damage Enhancer", shrapnel_ped=0.5, remaining=1
+        )
+    debug_msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     rendered = [m for m in debug_msgs if m.startswith("Enhancer break:")]
     assert rendered, f"expected the enhancer-break DEBUG line, got: {debug_msgs}"
     line = rendered[0]
     assert "Weapon Damage Enhancer" in line  # enhancer_name arg (mutmut_31/35)
-    assert "shrapnel=0.50" in line            # shrapnel_ped %.2f (mutmut_32/36)
-    assert "remaining=1" in line              # remaining arg (mutmut_33/37)
+    assert "shrapnel=0.50" in line  # shrapnel_ped %.2f (mutmut_32/36)
+    assert "remaining=1" in line  # remaining arg (mutmut_33/37)
 
 
 # --------------------------------------------------------------------------
@@ -456,6 +464,7 @@ def test_debug_log_renders_with_all_fields(caplog):
 # directly. These bypass only the bus's blanket try/except; the handler logic
 # under test is identical.
 # --------------------------------------------------------------------------
+
 
 def _debug_break_message(tracker, caplog, payload):
     """Drive _on_enhancer_break directly at DEBUG and return its rendered line."""
@@ -477,8 +486,11 @@ def test_missing_shrapnel_defaults_to_zero_in_debug_log(caplog):
     line = _debug_break_message(
         tracker,
         caplog,
-        {"enhancer_name": "Weapon Damage Enhancer", "item_name": "MyGun",
-         "remaining": 1},  # shrapnel_ped omitted -> default used
+        {
+            "enhancer_name": "Weapon Damage Enhancer",
+            "item_name": "MyGun",
+            "remaining": 1,
+        },  # shrapnel_ped omitted -> default used
     )
     assert "shrapnel=0.00" in line
     assert "shrapnel=1.00" not in line
@@ -493,8 +505,12 @@ def test_present_shrapnel_value_is_used_in_debug_log(caplog):
     line = _debug_break_message(
         tracker,
         caplog,
-        {"enhancer_name": "Weapon Damage Enhancer", "item_name": "MyGun",
-         "remaining": 1, "shrapnel_ped": 3.25},
+        {
+            "enhancer_name": "Weapon Damage Enhancer",
+            "item_name": "MyGun",
+            "remaining": 1,
+            "shrapnel_ped": 3.25,
+        },
     )
     assert "shrapnel=3.25" in line
 
@@ -541,6 +557,10 @@ def test_state_none_guard_short_circuits_without_touching_stacks():
     assert tracker._active_weapon_state() is None
     # Real code returns early cleanly; mutmut_44 raises on None.stacks.
     tracker._on_enhancer_break(
-        {"enhancer_name": "Weapon Damage Enhancer", "item_name": "MyGun",
-         "remaining": 1, "shrapnel_ped": 0.5}
+        {
+            "enhancer_name": "Weapon Damage Enhancer",
+            "item_name": "MyGun",
+            "remaining": 1,
+            "shrapnel_ped": 0.5,
+        }
     )  # must not raise

@@ -9,6 +9,8 @@ behaviour the mutation breaks.  Scenarios are arithmetic-pinned so precision and
 divisor mutants cannot survive on rounding coincidence.
 """
 
+from typing import cast
+
 import pytest
 
 from backend.services.character_calc import (
@@ -81,7 +83,9 @@ def test_iter_hp_non_dict_entry_is_skipped_not_break():
     Kills `continue -> break` on the isinstance guard (mutmut_3)."""
     skills_data = ["junk", {"name": "Rifle", "hp_increase": 10}]
     # 80 + 100/10 = 90
-    assert calculate_hp({"Rifle": 100.0}, skills_data) == pytest.approx(90.0)
+    assert calculate_hp(
+        {"Rifle": 100.0}, cast(list[dict], skills_data)
+    ) == pytest.approx(90.0)
 
 
 def test_iter_hp_unparseable_hp_increase_is_skipped_not_break():
@@ -91,9 +95,9 @@ def test_iter_hp_unparseable_hp_increase_is_skipped_not_break():
         {"name": "Bad", "hp_increase": "abc"},
         {"name": "Rifle", "hp_increase": 10},
     ]
-    assert calculate_hp({"Rifle": 100.0, "Bad": 100.0}, skills_data) == pytest.approx(
-        90.0
-    )
+    assert calculate_hp(
+        {"Rifle": 100.0, "Bad": 100.0}, cast(list[dict], skills_data)
+    ) == pytest.approx(90.0)
 
 
 def test_iter_hp_non_positive_increase_is_skipped_not_break():
@@ -178,7 +182,7 @@ def test_skill_rank_drops_rank_with_missing_name():
         {"name": "High", "skill": 100},
     ]
     # Valid ranks are [Low@1, High@100]; level 60 selects Low.
-    assert skill_rank(60, ranks) == "Low"
+    assert skill_rank(60, cast(list[dict], ranks)) == "Low"
 
 
 def test_skill_rank_bad_threshold_is_skipped_not_break():
@@ -191,7 +195,7 @@ def test_skill_rank_bad_threshold_is_skipped_not_break():
         {"name": "Good", "skill": 1},
         {"name": "Top", "skill": 100},
     ]
-    assert skill_rank(150, ranks) == "Top"
+    assert skill_rank(150, cast(list[dict], ranks)) == "Top"
 
 
 # ── profession_skill_optimizer ──────────────────────────────────────────────────
@@ -314,9 +318,7 @@ def test_optimizer_zero_weight_skip_is_continue_not_break():
             {"skill": {"name": "Rifle"}, "weight": 50},
         ]
     }
-    result = profession_skill_optimizer(
-        {"Handgun": 100.0, "Rifle": 500.0}, profession
-    )
+    result = profession_skill_optimizer({"Handgun": 100.0, "Rifle": 500.0}, profession)
     assert [s["name"] for s in result["skills"]] == ["Rifle"]
 
 

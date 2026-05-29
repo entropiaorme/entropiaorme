@@ -20,7 +20,6 @@ from backend.core.event_bus import EventBus
 from backend.tracking import tracker as tracker_mod
 from backend.tracking.tracker import HuntTracker
 
-
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
@@ -111,9 +110,7 @@ def test_record_shot_perf_increments_counters_within_window(tracker, fake_time):
     assert tracker._perf_shot_seconds == pytest.approx(2.0)
 
 
-def test_record_shot_perf_does_not_count_unknown_or_miss_when_false(
-    tracker, fake_time
-):
+def test_record_shot_perf_does_not_count_unknown_or_miss_when_false(tracker, fake_time):
     """unknown_tool / inference_miss False -> those counters stay put.
     Pins that the increments are gated behind their flags."""
     fake_time.set_monotonic(2000.0)
@@ -164,7 +161,9 @@ def test_record_shot_perf_shot_seconds_uses_difference_not_sum(tracker, fake_tim
     assert tracker._perf_shot_seconds == pytest.approx(6.0)  # 10 - 4, not 14
 
 
-def test_record_shot_perf_within_window_does_not_flush(tracker, fake_time, debug_records):
+def test_record_shot_perf_within_window_does_not_flush(
+    tracker, fake_time, debug_records
+):
     """elapsed < 15 -> no log, no reset. Catches ``elapsed = now + started``
     (always huge -> would flush) and the early-return removal."""
     records = debug_records
@@ -297,7 +296,9 @@ def test_record_shot_perf_flush_zero_shots_uses_zero_average(
     assert rec.args[5] == 0.0
 
 
-def test_record_shot_perf_flush_boundary_at_exactly_15(tracker, fake_time, debug_records):
+def test_record_shot_perf_flush_boundary_at_exactly_15(
+    tracker, fake_time, debug_records
+):
     """elapsed == 15.0 must flush (``< 15.0`` is False). Kills ``<`` -> ``<=``."""
     records = debug_records
     _seed_for_flush(tracker, fake_time, now=50_015.0, window_started=50_000.0)  # 15.0s
@@ -365,7 +366,9 @@ def test_reload_config_no_session_is_a_noop():
 def test_reload_config_non_trifecta_resets_heal_state():
     """Non-trifecta reload resets every heal field to its default. Pins each
     reset line: tool=None, cost=0.0, reload=2.5, min/max=None, warning=False."""
-    t = _make_tracker(trifecta=False, manual_enabled=True, manual_mob=("Atrox", "Young"))
+    t = _make_tracker(
+        trifecta=False, manual_enabled=True, manual_mob=("Atrox", "Young")
+    )
     t.start_session()
     # Perturb every heal field away from its default.
     t._active_heal_tool_name = "OldHeal"

@@ -76,8 +76,9 @@ def _heal_props(**extra):
     return props
 
 
-def _full_loadout(app_db, small_impact=10.0, big_impact=40.0, small_extra=None,
-                  heal_extra=None):
+def _full_loadout(
+    app_db, small_impact=10.0, big_impact=40.0, small_extra=None, heal_extra=None
+):
     """Seed a resolvable trifecta preset; returns (preset, ids)."""
     small_props = _weapon_props(small_impact, **(small_extra or {}))
     small_id = _seed_weapon(app_db, "SmallW", small_props)
@@ -197,7 +198,9 @@ def test_damage_enhancers_applied_to_profile(app_db):
     Mutants that drop the enhancer count (or, get-key, default) yield 10.
     """
     preset = _full_loadout(
-        app_db, small_impact=10.0, big_impact=80.0,
+        app_db,
+        small_impact=10.0,
+        big_impact=80.0,
         small_extra={"damage_enhancers": 5},
     )
     result, error = describe_trifecta(app_db.conn, preset)
@@ -276,6 +279,7 @@ def test_weapon_entry_dict_keys(app_db):
     preset = _full_loadout(app_db, small_impact=10.0, big_impact=40.0)
     result, error = describe_trifecta(app_db.conn, preset)
     assert error is None
+    assert result is not None
     small = result["small_weapon"]
     assert set(small) == {
         "id",
@@ -303,6 +307,7 @@ def test_heal_entry_dict_keys(app_db):
     preset = _full_loadout(app_db, small_impact=10.0, big_impact=40.0)
     result, error = describe_trifecta(app_db.conn, preset)
     assert error is None
+    assert result is not None
     heal = result["heal_tool"]
     assert set(heal) == {
         "id",
@@ -360,6 +365,7 @@ def test_heal_markup_used_when_present(app_db):
     )
     result, error = describe_trifecta(app_db.conn, preset)
     assert error is None
+    assert result is not None
     assert result["heal_tool"]["cost_per_use_ped"] == pytest.approx(0.0077)
 
 
@@ -372,6 +378,7 @@ def test_full_loadout_resolves_with_expected_values(app_db):
     preset = _full_loadout(app_db, small_impact=10.0, big_impact=40.0)
     result, error = describe_trifecta(app_db.conn, preset)
     assert error is None
+    assert result is not None
     assert set(result) == {"small_weapon", "big_weapon", "heal_tool"}
     assert result["small_weapon"]["damage_max"] == pytest.approx(10.0)
     assert result["big_weapon"]["damage_min"] == pytest.approx(20.0)

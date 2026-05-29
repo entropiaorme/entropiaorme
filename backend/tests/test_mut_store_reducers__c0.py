@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import sqlite3
 
-import pytest
-
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_COMBAT,

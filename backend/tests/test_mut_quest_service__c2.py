@@ -11,7 +11,6 @@ value sources, the soft-delete rowcount guard, the analytics ``continue`` skip,
 and the reward projections.
 """
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -81,7 +80,7 @@ def _link_quest_session(svc: QuestService, session_id: str, quest_id: int) -> No
 
 def test_get_playlists_active_only_default_excludes_deleted(svc: QuestService):
     """Default active_only=True hides soft-deleted playlists (mutmut_1)."""
-    keep = svc.create_playlist({"name": "Keep"})
+    svc.create_playlist({"name": "Keep"})
     drop = svc.create_playlist({"name": "Drop"})
     assert svc.delete_playlist(drop["id"]) is True
 
@@ -151,7 +150,9 @@ def test_create_playlist_uses_supplied_planet(svc: QuestService):
     """Supplied planet is stored, not the fallback default (mutmut_11/15/16)."""
     pl = svc.create_playlist({"name": "PL", "planet": "Arkadia"})
     assert pl["planet"] == "Arkadia"
-    assert svc.get_playlist(pl["id"])["planet"] == "Arkadia"
+    fetched = svc.get_playlist(pl["id"])
+    assert fetched is not None
+    assert fetched["planet"] == "Arkadia"
 
 
 def test_create_playlist_planet_default_is_calypso(svc: QuestService):
@@ -180,7 +181,9 @@ def test_update_playlist_name(svc: QuestService):
     updated = svc.update_playlist(pl["id"], {"name": "After"})
     assert updated is not None
     assert updated["name"] == "After"
-    assert svc.get_playlist(pl["id"])["name"] == "After"
+    fetched = svc.get_playlist(pl["id"])
+    assert fetched is not None
+    assert fetched["name"] == "After"
 
 
 def test_update_playlist_planet(svc: QuestService):
@@ -209,13 +212,12 @@ def test_update_playlist_multiple_fields_persist(svc: QuestService):
     pl = svc.create_playlist(
         {"name": "Old", "planet": "Calypso", "estimated_minutes": 30}
     )
-    updated = svc.update_playlist(
-        pl["id"], {"name": "New", "estimated_minutes": 77}
-    )
+    updated = svc.update_playlist(pl["id"], {"name": "New", "estimated_minutes": 77})
     assert updated is not None
     assert updated["name"] == "New"
     assert updated["estimated_minutes"] == 77
     refetched = svc.get_playlist(pl["id"])
+    assert refetched is not None
     assert refetched["name"] == "New"
     assert refetched["estimated_minutes"] == 77
 

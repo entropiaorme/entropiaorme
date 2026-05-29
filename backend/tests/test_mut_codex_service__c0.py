@@ -7,6 +7,7 @@ surviving mutant breaks.
 """
 
 import logging
+from typing import cast
 
 import pytest
 
@@ -16,6 +17,7 @@ from backend.data.codex_categories import (
 )
 from backend.db.app_database import AppDatabase
 from backend.services.codex_service import CodexService
+from backend.services.game_data_store import GameDataStore
 
 
 class _StubGameData:
@@ -87,7 +89,7 @@ def test_get_all_species_skips_mob_without_species(app_db):
             _make_mob("Atrox", 100, "MobLooter"),
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     names = [s["name"] for s in svc.get_all_species()]
     assert names == ["Atrox"]
 
@@ -103,7 +105,7 @@ def test_get_all_species_skips_empty_name(app_db):
             _make_mob("Feffoid", 50, "Mob"),
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     names = [s["name"] for s in svc.get_all_species()]
     assert names == ["Feffoid"]
 
@@ -118,7 +120,7 @@ def test_get_all_species_dedup_keeps_first(app_db):
             {**_make_mob("Atrox", 999, "Mob"), "name": "Atrox Old"},
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     species = svc.get_all_species()
     assert len(species) == 1
     assert species[0]["name"] == "Atrox"
@@ -136,7 +138,7 @@ def test_get_all_species_skips_missing_base_cost(app_db):
             _make_mob("Feffoid", 50, "Mob"),
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     names = [s["name"] for s in svc.get_all_species()]
     assert names == ["Feffoid"]
 
@@ -145,7 +147,7 @@ def test_get_all_species_base_cost_zero_is_kept(app_db):
     """codex_base_cost of 0 is a real value (only None is skipped)."""
     gd = _StubGameData()
     gd.store("mobs", [_make_mob("ZeroCost", 0, "Mob")])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     species = svc.get_all_species()
     assert len(species) == 1
     assert species[0]["name"] == "ZeroCost"
@@ -159,7 +161,7 @@ def test_get_all_species_codex_type_none_when_missing(app_db):
         "mobs",
         [{"id": 1, "name": "x", "species": {"name": "Plain", "codex_base_cost": 10}}],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     species = svc.get_all_species()
     assert species[0]["codexType"] is None
 
@@ -206,7 +208,7 @@ def test_get_all_species_next_cost_rounded_2dp(app_db):
     # base_cost chosen so cost/divisor has >2 decimals before rounding.
     # rank 5 -> cat3 (divisor 640), mult[4]=6. Use rank 4 here via calibrate.
     gd.store("mobs", [_make_mob("Odd", 33.333, "Mob")])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     sp = svc.get_all_species()[0]
     # next_cost uses get_rank_cost (mult*base), rounded to 2dp.
     # rank 1 mult=1 -> 33.333 -> round 2dp = 33.33
@@ -224,7 +226,7 @@ def test_get_all_species_sort_rank_desc_then_name_asc(app_db):
             _make_mob("Mid", 10, "Mob"),
         ],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     svc.calibrate("Mid", 5)
     names = [s["name"] for s in svc.get_all_species()]
     # Mid (rank 5) first; then Alpha, Zeta (rank 0) in name-asc order.
@@ -232,7 +234,7 @@ def test_get_all_species_sort_rank_desc_then_name_asc(app_db):
 
 
 def test_get_all_species_empty_when_no_mobs(app_db):
-    svc = CodexService(app_db, _StubGameData())
+    svc = CodexService(app_db, cast(GameDataStore, _StubGameData()))
     assert svc.get_all_species() == []
 
 
@@ -240,7 +242,7 @@ def test_get_all_species_empty_when_no_mobs(app_db):
 
 
 def test_get_species_ranks_unknown_returns_none(app_db):
-    svc = CodexService(app_db, _StubGameData())
+    svc = CodexService(app_db, cast(GameDataStore, _StubGameData()))
     assert svc.get_species_ranks("Nope") is None
 
 
@@ -323,9 +325,10 @@ def test_get_species_ranks_claims_scoped_to_species(app_db):
         "mobs",
         [_make_mob("Atrox", 100, "MobLooter"), _make_mob("Feffoid", 50, "Mob")],
     )
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     svc.claim_rank("Atrox", 1, "Aim")
     feff = svc.get_species_ranks("Feffoid")
+    assert feff is not None
     assert all(not item["claimed"] for item in feff["ranks"])
 
 
@@ -419,7 +422,7 @@ def test_claim_rank_cat4_skill_uses_cat4_divisor(app_db):
     gd = _StubGameData()
     gd.store("mobs", [_make_mob("Atrox", 100, "MobLooter")])
     gd.store("skills", [])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     for i in range(1, 5):
         cat = get_category_for_rank(i)
         svc.claim_rank("Atrox", i, CODEX_SKILL_CATEGORIES[cat][0])
@@ -436,7 +439,7 @@ def test_claim_rank_non_cat4_skill_uses_category_divisor(app_db):
 
     gd = _StubGameData()
     gd.store("mobs", [_make_mob("Atrox", 100, "MobLooter")])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     for i in range(1, 5):
         cat = get_category_for_rank(i)
         svc.claim_rank("Atrox", i, CODEX_SKILL_CATEGORIES[cat][0])
@@ -476,7 +479,7 @@ def test_claim_rank_new_level_is_sum(app_db):
 
     gd = _StubGameData()
     gd.store("mobs", [_make_mob("Atrox", 100, "MobLooter")])
-    svc = CodexService(app_db, gd)
+    svc = CodexService(app_db, cast(GameDataStore, gd))
     app_db.conn.execute(
         "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) "
         "VALUES (?, ?, 'scan', ?)",

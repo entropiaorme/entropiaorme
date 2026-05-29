@@ -11,9 +11,7 @@ from backend.services.mob_lookup_service import MobLookupService
 
 
 def _game_data(mobs):
-    return SimpleNamespace(
-        get_entities=lambda kind: mobs if kind == "mobs" else []
-    )
+    return SimpleNamespace(get_entities=lambda kind: mobs if kind == "mobs" else [])
 
 
 # --------------------------------------------------------------------------
@@ -243,8 +241,8 @@ def test_search_prefix_match_sorts_before_alphabetical():
     mobs = [
         # "Armax" contains "rax"? no. Use a substring-but-not-prefix match that
         # is alphabetically earlier than the prefix match.
-        {"name": "Aakra", "maturities": []},   # contains "akr", not a prefix of "kr"
-        {"name": "Kraax", "maturities": []},   # starts with "kra" -> prefix match
+        {"name": "Aakra", "maturities": []},  # contains "akr", not a prefix of "kr"
+        {"name": "Kraax", "maturities": []},  # starts with "kra" -> prefix match
     ]
     svc = MobLookupService(_game_data(mobs))
 
@@ -260,7 +258,9 @@ def test_search_prefix_match_sorts_before_alphabetical():
 # A mob with no species/name must not be matchable as species "XXXX".
 # --------------------------------------------------------------------------
 def test_has_mob_name_blank_mob_not_matched_as_fallback():
-    mobs = [{"species": {}, "maturities": []}]  # cached_species -> ""
+    mobs: list[dict[str, object]] = [
+        {"species": {}, "maturities": []}
+    ]  # cached_species -> ""
     svc = MobLookupService(_game_data(mobs))
 
     # Original: cached_species "" != "XXXX" -> skip -> False.

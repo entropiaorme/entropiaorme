@@ -23,6 +23,8 @@ from backend.services.scan_completion import (
     _log_skill_scan_drift,
     hydrate_skill_scan_state,
     make_skill_scan_completion,
+)
+from backend.services.scan_completion import (
     log as scan_completion_log,
 )
 
@@ -178,9 +180,7 @@ def test_drift_is_logged_when_drift_exists(app_db, caught):
 
     messages = _messages(caught)
     assert len(messages) == 2
-    assert messages[0].startswith(
-        "Skill scan drift before recalibration: compared=1"
-    )
+    assert messages[0].startswith("Skill scan drift before recalibration: compared=1")
     assert messages[1].startswith("Skill scan drift worst skill: Anatomy")
 
 

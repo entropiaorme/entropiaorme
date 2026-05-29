@@ -29,9 +29,11 @@ production source, service, or device handle is needed.
 from __future__ import annotations
 
 import sqlite3
+from typing import cast
 
 import pytest
 
+from backend.services.quest_service import QuestService
 from backend.testing.store_reducers import (
     CodexViewContext,
     QuestsViewContext,
@@ -40,7 +42,6 @@ from backend.testing.store_reducers import (
     quests_view_state,
     scan_view_state,
 )
-
 
 # --------------------------------------------------------------------------
 # Schema helpers: the exact column subset each view's SQL touches.
@@ -97,7 +98,9 @@ def _skill_calibrations_conn() -> sqlite3.Connection:
     return conn
 
 
-def _insert_calibration(conn: sqlite3.Connection, skill_name: str, level: float) -> None:
+def _insert_calibration(
+    conn: sqlite3.Connection, skill_name: str, level: float
+) -> None:
     conn.execute(
         "INSERT INTO skill_calibrations (skill_name, level, source) "
         "VALUES (?, ?, 'scan')",
@@ -144,7 +147,9 @@ def test_quests_view_inactive_session_returns_exact_empty_shape() -> None:
     _insert_notable(conn, "sess-X", "quest_started", "ShouldNotAppear")
     try:
         view = quests_view_state(
-            QuestsViewContext(quest_service=None, conn=conn, session_id=None)
+            QuestsViewContext(
+                quest_service=cast(QuestService, None), conn=conn, session_id=None
+            )
         )
     finally:
         conn.close()
@@ -168,7 +173,9 @@ def test_quests_view_active_session_returns_names_in_rowid_order() -> None:
     _insert_notable(conn, "sess-1", "quest_started", "Mu")
     try:
         view = quests_view_state(
-            QuestsViewContext(quest_service=None, conn=conn, session_id="sess-1")
+            QuestsViewContext(
+                quest_service=cast(QuestService, None), conn=conn, session_id="sess-1"
+            )
         )
     finally:
         conn.close()
@@ -195,7 +202,9 @@ def test_quests_view_filters_on_session_and_event_type_literal() -> None:
     _insert_notable(conn, "sess-2", "quest_started", "OtherSession")
     try:
         view = quests_view_state(
-            QuestsViewContext(quest_service=None, conn=conn, session_id="sess-1")
+            QuestsViewContext(
+                quest_service=cast(QuestService, None), conn=conn, session_id="sess-1"
+            )
         )
     finally:
         conn.close()
@@ -210,7 +219,9 @@ def test_quests_view_active_session_with_no_matching_rows_is_empty_list() -> Non
     conn = _notable_events_conn()
     try:
         view = quests_view_state(
-            QuestsViewContext(quest_service=None, conn=conn, session_id="sess-9")
+            QuestsViewContext(
+                quest_service=cast(QuestService, None), conn=conn, session_id="sess-9"
+            )
         )
     finally:
         conn.close()
@@ -287,8 +298,12 @@ def test_codex_view_counts_progress_and_claim_rows() -> None:
     (mutmut_11, 12, 18, 19).
     """
     conn = _codex_conn()
-    conn.execute("INSERT INTO codex_progress (species_name, current_rank) VALUES ('Atrox', 3)")
-    conn.execute("INSERT INTO codex_progress (species_name, current_rank) VALUES ('Daikiba', 1)")
+    conn.execute(
+        "INSERT INTO codex_progress (species_name, current_rank) VALUES ('Atrox', 3)"
+    )
+    conn.execute(
+        "INSERT INTO codex_progress (species_name, current_rank) VALUES ('Daikiba', 1)"
+    )
     conn.execute("INSERT INTO codex_claims (species_name, rank) VALUES ('Atrox', 1)")
     conn.execute("INSERT INTO codex_claims (species_name, rank) VALUES ('Atrox', 2)")
     conn.execute("INSERT INTO codex_claims (species_name, rank) VALUES ('Daikiba', 1)")
@@ -330,7 +345,9 @@ def test_codex_progress_and_claims_counts_are_independent() -> None:
     claim count and vice versa. Strengthens the table-targeting SQL
     (a query reading the wrong table would conflate the two counts)."""
     conn = _codex_conn()
-    conn.execute("INSERT INTO codex_progress (species_name, current_rank) VALUES ('Atrox', 3)")
+    conn.execute(
+        "INSERT INTO codex_progress (species_name, current_rank) VALUES ('Atrox', 3)"
+    )
     conn.commit()
     try:
         view = codex_view_state(CodexViewContext(conn=conn))

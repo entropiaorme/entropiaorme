@@ -50,17 +50,14 @@ def test_record_session_completion_uses_given_timestamp(svc: QuestService):
     assert row[0] == 12345.0
 
 
-def test_record_session_completion_session_log_message(
-    svc: QuestService, caplog
-):
+def test_record_session_completion_session_log_message(svc: QuestService, caplog):
     # mutmut_13..22: corrupt the session-branch log.info call (None message,
     # dropped/reordered args, changed text, or session_id[:8] -> [:9]).
     q = svc.create_quest({"name": "Q"})
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         svc._record_session_completion("SESSION_AB_X9", q["id"], 100.0)
     infos = [
-        r for r in caplog.records
-        if r.name == LOGGER_NAME and r.levelno == logging.INFO
+        r for r in caplog.records if r.name == LOGGER_NAME and r.levelno == logging.INFO
     ]
     # getMessage() raises for the None/arg mutants and differs for the
     # text/slice mutants; the original renders exactly this.
@@ -68,16 +65,13 @@ def test_record_session_completion_session_log_message(
     assert f"Recorded quest {q['id']} completion in session SESSION_" in messages
 
 
-def test_record_session_completion_manual_log_message(
-    svc: QuestService, caplog
-):
+def test_record_session_completion_manual_log_message(svc: QuestService, caplog):
     # mutmut_23..29: corrupt the manual-branch log.info call.
     q = svc.create_quest({"name": "Q"})
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         svc._record_session_completion(None, q["id"], 100.0)
     infos = [
-        r for r in caplog.records
-        if r.name == LOGGER_NAME and r.levelno == logging.INFO
+        r for r in caplog.records if r.name == LOGGER_NAME and r.levelno == logging.INFO
     ]
     messages = [r.getMessage() for r in infos]
     assert f"Recorded manual completion for quest {q['id']}" in messages
@@ -201,17 +195,13 @@ def test_scalar_from_row_keyed_mapping_uses_key_branch(svc: QuestService):
 def test_row_to_quest_zero_cooldown_has_no_expiry(svc: QuestService):
     # mutmut_24: `cd_hours > 0` -> `cd_hours >= 0`; with cd_hours == 0 the
     # original yields no cooldown window.
-    d = svc._row_to_quest(
-        {"id": 1, "last_completed_at": 1000.0, "cooldown_hours": 0}
-    )
+    d = svc._row_to_quest({"id": 1, "last_completed_at": 1000.0, "cooldown_hours": 0})
     assert d["cooldown_expires_at"] is None
 
 
 def test_row_to_quest_cooldown_expiry_value(svc: QuestService):
     # mutmut_29: `cd_hours * 3600` -> `* 3601` shifts the computed expiry.
-    d = svc._row_to_quest(
-        {"id": 1, "last_completed_at": 0.0, "cooldown_hours": 1}
-    )
+    d = svc._row_to_quest({"id": 1, "last_completed_at": 0.0, "cooldown_hours": 1})
     assert d["cooldown_expires_at"] == "1970-01-01T01:00:00+00:00"
 
 
@@ -222,56 +212,63 @@ def test_is_quest_cooling_missing_cooldown_with_last(svc: QuestService):
     # mutmut_9: `or cd_hours is None or` -> `or cd_hours is None and`; with
     # last set and cd_hours None the original returns False (the mutant would
     # raise comparing None <= 0).
-    assert svc._is_quest_cooling(
-        {"last_completed_at": _FakeTime.NOW, "cooldown_hours": None}
-    ) is False
+    assert (
+        svc._is_quest_cooling(
+            {"last_completed_at": _FakeTime.NOW, "cooldown_hours": None}
+        )
+        is False
+    )
 
 
 def test_is_quest_cooling_missing_last_with_cooldown(svc: QuestService):
     # mutmut_10: `last is None or cd_hours is None` -> `... and ...`; with
     # last None and cd_hours positive the original returns False (the mutant
     # would fall through and raise on None + ...).
-    assert svc._is_quest_cooling(
-        {"last_completed_at": None, "cooldown_hours": 5}
-    ) is False
+    assert (
+        svc._is_quest_cooling({"last_completed_at": None, "cooldown_hours": 5}) is False
+    )
 
 
 def test_is_quest_cooling_zero_cooldown_not_cooling(svc: QuestService, monkeypatch):
     # mutmut_13: `cd_hours <= 0` -> `cd_hours < 0`; cd_hours == 0 must be
     # treated as "no cooldown" even when last is in the future.
     monkeypatch.setattr(qs_module, "time", _FakeTime)
-    assert svc._is_quest_cooling(
-        {"last_completed_at": _FakeTime.NOW + 10_000, "cooldown_hours": 0}
-    ) is False
+    assert (
+        svc._is_quest_cooling(
+            {"last_completed_at": _FakeTime.NOW + 10_000, "cooldown_hours": 0}
+        )
+        is False
+    )
 
 
-def test_is_quest_cooling_one_hour_cooldown_is_cooling(
-    svc: QuestService, monkeypatch
-):
+def test_is_quest_cooling_one_hour_cooldown_is_cooling(svc: QuestService, monkeypatch):
     # mutmut_14: `cd_hours <= 0` -> `cd_hours <= 1`; a 1-hour cooldown that
     # just completed is still cooling.
     monkeypatch.setattr(qs_module, "time", _FakeTime)
-    assert svc._is_quest_cooling(
-        {"last_completed_at": _FakeTime.NOW, "cooldown_hours": 1}
-    ) is True
+    assert (
+        svc._is_quest_cooling({"last_completed_at": _FakeTime.NOW, "cooldown_hours": 1})
+        is True
+    )
 
 
 def test_is_quest_cooling_guard_returns_false(svc: QuestService):
     # mutmut_15: guard `return False` -> `return True`.
-    assert svc._is_quest_cooling(
-        {"last_completed_at": None, "cooldown_hours": None}
-    ) is False
+    assert (
+        svc._is_quest_cooling({"last_completed_at": None, "cooldown_hours": None})
+        is False
+    )
 
 
-def test_is_quest_cooling_multiplies_hours_to_seconds(
-    svc: QuestService, monkeypatch
-):
+def test_is_quest_cooling_multiplies_hours_to_seconds(svc: QuestService, monkeypatch):
     # mutmut_17: `cd_hours * 3600` -> `cd_hours / 3600`. A quest completed
     # 100s ago with a 1h cooldown is cooling under x3600 but not under /3600.
     monkeypatch.setattr(qs_module, "time", _FakeTime)
-    assert svc._is_quest_cooling(
-        {"last_completed_at": _FakeTime.NOW - 100, "cooldown_hours": 1}
-    ) is True
+    assert (
+        svc._is_quest_cooling(
+            {"last_completed_at": _FakeTime.NOW - 100, "cooldown_hours": 1}
+        )
+        is True
+    )
 
 
 def test_is_quest_cooling_seconds_factor_exact(svc: QuestService, monkeypatch):
@@ -279,18 +276,22 @@ def test_is_quest_cooling_seconds_factor_exact(svc: QuestService, monkeypatch):
     # the expiry straddles "now" only under the off-by-one factor.
     monkeypatch.setattr(qs_module, "time", _FakeTime)
     last = _FakeTime.NOW - 1_000_000 * 3600 - 500_000
-    assert svc._is_quest_cooling(
-        {"last_completed_at": last, "cooldown_hours": 1_000_000}
-    ) is False
+    assert (
+        svc._is_quest_cooling({"last_completed_at": last, "cooldown_hours": 1_000_000})
+        is False
+    )
 
 
 def test_is_quest_cooling_strict_greater_than(svc: QuestService, monkeypatch):
     # mutmut_19: `> time.time()` -> `>= time.time()`. Expiry exactly equal to
     # now is NOT cooling.
     monkeypatch.setattr(qs_module, "time", _FakeTime)
-    assert svc._is_quest_cooling(
-        {"last_completed_at": _FakeTime.NOW - 3600, "cooldown_hours": 1}
-    ) is False
+    assert (
+        svc._is_quest_cooling(
+            {"last_completed_at": _FakeTime.NOW - 3600, "cooldown_hours": 1}
+        )
+        is False
+    )
 
 
 # ── _row_to_playlist ───────────────────────────────────────────────────────
@@ -311,9 +312,7 @@ def test_row_to_playlist_normalizes_id_in_place(svc: QuestService):
 def test_normalize_expected_reward_markup_zero_reward(svc: QuestService):
     # mutmut_5: `reward_ped <= 0` -> `reward_ped < 0`; a zero reward must
     # produce no markup.
-    assert (
-        svc._normalize_expected_reward_markup(0, False, 130.0) is None
-    )
+    assert svc._normalize_expected_reward_markup(0, False, 130.0) is None
 
 
 # ── _expected_reward_total ─────────────────────────────────────────────────

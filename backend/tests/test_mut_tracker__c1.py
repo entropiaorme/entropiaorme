@@ -23,8 +23,8 @@ import sqlite3
 import pytest
 
 from backend.core.event_bus import EventBus
-from backend.tracking.tracker import HuntTracker, _Accumulator
 from backend.tracking.models import ToolStats
+from backend.tracking.tracker import HuntTracker, _Accumulator
 
 # A weapon profile whose canonical weapon name differs from the observed tool
 # name, so name-resolution mutations become visible. 2 configured damage

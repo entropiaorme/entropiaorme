@@ -52,8 +52,7 @@ def svc(tmp_path: Path):
 
 def _notable_rows(service: QuestService) -> list:
     return service._conn.execute(
-        "SELECT event_type, mob_or_item, value_ped FROM notable_events "
-        "ORDER BY id"
+        "SELECT event_type, mob_or_item, value_ped FROM notable_events ORDER BY id"
     ).fetchall()
 
 
@@ -307,9 +306,7 @@ def test_skill_reward_none_uses_zero_not_one(svc: QuestService):
     """A skill quest with no reward_ped records value_ped via ``reward_ped or
     0`` == 0. ``or 1`` would record 1.0; ``and 0`` is moot here (None)."""
     svc.create_quest({"name": "FreeSkill", "reward_is_skill": True})
-    svc.quest_reward_filter(
-        "FreeSkill", [], [{"skill_name": "Evade", "amount": 0.1}]
-    )
+    svc.quest_reward_filter("FreeSkill", [], [{"skill_name": "Evade", "amount": 0.1}])
     event_type, mob_or_item, value_ped = _last_notable(svc)
     assert event_type == "quest_completed_pes"
     assert value_ped == 0

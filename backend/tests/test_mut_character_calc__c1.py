@@ -27,11 +27,19 @@ def test_xor_validation_message_exact():
     prof = _prof(("Rifle", 50))
     expected = "Exactly one of target_level or ped_budget must be provided"
     # both provided
-    with pytest.raises(ValueError, match=r"^Exactly one of target_level or ped_budget must be provided$") as e1:
-        profession_path_optimizer({"Rifle": 0.0}, prof, target_level=5.0, ped_budget=10.0)
+    with pytest.raises(
+        ValueError,
+        match=r"^Exactly one of target_level or ped_budget must be provided$",
+    ) as e1:
+        profession_path_optimizer(
+            {"Rifle": 0.0}, prof, target_level=5.0, ped_budget=10.0
+        )
     assert str(e1.value) == expected
     # neither provided
-    with pytest.raises(ValueError, match=r"^Exactly one of target_level or ped_budget must be provided$") as e2:
+    with pytest.raises(
+        ValueError,
+        match=r"^Exactly one of target_level or ped_budget must be provided$",
+    ) as e2:
         profession_path_optimizer({"Rifle": 0.0}, prof)
     assert str(e2.value) == expected
 

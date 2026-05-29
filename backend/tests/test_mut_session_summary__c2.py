@@ -175,18 +175,24 @@ def test_write_clears_stale_row_when_session_no_longer_qualifies():
     _seed_qualifying(conn, sid)
     write_session_summary(conn, sid)
     conn.commit()
-    assert conn.execute(
-        "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (sid,)
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (sid,)
+        ).fetchone()[0]
+        == 1
+    )
 
     # Remove the gains so the session no longer qualifies, then re-write.
     conn.execute("DELETE FROM skill_gains WHERE session_id = ?", (sid,))
     assert compute_session_summary(conn, sid) is None
     write_session_summary(conn, sid)
     conn.commit()
-    assert conn.execute(
-        "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (sid,)
-    ).fetchone()[0] == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (sid,)
+        ).fetchone()[0]
+        == 0
+    )
 
 
 # --------------------------------------------------------------------------
@@ -214,7 +220,8 @@ def test_delete_removes_only_the_targeted_row():
     delete_session_summary(conn, drop)
     conn.commit()
     remaining = [
-        r[0] for r in conn.execute("SELECT session_id FROM session_summaries").fetchall()
+        r[0]
+        for r in conn.execute("SELECT session_id FROM session_summaries").fetchall()
     ]
     assert remaining == [keep]
 
@@ -268,46 +275,46 @@ def test_delete_is_idempotent_second_call_is_noop():
 # Column order matches the SELECT in load_prospect_sessions.
 _TRUTHY_ROW = (
     "sess-truthy",  # session_id
-    11.0,           # started_at
-    22.0,           # ended_at
-    1.5,            # duration_hours
-    7,              # kills
-    33.0,           # loot_tt
-    44.0,           # weapon_cost
-    55.0,           # enhancer_cost
-    66.0,           # armour_cost
-    77.0,           # heal_cost
-    88.0,           # dangling_cost
-    99.0,           # cycled_ped
-    '{"Anatomy": 5.0}',         # regular_skill_ped_json
-    '{"Strength": 3.0}',        # attribute_levels_json
-    12.0,           # regular_skill_tt
-    13.0,           # attribute_levels_total
-    "Atrox",        # dominant_mob
-    "tag-x",        # dominant_tag
-    "Opalo",        # dominant_weapon
+    11.0,  # started_at
+    22.0,  # ended_at
+    1.5,  # duration_hours
+    7,  # kills
+    33.0,  # loot_tt
+    44.0,  # weapon_cost
+    55.0,  # enhancer_cost
+    66.0,  # armour_cost
+    77.0,  # heal_cost
+    88.0,  # dangling_cost
+    99.0,  # cycled_ped
+    '{"Anatomy": 5.0}',  # regular_skill_ped_json
+    '{"Strength": 3.0}',  # attribute_levels_json
+    12.0,  # regular_skill_tt
+    13.0,  # attribute_levels_total
+    "Atrox",  # dominant_mob
+    "tag-x",  # dominant_tag
+    "Opalo",  # dominant_weapon
 )
 
 _FALSY_ROW = (
-    "sess-falsy",   # session_id
-    None,           # started_at
-    None,           # ended_at
-    None,           # duration_hours
-    None,           # kills
-    None,           # loot_tt
-    None,           # weapon_cost
-    None,           # enhancer_cost
-    None,           # armour_cost
-    None,           # heal_cost
-    None,           # dangling_cost
-    None,           # cycled_ped
-    None,           # regular_skill_ped_json
-    None,           # attribute_levels_json
-    None,           # regular_skill_tt
-    None,           # attribute_levels_total
-    None,           # dominant_mob
-    None,           # dominant_tag
-    None,           # dominant_weapon
+    "sess-falsy",  # session_id
+    None,  # started_at
+    None,  # ended_at
+    None,  # duration_hours
+    None,  # kills
+    None,  # loot_tt
+    None,  # weapon_cost
+    None,  # enhancer_cost
+    None,  # armour_cost
+    None,  # heal_cost
+    None,  # dangling_cost
+    None,  # cycled_ped
+    None,  # regular_skill_ped_json
+    None,  # attribute_levels_json
+    None,  # regular_skill_tt
+    None,  # attribute_levels_total
+    None,  # dominant_mob
+    None,  # dominant_tag
+    None,  # dominant_weapon
 )
 
 _EXPECTED_KEYS = {

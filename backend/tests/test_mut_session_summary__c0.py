@@ -20,7 +20,6 @@ import pytest
 
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.session_summary import (
-    DOMINANCE_THRESHOLD,
     compute_session_summary,
 )
 from backend.tracking.schema import init_tracking_tables
@@ -62,7 +61,15 @@ def _insert_session(
         "INSERT INTO tracking_sessions "
         "(id, started_at, ended_at, is_active, armour_cost, heal_cost, dangling_cost) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (session_id, started_at, ended_at, is_active, armour_cost, heal_cost, dangling_cost),
+        (
+            session_id,
+            started_at,
+            ended_at,
+            is_active,
+            armour_cost,
+            heal_cost,
+            dangling_cost,
+        ),
     )
 
 
@@ -260,14 +267,24 @@ def _seed_dominant_mob_session(
     ts = 0.0
     for _ in range(top_count):
         _insert_kill(
-            conn, uuid.uuid4().hex, sid,
-            mob_name=_MOB, species=species, maturity=maturity, timestamp=ts,
+            conn,
+            uuid.uuid4().hex,
+            sid,
+            mob_name=_MOB,
+            species=species,
+            maturity=maturity,
+            timestamp=ts,
         )
         ts += 1.0
     for _ in range(other_count):
         _insert_kill(
-            conn, uuid.uuid4().hex, sid,
-            mob_name="Daikiba", species="Daikiba", maturity="Old", timestamp=ts,
+            conn,
+            uuid.uuid4().hex,
+            sid,
+            mob_name="Daikiba",
+            species="Daikiba",
+            maturity="Old",
+            timestamp=ts,
         )
         ts += 1.0
     _add_qualifying_skill(conn, sid)
@@ -743,7 +760,9 @@ def test_cycled_ped_is_sum_of_all_components():
     conn = _fresh_db()
     sid = uuid.uuid4().hex
     # weapon = 1*10 = 10, enhancer = 20, armour = 4, heal = 8, dangling = 16
-    _insert_session(conn, sid, 0.0, 3600.0, armour_cost=4.0, heal_cost=8.0, dangling_cost=16.0)
+    _insert_session(
+        conn, sid, 0.0, 3600.0, armour_cost=4.0, heal_cost=8.0, dangling_cost=16.0
+    )
     kid = uuid.uuid4().hex
     _insert_kill(conn, kid, sid, mob_name=_MOB, enhancer_cost=20.0)
     _insert_tool_stat(conn, kid, _TOOL, shots_fired=10, cost_per_shot=1.0)
@@ -765,9 +784,7 @@ def test_zero_shot_tool_does_not_inflate_total_shots():
     """
     conn = _fresh_db()
     sid = uuid.uuid4().hex
-    _seed_tool_session(
-        conn, sid, [(_TOOL, 3), ("CB5 Regular", 0), ("Breer P1a", 2)]
-    )
+    _seed_tool_session(conn, sid, [(_TOOL, 3), ("CB5 Regular", 0), ("Breer P1a", 2)])
     summary = compute_session_summary(conn, sid)
     assert summary is not None
     assert summary["dominantWeapon"] == _TOOL

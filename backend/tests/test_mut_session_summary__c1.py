@@ -168,11 +168,18 @@ def test_exact_summary_values_for_fully_specified_session():
     # weapon = 10 * 0.5 = 5.0, enhancer = 2.0, armour=1.0, heal=0.25, dangling=0.75
     # cycled = 5 + 2 + 1 + 0.25 + 0.75 = 9.0
     _insert_session(
-        conn, sid, started_at=100.0, ended_at=3700.0,
-        armour_cost=1.0, heal_cost=0.25, dangling_cost=0.75,
+        conn,
+        sid,
+        started_at=100.0,
+        ended_at=3700.0,
+        armour_cost=1.0,
+        heal_cost=0.25,
+        dangling_cost=0.75,
     )
     kill_id = uuid.uuid4().hex
-    _insert_kill(conn, kill_id, sid, mob_name="Atrox", loot_total_ped=12.5, enhancer_cost=2.0)
+    _insert_kill(
+        conn, kill_id, sid, mob_name="Atrox", loot_total_ped=12.5, enhancer_cost=2.0
+    )
     _insert_tool_stat(conn, kill_id, "Opalo", shots_fired=10, cost_per_shot=0.5)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=3.0)
     _insert_skill_gain(conn, sid, "Wounding", amount=0.02, ped_value=4.0)
@@ -209,11 +216,11 @@ def test_exact_summary_values_for_fully_specified_session():
 @pytest.mark.parametrize(
     "armour,heal,dangling,enhancer,cost_per_shot,shots,expected",
     [
-        (0.0, 0.0, 0.0, 0.0, 0.5, 10, 5.0),   # weapon only
-        (0.0, 0.0, 0.0, 3.0, 0.0, 10, 3.0),   # enhancer only
-        (7.0, 0.0, 0.0, 0.0, 0.0, 10, 7.0),   # armour only
-        (0.0, 9.0, 0.0, 0.0, 0.0, 10, 9.0),   # heal only
-        (0.0, 0.0, 4.0, 0.0, 0.0, 10, 4.0),   # dangling only
+        (0.0, 0.0, 0.0, 0.0, 0.5, 10, 5.0),  # weapon only
+        (0.0, 0.0, 0.0, 3.0, 0.0, 10, 3.0),  # enhancer only
+        (7.0, 0.0, 0.0, 0.0, 0.0, 10, 7.0),  # armour only
+        (0.0, 9.0, 0.0, 0.0, 0.0, 10, 9.0),  # heal only
+        (0.0, 0.0, 4.0, 0.0, 0.0, 10, 4.0),  # dangling only
         (1.0, 2.0, 3.0, 4.0, 0.5, 10, 15.0),  # all five
     ],
 )
@@ -223,12 +230,19 @@ def test_cycled_ped_is_sum_of_all_cost_components(
     conn = _fresh_db()
     sid = uuid.uuid4().hex
     _insert_session(
-        conn, sid, started_at=0.0, ended_at=3600.0,
-        armour_cost=armour, heal_cost=heal, dangling_cost=dangling,
+        conn,
+        sid,
+        started_at=0.0,
+        ended_at=3600.0,
+        armour_cost=armour,
+        heal_cost=heal,
+        dangling_cost=dangling,
     )
     kill_id = uuid.uuid4().hex
     _insert_kill(conn, kill_id, sid, mob_name="Atrox", enhancer_cost=enhancer)
-    _insert_tool_stat(conn, kill_id, "Opalo", shots_fired=shots, cost_per_shot=cost_per_shot)
+    _insert_tool_stat(
+        conn, kill_id, "Opalo", shots_fired=shots, cost_per_shot=cost_per_shot
+    )
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=2.0)
     conn.commit()
 
@@ -346,11 +360,27 @@ def test_dominant_mob_set_when_species_present_and_over_threshold():
     # 7 Atrox (species present) + 3 Daikiba -> 0.7 >= 0.6 -> dominant.
     for i in range(7):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Atrox", species="Atrox", maturity="Young", timestamp=float(i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Atrox",
+            species="Atrox",
+            maturity="Young",
+            timestamp=float(i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=1.0)
     for i in range(3):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Daikiba", species="Daikiba", maturity="Old", timestamp=float(100 + i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Daikiba",
+            species="Daikiba",
+            maturity="Old",
+            timestamp=float(100 + i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=0.0)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=2.0)
     conn.commit()
@@ -367,11 +397,27 @@ def test_dominant_tag_set_when_no_species_and_over_threshold():
     # 7 of a blank-species/maturity mob -> dominant_tag branch.
     for i in range(7):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Mystery", species="", maturity="", timestamp=float(i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Mystery",
+            species="",
+            maturity="",
+            timestamp=float(i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=1.0)
     for i in range(3):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Other", species="", maturity="", timestamp=float(100 + i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Other",
+            species="",
+            maturity="",
+            timestamp=float(100 + i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=0.0)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=2.0)
     conn.commit()
@@ -388,11 +434,27 @@ def test_no_dominance_below_threshold():
     # 5 vs 5 -> top fraction 0.5 < 0.6 -> neither set.
     for i in range(5):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Atrox", species="Atrox", maturity="Young", timestamp=float(i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Atrox",
+            species="Atrox",
+            maturity="Young",
+            timestamp=float(i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=1.0)
     for i in range(5):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Daikiba", species="Daikiba", maturity="Old", timestamp=float(100 + i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Daikiba",
+            species="Daikiba",
+            maturity="Old",
+            timestamp=float(100 + i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=0.0)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=2.0)
     conn.commit()
@@ -410,11 +472,27 @@ def test_dominance_exactly_at_threshold_is_inclusive():
     # 6 Atrox + 4 Daikiba -> exactly 0.6.
     for i in range(6):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Atrox", species="Atrox", maturity="Young", timestamp=float(i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Atrox",
+            species="Atrox",
+            maturity="Young",
+            timestamp=float(i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=1.0)
     for i in range(4):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Daikiba", species="Daikiba", maturity="Old", timestamp=float(100 + i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Daikiba",
+            species="Daikiba",
+            maturity="Old",
+            timestamp=float(100 + i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=0.0)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=2.0)
     conn.commit()
@@ -431,7 +509,15 @@ def test_unknown_and_null_mobs_excluded_from_dominance():
     # known set is 100% Atrox -> dominant_mob Atrox.
     for i in range(3):
         kid = uuid.uuid4().hex
-        _insert_kill(conn, kid, sid, mob_name="Atrox", species="Atrox", maturity="Young", timestamp=float(i))
+        _insert_kill(
+            conn,
+            kid,
+            sid,
+            mob_name="Atrox",
+            species="Atrox",
+            maturity="Young",
+            timestamp=float(i),
+        )
         _insert_tool_stat(conn, kid, "Opalo", shots_fired=1, cost_per_shot=1.0)
     for i in range(4):
         kid = uuid.uuid4().hex
@@ -525,12 +611,25 @@ def test_load_prospect_sessions_round_trips_all_fields():
     conn = _fresh_db()
     sid = uuid.uuid4().hex
     _insert_session(
-        conn, sid, started_at=100.0, ended_at=3700.0,
-        armour_cost=1.0, heal_cost=0.25, dangling_cost=0.75,
+        conn,
+        sid,
+        started_at=100.0,
+        ended_at=3700.0,
+        armour_cost=1.0,
+        heal_cost=0.25,
+        dangling_cost=0.75,
     )
     kid = uuid.uuid4().hex
-    _insert_kill(conn, kid, sid, mob_name="Atrox", species="Atrox", maturity="Young",
-                 loot_total_ped=12.5, enhancer_cost=2.0)
+    _insert_kill(
+        conn,
+        kid,
+        sid,
+        mob_name="Atrox",
+        species="Atrox",
+        maturity="Young",
+        loot_total_ped=12.5,
+        enhancer_cost=2.0,
+    )
     _insert_tool_stat(conn, kid, "Opalo", shots_fired=10, cost_per_shot=0.5)
     _insert_skill_gain(conn, sid, "Anatomy", amount=0.01, ped_value=3.0)
     _insert_skill_gain(conn, sid, "Health", amount=2.5, ped_value=None)

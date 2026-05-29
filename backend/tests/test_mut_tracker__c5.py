@@ -375,7 +375,7 @@ def test_falsy_heal_tool_value_keeps_defaults():
 
 
 def test_empty_dict_heal_tool_value_keeps_defaults():
-    trifecta = {"heal_tool": {}}
+    trifecta: dict[str, dict[str, object]] = {"heal_tool": {}}
     tracker = _make_tracker(trifecta)
     tracker._load_trifecta_weapon_profiles()
     assert tracker._active_heal_tool_name is None

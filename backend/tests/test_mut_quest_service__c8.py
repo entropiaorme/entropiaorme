@@ -60,8 +60,16 @@ def test_items_branch_preserves_quest_id_description_and_group():
         {
             "name": "PL",
             "items": [
-                {"quest_id": q1, "description": "first", "group_type": PLAYLIST_GROUP_IMMEDIATE},
-                {"quest_id": q2, "description": "second", "group_type": PLAYLIST_GROUP_LONG_HORIZON},
+                {
+                    "quest_id": q1,
+                    "description": "first",
+                    "group_type": PLAYLIST_GROUP_IMMEDIATE,
+                },
+                {
+                    "quest_id": q2,
+                    "description": "second",
+                    "group_type": PLAYLIST_GROUP_LONG_HORIZON,
+                },
             ],
         }
     )
@@ -251,7 +259,10 @@ def test_long_horizon_group_type_is_accepted_and_persisted():
     svc = _make_service()
     q1 = _new_quest(svc, "A")
     pl = svc.create_playlist(
-        {"name": "PL", "items": [{"quest_id": q1, "group_type": PLAYLIST_GROUP_LONG_HORIZON}]}
+        {
+            "name": "PL",
+            "items": [{"quest_id": q1, "group_type": PLAYLIST_GROUP_LONG_HORIZON}],
+        }
     )
     rows = _raw_items(svc, pl["id"])
     assert rows[0][3] == PLAYLIST_GROUP_LONG_HORIZON

@@ -32,24 +32,56 @@ from backend.services.character_calc import (
 
 def _pr_skills():
     return [
-        {"name": "Aim", "weight": 3.0, "currentLevel": 2000.0,
-         "allocated": 12.34, "ped": 5.678},
-        {"name": "Wounding", "weight": 2.0, "currentLevel": 1000.0,
-         "allocated": 7.891, "ped": 2.345},
-        {"name": "Bravado", "weight": 1.0, "currentLevel": 500.0,
-         "allocated": 0.0, "ped": 0.0},
-        {"name": "Anatomy", "weight": 1.5, "currentLevel": 300.0,
-         "allocated": 0.0, "ped": 0.0},
+        {
+            "name": "Aim",
+            "weight": 3.0,
+            "currentLevel": 2000.0,
+            "allocated": 12.34,
+            "ped": 5.678,
+        },
+        {
+            "name": "Wounding",
+            "weight": 2.0,
+            "currentLevel": 1000.0,
+            "allocated": 7.891,
+            "ped": 2.345,
+        },
+        {
+            "name": "Bravado",
+            "weight": 1.0,
+            "currentLevel": 500.0,
+            "allocated": 0.0,
+            "ped": 0.0,
+        },
+        {
+            "name": "Anatomy",
+            "weight": 1.5,
+            "currentLevel": 300.0,
+            "allocated": 0.0,
+            "ped": 0.0,
+        },
     ]
 
 
 def _pr_call():
-    attrs = [{"name": "Health", "weight": 4.0, "currentLevel": 1500.0,
-              "contributionFactor": 80.0}]
+    attrs = [
+        {
+            "name": "Health",
+            "weight": 4.0,
+            "currentLevel": 1500.0,
+            "contributionFactor": 80.0,
+        }
+    ]
     excluded = [{"name": "Zeta", "weight": 1.0, "reason": "not unlocked"}]
     return _path_result(
-        "target", 7.0, None, 5.123456, 6.987654,
-        _pr_skills(), attrs, excluded,
+        "target",
+        7.0,
+        None,
+        5.123456,
+        6.987654,
+        _pr_skills(),
+        attrs,
+        excluded,
     )
 
 
@@ -58,9 +90,16 @@ def test_path_result_top_level_shape_and_values():
     # Exact key set at the top level (kills key-name mutants on inputTargetLevel
     # / inputPedBudget and guards the overall shape).
     assert set(res) == {
-        "mode", "inputTargetLevel", "inputPedBudget", "currentLevel",
-        "endLevel", "professionLevelsGained", "totalPed", "allocations",
-        "attributes", "excluded",
+        "mode",
+        "inputTargetLevel",
+        "inputPedBudget",
+        "currentLevel",
+        "endLevel",
+        "professionLevelsGained",
+        "totalPed",
+        "allocations",
+        "attributes",
+        "excluded",
     }
     assert res["mode"] == "target"
     # inputTargetLevel / inputPedBudget pass straight through.
@@ -127,8 +166,14 @@ def test_path_result_allocation_per_skill_values():
     # Exact allocation entry key set (kills currentLevel / codexCategory /
     # codexDivisor key-name mutants).
     assert set(aim) == {
-        "name", "weight", "currentLevel", "levelsToGain", "pedCost",
-        "newLevel", "codexCategory", "codexDivisor",
+        "name",
+        "weight",
+        "currentLevel",
+        "levelsToGain",
+        "pedCost",
+        "newLevel",
+        "codexCategory",
+        "codexDivisor",
     }
     assert aim["currentLevel"] == 2000.0
     # levelsToGain = round(12.34, 2); newLevel = round(2000 + 12.34, 2)
@@ -195,8 +240,8 @@ def test_path_result_excluded_passthrough():
 
 def test_calculate_hp_value():
     skills_data = [
-        {"name": "Aim", "hp_increase": 7.0},      # regular: 2000 / 7
-        {"name": "Health", "hp_increase": 5.0},   # attribute: 1500*20 / 5
+        {"name": "Aim", "hp_increase": 7.0},  # regular: 2000 / 7
+        {"name": "Health", "hp_increase": 5.0},  # attribute: 1500*20 / 5
     ]
     skill_levels = {"Aim": 2000.0, "Health": 1500.0}
     hp = calculate_hp(skill_levels, skills_data)
@@ -244,8 +289,8 @@ def test_calculate_hp_includes_fractional_level_below_one():
 
 def _hpo_call():
     skills_data = [
-        {"name": "Aim", "hp_increase": 7.25},      # regular, cat1
-        {"name": "Health", "hp_increase": 4.66},   # attribute, no codex
+        {"name": "Aim", "hp_increase": 7.25},  # regular, cat1
+        {"name": "Health", "hp_increase": 4.66},  # attribute, no codex
         {"name": "Wounding", "hp_increase": 3.0},  # regular, no codex
     ]
     skill_levels = {"Aim": 2000.0, "Health": 1500.0, "Wounding": 1000.0}
@@ -275,8 +320,14 @@ def test_hpo_regular_skill_entry_values_and_keys():
 
     aim = by_name["Aim"]
     assert set(aim) == {
-        "name", "hpIncrease", "currentLevel", "levelsPerHp", "pedPerHp",
-        "hpPerPed", "codexCategory", "codexDivisor",
+        "name",
+        "hpIncrease",
+        "currentLevel",
+        "levelsPerHp",
+        "pedPerHp",
+        "hpPerPed",
+        "codexCategory",
+        "codexDivisor",
     }
     assert aim["hpIncrease"] == 7.25
     assert aim["currentLevel"] == 2000.0
@@ -353,7 +404,11 @@ def test_hpo_attribute_entry_values_and_keys():
     assert len(res["attributes"]) == 1
     health = res["attributes"][0]
     assert set(health) == {
-        "name", "hpIncrease", "currentLevel", "levelsPerHp", "hpContribution",
+        "name",
+        "hpIncrease",
+        "currentLevel",
+        "levelsPerHp",
+        "hpContribution",
     }
     assert health["name"] == "Health"
     assert health["hpIncrease"] == 4.66

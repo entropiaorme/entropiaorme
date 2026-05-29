@@ -18,7 +18,6 @@ import pytest
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_COMBAT,
-    EVENT_LOOT_GROUP,
 )
 from backend.tracking.models import ToolStats
 from backend.tracking.tracker import HuntTracker
@@ -122,9 +121,7 @@ class TestOnLootItemDefaults:
         bus, tracker, db = pipeline
         tracker.start_session()
         ts = datetime.now(tz=None)
-        tracker._on_loot(
-            self._loot([{"quantity": 3, "value_ped": 0.2}], 0.2, ts)
-        )
+        tracker._on_loot(self._loot([{"quantity": 3, "value_ped": 0.2}], 0.2, ts))
         kill = tracker.session.kills[0]
         assert len(kill.loot_items) == 1
         assert kill.loot_items[0].item_name == ""
@@ -136,9 +133,7 @@ class TestOnLootItemDefaults:
         bus, tracker, db = pipeline
         tracker.start_session()
         ts = datetime.now(tz=None)
-        tracker._on_loot(
-            self._loot([{"item_name": "Animal Oil Residue"}], 0.0, ts)
-        )
+        tracker._on_loot(self._loot([{"item_name": "Animal Oil Residue"}], 0.0, ts))
         item = tracker.session.kills[0].loot_items[0]
         assert item.quantity == 1
         assert item.value_ped == 0.0
@@ -207,7 +202,9 @@ class TestOnLootTimestamp:
         ts = datetime(2024, 1, 2, 3, 4, 5)
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": ts,
             }
@@ -222,7 +219,9 @@ class TestOnLootTimestamp:
         tracker.start_session()
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": 1700000000.5,
             }
@@ -240,7 +239,9 @@ class TestOnLootDedup:
         tracker.start_session()
         t0 = datetime(2024, 1, 1, 0, 0, 0)
         payload = {
-            "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}],
+            "items": [
+                {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}
+            ],
             "total_ped": 1.23456,
             "timestamp": t0,
         }
@@ -260,7 +261,9 @@ class TestOnLootDedup:
         tracker.start_session()
         t0 = datetime(2024, 1, 1, 0, 0, 0)
         payload = {
-            "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}],
+            "items": [
+                {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}
+            ],
             "total_ped": 1.0,
             "timestamp": t0,
         }
@@ -308,14 +311,18 @@ class TestOnLootDedup:
         t0 = datetime(2024, 1, 1, 0, 0, 0)
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.5}
+                ],
                 "total_ped": 1.0,
                 "timestamp": t0,
             }
         )
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.5}],
+                "items": [
+                    {"item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.5}
+                ],
                 "total_ped": 1.0,
                 "timestamp": t0 + timedelta(seconds=0.5),
             }
@@ -343,7 +350,9 @@ class TestOnLootKillSnapshot:
         self._arm_accumulator(tracker)
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": datetime.now(tz=None),
             }
@@ -358,7 +367,9 @@ class TestOnLootKillSnapshot:
         self._arm_accumulator(tracker)
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": datetime.now(tz=None),
             }
@@ -372,7 +383,9 @@ class TestOnLootKillSnapshot:
         self._arm_accumulator(tracker)
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": datetime.now(tz=None),
             }
@@ -389,16 +402,16 @@ class TestOnLootKillSnapshot:
         tracker.start_session()
         tracker._on_loot(
             {
-                "items": [{"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}],
+                "items": [
+                    {"item_name": "Animal Oil Residue", "quantity": 1, "value_ped": 0.1}
+                ],
                 "total_ped": 0.1,
                 "timestamp": datetime.now(tz=None),
             }
         )
         kill = tracker.session.kills[0]
         assert len(kill.id) == 36  # uuid4 string
-        row = db.execute(
-            "SELECT id FROM kills WHERE id = ?", (kill.id,)
-        ).fetchone()
+        row = db.execute("SELECT id FROM kills WHERE id = ?", (kill.id,)).fetchone()
         assert row is not None and row[0] == kill.id
 
 
@@ -439,9 +452,7 @@ class TestOnToolChangedMerge:
         """`pop("Unknown", None)` (mutmut_13 drops the default). With no
         "Unknown" entry, the original returns None and skips the merge; a bare
         `pop("Unknown")` would raise KeyError."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         # Accumulator has no "Unknown" key.
         tracker._on_tool_changed({"tool_name": "Gun"})  # must not raise
@@ -452,9 +463,7 @@ class TestOnToolChangedMerge:
         """mutmut_19 sets `real = None`, then `real.shots_fired += ...` raises
         AttributeError. The original merges the unknown shots into the real
         tool; assert the merged result is present and no exception escaped."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         self._seed_unknown(tracker, shots=2, dmg=20.0, crits=1)
         tracker._on_tool_changed({"tool_name": "Gun"})
@@ -467,9 +476,7 @@ class TestOnToolChangedMerge:
         """mutmut_20 passes None as the tool_name to _tool_stats_for_phase, so
         the merged stats land under a None-named tool. The original keys them
         under the real tool name "Gun"."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         self._seed_unknown(tracker, shots=2, dmg=20.0, crits=1)
         tracker._on_tool_changed({"tool_name": "Gun"})
@@ -482,22 +489,20 @@ class TestOnToolChangedMerge:
         """mutmut_21 passes None as cost_per_shot; weapon_cost then multiplies
         None by shots and raises TypeError. The original keeps cost_per_shot 2.0
         so weapon_cost = 2.0 * 2 = 4.0."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         self._seed_unknown(tracker, shots=2, dmg=20.0, crits=1)
         tracker._on_tool_changed({"tool_name": "Gun"})
-        assert tracker.current_accumulator.tool_stats["Gun"].cost_per_shot == pytest.approx(2.0)
+        assert tracker.current_accumulator.tool_stats[
+            "Gun"
+        ].cost_per_shot == pytest.approx(2.0)
         assert tracker.current_accumulator.weapon_cost == pytest.approx(4.0)
 
     def test_phase_helper_called_with_both_arguments(self):
         """mutmut_22/23 drop one of the two required positional args to
         _tool_stats_for_phase, raising TypeError. The original call succeeds and
         records the merged tool stats."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         self._seed_unknown(tracker, shots=2, dmg=20.0, crits=1)
         tracker._on_tool_changed({"tool_name": "Gun"})
@@ -508,9 +513,7 @@ class TestOnToolChangedMerge:
         unknown.X`. Pre-seed an existing "Gun" phase (same cost) with its own
         shots/damage/crits so the merge must ADD the unknown counts rather than
         overwrite them."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 2.0
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 2.0)
         tracker.start_session()
         acc = tracker.current_accumulator
         # Existing real-tool phase with nonzero counts and matching cost.
@@ -539,9 +542,7 @@ class TestOnToolChangedMerge:
         sub-1 positive cost (0.5) the original takes the cost>0 branch and the
         merged phase keeps cost_per_shot 0.5; the mutant falls into the
         zero-cost branch and the stats carry cost_per_shot 0.0."""
-        bus, tracker, db = _make_tracker(
-            equipment_cost_lookup=lambda name: 0.5
-        )
+        bus, tracker, db = _make_tracker(equipment_cost_lookup=lambda name: 0.5)
         tracker.start_session()
         self._seed_unknown(tracker, shots=4, dmg=40.0, crits=0)
         tracker._on_tool_changed({"tool_name": "Gun"})
@@ -635,7 +636,11 @@ class TestOnHealToolChanged:
         # Second activation past the 2.0s reload window.
         bus.publish(
             EVENT_COMBAT,
-            {"type": "self_heal", "amount": 30.0, "timestamp": base + timedelta(seconds=2.0)},
+            {
+                "type": "self_heal",
+                "amount": 30.0,
+                "timestamp": base + timedelta(seconds=2.0),
+            },
         )
         assert tracker._session_heal_cost == pytest.approx(1.0)
         result = tracker.stop_session()
@@ -750,6 +755,10 @@ class TestHealAmountMatchesTrifectaTool:
         # In-range heal a window later: gate returns True -> cost charged.
         bus.publish(
             EVENT_COMBAT,
-            {"type": "self_heal", "amount": 15.0, "timestamp": base + timedelta(seconds=2.0)},
+            {
+                "type": "self_heal",
+                "amount": 15.0,
+                "timestamp": base + timedelta(seconds=2.0),
+            },
         )
         assert tracker._session_heal_cost == pytest.approx(0.5)

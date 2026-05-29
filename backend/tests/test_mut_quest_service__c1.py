@@ -64,26 +64,28 @@ def _rendered(caplog, substring: str) -> str:
 
 
 class TestDeleteQuest:
-    def test_soft_delete_clears_active_and_playlist_membership(
-        self, svc: QuestService
-    ):
+    def test_soft_delete_clears_active_and_playlist_membership(self, svc: QuestService):
         q = svc.create_quest({"name": "DelMe"})
         pl = svc.create_playlist({"name": "PL", "quest_ids": [q["id"]]})
         # quest is in the playlist before deletion
-        assert q["id"] in svc.get_playlist(pl["id"])["quest_ids"]
+        playlist_before = svc.get_playlist(pl["id"])
+        assert playlist_before is not None
+        assert q["id"] in playlist_before["quest_ids"]
 
         assert svc.delete_quest(q["id"]) is True
         # is_active flipped to 0 (UPDATE actually applied to the matching row)
         assert svc.get_quests(active_only=True) == []
         assert len(svc.get_quests(active_only=False)) == 1
         # playlist membership removed (the DELETE FROM quest_playlist_items ran)
-        assert svc.get_playlist(pl["id"])["quest_ids"] == []
+        playlist_after = svc.get_playlist(pl["id"])
+        assert playlist_after is not None
+        assert playlist_after["quest_ids"] == []
 
     def test_delete_already_inactive_returns_false_and_keeps_playlist(
         self, svc: QuestService
     ):
         q = svc.create_quest({"name": "DelMe"})
-        pl = svc.create_playlist({"name": "PL", "quest_ids": [q["id"]]})
+        svc.create_playlist({"name": "PL", "quest_ids": [q["id"]]})
         assert svc.delete_quest(q["id"]) is True
         # second delete: WHERE is_active = 1 matches nothing -> rowcount 0
         assert svc.delete_quest(q["id"]) is False
@@ -108,7 +110,9 @@ class TestStartQuest:
         # UPDATE ... WHERE is_active = 1 affects 0 rows -> must be None.
         assert svc.start_quest(q["id"]) is None
         # and started_at on the (inactive) row stays NULL
-        assert svc.get_quest(q["id"])["started_at"] is None
+        inactive_quest = svc.get_quest(q["id"])
+        assert inactive_quest is not None
+        assert inactive_quest["started_at"] is None
 
 
 # ── complete_quest ───────────────────────────────────────────────────────────
@@ -118,7 +122,9 @@ class TestCompleteQuest:
     def test_complete_clears_started_at(self, svc: QuestService):
         q = svc.create_quest({"name": "C"})
         svc.start_quest(q["id"])
-        assert svc.get_quest(q["id"])["started_at"] is not None
+        started_quest = svc.get_quest(q["id"])
+        assert started_quest is not None
+        assert started_quest["started_at"] is not None
         done = svc.complete_quest(q["id"])
         assert done is not None
         assert done["started_at"] is None
@@ -214,6 +220,7 @@ def _make_cooling_quest_with_reward(
     svc._current_session_id = session_id
     svc.complete_quest(q["id"])
     refreshed = svc.get_quest(q["id"])
+    assert refreshed is not None
     assert svc._is_quest_cooling(refreshed) is True
     return q
 
@@ -264,9 +271,7 @@ class TestCancelQuest:
             "'Cool-7.0-False': 7.00 PED"
         )
 
-    def test_cancel_undo_reward_removes_claim_and_logs(
-        self, svc: QuestService, caplog
-    ):
+    def test_cancel_undo_reward_removes_claim_and_logs(self, svc: QuestService, caplog):
         q = _make_cooling_quest_with_reward(
             svc, reward_ped=8.0, is_skill=True, session_id="s4"
         )
@@ -324,9 +329,7 @@ class TestSessionLinkSuggestion:
     def test_exact_playlist(self, svc: QuestService):
         q1 = svc.create_quest({"name": "P1"})
         q2 = svc.create_quest({"name": "P2"})
-        pl = svc.create_playlist(
-            {"name": "ExactPL", "quest_ids": [q1["id"], q2["id"]]}
-        )
+        pl = svc.create_playlist({"name": "ExactPL", "quest_ids": [q1["id"], q2["id"]]})
         svc._current_session_id = "sess-pl"
         svc.complete_quest(q1["id"])
         svc.complete_quest(q2["id"])

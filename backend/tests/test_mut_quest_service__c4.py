@@ -29,8 +29,6 @@ import pytest
 
 from backend.db.app_database import AppDatabase
 from backend.services.quest_service import (
-    PLAYLIST_GROUP_IMMEDIATE,
-    PLAYLIST_GROUP_LONG_HORIZON,
     QuestService,
 )
 
@@ -167,7 +165,7 @@ class TestComputeSessionSetStats:
         """
         out = svc._compute_session_set_stats([])
         assert set(out) == _SESSION_SET_KEYS
-        assert out == {k: 0 for k in _SESSION_SET_KEYS}
+        assert out == dict.fromkeys(_SESSION_SET_KEYS, 0)
 
     def test_nonempty_keys_and_distinct_values(self, svc: QuestService):
         """Two sessions with distinct per-column values.
@@ -233,7 +231,7 @@ class TestComputePlaylistRewardStats:
         """
         out = svc._compute_playlist_reward_stats([], [1], [2])
         assert set(out) == _REWARD_KEYS
-        assert out == {k: 0 for k in _REWARD_KEYS}
+        assert out == dict.fromkeys(_REWARD_KEYS, 0)
 
     def test_bonus_skill_only_filter_excludes_nonskill(self, svc: QuestService):
         """long_horizon (bonus) skill total must filter to skill quests only.

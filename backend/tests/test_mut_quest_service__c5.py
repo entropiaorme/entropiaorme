@@ -181,9 +181,7 @@ class TestStartedLog:
 # Kills mutmut_41 (type->None), 42 (name->None), 43 (value->None),
 # 47 (type "XXquest_startedXX"), 48 (type "QUEST_STARTED"), 51 (value 0->1).
 class TestNotableEvent:
-    def test_started_records_quest_started_notable_event(
-        self, tmp_path: Path
-    ) -> None:
+    def test_started_records_quest_started_notable_event(self, tmp_path: Path) -> None:
         svc, bus = _make_service_with_events(tmp_path)
         # Activate a tracking session so _record_notable_event writes a row.
         bus.publish(EVENT_SESSION_STARTED, {"session_id": "sess-c5"})
@@ -192,8 +190,7 @@ class TestNotableEvent:
         svc.start_quest_from_mission("Paneleon Hunter (repeatable)")
 
         row = svc._conn.execute(
-            "SELECT session_id, event_type, mob_or_item, value_ped "
-            "FROM notable_events"
+            "SELECT session_id, event_type, mob_or_item, value_ped FROM notable_events"
         ).fetchall()
         assert len(row) == 1, row
         session_id, event_type, mob_or_item, value_ped = row[0]

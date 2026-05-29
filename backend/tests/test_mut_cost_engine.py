@@ -5,11 +5,6 @@ mutation campaign were able to change without detection. Each test exercises
 the exact mutated line and asserts the precise behaviour the mutation breaks.
 """
 
-import math
-
-import pytest
-
-from backend.services import cost_engine
 from backend.services.cost_engine import (
     cost_per_shot,
     cost_per_shot_from_props,
@@ -18,7 +13,6 @@ from backend.services.cost_engine import (
     is_limited,
     weapon_total_damage,
 )
-
 
 # ── is_limited: the "name" default must be "" (a string), never None ─────────
 
@@ -68,6 +62,7 @@ def test_get_weapon_damage_profile_forwards_amp():
     weapon = {"name": "X", "damage": {"impact": 30.0}}
     amp = {"name": "Amp", "damage": {"impact": 10.0}}
     profile = get_weapon_damage_profile(weapon, amp=amp)
+    assert profile is not None
     # base 30 + amp 10 (under the 15 cap) = 40
     assert profile["totalDamage"] == 40.0
     assert profile["damageMin"] == 20.0
@@ -82,6 +77,7 @@ def test_get_weapon_damage_profile_forwards_damage_enhancers():
     """
     weapon = {"name": "X", "damage": {"impact": 20.0}}
     profile = get_weapon_damage_profile(weapon, damage_enhancers=2)
+    assert profile is not None
     # 20 * (1 + 2*0.1) = 24
     assert profile["totalDamage"] == 24.0
     assert profile["damageMax"] == 24.0
@@ -319,9 +315,7 @@ def test_from_props_default_damage_enhancers_is_zero():
 
 def test_from_props_forwards_amp_entity():
     """The amp entity must be read from props["amp_entity"], not dropped/renamed."""
-    props = _props(
-        amp_entity={"name": "A", "economy": {"decay": 1.0, "ammo_burn": 0}}
-    )
+    props = _props(amp_entity={"name": "A", "economy": {"decay": 1.0, "ammo_burn": 0}})
     result = cost_per_shot_from_props(props)
     components = [ln["component"] for ln in result["costBreakdown"]]
     assert "Amp decay" in components
@@ -341,9 +335,7 @@ def test_from_props_forwards_scope_entity():
 
 def test_from_props_forwards_absorber_entity():
     """The absorber entity must be read from props["absorber_entity"]."""
-    props = _props(
-        absorber_entity={"name": "Abs", "economy": {"absorption": 0.25}}
-    )
+    props = _props(absorber_entity={"name": "Abs", "economy": {"absorption": 0.25}})
     result = cost_per_shot_from_props(props)
     components = [ln["component"] for ln in result["costBreakdown"]]
     assert "Absorber decay" in components
@@ -389,9 +381,7 @@ def test_from_props_amp_markup_value_divided_by_100():
 
 def test_from_props_amp_markup_default_is_tt():
     """Missing amp_markup defaults to 100 -> 1.0 multiplier."""
-    props = _props(
-        amp_entity={"name": "A", "economy": {"decay": 2.0, "ammo_burn": 0}}
-    )
+    props = _props(amp_entity={"name": "A", "economy": {"decay": 2.0, "ammo_burn": 0}})
     result = cost_per_shot_from_props(props)
     amp_line = next(
         ln for ln in result["costBreakdown"] if ln["component"] == "Amp decay"
@@ -442,9 +432,7 @@ def test_from_props_absorber_markup_value_divided_by_100():
 
 def test_from_props_absorber_markup_default_is_tt():
     """Missing absorber_markup defaults to 100 -> 1.0 multiplier."""
-    props = _props(
-        absorber_entity={"name": "Abs", "economy": {"absorption": 0.5}}
-    )
+    props = _props(absorber_entity={"name": "Abs", "economy": {"absorption": 0.5}})
     result = cost_per_shot_from_props(props)
     abs_line = next(
         ln for ln in result["costBreakdown"] if ln["component"] == "Absorber decay"

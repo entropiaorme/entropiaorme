@@ -459,9 +459,7 @@ def test_global_exactly_five_seconds_does_not_correlate():
     tracker.start_session()
     t0 = datetime(2025, 1, 1, 12, 0, 0)
     _make_kill(bus, t0)
-    _fire_global(
-        bus, creature="Atrox", value=5.0, timestamp=t0 + timedelta(seconds=5)
-    )
+    _fire_global(bus, creature="Atrox", value=5.0, timestamp=t0 + timedelta(seconds=5))
     kill = tracker.session.kills[-1]
     assert kill.is_global is False
     # The notable event still persists, uncorrelated.
@@ -492,9 +490,7 @@ def test_global_within_window_correlates():
     tracker.start_session()
     t0 = datetime(2025, 1, 1, 12, 0, 0)
     _make_kill(bus, t0)
-    _fire_global(
-        bus, creature="Atrox", value=5.0, timestamp=t0 + timedelta(seconds=2)
-    )
+    _fire_global(bus, creature="Atrox", value=5.0, timestamp=t0 + timedelta(seconds=2))
     kill = tracker.session.kills[-1]
     assert kill.is_global is True
     rows = _notable_rows(db)
@@ -553,7 +549,7 @@ def test_global_correlated_info_log_message_rendered(caplog):
     # format string raises here, and a mangled format text changes the result.
     rendered = record.getMessage()
     assert rendered == (
-        "Global/HoF correlated: global_kill 42.00 PED → kill %s" % kill.id[:8]
+        f"Global/HoF correlated: global_kill 42.00 PED → kill {kill.id[:8]}"
     )
     # mut_85 ([:9]) - exactly the 8-char prefix must be present, not 9.
     assert kill.id[:8] in rendered
@@ -570,9 +566,7 @@ def test_global_uncorrelated_warning_log_message_rendered(caplog):
     t0 = datetime(2025, 1, 1, 12, 0, 0)
     # No kill in window → the warning branch fires.
     with caplog.at_level(logging.WARNING, logger=TRACKER_LOGGER):
-        _fire_global(
-            bus, type="global_kill", creature="Atrox", value=7.0, timestamp=t0
-        )
+        _fire_global(bus, type="global_kill", creature="Atrox", value=7.0, timestamp=t0)
     recs = [
         r
         for r in caplog.records

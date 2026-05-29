@@ -26,7 +26,6 @@ from backend.core.events import (
     EVENT_LOOT_GROUP,
     EVENT_SESSION_STOPPED,
 )
-from backend.tracking.schema import init_tracking_tables
 from backend.tracking.tracker import HuntTracker
 
 # The six event types the tracker subscribes to for the lifetime of a session.
@@ -51,7 +50,9 @@ def _make_tracker(**kwargs):
 def _fire_kill(bus, *, name="Shrapnel", value=0.50):
     """Drive one shot + one loot group → exactly one Kill record."""
     now = datetime.now(tz=None)
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+    )
     bus.publish(
         EVENT_LOOT_GROUP,
         {

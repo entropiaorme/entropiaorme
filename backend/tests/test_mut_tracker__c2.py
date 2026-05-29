@@ -18,7 +18,6 @@ branch of the method is exercised deterministically:
 These all import the real backend.tracking.tracker module under test.
 """
 
-import logging
 import sqlite3
 
 import pytest
@@ -26,7 +25,6 @@ import pytest
 from backend.core.event_bus import EventBus
 from backend.tracking import tracker as tracker_mod
 from backend.tracking.tracker import HuntTracker
-
 
 # --------------------------------------------------------------------------
 # Construction helpers
@@ -50,7 +48,9 @@ _ENH_WEAPON_PROPS = {
 _ENH_WEAPON_COST_PED = 0.015
 
 
-def _make_tracker(*, trifecta=False, equipment_cost=0.0, cost_lookup=None, profile_lookup=None):
+def _make_tracker(
+    *, trifecta=False, equipment_cost=0.0, cost_lookup=None, profile_lookup=None
+):
     db = sqlite3.connect(":memory:", check_same_thread=False)
     bus = EventBus()
     tracker = HuntTracker(

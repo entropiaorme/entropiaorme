@@ -79,9 +79,7 @@ def test_two_pairs_accumulate_totals_and_averages():
       - mut_48  'total_abs_pct +=' -> '='       (avg_abs_pct 14.2857...)
       - mut_72  'avg = total / count' -> 'total * count' (avg_abs_pct 132.14...)
     """
-    result = summarize_level_drift(
-        {"a": 10.0, "b": 10.0}, {"a": 16.0, "b": 14.0}
-    )
+    result = summarize_level_drift({"a": 10.0, "b": 10.0}, {"a": 16.0, "b": 14.0})
     assert result is not None
     assert result["compared_count"] == 2
     assert result["total_abs_diff"] == pytest.approx(10.0)
@@ -102,9 +100,7 @@ def test_strict_tie_break_keeps_first_sorted_worst():
     max), so worst_signed_diff == +5.0. mut_50 relaxes '>' to '>=', which lets
     'b' overwrite on the tie, flipping worst to 'b' (worst_signed_diff == -5.0).
     """
-    result = summarize_level_drift(
-        {"a": 10.0, "b": 30.0}, {"a": 15.0, "b": 25.0}
-    )
+    result = summarize_level_drift({"a": 10.0, "b": 30.0}, {"a": 15.0, "b": 25.0})
     assert result is not None
     assert result["worst_abs_diff"] == pytest.approx(5.0)
     assert result["worst_name"] == "a"

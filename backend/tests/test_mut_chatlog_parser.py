@@ -7,11 +7,10 @@ the corresponding mutation would break.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 import pytest
-
-import re
 
 from backend.services.chatlog_parser import (
     EventType,
@@ -178,8 +177,7 @@ def test_parse_global_hof_item_timestamp_and_raw_line_preserved():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_parse_system_loot_timestamp_and_raw_line_preserved():
     raw = (
-        "2026-03-24 14:31:00 [System] [] You received Animal Muscle Oil "
-        "Value: 0.12 PED"
+        "2026-03-24 14:31:00 [System] [] You received Animal Muscle Oil Value: 0.12 PED"
     )
     event = parse_line(raw)
     assert event is not None
@@ -217,8 +215,7 @@ def test_message_preserves_internal_bracket_separator_in_mission_name():
     # -> return full content (with the "[System] []" prefix) -> prefix check
     # fails -> None. Mutant 6 (rsplit) keeps only the tail "Hunt)" -> None.
     line = (
-        "2026-03-24 17:31:58 [System] [] Mission completed "
-        "(Paneleon [Repeatable] Hunt)"
+        "2026-03-24 17:31:58 [System] [] Mission completed (Paneleon [Repeatable] Hunt)"
     )
     event = parse_line(line)
     assert event is not None

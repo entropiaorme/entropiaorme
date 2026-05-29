@@ -31,7 +31,6 @@ from backend.core.events import (
 from backend.tracking.schema import init_tracking_tables
 from backend.tracking.tracker import HuntTracker, _DamageEnhancerState
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -187,8 +186,7 @@ def test_constructor_loot_blacklist_is_retained_and_filters_loot():
     )
     # Forbidden Ore is blacklisted -> only Animal Oil persisted.
     names = [
-        r[0]
-        for r in db.execute("SELECT item_name FROM kill_loot_items").fetchall()
+        r[0] for r in db.execute("SELECT item_name FROM kill_loot_items").fetchall()
     ]
     assert "Forbidden Ore" not in names
     assert names == ["Animal Oil"]
@@ -377,7 +375,6 @@ def test_trifecta_inference_miss_perf_counter_is_numeric(caplog):
         # so every damage shot fails attribution (an inference miss).
     )
     tracker.start_session()
-    logger = logging.getLogger("backend.tracking.tracker")
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
         tracker._on_combat(
             {"type": "damage_dealt", "amount": 7.0, "timestamp": datetime.now(tz=None)}
@@ -393,7 +390,6 @@ def test_combat_cost_lookup_perf_counter_is_numeric(caplog):
     tracker.start_session()
     # Equip a hotbar tool so the cost-lookup branch (tool is not None) runs.
     tracker._on_tool_changed({"tool_name": "Korss H400"})
-    logger = logging.getLogger("backend.tracking.tracker")
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
         tracker._on_combat(
             {"type": "damage_dealt", "amount": 7.0, "timestamp": datetime.now(tz=None)}
@@ -436,7 +432,6 @@ def test_perf_window_flush_reports_exact_counter_values(caplog):
     tracker.start_session()
     # Pretend the perf window opened > 15s ago so the next shot flushes the log.
     tracker._perf_window_started = _monotonic() - 100.0
-    logger = logging.getLogger("backend.tracking.tracker")
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
         # One unknown-tool shot: shots=1, unknown=1, inference_misses=0.
         tracker._on_combat(
@@ -469,7 +464,6 @@ def test_perf_window_flush_reports_inference_miss_and_cost_lookup(caplog):
     # so no cost lookup runs. To exercise cost-lookup too, prime a last tool.
     tracker._last_offensive_tool_name = "Korss H400"
     tracker._perf_window_started = _monotonic() - 100.0
-    logger = logging.getLogger("backend.tracking.tracker")
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
         # damage_dealt in trifecta with no profiles -> attribution miss.
         tracker._on_combat(
@@ -491,7 +485,6 @@ def test_perf_window_flush_cost_lookup_known_tool(caplog):
     tracker.start_session()
     tracker._on_tool_changed({"tool_name": "Korss H400"})
     tracker._perf_window_started = _monotonic() - 100.0
-    logger = logging.getLogger("backend.tracking.tracker")
     with caplog.at_level(logging.DEBUG, logger="backend.tracking.tracker"):
         tracker._on_combat(
             {"type": "damage_dealt", "amount": 7.0, "timestamp": datetime.now(tz=None)}

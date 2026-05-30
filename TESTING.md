@@ -164,7 +164,7 @@ Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
 - **Pre-commit hooks**: `pre-commit run --all-files`, validating the hook configuration the local development loop uses (see "Local checks" below).
-- **Golden ratification** (pull requests only): fails when a commit moves a golden file without the `test: regenerate goldens` marker, so a regression cannot be ratified silently (see "Goldens regeneration" above).
+- **Golden ratification** (pull requests only): fails when a commit moves a golden file without both the `test: regenerate goldens` marker and a recorded independent `ratification-sound` verdict for the changed sets, so a regression can be ratified neither unconsciously nor by its own author (see "Goldens regeneration" above).
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
@@ -212,6 +212,25 @@ Regenerate with the harness flag, which surfaces the diff before writing so a ra
 
 Narrow `<selector>` to the affected scenarios or modules. The `pytest-regressions` goldens regenerate with that library's `--force-regen` instead; each suite documents its own flow (`backend/testing/CONFORMANCE.md`, `backend/testing/CONSISTENCY.md`, `backend/testing/AUTHORING.md`).
 
+### Independent ratification (the review step)
+
+Regenerating a golden makes you, at once, the author of the change, the regenerator of the expected output, and its would-be approver. That is a structural conflict of interest: the honest tell that you owe a second opinion is that you are reaching to change what *correct* means rather than to make the code meet it. So a golden move is not yours to approve alone.
+
+Before committing any expected-output change (a regenerated golden, or the first pin of a newly emitted one), have an independent reviewer (someone who did not author the change) examine it against the code change and your rationale, and judge the one question the marker cannot: is this delta a genuine intended behaviour change, or a regression being laundered into the goldens as the new "correct"? The first-pin case is the most dangerous, because no prior golden means no assertion fails, so an over-emission can be pinned as "expected" and pass silently; the review scrutinises the absolute output, not just a diff.
+
+The review records a fenced verdict block you commit verbatim (the block must be fenced; the guard reads only the fenced block, never any `VERDICT:` line that happens to appear in the report's surrounding prose):
+
+```text
+ORACLE-RATIFICATION
+range: <commit-range>
+goldens: <comma-separated sets reviewed>
+VERDICT: ratification-sound | regression-suspected | needs-user-judgement
+```
+
+Commit that report to `backend/testing/ratifications/<slug>.md` alongside the golden change, naming the changed sets in its `goldens:` field. It lives deliberately *outside* any `expected/` directory, so the guard never treats the report as a golden and demands a ratification of the ratification. Proceed only on `ratification-sound`; a `regression-suspected` or `needs-user-judgement` verdict means fix the code (or settle the product question) rather than pin the diff.
+
+A committed report is required rather than a bare commit trailer on purpose: forging a one-line trailer is free, whereas fabricating a plausible adversarial report that cites real diff elements is a high bar and is reviewer-visible (CodeRabbit, a human) where a trailer is not.
+
 ### Commit-message convention
 
 A regeneration commit takes the subject prefix `test: regenerate goldens` and lists the regenerated sets in the body, so a reviewer sees at a glance which goldens moved and why:
@@ -230,9 +249,14 @@ The regeneration may sit in its own commit alongside the behaviour-change commit
 
 ### Ratification guard
 
-The marker is not merely a courtesy to reviewers: it is enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate rather than accidental, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
+Neither the marker nor the independent verdict is merely a courtesy to reviewers: both are enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked, unscrutinised golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate *and* independently signed off, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
 
-The guard inspects the pull request's diff against its base. If any commit modifies a golden file (anything under a `backend/tests` `expected/` directory: the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens, the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix) without the `test: regenerate goldens` subject prefix on the relevant commit(s), the job fails and surfaces the golden diff for review. A change that carries the marker passes; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
+The guard inspects the pull request's diff against its base. A golden file is anything under a `backend/tests` `expected/` directory (the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens), the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix. If any commit modifies a golden, the job requires **both**:
+
+- the `test: regenerate goldens` subject prefix on the relevant commit(s); and
+- a ratification artefact (`backend/testing/ratifications/<slug>.md`) added or modified **in the same PR range**, carrying a fenced `ORACLE-RATIFICATION` block whose `VERDICT` is `ratification-sound` and whose `goldens:` field names every changed set, and committed **no earlier than the last golden change in the range**.
+
+Three properties make the verdict hard to satisfy by accident. Tying the artefact to the range stops a sound verdict from a *prior* regeneration blessing a fresh golden change. The ordering requirement stops a verdict from an *earlier commit in the same range* blessing a golden edit made in a later commit (the verdict reviewed the earlier state, not the final one), so a same-range golden change after the report forces the report to be re-reviewed and re-committed. And the per-set `goldens:` check stops a verdict recorded for one set blessing another. A change missing any of these fails and surfaces the golden diff for review; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
 
 Run it locally before pushing a goldens change, against the staged / working-tree diff or an explicit range:
 
@@ -241,7 +265,9 @@ Run it locally before pushing a goldens change, against the staged / working-tre
 .venv/Scripts/python.exe -m backend.scripts.check_golden_ratification --range origin/main..HEAD
 ```
 
-Pass `--warn-only` to surface the diff without failing. The goldens diff is still reviewed on the pull request like any other change, where a golden that moved for the wrong reason is caught; the guard adds a mechanical backstop so an unmarked move cannot slip through unremarked.
+The staged / working-tree invocation is **marker-only and advisory**: before the commit exists there is no committed verdict for it to inspect, so it checks the marker and surfaces the diff, leaving the verdict requirement to the range-mode pull-request gate. Pass `--warn-only` to surface the diff without failing.
+
+What the guard *cannot* do is prove the independent review actually happened: it can only confirm a sound verdict artefact is present, parse it, and tie it to the range. That residual is closed not by CI but by the committed report being reviewer-visible (CodeRabbit, a human) and by the human merge to `main`. The guard is the mechanical backstop; the report and the review are the substance.
 
 ## Test layout
 

@@ -222,10 +222,20 @@ jobs:
           python-version: '3.12'
       # Fail when a commit modifies a committed golden (a scenario fingerprint /
       # DB-state snapshot, an HTTP-response or OpenAPI snapshot, a consistency
-      # golden, or the coverage matrix) without the documented
-      # 'test: regenerate goldens' commit-message marker, so a regression cannot
-      # be silently ratified by regenerating the expected output. Pure stdlib +
-      # git, so no dependency install is needed.
+      # golden, or the coverage matrix) without BOTH the documented
+      # 'test: regenerate goldens' commit-message marker AND a recorded
+      # independent ratification verdict. The marker proves the regeneration was
+      # conscious; the verdict supplies the correctness sign-off the marker
+      # cannot. The verdict is a report committed to
+      # backend/testing/ratifications/<slug>.md in this same PR range, carrying
+      # an 'ORACLE-RATIFICATION ... VERDICT: ratification-sound' block that names
+      # the changed sets, so an independent party (not the change's author)
+      # signed off and a stale verdict from a prior regeneration cannot bless a
+      # fresh golden change. Together this stops a regression being silently
+      # ratified by regenerating the expected output. CI can only presence-check
+      # and parse the verdict, not prove the review happened; that residual is
+      # closed by the report being reviewer-visible and by the human merge to
+      # main. Pure stdlib + git, so no dependency install is needed.
       - name: Guard golden ratification
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}

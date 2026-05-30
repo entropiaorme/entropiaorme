@@ -44,6 +44,7 @@ BEHAVIOUR: dict[str, str] = {
     "config_service": "Loads, validates, and persists the app settings overlay.",
     "cost_engine": "Per-shot weapon / amp / heal cost from the equipment catalogue.",
     "eu_window": "Locates the Entropia Universe window for screen capture.",
+    "event_stream": "Fans typed domain events from the bus out to SSE clients.",
     "game_data_store": "Read-only access to the bundled game-data tables.",
     "hotbar_listener": "Maps hotbar keystrokes to active-tool change events.",
     "local_ocr": "ONNX skill-panel OCR engine, screen grab, and orchestration.",
@@ -220,7 +221,9 @@ def render_matrix() -> str:
 
 def main() -> None:
     """Write the rendered matrix to ``backend/testing/COVERAGE.md``."""
-    OUTPUT.write_text(render_matrix(), encoding="utf-8")
+    # newline="\n" so a Windows regen writes LF directly, matching the repo's
+    # `*.md eol=lf` policy rather than emitting CRLF in text mode.
+    OUTPUT.write_text(render_matrix(), encoding="utf-8", newline="\n")
     print(f"Wrote {OUTPUT}")
 
 

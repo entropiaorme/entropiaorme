@@ -98,10 +98,13 @@ _MODULE_TIERS = {
     "test_consistency_codex_isolation_midpoint": "standard",
     "test_etag": "standard",  # boots the app lifespan via TestClient
     "test_openapi_drift": "fast",  # introspects app.openapi() at module load
+    "test_event_schema_drift": "fast",  # introspects the event union at module load
+    "test_event_stream": "fast",  # hub fan-out driven via asyncio.run; no lifespan
     "test_coverage_matrix_drift": "fast",  # renders the matrix from source files
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
+    "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE
     # Property and metamorphic suites that touch a db / filesystem / the app path.
     "test_codex_properties": "standard",  # now drives CodexService over a temp db
     "test_consistency_property": "standard",  # generated sequences through the watcher

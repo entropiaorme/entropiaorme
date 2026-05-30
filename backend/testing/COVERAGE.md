@@ -4,7 +4,7 @@ Every backend service mapped to the tests and scenarios that exercise its extern
 
 The mechanical gates are the source of truth for *how much* is covered: branch coverage (the floor in `pyproject.toml`, the published badge) and the nightly mutation score over the pure-logic core. This matrix is the human-readable layer on top: it shows *that* every service has at least one exercising test, and names the device/IO modules that are exempt from the coverage floor by design (they need a real display, capture device, or OS hook, so they are exercised through seams and fixtures rather than measured).
 
-Services: 24.
+Services: 25.
 
 | Service | Externally-observable behaviour | Covering tests | Held to account by |
 | --- | --- | --- | --- |
@@ -16,6 +16,7 @@ Services: 24.
 | `config_service` | Loads, validates, and persists the app settings overlay. | `test_config_service.py`<br>`test_config_service_properties.py` | branch coverage |
 | `cost_engine` | Per-shot weapon / amp / heal cost from the equipment catalogue. | `test_cost_engine.py`<br>`test_cost_engine_properties.py`<br>`test_mut_cost_engine.py`<br>`test_trifecta_service_properties.py` | branch coverage + mutation |
 | `eu_window` | Locates the Entropia Universe window for screen capture. | `test_eu_window_properties.py` | device / IO (exempt from the coverage floor) |
+| `event_stream` | Fans typed domain events from the bus out to SSE clients. | `test_event_stream.py` | branch coverage |
 | `game_data_store` | Read-only access to the bundled game-data tables. | `test_game_data_store.py`<br>`test_game_data_store_properties.py`<br>`test_mut_codex_service__c0.py`<br>`test_mut_codex_service__c1.py` | branch coverage |
 | `hotbar_listener` | Maps hotbar keystrokes to active-tool change events. | `e2e/test_hotbar_slot_use.py`<br>`e2e/test_input_listening_minimisation.py`<br>`test_hotbar_listener.py` | device / IO (exempt from the coverage floor) |
 | `local_ocr` | ONNX skill-panel OCR engine, screen grab, and orchestration. | `test_local_ocr_postprocess.py`<br>`test_repair_ocr_properties.py` | device / IO (exempt from the coverage floor) |

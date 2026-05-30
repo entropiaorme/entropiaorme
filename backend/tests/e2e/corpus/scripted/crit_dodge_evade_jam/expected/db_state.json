@@ -34,13 +34,13 @@
       "mob_species": "",
       "session_id": "<UUID_1>",
       "shots_fired": 7,
-      "timestamp": "<TS_7>"
+      "timestamp": "<TS_13>"
     }
   ],
   "ledger_entries": [
     {
       "amount": 0.054,
-      "date": "<TS_8>",
+      "date": "<TS_14>",
       "description": "Shrapnel Conversion",
       "id": "<UUID_3>",
       "tag": "convert",
@@ -51,11 +51,11 @@
   "tracking_sessions": [
     {
       "dangling_cost": 0.0,
-      "ended_at": "<TS_5>",
+      "ended_at": "<TS_11>",
       "heal_cost": 0.0,
       "id": "<UUID_1>",
       "is_active": 0,
-      "started_at": "<TS_6>"
+      "started_at": "<TS_12>"
     }
   ]
 }

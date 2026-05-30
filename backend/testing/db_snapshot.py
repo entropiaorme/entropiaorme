@@ -149,7 +149,9 @@ def serialize(snapshot: dict[str, Any]) -> str:
 def write(snapshot: dict[str, Any], path: Path) -> None:
     """Persist the snapshot to ``path`` (parents created on demand)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(serialize(snapshot), encoding="utf-8")
+    # newline="\n" so a Windows regen writes LF directly, matching the repo's
+    # `*.json eol=lf` policy rather than emitting CRLF in text mode.
+    path.write_text(serialize(snapshot), encoding="utf-8", newline="\n")
 
 
 def _fetch_rows(db: sqlite3.Connection, spec: TableSpec) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 """FastAPI backend for EntropiaOrme — serves REST API to Svelte frontend."""
 
+import asyncio
 import contextlib
 import os
 import sys
@@ -119,6 +120,7 @@ from backend.routers import (
     codex,
     demo,
     equipment,
+    events,
     health,
     quests,
     recording,
@@ -134,6 +136,7 @@ from backend.services.cost_engine import (
     heal_cost_per_use,
     heal_reload_seconds,
 )
+from backend.services.event_stream import EventStreamHub
 from backend.services.game_data_store import GameDataStore
 from backend.services.hotbar_listener import HOTBAR_SLOT_KEYS, HotbarListener
 from backend.services.mob_lookup_service import MobLookupService
@@ -182,6 +185,13 @@ async def lifespan(app: FastAPI):
     mob_lookup_service = MobLookupService(game_data)
     config_service = ConfigService(data_dir)
     event_bus = EventBus()
+
+    # SSE fan-out hub: subscribes to the coarse domain topics on the bus and
+    # forwards their frames to GET /api/events streams. Bind it to the running
+    # uvicorn loop now (we are inside it) so the bus callback, which fires on the
+    # producer thread, can hop frames across the thread boundary.
+    event_stream_hub = EventStreamHub(event_bus)
+    event_stream_hub.bind_loop(asyncio.get_running_loop())
 
     def _equipment_profile_lookup(tool_name: str) -> dict | None:
         import json
@@ -391,6 +401,7 @@ async def lifespan(app: FastAPI):
         mob_lookup=mob_lookup_service,
         config_service=config_service,
         event_bus=event_bus,
+        event_stream_hub=event_stream_hub,
         tracker=tracker,
         chatlog_watcher=chatlog_watcher,
         skill_tracker=skill_tracker,
@@ -409,7 +420,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup. Abort only an in-flight recording; is_recording is true for both
+    # Cleanup. Detach the SSE hub from the bus first so a producer's final
+    # shutdown event cannot hop a frame onto the closing loop.
+    event_stream_hub.close()
+    # Abort only an in-flight recording; is_recording is true for both
     # the recording and finalising states, and aborting mid-finalise could
     # discard or corrupt the bundle being committed.
     if recording_controller.status().get("state") == "recording":
@@ -473,6 +487,7 @@ def create_app() -> FastAPI:
     app.include_router(quests.router, prefix="/api")
     app.include_router(demo.router, prefix="/api")
     app.include_router(recording.router, prefix="/api")
+    app.include_router(events.router, prefix="/api")
 
     return app
 

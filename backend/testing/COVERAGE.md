@@ -36,9 +36,8 @@ Services: 24.
 ## Mutation testing
 
 The services marked *branch coverage + mutation* are in the nightly mutation campaign's `paths_to_mutate` (the pure-logic core). The campaign is the effectiveness metric on top of branch coverage: it proves a test would notice if a line were wrong, not merely that the line ran. It runs nightly on Linux (the engine is POSIX-only) and publishes a score badge; it is not a per-PR gate.
-- Current aggregate score: **76.8%** across the campaign modules, with `skill_panel_parse` at **97.8%**; the ratcheting floor is 74.
+- Live score: the aggregate mutation score is published as the badge at the top of the README; the enforced floors (a ratcheting aggregate floor plus a per-module floor map) live in `.github/workflows/nightly.yml` and only ever rise. The campaign is POSIX-only, so the score is refreshed by the nightly Linux run, not computed when this matrix is generated.
 - North-star: **>= 90% aggregate**, reached by killing surviving mutants and widening `paths_to_mutate` to any further pure-logic service the matrix surfaces. The device / IO and HTTP-glue modules stay out of the campaign: they carry little mutation signal and would slow it for no gain.
-- Prime expansion candidate: `chatlog_parser` (pure line parsing, already exercised by `test_chatlog_parser` and its property suite). It is held out of `paths_to_mutate` until the next campaign run can verify its score against the floor, since the engine is POSIX-only and the run is out of this platform's reach; adding an unverified target could drop the aggregate below the gate.
 
 ## Notes
 

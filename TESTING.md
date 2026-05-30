@@ -12,7 +12,7 @@ The test tooling is installed from `backend/requirements-dev.txt`. From the repo
 
 The Linux / macOS invocation is `.venv/bin/python -m pytest -q`.
 
-Expected: 381 tests pass in roughly 3 seconds. The suite is deterministic; no flaky tests, no network access, no on-disk state outside `tmp_path` fixtures. Test order is randomised (via `pytest-randomly`) to surface any accidental coupling between tests.
+Expected: the suite passes deterministically, with no flaky tests, no network access, and no on-disk state outside `tmp_path` fixtures. Test order is randomised (via `pytest-randomly`) to surface any accidental coupling between tests. For the exact current test count, collect without running: `.venv/Scripts/python.exe -m pytest --collect-only -q`.
 
 ### Runtime tiers
 
@@ -20,8 +20,8 @@ Tests are tagged by runtime tier so the right subset runs in the right place:
 
 | Tier | Covers | Command |
 | ---- | ------ | ------- |
-| `fast` | Pure-logic, in-memory, sub-second (162 tests) | `pytest -m fast` |
-| `standard` | Database / filesystem / in-process state (219 tests) | `pytest -m standard` |
+| `fast` | Pure-logic, in-memory, sub-second | `pytest -m fast` |
+| `standard` | Database / filesystem / in-process state | `pytest -m standard` |
 | `full` | Device / screen-capture / slow checks (none yet) | `pytest -m full` |
 
 Each module's tier is set in `backend/tests/conftest.py`; a module with no entry defaults to `standard`. The tier is selected positively (`pytest -m "fast or standard"`), not by negative exclusion, so a test that lands without a marker stays out of the per-PR run until it is deliberately classified rather than silently joining the gate.
@@ -61,7 +61,7 @@ Branch coverage is measured with `pytest-cov` (configuration under `[tool.covera
 .venv/Scripts/python.exe -m pytest -m "not full" --cov=backend --cov-branch --cov-report=term-missing
 ```
 
-The run must hold a total branch-coverage floor (currently 44%). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
+The run must hold a total branch-coverage floor (the `fail_under` value in `pyproject.toml`; the live measured figure is the coverage badge at the top of the README). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
 
 The API contract suite contributes to coverage as well, since it exercises the HTTP router surface. It runs in deterministic mode against a pinned generator, so its contribution is reproducible; in CI it runs as a separate step whose coverage is accumulated into the same report (`coverage` with `--cov-append`), and both coverage passes pin the test order so the measured figure does not vary run to run. The single local command above already covers it (the contract tier is part of `not full`).
 
@@ -139,9 +139,9 @@ The suite covers the read surface; mutating endpoints need request fixtures and 
 
 Coverage proves a line ran; it cannot prove a test would notice if that line were wrong. [Mutation testing](https://mutmut.readthedocs.io) closes that gap: [mutmut](https://github.com/boxed/mutmut) makes small changes to the code (a `<` becomes `<=`, a `+` a `-`, a constant shifts) and re-runs the tests against each one. A mutant the tests catch is *killed*; one that slips through *survives* and marks a weak spot. The **mutation score** (the share of mutants killed) is the suite's effectiveness metric, and the headline quality signal for the pure-logic core.
 
-The campaign targets that core (`cost_engine`, `character_calc`, `codex_categories`, `tt_value_curve`, `scan_drift`, `loot_filter`, `tool_inference`); device, IO, and router glue carry little mutation value. The configuration lives in `[tool.mutmut]` in `pyproject.toml`. Because a campaign is slow (it re-runs tests once per mutant), it runs nightly and on demand rather than on every pull request (`.github/workflows/nightly.yml`); the engine has no native Windows support, so it runs on a Linux runner, which the pure-logic targets are indifferent to.
+The campaign targets that pure-logic core; the exact target list is `[tool.mutmut] paths_to_mutate` in `pyproject.toml`, and the service coverage matrix (`backend/testing/COVERAGE.md`) marks every module the campaign covers. Device, IO, and router glue carry little mutation value, so they stay out. Because a campaign is slow (it re-runs tests once per mutant), it runs nightly and on demand rather than on every pull request (`.github/workflows/nightly.yml`); the engine has no native Windows support, so it runs on a Linux runner, which the pure-logic targets are indifferent to.
 
-The current baseline is **75.1%** across the seven modules, measured under the derandomised profile so it is reproducible (floor **72%**, with headroom to ratchet upward). `codex_categories` is strongest at 95%; `character_calc` carries most of the survivors (its profession-path heuristics admit many behaviour-preserving mutants). Run a campaign on a POSIX environment with:
+The campaign runs under the derandomised profile so the score is reproducible. The live aggregate score is the mutation badge at the top of the README; the enforced floors (a ratcheting aggregate floor plus a per-module floor map, each held a few points below the measured score) live in `.github/workflows/nightly.yml` and only ever rise. Branchy heuristic modules admit more behaviour-preserving mutants, so they carry most of the survivors at any given time. Run a campaign on a POSIX environment with:
 
 ```bash
 HYPOTHESIS_PROFILE=mutation mutmut run   # run the campaign (derandomised, so the score is reproducible)
@@ -159,7 +159,7 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, parallelised with `pytest-xdist` (`-n auto --dist=loadfile`). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, single-worker, rather than on both legs).
+- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run serially (xdist is a local-only accelerator, see "Parallelism"; on the few-core hosted runner the per-worker re-imports would slow the run rather than speed it). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, single-worker, rather than on both legs).
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
@@ -169,7 +169,7 @@ Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
 
-A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request) and runs the mutation campaign, publishing the mutation score and refreshing the coverage figure as the badges at the top of the README.
+A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request) and runs the mutation campaign, publishing the mutation score as a badge at the top of the README. (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
 
 ## Local checks (pre-commit)
 

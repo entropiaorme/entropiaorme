@@ -74,3 +74,64 @@ class TrackingSession:
     end_time: datetime | None = None
     kills: list[Kill] = field(default_factory=list)
     dangling_cost: float = 0.0  # unresolved shots at session end
+
+
+@dataclass(frozen=True)
+class ActiveSessionView:
+    """Immutable view of the active-session readout.
+
+    Computed by ``HuntTracker.snapshot`` under the tracker's own ownership and
+    returned as a detached value, so a caller on the web thread never iterates
+    the live ``kills`` list or the in-progress accumulator while the chat-log
+    thread mutates them. Maps onto a Rust ``struct`` returned from the tracking
+    actor's snapshot query: owned data out, no shared reference in.
+
+    The notable-event feed is carried as raw rows rather than formatted
+    entries: the presentation mapping (category/label/description) lives in the
+    HTTP layer, so the owner stays free of wire-format concerns.
+    """
+
+    session_id: str
+    started_at: str
+    kill_count: int
+    elapsed: int
+    cost: float
+    returns: float
+    pes: float
+    net: float
+    return_rate: float
+    damage_dealt_total: float
+    weapon_damage_dealt: float
+    weapon_cost: float
+    shots_fired_total: int
+    critical_hits_total: int
+    max_damage: float
+    globals_count: int
+    hofs_count: int
+    latest_kill_loot: float | None
+    multiplier_last: float | None
+    multiplier_avg: float | None
+    multiplier_max: float | None
+    multiplier_history: tuple[float, ...]
+    cumulative_net_history: tuple[float, ...]
+    current_mob: str | None
+    mob_source: str | None
+    mob_entry_mode: str
+    notable_event_rows: tuple[tuple[str, str, float, float | None], ...]
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TrackingReadout:
+    """Immutable view of the whole tracking readout the owner can supply.
+
+    ``active`` is ``None`` when no session is running; ``current_tool`` (the
+    detected active weapon) is meaningful in both states. The HTTP layer merges
+    configuration- and runtime-derived fields (attribution mode, the repair-OCR
+    flag, whether the hotbar listener is running) around this owned value to
+    build the wire response, since those are not the tracker's to own.
+    """
+
+    is_tracking: bool
+    current_tool: str | None
+    active: ActiveSessionView | None

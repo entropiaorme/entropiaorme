@@ -93,9 +93,18 @@ export function startEventRelay(): () => void {
 
 	stream.onopen = () => {
 		// Hydrate on (re)connect: prompt every window to re-read its current
-		// state through the existing GETs, so an EventSource auto-reconnect
-		// cannot leave a window showing stale data.
+		// state, so an EventSource auto-reconnect cannot leave a window showing
+		// stale data. The legacy lifecycle event drives the GET-based consumers
+		// (the dashboard's existing listener, the overlays); a payload-less typed
+		// frame on each forwarded topic drives topic-aware consumers (the tracking
+		// store) the same way. That makes the typed topic a complete subscription
+		// surface: a reconnect re-reads through it too, never leaving a typed
+		// subscriber stale, and a payload-less frame reads as "re-hydrate" rather
+		// than as an idle session.
 		void emit(TRACKING_STATE_CHANGED_EVENT, {});
+		for (const topic of FORWARDED_TOPICS) {
+			void emit(toTauriEventName(topic), {});
+		}
 	};
 	for (const topic of FORWARDED_TOPICS) {
 		stream.addEventListener(topic, (event) => {

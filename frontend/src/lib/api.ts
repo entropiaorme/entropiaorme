@@ -510,6 +510,31 @@ export async function getTrackingLive(): Promise<TrackingLive> {
 	return request(demoPath('/tracking/live'));
 }
 
+/**
+ * The consolidated tracking readout: one hydration-only endpoint that unions the
+ * legacy status, live, and recent-events shapes (the polled trio it replaces).
+ * The dashboard reads its render shape from here and re-reads it on a backend
+ * tracking event, rather than polling the three endpoints.
+ *
+ * Shape is the status superset (snake `session_id` / `started_at` / `kill_count`,
+ * camelCase headline numbers, the shared config fields) plus the live-only
+ * `elapsed` / `net` / `currentTool` / `trifectaAttribution`, the `recentEvents`
+ * activity feed, and a `warnings` sibling array. Active-only fields are absent
+ * when idle, where `recentEvents` is `[]` (the feed clears on idle).
+ */
+export interface TrackingSnapshot extends TrackingStatus {
+	elapsed?: number;
+	net?: number;
+	currentTool?: string | null;
+	trifectaAttribution?: TrackingLive['trifectaAttribution'];
+	recentEvents?: RecentEvent[];
+	warnings?: { type: 'warning'; description: string; value: number }[];
+}
+
+export async function getTrackingSnapshot(): Promise<TrackingSnapshot> {
+	return request(demoPath('/tracking/snapshot'));
+}
+
 export async function releaseMob(): Promise<{ released: string | null }> {
 	return request('/tracking/release-mob', { method: 'POST' });
 }

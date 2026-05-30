@@ -274,6 +274,12 @@ def test_hp_optimizer_runs_over_calibrated_skills(app_db, monkeypatch):
     result = character.get_hp_optimizer()
 
     assert isinstance(result, dict)
+    # Health is the only calibrated skill (level 100 -> HP 80); Anatomy is a
+    # regular skill at level 0, so it ranks alone in skills with no attributes.
+    assert result["currentHp"] == pytest.approx(80.0, abs=1e-2)
+    assert [s["name"] for s in result["skills"]] == ["Anatomy"]
+    assert result["skills"][0]["levelsPerHp"] == pytest.approx(0.1, abs=1e-3)
+    assert result["attributes"] == []
 
 
 # ── Prospect forecast (drives the sample + projection machinery) ──────────────
@@ -332,8 +338,8 @@ def test_prospect_options_list_observed_slices(app_db, monkeypatch):
 
 
 def test_prospect_high_target_exercises_the_search(app_db, monkeypatch):
-    """A target well above the current level forces the doubling/bisection search
-    (and a long-extrapolation warning), exercising the iterative projection."""
+    """A target above the current level drives the doubling/bisection search,
+    exercising the iterative projection and pinning the forecast it converges on."""
     _seed_calibration(app_db, "Handgun", 50.0)
     monkeypatch.setattr(
         character, "_load_prospect_sessions", lambda _db: list(_PROSPECT_SESSIONS)
@@ -349,4 +355,13 @@ def test_prospect_high_target_exercises_the_search(app_db, monkeypatch):
     )
 
     assert result["currentLevel"] == 0.5
-    assert "projectedCycledPed" in result
+    # Reaching Laser Pistoleer level 1.0 from 0.5 needs only ~1.2 PED of cycling
+    # with this sample, so the bisection converges well inside the observed
+    # sample (200 PED) and emits no long-extrapolation warning. Pin the
+    # converged forecast so a mutant breaking the search or the hours/rows
+    # derivation cannot survive behind a key-existence check.
+    assert result["projectedCycledPed"] == pytest.approx(1.2, abs=1e-2)
+    assert result["projectedHours"] == pytest.approx(0.01, abs=1e-3)
+    assert result["projectedHours"] > 0
+    assert result["rows"]  # per-skill projection rows
+    assert "Long extrapolation" not in " ".join(result["warnings"])

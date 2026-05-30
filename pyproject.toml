@@ -43,6 +43,13 @@ markers = [
     "standard: db / filesystem / in-process-stateful tests (run on every PR)",
     "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
     "contract: schemathesis API contract tests (run once, on the coverage leg)",
+    # Serial-only escape hatch for parallel runs. The PR legs distribute with
+    # --dist=loadfile, which keeps each file on one worker, so a test only needs
+    # this if it cannot run concurrently with tests in OTHER files (binds a fixed
+    # OS port, mutates a process-wide global another file reads). No test carries
+    # it today (see backend/testing/TESTING.md "Parallelism and serial-only
+    # tests"); it is registered so the convention exists when one does.
+    "no_xdist: must not run concurrently with tests in other files; pinned onto a single worker under --dist=loadgroup",
 ]
 
 [tool.coverage.run]
@@ -83,12 +90,16 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",
 ]
-# Floor set 3 points below the measured branch coverage (47%) of the
-# testable surface, leaving ratchet headroom and avoiding a day-one red. The
-# router layer and main.py sit in the denominator uncovered for now; as their
-# tests land, this figure climbs and the floor is tightened to track it.
+# Floor set ~3 points below the measured branch coverage, leaving ratchet
+# headroom and avoiding a brittle zero-margin gate. The HTTP read/write
+# surface, the tracker cost-attribution paths, and the harness modules are now
+# exercised end to end (the seeded surface and mutation walks, the weapon
+# cost-attribution integration, and unit suites across the services and harness
+# helpers), lifting measured branch coverage to ~90%. The residual is the
+# device/IO glue (already exempt) plus main.py's lifespan wiring; as that lands
+# the figure climbs and the floor is tightened to track it.
 # Never lower a landed floor to make a red gate pass.
-fail_under = 44
+fail_under = 87
 
 [tool.mypy]
 python_version = "3.11"
@@ -162,6 +173,30 @@ paths_to_mutate = [
     "backend/services/scan_drift.py",
     "backend/tracking/loot_filter.py",
     "backend/tracking/tool_inference.py",
+    # Pure skill-panel OCR parsing (name / level / bar-fill / fuzzy resolution /
+    # cell slicing / PNG decode), extracted from local_ocr so the device and IO
+    # glue (the ONNX engine, the screen grab, the geometry and vocab loaders)
+    # stays out of the campaign. The repair cost parse is a @staticmethod, which
+    # mutmut skips, so it is pinned by exhaustive unit tests rather than listed.
+    "backend/services/skill_panel_parse.py",
+    # The property-covered service layer: each module below carries a
+    # property-based invariant suite (and, where useful, an example-based unit
+    # suite) strong enough to give mutation a real signal. They are pure logic
+    # (parsing, lookups, projections, reducers) or backed only by in-memory
+    # SQLite, so the platform is immaterial to the result.
+    "backend/services/chatlog_parser.py",
+    "backend/services/mob_lookup_service.py",
+    "backend/services/scan_completion.py",
+    "backend/services/session_summary.py",
+    "backend/services/trifecta_service.py",
+    "backend/services/scan_presets.py",
+    "backend/services/codex_service.py",
+    "backend/services/quest_service.py",
+    "backend/testing/store_reducers.py",
+    # The tracking engine: the highest-value target. It runs against an
+    # in-memory SQLite database and an in-process event bus, with no device or
+    # OS dependency, so the stateful and integration suites exercise it in full.
+    "backend/tracking/tracker.py",
 ]
 # The engine works in a copied `mutants/` tree, so the package it imports at
 # test time (sources, the curated data tables, the test files, conftest) must
@@ -183,6 +218,71 @@ pytest_add_cli_args_test_selection = [
     "backend/tests/test_scan_drift.py",
     "backend/tests/test_loot_filter.py",
     "backend/tests/test_tool_inference.py",
+    "backend/tests/test_skill_panel_parse.py",
+    # Test files exercising the property-covered service layer and the tracking
+    # engine added above. Each module's example-based and property-based suites
+    # are listed together so a mutant is met by every test that touches it.
+    "backend/tests/test_chatlog_parser.py",
+    "backend/tests/test_chatlog_parser_properties.py",
+    "backend/tests/test_mob_lookup_service.py",
+    "backend/tests/test_mob_lookup_service_properties.py",
+    "backend/tests/test_scan_completion.py",
+    "backend/tests/test_scan_completion_properties.py",
+    "backend/tests/test_session_summary_properties.py",
+    "backend/tests/test_trifecta_service.py",
+    "backend/tests/test_trifecta_service_properties.py",
+    "backend/tests/test_scan_presets_properties.py",
+    "backend/tests/test_codex_service.py",
+    "backend/tests/test_quests.py",
+    "backend/tests/test_quest_service_properties.py",
+    "backend/tests/test_store_reducers.py",
+    "backend/tests/test_store_reducers_properties.py",
+    "backend/tests/test_tracker_integration.py",
+    "backend/tests/test_tracker_stateful.py",
+    "backend/tests/test_mut_character_calc__c0.py",
+    "backend/tests/test_mut_character_calc__c1.py",
+    "backend/tests/test_mut_character_calc__c2.py",
+    "backend/tests/test_mut_character_calc__c3.py",
+    "backend/tests/test_mut_chatlog_parser.py",
+    "backend/tests/test_mut_codex_categories.py",
+    "backend/tests/test_mut_codex_service__c0.py",
+    "backend/tests/test_mut_codex_service__c1.py",
+    "backend/tests/test_mut_cost_engine.py",
+    "backend/tests/test_mut_loot_filter.py",
+    "backend/tests/test_mut_mob_lookup_service.py",
+    "backend/tests/test_mut_quest_service__c0.py",
+    "backend/tests/test_mut_quest_service__c1.py",
+    "backend/tests/test_mut_quest_service__c2.py",
+    "backend/tests/test_mut_quest_service__c3.py",
+    "backend/tests/test_mut_quest_service__c4.py",
+    "backend/tests/test_mut_quest_service__c5.py",
+    "backend/tests/test_mut_quest_service__c6.py",
+    "backend/tests/test_mut_quest_service__c7.py",
+    "backend/tests/test_mut_quest_service__c8.py",
+    "backend/tests/test_mut_scan_completion.py",
+    "backend/tests/test_mut_scan_drift.py",
+    "backend/tests/test_mut_scan_presets.py",
+    "backend/tests/test_mut_session_summary__c0.py",
+    "backend/tests/test_mut_session_summary__c1.py",
+    "backend/tests/test_mut_session_summary__c2.py",
+    "backend/tests/test_mut_session_summary__c3.py",
+    "backend/tests/test_mut_skill_panel_parse.py",
+    "backend/tests/test_mut_store_reducers__c0.py",
+    "backend/tests/test_mut_store_reducers__c1.py",
+    "backend/tests/test_mut_tool_inference.py",
+    "backend/tests/test_mut_tracker__c0.py",
+    "backend/tests/test_mut_tracker__c1.py",
+    "backend/tests/test_mut_tracker__c10.py",
+    "backend/tests/test_mut_tracker__c2.py",
+    "backend/tests/test_mut_tracker__c3.py",
+    "backend/tests/test_mut_tracker__c4.py",
+    "backend/tests/test_mut_tracker__c5.py",
+    "backend/tests/test_mut_tracker__c6.py",
+    "backend/tests/test_mut_tracker__c7.py",
+    "backend/tests/test_mut_tracker__c8.py",
+    "backend/tests/test_mut_tracker__c9.py",
+    "backend/tests/test_mut_trifecta_service.py",
+    "backend/tests/test_mut_tt_value_curve.py",
 ]
 # Keep the device tier out (redundant with the explicit selection above, but it
 # keeps the intent legible and guards against a selected file growing a slow

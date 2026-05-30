@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/sessions",
+    "query": {}
+  },
+  "response": {
+    "body": [
+      {
+        "cost": 0.0,
+        "duration": "<SESSION_DURATION>",
+        "endTime": "<TS_1>",
+        "globals": 0,
+        "hofs": 0,
+        "id": "<UUID_1>",
+        "net": 12.5,
+        "primaryMobs": [],
+        "primaryWeapons": [],
+        "returnRate": 0.0,
+        "returns": 12.5,
+        "startTime": "<TS_2>"
+      }
+    ],
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

@@ -193,3 +193,153 @@ def test_heal_cost_is_non_negative_and_linear_in_markup(decay, ammo, markup):
     cost = heal_cost_per_use(tool, markup)
     assert cost >= 0.0
     assert cost == pytest.approx((decay + ammo / 100.0) * markup, abs=1e-4)
+
+
+# --- generalised invariants over full weapon configurations ---
+#
+# The bare-weapon properties above cover the common path; these strengthen the
+# same invariants to the full configuration space (absorber + amp + scope +
+# enhancers + per-component markups), where the recon analysis confirmed they
+# still hold.
+
+_AMP = st.one_of(
+    st.none(),
+    st.fixed_dictionaries(
+        {"economy": st.fixed_dictionaries({"decay": _NONNEG, "ammo_burn": _NONNEG})}
+    ),
+)
+_SCOPE = st.one_of(
+    st.none(),
+    st.fixed_dictionaries({"economy": st.fixed_dictionaries({"decay": _NONNEG})}),
+)
+# Catalogue absorbers cap absorption in [0.1, 0.3]; stay inside [0, 1) so the
+# weapon-decay residue is always non-negative, which the invariants rely on.
+_ABSORBER = st.one_of(
+    st.none(),
+    st.fixed_dictionaries(
+        {
+            "economy": st.fixed_dictionaries(
+                {
+                    "absorption": st.floats(
+                        min_value=0.0,
+                        max_value=0.95,
+                        allow_nan=False,
+                        allow_infinity=False,
+                    )
+                }
+            )
+        }
+    ),
+)
+
+
+@given(
+    _NONNEG,
+    _NONNEG,
+    _AMP,
+    _SCOPE,
+    _ABSORBER,
+    _MARKUP,
+    _MARKUP,
+    _MARKUP,
+    _MARKUP,
+    _ENHANCERS,
+)
+def test_total_equals_sum_of_effective_lines_full_config(
+    decay, ammo, amp, scope, absorber, w_m, a_m, s_m, ab_m, enh
+):
+    result = cost_per_shot(
+        _weapon(decay, ammo),
+        amp=amp,
+        scope=scope,
+        absorber=absorber,
+        damage_enhancers=enh,
+        weapon_markup=w_m,
+        amp_markup=a_m,
+        scope_markup=s_m,
+        absorber_markup=ab_m,
+    )
+    lines = result["costBreakdown"]
+    re_summed = round(sum(line["effectiveCostPec"] for line in lines), 4)
+    assert result["totalCostPerUse"] == pytest.approx(re_summed, abs=1e-9)
+
+
+@given(
+    _NONNEG,
+    _NONNEG,
+    _AMP,
+    _SCOPE,
+    _ABSORBER,
+    _MARKUP,
+    _MARKUP,
+    _MARKUP,
+    _MARKUP,
+    _ENHANCERS,
+)
+def test_total_monotonic_in_weapon_markup_full_config(
+    decay, ammo, amp, scope, absorber, m1, m2, a_m, s_m, ab_m
+):
+    lo, hi = sorted((m1, m2))
+    weapon = _weapon(decay, ammo)
+    kwargs = {
+        "amp": amp,
+        "scope": scope,
+        "absorber": absorber,
+        "amp_markup": a_m,
+        "scope_markup": s_m,
+        "absorber_markup": ab_m,
+    }
+    t_lo = cost_per_shot(weapon, weapon_markup=lo, **kwargs)["totalCostPerUse"]
+    t_hi = cost_per_shot(weapon, weapon_markup=hi, **kwargs)["totalCostPerUse"]
+    assert t_hi + 1e-9 >= t_lo
+
+
+@given(
+    st.floats(min_value=0.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    st.floats(min_value=0.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    _ENHANCERS,
+)
+def test_amp_damage_capped_at_half_base_full(base, amp_dmg, enh):
+    # Upper bound holds for every finite base/amp: total never exceeds the
+    # enhancer-scaled base plus an amp contribution capped at half the base.
+    weapon = {"damage": {"impact": base}}
+    amp = {"damage": {"impact": amp_dmg}}
+    total = weapon_total_damage(weapon, amp=amp, damage_enhancers=enh)
+    if total is None:
+        # _sum_damage returns None when the base damage sum is zero.
+        assert base == 0.0
+        return
+    scaled_base = base * (1 + 0.1 * enh)
+    assert total <= scaled_base + base / 2.0 + 1e-9
+
+
+@given(st.floats(min_value=0.0, max_value=1e9, allow_nan=False, allow_infinity=False))
+def test_damage_range_min_le_max_for_nonneg(total):
+    # Precondition: total_damage >= 0 (catalogue damage fields are non-negative).
+    interval = damage_range_at_max_skill(total)
+    assert interval["min"] <= interval["max"] + 1e-12
+    assert interval["min"] == pytest.approx(0.5 * total)
+    assert interval["max"] == total
+
+
+_MAYBE_NEG_ENH = st.one_of(
+    st.integers(min_value=-50, max_value=10),
+    st.floats(min_value=-5.0, max_value=10.0, allow_nan=False, allow_infinity=False),
+    st.sampled_from(["-5", "-1", "0", "3"]),
+    st.none(),
+)
+
+
+@given(_NONNEG, _NONNEG, _MAYBE_NEG_ENH)
+def test_from_props_clamps_enhancers_never_below_baseline(decay, ammo, configured):
+    # Any negative / zero configured enhancer count collapses to the
+    # zero-enhancer baseline; cost never drops below it.
+    weapon = _weapon(decay, ammo)
+    props = {
+        "weapon_entity": weapon,
+        "weapon_markup": 100,
+        "damage_enhancers": configured,
+    }
+    via_props = cost_per_shot_from_props(props)
+    baseline = cost_per_shot(weapon, damage_enhancers=0, weapon_markup=1.0)
+    assert via_props["totalCostPerUse"] >= baseline["totalCostPerUse"] - 1e-9

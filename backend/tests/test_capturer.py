@@ -7,6 +7,7 @@ swap the whole ``ScreenCapturer`` for a recorder to pin the ``(tl, br)`` →
 ``x/y/w/h`` adaptation and the ``None``-on-failure contract.
 """
 
+import logging
 from typing import ClassVar
 
 import cv2
@@ -115,6 +116,7 @@ def test_capture_region_adapts_corners_and_delegates(tmp_path, recording_capture
 
     out = core.capture_region([100, 50], [40, 80])
 
+    assert out is not None and len(out) > 0
     assert out == b"PNGBYTES"
     # left=min(100,40), top=min(50,80), width=|40-100|, height=|80-50|
     assert recording_capturer.calls == [(40, 50, 60, 30)]
@@ -139,12 +141,27 @@ def test_capture_region_none_on_empty_region(tmp_path, recording_capturer):
     assert recording_capturer.calls == []
 
 
-def test_capture_region_none_on_capture_failure(tmp_path, monkeypatch):
-    """A capturer that raises (e.g. mss unavailable) yields None, not an error."""
+def test_capture_region_none_on_capture_failure(tmp_path, monkeypatch, caplog):
+    """A capturer that raises (e.g. mss unavailable) yields None, not an error.
+
+    Distinct from the bad-input None paths: a valid region is adapted and the
+    capturer instantiation is attempted, so the exception branch logs the
+    failure with the adapted coordinates before returning None.
+    """
+    attempts: list[int] = []
 
     class _Boom:
         def __init__(self):
+            attempts.append(1)
             raise ImportError("mss is required for screen capture")
 
     monkeypatch.setattr("backend.services.skill_scan_core.ScreenCapturer", _Boom)
-    assert _core(tmp_path).capture_region([0, 0], [10, 10]) is None
+    with caplog.at_level(logging.ERROR, logger="backend.services.skill_scan_core"):
+        assert _core(tmp_path).capture_region([0, 0], [10, 10]) is None
+    # The exception path was taken, not silent input rejection: instantiation
+    # was attempted and the failure was logged with the adapted region.
+    assert attempts == [1]
+    assert any(
+        "capture failed for region (0, 0, 10, 10)" in record.message
+        for record in caplog.records
+    )

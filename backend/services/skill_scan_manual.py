@@ -59,6 +59,19 @@ class SkillScanManual:
         self._last_skills_count: int = initial_skills_count
         self._on_complete: Callable[[dict[str, float]], None] | None = None
 
+        # Optional capture observer. None in normal operation; set by the
+        # recording controller to copy each captured page into a bundle.
+        # Called as tap(panel: str, region: dict, image_png_bytes: bytes).
+        self._capture_tap: Callable[..., None] | None = None
+
+    def set_capture_tap(self, tap: Callable[..., None]) -> None:
+        """Install a capture observer (called after each successful page grab)."""
+        self._capture_tap = tap
+
+    def clear_capture_tap(self) -> None:
+        """Remove the capture observer."""
+        self._capture_tap = None
+
     def set_completion_callback(
         self, callback: Callable[[dict[str, float]], None]
     ) -> None:
@@ -147,6 +160,12 @@ class SkillScanManual:
             page_num = len(self._captures)
             ok = png is not None
         if ok:
+            tap = self._capture_tap
+            if tap is not None:
+                try:
+                    tap("skill", {"tl": tl, "br": br}, png)
+                except Exception:
+                    log.exception("Scan capture tap failed")
             log.info("Manual skill scan: captured page %d/%d", page_num, expected)
         else:
             log.warning("Manual skill scan: page %d capture failed", page_num)

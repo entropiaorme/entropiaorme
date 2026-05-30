@@ -1,0 +1,61 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "deactivatedLootBreakdown": [],
+      "effectiveLoot": 2.1,
+      "lootBreakdown": [
+        {
+          "name": "Bone Frame",
+          "quantity": 1,
+          "ttValue": 2.1
+        }
+      ],
+      "mobBreakdown": [
+        {
+          "currentName": "Unknown",
+          "killCount": 1,
+          "originalName": null
+        }
+      ],
+      "mobEntryMode": "mob",
+      "notableEvents": [],
+      "sessionId": "<UUID_1>",
+      "skillGains": [],
+      "summary": {
+        "cost": 0.0,
+        "costBreakdown": {
+          "armourCost": 0.0,
+          "enhancerCost": 0.0,
+          "healCost": 0.0,
+          "weaponCost": 0.0
+        },
+        "duration": "<SESSION_DURATION>",
+        "kills": 1,
+        "net": 2.1,
+        "pes": 0.0,
+        "returnRate": 0.0,
+        "returns": 2.1
+      },
+      "toolStats": [
+        {
+          "costAttributed": 0.0,
+          "crits": 0,
+          "damageDealt": 43.0,
+          "shotsFired": 2,
+          "weaponName": "Unknown"
+        }
+      ]
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

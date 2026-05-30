@@ -199,3 +199,62 @@ def test_global_vs_hof_item_precedence(dt, player, item, value, denom):
         assert event.data["player"] == player
         assert event.data["item"] == item
         assert event.data["value"] == pytest.approx(float(text))
+
+
+_HOF_SUFFIX = " A record has been added to the Hall of Fame!"
+
+# A free-text decoy that the leading (.+?) capture may have to absorb before
+# locking onto the genuine trailing global clause. It is deliberately allowed to
+# embed value-like tokens, but must not itself smuggle in a complete second
+# global clause (the parser is only specified over real single-clause lines) or
+# the HoF suffix. The trailing space joins it cleanly to the player name.
+_DECOY = st.text(
+    alphabet=string.ascii_letters + string.digits + " .,!?:;",
+    min_size=0,
+    max_size=40,
+).map(lambda s: f"{s} " if s else "")
+
+
+def _decoy_ok(decoy: str) -> bool:
+    return (
+        "killed a creature" not in decoy
+        and "has found a rare item" not in decoy
+        and "Hall of Fame" not in decoy
+    )
+
+
+@given(_TIMESTAMPS, _DECOY, _WORD, _WORD, _AMOUNT)
+def test_hof_kill_wins_over_plain_global_under_decoy_prefix(
+    dt, decoy, player, creature, value
+):
+    # The surviving invariant: any valid global KILL line that ends with the
+    # HoF suffix classifies as HOF_KILL, never the plain GLOBAL_KILL, even when
+    # a decoy prefix forces the leading (.+?) capture to backtrack. The value
+    # field carries no thousands separator (real EU globals never do), so the
+    # line is always a recognised global rather than a parse miss.
+    assume(_decoy_ok(decoy))
+    text = f"{value:.2f}"
+    body = (
+        f"{decoy}{player} killed a creature ({creature}) "
+        f"with a value of {text} PED!{_HOF_SUFFIX}"
+    )
+    event = parse_line(_globals_line(dt, body))
+    assert event is not None
+    assert event.type is EventType.HOF_KILL
+
+
+@given(_TIMESTAMPS, _DECOY, _WORD, _WORD, _AMOUNT, st.sampled_from(["PED", "PEC"]))
+def test_hof_item_wins_over_plain_global_under_decoy_prefix(
+    dt, decoy, player, item, value, denom
+):
+    # As above for the rare-item global: the HoF rule precedes the plain rule in
+    # GLOBAL_RULES order, so any HoF-suffixed item line resolves to HOF_ITEM.
+    assume(_decoy_ok(decoy))
+    text = f"{value:.2f}"
+    body = (
+        f"{decoy}{player} has found a rare item ({item}) "
+        f"with a value of {text} {denom}!{_HOF_SUFFIX}"
+    )
+    event = parse_line(_globals_line(dt, body))
+    assert event is not None
+    assert event.type is EventType.HOF_ITEM

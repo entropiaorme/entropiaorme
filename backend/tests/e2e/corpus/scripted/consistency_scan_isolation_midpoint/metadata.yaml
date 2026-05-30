@@ -1,0 +1,31 @@
+name: consistency_scan_isolation_midpoint
+flavour: scripted
+description: >
+  Two-segment hunt scenario whose post-midpoint segment contains
+  combat plus a loot tick. Drives the scan-surface forward-positioning
+  consistency test: the scan view's DB-backed projection
+  (calibrated-skills count) must stay identical across an interval
+  the chat stream populates with tracking events. Pinning the
+  isolation invariant today positions the apparatus to admit a real
+  scan event-stream contract when one lands; the reducer's
+  subscription set extends in place, the scenario stays unchanged.
+surfaces:
+  - scan-hydration-consistency
+  - scan-isolation-from-chat-event-stream
+segments:
+  pre: chat_replay.log
+  post: chat_replay_after.log
+events_pre: 1
+events_post: 4
+expected_calibration_changes: 0
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. The pre-segment lays down a single
+  combat shot so the snapshot at T0 is captured against a session
+  with non-trivial tracking state; the post-segment drives a kill +
+  loot tick + skill-gain-shaped chat line. The scan view's
+  skill_calibrations table is untouched by chat events, so the
+  projection stays constant across the interval.

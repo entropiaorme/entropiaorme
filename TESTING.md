@@ -24,7 +24,25 @@ Tests are tagged by runtime tier so the right subset runs in the right place:
 | `standard` | Database / filesystem / in-process state (219 tests) | `pytest -m standard` |
 | `full` | Device / screen-capture / slow checks (none yet) | `pytest -m full` |
 
-Each module's tier is set in `backend/tests/conftest.py`; a module with no entry defaults to `standard`.
+Each module's tier is set in `backend/tests/conftest.py`; a module with no entry defaults to `standard`. The tier is selected positively (`pytest -m "fast or standard"`), not by negative exclusion, so a test that lands without a marker stays out of the per-PR run until it is deliberately classified rather than silently joining the gate.
+
+### Parallelism
+
+On a multi-core machine the local suite parallelises with [pytest-xdist](https://pytest-xdist.readthedocs.io) under the `loadfile` scheduler:
+
+```bash
+.venv/Scripts/python.exe -m pytest -m "fast or standard" -n auto --dist=loadfile
+```
+
+`loadfile` sends each whole test file to a single worker. That keeps the module-scoped lifespan-boot fixtures (the contract, ETag, and HTTP-fingerprint scenario suites each boot the FastAPI lifespan against a temporary data directory) booting once per file rather than once per worker, and never splits a file's tests across workers. A parallel run reproduces the serial pass count exactly; no test is dropped by worker collection.
+
+**Continuous integration runs the suite serially, not under xdist.** The parallel form is a local accelerator only. Measured on the hosted Windows runner, the supported-floor leg took roughly three minutes serially but about fourteen and a half minutes under `-n auto`: with only a handful of cores, each xdist worker re-pays the heavy import cost (onnxruntime, OpenCV, FastAPI) and the per-process spawn, and that overhead dwarfs the parallelism gain on a suite this size. A many-core developer machine sees the opposite (the full leg finishes in well under a minute under xdist), so the split is deliberate: xdist locally, serial on CI. The markers and the scheduler wiring below stay in place so the local form and the serial-only opt-out both keep working.
+
+The suite parallelises safely because every test isolates its own external state: xdist workers are separate processes, so no in-memory singleton is shared between them; no test binds a real OS socket (the HTTP suites drive the app in-process through Starlette's `TestClient`, and `BACKEND_PORT` only builds the origin-checked `base_url` string); per-test state runs through `tmp_path` / `mkdtemp` and fresh in-memory SQLite; and the one direct `os.environ` mutation (the data-directory override in the e2e HTTP fixture) is save-and-restore guarded and per-process. `pytest-randomly` already shuffles order within each worker, so intra-process ordering coupling would surface regardless of how files are distributed.
+
+A test that genuinely cannot run concurrently with tests in *other* files (one that binds a fixed OS port, or mutates a process-wide global another file reads) marks itself `@pytest.mark.no_xdist`. Under `--dist=loadgroup` the collection hook keeps unmarked tests grouped by file and collapses every `no_xdist` test onto one shared worker, so activating the opt-out is a one-flag change on the affected leg rather than a code change. No test needs it today.
+
+The e2e scenario and recorder tests drive the real `ChatlogWatcher` tail loop, then wait for it to catch up before asserting. That wait (`wait_for_drain` in `backend/testing/replay.py`) is a condition wait, not a fixed-duration sleep: it blocks until the watcher reports it has read every line the scenario appended and flushed its final tick, and raises `TimeoutError` if the watcher never reaches that state. Two seams make it correct under contention. First, `ChatlogWatcher.start()` blocks until the tail loop has opened the file and seeked to its end, so a scenario that writes immediately after `start()` cannot have its lines missed by a not-yet-seeked watcher; without that barrier, heavy parallel load could delay the seek past the writes and the watcher would read nothing. Second, the watcher signals an idle condition on each end-of-file cycle, which the drain wait blocks on rather than polling a clock. Together they make the drain converge the instant the watcher is genuinely idle regardless of scheduling latency, which is why the suite holds under the aggressive `loadgroup` scheduler as well as `loadfile`. This honours the "flakes are bugs, no reruns" stance: the timing race is removed at the source rather than absorbed by a sleep or a rerun plugin.
 
 ### Linting and formatting
 
@@ -139,13 +157,14 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 ## Continuous integration
 
-Every pull request and push to `main` runs six jobs (`.github/workflows/ci.yml`):
+Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the suite excluding the `full` tier. The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, rather than on both legs).
+- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, parallelised with `pytest-xdist` (`-n auto --dist=loadfile`). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, single-worker, rather than on both legs).
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
 - **Pre-commit hooks**: `pre-commit run --all-files`, validating the hook configuration the local development loop uses (see "Local checks" below).
+- **Golden ratification** (pull requests only): fails when a commit moves a golden file without the `test: regenerate goldens` marker, so a regression cannot be ratified silently (see "Goldens regeneration" above).
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
@@ -180,6 +199,49 @@ pre-commit run --hook-stage manual pip-audit
 ```
 
 The mypy and test hooks run against the active virtual environment; the lint and hygiene hooks run in environments pre-commit manages itself, so the CI `pre-commit` job exercises those without reinstalling the dependency tree the typing and backend jobs already cover.
+
+## Goldens regeneration
+
+Several e2e suites assert against committed golden files: the per-scenario event-stream fingerprint (`fingerprint.jsonl`) and DB-state snapshot (`db_state.json`), the per-endpoint HTTP-response goldens, the OpenAPI spec snapshot (`backend/tests/expected/openapi.snapshot.json`), and the `pytest-regressions` goldens (OCR equivalence, snapshot / event-stream consistency). The default mode asserts; a deliberate behaviour change is re-ratified by regenerating the affected goldens and reviewing the resulting diff.
+
+Regenerate with the harness flag, which surfaces the diff before writing so a ratification is deliberate rather than mechanical:
+
+```bash
+.venv/Scripts/python.exe -m pytest --update-fingerprints <selector>
+```
+
+Narrow `<selector>` to the affected scenarios or modules. The `pytest-regressions` goldens regenerate with that library's `--force-regen` instead; each suite documents its own flow (`backend/testing/CONFORMANCE.md`, `backend/testing/CONSISTENCY.md`, `backend/testing/AUTHORING.md`).
+
+### Commit-message convention
+
+A regeneration commit takes the subject prefix `test: regenerate goldens` and lists the regenerated sets in the body, so a reviewer sees at a glance which goldens moved and why:
+
+```
+test: regenerate goldens for the basic-hunt loot rounding change
+
+Regenerated alongside the loot-value rounding fix:
+- basic_hunt_10_events: fingerprint.jsonl, db_state.json
+- basic_hunt_10_events: http_responses/ (tracking + quests endpoints)
+
+The OpenAPI snapshot and the consistency goldens are unchanged.
+```
+
+The regeneration may sit in its own commit alongside the behaviour-change commit, or be the sole content of a goldens-only maintenance pull request; the convention is the same either way.
+
+### Ratification guard
+
+The marker is not merely a courtesy to reviewers: it is enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate rather than accidental, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
+
+The guard inspects the pull request's diff against its base. If any commit modifies a golden file (anything under a `backend/tests` `expected/` directory: the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens, the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix) without the `test: regenerate goldens` subject prefix on the relevant commit(s), the job fails and surfaces the golden diff for review. A change that carries the marker passes; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
+
+Run it locally before pushing a goldens change, against the staged / working-tree diff or an explicit range:
+
+```bash
+.venv/Scripts/python.exe -m backend.scripts.check_golden_ratification              # staged vs HEAD
+.venv/Scripts/python.exe -m backend.scripts.check_golden_ratification --range origin/main..HEAD
+```
+
+Pass `--warn-only` to surface the diff without failing. The goldens diff is still reviewed on the pull request like any other change, where a golden that moved for the wrong reason is caught; the guard adds a mechanical backstop so an unmarked move cannot slip through unremarked.
 
 ## Test layout
 

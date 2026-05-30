@@ -15,6 +15,7 @@ from typing import Any
 
 from backend.ocr.capturer import ScreenCapturer
 from backend.services import local_ocr
+from backend.services.skill_panel_parse import decode_panel_png
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ class SkillScanCore:
     def extract_page_levels(self, png_bytes: bytes) -> dict[str, float]:
         """Run local OCR on a single page PNG; return {canonical_name: level}."""
         try:
-            panel_bgr = local_ocr.decode_panel_png(png_bytes)
+            panel_bgr = decode_panel_png(png_bytes)
         except ValueError as exc:
             log.warning("skill scan: PNG decode failed: %s", exc)
             return {}

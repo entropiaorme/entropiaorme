@@ -130,7 +130,10 @@ def test_claim_rank_success(service):
     result = service.claim_rank("Atrox", 1, "Aim")  # cat1 skill
     assert result["rank"] == 1
     assert result["skillName"] == "Aim"
-    assert result["pedValue"] > 0
+    # Deterministic reward: get_rank_cost(1, 100) = 100, cat1 divisor 200 → 0.5 PED.
+    # Pins the divisor/multiplier selection so a mutant that keeps a positive
+    # value but corrupts the arithmetic is caught.
+    assert result["pedValue"] == 0.5
 
     # Verify progress updated
     species = service.get_all_species()

@@ -227,7 +227,13 @@ def test_add_weapon_with_attachments_persists(app_db, monkeypatch):
     assert result["type"] == "weapon"
     assert result["name"] == "Test Weapon"
     assert result["amplifierName"] == "Test Amp"
-    assert result["costPerUse"] > 0
+    # Pin the exact computed cost so a mutation that scales/offsets it survives.
+    # enhancer mult 1.2 on weapon (decay 2.0, ammo 2.0 PEC), absorber takes 12%
+    # of weapon decay, amp adds decay 1.0 + ammo 1.0, scope adds decay 0.5.
+    assert result["costPerUse"] == pytest.approx(7.3, abs=1e-4)
+    # No damage fields on the catalogue fixtures, so the profile is undefined.
+    assert result["damageMin"] is None
+    assert result["damageMax"] is None
     assert result["enrichmentLevel"] == 3  # amp plus scope/absorber
 
 
@@ -296,4 +302,7 @@ def test_calculate_cost_for_healing_tool(monkeypatch):
         equipment.CalculateCostRequest(catalog_id="t1", type="healing")
     )
 
-    assert "totalCostPerUse" in result
+    # Heal cost is (decay + ammo PEC) x markup: t1 has decay 1.0, ammo 0, markup
+    # defaults to 100% -> 1.0. The healing branch returns an empty breakdown.
+    assert result["totalCostPerUse"] == pytest.approx(1.0, abs=1e-4)
+    assert result["costBreakdown"] == []

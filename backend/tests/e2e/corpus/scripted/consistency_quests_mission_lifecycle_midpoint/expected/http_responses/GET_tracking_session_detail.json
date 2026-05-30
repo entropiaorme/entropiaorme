@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/tracking/session/<UUID_1>",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "deactivatedLootBreakdown": [],
+      "effectiveLoot": 0.0,
+      "lootBreakdown": [],
+      "mobBreakdown": [],
+      "mobEntryMode": "mob",
+      "notableEvents": [],
+      "sessionId": "<UUID_1>",
+      "skillGains": [],
+      "summary": {
+        "cost": 0.0,
+        "costBreakdown": {
+          "armourCost": 0.0,
+          "enhancerCost": 0.0,
+          "healCost": 0.0,
+          "weaponCost": 0.0
+        },
+        "duration": "<SESSION_DURATION>",
+        "kills": 0,
+        "net": 0.0,
+        "pes": 0.0,
+        "returnRate": 0.0,
+        "returns": 0.0
+      },
+      "toolStats": []
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

@@ -19,11 +19,23 @@ def test_search_matches_both_maturity_and_no_maturity_mobs():
     ]
     svc = MobLookupService(_game_data(mobs))
 
+    # Pin the full projected result set, fields, dedup, and prefix-priority sort:
+    # neither display starts with "atrox", so both fall to the alphabetical tier.
     atrox = svc.search_mob_names("atrox")
-    assert any(r["display"] == "Young Atrox" for r in atrox)  # maturity branch
+    assert atrox == [
+        {"display": "Old Atrox", "species": "Atrox", "maturity": "Old"},
+        {"display": "Young Atrox", "species": "Atrox", "maturity": "Young"},
+    ]
 
     berycled = svc.search_mob_names("berycled")
-    assert any(r["display"] == "Berycled" for r in berycled)  # no-maturity branch
+    assert berycled == [{"display": "Berycled", "species": "Berycled", "maturity": ""}]
+
+    # Multi-token query exercises the all-parts matcher: "Old Atrox" is rejected
+    # because "young" is absent, leaving only the Young Atrox row.
+    young_atrox = svc.search_mob_names("young atrox")
+    assert young_atrox == [
+        {"display": "Young Atrox", "species": "Atrox", "maturity": "Young"}
+    ]
 
 
 def test_search_empty_query_returns_nothing():
@@ -35,5 +47,24 @@ def test_has_mob_name_checks_exact_pair():
     mobs = [{"species": {"name": "Atrox"}, "maturities": [{"name": "Young"}]}]
     svc = MobLookupService(_game_data(mobs))
 
-    assert isinstance(svc.has_mob_name("Atrox", "Young"), bool)
+    assert svc.has_mob_name("Atrox", "Young") is True
     assert svc.has_mob_name("Nonexistent", "Young") is False
+
+
+def test_has_mob_name_branches():
+    mobs = [
+        {
+            "species": {"name": "Atrox"},
+            "maturities": [{"name": "Young"}, {"name": "Old"}],
+        },
+        {"name": "Berycled", "maturities": []},  # no maturities -> bare species
+    ]
+    svc = MobLookupService(_game_data(mobs))
+
+    assert svc.has_mob_name("", "Young") is False  # empty species short-circuits
+    assert svc.has_mob_name("Atrox", "Young") is True  # exact maturity match
+    assert svc.has_mob_name("Atrox", "Ancient") is False  # maturities present, no match
+    assert (
+        svc.has_mob_name("Berycled", "") is True
+    )  # no-maturity species, empty maturity
+    assert svc.has_mob_name("Berycled", "Young") is False  # no-maturity species, named

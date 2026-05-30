@@ -75,7 +75,91 @@ jobs:
         run: bash .github/scripts/publish-badge.sh mutation.json
       # Ratchet: fail if the score has regressed below the published floor. Runs
       # after publishing, so the badge still reflects reality on a regression.
-      # Floor set a few points below the measured baseline (75.1%) for headroom;
-      # raise it as survivors are killed, never lower it to make a red run pass.
-      - name: Enforce the mutation-score floor
-        run: python -m backend.scripts.mutation_score --fail-under 72
+      # Two complementary gates: a ratcheted aggregate floor, and a per-module
+      # floor map so a strong module can no longer mask a weak one. Each floor is
+      # a few points below the measured score for headroom (incl. margin for a
+      # load-sensitive timeout drifting to survived); raise as survivors are
+      # killed, never lower it to make a red run pass.
+      - name: Enforce the aggregate mutation-score floor
+        run: python -m backend.scripts.mutation_score --fail-under 88
+      # Per-module floor map. Reads mutmut's authoritative per-mutant exit codes
+      # from mutants/<path>.meta (same accounting as backend.scripts.mutation_score
+      # and analysis/permodule) and fails if any targeted module regresses below
+      # its own floor. Inline here rather than a committed script so the gate lives
+      # with the workflow it guards.
+      - name: Enforce the per-module mutation floors
+        run: |
+          python - <<'PY'
+          import sys
+          from collections import defaultdict
+          from pathlib import Path
+
+          import mutmut
+          from mutmut.__main__ import (
+              SourceFileMutationData,
+              ensure_config_loaded,
+              status_by_exit_code,
+              walk_source_files,
+          )
+
+          # module -> floor %. A few points below the measured score; ratchet up,
+          # never down. Scores count caught = killed + timeout over the considered
+          # set (killed + timeout + suspicious + survived + no_tests).
+          FLOORS = {
+              "backend.data.codex_categories": 96.0,
+              "backend.data.tt_value_curve": 86.0,
+              "backend.services.chatlog_parser": 93.0,
+              "backend.services.character_calc": 95.0,
+              "backend.services.codex_service": 89.0,
+              "backend.services.cost_engine": 92.0,
+              "backend.services.mob_lookup_service": 95.0,
+              "backend.services.quest_service": 90.0,
+              "backend.services.scan_completion": 94.0,
+              "backend.services.scan_drift": 85.0,
+              "backend.services.scan_presets": 94.0,
+              "backend.services.session_summary": 80.0,
+              "backend.services.skill_panel_parse": 96.0,
+              "backend.services.trifecta_service": 92.0,
+              "backend.testing.store_reducers": 88.0,
+              "backend.tracking.loot_filter": 85.0,
+              "backend.tracking.tool_inference": 91.0,
+              "backend.tracking.tracker": 82.0,
+          }
+
+          ensure_config_loaded()
+
+          def score(d):
+              caught = d.get("killed", 0) + d.get("timeout", 0)
+              considered = caught + d.get("suspicious", 0) + d.get("survived", 0) + d.get("no_tests", 0)
+              return (100.0 * caught / considered) if considered else 0.0
+
+          per = defaultdict(lambda: defaultdict(int))
+          for path in walk_source_files():
+              if mutmut.config.should_ignore_for_mutation(path):
+                  continue
+              meta = Path("mutants") / (str(path) + ".meta")
+              if not meta.exists():
+                  continue
+              m = SourceFileMutationData(path=path)
+              m.load()
+              if not m.exit_code_by_key:
+                  continue
+              mod = str(path).replace("/", ".").replace("\\", ".")[:-3]
+              for _key, code in m.exit_code_by_key.items():
+                  per[mod][status_by_exit_code[code].replace(" ", "_")] += 1
+
+          fail = False
+          for mod, floor in sorted(FLOORS.items()):
+              if mod not in per:
+                  print(f"FAIL {mod}: no mutants found (paths_to_mutate drift?)")
+                  fail = True
+                  continue
+              s = score(per[mod])
+              print(f"  {'ok  ' if s >= floor else 'FAIL'} {mod:42s} {s:5.1f}%  (floor {floor:.0f})")
+              if s < floor:
+                  fail = True
+
+          if fail:
+              print("Per-module mutation-score floor regression.", file=sys.stderr)
+          sys.exit(1 if fail else 0)
+          PY

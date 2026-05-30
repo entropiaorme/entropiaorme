@@ -148,9 +148,14 @@ class HuntTracker:
         manual_mob_entry_enabled_provider: Callable[[], bool] | None = None,
         manual_mob_provider: Callable[[], tuple[str, str] | None] | None = None,
         trifecta_resolver: Callable[[], dict | None] | None = None,
+        now_fn: Callable[[], datetime] | None = None,
     ):
         self._event_bus = event_bus
         self._db = db_conn
+        # Time source for session-boundary timestamps. Injected so replay
+        # tests can drive deterministic session start/stop instants; defaults
+        # to wall-clock time, leaving production behaviour unchanged.
+        self._now_fn = now_fn or (lambda: datetime.now(tz=None))
         self._equipment_cost_lookup = equipment_cost_lookup or (lambda _: 0.0)
         self._equipment_profile_lookup = equipment_profile_lookup or (lambda _: None)
         self._player_name = player_name.strip()
@@ -570,6 +575,7 @@ class HuntTracker:
 
         session_id = str(uuid.uuid4())
         self._session = TrackingSession(id=session_id)
+        self._session.start_time = self._now_fn()
         self._accumulator = _Accumulator()
 
         self._active_hotbar_tool_name = None
@@ -700,7 +706,7 @@ class HuntTracker:
         self._event_bus.unsubscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
 
         # Finalise session
-        self._session.end_time = datetime.now(tz=None)
+        self._session.end_time = self._now_fn()
         self._session.dangling_cost = dangling_cost
         self._db.execute(
             "UPDATE tracking_sessions SET ended_at = ?, is_active = 0, "

@@ -4,7 +4,10 @@ import os
 import tempfile
 from datetime import datetime
 
+import pytest
+
 from backend.core.event_bus import EventBus
+from backend.data.tt_value_curve import tt_value_of_gain
 from backend.db.app_database import AppDatabase
 from backend.services.skill_tracker import SkillTracker
 
@@ -51,6 +54,15 @@ def test_gain_recorded_during_session():
     assert rows[0][3] == "Laser Weaponry Technology"
     assert abs(rows[0][4] - 0.1234) < 0.0001  # amount
     assert rows[0][5] is None  # ped_value is null (not calibrated)
+    # Uncalibrated path: old_level is None, so no incremental calibration row
+    # may be written. A mutation that inserts one regardless would survive
+    # without this check.
+    cal_count = db.conn.execute(
+        "SELECT COUNT(*) FROM skill_calibrations WHERE skill_name = 'Laser Weaponry Technology'"
+    ).fetchone()[0]
+    assert cal_count == 0
+    # In-memory session total tracks the raw amount even without a TT value.
+    assert tracker._session_skills["Laser Weaponry Technology"] == pytest.approx(0.1234)
     db.close()
 
 
@@ -77,6 +89,16 @@ def test_tt_value_computed_when_calibrated():
     assert len(rows) == 1
     assert rows[0][0] is not None
     assert rows[0][0] > 0  # TT value between 1000 and 1100 should be positive
+    # Pin the exact magnitude: old_level=1000.0, amount=100.0 give new_level=1100.0,
+    # so the gain's TT value must equal the curve over that span. This catches
+    # mutations that swap the level bounds, span the wrong interval, or drop the
+    # +amount (which would yield a zero or otherwise-still-positive value).
+    expected_tt = tt_value_of_gain(1000.0, 1100.0)
+    assert rows[0][0] == pytest.approx(expected_tt)
+    # The in-memory TT total must mirror the persisted value.
+    assert tracker._session_skill_tt["Laser Weaponry Technology"] == pytest.approx(
+        expected_tt
+    )
     db.close()
 
 
@@ -106,6 +128,13 @@ def test_calibration_level_incremented():
     assert len(rows) == 2  # original scan + chatlog increment
     assert abs(rows[0][0] - 500.5) < 0.001
     assert rows[0][1] == "chatlog"
+    # Calibrated regular-skill path: ped_value is computed over the level span
+    # the increment covers (500.0 -> 500.5), not left null. Pin the exact value
+    # so a mutation that mis-spans the gain or skips the curve call is caught.
+    gain = db.conn.execute(
+        "SELECT ped_value FROM skill_gains WHERE skill_name = 'Anatomy'"
+    ).fetchone()
+    assert gain[0] == pytest.approx(tt_value_of_gain(500.0, 500.5))
     db.close()
 
 

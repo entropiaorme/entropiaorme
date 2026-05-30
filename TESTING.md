@@ -218,9 +218,9 @@ Regenerating a golden makes you, at once, the author of the change, the regenera
 
 Before committing any expected-output change (a regenerated golden, or the first pin of a newly emitted one), have an independent reviewer (someone who did not author the change) examine it against the code change and your rationale, and judge the one question the marker cannot: is this delta a genuine intended behaviour change, or a regression being laundered into the goldens as the new "correct"? The first-pin case is the most dangerous, because no prior golden means no assertion fails, so an over-emission can be pinned as "expected" and pass silently; the review scrutinises the absolute output, not just a diff.
 
-The review records a fenced verdict block you commit verbatim:
+The review records a fenced verdict block you commit verbatim (the block must be fenced; the guard reads only the fenced block, never any `VERDICT:` line that happens to appear in the report's surrounding prose):
 
-```
+```text
 ORACLE-RATIFICATION
 range: <commit-range>
 goldens: <comma-separated sets reviewed>
@@ -254,9 +254,9 @@ Neither the marker nor the independent verdict is merely a courtesy to reviewers
 The guard inspects the pull request's diff against its base. A golden file is anything under a `backend/tests` `expected/` directory (the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens), the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix. If any commit modifies a golden, the job requires **both**:
 
 - the `test: regenerate goldens` subject prefix on the relevant commit(s); and
-- a ratification artefact (`backend/testing/ratifications/<slug>.md`) added or modified **in the same PR range**, carrying an `ORACLE-RATIFICATION` block whose `VERDICT` is `ratification-sound` and whose `goldens:` field names every changed set.
+- a ratification artefact (`backend/testing/ratifications/<slug>.md`) added or modified **in the same PR range**, carrying a fenced `ORACLE-RATIFICATION` block whose `VERDICT` is `ratification-sound` and whose `goldens:` field names every changed set, and committed **no earlier than the last golden change in the range**.
 
-Tying the artefact to the range is deliberate: a sound verdict from a prior regeneration cannot bless a fresh golden change, and a verdict recorded for one set cannot bless another. A change missing either requirement fails and surfaces the golden diff for review; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
+Three properties make the verdict hard to satisfy by accident. Tying the artefact to the range stops a sound verdict from a *prior* regeneration blessing a fresh golden change. The ordering requirement stops a verdict from an *earlier commit in the same range* blessing a golden edit made in a later commit (the verdict reviewed the earlier state, not the final one), so a same-range golden change after the report forces the report to be re-reviewed and re-committed. And the per-set `goldens:` check stops a verdict recorded for one set blessing another. A change missing any of these fails and surfaces the golden diff for review; a change that touches no golden file is ignored, so the guard is inert for ordinary work.
 
 Run it locally before pushing a goldens change, against the staged / working-tree diff or an explicit range:
 

@@ -126,6 +126,11 @@ _VERDICT_VALUES = (
     "regression-suspected",
     "needs-user-judgement",
 )
+# A fenced code block (```...```), whose inner text is the only place the
+# verdict block is read from. Scoping to the fence means a stray ``VERDICT:``
+# line in the report's surrounding prose cannot satisfy the gate; only the
+# committed-verbatim fenced block the convention prescribes counts.
+_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _HEADER_RE = re.compile(r"ORACLE-RATIFICATION\b", re.IGNORECASE)
 _VERDICT_RE = re.compile(
     r"^[^\S\n]*VERDICT:[^\S\n]*(" + "|".join(_VERDICT_VALUES) + r")[^\S\n]*$",
@@ -156,28 +161,35 @@ class RatificationVerdict:
 def parse_ratification_artifact(path: str, text: str) -> RatificationVerdict | None:
     """Parse the verdict block out of a ratification report, or ``None``.
 
-    Returns ``None`` when the text carries no ``ORACLE-RATIFICATION`` header or
-    no recognised ``VERDICT:`` line beneath it, so a malformed or placeholder
-    report does not register as any verdict (and so cannot satisfy the gate).
+    The verdict is read only from a fenced code block (```...```) that carries
+    the ``ORACLE-RATIFICATION`` header, matching the committed-verbatim form the
+    convention prescribes. Fields (``VERDICT:``, ``goldens:``, ``range:``) are
+    parsed strictly within that fence, so a ``VERDICT:`` line appearing in the
+    report's surrounding prose cannot satisfy the gate. Returns ``None`` when no
+    fenced block carries the header and a recognised ``VERDICT:`` line, so a
+    malformed or placeholder report registers as no verdict.
     """
-    header = _HEADER_RE.search(text)
-    if not header:
-        return None
-    block = text[header.start() :]
-    verdict_m = _VERDICT_RE.search(block)
-    if not verdict_m:
-        return None
-    goldens_m = _GOLDENS_RE.search(block)
-    goldens: tuple[str, ...] = ()
-    if goldens_m:
-        goldens = tuple(tok for tok in re.split(r"[,\s]+", goldens_m.group(1)) if tok)
-    range_m = _RANGE_FIELD_RE.search(block)
-    return RatificationVerdict(
-        path=path,
-        verdict=verdict_m.group(1).lower(),
-        goldens=goldens,
-        range=range_m.group(1).strip() if range_m else None,
-    )
+    for fence in _FENCE_RE.finditer(text):
+        block = fence.group(1)
+        if not _HEADER_RE.search(block):
+            continue
+        verdict_m = _VERDICT_RE.search(block)
+        if not verdict_m:
+            continue
+        goldens_m = _GOLDENS_RE.search(block)
+        goldens: tuple[str, ...] = ()
+        if goldens_m:
+            goldens = tuple(
+                tok for tok in re.split(r"[,\s]+", goldens_m.group(1)) if tok
+            )
+        range_m = _RANGE_FIELD_RE.search(block)
+        return RatificationVerdict(
+            path=path,
+            verdict=verdict_m.group(1).lower(),
+            goldens=goldens,
+            range=range_m.group(1).strip() if range_m else None,
+        )
+    return None
 
 
 def golden_set_key(path: str) -> str:
@@ -207,22 +219,21 @@ def _normalise(text: str) -> str:
 
 
 def _verdict_covers(verdict: RatificationVerdict, set_key: str) -> bool:
-    """True when the verdict's ``goldens:`` field references ``set_key``.
+    """True when the verdict's ``goldens:`` field names ``set_key``.
 
-    Comparison is alphanumeric-insensitive and bidirectional-substring, so a
-    report naming ``basic_hunt`` (or ``basic-hunt``, or ``basic_hunt
-    fingerprint.jsonl``) covers the ``basic_hunt`` scenario. A verdict that
-    records no ``goldens:`` field covers nothing, so this cross-check can only
-    ever tighten the gate, never silently pass an unnamed set.
+    The set key must appear *within* one of the goldens tokens, after
+    alphanumeric normalisation: ``basic_hunt`` (or ``basic-hunt``) covers the
+    ``basic_hunt`` scenario, and the ``openapi`` key is covered by a token like
+    ``openapi.snapshot.json``. The match is intentionally one-directional (key
+    within token, not the reverse), so a short or broad token such as ``hunt``
+    does NOT cover ``basic_hunt_10_events``: a vague verdict cannot bless a
+    specific set. A verdict with no ``goldens:`` field covers nothing, so this
+    cross-check can only ever tighten the gate.
     """
     key = _normalise(set_key)
     if not key:
         return False
-    for token in verdict.goldens:
-        norm = _normalise(token)
-        if norm and (key in norm or norm in key):
-            return True
-    return False
+    return any(key in _normalise(token) for token in verdict.goldens)
 
 
 @dataclass(frozen=True)
@@ -236,6 +247,7 @@ class Evaluation:
     ratification_artifacts: tuple[str, ...] = ()
     sound_verdicts: tuple[RatificationVerdict, ...] = ()
     unblessed_sets: tuple[str, ...] = ()
+    artifact_stale: bool = False
 
     @property
     def touches_goldens(self) -> bool:
@@ -253,13 +265,19 @@ class Evaluation:
         rule is marker-only and advisory (no committed verdict exists yet to
         inspect). In range mode (the pull-request gate) a golden change must
         carry the marker AND a sound, in-range verdict that names every changed
-        set.
+        set AND was recorded no earlier than the last golden change in the range
+        (so a verdict cannot be left stale by a later same-range golden edit).
         """
         if not self.touches_goldens:
             return True
         if not self.range_mode:
             return self.has_marker
-        return self.has_marker and self.has_sound_verdict and not self.unblessed_sets
+        return (
+            self.has_marker
+            and self.has_sound_verdict
+            and not self.unblessed_sets
+            and not self.artifact_stale
+        )
 
 
 def _run_git(args: list[str], repo_root: Path) -> str:
@@ -352,6 +370,51 @@ def _file_at(repo_root: Path, ref: str, path: str) -> str | None:
         return None
 
 
+def _commit_index(repo_root: Path, commit_range: str) -> dict[str, int]:
+    """Map each commit in the range to its position (oldest = 0)."""
+    out = _run_git(["rev-list", "--reverse", commit_range], repo_root)
+    return {sha: index for index, sha in enumerate(out.split())}
+
+
+def _last_commit_touching(
+    repo_root: Path,
+    commit_range: str,
+    paths: list[str],
+) -> str | None:
+    """The most recent commit in the range that touched any of ``paths``."""
+    if not paths:
+        return None
+    out = _run_git(
+        ["log", "-1", "--format=%H", commit_range, "--", *paths], repo_root
+    ).strip()
+    return out or None
+
+
+def _is_artifact_stale(
+    repo_root: Path,
+    commit_range: str,
+    golden_paths: tuple[str, ...],
+    sound_paths: list[str],
+) -> bool:
+    """True when a golden was changed later in the range than the sound verdict.
+
+    A sound verdict recorded in an early commit does not bless a same-range
+    golden edit made in a later commit: the verdict reviewed the earlier state,
+    not the final one. This requires the sound artefact to be (re)committed no
+    earlier than the last golden change in the range, closing the within-range
+    stale-verdict gap (the across-range case is already handled by only counting
+    in-range artefacts).
+    """
+    if not golden_paths or not sound_paths:
+        return False
+    order = _commit_index(repo_root, commit_range)
+    last_golden = _last_commit_touching(repo_root, commit_range, list(golden_paths))
+    last_sound = _last_commit_touching(repo_root, commit_range, sound_paths)
+    golden_pos = order.get(last_golden, -1) if last_golden else -1
+    sound_pos = order.get(last_sound, -1) if last_sound else -1
+    return golden_pos > sound_pos
+
+
 def evaluate(
     repo_root: Path,
     *,
@@ -374,6 +437,7 @@ def evaluate(
     artifact_paths: tuple[str, ...] = ()
     sound_verdicts: tuple[RatificationVerdict, ...] = ()
     unblessed_sets: tuple[str, ...] = ()
+    artifact_stale = False
 
     if commit_range is not None:
         tip = _range_tip(commit_range)
@@ -400,6 +464,12 @@ def evaluate(
                     if not any(_verdict_covers(v, key) for v in sound_verdicts)
                 )
             )
+            artifact_stale = _is_artifact_stale(
+                repo_root,
+                commit_range,
+                goldens,
+                [v.path for v in sound_verdicts],
+            )
 
     return Evaluation(
         golden_paths=goldens,
@@ -409,6 +479,7 @@ def evaluate(
         ratification_artifacts=artifact_paths,
         sound_verdicts=sound_verdicts,
         unblessed_sets=unblessed_sets,
+        artifact_stale=artifact_stale,
     )
 
 
@@ -530,6 +601,19 @@ def main(argv: list[str] | None = None) -> int:
             "in the same range as the golden change. A verdict artefact from a "
             "prior regeneration does not count: it must be added or modified in "
             "this range.\n\n"
+            f"Changed golden files:\n{listing}\n",
+            file=sys.stderr,
+        )
+    elif result.artifact_stale:
+        print(
+            "check-golden-ratification: a 'ratification-sound' verdict is "
+            "present, but a golden was changed later in this range than the "
+            "verdict was recorded.\n\n"
+            "The verdict reviewed the earlier golden state, not the final one, so "
+            "it cannot bless the later edit. Re-run the independent review against "
+            "the current diff and re-commit the report (carrying a fresh "
+            "ORACLE-RATIFICATION ... VERDICT: ratification-sound block) so the "
+            "verdict is no earlier than the last golden change in the range.\n\n"
             f"Changed golden files:\n{listing}\n",
             file=sys.stderr,
         )

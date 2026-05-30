@@ -318,16 +318,29 @@ def test_parse_extracts_verdict_goldens_and_range() -> None:
 
 def test_parse_returns_none_without_a_complete_block() -> None:
     assert guard.parse_ratification_artifact("p", "no block here at all") is None
-    # Header but no recognised VERDICT line: a malformed / placeholder report
-    # registers as no verdict, so it cannot satisfy the gate.
+    # A fenced block with the header but no recognised VERDICT line: a malformed
+    # / placeholder report registers as no verdict, so it cannot satisfy the gate.
     assert (
-        guard.parse_ratification_artifact("p", "ORACLE-RATIFICATION\nrange: x\n")
+        guard.parse_ratification_artifact(
+            "p", "```\nORACLE-RATIFICATION\nrange: x\n```\n"
+        )
         is None
     )
 
 
+def test_parse_ignores_a_verdict_outside_the_fence() -> None:
+    # A VERDICT line in the report's prose (outside the fenced block) does not
+    # count: only the fenced ORACLE-RATIFICATION block is read.
+    text = (
+        "The reviewer wrote VERDICT: ratification-sound in passing, but the real\n"
+        "block is malformed below.\n\n"
+        "```\nnot the verdict block\n```\n"
+    )
+    assert guard.parse_ratification_artifact("p", text) is None
+
+
 def test_parse_reads_an_unsound_verdict() -> None:
-    text = "ORACLE-RATIFICATION\ngoldens: x\nVERDICT: regression-suspected\n"
+    text = "```\nORACLE-RATIFICATION\ngoldens: x\nVERDICT: regression-suspected\n```\n"
     verdict = guard.parse_ratification_artifact("p", text)
     assert verdict is not None
     assert not verdict.is_sound
@@ -371,12 +384,13 @@ def test_range_unsound_verdict_fails(repo: Path) -> None:
     assert not result.ok
 
 
-def test_range_stale_verdict_does_not_bless_a_new_change(repo: Path) -> None:
-    """A sound verdict from a prior regen must not satisfy a later golden change.
+def test_range_stale_verdict_does_not_bless_a_new_change(repo: Path, capsys) -> None:
+    """A sound verdict must not satisfy a later same-range golden change.
 
     Commit A is a properly ratified regeneration. Commit B is a fresh golden
     change carrying the marker but no fresh artefact. A range covering only B
-    must fail (the artefact is out of range); the range covering both passes.
+    fails (the artefact is out of range); the range covering both ALSO fails,
+    because the verdict from A reviewed the earlier state, not B's later edit.
     """
     # Commit A: a fully ratified regeneration.
     _write(repo, _GOLDEN, '{"sessions": 99}\n')
@@ -395,11 +409,40 @@ def test_range_stale_verdict_does_not_bless_a_new_change(repo: Path) -> None:
     assert not only_b.has_sound_verdict
     assert not only_b.ok
 
-    # The wider range that does include A's artefact passes: the artefact (still
-    # present at the tip) is added within the range.
+    # The wider range includes A's artefact, but B changed the golden after it,
+    # so the verdict is stale and the gate still fails.
     both = guard.evaluate(repo, commit_range="HEAD~2..HEAD")
     assert both.ratification_artifacts == (_ARTIFACT,)
     assert both.has_sound_verdict
+    assert both.artifact_stale
+    assert not both.ok
+
+    code = guard.main(["--range", "HEAD~2..HEAD", "--repo-root", str(repo)])
+    assert code == 1
+    assert "later in this range than the verdict" in capsys.readouterr().err
+
+
+def test_range_refreshed_verdict_blesses_the_latest_change(repo: Path) -> None:
+    """Refreshing the artefact alongside the later golden change passes.
+
+    The same A-then-B shape as the stale test, except commit B re-commits the
+    ratification report, so the sound verdict is no earlier than the last golden
+    change and the gate is satisfied.
+    """
+    _write(repo, _GOLDEN, '{"sessions": 99}\n')
+    _write(repo, _ARTIFACT, _ratification())
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "test: regenerate goldens (A)")
+    # Commit B: a further golden change WITH a refreshed report.
+    _write(repo, _GOLDEN, '{"sessions": 123}\n')
+    _write(repo, _ARTIFACT, _ratification(goldens="basic_hunt db_state.json refreshed"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "test: regenerate goldens (B, re-reviewed)")
+
+    both = guard.evaluate(repo, commit_range="HEAD~2..HEAD")
+    assert both.has_sound_verdict
+    assert not both.artifact_stale
+    assert not both.unblessed_sets
     assert both.ok
 
 

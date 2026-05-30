@@ -67,6 +67,26 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+      # The two guards below are pure stdlib + git (no installed dependency
+      # tree), so unlike mypy / pytest-fast they are NOT in the CI pre-commit
+      # job's SKIP list: they run both locally and in CI. The authoring lint is
+      # diff-scoped (it inspects the lines a change adds, against HEAD here), so
+      # it computes its own diff and ignores filenames; the version-stamp parity
+      # check reads the manifests whole, so both always_run.
+      - id: authoring-lint
+        name: authoring lint (em dash + UK spelling, diff-scoped)
+        entry: python -m backend.scripts.check_authoring_lint
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
+      - id: version-stamp-parity
+        name: version-stamp parity
+        entry: python -m backend.scripts.check_version_stamps
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
       - id: pip-audit
         name: pip-audit (manual stage)
         entry: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict

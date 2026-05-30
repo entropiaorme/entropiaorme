@@ -83,8 +83,9 @@ class ActiveSessionView:
     Computed by ``HuntTracker.snapshot`` under the tracker's own ownership and
     returned as a detached value, so a caller on the web thread never iterates
     the live ``kills`` list or the in-progress accumulator while the chat-log
-    thread mutates them. Maps onto a Rust ``struct`` returned from the tracking
-    actor's snapshot query: owned data out, no shared reference in.
+    thread mutates them: owned data out, no shared reference in. The same
+    by-value shape ports directly to an owned Rust ``struct`` if the tracker is
+    later moved to Rust.
 
     The notable-event feed is carried as raw rows rather than formatted
     entries: the presentation mapping (category/label/description) lives in the
@@ -126,9 +127,8 @@ class TrackingReadout:
     """Immutable view of the whole tracking readout the owner can supply.
 
     ``active`` is the session discriminator: ``None`` when no session is
-    running, an ``ActiveSessionView`` otherwise (maps onto a Rust
-    ``Option<ActiveSessionView>``). ``current_tool`` (the detected active
-    weapon) is meaningful in both states. The HTTP layer merges configuration-
+    running, an ``ActiveSessionView`` otherwise. ``current_tool`` (the detected
+    active weapon) is meaningful in both states. The HTTP layer merges configuration-
     and runtime-derived fields (attribution mode, the repair-OCR flag, whether
     the hotbar listener is running) around this owned value to build the wire
     response, since those are not the tracker's to own.

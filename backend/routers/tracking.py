@@ -14,6 +14,7 @@ from backend.dependencies import get_services
 from backend.routers.response_models import (
     NotableEvent,
     TrackingLive,
+    TrackingSnapshot,
     TrackingStatus,
 )
 from backend.services.character_calc import ATTRIBUTE_SKILLS
@@ -655,6 +656,17 @@ def recent_events():
     clears the dashboard feed; events populate again as they occur in-session.
     """
     return recent_events_impl(get_services())
+
+
+@router.get(
+    "/snapshot",
+    response_model=TrackingSnapshot,
+    response_model_exclude_unset=True,
+)
+def tracking_snapshot():
+    """Consolidated dashboard hydration: one response a newly mounted webview
+    reads once, then keeps current from pushed events instead of re-polling."""
+    return tracking_snapshot_impl(get_services())
 
 
 def recent_events_impl(svc):

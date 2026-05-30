@@ -1,0 +1,21 @@
+name: skill_gain_across_tick
+flavour: scripted
+description: >
+  Multiple skill_gain events landing within and across tick
+  boundaries during a two-kill hunt. Pins that skill-gain lines
+  do not partition the combat-accumulator (existing behaviour
+  also exercised by basic_hunt_10_events kill 3 but in a
+  narrower test surface here).
+surfaces:
+  - tracking-skill-gain
+  - tracking-skill-gain-during-tick
+  - tracking-tick-boundary
+events: 9
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Two kills with skill-gains scattered through
+  combat ticks, loot ticks, and the gap between kills.

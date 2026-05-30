@@ -1,0 +1,61 @@
+{
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_2>",
+      "quantity": 540,
+      "value_ped": 5.4
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 1,
+      "damage_dealt": 73.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 7,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.0,
+      "critical_hits": 1,
+      "damage_dealt": 73.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 5.4,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 7,
+      "timestamp": "<TS_7>"
+    }
+  ],
+  "ledger_entries": [
+    {
+      "amount": 0.054,
+      "date": "<TS_8>",
+      "description": "Shrapnel Conversion",
+      "id": "<UUID_3>",
+      "tag": "convert",
+      "type": "markup"
+    }
+  ],
+  "notable_events": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_5>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_6>"
+    }
+  ]
+}

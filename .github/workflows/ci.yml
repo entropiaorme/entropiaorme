@@ -48,8 +48,18 @@ jobs:
       # tier runs once, on the coverage leg below, so it is excluded here.
       - name: Run backend test suite
         if: matrix.python-version == '3.11'
-        # Everything except the device / slow `full` tier and the contract tier.
-        run: python -m pytest -m "not full and not contract"
+        # Positive tier selection (`fast or standard`) rather than a negative
+        # exclusion: a test that lands without a tier marker stays out of the PR
+        # leg until it is deliberately classified, so an unclassified slow or
+        # device test cannot silently join the per-PR run. `--strict-markers`
+        # plus the conftest tier-map keep the markers honest at collection time.
+        # Run serially: this leg was measured at ~3 min serial but ~14.5 min
+        # under `-n auto` on the few-core hosted Windows runner, where each
+        # xdist worker re-pays the heavy import cost (onnxruntime, OpenCV,
+        # FastAPI) and per-process spawn dwarfs the parallelism gain. xdist
+        # stays a local-only accelerator on multi-core machines (see
+        # TESTING.md "Parallelism"); it is not wired into CI.
+        run: python -m pytest -m "fast or standard"
       # Coverage is measured on one leg only (3.14) to avoid double-counting and
       # racing coverage files; the floor lives in pyproject.toml. Coverage data
       # is accumulated here and across the contract run below, then reported once
@@ -59,12 +69,18 @@ jobs:
       # to run; the 3.11 leg keeps randomised order to surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
-        run: python -m pytest -m "not full and not contract" -p no:randomly --cov=backend --cov-branch --cov-report=
+        # Same positive tier selection as the floor leg above, run serially for
+        # the same wall-clock reason, with pinned order so the measured coverage
+        # is reproducible run to run.
+        run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report=
       # API contract tests (schemathesis from_asgi) drive the read surface
       # against the app's own OpenAPI schema. Run on the coverage leg only so the
       # slower schemathesis pass executes once per CI run; its coverage is
       # appended to the run above. schemathesis runs in deterministic mode against
       # a pinned Hypothesis, with order pinned, so this contribution is stable.
+      # Kept single-worker (no xdist): the stateful schemathesis pass carries
+      # per-process generation state, and pinned serial execution is what makes
+      # the appended coverage reproducible run to run.
       - name: Run API contract tests
         if: matrix.python-version == '3.14'
         run: python -m pytest -m contract -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
@@ -187,6 +203,34 @@ jobs:
         env:
           SKIP: mypy,pytest-fast
         run: pre-commit run --all-files --show-diff-on-failure
+
+  golden-ratification:
+    name: Golden ratification guard
+    runs-on: ubuntu-latest
+    # Pull requests only: the guard compares the PR's commits against the base
+    # branch, so it needs a two-sided range. A push to main has already been
+    # reviewed on its PR, where this same check ran.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base..head range resolves to the PR's commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Fail when a commit modifies a committed golden (a scenario fingerprint /
+      # DB-state snapshot, an HTTP-response or OpenAPI snapshot, a consistency
+      # golden, or the coverage matrix) without the documented
+      # 'test: regenerate goldens' commit-message marker, so a regression cannot
+      # be silently ratified by regenerating the expected output. Pure stdlib +
+      # git, so no dependency install is needed.
+      - name: Guard golden ratification
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.check_golden_ratification --range "$PR_BASE_SHA..$PR_HEAD_SHA"
 
   frontend:
     name: Frontend (build + check)

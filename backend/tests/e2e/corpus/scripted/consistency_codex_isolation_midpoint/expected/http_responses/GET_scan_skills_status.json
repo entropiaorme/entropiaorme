@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/scan/skills/status",
+    "query": {}
+  },
+  "response": {
+    "body": {
+      "active": false,
+      "captured_pages": 0,
+      "configured": true,
+      "error": null,
+      "expected_pages": 12,
+      "game_window_present": false,
+      "has_pending_result": false,
+      "last_scan_time": null,
+      "phase": "idle",
+      "processing": false,
+      "processing_progress": {
+        "done": 0,
+        "total": 0
+      },
+      "skills_count": 0
+    },
+    "headers": {
+      "cache-control": "no-cache",
+      "content-type": "application/json",
+      "etag": "<STRONG_ETAG>"
+    },
+    "status_code": 200
+  }
+}

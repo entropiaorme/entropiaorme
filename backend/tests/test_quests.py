@@ -1158,15 +1158,40 @@ class TestPlaylistAnalytics:
     def test_get_all_playlist_analytics(self, svc_with_tables):
         svc, _ = svc_with_tables
         q1 = svc.create_quest({"name": "A", "reward_ped": 1.0})
-        svc.create_playlist({"name": "Loop1", "quest_ids": [q1["id"]]})
-        svc.create_playlist({"name": "Loop2", "quest_ids": [q1["id"]]})
+        q2 = svc.create_quest({"name": "B", "reward_ped": 2.0})
+        q3 = svc.create_quest({"name": "C", "reward_ped": 4.0})
+        # Loop1's immediate set is fully completed and curated; Loop2 is left
+        # uncurated so the two branches (aggregated vs empty) are both pinned.
+        svc.create_playlist({"name": "Loop1", "quest_ids": [q1["id"], q2["id"]]})
+        svc.create_playlist({"name": "Loop2", "quest_ids": [q3["id"]]})
 
         self._create_session(svc, "sess-1")
         self._record_completion(svc, "sess-1", q1["id"])
+        self._record_completion(svc, "sess-1", q2["id"])
+        suggestion = svc.accept_session_link_suggestion("sess-1")
+        assert suggestion["suggestion_type"] == "playlist"
+        assert suggestion["playlist_name"] == "Loop1"
 
         results = svc.get_all_playlist_analytics()
         assert len(results) == 2  # Both playlists returned
-        assert all(r["matched_sessions"] == 0 for r in results)
+        by_name = {r["playlist_name"]: r for r in results}
+
+        # Curated playlist: the reward aggregation arithmetic is pinned, not just
+        # the matched-session count, so a mutant that corrupts the per-playlist
+        # reward sums while preserving the link count is caught.
+        loop1 = by_name["Loop1"]
+        assert loop1["matched_sessions"] == 1
+        assert loop1["quest_count"] == 2
+        assert loop1["total_immediate_reward_ped"] == pytest.approx(3.0)
+        assert loop1["total_bonus_reward_ped"] == pytest.approx(0.0)
+        assert loop1["total_reward_ped"] == pytest.approx(3.0)
+
+        # Uncurated playlist: no linked sessions, so every reward total is zero.
+        loop2 = by_name["Loop2"]
+        assert loop2["matched_sessions"] == 0
+        assert loop2["quest_count"] == 1
+        assert loop2["total_reward_ped"] == pytest.approx(0.0)
+        assert loop2["total_immediate_reward_ped"] == pytest.approx(0.0)
 
 
 class TestSessionLinkSuggestions:

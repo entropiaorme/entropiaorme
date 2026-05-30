@@ -1,0 +1,4 @@
+{"key": "space", "kind": "press", "offset_s": 0.0, "wall": "2026-05-19T10:00:00+00:00"}
+{"key": "space", "kind": "release", "offset_s": 1.0, "wall": "2026-05-19T10:00:01+00:00"}
+{"key": "space", "kind": "press", "offset_s": 2.0, "wall": "2026-05-19T10:00:02+00:00"}
+{"key": "space", "kind": "release", "offset_s": 3.0, "wall": "2026-05-19T10:00:03+00:00"}

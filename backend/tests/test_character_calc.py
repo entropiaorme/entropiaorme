@@ -517,3 +517,43 @@ def test_path_optimizer_mutual_exclusion():
         )
     with pytest.raises(ValueError):
         profession_path_optimizer({"Rifle": 0.0}, profession)
+
+
+def test_profession_level_skips_malformed_skill_entries():
+    """Non-dict entries, missing names, and unparseable weights are ignored."""
+    profession = {
+        "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 2.0},
+            "not-a-dict",  # skipped
+            {"skill": {}, "weight": 1.0},  # no name -> skipped
+            {"skill": {"name": "Aim"}, "weight": "bad"},  # weight defaults to 0.0
+        ]
+    }
+    # Computes without raising; the malformed rows contribute nothing.
+    level = profession_level({"Rifle": 50.0, "Aim": 50.0}, profession)
+    assert isinstance(level, float)
+    # Only Rifle (weight 2.0, level 50.0) contributes: round(50 * 2 / 10000, 2) = 0.01.
+    # The "bad"-weight Aim row must fall back to 0.0 and add nothing.
+    assert level == pytest.approx(0.01, abs=1e-6)
+
+
+def test_calculate_hp_skips_malformed_skill_rows():
+    """HP iteration drops non-dict, non-positive, unparseable, and nameless rows."""
+    skills_data: list = [
+        {"name": "Anatomy", "hp_increase": 1.0},
+        "not-a-dict",  # skipped
+        {"name": "Z", "hp_increase": "bad"},  # unparseable -> skipped
+        {"name": "N", "hp_increase": 0},  # non-positive -> skipped
+        {"hp_increase": 1.0},  # no name -> skipped
+    ]
+    hp = calculate_hp({"Anatomy": 100.0}, skills_data)
+    assert isinstance(hp, float)
+    # Only Anatomy (hp_increase 1.0) survives: HP = 80 + 100 / 1 = 180.0.
+    assert hp == pytest.approx(180.0, abs=1e-6)
+    # The optimizer walks the same iterator and returns a structured result.
+    result = hp_skill_optimizer({"Anatomy": 100.0}, skills_data)
+    assert isinstance(result, dict)
+    assert result["currentHp"] == pytest.approx(180.0, abs=1e-2)
+    # Exactly the one well-formed regular skill survives; nothing is an attribute.
+    assert [s["name"] for s in result["skills"]] == ["Anatomy"]
+    assert result["attributes"] == []

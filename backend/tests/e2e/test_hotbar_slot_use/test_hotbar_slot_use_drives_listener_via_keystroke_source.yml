@@ -1,0 +1,8 @@
+- source: hotbar:1
+  tool_name: Sollomate Opalo
+  topic: active_tool_changed
+- cost_per_use_ped: 0.3
+  reload_seconds: 2.5
+  source: hotbar:2
+  tool_name: FAP-5
+  topic: active_heal_tool_changed

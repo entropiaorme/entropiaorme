@@ -296,6 +296,12 @@ class TestLootGrouping:
 
         items = events[1][1]["items"]
         assert [item["is_enhancer_shrapnel"] for item in items] == [True, False]
+        # The flagged stack must be the one whose value matches the refund;
+        # pin both values so a mutant cannot flip the flag onto the wrong stack.
+        assert items[0]["value_ped"] == pytest.approx(0.80)
+        assert items[0]["is_enhancer_shrapnel"] is True
+        assert items[1]["value_ped"] == pytest.approx(1.73)
+        assert items[1]["is_enhancer_shrapnel"] is False
 
     def test_mission_received_event_emitted(self):
         """New Mission received line emits EVENT_MISSION_RECEIVED."""
@@ -355,6 +361,12 @@ class TestQuestRewardSuppression:
         assert len(items) == 3  # Shrapnel, Shrapnel, Animal Eye Oil (UA suppressed)
         names = [i["item_name"] for i in items]
         assert "Universal Ammo" not in names
+        # Pin order and per-item values, not just the sum: a mutant that drops a
+        # different item (or keeps Universal Ammo) can still hit the same total.
+        assert names == ["Shrapnel", "Shrapnel", "Animal Eye Oil"]
+        assert items[0]["value_ped"] == pytest.approx(0.0825)
+        assert items[1]["value_ped"] == pytest.approx(0.7247)
+        assert items[2]["value_ped"] == pytest.approx(0.80)
         assert loot_events[0][1]["total_ped"] == pytest.approx(0.0825 + 0.7247 + 0.80)
 
     def test_zero_ped_reward_suppresses_lowest_value(self):
@@ -428,7 +440,10 @@ class TestQuestRewardSuppression:
 
         loot_events = [e for e in events if e[0] == "loot"]
         assert len(loot_events) == 1
-        assert len(loot_events[0][1]["items"]) == 2  # Both items pass through
+        items = loot_events[0][1]["items"]
+        assert len(items) == 2  # Both items pass through
+        assert {i["item_name"] for i in items} == {"Universal Ammo", "Shrapnel"}
+        assert loot_events[0][1]["total_ped"] == pytest.approx(2.0)
 
     def test_filter_returns_none_all_events_pass(self):
         """Filter returning None means no suppression."""
@@ -501,3 +516,112 @@ class TestQuestRewardSuppression:
         # Events should still be emitted despite exception
         loot_events = [e for e in events if e[0] == "loot"]
         assert len(loot_events) == 1
+
+
+class TestDrainSeams:
+    """The condition-drain seams the replay helpers depend on.
+
+    These pin the watcher contract the e2e/recorder drain helpers rely on:
+    ``start()`` is ready to tail before it returns, ``wait_until_drained``
+    blocks on the tail loop's progress rather than a clock, and a watcher that
+    never reaches the requested line count raises rather than passing silently.
+    """
+
+    def _write(self, path, lines: list[str]) -> None:
+        with path.open("a", encoding="utf-8") as sink:
+            for line in lines:
+                sink.write(line)
+                sink.flush()
+
+    def test_start_is_ready_to_tail_before_returning(self, tmp_path):
+        """Lines written immediately after start() are tailed, not missed.
+
+        The readiness barrier means start() has opened the file and seeked to
+        end by the time it returns, so a write that lands right after cannot
+        slip past a not-yet-seeked watcher.
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        bus = EventBus()
+        loot: list = []
+        bus.subscribe(EVENT_LOOT_GROUP, loot.append)
+        watcher = ChatlogWatcher(bus, chatlog)
+        watcher.start()
+        try:
+            line = _make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12")
+            self._write(chatlog, [line])
+            watcher.wait_until_drained(1, timeout=5.0)
+        finally:
+            watcher.stop()
+
+        assert watcher.lines_seen == 1
+        assert not watcher.has_pending_tick
+        assert len(loot) == 1
+        # Pin the parsed payload, not just the count: a mutant that drops the
+        # value or mislabels the item would keep the count but corrupt the event.
+        assert loot[0]["timestamp"] == datetime(2026, 3, 27, 10, 0, 0)
+        assert loot[0]["items"][0]["item_name"] == "Animal Muscle Oil"
+        assert loot[0]["total_ped"] == 0.12
+
+    def test_wait_until_drained_raises_when_target_unreached(self, tmp_path):
+        """A watcher that never reads the requested lines raises TimeoutError.
+
+        A drain that the watcher cannot satisfy is a bug to surface, never a
+        wait to sleep through; the helper raises rather than returning.
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        watcher = ChatlogWatcher(EventBus(), chatlog)
+        watcher.start()
+        try:
+            # The message must surface both the unmet target and the actual
+            # progress so a stuck drain is diagnosable from the traceback alone.
+            with pytest.raises(
+                TimeoutError, match=r"did not drain to 1 line.*within 0\.3s.*read 0"
+            ):
+                # Nothing is ever written, so line one never arrives.
+                watcher.wait_until_drained(1, timeout=0.3)
+        finally:
+            watcher.stop()
+
+    def test_start_does_not_hang_when_readiness_times_out(self, tmp_path):
+        """If the readiness signal never fires, start() warns and returns.
+
+        The barrier must not turn a slow or failed startup into a hang; the
+        wait is bounded and start() proceeds (the watcher thread is still
+        live) rather than blocking the caller indefinitely.
+        """
+
+        class _NeverReady:
+            def clear(self):
+                pass
+
+            def set(self):
+                pass
+
+            def wait(self, timeout=None):
+                return False
+
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        watcher = ChatlogWatcher(EventBus(), chatlog)
+        watcher._ready = _NeverReady()  # type: ignore[assignment]
+        watcher.start()
+        try:
+            assert watcher.is_running
+        finally:
+            watcher.stop()
+
+    def test_pending_tick_reflects_buffer_state(self):
+        """has_pending_tick tracks the tick buffer across process and flush."""
+        bus = EventBus()
+        bus.subscribe(EVENT_LOOT_GROUP, lambda _d: None)
+        watcher = ChatlogWatcher(bus, "dummy.log")
+
+        assert not watcher.has_pending_tick
+        watcher._process_line(
+            _make_loot_line("2026-03-27 10:00:00", "Animal Muscle Oil", "0.12")
+        )
+        assert watcher.has_pending_tick
+        watcher._flush_tick()
+        assert not watcher.has_pending_tick

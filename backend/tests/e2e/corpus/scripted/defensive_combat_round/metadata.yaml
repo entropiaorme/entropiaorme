@@ -1,0 +1,24 @@
+name: defensive_combat_round
+flavour: scripted
+description: >
+  Defensive-combat surface: no player offence, only incoming
+  attacks (some hit, some dodged/evaded/jammed/missed/deflected),
+  one self-heal. Pins the no-kill defensive path so any future
+  regression that promotes a defensive line into a kill or that
+  drops damage_taken accounting surfaces as a golden diff. Fills
+  the parser-EventType coverage gap for the defensive combat
+  family; profession-panel coverage is unrelated to the chatlog
+  parser and lands via the screen-capture harness layer instead.
+surfaces:
+  - chatlog-defensive-combat
+  - chatlog-self-heal
+  - tracking-no-kill-session
+events: 8
+expected_kills: 0
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. No offensive shots, no loot, so the session
+  ends with zero kills but non-zero damage_taken accounting.

@@ -112,6 +112,7 @@ ALLOWED_API_HOSTS = {f"127.0.0.1:{BACKEND_PORT}", f"localhost:{BACKEND_PORT}"}
 from backend.core.event_bus import EventBus
 from backend.db.app_database import AppDatabase
 from backend.dependencies import Services, set_services
+from backend.middleware.etag import install_etag_middleware
 from backend.routers import (
     analytics,
     character,
@@ -120,6 +121,7 @@ from backend.routers import (
     equipment,
     health,
     quests,
+    recording,
     scan_manual,
     settings,
     tracking,
@@ -133,7 +135,7 @@ from backend.services.cost_engine import (
     heal_reload_seconds,
 )
 from backend.services.game_data_store import GameDataStore
-from backend.services.hotbar_listener import HotbarListener
+from backend.services.hotbar_listener import HOTBAR_SLOT_KEYS, HotbarListener
 from backend.services.mob_lookup_service import MobLookupService
 from backend.services.quest_service import QuestService
 from backend.services.repair_ocr import RepairOcrService
@@ -145,6 +147,8 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
+from backend.testing.keystroke_source import PynputKeystrokeSource
+from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
 
 
@@ -346,19 +350,39 @@ async def lifespan(app: FastAPI):
 
     codex_service = CodexService(app_db, game_data)
 
-    # Hotbar key listener — pynput hotbar-slot hook. Subscribes to session
-    # lifecycle events on the bus; only runs while a tracking session is
-    # active AND the user-facing toggle is on.
-    hotbar_listener = HotbarListener(event_bus, hotbar_resolver=_hotbar_resolver)
+    # Hotbar key listener. Consumes a PynputKeystrokeSource filtered to the
+    # number-row hotbar keys at the OS-hook boundary (input minimisation made
+    # structural); subscribes to session lifecycle events on the bus; only
+    # runs while a tracking session is active AND the user-facing toggle is on.
+    hotbar_keystroke_source = PynputKeystrokeSource(key_allowlist=HOTBAR_SLOT_KEYS)
+    hotbar_listener = HotbarListener(
+        event_bus,
+        keystroke_source=hotbar_keystroke_source,
+        hotbar_resolver=_hotbar_resolver,
+    )
     hotbar_listener.apply_config(hotbar_hooks_enabled=config.hotbar_hooks_enabled)
 
     repair_ocr = RepairOcrService(config_service)
 
-    # Spacebar capture listener — pynput Space hook that fires capture on the
-    # active skill scan when the user opts in via the scan-overlay toggle.
-    # Off until the frontend explicitly enables it.
+    # Spacebar capture listener. Consumes a PynputKeystrokeSource filtered to
+    # the space key only; fires capture on the active skill scan when the user
+    # opts in via the scan-overlay toggle. Off until the frontend explicitly
+    # enables it.
+    spacebar_keystroke_source = PynputKeystrokeSource(key_allowlist={"space"})
     spacebar_capture_listener = SpacebarCaptureListener(
         skill_scan_manual=skill_scan_manual,
+        keystroke_source=spacebar_keystroke_source,
+    )
+
+    # Developer-only session recorder. Constructed unconditionally (cheap, no
+    # I/O until start); its endpoints are gated server-side on developer mode.
+    recording_controller = RecordingController(
+        chatlog_watcher=chatlog_watcher,
+        skill_scan_manual=skill_scan_manual,
+        repair_ocr=repair_ocr,
+        hotbar_listener=hotbar_listener,
+        spacebar_capture_listener=spacebar_capture_listener,
+        corpus_root=Path(__file__).resolve().parent / "tests" / "e2e" / "corpus",
     )
 
     services = Services(
@@ -376,6 +400,7 @@ async def lifespan(app: FastAPI):
         hotbar_listener=hotbar_listener,
         repair_ocr=repair_ocr,
         spacebar_capture_listener=spacebar_capture_listener,
+        recording_controller=recording_controller,
     )
     set_services(services)
 
@@ -384,7 +409,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Cleanup
+    # Cleanup. Abort only an in-flight recording; is_recording is true for both
+    # the recording and finalising states, and aborting mid-finalise could
+    # discard or corrupt the bundle being committed.
+    if recording_controller.status().get("state") == "recording":
+        recording_controller.abort()
     spacebar_capture_listener.stop()
     hotbar_listener.stop()
     if tracker.is_tracking:
@@ -431,6 +460,8 @@ def create_app() -> FastAPI:
 
         return await call_next(request)
 
+    install_etag_middleware(app)
+
     app.include_router(health.router, prefix="/api")
     app.include_router(character.router, prefix="/api")
     app.include_router(equipment.router, prefix="/api")
@@ -441,6 +472,7 @@ def create_app() -> FastAPI:
     app.include_router(codex.router, prefix="/api")
     app.include_router(quests.router, prefix="/api")
     app.include_router(demo.router, prefix="/api")
+    app.include_router(recording.router, prefix="/api")
 
     return app
 

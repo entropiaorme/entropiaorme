@@ -15,8 +15,10 @@ from backend.services.character_calc import (
     codex_next_reward,
     codex_tier_progress,
     effective_points,
+    hp_skill_optimizer,
     profession_level,
     profession_path_optimizer,
+    profession_skill_optimizer,
     skill_rank,
 )
 
@@ -84,6 +86,26 @@ def test_profession_level_is_monotone_in_skill_level(weight, base_level, delta):
     assert hi + 1e-9 >= lo
 
 
+@given(
+    st.dictionaries(_SKILL_NAMES, _WEIGHT, min_size=1, max_size=5),
+    st.dictionaries(_SKILL_NAMES, _LEVEL, max_size=5),
+    _SKILL_NAMES,
+    st.floats(min_value=0.1, max_value=100.0, allow_nan=False, allow_infinity=False),
+)
+def test_profession_level_is_monotone_raising_any_one_skill(
+    weights, levels, raised, delta
+):
+    # Raising a single skill (regular or attribute) inside a multi-skill
+    # profession never lowers the rounded profession level, given the
+    # weight >= 0 precondition the _WEIGHT strategy enforces.
+    profession = _profession(weights)
+    lo = profession_level(levels, profession)
+    bumped = dict(levels)
+    bumped[raised] = bumped.get(raised, 0.0) + delta
+    hi = profession_level(bumped, profession)
+    assert hi + 1e-9 >= lo
+
+
 def test_missing_skill_contributes_zero():
     assert profession_level({}, _profession({"Handgun": 5.0})) == 0.0
 
@@ -138,6 +160,27 @@ def test_path_optimizer_requires_exactly_one_objective():
         profession_path_optimizer(
             {"Handgun": 10.0}, profession, target_level=5.0, ped_budget=10.0
         )
+
+
+@given(
+    st.floats(min_value=0.0, max_value=10.0, allow_nan=False, allow_infinity=False),
+    st.floats(min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False),
+)
+def test_path_optimizer_raises_unless_exactly_one_objective_given(target, budget):
+    # XOR guard: the call must succeed iff exactly one of target_level /
+    # ped_budget is supplied, and raise ValueError when neither or both are.
+    profession = _profession({"Handgun": 6.0})
+    levels = {"Handgun": 50.0}
+
+    with pytest.raises(ValueError):
+        profession_path_optimizer(levels, profession)
+    with pytest.raises(ValueError):
+        profession_path_optimizer(
+            levels, profession, target_level=target, ped_budget=budget
+        )
+    # Exactly one provided: both succeed without raising.
+    profession_path_optimizer(levels, profession, target_level=target)
+    profession_path_optimizer(levels, profession, ped_budget=budget)
 
 
 @settings(max_examples=20)
@@ -218,3 +261,73 @@ def test_codex_tier_progress_stays_in_the_unit_interval(skill, level):
     assert progress is not None
     # Rounding to four decimals can touch 1.0 at the very top of a tier.
     assert 0.0 <= progress <= 1.0
+
+
+# --- optimiser sort order ---
+
+# Mix of regular and attribute skills so both result lists are populated.
+_OPTIMISER_SKILLS = ["Handgun", "Rifle", "Aim", "Health", "Strength", "Agility"]
+
+
+def _is_non_decreasing(values):
+    return all(a <= b for a, b in zip(values, values[1:], strict=False))
+
+
+def _is_non_increasing(values):
+    return all(a >= b for a, b in zip(values, values[1:], strict=False))
+
+
+@given(
+    st.dictionaries(
+        st.sampled_from(_OPTIMISER_SKILLS),
+        st.floats(min_value=0.1, max_value=10.0, allow_nan=False, allow_infinity=False),
+        min_size=1,
+        max_size=6,
+    ),
+    st.dictionaries(
+        st.sampled_from(_OPTIMISER_SKILLS),
+        st.floats(
+            min_value=0.0, max_value=500.0, allow_nan=False, allow_infinity=False
+        ),
+        max_size=6,
+    ),
+)
+def test_profession_optimiser_returns_sorted_lists(weights, levels):
+    profession = _profession(weights)
+    result = profession_skill_optimizer(levels, profession)
+    # Regular skills ascending by PED to the next profession level.
+    assert _is_non_decreasing([s["pedToNextLevel"] for s in result["skills"]])
+    # Attributes descending by contribution factor.
+    assert _is_non_increasing([a["contributionFactor"] for a in result["attributes"]])
+
+
+@given(
+    st.lists(
+        st.fixed_dictionaries(
+            {
+                "name": st.sampled_from(_OPTIMISER_SKILLS),
+                "hp_increase": st.floats(
+                    min_value=1.0,
+                    max_value=300.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                ),
+            }
+        ),
+        min_size=1,
+        max_size=6,
+    ),
+    st.dictionaries(
+        st.sampled_from(_OPTIMISER_SKILLS),
+        st.floats(
+            min_value=0.0, max_value=500.0, allow_nan=False, allow_infinity=False
+        ),
+        max_size=6,
+    ),
+)
+def test_hp_optimiser_returns_sorted_lists(skills_data, levels):
+    result = hp_skill_optimizer(levels, skills_data)
+    # Regular skills ascending by PED per HP.
+    assert _is_non_decreasing([s["pedPerHp"] for s in result["skills"]])
+    # Attributes ascending by levels per HP.
+    assert _is_non_decreasing([a["levelsPerHp"] for a in result["attributes"]])

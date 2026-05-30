@@ -11,7 +11,7 @@ test (file write -> watcher tail loop -> parser -> tick buffer -> bus
 production; this is the first test in the suite to exercise it
 end-to-end rather than via direct ``_process_line(...)`` calls.
 
-R2 layers golden-file assertions on top of the explicit kill-by-kill
+The golden-file assertions layer on top of the explicit kill-by-kill
 checks: the explicit assertions stay as a clarity backstop and a
 quick orientation surface for a developer reading the test, while the
 goldens add full-coverage regression catching across fields the

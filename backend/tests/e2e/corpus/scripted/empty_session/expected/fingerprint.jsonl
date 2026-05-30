@@ -1,2 +1,4 @@
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_2>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from backend.services.chatlog_watcher import ChatlogWatcher
     from backend.services.codex_service import CodexService
     from backend.services.config_service import ConfigService
+    from backend.services.event_stream import EventStreamHub
     from backend.services.game_data_store import GameDataStore
     from backend.services.hotbar_listener import HotbarListener
     from backend.services.mob_lookup_service import MobLookupService
@@ -32,6 +33,7 @@ class Services:
     mob_lookup: MobLookupService
     config_service: ConfigService
     event_bus: EventBus
+    event_stream_hub: EventStreamHub
     tracker: HuntTracker
     chatlog_watcher: ChatlogWatcher
     skill_tracker: SkillTracker

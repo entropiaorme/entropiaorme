@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "TrackingSessionUpdated": {
+      "additionalProperties": false,
+      "description": "The session aggregates changed (started, advanced a tick, or stopped).",
+      "properties": {
+        "event_version": {
+          "default": 1,
+          "title": "Event Version",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurred At"
+        },
+        "payload": {
+          "$ref": "#/$defs/TrackingSessionUpdatedPayload"
+        },
+        "type": {
+          "const": "tracking.session.updated",
+          "default": "tracking.session.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "TrackingSessionUpdated",
+      "type": "object"
+    },
+    "TrackingSessionUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "Push-to-pull invalidation signal for the live tracking session.\n\nCarries only what the frontend needs to route the change: which session, the\ncoarse active/idle state (so the relay can drive the existing\n``tracking-state-changed`` listener verbatim), and why it fired. The window\nre-hydrates the full readout via the snapshot GET.",
+      "properties": {
+        "reason": {
+          "enum": [
+            "started",
+            "updated",
+            "stopped"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sessionid"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "idle"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "TrackingSessionUpdatedPayload",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "tracking.session.updated": "#/$defs/TrackingSessionUpdated"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TrackingSessionUpdated"
+    }
+  ]
+}

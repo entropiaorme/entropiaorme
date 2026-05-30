@@ -6,6 +6,11 @@
 
 const API_BASE = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT}/api`;
 
+/** Server-sent-events stream the main-window relay subscribes to (see
+ * `$lib/realtime/eventRelay`). Lives on the same loopback origin as every other
+ * `/api/*` call, so it needs no separate CSP `connect-src` entry. */
+export const EVENTS_STREAM_URL = `${API_BASE}/events`;
+
 import type { NotableEventCategory, NotableEventType } from '$lib/types/common';
 import { guideState } from '$lib/guide/state.svelte';
 

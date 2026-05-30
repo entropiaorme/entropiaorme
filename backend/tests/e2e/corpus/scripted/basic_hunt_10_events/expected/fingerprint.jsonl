@@ -1,11 +1,28 @@
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
-{"payload": {"amount": 10.5, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"amount": 15.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"amount": 30.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 500, "value_ped": 5.0}, {"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.12}], "timestamp": "<TS_3>", "total_ped": 5.12, "type": "loot"}, "topic": "loot_group"}
-{"payload": {"amount": 20.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 200, "value_ped": 2.0}], "timestamp": "<TS_5>", "total_ped": 2.0, "type": "loot"}, "topic": "loot_group"}
-{"payload": {"amount": 25.0, "timestamp": "<TS_6>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"amount": 0.05, "skill_name": "Bioregenesis", "timestamp": "<TS_7>", "type": "skill_gain"}, "topic": "skill_gain"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Wool", "quantity": 3, "value_ped": 1.5}], "timestamp": "<TS_8>", "total_ped": 1.5, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.5, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 15.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 30.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_4>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_5>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 500, "value_ped": 5.0}, {"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 0.12}], "timestamp": "<TS_6>", "total_ped": 5.12, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_6>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 20.0, "timestamp": "<TS_8>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_8>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 200, "value_ped": 2.0}], "timestamp": "<TS_10>", "total_ped": 2.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_10>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_11>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_12>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_12>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_13>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 0.05, "skill_name": "Bioregenesis", "timestamp": "<TS_14>", "type": "skill_gain"}, "topic": "skill_gain"}
+{"payload": {"timestamp": "<TS_14>"}, "topic": "tick_flushed"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Wool", "quantity": 3, "value_ped": 1.5}], "timestamp": "<TS_15>", "total_ped": 1.5, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_15>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_16>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_17>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

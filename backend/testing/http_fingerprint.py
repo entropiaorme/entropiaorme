@@ -332,4 +332,6 @@ class HttpFingerprinter:
         """Serialise ``payload`` to ``path`` as canonical sorted JSON."""
         path.parent.mkdir(parents=True, exist_ok=True)
         text = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
-        path.write_text(text, encoding="utf-8")
+        # newline="\n" so a Windows regen writes LF directly, matching the repo's
+        # `*.json eol=lf` policy rather than emitting CRLF in text mode.
+        path.write_text(text, encoding="utf-8", newline="\n")

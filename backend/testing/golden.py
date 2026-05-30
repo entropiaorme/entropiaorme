@@ -178,5 +178,12 @@ class GoldenSet:
             )
 
         self.expected_dir.mkdir(parents=True, exist_ok=True)
-        self.fingerprint_path.write_text(fingerprint_text, encoding="utf-8")
-        self.snapshot_path.write_text(serialize_snapshot(snapshot), encoding="utf-8")
+        # newline="\n" so a regen on Windows writes LF directly, matching the
+        # repo's `*.json/*.jsonl eol=lf` policy; text mode would emit CRLF and
+        # dirty every golden against the index until `git add --renormalize`.
+        self.fingerprint_path.write_text(
+            fingerprint_text, encoding="utf-8", newline="\n"
+        )
+        self.snapshot_path.write_text(
+            serialize_snapshot(snapshot), encoding="utf-8", newline="\n"
+        )

@@ -24,6 +24,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from backend.core.event_bus import EventBus
 
 UUID_PATTERN = re.compile(
@@ -78,6 +80,13 @@ class Normalizer:
         """
         if value is None or isinstance(value, bool):
             return value
+        if isinstance(value, BaseModel):
+            # Typed domain-event envelopes are published on the bus as model
+            # instances. Dump to the JSON wire form (the exact bytes the SSE
+            # bridge serialises) and recurse, so the envelope's UUID/timestamp
+            # fields normalise like any dict payload rather than hitting the
+            # ``repr`` fallback below.
+            return self._walk(value.model_dump(mode="json"))
         if isinstance(value, datetime):
             return self._symbol_for_timestamp(value.isoformat())
         if isinstance(value, str):
@@ -196,4 +205,7 @@ class FingerprintRecorder:
         """Persist the serialised fingerprint to ``path`` (parents
         created on demand)."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.serialize(), encoding="utf-8")
+        # newline="\n" so a regen on Windows writes LF directly, matching the
+        # repo's `*.json/*.jsonl eol=lf` policy (text mode would emit CRLF and
+        # dirty every golden against the index until `git add --renormalize`).
+        path.write_text(self.serialize(), encoding="utf-8", newline="\n")

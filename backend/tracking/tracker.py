@@ -19,7 +19,14 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Literal
 
+from backend.core.domain_events import (
+    TOPIC_TRACKING_SESSION_UPDATED,
+    TrackingSessionUpdated,
+    TrackingSessionUpdatedPayload,
+    to_iso_utc,
+)
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_ACTIVE_HEAL_TOOL_CHANGED,
@@ -30,6 +37,7 @@ from backend.core.events import (
     EVENT_LOOT_GROUP,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
+    EVENT_TICK_FLUSHED,
 )
 from backend.services.cost_engine import cost_per_shot_from_props
 from backend.tracking.loot_filter import is_tracked_loot, normalize_blacklist
@@ -197,6 +205,11 @@ class HuntTracker:
         # Session state
         self._session: TrackingSession | None = None
         self._accumulator: _Accumulator | None = None
+        # Set by the P&L handlers when a tick mutates the live session readout,
+        # cleared when the coalesced tracking.session.updated is emitted at the
+        # settled-tick boundary. Lets one domain event stand for a tick's worth
+        # of low-level mutations rather than one per raw mutation.
+        self._session_dirty = False
         self._loot_blacklist = normalize_blacklist(loot_filter_blacklist)
         self._refresh_loot_filter()
 
@@ -618,6 +631,7 @@ class HuntTracker:
         )
         self._event_bus.subscribe(EVENT_GLOBAL, self._on_global)
         self._event_bus.subscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+        self._event_bus.subscribe(EVENT_TICK_FLUSHED, self._on_tick_flushed)
 
         # Persist session start. `mob_tracking_mode` records the input
         # mode the session was captured under so post-hoc UI surfaces
@@ -637,6 +651,10 @@ class HuntTracker:
 
         log.info("Session started: %s", session_id[:8])
         self._event_bus.publish(EVENT_SESSION_STARTED, {"session_id": session_id})
+        self._session_dirty = False
+        self._emit_session_event(
+            "started", "active", self._session.start_time.timestamp()
+        )
         return self._session
 
     def _refresh_loot_filter(self) -> None:
@@ -704,6 +722,7 @@ class HuntTracker:
         )
         self._event_bus.unsubscribe(EVENT_GLOBAL, self._on_global)
         self._event_bus.unsubscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+        self._event_bus.unsubscribe(EVENT_TICK_FLUSHED, self._on_tick_flushed)
 
         # Finalise session
         self._session.end_time = self._now_fn()
@@ -739,6 +758,11 @@ class HuntTracker:
             dangling_cost,
         )
         self._event_bus.publish(EVENT_SESSION_STOPPED, {"session_id": session.id})
+        self._emit_session_event(
+            "stopped",
+            "idle",
+            session.end_time.timestamp() if session.end_time else None,
+        )
 
         # Cleanup
         self._session = None
@@ -886,6 +910,57 @@ class HuntTracker:
     # Event handlers
     # ------------------------------------------------------------------
 
+    def _emit_session_event(
+        self,
+        reason: Literal["started", "updated", "stopped"],
+        status: Literal["active", "idle"],
+        occurred_ts: float | None,
+    ) -> None:
+        """Publish the coarse, frontend-facing tracking.session.updated event.
+
+        A typed ``DomainEvent`` instance (not a dict) is published, so the bus
+        carries the same shape the SSE bridge serialises and a future Rust
+        emitter reproduces. ``occurred_at`` is stamped from the domain timestamp
+        that triggered the event (the tick time, or the session start/stop
+        time), not a fresh clock read: those values already exist in the
+        scenario's event stream and DB columns, so the event is deterministic
+        under replay and reuses the harness's existing timestamp symbols rather
+        than minting wall-clock ones.
+        """
+        session_id = self._session.id if self._session else None
+        self._event_bus.publish(
+            TOPIC_TRACKING_SESSION_UPDATED,
+            TrackingSessionUpdated(
+                occurred_at=to_iso_utc(occurred_ts),
+                payload=TrackingSessionUpdatedPayload(
+                    sessionId=session_id,
+                    status=status,
+                    reason=reason,
+                ),
+            ),
+        )
+
+    def _on_tick_flushed(self, data: dict) -> None:
+        """Coalesce a settled tick's mutations into one domain event.
+
+        Subscribed only while a session is active. Emits a single
+        ``tracking.session.updated`` when the tick actually changed the live
+        session readout (the P&L handlers set ``_session_dirty``), so a tick of
+        unrelated chat traffic does not wake every frontend listener. The
+        event is stamped with the tick's own timestamp, which already appears
+        on the tick's loot/combat events.
+        """
+        if self._session is None or not self._session_dirty:
+            return
+        self._session_dirty = False
+        raw_ts = data.get("timestamp")
+        occurred_ts = (
+            raw_ts.timestamp()
+            if isinstance(raw_ts, datetime)
+            else (float(raw_ts) if raw_ts is not None else None)
+        )
+        self._emit_session_event("updated", "active", occurred_ts)
+
     def _on_combat(self, data: dict) -> None:
         """Handle a parsed combat event from chat.log."""
         if not self._accumulator:
@@ -894,6 +969,11 @@ class HuntTracker:
         event_type = data.get("type", "")
         amount = data.get("amount", 0.0)
         timestamp = data.get("timestamp")
+        # Whether this event actually changed the live session readout. The
+        # coalesced tracking.session.updated fires only on a real mutation, so a
+        # duplicate self-heal tick or an unhandled event type does not wake
+        # listeners for a no-op.
+        mutated = False
 
         if event_type in ("damage_dealt", "critical_hit"):
             self._record_offensive_shot(
@@ -901,6 +981,7 @@ class HuntTracker:
                 is_crit=(event_type == "critical_hit"),
                 allow_damage_inference=True,
             )
+            mutated = True
 
         elif event_type in ("target_dodge", "target_evade", "target_jam"):
             self._record_offensive_shot(
@@ -908,9 +989,11 @@ class HuntTracker:
                 is_crit=False,
                 allow_damage_inference=False,
             )
+            mutated = True
 
         elif event_type == "damage_received":
             self._accumulator.damage_taken += amount
+            mutated = True
 
         # Kept as nested ifs rather than one combined condition so each
         # event-type branch dispatches on a single comparison.
@@ -942,6 +1025,10 @@ class HuntTracker:
                     if self._heal_cost_per_use_ped > 0:
                         self._session_heal_cost += self._heal_cost_per_use_ped
                     self._last_heal_time = timestamp
+                    mutated = True
+
+        if mutated:
+            self._session_dirty = True
 
         # Defensive incoming events stay out of the kills model.
 
@@ -967,6 +1054,8 @@ class HuntTracker:
             return
         self._last_loot_fingerprint = fingerprint
         self._last_loot_time = now
+        # Past the dedup guard a Kill is always recorded, so the readout changes.
+        self._session_dirty = True
 
         # Filter items
         items = []
@@ -1124,6 +1213,7 @@ class HuntTracker:
         if not self._player_name or player.lower() != self._player_name.lower():
             return
 
+        self._session_dirty = True
         event_type = data.get("type", "")
         mob_or_item = data.get("creature") or data.get("item") or "Unknown"
         value_ped = data.get("value", 0.0)
@@ -1190,6 +1280,9 @@ class HuntTracker:
         ):
             return
 
+        # The break applies to the active weapon, so the readout reflects it; an
+        # ignored break (filtered out above) leaves the session unchanged.
+        self._session_dirty = True
         slot_changed = state.apply_break(
             remaining if isinstance(remaining, int) else None
         )

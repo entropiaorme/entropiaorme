@@ -210,6 +210,14 @@ class HuntTracker:
         # settled-tick boundary. Lets one domain event stand for a tick's worth
         # of low-level mutations rather than one per raw mutation.
         self._session_dirty = False
+        # Session-readout fields, initialised here rather than sprung lazily in
+        # start_session so they are always-present owned state: the owner-side
+        # snapshot read (and any reader before the first session) sees them
+        # unconditionally, with no defensive hasattr/getattr at the call site.
+        # start_session resets them at each session boundary.
+        self._session_heal_cost: float = 0.0
+        self._heal_warning_emitted: bool = False
+        self._session_warnings: list[str] = []
         self._loot_blacklist = normalize_blacklist(loot_filter_blacklist)
         self._refresh_loot_filter()
 

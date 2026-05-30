@@ -279,11 +279,7 @@ def tracking_status_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
+    heal_cost = svc.tracker._session_heal_cost
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
 
@@ -575,11 +571,7 @@ def tracking_live_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
+    heal_cost = svc.tracker._session_heal_cost
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
     kills = len(session.kills)
@@ -597,15 +589,14 @@ def tracking_live_impl(svc):
     recent_events_list = []
 
     # Warnings from the tracker (e.g., heal tool not equipped)
-    if hasattr(svc.tracker, "_session_warnings"):
-        for msg in svc.tracker._session_warnings:
-            recent_events_list.append(
-                {
-                    "type": "warning",
-                    "description": msg,
-                    "value": 0,
-                }
-            )
+    for msg in svc.tracker._session_warnings:
+        recent_events_list.append(
+            {
+                "type": "warning",
+                "description": msg,
+                "value": 0,
+            }
+        )
 
     for r in notable:
         event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
@@ -647,7 +638,7 @@ def tracking_live_impl(svc):
             duration_ms,
             kills,
             len(notable),
-            len(getattr(svc.tracker, "_session_warnings", [])),
+            len(svc.tracker._session_warnings),
         )
     return payload
 

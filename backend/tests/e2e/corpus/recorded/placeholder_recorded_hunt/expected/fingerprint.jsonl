@@ -1,7 +1,17 @@
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
-{"payload": {"amount": 20.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 500, "value_ped": 5.0}], "timestamp": "<TS_2>", "total_ped": 5.0, "type": "loot"}, "topic": "loot_group"}
-{"payload": {"amount": 15.0, "timestamp": "<TS_3>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"amount": 40.0, "timestamp": "<TS_3>", "type": "critical_hit"}, "topic": "combat"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 1.2}], "timestamp": "<TS_4>", "total_ped": 1.2, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 20.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 500, "value_ped": 5.0}], "timestamp": "<TS_4>", "total_ped": 5.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_4>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_5>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 15.0, "timestamp": "<TS_6>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"amount": 40.0, "timestamp": "<TS_6>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_6>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Animal Muscle Oil", "quantity": 1, "value_ped": 1.2}], "timestamp": "<TS_8>", "total_ped": 1.2, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_8>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_10>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

@@ -1,7 +1,19 @@
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
-{"payload": {"amount": 13.0, "timestamp": "<TS_1>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"amount": 17.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"enhancer_name": "Weapon Damage Enhancer 1", "item_name": "ArMatrix LR-5", "remaining": 2, "shrapnel_ped": 0.83, "timestamp": "<TS_3>", "type": "enhancer_break"}, "topic": "enhancer_break"}
-{"payload": {"amount": 21.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
-{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 410, "value_ped": 4.1}, {"is_enhancer_shrapnel": false, "item_name": "Animal Eye Oil", "quantity": 1, "value_ped": 0.55}], "timestamp": "<TS_5>", "total_ped": 4.65, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 13.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 17.0, "timestamp": "<TS_4>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_4>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_5>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"enhancer_name": "Weapon Damage Enhancer 1", "item_name": "ArMatrix LR-5", "remaining": 2, "shrapnel_ped": 0.83, "timestamp": "<TS_6>", "type": "enhancer_break"}, "topic": "enhancer_break"}
+{"payload": {"timestamp": "<TS_6>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 21.0, "timestamp": "<TS_8>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_8>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 410, "value_ped": 4.1}, {"is_enhancer_shrapnel": false, "item_name": "Animal Eye Oil", "quantity": 1, "value_ped": 0.55}], "timestamp": "<TS_10>", "total_ped": 4.65, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_10>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_11>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
 {"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_12>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

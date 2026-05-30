@@ -7,11 +7,11 @@
   "tracking_sessions": [
     {
       "dangling_cost": 0.0,
-      "ended_at": "<TS_9>",
+      "ended_at": "<TS_19>",
       "heal_cost": 0.0,
       "id": "<UUID_1>",
       "is_active": 0,
-      "started_at": "<TS_10>"
+      "started_at": "<TS_20>"
     }
   ]
 }

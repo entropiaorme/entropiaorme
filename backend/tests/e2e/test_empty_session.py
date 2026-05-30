@@ -17,11 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.testing.clock import MockClock
 from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_empty_session_produces_no_kills_via_real_tail_loop(
-    e2e_pipeline,
+    make_e2e_pipeline,
     corpus_root: Path,
     golden_set,
     in_memory_db,
@@ -31,7 +32,15 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
     goldens.
     """
 
-    bus, tracker, watcher, chatlog = e2e_pipeline
+    # A zero-event session reads the clock only twice (session start and
+    # session stop) with no intervening events to separate them. Under the
+    # real wall clock those two reads can land on the same instant, leaving
+    # the start/stop timestamps equal or distinct depending on timing, which
+    # makes the golden order-dependent. Drive a deterministic clock and step
+    # it forward before the stop so the session boundaries are always
+    # distinct and the golden is reproducible regardless of test order.
+    clock = MockClock()
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(now_fn=clock.now)
 
     scenario = corpus_root / "scripted" / "empty_session"
     goldens = golden_set(scenario)
@@ -40,6 +49,7 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(1.0)
     result = tracker.stop_session()
 
     assert len(result.kills) == 0, (

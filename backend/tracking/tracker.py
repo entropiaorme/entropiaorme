@@ -473,9 +473,7 @@ class HuntTracker:
             current_mob=self._confirmed_mob_name or None,
             mob_source=self._mob_source if self._confirmed_mob_name else None,
             mob_entry_mode=self._session_mob_tracking_mode,
-            notable_event_rows=tuple(
-                (r[0], r[1], r[2], r[3]) for r in notable_rows
-            ),
+            notable_event_rows=tuple((r[0], r[1], r[2], r[3]) for r in notable_rows),
             warnings=tuple(self._session_warnings),
         )
         return TrackingReadout(current_tool=current_tool, active=active)

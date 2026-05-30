@@ -224,4 +224,6 @@ def test_dashboard_data_flow_reads_no_collapsed_endpoint(
     # The collapsed trio is never read, and neither is the un-collapsed sessions
     # endpoint the dashboard no longer fetches.
     assert collapsed == [], f"collapsed endpoints must not be read: {collapsed}"
-    assert sessions == [], f"sessions must not be read by the dashboard flow: {sessions}"
+    assert sessions == [], (
+        f"sessions must not be read by the dashboard flow: {sessions}"
+    )

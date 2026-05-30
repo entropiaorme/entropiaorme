@@ -79,9 +79,7 @@ def active_pipeline():
     def _kill(offset_s, combats, loot):
         ts = base + timedelta(seconds=offset_s)
         for kind, amount in combats:
-            bus.publish(
-                EVENT_COMBAT, {"type": kind, "amount": amount, "timestamp": ts}
-            )
+            bus.publish(EVENT_COMBAT, {"type": kind, "amount": amount, "timestamp": ts})
         bus.publish(
             EVENT_LOOT_GROUP,
             {

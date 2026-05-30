@@ -421,8 +421,12 @@
 		// backend tracking events: each one re-reads the snapshot, so the session
 		// island and stats grid update by subscription rather than by polling.
 		let unsubscribeTracking: (() => void) | undefined;
+		let unmounted = false;
 		void subscribeTracking().then((unlisten) => {
-			unsubscribeTracking = unlisten;
+			// Guard the unmount-before-resolve race: if teardown already ran,
+			// detach immediately rather than leaking the listener.
+			if (unmounted) unlisten();
+			else unsubscribeTracking = unlisten;
 		});
 		registerDemoApi('dashboard', {
 			setOverlayDemoVisible: (visible: boolean) => {
@@ -538,6 +542,7 @@
 			}
 		});
 		return () => {
+			unmounted = true;
 			unregisterDemoApi('dashboard');
 			unsubscribeTracking?.();
 		};

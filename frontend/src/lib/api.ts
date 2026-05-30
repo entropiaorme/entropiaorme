@@ -464,10 +464,6 @@ export async function restoreSessionMob(
 	);
 }
 
-export async function getRecentEvents(): Promise<RecentEvent[]> {
-	return request(demoPath('/tracking/recent-events'));
-}
-
 export interface TrackingLive {
 	status: 'unavailable' | 'idle' | 'active';
 	sessionId?: string;

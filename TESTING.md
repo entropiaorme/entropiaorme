@@ -165,6 +165,7 @@ Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml
 - **Dependency audit**: `pip-audit` against the pinned requirements.
 - **Pre-commit hooks**: `pre-commit run --all-files`, validating the hook configuration the local development loop uses (see "Local checks" below).
 - **Golden ratification** (pull requests only): fails when a commit moves a golden file without both the `test: regenerate goldens` marker and a recorded independent `ratification-sound` verdict for the changed sets, so a regression can be ratified neither unconsciously nor by its own author (see "Goldens regeneration" above).
+- **Authoring lint** (pull requests only): flags em dashes and US spellings on the lines a pull request adds (see "Authoring lint" below). Diff-scoped, so it binds new content without forcing a drive-by sweep of the old.
 - **Frontend**: the type-check and production build.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
@@ -190,7 +191,11 @@ The configured hooks are:
 - **ruff** (lint with autofix) and **ruff-format**, pinned to the same ruff version as the lint job, reading the same configuration.
 - **mypy** over `backend`, run against the project virtual environment so it resolves dependencies exactly as the typing job does.
 - the **fast test tier** (`pytest -m fast`), the quick pure-logic subset.
+- **authoring lint** (em dash + UK spelling), diff-scoped against the staged change (see "Authoring lint" below).
+- **version-stamp parity**, asserting the three app version stamps stay in lock-step (see "Authoring lint" below).
 - general hygiene: end-of-file and trailing-whitespace fixers, YAML and TOML validity, merge-conflict markers, and a mixed-line-ending check (line-ending policy itself is set per file type in `.gitattributes`).
+
+The authoring-lint and version-stamp hooks are pure stdlib plus git, so unlike mypy and the fast test tier (which need the installed dependency tree and are skipped in the CI pre-commit job) they run in CI as well as locally.
 
 The dependency audit is slower, so it is reserved for the manual stage rather than every commit; run it explicitly when checking dependencies:
 
@@ -199,6 +204,28 @@ pre-commit run --hook-stage manual pip-audit
 ```
 
 The mypy and test hooks run against the active virtual environment; the lint and hygiene hooks run in environments pre-commit manages itself, so the CI `pre-commit` job exercises those without reinstalling the dependency tree the typing and backend jobs already cover.
+
+## Authoring lint
+
+Two mechanical authoring rules are enforced as deterministic lint rather than eyeballed in review: no em dashes (U+2014) in authored content, and UK spelling in authored prose. Both live in `backend/scripts/check_authoring_lint.py`.
+
+They are **diff-scoped**: they inspect only the lines a change *adds*, never the whole tree. This is deliberate. The tree carries pre-existing US spellings and em dashes that predate the discipline, and normalising them drive-by is out of scope; a whole-tree gate could not run green without that churn, and a lint floor only ratchets up. Checking added lines only binds new content without disturbing the old.
+
+The scope differs by rule for a reason:
+
+- The **em-dash ban** applies to every added line in a non-exempt file (LICENSE, THIRD-PARTY-NOTICES, vendored trees and lockfiles, binaries, and generated artefacts are exempt). U+2014 is never code syntax, so an added em dash is always authored content.
+- The **UK-spelling check** applies only to added lines in prose contexts: Markdown / plain-text docs, and comment-only lines in code. A blanket US-to-UK check over code would be unworkable, because `color` (CSS), `behavior` (DOM API), `center` (CSS value), `license` (the `package.json` field), and `serialize` / `initialize` (identifiers) are legitimate US-spelled code tokens, not authoring slips. In-app copy in string literals stays under the em-dash net but is left to review for UK spelling. The US-to-UK map is a curated floor, extended as real slips appear.
+
+Run it against the staged change (the pre-commit invocation) or an explicit range:
+
+```bash
+.venv/Scripts/python.exe -m backend.scripts.check_authoring_lint              # staged vs HEAD
+.venv/Scripts/python.exe -m backend.scripts.check_authoring_lint --range origin/main..HEAD
+```
+
+The pull-request gate runs it over the PR's `base..head` range. Pass `--warn-only` to print findings without failing.
+
+A companion check, `backend/scripts/check_version_stamps.py`, asserts the three application version stamps (`frontend/package.json`, `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/tauri.conf.json`) carry an identical version, so a release bump cannot update some and miss others. It is whole-tree rather than diff-scoped (the invariant holds over the current tree at all times), so it runs in the pre-commit job rather than the diff-scoped authoring-lint job. `CURRENT_TOS_VERSION` in `frontend/src/lib/tos.ts` is deliberately excluded: it versions the terms-of-service document, a separate namespace that moves independently of the application release.
 
 ## Goldens regeneration
 

@@ -242,6 +242,34 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python -m backend.scripts.check_golden_ratification --range "$PR_BASE_SHA..$PR_HEAD_SHA"
 
+  authoring-lint:
+    name: Authoring lint (em dash + UK spelling)
+    runs-on: ubuntu-latest
+    # Pull requests only: the lint is diff-scoped, so it needs the PR's
+    # base..head range to know which lines the change adds. A push to main has
+    # already cleared this on its PR. The version-stamp parity check is whole-tree
+    # rather than diff-scoped, so it rides the pre-commit job instead of here.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base..head range resolves to the PR's commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Flag em dashes (U+2014) in any added line, and US spellings in added
+      # prose lines (docs + comments), on the lines this PR adds only. Pre-existing
+      # content is out of scope by construction, so the gate binds new authoring
+      # without forcing a drive-by sweep of the old. Pure stdlib + git, so no
+      # dependency install is needed.
+      - name: Lint newly authored lines
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.check_authoring_lint --range "$PR_BASE_SHA..$PR_HEAD_SHA"
+
   frontend:
     name: Frontend (build + check)
     runs-on: ubuntu-latest

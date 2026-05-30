@@ -966,10 +966,14 @@ class HuntTracker:
         if not self._accumulator:
             return
 
-        self._session_dirty = True
         event_type = data.get("type", "")
         amount = data.get("amount", 0.0)
         timestamp = data.get("timestamp")
+        # Whether this event actually changed the live session readout. The
+        # coalesced tracking.session.updated fires only on a real mutation, so a
+        # duplicate self-heal tick or an unhandled event type does not wake
+        # listeners for a no-op.
+        mutated = False
 
         if event_type in ("damage_dealt", "critical_hit"):
             self._record_offensive_shot(
@@ -977,6 +981,7 @@ class HuntTracker:
                 is_crit=(event_type == "critical_hit"),
                 allow_damage_inference=True,
             )
+            mutated = True
 
         elif event_type in ("target_dodge", "target_evade", "target_jam"):
             self._record_offensive_shot(
@@ -984,9 +989,11 @@ class HuntTracker:
                 is_crit=False,
                 allow_damage_inference=False,
             )
+            mutated = True
 
         elif event_type == "damage_received":
             self._accumulator.damage_taken += amount
+            mutated = True
 
         # Kept as nested ifs rather than one combined condition so each
         # event-type branch dispatches on a single comparison.
@@ -1018,6 +1025,10 @@ class HuntTracker:
                     if self._heal_cost_per_use_ped > 0:
                         self._session_heal_cost += self._heal_cost_per_use_ped
                     self._last_heal_time = timestamp
+                    mutated = True
+
+        if mutated:
+            self._session_dirty = True
 
         # Defensive incoming events stay out of the kills model.
 
@@ -1026,7 +1037,6 @@ class HuntTracker:
         if not self._accumulator or not self._session:
             return
 
-        self._session_dirty = True
         items_raw = data.get("items", [])
         total_ped = data.get("total_ped", 0.0)
         timestamp = data.get("timestamp")
@@ -1044,6 +1054,8 @@ class HuntTracker:
             return
         self._last_loot_fingerprint = fingerprint
         self._last_loot_time = now
+        # Past the dedup guard a Kill is always recorded, so the readout changes.
+        self._session_dirty = True
 
         # Filter items
         items = []
@@ -1247,7 +1259,6 @@ class HuntTracker:
         if not self._accumulator:
             return
 
-        self._session_dirty = True
         shrapnel_ped = data.get("shrapnel_ped", 0.0)
         enhancer_name = data.get("enhancer_name", "")
         item_name = data.get("item_name", "")
@@ -1269,6 +1280,9 @@ class HuntTracker:
         ):
             return
 
+        # The break applies to the active weapon, so the readout reflects it; an
+        # ignored break (filtered out above) leaves the session unchanged.
+        self._session_dirty = True
         slot_changed = state.apply_break(
             remaining if isinstance(remaining, int) else None
         )

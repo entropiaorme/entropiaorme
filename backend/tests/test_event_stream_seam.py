@@ -30,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import tempfile
 import threading
 import time
@@ -54,48 +53,44 @@ _MAX_LINES = 50
 _STARTUP_TIMEOUT = 15.0
 
 
-def _free_loopback_port() -> int:
-    """Reserve and release an ephemeral loopback port for the test server."""
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-    finally:
-        probe.close()
-
-
 @pytest.fixture
 def live_server() -> Iterator[int]:
     """Run the real app on a loopback uvicorn server for one test.
 
-    The host/origin guard allows only hosts derived from the configured backend
-    port, so the ephemeral port is added to the allow-list for the server's
-    lifetime. The lifespan (and thus the event bus, hub, and tracker) is wired by
-    uvicorn itself, so the seam runs against production startup.
+    Uvicorn binds an ephemeral port itself (``port=0``) and the actual port is
+    read back from the running server's socket after startup, so there is no
+    bind-then-release window another process could steal. The host/origin guard
+    allows only hosts derived from the configured backend port, so the bound port
+    is added to the allow-list for the server's lifetime. The lifespan (and thus
+    the event bus, hub, and tracker) is wired by uvicorn itself, so the seam runs
+    against production startup.
     """
-    port = _free_loopback_port()
     data_dir = tempfile.mkdtemp(prefix="eo_sse_seam_")
-
-    added_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-    main_module.ALLOWED_API_HOSTS |= added_hosts
     original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
     os.environ["ENTROPIAORME_DATA_DIR"] = data_dir
 
     config = uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning", lifespan="on"
+        app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
 
-    deadline = time.monotonic() + _STARTUP_TIMEOUT
-    while not server.started:
-        if time.monotonic() > deadline:
-            server.should_exit = True
-            raise RuntimeError("loopback server did not start in time")
-        time.sleep(0.05)
-
+    added_hosts: set[str] = set()
     try:
+        deadline = time.monotonic() + _STARTUP_TIMEOUT
+        while not server.started:
+            if time.monotonic() > deadline:
+                server.should_exit = True
+                raise RuntimeError("loopback server did not start in time")
+            time.sleep(0.05)
+
+        # Read the port uvicorn actually bound (port=0 -> kernel-assigned), so
+        # there is no gap between choosing a port and binding it.
+        port = server.servers[0].sockets[0].getsockname()[1]
+        added_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        main_module.ALLOWED_API_HOSTS |= added_hosts
+
         yield port
     finally:
         server.should_exit = True

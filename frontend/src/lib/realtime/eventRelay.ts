@@ -56,8 +56,10 @@ function forward(topic: string, raw: string): void {
 		return;
 	}
 	const payload = envelope.payload ?? {};
-	// Re-emit the domain event onto the Tauri bus for any topic-aware consumer.
-	void emit(toTauriEventName(topic), payload);
+	// Re-emit the whole typed envelope onto the Tauri bus, so a topic-aware
+	// consumer sees the full contract (type, event_version, occurred_at,
+	// payload), not just the payload.
+	void emit(toTauriEventName(topic), envelope);
 	// Bridge the tracking lifecycle onto the existing window-to-window seam so
 	// the dashboard and overlays react with no change to their listeners.
 	if (topic === 'tracking.session.updated') {

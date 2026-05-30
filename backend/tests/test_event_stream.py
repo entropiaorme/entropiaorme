@@ -19,6 +19,8 @@ import asyncio
 import json
 import threading
 
+import pytest
+
 from backend.core.domain_events import (
     TOPIC_TRACKING_SESSION_UPDATED,
     TrackingSessionUpdated,
@@ -49,10 +51,10 @@ def test_publish_serialises_and_fans_out_to_every_connection() -> None:
         assert hub.connection_count == 2
 
         bus.publish(TOPIC_TRACKING_SESSION_UPDATED, _session_event("sess-1"))
-        await asyncio.sleep(0)  # let the call_soon_threadsafe callback run
-
-        frame1 = q1.get_nowait()
-        frame2 = q2.get_nowait()
+        # Wait for the cross-thread delivery rather than relying on a bare
+        # sleep(0) as the synchronisation barrier.
+        frame1 = await asyncio.wait_for(q1.get(), 1.0)
+        frame2 = await asyncio.wait_for(q2.get(), 1.0)
         assert frame1 == frame2, "both connections must receive the identical frame"
 
         # SSE frame shape: id, event topic, data, terminating blank line.
@@ -140,9 +142,10 @@ def test_unregistered_connection_receives_no_further_frames() -> None:
         assert hub.connection_count == 0
 
         bus.publish(TOPIC_TRACKING_SESSION_UPDATED, _session_event("sess-2"))
-        await asyncio.sleep(0)
-
-        assert queue.empty()
+        # An unregistered connection must receive nothing: assert the queue
+        # stays empty across a real wait window, not just one event-loop tick.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(queue.get(), 0.1)
 
         hub.close()
 
@@ -160,9 +163,9 @@ def test_non_model_payload_on_domain_topic_is_dropped_not_forwarded() -> None:
         queue = hub.register()
 
         bus.publish(TOPIC_TRACKING_SESSION_UPDATED, {"not": "a model"})
-        await asyncio.sleep(0)
-
-        assert queue.empty()
+        # A non-model payload must be dropped: nothing arrives within the window.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(queue.get(), 0.1)
 
         hub.close()
 

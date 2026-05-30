@@ -366,9 +366,7 @@ class HuntTracker:
         current_tool = self._active_hotbar_tool_name
         session = self._session
         if session is None:
-            return TrackingReadout(
-                is_tracking=False, current_tool=current_tool, active=None
-            )
+            return TrackingReadout(current_tool=current_tool, active=None)
 
         kills = session.kills
         acc = self._accumulator
@@ -480,9 +478,7 @@ class HuntTracker:
             ),
             warnings=tuple(self._session_warnings),
         )
-        return TrackingReadout(
-            is_tracking=True, current_tool=current_tool, active=active
-        )
+        return TrackingReadout(current_tool=current_tool, active=active)
 
     def _is_weapon_attribution_trifecta(self) -> bool:
         return self._weapon_attribution_trifecta_provider()

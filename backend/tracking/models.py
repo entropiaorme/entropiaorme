@@ -125,13 +125,14 @@ class ActiveSessionView:
 class TrackingReadout:
     """Immutable view of the whole tracking readout the owner can supply.
 
-    ``active`` is ``None`` when no session is running; ``current_tool`` (the
-    detected active weapon) is meaningful in both states. The HTTP layer merges
-    configuration- and runtime-derived fields (attribution mode, the repair-OCR
-    flag, whether the hotbar listener is running) around this owned value to
-    build the wire response, since those are not the tracker's to own.
+    ``active`` is the session discriminator: ``None`` when no session is
+    running, an ``ActiveSessionView`` otherwise (maps onto a Rust
+    ``Option<ActiveSessionView>``). ``current_tool`` (the detected active
+    weapon) is meaningful in both states. The HTTP layer merges configuration-
+    and runtime-derived fields (attribution mode, the repair-OCR flag, whether
+    the hotbar listener is running) around this owned value to build the wire
+    response, since those are not the tracker's to own.
     """
 
-    is_tracking: bool
     current_tool: str | None
     active: ActiveSessionView | None

@@ -353,6 +353,7 @@ async def lifespan(app: FastAPI):
     skill_scan_manual = SkillScanManual(
         config_service,
         data_dir,
+        event_bus=event_bus,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
     )

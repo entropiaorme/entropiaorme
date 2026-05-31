@@ -229,3 +229,81 @@ def test_dashboard_data_flow_reads_no_collapsed_endpoint(
     assert sessions == [], (
         f"sessions must not be read by the dashboard flow: {sessions}"
     )
+
+
+_SCAN_STATUS_ENDPOINT = "/api/scan/skills/status"
+
+
+async def _drive_scan_flow(port: int) -> None:
+    """Model the scan overlay's hydrate-and-subscribe loop against the live server.
+
+    The real scan verbs gate on the OCR engine and the game window (absent in a
+    headless test), so status changes are driven through the producer's owned
+    state and outbox; the property under test is the request signature (no timer
+    poll of the 500ms status route), not the verb business logic.
+    """
+    base_url = f"http://127.0.0.1:{port}"
+    svc = get_services().skill_scan_manual
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=10.0, headers=REQUEST_HEADERS
+    ) as client:
+        # Hydrate on show: one status read, idle to begin with.
+        first = await client.get(_SCAN_STATUS_ENDPOINT)
+        assert first.status_code == 200
+        assert first.json()["phase"] == "idle"
+
+        async with client.stream("GET", "/api/events") as response:
+            assert response.status_code == 200
+            lines = response.aiter_lines()
+            assert await asyncio.wait_for(anext(lines), _READ_TIMEOUT) == ": ready"
+
+            try:
+                # A status change pushes a frame; the re-read it triggers reflects
+                # the new phase, so no timer poll is needed to learn it.
+                with svc._lock:
+                    svc._active = True
+                    svc._captures = [b"page"]
+                svc._publish_status()
+                frame = await _next_frame(lines)
+                assert frame["topic"] == "scan.status.changed"
+                assert frame["envelope"]["payload"]["phase"] == "capturing"
+
+                capturing = await client.get(_SCAN_STATUS_ENDPOINT)
+                assert capturing.status_code == 200
+                assert capturing.json()["phase"] == "capturing"
+
+                # A second change (-> awaiting_review) pushes another frame.
+                with svc._lock:
+                    svc._active = False
+                    svc._pending_result = {"Aim": 10.0}
+                svc._publish_status()
+                frame2 = await _next_frame(lines)
+                assert frame2["topic"] == "scan.status.changed"
+                assert frame2["envelope"]["payload"]["phase"] == "awaiting_review"
+
+                pending = await client.get(_SCAN_STATUS_ENDPOINT)
+                assert pending.status_code == 200
+                assert pending.json()["has_pending_result"] is True
+            finally:
+                with svc._lock:
+                    svc._reset()
+
+
+def test_scan_flow_reads_status_only_on_hydration(
+    recording_live_server: tuple[int, _RequestLog],
+) -> None:
+    """The scan overlay stays current on the status snapshot plus the push alone:
+    the server sees only the status reads the hydrate-and-subscribe loop issues
+    (one on show, one per pushed frame) and never a read on a 500ms timer."""
+    port, log = recording_live_server
+    asyncio.run(_drive_scan_flow(port))
+
+    status_reads = log.get_paths(_SCAN_STATUS_ENDPOINT)
+    event_streams = log.get_paths("/api/events")
+
+    # One stream, opened once.
+    assert len(event_streams) == 1, log.requests
+    # Exactly the hydrations the loop issues: one on show, one per pushed frame
+    # (capturing, awaiting_review). The retired 500ms timer poll would inflate
+    # this without bound; its absence is the network-quiet property.
+    assert len(status_reads) == 3, log.requests

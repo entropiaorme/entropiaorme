@@ -1,5 +1,63 @@
 {
   "$defs": {
+    "ScanStatusChanged": {
+      "additionalProperties": false,
+      "description": "The manual skill-scan status changed (phase transition or capture/OCR progress).",
+      "properties": {
+        "event_version": {
+          "default": 1,
+          "title": "Event Version",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurred At"
+        },
+        "payload": {
+          "$ref": "#/$defs/ScanStatusChangedPayload"
+        },
+        "type": {
+          "const": "scan.status.changed",
+          "default": "scan.status.changed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ScanStatusChanged",
+      "type": "object"
+    },
+    "ScanStatusChangedPayload": {
+      "additionalProperties": false,
+      "description": "Push-to-pull invalidation signal for the manual skill-scan flow.\n\nCarries only the coarse phase so a listener can route (and a human can read\nthe wire). The window re-hydrates the full status via the scan-status GET on\nevery frame, so per-page capture/OCR progress liveness comes from the\nhydration rather than from widening this payload: the emitter still fires on\nevery discrete progress change (see ``SkillScanManual``), but the wire stays\na minimal invalidation signal.",
+      "properties": {
+        "phase": {
+          "enum": [
+            "idle",
+            "capturing",
+            "processing",
+            "awaiting_review"
+          ],
+          "title": "Phase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "title": "ScanStatusChangedPayload",
+      "type": "object"
+    },
     "TrackingSessionUpdated": {
       "additionalProperties": false,
       "description": "The session aggregates changed (started, advanced a tick, or stopped).",
@@ -81,6 +139,7 @@
   },
   "discriminator": {
     "mapping": {
+      "scan.status.changed": "#/$defs/ScanStatusChanged",
       "tracking.session.updated": "#/$defs/TrackingSessionUpdated"
     },
     "propertyName": "type"
@@ -88,6 +147,9 @@
   "oneOf": [
     {
       "$ref": "#/$defs/TrackingSessionUpdated"
+    },
+    {
+      "$ref": "#/$defs/ScanStatusChanged"
     }
   ]
 }

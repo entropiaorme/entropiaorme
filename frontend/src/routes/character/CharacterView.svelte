@@ -20,12 +20,16 @@
 		getHpOptimizer,
 		getCharacterProspectOptions,
 		getCharacterProspect,
-		getManualSkillScanStatus,
-		type ScanManualStatus,
 	} from '$lib/api';
 	import { invoke } from '@tauri-apps/api/core';
+	import { type UnlistenFn } from '@tauri-apps/api/event';
 	import { onMount } from 'svelte';
 	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
+	import {
+		scanStatus as scanStatusStore,
+		hydrate as hydrateScan,
+		subscribeScan,
+	} from '$lib/stores/scanStore';
 	import {
 		characterDemoCalibration,
 		characterDemoStats,
@@ -122,7 +126,11 @@
 
 	// ── Manual scan status (drives in-flight view) ──────────────────────────────
 
-	let scanStatus = $state<ScanManualStatus | null>(null);
+	// Scan status from the shared event-driven store, suppressed while the guide
+	// is active (the guide owns this view then). The effect below hydrates once
+	// and subscribes when the guide is inactive; the store re-reads on each
+	// backend scan frame the relay re-emits, replacing the retired 500ms poll.
+	let scanStatus = $derived(guideState.isActive ? null : $scanStatusStore);
 	let scanInFlight = $derived(scanStatus !== null && scanStatus.phase !== 'idle');
 
 	$effect(() => {
@@ -130,27 +138,24 @@
 	});
 
 	$effect(() => {
-		if (guideState.isActive) {
-			scanStatus = null;
-			return;
-		}
-		let stopped = false;
-
-		async function tick() {
-			try {
-				const sk = await getManualSkillScanStatus().catch(() => null);
-				if (stopped) return;
-				scanStatus = sk;
-			} catch {
-				// Backend not reachable; leave previous status.
+		if (guideState.isActive) return;
+		let unlisten: UnlistenFn | undefined;
+		let disposed = false;
+		// Attach the listener BEFORE the first hydrate: a status change between
+		// the hydrate GET and the listener attaching would otherwise be lost (if
+		// it were the last transition). Hydrating inside the resolve keeps the
+		// listener live first, so any later frame re-hydrates and heals it.
+		void subscribeScan().then((fn) => {
+			if (disposed) {
+				fn();
+				return;
 			}
-		}
-
-		void tick();
-		const interval = setInterval(tick, 500);
+			unlisten = fn;
+			void hydrateScan();
+		});
 		return () => {
-			stopped = true;
-			clearInterval(interval);
+			disposed = true;
+			unlisten?.();
 		};
 	});
 

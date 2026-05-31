@@ -31,6 +31,8 @@ import pytest
 
 from backend.core.domain_events import (
     DomainEventAdapter,
+    ScanStatusChanged,
+    ScanStatusChangedPayload,
     TrackingSessionUpdated,
     TrackingSessionUpdatedPayload,
     to_iso_utc,
@@ -146,3 +148,30 @@ def test_event_envelope_serialises_to_expected_wire() -> None:
     restored = DomainEventAdapter.validate_python(envelope.model_dump(mode="json"))
     assert isinstance(restored, TrackingSessionUpdated)
     assert restored.payload.sessionId == "session-abc"
+
+
+def test_scan_status_changed_serialises_to_expected_wire() -> None:
+    """Pin the value-level wire contract of the scan domain event.
+
+    The second union member must serialise to the same closed, camelCase,
+    ISO-8601-UTC envelope shape as the first, and the discriminator must select
+    it (not tracking) on the way back. This proves the actual bytes a frontend
+    listener (and the Rust port) sees for the new topic, not just the schema.
+    """
+    envelope = ScanStatusChanged(
+        occurred_at=to_iso_utc(1735680000.0),
+        payload=ScanStatusChangedPayload(phase="processing"),
+    )
+
+    assert envelope.model_dump(mode="json") == {
+        "type": "scan.status.changed",
+        "event_version": 1,
+        "occurred_at": "2024-12-31T21:20:00+00:00",
+        "payload": {
+            "phase": "processing",
+        },
+    }
+
+    restored = DomainEventAdapter.validate_python(envelope.model_dump(mode="json"))
+    assert isinstance(restored, ScanStatusChanged)
+    assert restored.payload.phase == "processing"

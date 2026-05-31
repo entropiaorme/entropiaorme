@@ -155,3 +155,62 @@ def test_session_started_event_crosses_the_sse_seam(live_server: int) -> None:
     assert payload["reason"] == "started"
     # camelCase on the wire, and the id matches the session just started.
     assert payload["sessionId"] == session_id
+
+
+async def _read_scan_frame(port: int) -> tuple[str | None, str | None]:
+    """Open the stream, drive a scan status change, return the first scan frame.
+
+    The real scan verbs gate on the OCR engine and the game window (absent in a
+    headless test), so the status change is driven through the producer's owned
+    state and outbox directly. The seam under test is that the frame crosses the
+    wire; the verb business logic is covered by the producer unit and scan suites.
+    """
+    base_url = f"http://127.0.0.1:{port}"
+    async with (
+        httpx.AsyncClient(base_url=base_url, timeout=10.0) as client,
+        client.stream("GET", "/api/events", headers=REQUEST_HEADERS) as response,
+    ):
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+
+        lines = response.aiter_lines()
+        assert await asyncio.wait_for(anext(lines), _READ_TIMEOUT) == ": ready"
+
+        svc = get_services().skill_scan_manual
+        try:
+            with svc._lock:
+                svc._active = True
+                svc._captures = [b"page"]
+            svc._publish_status()
+
+            topic: str | None = None
+            data_payload: str | None = None
+            for _ in range(_MAX_LINES):
+                raw = await asyncio.wait_for(anext(lines), _READ_TIMEOUT)
+                if raw.startswith("event:"):
+                    topic = raw[len("event:") :].strip()
+                elif raw.startswith("data:"):
+                    data_payload = raw[len("data:") :].strip()
+                    break
+            return topic, data_payload
+        finally:
+            with svc._lock:
+                svc._reset()
+
+
+def test_scan_status_event_crosses_the_sse_seam(live_server: int) -> None:
+    """A scan status change pushes a typed scan.status.changed frame to an open
+    SSE stream, proving the spine's second domain topic crosses the same seam as
+    the first with the discriminator, version, and phase the wire contract pins."""
+    topic, data_payload = asyncio.run(_read_scan_frame(live_server))
+
+    assert topic == "scan.status.changed", (
+        f"expected the scan topic on the stream, saw {topic!r}"
+    )
+    assert data_payload is not None, "no scan data frame arrived on the stream"
+
+    envelope = json.loads(data_payload)
+    assert envelope["type"] == "scan.status.changed"
+    assert envelope["event_version"] == 1
+    assert envelope["occurred_at"] is not None
+    assert envelope["payload"]["phase"] == "capturing"

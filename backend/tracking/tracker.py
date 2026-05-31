@@ -1532,13 +1532,16 @@ class HuntTracker:
                 else datetime.now(tz=None).timestamp()
             )
 
-            # Tag the most recently created kill (staleness check: within 5s)
-            kill_id = None
-            target_id = None
+            # Tag the most recently created kill (staleness check: within 5s).
+            # Narrow on ``target is not None`` directly (rather than capturing
+            # the match in a separate bool) so the type checker can prove the
+            # kill is present before its fields are read; ``target_id`` then
+            # carries the "a kill was tagged" signal to the post-lock DB writes.
+            kill_id: str | None = None
+            target_id: str | None = None
             target_is_hof = False
             target = self._last_kill
-            correlated = bool(target and abs(ts - target.timestamp) < 5.0)
-            if correlated:
+            if target is not None and abs(ts - target.timestamp) < 5.0:
                 target.is_global = True
                 if is_hof:
                     target.is_hof = True
@@ -1546,7 +1549,7 @@ class HuntTracker:
                 target_id = target.id
                 target_is_hof = target.is_hof
 
-        if correlated:
+        if target_id is not None:
             self._db.execute(
                 "UPDATE kills SET is_global = 1, is_hof = ? WHERE id = ?",
                 (int(target_is_hof), target_id),

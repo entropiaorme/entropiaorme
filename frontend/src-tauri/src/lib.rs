@@ -3,7 +3,7 @@ use std::sync::Mutex;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -14,6 +14,11 @@ fn toggle_overlay(app: tauri::AppHandle) {
             let _ = window.hide();
         } else {
             let _ = window.show();
+            // The overlay is a pre-spawned hidden window shown without focus, so
+            // no focus/visibility event reaches its webview on show. Signal the
+            // show explicitly so it can re-read config/runtime state that no
+            // backend event announces (otherwise it stays stale until restart).
+            let _ = app.emit("overlay-shown", ());
         }
     }
 }

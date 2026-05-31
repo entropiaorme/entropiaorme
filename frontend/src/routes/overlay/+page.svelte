@@ -1,8 +1,7 @@
 <script lang="ts">
 	import {
 		ApiError,
-		getTrackingLive,
-		getTrackingStatus,
+		getTrackingSnapshot,
 		startTracking,
 		stopTracking,
 		releaseMob,
@@ -17,6 +16,7 @@
 		updateSettings,
 		type TrackingLive,
 		type TrackingStatus,
+		type TrackingSnapshot,
 		type ManualMobSuggestion,
 		type SessionQuestLinkSuggestion
 	} from '$lib/api';
@@ -50,6 +50,13 @@
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 
 	const TRACKING_STATE_CHANGED_EVENT = 'tracking-state-changed';
+	// The colon-form Tauri topic the event relay re-emits each backend tracking
+	// frame on (the wire topic `tracking.session.updated`; Tauri event names
+	// forbid dots). See lib/realtime/eventRelay.ts.
+	const TRACKING_TOPIC = 'tracking:session:updated';
+	// Emitted by the shell (toggle_overlay) when this hidden window is shown, so
+	// the overlay can re-read config/runtime fields no tracking frame announces.
+	const OVERLAY_SHOWN_EVENT = 'overlay-shown';
 	const OVERLAY_SIZE_SLACK = 36;
 	const OVERLAY_MENU_VERTICAL_GAP = 6;
 	const OVERLAY_MENU_MAX_HEIGHT = 220;
@@ -107,6 +114,9 @@
 
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
+	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
+	// for the client-side elapsed tick. null when no active session is timed.
+	let sessionStartedAtMs = $state<number | null>(null);
 	let releasing = $state(false);
 	let toggling = $state(false);
 
@@ -612,7 +622,7 @@
 		trifectaError = null;
 		try {
 			await updateSettings({ active_trifecta_preset_id: presetId });
-			await fetchLive();
+			await hydrate();
 		} catch (error) {
 			trifectaError = error instanceof ApiError || error instanceof Error
 				? error.message
@@ -698,31 +708,74 @@
 
 
 
-	// Poll live data every 2 seconds
-	$effect(() => {
-		fetchLive();
-		const interval = setInterval(fetchLive, 2000);
-		return () => clearInterval(interval);
-	});
-
+	// Hydrate the consolidated snapshot on mount and re-read it on each backend
+	// tracking frame the event relay re-emits onto the typed Tauri topic. No
+	// polling: the snapshot is the single source of render shape, and a frame is
+	// a pure trigger to re-read it (the payload is never reduced into state).
 	$effect(() => {
 		let disposed = false;
 		let unlisten: (() => void) | undefined;
 
 		(async () => {
-			unlisten = await listen<{ status?: 'active' | 'idle' }>(
-				TRACKING_STATE_CHANGED_EVENT,
-				async () => {
-					if (disposed) return;
-					await fetchLive();
-				}
-			);
+			unlisten = await listen(TRACKING_TOPIC, () => {
+				if (disposed) return;
+				void hydrate();
+			});
+			// Hydrate AFTER the listener attaches, so a frame arriving during
+			// subscription setup is not lost (it re-triggers a read). A payload-less
+			// reconnect nudge on this topic re-hydrates the same way, so it can
+			// never be mistaken for an idle session.
+			if (disposed) return;
+			void hydrate();
 		})();
 
 		return () => {
 			disposed = true;
 			unlisten?.();
 		};
+	});
+
+	// The overlay is a hidden pre-spawned window shown (not focused) by
+	// toggle_overlay, so no focus/visibility event fires on the frontend when it
+	// appears. The shell emits `overlay-shown` from the show path; re-read on it
+	// to refresh config/runtime fields no tracking frame announces (weapon
+	// attribution, trifecta presets, mob-entry mode, repair-OCR, the armour
+	// reminder), which would otherwise stay stale and wedge a control after a
+	// settings change made while the overlay was hidden.
+	$effect(() => {
+		let disposed = false;
+		let unlisten: (() => void) | undefined;
+
+		(async () => {
+			unlisten = await listen(OVERLAY_SHOWN_EVENT, () => {
+				if (disposed) return;
+				void hydrate();
+			});
+		})();
+
+		return () => {
+			disposed = true;
+			unlisten?.();
+		};
+	});
+
+	// Drive the elapsed timer client-side while active. With no poll, data.elapsed
+	// would otherwise advance only on coalesced backend frames and the headline
+	// timer would stutter; derive seconds from the session's started_at (the same
+	// basis the stat pills use) and tick once a second. Idle tears the tick down.
+	// Writing data.elapsed here cannot retrigger this effect: Svelte 5 tracks per
+	// property, so the .elapsed write is isolated from the .status read (and
+	// applySnapshot always materialises the elapsed key, so the write is a
+	// value-update, never a key-add that would invalidate the read).
+	$effect(() => {
+		if (data.status !== 'active' || sessionStartedAtMs == null) return;
+		const startedAt = sessionStartedAtMs;
+		const tickElapsed = () => {
+			data.elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+		};
+		tickElapsed();
+		const interval = setInterval(tickElapsed, 1000);
+		return () => clearInterval(interval);
 	});
 
 	$effect(() => {
@@ -797,24 +850,65 @@
 
 
 
-	async function fetchLive() {
+	let snapshotInFlight = false;
+	let snapshotRefetchQueued = false;
+
+	// Map the one consolidated snapshot onto the overlay's two render bindings:
+	// `data` (TrackingLive, the strip) and `status` (TrackingStatus, the stat
+	// pills). TrackingSnapshot is a strict superset of TrackingStatus, so `status`
+	// takes it directly; `data` is mapped field by field, bridging the snapshot's
+	// snake `session_id` / `kill_count` onto the live shape's camel `sessionId` /
+	// `killCount`. The activity feed (`recentEvents`) is deliberately not mapped:
+	// the overlay renders no feed.
+	function applySnapshot(snapshot: TrackingSnapshot) {
+		status = snapshot;
+		data = {
+			status: snapshot.status,
+			sessionId: snapshot.session_id,
+			elapsed: snapshot.elapsed,
+			killCount: snapshot.kill_count,
+			cost: snapshot.cost,
+			returns: snapshot.returns,
+			pes: snapshot.pes,
+			net: snapshot.net,
+			returnRate: snapshot.returnRate,
+			weaponAttribution: snapshot.weaponAttribution,
+			repairOcrEnabled: snapshot.repairOcrEnabled,
+			endOfSessionArmourReminderEnabled: snapshot.endOfSessionArmourReminderEnabled,
+			mobEntryMode: snapshot.mobEntryMode,
+			currentMob: snapshot.currentMob,
+			mobSource: snapshot.mobSource,
+			currentTool: snapshot.currentTool,
+			trifectaAttribution: snapshot.trifectaAttribution,
+		};
+		const startedMs = snapshot.started_at ? new Date(snapshot.started_at).getTime() : NaN;
+		sessionStartedAtMs = Number.isNaN(startedMs) ? null : startedMs;
+	}
+
+	// Re-read the consolidated snapshot and apply it. Overlapping calls coalesce:
+	// a frame arriving mid-read queues exactly one follow-up read, so two reads
+	// can never settle out of order and the overlay always lands on the latest
+	// state. A failed read keeps the last-good render rather than flickering the
+	// overlay to a dormant default; the next frame (or the relay's reconnect
+	// nudge) re-reads. Mirrors the dashboard trackingStore; each webview is its
+	// own JS context, so the overlay keeps its own coalescer instance.
+	async function hydrate(): Promise<void> {
+		if (snapshotInFlight) {
+			snapshotRefetchQueued = true;
+			return;
+		}
+		snapshotInFlight = true;
 		try {
-			const [live, full] = await Promise.all([
-				getTrackingLive(),
-				getTrackingStatus().catch(() => null),
-			]);
-			data = live;
-			status = full;
-		} catch {
-			// Preserve last-good state across transient fetch errors. A single
-			// failed poll (sidecar briefly busy during a hotbar tool-switch,
-			// concurrent fetches racing on a TRACKING_STATE_CHANGED_EVENT
-			// re-fetch atop the 2s poll) used to wipe `data` to a dormant
-			// 'unavailable' default and flicker the overlay through its
-			// no-active-session render every poll midpoint. Sticky state holds
-			// the last reading until the next successful poll restores live
-			// state; if the sidecar is genuinely down, other surfaces signal
-			// that more authoritatively.
+			do {
+				snapshotRefetchQueued = false;
+				try {
+					applySnapshot(await getTrackingSnapshot());
+				} catch {
+					// Transient read failure: keep the last good snapshot.
+				}
+			} while (snapshotRefetchQueued);
+		} finally {
+			snapshotInFlight = false;
 		}
 	}
 
@@ -925,7 +1019,7 @@
 		attributionWarning = null;
 		try {
 			await startTracking();
-			await fetchLive();
+			await hydrate();
 			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'active' });
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 400) {
@@ -961,7 +1055,13 @@
 		const wasActive = data.status === 'active';
 		let stoppedSessionId: string | null = null;
 		try {
-			// Capture session stats before stopping
+			// Refresh to the latest totals before capturing the final readout.
+			// With no poll, `data` is only as fresh as the last backend frame, and
+			// cost / returns / net are confirmed-ledger PED figures: the
+			// post-session readout must show the session's true final totals, not a
+			// tick-stale snapshot. The session is still active here, so this reads
+			// the live totals; stopping adds nothing to them.
+			if (wasActive) await hydrate();
 			lastSessionStats = wasActive ? {
 				cost: data.cost ?? 0,
 				returns: data.returns ?? 0,
@@ -972,7 +1072,7 @@
 			const result = await stopTracking();
 			stoppedSessionId = result.session_id;
 			lastSessionId = stoppedSessionId;
-			await fetchLive();
+			await hydrate();
 			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'idle' });
 		} catch { /* ignore */ }
 		toggling = false;
@@ -1055,7 +1155,7 @@
 			mobSuggestions = [];
 			await closeMobMenu();
 			mobError = null;
-			await fetchLive();
+			await hydrate();
 		} catch { /* ignore */ }
 		releasing = false;
 	}
@@ -1107,7 +1207,7 @@
 			mobSuggestions = [];
 			overlayMenuLaunchError = null;
 			await closeMobMenu();
-			await fetchLive();
+			await hydrate();
 		} catch (error) {
 			mobError = error instanceof ApiError ? error.message : 'Failed to set tag';
 		}
@@ -1124,7 +1224,7 @@
 			mobSuggestions = [];
 			overlayMenuLaunchError = null;
 			await closeMobMenu();
-			await fetchLive();
+			await hydrate();
 		} catch (error) {
 			mobError = error instanceof ApiError ? error.message : 'Failed to lock mob';
 		}

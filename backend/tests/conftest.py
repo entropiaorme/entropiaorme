@@ -56,6 +56,7 @@ _MODULE_TIERS = {
     "test_mob_lookup_service": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
+    "test_skill_scan_producer": "fast",  # producer coalescer; in-memory bus
     "test_tool_inference": "fast",
     "test_tt_curve_properties": "fast",
     # Property suites over pure-logic services (in-memory, sub-second).

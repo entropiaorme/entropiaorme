@@ -24,8 +24,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { EVENTS_STREAM_URL } from '$lib/api';
 
 /** Wire topics forwarded from the SSE stream onto the Tauri bus. Grows as more
- * domain topics are added (scan status, quests, ...). */
-const FORWARDED_TOPICS = ['tracking.session.updated'] as const;
+ * domain topics are added (quests, ...). Each is re-emitted on its colon-form
+ * Tauri topic and covered by the reconnect nudge below; only tracking also
+ * bridges onto the legacy window-to-window lifecycle event. */
+const FORWARDED_TOPICS = ['tracking.session.updated', 'scan.status.changed'] as const;
 
 /** Existing window-to-window lifecycle event the dashboard and overlays already
  * listen on; the relay drives it from the backend in addition to the overlay's

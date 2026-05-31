@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { invoke } from '@tauri-apps/api/core';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
+	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 	import { LogicalSize } from '@tauri-apps/api/dpi';
 	import Button from '$lib/components/Button.svelte';
 	import {
@@ -13,6 +14,7 @@
 		setSpacebarCapture,
 		type ScanManualStatus
 	} from '$lib/api';
+	import { SCAN_TOPIC } from '$lib/stores/scanStore';
 
 	const OVERLAY_SIZE_SLACK = 36;
 
@@ -91,11 +93,48 @@
 		await syncSpacebarCapture(spacebarCapture);
 	});
 
+	// Event-driven status, replacing the retired 500ms poll: re-read on each
+	// backend scan frame the relay re-emits (a change driven by this overlay's
+	// own actions, a spacebar capture, or background OCR progress). The producer
+	// coalesces, so this fires once per discrete change rather than on a timer.
+	// The webview keeps listening while the window is hidden, so the status stays
+	// current without a poll; the relay's reconnect nudge re-reads after a stream
+	// drop.
 	$effect(() => {
-		const interval = setInterval(() => {
+		let unlisten: UnlistenFn | undefined;
+		let disposed = false;
+		void listen(SCAN_TOPIC, () => {
 			void refreshStatus();
-		}, 500);
-		return () => clearInterval(interval);
+		}).then((fn) => {
+			if (disposed) fn();
+			else unlisten = fn;
+		});
+		return () => {
+			disposed = true;
+			unlisten?.();
+		};
+	});
+
+	// The retired 500ms poll also refreshed the environmental status fields
+	// (game-window presence, OCR-engine availability) that no scan frame
+	// announces, since no verb mutates them. Re-read on focus gain so launching
+	// EU (or the OCR engine appearing) after the overlay opened un-wedges the
+	// Start button. show_scan_overlay focuses the window, so this fires on show.
+	$effect(() => {
+		let unlisten: UnlistenFn | undefined;
+		let disposed = false;
+		void getCurrentWindow()
+			.onFocusChanged(({ payload: focused }) => {
+				if (!disposed && focused) void refreshStatus();
+			})
+			.then((fn) => {
+				if (disposed) fn();
+				else unlisten = fn;
+			});
+		return () => {
+			disposed = true;
+			unlisten?.();
+		};
 	});
 
 	async function handleDrag(e: MouseEvent) {
@@ -148,11 +187,29 @@
 		};
 	});
 
+	let statusInFlight = false;
+	let statusRefetchQueued = false;
+
+	// Coalesce overlapping reads (the same guard the shared scan store uses): a
+	// frame arriving mid-read queues exactly one follow-up, so two reads can never
+	// resolve out of order and wedge the overlay on a stale phase. The producer
+	// emits the final processing frame and the awaiting_review frame microseconds
+	// apart, so an unguarded read could otherwise settle on the earlier one.
 	async function refreshStatus() {
+		if (statusInFlight) {
+			statusRefetchQueued = true;
+			return;
+		}
+		statusInFlight = true;
 		try {
-			status = await getManualSkillScanStatus();
+			do {
+				statusRefetchQueued = false;
+				status = await getManualSkillScanStatus();
+			} while (statusRefetchQueued);
 		} catch (err) {
 			message = `status error: ${err}`;
+		} finally {
+			statusInFlight = false;
 		}
 	}
 

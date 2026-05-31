@@ -29,7 +29,7 @@ Services: 25.
 | `session_summary` | Composes the end-of-session summary projection. | `test_character_properties.py`<br>`test_mut_session_summary__c0.py`<br>`test_mut_session_summary__c1.py`<br>`test_mut_session_summary__c2.py`<br>`test_mut_session_summary__c3.py`<br>`test_session_summary_properties.py` | branch coverage + mutation |
 | `skill_panel_parse` | Pure skill-panel parsing (name / level / bar / cells). | `test_mut_skill_panel_parse.py`<br>`test_skill_panel_parse_properties.py` | branch coverage + mutation |
 | `skill_scan_core` | Skill-scan capture and recognition pipeline core. | `e2e/test_ocr_equivalence.py`<br>`test_capturer.py`<br>`test_skill_scan_core_extract.py` | branch coverage |
-| `skill_scan_manual` | Manual skill-scan lifecycle and capture orchestration. | `e2e/test_ocr_equivalence.py` | device / IO (exempt from the coverage floor) |
+| `skill_scan_manual` | Manual skill-scan lifecycle and capture orchestration. | `e2e/test_ocr_equivalence.py`<br>`test_skill_scan_producer.py` | device / IO (exempt from the coverage floor) |
 | `skill_tracker` | Records chat.log skill gains during a tracking session. | `test_skill_tracker.py` | branch coverage |
 | `spacebar_capture_listener` | Maps the spacebar to a skill-scan capture trigger. | `e2e/test_spacebar_scan_capture.py`<br>`test_spacebar_capture_listener.py` | device / IO (exempt from the coverage floor) |
 | `trifecta_service` | Validates and describes the weapon / heal trifecta loadout. | `test_mut_trifecta_service.py`<br>`test_trifecta_service.py`<br>`test_trifecta_service_properties.py` | branch coverage + mutation |

@@ -44,6 +44,17 @@ via the snapshot GET. That keeps the ETag/304 snapshot as the single source of
 shape and minimises the Rust-port serialisation surface. Push-with-data is
 reserved for a latency-sensitive topic (e.g. scan-status capture progress) if
 it is ever warranted.
+
+One layer does **not** port one-to-one, called out so the "maps line-for-line"
+claim above stays honest: these typed envelopes travel on the shared
+:class:`~backend.core.event_bus.EventBus`, whose ``publish`` is ``Any``-typed and
+also carries the low-level dict ``EVENT_*`` topics, so "a typed instance on a
+domain topic" is a producer-side convention the type checker cannot enforce (the
+SSE hub re-validates at runtime for exactly this reason). A monomorphic Rust
+``broadcast::Sender<DomainEvent>`` makes that convention a compile-time guarantee
+and turns the hub's runtime-defensive branches into dead code; bringing that
+enforcement forward into Python (a producer-side ``publish_domain`` narrowing) is
+a noted follow-up, not done here.
 """
 
 from __future__ import annotations
@@ -59,6 +70,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 TOPIC_TRACKING_SESSION_UPDATED: Literal["tracking.session.updated"] = (
     "tracking.session.updated"
 )
+TOPIC_SCAN_STATUS_CHANGED: Literal["scan.status.changed"] = "scan.status.changed"
 
 
 def to_iso_utc(ts: float | None) -> str | None:
@@ -101,17 +113,41 @@ class TrackingSessionUpdated(_EventModel):
     payload: TrackingSessionUpdatedPayload
 
 
-# The discriminated union of every frontend-facing domain event. It lands a
-# single member today; further members (``ScanStatusChanged`` etc.) join here as
-# new variants, at which point ``Field(discriminator="type")`` selects on the
-# ``type`` tag with no change to existing members or the wire format.
-#
-# Authored as a one-member union deliberately: it is the seam further topics slot
-# into, and ``DomainEventAdapter`` already validates/serialises through the union
-# so call sites never change as members are added.
+class ScanStatusChangedPayload(_EventModel):
+    """Push-to-pull invalidation signal for the manual skill-scan flow.
+
+    Carries only the coarse phase so a listener can route (and a human can read
+    the wire). The window re-hydrates the full status via the scan-status GET on
+    every frame, so per-page capture/OCR progress liveness comes from the
+    hydration rather than from widening this payload: the emitter still fires on
+    every discrete progress change (see ``SkillScanManual``), but the wire stays
+    a minimal invalidation signal.
+    """
+
+    phase: Literal["idle", "capturing", "processing", "awaiting_review"]
+
+
+class ScanStatusChanged(_EventModel):
+    """The manual skill-scan status changed (phase transition or capture/OCR progress)."""
+
+    type: Literal["scan.status.changed"] = TOPIC_SCAN_STATUS_CHANGED
+    event_version: int = 1
+    occurred_at: str | None = None
+    payload: ScanStatusChangedPayload
+
+
+# The discriminated union of every frontend-facing domain event.
+# ``Field(discriminator="type")`` selects the member by its ``type`` tag, so a
+# new member changes neither the existing members nor the wire format, and the
+# call sites (the bus publish, the SSE serialiser, the schema golden) route
+# through the union unchanged. The second member (scan) is the proof the
+# serde-tagged-union spine generalises beyond tracking, which is what maps
+# mechanically onto a Rust ``#[serde(tag = "type")] enum DomainEvent { ... }``.
 DomainEvent = Annotated[
-    TrackingSessionUpdated,
+    TrackingSessionUpdated | ScanStatusChanged,
     Field(discriminator="type"),
 ]
 
-DomainEventAdapter: TypeAdapter[TrackingSessionUpdated] = TypeAdapter(DomainEvent)
+DomainEventAdapter: TypeAdapter[TrackingSessionUpdated | ScanStatusChanged] = (
+    TypeAdapter(DomainEvent)
+)

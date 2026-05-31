@@ -44,7 +44,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from backend.core.domain_events import TOPIC_TRACKING_SESSION_UPDATED
+from backend.core.domain_events import (
+    TOPIC_SCAN_STATUS_CHANGED,
+    TOPIC_TRACKING_SESSION_UPDATED,
+)
 from backend.core.event_bus import EventBus
 
 log = logging.getLogger(__name__)
@@ -53,7 +56,10 @@ log = logging.getLogger(__name__)
 # published on the bus as a typed DomainEvent instance (see domain_events.py);
 # the legacy low-level EVENT_* topics stay intra-backend and are deliberately
 # not forwarded. Further domain topics join this tuple as they are added.
-DOMAIN_TOPICS: tuple[str, ...] = (TOPIC_TRACKING_SESSION_UPDATED,)
+DOMAIN_TOPICS: tuple[str, ...] = (
+    TOPIC_TRACKING_SESSION_UPDATED,
+    TOPIC_SCAN_STATUS_CHANGED,
+)
 
 # Per-connection queue bound. A stalled or slow webview reader cannot grow
 # memory without limit: once the queue is full the oldest frame is dropped. Under

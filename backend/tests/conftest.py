@@ -94,6 +94,7 @@ _MODULE_TIERS = {
     "test_quests": "standard",
     "test_skill_tracker": "standard",
     "test_spacebar_capture_listener": "standard",  # threading.Event waits on capture
+    "test_tracker_concurrency": "standard",  # two-thread read/write hammer
     "test_tracker_integration": "standard",
     "test_tracking_endpoints": "standard",
     "test_trifecta_service": "standard",

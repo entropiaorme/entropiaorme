@@ -119,6 +119,62 @@ class TrackingLive(_Loose):
 
 
 # ---------------------------------------------------------------------------
+# Tracking snapshot (/tracking/snapshot): unavailable | idle | active
+# ---------------------------------------------------------------------------
+
+
+class TrackingSnapshot(_Loose):
+    """The consolidated dashboard hydration shape.
+
+    The union of the status, live, and recent-events readouts in one response:
+    a newly mounted dashboard hydrates from this once, then reacts to pushed
+    events rather than re-polling. Casing is preserved from the readouts it
+    unions: ``session_id`` / ``started_at`` / ``kill_count`` stay snake-case,
+    the headline numbers stay camelCase. Polymorphic across the three states;
+    served with ``response_model_exclude_unset=True`` so each state keeps its
+    own shape.
+    """
+
+    status: str
+    # Shared by idle + active.
+    hotbarListenerActive: bool | None = None
+    weaponAttribution: str | None = None
+    repairOcrEnabled: bool | None = None
+    endOfSessionArmourReminderEnabled: bool | None = None
+    mobEntryMode: str | None = None
+    currentMob: str | None = None
+    mobSource: str | None = None
+    currentTool: str | None = None
+    trifectaAttribution: dict[str, Any] | None = None
+    recentEvents: list[NotableEvent] | None = None
+    # Active only.
+    session_id: str | None = None
+    started_at: str | None = None
+    kill_count: int | None = None
+    elapsed: int | None = None
+    cost: float | None = None
+    returns: float | None = None
+    pes: float | None = None
+    net: float | None = None
+    returnRate: float | None = None
+    damageDealtTotal: float | None = None
+    weaponDamageDealt: float | None = None
+    weaponCost: float | None = None
+    shotsFiredTotal: int | None = None
+    criticalHitsTotal: int | None = None
+    maxDamage: float | None = None
+    globalsCount: int | None = None
+    hofsCount: int | None = None
+    latestKillLoot: float | None = None
+    multiplierLast: float | None = None
+    multiplierAvg: float | None = None
+    multiplierMax: float | None = None
+    multiplierHistory: list[float] | None = None
+    cumulativeNetHistory: list[float] | None = None
+    warnings: list[NotableEvent] | None = None
+
+
+# ---------------------------------------------------------------------------
 # Analytics overview (/analytics/overview): stable shape
 # ---------------------------------------------------------------------------
 

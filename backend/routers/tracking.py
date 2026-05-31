@@ -14,6 +14,7 @@ from backend.dependencies import get_services
 from backend.routers.response_models import (
     NotableEvent,
     TrackingLive,
+    TrackingSnapshot,
     TrackingStatus,
 )
 from backend.services.character_calc import ATTRIBUTE_SKILLS
@@ -279,11 +280,7 @@ def tracking_status_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
+    heal_cost = svc.tracker._session_heal_cost
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
 
@@ -575,11 +572,7 @@ def tracking_live_impl(svc):
         weapon_cost += acc.weapon_cost
         enhancer_cost += acc.enhancer_cost
 
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
+    heal_cost = svc.tracker._session_heal_cost
     cost = weapon_cost + heal_cost + enhancer_cost
     returns = sum(k.loot_total_ped for k in session.kills)
     kills = len(session.kills)
@@ -597,15 +590,14 @@ def tracking_live_impl(svc):
     recent_events_list = []
 
     # Warnings from the tracker (e.g., heal tool not equipped)
-    if hasattr(svc.tracker, "_session_warnings"):
-        for msg in svc.tracker._session_warnings:
-            recent_events_list.append(
-                {
-                    "type": "warning",
-                    "description": msg,
-                    "value": 0,
-                }
-            )
+    for msg in svc.tracker._session_warnings:
+        recent_events_list.append(
+            {
+                "type": "warning",
+                "description": msg,
+                "value": 0,
+            }
+        )
 
     for r in notable:
         event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
@@ -647,7 +639,7 @@ def tracking_live_impl(svc):
             duration_ms,
             kills,
             len(notable),
-            len(getattr(svc.tracker, "_session_warnings", [])),
+            len(svc.tracker._session_warnings),
         )
     return payload
 
@@ -664,6 +656,17 @@ def recent_events():
     clears the dashboard feed; events populate again as they occur in-session.
     """
     return recent_events_impl(get_services())
+
+
+@router.get(
+    "/snapshot",
+    response_model=TrackingSnapshot,
+    response_model_exclude_unset=True,
+)
+def tracking_snapshot():
+    """Consolidated dashboard hydration: one response a newly mounted webview
+    reads once, then keeps current from pushed events instead of re-polling."""
+    return tracking_snapshot_impl(get_services())
 
 
 def recent_events_impl(svc):
@@ -692,6 +695,102 @@ def recent_events_impl(svc):
             }
         )
     return events
+
+
+def tracking_snapshot_impl(svc):
+    """Single hydration readout for a newly mounted dashboard.
+
+    Returns the union of the status, live, and recent-events shapes in one
+    response. The session-derived numbers come from ``tracker.snapshot()`` as an
+    owned value, so this handler never iterates the live kills list off the web
+    thread; the configuration- and runtime-derived fields (attribution mode, the
+    repair-OCR flag, whether the hotbar listener is running, the trifecta
+    attribution summary) are merged in here, since they are not the tracker's to
+    own. The activity feed adopts the recent-events identified projection as
+    canonical and splits tracker warnings into a sibling ``warnings`` array; per
+    the dashboard's clear-on-idle behaviour the idle branch carries an empty
+    feed.
+
+    Key casing is preserved non-destructively from the readouts it unions: the
+    status shape's ``session_id`` / ``started_at`` / ``kill_count`` stay
+    snake-case (the dashboard reads them so), while the headline numbers stay
+    camelCase. The live shape's camelCase ``sessionId`` / ``killCount``
+    duplicates and its bare ``kills`` count are dropped (no consumer reads them
+    off this endpoint; the overlay still has its own live readout).
+    """
+    if not hasattr(svc, "tracker") or svc.tracker is None:
+        return {"status": "unavailable"}
+
+    config = svc.config_service.get()
+    weapon_attribution = _weapon_attribution(config)
+    trifecta_attribution = (
+        _trifecta_attribution_summary(svc) if weapon_attribution == "trifecta" else None
+    )
+    readout = svc.tracker.snapshot()
+
+    envelope = {
+        "hotbarListenerActive": svc.hotbar_listener.is_running,
+        "weaponAttribution": weapon_attribution,
+        "repairOcrEnabled": config.repair_ocr_enabled,
+        "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
+        "currentTool": readout.current_tool,
+        "trifectaAttribution": trifecta_attribution,
+    }
+
+    active = readout.active
+    if active is None:
+        current_mob, mob_source = _configured_manual_label(config)
+        return {
+            "status": "idle",
+            **envelope,
+            "mobEntryMode": config.mob_tracking_mode,
+            "currentMob": current_mob,
+            "mobSource": mob_source,
+            "recentEvents": [],
+        }
+
+    recent_events = []
+    for i, (event_type, mob_or_item, value_ped, ts) in enumerate(
+        active.notable_event_rows
+    ):
+        payload = _notable_event_payload(event_type, mob_or_item, value_ped)
+        recent_events.append({"id": f"ne-{i}", **payload, "timestamp": _ts_to_iso(ts)})
+    warnings = [
+        {"type": "warning", "description": msg, "value": 0} for msg in active.warnings
+    ]
+
+    return {
+        "status": "active",
+        "session_id": active.session_id,
+        "started_at": active.started_at,
+        "kill_count": active.kill_count,
+        "elapsed": active.elapsed,
+        "cost": active.cost,
+        "returns": active.returns,
+        "pes": active.pes,
+        "net": active.net,
+        "returnRate": active.return_rate,
+        "damageDealtTotal": active.damage_dealt_total,
+        "weaponDamageDealt": active.weapon_damage_dealt,
+        "weaponCost": active.weapon_cost,
+        "shotsFiredTotal": active.shots_fired_total,
+        "criticalHitsTotal": active.critical_hits_total,
+        "maxDamage": active.max_damage,
+        "globalsCount": active.globals_count,
+        "hofsCount": active.hofs_count,
+        "latestKillLoot": active.latest_kill_loot,
+        "multiplierLast": active.multiplier_last,
+        "multiplierAvg": active.multiplier_avg,
+        "multiplierMax": active.multiplier_max,
+        "multiplierHistory": list(active.multiplier_history),
+        "cumulativeNetHistory": list(active.cumulative_net_history),
+        **envelope,
+        "mobEntryMode": active.mob_entry_mode,
+        "currentMob": active.current_mob,
+        "mobSource": active.mob_source,
+        "recentEvents": recent_events,
+        "warnings": warnings,
+    }
 
 
 @router.get("/sessions")

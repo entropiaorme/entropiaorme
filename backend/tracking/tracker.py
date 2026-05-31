@@ -41,7 +41,14 @@ from backend.core.events import (
 )
 from backend.services.cost_engine import cost_per_shot_from_props
 from backend.tracking.loot_filter import is_tracked_loot, normalize_blacklist
-from backend.tracking.models import Kill, LootItem, ToolStats, TrackingSession
+from backend.tracking.models import (
+    ActiveSessionView,
+    Kill,
+    LootItem,
+    ToolStats,
+    TrackingReadout,
+    TrackingSession,
+)
 from backend.tracking.schema import init_tracking_tables
 from backend.tracking.tool_inference import DamageAttributor
 
@@ -210,6 +217,14 @@ class HuntTracker:
         # settled-tick boundary. Lets one domain event stand for a tick's worth
         # of low-level mutations rather than one per raw mutation.
         self._session_dirty = False
+        # Session-readout fields, initialised here rather than sprung lazily in
+        # start_session so they are always-present owned state: the owner-side
+        # snapshot read (and any reader before the first session) sees them
+        # unconditionally, with no defensive hasattr/getattr at the call site.
+        # start_session resets them at each session boundary.
+        self._session_heal_cost: float = 0.0
+        self._heal_warning_emitted: bool = False
+        self._session_warnings: list[str] = []
         self._loot_blacklist = normalize_blacklist(loot_filter_blacklist)
         self._refresh_loot_filter()
 
@@ -334,6 +349,134 @@ class HuntTracker:
     @property
     def current_accumulator(self) -> _Accumulator | None:
         return self._accumulator
+
+    def snapshot(self) -> TrackingReadout:
+        """Return an owned, immutable view of the current tracking readout.
+
+        The owner computes the session-derived readout here rather than letting
+        a caller iterate ``self._session.kills`` and the in-progress accumulator
+        from another thread: the caller receives a detached value and never
+        holds a live reference into mutating session state. ``active`` is None
+        when idle. The active path issues exactly two reads, both scoped to the
+        live session: the session skill-gain total and the session notable-event
+        feed. Configuration- and runtime-derived fields (attribution mode, the
+        repair-OCR flag, the hotbar-listener running flag) are not the tracker's
+        to own and are merged in by the HTTP layer.
+        """
+        current_tool = self._active_hotbar_tool_name
+        session = self._session
+        if session is None:
+            return TrackingReadout(current_tool=current_tool, active=None)
+
+        kills = session.kills
+        acc = self._accumulator
+
+        weapon_cost = sum(
+            ts.cost_per_shot * ts.shots_fired
+            for kill in kills
+            for ts in kill.tool_stats.values()
+        )
+        enhancer_cost = sum(k.enhancer_cost for k in kills)
+        if acc:
+            weapon_cost += acc.weapon_cost
+            enhancer_cost += acc.enhancer_cost
+        heal_cost = self._session_heal_cost
+        cost = weapon_cost + heal_cost + enhancer_cost
+        returns = sum(k.loot_total_ped for k in kills)
+
+        damage_total = sum(k.damage_dealt for k in kills)
+        shots_total = sum(k.shots_fired for k in kills)
+        crits_total = sum(k.critical_hits for k in kills)
+        max_damage = max((k.damage_dealt for k in kills), default=0.0)
+        live_weapon_damage = damage_total + (acc.damage_dealt if acc else 0.0)
+        globals_count = sum(1 for k in kills if k.is_global)
+        hofs_count = sum(1 for k in kills if k.is_hof)
+        latest_kill_loot = kills[-1].loot_total_ped if kills else None
+
+        # Multipliers use kill.cost_ped (weapon cost only) per EU convention.
+        mult_per_kill = [k.loot_total_ped / k.cost_ped for k in kills if k.cost_ped > 0]
+        multiplier_avg = (
+            sum(mult_per_kill) / len(mult_per_kill) if mult_per_kill else None
+        )
+        multiplier_max = max(mult_per_kill, default=None) if mult_per_kill else None
+        multiplier_last = (
+            kills[-1].loot_total_ped / kills[-1].cost_ped
+            if kills and kills[-1].cost_ped > 0
+            else None
+        )
+        multiplier_history = tuple(round(m, 4) for m in mult_per_kill[-120:])
+
+        # Cumulative-net history (per kill), distributing the session-level heal
+        # cost pro-rata across kills by their weapon-cost share so the curve's
+        # final point reconciles with the displayed Net stat (returns - cost).
+        per_kill_weapon = [
+            sum(ts.cost_per_shot * ts.shots_fired for ts in k.tool_stats.values())
+            for k in kills
+        ]
+        total_weapon = sum(per_kill_weapon)
+        cumulative_net: list[float] = []
+        if kills:
+            running = 0.0
+            for k, w in zip(kills, per_kill_weapon, strict=True):
+                heal_share = heal_cost * (w / total_weapon) if total_weapon > 0 else 0.0
+                running += k.loot_total_ped - w - k.enhancer_cost - heal_share
+                cumulative_net.append(round(running, 2))
+            cumulative_net = cumulative_net[-120:]
+
+        skill_tt = self._db.execute(
+            "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
+            (session.id,),
+        ).fetchone()[0]
+
+        # Latest-session notable-event feed (top 20). The live session is the
+        # latest session, so this single read serves the activity feed.
+        notable_rows = self._db.execute(
+            "SELECT event_type, mob_or_item, value_ped, timestamp "
+            "FROM notable_events WHERE session_id = ? "
+            "ORDER BY timestamp DESC LIMIT 20",
+            (session.id,),
+        ).fetchall()
+
+        start_ts = session.start_time.timestamp()
+        active = ActiveSessionView(
+            session_id=session.id,
+            started_at=session.start_time.isoformat(),
+            kill_count=len(kills),
+            elapsed=int(self._now_fn().timestamp() - start_ts),
+            cost=round(cost, 2),
+            returns=round(returns, 2),
+            pes=round(float(skill_tt), 2),
+            net=round(returns - cost, 2),
+            return_rate=round(returns / cost, 4) if cost > 0 else 0.0,
+            damage_dealt_total=round(damage_total, 1),
+            weapon_damage_dealt=round(live_weapon_damage, 1),
+            weapon_cost=round(weapon_cost, 6),
+            shots_fired_total=shots_total,
+            critical_hits_total=crits_total,
+            max_damage=round(max_damage, 1),
+            globals_count=globals_count,
+            hofs_count=hofs_count,
+            latest_kill_loot=round(latest_kill_loot, 2)
+            if latest_kill_loot is not None
+            else None,
+            multiplier_last=round(multiplier_last, 4)
+            if multiplier_last is not None
+            else None,
+            multiplier_avg=round(multiplier_avg, 4)
+            if multiplier_avg is not None
+            else None,
+            multiplier_max=round(multiplier_max, 4)
+            if multiplier_max is not None
+            else None,
+            multiplier_history=multiplier_history,
+            cumulative_net_history=tuple(cumulative_net),
+            current_mob=self._confirmed_mob_name or None,
+            mob_source=self._mob_source if self._confirmed_mob_name else None,
+            mob_entry_mode=self._session_mob_tracking_mode,
+            notable_event_rows=tuple((r[0], r[1], r[2], r[3]) for r in notable_rows),
+            warnings=tuple(self._session_warnings),
+        )
+        return TrackingReadout(current_tool=current_tool, active=active)
 
     def _is_weapon_attribution_trifecta(self) -> bool:
         return self._weapon_attribution_trifecta_provider()
@@ -595,7 +738,7 @@ class HuntTracker:
         self._last_heal_time = None
         self._session_heal_cost = 0.0
         self._heal_warning_emitted = False
-        self._session_warnings: list[str] = []
+        self._session_warnings = []
         self._last_kill = None
         self._last_loot_fingerprint = None
         self._last_loot_time = None

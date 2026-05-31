@@ -1736,6 +1736,408 @@
         "title": "TrackingLive",
         "type": "object"
       },
+      "TrackingSnapshot": {
+        "additionalProperties": true,
+        "description": "The consolidated dashboard hydration shape.\n\nThe union of the status, live, and recent-events readouts in one response:\na newly mounted dashboard hydrates from this once, then reacts to pushed\nevents rather than re-polling. Casing is preserved from the readouts it\nunions: ``session_id`` / ``started_at`` / ``kill_count`` stay snake-case,\nthe headline numbers stay camelCase. Polymorphic across the three states;\nserved with ``response_model_exclude_unset=True`` so each state keeps its\nown shape.",
+        "properties": {
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "criticalHitsTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criticalhitstotal"
+          },
+          "cumulativeNetHistory": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cumulativenethistory"
+          },
+          "currentMob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentmob"
+          },
+          "currentTool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currenttool"
+          },
+          "damageDealtTotal": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagedealttotal"
+          },
+          "elapsed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed"
+          },
+          "endOfSessionArmourReminderEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endofsessionarmourreminderenabled"
+          },
+          "globalsCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Globalscount"
+          },
+          "hofsCount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hofscount"
+          },
+          "hotbarListenerActive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hotbarlisteneractive"
+          },
+          "kill_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kill Count"
+          },
+          "latestKillLoot": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latestkillloot"
+          },
+          "maxDamage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxdamage"
+          },
+          "mobEntryMode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobentrymode"
+          },
+          "mobSource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobsource"
+          },
+          "multiplierAvg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplieravg"
+          },
+          "multiplierHistory": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplierhistory"
+          },
+          "multiplierLast": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multiplierlast"
+          },
+          "multiplierMax": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Multipliermax"
+          },
+          "net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net"
+          },
+          "pes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pes"
+          },
+          "recentEvents": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NotableEvent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recentevents"
+          },
+          "repairOcrEnabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repairocrenabled"
+          },
+          "returnRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returnrate"
+          },
+          "returns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returns"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "shotsFiredTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shotsfiredtotal"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "trifectaAttribution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trifectaattribution"
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/NotableEvent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warnings"
+          },
+          "weaponAttribution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weaponattribution"
+          },
+          "weaponCost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weaponcost"
+          },
+          "weaponDamageDealt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weapondamagedealt"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "TrackingSnapshot",
+        "type": "object"
+      },
       "TrackingStatus": {
         "additionalProperties": true,
         "properties": {
@@ -3417,6 +3819,27 @@
           }
         },
         "summary": "Demo List Sessions",
+        "tags": [
+          "demo"
+        ]
+      }
+    },
+    "/api/demo/tracking/snapshot": {
+      "get": {
+        "operationId": "demo_tracking_snapshot_api_demo_tracking_snapshot_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Demo Tracking Snapshot",
         "tags": [
           "demo"
         ]
@@ -5432,6 +5855,28 @@
           }
         },
         "summary": "List Sessions",
+        "tags": [
+          "tracking"
+        ]
+      }
+    },
+    "/api/tracking/snapshot": {
+      "get": {
+        "description": "Consolidated dashboard hydration: one response a newly mounted webview\nreads once, then keeps current from pushed events instead of re-polling.",
+        "operationId": "tracking_snapshot_api_tracking_snapshot_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Tracking Snapshot",
         "tags": [
           "tracking"
         ]

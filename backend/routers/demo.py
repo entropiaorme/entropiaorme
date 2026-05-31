@@ -44,6 +44,7 @@ from backend.routers.response_models import (
     AnalyticsOverview,
     NotableEvent,
     TrackingLive,
+    TrackingSnapshot,
     TrackingStatus,
 )
 
@@ -240,3 +241,12 @@ def demo_tracking_live():
 )
 def demo_recent_events():
     return tracking_router.recent_events_impl(_ensure_svc())
+
+
+@router.get(
+    "/tracking/snapshot",
+    response_model=TrackingSnapshot,
+    response_model_exclude_unset=True,
+)
+def demo_tracking_snapshot():
+    return tracking_router.tracking_snapshot_impl(_ensure_svc())

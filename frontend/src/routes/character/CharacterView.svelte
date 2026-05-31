@@ -139,12 +139,19 @@
 
 	$effect(() => {
 		if (guideState.isActive) return;
-		void hydrateScan();
 		let unlisten: UnlistenFn | undefined;
 		let disposed = false;
+		// Attach the listener BEFORE the first hydrate: a status change between
+		// the hydrate GET and the listener attaching would otherwise be lost (if
+		// it were the last transition). Hydrating inside the resolve keeps the
+		// listener live first, so any later frame re-hydrates and heals it.
 		void subscribeScan().then((fn) => {
-			if (disposed) fn();
-			else unlisten = fn;
+			if (disposed) {
+				fn();
+				return;
+			}
+			unlisten = fn;
+			void hydrateScan();
 		});
 		return () => {
 			disposed = true;

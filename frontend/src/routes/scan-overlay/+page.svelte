@@ -87,9 +87,11 @@
 	let canUndo = $derived(status !== null && status.captured_pages > 0);
 
 	onMount(async () => {
-		await refreshStatus();
-		// Replay the stored spacebar-capture toggle to the backend so the
-		// listener state matches the UI on every overlay (re)mount.
+		// The initial hydrate lives in the scan-frame subscription effect below,
+		// after the listener attaches, so a status change between the first read
+		// and the listener attaching is not lost. Here we only replay the stored
+		// spacebar-capture toggle so the backend listener state matches the UI on
+		// every overlay (re)mount.
 		await syncSpacebarCapture(spacebarCapture);
 	});
 
@@ -106,8 +108,14 @@
 		void listen(SCAN_TOPIC, () => {
 			void refreshStatus();
 		}).then((fn) => {
-			if (disposed) fn();
-			else unlisten = fn;
+			if (disposed) {
+				fn();
+				return;
+			}
+			unlisten = fn;
+			// Hydrate after the listener attaches (not in onMount), so a frame
+			// between the first read and the listener attaching is not lost.
+			void refreshStatus();
 		});
 		return () => {
 			disposed = true;
@@ -204,10 +212,16 @@
 		try {
 			do {
 				statusRefetchQueued = false;
-				status = await getManualSkillScanStatus();
+				try {
+					status = await getManualSkillScanStatus();
+				} catch (err) {
+					// Transient read failure: keep the last good status and surface
+					// the error. The catch is INSIDE the loop so a re-read a frame
+					// queued during this attempt is not abandoned (it may be the
+					// last transition, with no later frame to re-trigger it).
+					message = `status error: ${err}`;
+				}
 			} while (statusRefetchQueued);
-		} catch (err) {
-			message = `status error: ${err}`;
 		} finally {
 			statusInFlight = false;
 		}

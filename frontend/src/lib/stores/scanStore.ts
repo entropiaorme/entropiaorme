@@ -50,10 +50,16 @@ export async function hydrate(): Promise<void> {
 	try {
 		do {
 			refetchQueued = false;
-			scanStatus.set(await getManualSkillScanStatus());
+			try {
+				scanStatus.set(await getManualSkillScanStatus());
+			} catch {
+				// Transient read failure: keep the last good status rather than
+				// blanking. The catch is INSIDE the loop so a re-read a frame
+				// queued during this attempt is not abandoned: the do-while still
+				// runs it (it may be the last transition, with no later frame to
+				// re-trigger the read).
+			}
 		} while (refetchQueued);
-	} catch {
-		// Transient read failure: keep the last good status rather than blanking.
 	} finally {
 		inFlight = false;
 	}

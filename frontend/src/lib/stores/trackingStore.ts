@@ -52,11 +52,16 @@ export async function hydrate(): Promise<void> {
 	try {
 		do {
 			refetchQueued = false;
-			trackingSnapshot.set(await getTrackingSnapshot());
+			try {
+				trackingSnapshot.set(await getTrackingSnapshot());
+			} catch {
+				// Transient read failure: keep the last good snapshot rather than
+				// blanking the dashboard. The catch is INSIDE the loop so a re-read
+				// a frame queued during this attempt is not abandoned: the do-while
+				// still runs it (it may be the last transition, with no later frame
+				// to re-trigger the read).
+			}
 		} while (refetchQueued);
-	} catch {
-		// Transient read failure: keep the last good snapshot rather than
-		// blanking the dashboard.
 	} finally {
 		inFlight = false;
 	}

@@ -251,7 +251,14 @@ def tracking_status_impl(svc):
     config = svc.config_service.get()
     weapon_attribution = _weapon_attribution(config)
 
-    if not svc.tracker.is_tracking:
+    # One owner-side, lock-synchronised read of the tracking readout replaces
+    # the former inline iteration over the live kills list and accumulator on
+    # this web thread, so a producer thread can no longer resize a container
+    # mid-read. The session-derived numbers come from the detached
+    # ``ActiveSessionView``; the configuration- and runtime-derived fields are
+    # merged in here, as they are not the tracker's to own.
+    active = svc.tracker.snapshot().active
+    if active is None:
         current_mob, mob_source = _configured_manual_label(config)
         return {
             "status": "idle",
@@ -264,117 +271,36 @@ def tracking_status_impl(svc):
             "mobSource": mob_source,
         }
 
-    session = svc.tracker.session
-
-    # Compute live cost/returns from completed kills + in-progress accumulator
-    weapon_cost = sum(
-        ts.cost_per_shot * ts.shots_fired
-        for kill in session.kills
-        for ts in kill.tool_stats.values()
-    )
-    enhancer_cost = sum(k.enhancer_cost for k in session.kills)
-
-    # Add in-progress accumulator (shots not yet resolved to a kill)
-    acc = svc.tracker.current_accumulator
-    if acc:
-        weapon_cost += acc.weapon_cost
-        enhancer_cost += acc.enhancer_cost
-
-    heal_cost = svc.tracker._session_heal_cost
-    cost = weapon_cost + heal_cost + enhancer_cost
-    returns = sum(k.loot_total_ped for k in session.kills)
-
-    # Per-kill aggregates for the modular dashboard pills.
-    kills = session.kills
-    damage_total = sum(k.damage_dealt for k in kills)
-    shots_total = sum(k.shots_fired for k in kills)
-    crits_total = sum(k.critical_hits for k in kills)
-    max_damage = max((k.damage_dealt for k in kills), default=0.0)
-    live_weapon_damage = damage_total + (acc.damage_dealt if acc else 0.0)
-    globals_count = sum(1 for k in kills if k.is_global)
-    hofs_count = sum(1 for k in kills if k.is_hof)
-    latest_kill_loot = kills[-1].loot_total_ped if kills else None
-    # Multipliers use kill.cost_ped (weapon cost only) per EU community convention.
-    mult_per_kill = [k.loot_total_ped / k.cost_ped for k in kills if k.cost_ped > 0]
-    multiplier_avg = (
-        (sum(mult_per_kill) / len(mult_per_kill)) if mult_per_kill else None
-    )
-    multiplier_max = max(mult_per_kill, default=None) if mult_per_kill else None
-    multiplier_last = (
-        kills[-1].loot_total_ped / kills[-1].cost_ped
-        if kills and kills[-1].cost_ped > 0
-        else None
-    )
-    # Recent per-kill multipliers (chronological, oldest → newest) for the
-    # Loot Pulse chart. Cap at 120 — the frontend picks how many to render
-    # based on available width, so we just need enough headroom for a wide
-    # window. 120 floats is ~1 KB, negligible at this poll cadence.
-    multiplier_history = [round(m, 4) for m in mult_per_kill[-120:]]
-
-    # Cumulative-net history (per kill) for the Loot Pulse P&L chart.
-    # Heal cost is session-level and not per-kill-attributable, so we
-    # distribute it pro-rata across kills by their weapon cost share. This
-    # makes the curve's final point reconcile exactly with the displayed
-    # Net stat (returns - cost), modulo rounding.
-    per_kill_weapon = [
-        sum(ts.cost_per_shot * ts.shots_fired for ts in k.tool_stats.values())
-        for k in kills
-    ]
-    total_weapon = sum(per_kill_weapon)
-    cumulative_net_history: list[float] = []
-    if kills:
-        running = 0.0
-        for k, w in zip(kills, per_kill_weapon, strict=True):
-            heal_share = (heal_cost * (w / total_weapon)) if total_weapon > 0 else 0.0
-            running += k.loot_total_ped - w - k.enhancer_cost - heal_share
-            cumulative_net_history.append(round(running, 2))
-        cumulative_net_history = cumulative_net_history[-120:]
-
-    skill_tt = svc.app_db.conn.execute(
-        "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
-        (session.id,),
-    ).fetchone()[0]
-
     return {
         "status": "active",
-        "session_id": session.id,
-        "started_at": session.start_time.isoformat(),
-        "kill_count": len(session.kills),
-        "cost": round(cost, 2),
-        "returns": round(returns, 2),
-        "pes": round(float(skill_tt), 2),
-        "returnRate": round(returns / cost, 4) if cost > 0 else 0.0,
-        "damageDealtTotal": round(damage_total, 1),
-        "weaponDamageDealt": round(live_weapon_damage, 1),
-        "weaponCost": round(weapon_cost, 6),
-        "shotsFiredTotal": shots_total,
-        "criticalHitsTotal": crits_total,
-        "maxDamage": round(max_damage, 1),
-        "globalsCount": globals_count,
-        "hofsCount": hofs_count,
-        "latestKillLoot": round(latest_kill_loot, 2)
-        if latest_kill_loot is not None
-        else None,
-        "multiplierLast": round(multiplier_last, 4)
-        if multiplier_last is not None
-        else None,
-        "multiplierAvg": round(multiplier_avg, 4)
-        if multiplier_avg is not None
-        else None,
-        "multiplierMax": round(multiplier_max, 4)
-        if multiplier_max is not None
-        else None,
-        "multiplierHistory": multiplier_history,
-        "cumulativeNetHistory": cumulative_net_history,
+        "session_id": active.session_id,
+        "started_at": active.started_at,
+        "kill_count": active.kill_count,
+        "cost": active.cost,
+        "returns": active.returns,
+        "pes": active.pes,
+        "returnRate": active.return_rate,
+        "damageDealtTotal": active.damage_dealt_total,
+        "weaponDamageDealt": active.weapon_damage_dealt,
+        "weaponCost": active.weapon_cost,
+        "shotsFiredTotal": active.shots_fired_total,
+        "criticalHitsTotal": active.critical_hits_total,
+        "maxDamage": active.max_damage,
+        "globalsCount": active.globals_count,
+        "hofsCount": active.hofs_count,
+        "latestKillLoot": active.latest_kill_loot,
+        "multiplierLast": active.multiplier_last,
+        "multiplierAvg": active.multiplier_avg,
+        "multiplierMax": active.multiplier_max,
+        "multiplierHistory": list(active.multiplier_history),
+        "cumulativeNetHistory": list(active.cumulative_net_history),
         "hotbarListenerActive": hotbar_listener_active,
         "weaponAttribution": weapon_attribution,
         "repairOcrEnabled": config.repair_ocr_enabled,
         "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": svc.tracker._session_mob_tracking_mode,
-        "currentMob": svc.tracker._confirmed_mob_name or None,
-        "mobSource": svc.tracker._mob_source
-        if svc.tracker._confirmed_mob_name
-        else None,
+        "mobEntryMode": active.mob_entry_mode,
+        "currentMob": active.current_mob,
+        "mobSource": active.mob_source,
     }
 
 
@@ -534,14 +460,19 @@ def tracking_live_impl(svc):
     if not hasattr(svc, "tracker") or svc.tracker is None:
         return {"status": "unavailable"}
 
-    detected_tool = getattr(svc.tracker, "_active_hotbar_tool_name", None)
     config = svc.config_service.get()
     weapon_attribution = _weapon_attribution(config)
     trifecta_attribution = (
         _trifecta_attribution_summary(svc) if weapon_attribution == "trifecta" else None
     )
 
-    if not svc.tracker.is_tracking:
+    # One owner-side, lock-synchronised read replaces this overlay poll's former
+    # inline iteration over the live kills list and accumulator on the web
+    # thread. ``current_tool`` rides the readout (set whether idle or active).
+    readout = svc.tracker.snapshot()
+    detected_tool = readout.current_tool
+    active = readout.active
+    if active is None:
         current_mob, mob_source = _configured_manual_label(config)
         return {
             "status": "idle",
@@ -555,79 +486,35 @@ def tracking_live_impl(svc):
             "trifectaAttribution": trifecta_attribution,
         }
 
-    session = svc.tracker.session
-    start_ts = session.start_time.timestamp()
-    elapsed = int(time.time() - start_ts)
-
-    # Compute live cost/returns from completed kills + in-progress accumulator
-    weapon_cost = sum(
-        ts.cost_per_shot * ts.shots_fired
-        for kill in session.kills
-        for ts in kill.tool_stats.values()
-    )
-    enhancer_cost = sum(k.enhancer_cost for k in session.kills)
-
-    acc = svc.tracker.current_accumulator
-    if acc:
-        weapon_cost += acc.weapon_cost
-        enhancer_cost += acc.enhancer_cost
-
-    heal_cost = svc.tracker._session_heal_cost
-    cost = weapon_cost + heal_cost + enhancer_cost
-    returns = sum(k.loot_total_ped for k in session.kills)
-    kills = len(session.kills)
-
-    current_mob = svc.tracker._confirmed_mob_name or None
-
-    # Recent notable events from this session
-    notable = svc.app_db.conn.execute(
-        """SELECT event_type, mob_or_item, value_ped, timestamp
-           FROM notable_events WHERE session_id = ?
-           ORDER BY timestamp DESC LIMIT 5""",
-        (session.id,),
-    ).fetchall()
-
-    recent_events_list = []
-
-    # Warnings from the tracker (e.g., heal tool not equipped)
-    for msg in svc.tracker._session_warnings:
-        recent_events_list.append(
-            {
-                "type": "warning",
-                "description": msg,
-                "value": 0,
-            }
-        )
-
-    for r in notable:
-        event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
+    # The overlay's recent-events strip: tracker warnings first, then the top-5
+    # notable events (a strict prefix of the readout's top-20 feed, identical to
+    # the legacy LIMIT 5 read).
+    recent_events_list = [
+        {"type": "warning", "description": msg, "value": 0} for msg in active.warnings
+    ]
+    notable_top5 = active.notable_event_rows[:5]
+    for event_type, mob_or_item, value_ped, timestamp in notable_top5:
         recent_events_list.append(
             _notable_event_payload(event_type, mob_or_item, value_ped, timestamp)
         )
 
-    # Skill TT from this session
-    skill_tt = svc.app_db.conn.execute(
-        "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
-        (session.id,),
-    ).fetchone()[0]
-
     payload = {
         "status": "active",
-        "sessionId": session.id,
-        "elapsed": elapsed,
-        "killCount": len(session.kills),
-        "kills": kills,
-        "cost": round(cost, 2),
-        "returns": round(returns, 2),
-        "pes": round(float(skill_tt), 2),
-        "net": round(returns - cost, 2),
-        "returnRate": round(returns / cost, 4) if cost > 0 else 0.0,
+        "sessionId": active.session_id,
+        "elapsed": active.elapsed,
+        "killCount": active.kill_count,
+        "kills": active.kill_count,
+        "cost": active.cost,
+        "returns": active.returns,
+        "pes": active.pes,
+        "net": active.net,
+        "returnRate": active.return_rate,
         "weaponAttribution": weapon_attribution,
         "repairOcrEnabled": config.repair_ocr_enabled,
         "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": svc.tracker._session_mob_tracking_mode,
-        "currentMob": current_mob,
-        "mobSource": svc.tracker._mob_source if current_mob else None,
+        "mobEntryMode": active.mob_entry_mode,
+        "currentMob": active.current_mob,
+        "mobSource": active.mob_source,
         "currentTool": detected_tool,
         "trifectaAttribution": trifecta_attribution,
         "recentEvents": recent_events_list,
@@ -637,9 +524,9 @@ def tracking_live_impl(svc):
         log.debug(
             "/tracking/live slow-ish response: %.2f ms (kills=%d recent_events=%d warnings=%d)",
             duration_ms,
-            kills,
-            len(notable),
-            len(svc.tracker._session_warnings),
+            active.kill_count,
+            len(notable_top5),
+            len(active.warnings),
         )
     return payload
 

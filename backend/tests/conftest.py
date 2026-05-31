@@ -5,7 +5,10 @@ test module, so the whole classification lives in one readable place:
 
 - ``fast``:     pure-logic, in-memory, sub-second (every PR)
 - ``standard``: db / filesystem / in-process-stateful (every PR)
-- ``full``:     device / OCR / listener-touching or slow (nightly; none yet)
+- ``full``:     the slowest suites: the schemathesis contract suites
+                and OCR equivalence (device / OCR / slow). Runs post-merge on a
+                push to main and nightly, NOT on the per-PR gate, so a pull
+                request waits only on fast + standard.
 
 A module absent from the map defaults to ``standard`` (the broader, safer tier),
 so a new test file always runs on PRs until it is deliberately classified.
@@ -73,8 +76,14 @@ _MODULE_TIERS = {
     "test_version_stamps": "fast",  # pure stdlib, reads tracked manifests
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
-    "test_api_contract": "standard",  # boots the app lifespan + ASGI schemathesis run
-    "test_api_contract_with_state": "standard",  # contract suite over replayed state
+    # full tier: the slowest suites. Runs post-merge (push to main) and
+    # nightly, not per-PR, so the per-PR gate stays fast. The per-PR coverage leg
+    # still clears the floor without these (the API-surface walk/mutation tests
+    # cover the same router branches the contract suites exercise). See ci.yml,
+    # nightly.yml, and TESTING.md "Runtime tiers".
+    "test_api_contract": "full",  # ASGI schemathesis run over the read surface
+    "test_api_contract_with_state": "full",  # schemathesis over replayed state
+    "test_ocr_equivalence": "full",  # real ONNX inference vs recorded panels (skips without the corpus)
     "test_character_endpoints": "standard",
     "test_chatlog_watcher": "standard",
     "test_codex_service": "standard",

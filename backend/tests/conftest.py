@@ -117,6 +117,7 @@ _MODULE_TIERS = {
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
     "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE
+    "test_network_quiet_seam": "standard",  # boots the app lifespan; streams SSE + records requests
     # Property and metamorphic suites that touch a db / filesystem / the app path.
     "test_codex_properties": "standard",  # now drives CodexService over a temp db
     "test_consistency_property": "standard",  # generated sequences through the watcher

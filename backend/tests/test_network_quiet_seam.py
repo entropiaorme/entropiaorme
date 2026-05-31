@@ -307,3 +307,89 @@ def test_scan_flow_reads_status_only_on_hydration(
     # (capturing, awaiting_review). The retired 500ms timer poll would inflate
     # this without bound; its absence is the network-quiet property.
     assert len(status_reads) == 3, log.requests
+
+
+async def _drive_overlay_flow(port: int) -> None:
+    """Model the HUD overlay window's hydrate-and-subscribe loop against the live
+    server.
+
+    The overlay used to poll a 2s timer that fetched BOTH ``/tracking/live`` and
+    ``/tracking/status`` on every tick. Post-migration it rides the same snapshot
+    plus typed-topic push as the dashboard: one snapshot read on mount, then one
+    re-read per pushed ``tracking.session.updated`` frame. This drives genuine
+    mutations through the producer and asserts the push-driven loop reads only the
+    snapshot and the stream, never the collapsed trio (which now includes the
+    overlay's retired ``/status`` co-poll). The overlay also issues frontend-only
+    snapshot reads not modelled here (a re-read on window-show, a pre-stop refresh
+    of the final totals); those are still snapshot reads, never a collapsed
+    endpoint, so the guarded invariant is collapsed-trio absence, and the exact
+    count below pins the push-driven hydrations (mount + start frame + stop frame).
+    """
+    base_url = f"http://127.0.0.1:{port}"
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=10.0, headers=REQUEST_HEADERS
+    ) as client:
+        # Hydrate on mount: one snapshot read, idle to begin with.
+        first = await client.get("/api/tracking/snapshot")
+        assert first.status_code == 200
+        assert first.json()["status"] == "idle"
+
+        async with client.stream("GET", "/api/events") as response:
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+            lines = response.aiter_lines()
+            assert await asyncio.wait_for(anext(lines), _READ_TIMEOUT) == ": ready"
+
+            # Mutate (start): the push delivers a started frame, and the snapshot
+            # re-read it triggers reflects the active session, so the overlay
+            # learns the state change without polling /live or /status.
+            get_services().tracker.start_session()
+            started = await _next_frame(lines)
+            assert started["topic"] == "tracking.session.updated"
+            assert started["envelope"]["payload"]["status"] == "active"
+            assert started["envelope"]["payload"]["reason"] == "started"
+
+            active = await client.get("/api/tracking/snapshot")
+            assert active.status_code == 200
+            assert active.json()["status"] == "active"
+
+            # Mutate (stop): a stopped frame, then an idle snapshot.
+            get_services().tracker.stop_session()
+            stopped = await _next_frame(lines)
+            assert stopped["topic"] == "tracking.session.updated"
+            assert stopped["envelope"]["payload"]["reason"] == "stopped"
+
+            # Unlike the dashboard flow, the overlay maps no activity feed
+            # (applySnapshot drops recentEvents), so there is deliberately no
+            # recentEvents == [] assertion here; the idle status transition is the
+            # state the overlay reads. The only intended divergence from the
+            # dashboard flow is this omitted feed assertion.
+            idle = await client.get("/api/tracking/snapshot")
+            assert idle.status_code == 200
+            assert idle.json()["status"] == "idle"
+
+
+def test_overlay_flow_reads_no_collapsed_endpoint(
+    recording_live_server: tuple[int, _RequestLog],
+) -> None:
+    """The HUD overlay stays current on the snapshot plus the push alone: the
+    server sees the snapshot hydrations and the single event stream, and never a
+    read of the collapsed status / live / recent-events endpoints. This is what
+    retires the overlay's 2s /live + /status double-poll, proven against a
+    backend-modelled overlay client rather than convention."""
+    port, log = recording_live_server
+    asyncio.run(_drive_overlay_flow(port))
+
+    snapshot_reads = log.get_paths("/api/tracking/snapshot")
+    event_streams = log.get_paths("/api/events")
+    collapsed = [(m, p) for (m, p) in log.requests if p in _COLLAPSED_ENDPOINTS]
+
+    # One stream, opened once.
+    assert len(event_streams) == 1, log.requests
+    # Exactly the push-driven hydrations: one on mount, one per pushed frame
+    # (start, stop). The retired 2s timer (two reads per tick) would inflate this
+    # without bound; its absence is the network-quiet property.
+    assert len(snapshot_reads) == 3, log.requests
+    # The collapsed trio is never read: neither /live nor the /status the overlay
+    # used to co-poll on the same timer.
+    assert collapsed == [], f"collapsed endpoints must not be read: {collapsed}"

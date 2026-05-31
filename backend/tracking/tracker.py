@@ -442,7 +442,7 @@ class HuntTracker:
             session_id=session.id,
             started_at=session.start_time.isoformat(),
             kill_count=len(kills),
-            elapsed=int(_time.time() - start_ts),
+            elapsed=int(self._now_fn().timestamp() - start_ts),
             cost=round(cost, 2),
             returns=round(returns, 2),
             pes=round(float(skill_tt), 2),

@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -133,6 +134,7 @@ def recording_live_server() -> Iterator[tuple[int, _RequestLog]]:
         server.should_exit = True
         thread.join(timeout=10)
         main_module.ALLOWED_API_HOSTS -= added_hosts
+        shutil.rmtree(data_dir, ignore_errors=True)
         if original_data_dir is None:
             os.environ.pop("ENTROPIAORME_DATA_DIR", None)
         else:

@@ -41,9 +41,11 @@ jobs:
     # main, see ci.yml), and the randomised order surfaces cross-file isolation
     # coupling the pinned per-PR legs cannot. Windows, the application's platform.
     runs-on: windows-latest
-    # Run the property-based suites with more examples than the local default.
+    # The scheduled cadence runs the property suites at the deepest example
+    # budget: the `nightly` Hypothesis profile (1000 examples), beyond the
+    # per-PR `ci` profile's 300.
     env:
-      HYPOTHESIS_PROFILE: ci
+      HYPOTHESIS_PROFILE: nightly
     strategy:
       fail-fast: false
       matrix:

@@ -33,6 +33,42 @@ jobs:
       - name: Audit dependencies
         run: pip-audit -r backend/requirements.txt -r backend/requirements-dev.txt --strict
 
+  backend-full:
+    name: Backend full-tier suite (Python ${{ matrix.python-version }})
+    # The full tier (the schemathesis contract suites + OCR equivalence) plus a
+    # complete-suite re-run under randomised order. The full tier does not
+    # block the per-PR gate (it runs here nightly and post-merge on a push to
+    # main, see ci.yml), and the randomised order surfaces cross-file isolation
+    # coupling the pinned per-PR legs cannot. Windows, the application's platform.
+    runs-on: windows-latest
+    # The scheduled cadence runs the property suites at the deepest example
+    # budget: the `nightly` Hypothesis profile (1000 examples), beyond the
+    # per-PR `ci` profile's 300.
+    env:
+      HYPOTHESIS_PROFILE: nightly
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      # No tier filter: the complete suite (fast + standard + full), randomised
+      # order on (pytest-randomly default), so every tier and their interaction
+      # is exercised. OCR equivalence skips without the local recorded corpus.
+      - name: Run the complete backend suite, all tiers
+        run: python -m pytest
+
   mutation:
     name: Mutation testing (mutmut)
     # The mutation engine has no native Windows support, so the campaign runs on

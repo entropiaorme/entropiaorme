@@ -44,8 +44,10 @@ jobs:
             backend/requirements-dev.txt
       - name: Install dependencies
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
-      # The supported-floor leg runs the suite without coverage. The contract
-      # tier runs once, on the coverage leg below, so it is excluded here.
+      # The supported-floor leg runs the fast + standard tiers without coverage.
+      # The full tier (the contract suites + OCR equivalence) is excluded by the
+      # marker filter; it runs post-merge on main and nightly (see the full-tier
+      # step below and nightly.yml), not on either per-PR leg.
       - name: Run backend test suite
         if: matrix.python-version == '3.11'
         # Positive tier selection (`fast or standard`) rather than a negative
@@ -61,29 +63,32 @@ jobs:
         # TESTING.md "Parallelism"); it is not wired into CI.
         run: python -m pytest -m "fast or standard"
       # Coverage is measured on one leg only (3.14) to avoid double-counting and
-      # racing coverage files; the floor lives in pyproject.toml. Coverage data
-      # is accumulated here and across the contract run below, then reported once
-      # (see "Combine and report coverage"), so the report and the diff-coverage
-      # gate credit the router surface the contract suite exercises. Test order
-      # is pinned on the coverage legs so the measured figure is reproducible run
-      # to run; the 3.11 leg keeps randomised order to surface inter-test coupling.
+      # racing coverage files; the floor lives in pyproject.toml. On a pull
+      # request this measures the fast + standard tiers alone, which clear the
+      # floor on their own (the seeded API-surface tests cover the router
+      # branches). On a push to main the full-tier step below appends its
+      # coverage (--cov-append) before the report and badge, so the published
+      # figure reflects the full surface. Test order is pinned on the coverage
+      # legs so the measured figure is reproducible run to run; the 3.11 leg
+      # keeps randomised order to surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
         # Same positive tier selection as the floor leg above, run serially for
         # the same wall-clock reason, with pinned order so the measured coverage
         # is reproducible run to run.
         run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report=
-      # API contract tests (schemathesis from_asgi) drive the read surface
-      # against the app's own OpenAPI schema. Run on the coverage leg only so the
-      # slower schemathesis pass executes once per CI run; its coverage is
-      # appended to the run above. schemathesis runs in deterministic mode against
-      # a pinned Hypothesis, with order pinned, so this contribution is stable.
-      # Kept single-worker (no xdist): the stateful schemathesis pass carries
-      # per-process generation state, and pinned serial execution is what makes
-      # the appended coverage reproducible run to run.
-      - name: Run API contract tests
-        if: matrix.python-version == '3.14'
-        run: python -m pytest -m contract -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
+      # The full tier (the two schemathesis contract suites + OCR equivalence) is
+      # the slowest part of the suite. It does not run on the per-PR gate, so a pull
+      # request waits only on the fast + standard tiers; it runs here post-merge
+      # on a push to main (and nightly, see nightly.yml) so nothing reaches main
+      # un-vetted by the full suite. Its coverage is appended to the run above so
+      # the published badge reflects the full surface. Single-worker with pinned
+      # order: the stateful schemathesis pass carries per-process generation
+      # state, and pinned serial execution makes the appended coverage
+      # reproducible run to run.
+      - name: Run the full-tier suites (post-merge to main)
+        if: matrix.python-version == '3.14' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: python -m pytest -m full -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
       # Report once over the combined data: enforce the total floor and write the
       # XML the diff-coverage gate and the badge step consume.
       - name: Combine and report coverage

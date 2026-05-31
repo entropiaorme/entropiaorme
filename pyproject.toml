@@ -41,8 +41,8 @@ addopts = "--strict-markers --strict-config"
 markers = [
     "fast: pure-logic, in-memory, sub-second tests (run on every PR)",
     "standard: db / filesystem / in-process-stateful tests (run on every PR)",
-    "full: device / OCR / listener-touching or slow tests (run nightly, not on PRs)",
-    "contract: schemathesis API contract tests (run once, on the coverage leg)",
+    "full: the slowest suites (schemathesis contract suites + OCR equivalence); runs post-merge on main and nightly, not on PRs",
+    "contract: schemathesis API contract tests (full tier; runs post-merge and nightly, see TESTING.md)",
     # Serial-only escape hatch for parallel runs. The PR legs distribute with
     # --dist=loadfile, which keeps each file on one worker, so a test only needs
     # this if it cannot run concurrently with tests in OTHER files (binds a fixed

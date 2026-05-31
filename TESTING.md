@@ -22,7 +22,7 @@ Tests are tagged by runtime tier so the right subset runs in the right place:
 | ---- | ------ | ------- |
 | `fast` | Pure-logic, in-memory, sub-second | `pytest -m fast` |
 | `standard` | Database / filesystem / in-process state | `pytest -m standard` |
-| `full` | Device / screen-capture / slow checks (none yet) | `pytest -m full` |
+| `full` | The slowest suites: the schemathesis contract suites and OCR equivalence (device / OCR / slow) | `pytest -m full` |
 
 Each module's tier is set in `backend/tests/conftest.py`; a module with no entry defaults to `standard`. The tier is selected positively (`pytest -m "fast or standard"`), not by negative exclusion, so a test that lands without a marker stays out of the per-PR run until it is deliberately classified rather than silently joining the gate.
 
@@ -63,9 +63,9 @@ Branch coverage is measured with `pytest-cov` (configuration under `[tool.covera
 
 The run must hold a total branch-coverage floor (the `fail_under` value in `pyproject.toml`; the live measured figure is the coverage badge at the top of the README). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
 
-The API contract suite contributes to coverage as well, since it exercises the HTTP router surface. It runs in deterministic mode against a pinned generator, so its contribution is reproducible; in CI it runs as a separate step whose coverage is accumulated into the same report (`coverage` with `--cov-append`), and both coverage passes pin the test order so the measured figure does not vary run to run. The single local command above already covers it (the contract tier is part of `not full`).
+The API contract suite exercises the HTTP router surface, but as the `full` tier it runs on the post-merge and nightly gates rather than the per-PR coverage leg (see "Runtime tiers" and "Continuous integration"). The per-PR coverage leg measures the `fast or standard` set and clears the floor on its own, because the seeded API-surface walk and mutation tests already cover the router branches the contract suite touches. The post-merge leg appends the contract suite's coverage (`coverage` with `--cov-append`) so the published badge reflects the full surface; order is pinned on both coverage passes so the measured figure does not vary run to run. The local command above (`-m "not full"`) reproduces the per-PR coverage; add a `-m full --cov-append` pass to fold in the contract suite.
 
-On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time.
+On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time. A new read endpoint therefore needs a `fast` or `standard` tier test exercising it (for example an entry in the e2e API-surface walk): the contract suite that fuzzes the GET surface is the `full` tier and runs post-merge, not on the pull request, so leaning on it alone for a new route would surface as a diff-coverage miss on the PR.
 
 ### Typing
 
@@ -127,6 +127,8 @@ The prioritised endpoints carry response models so this has teeth: the polymorph
 .venv/Scripts/python.exe -m pytest -m contract
 ```
 
+The suite is the `full` tier, so on CI it runs on the post-merge and nightly gates rather than every pull request (see "Continuous integration"); the command above runs it locally on demand.
+
 A few deliberate scoping choices keep the run honest and reproducible:
 
 - **Conformance is asserted on `2xx` responses.** Request-validation failures return FastAPI's standard `HTTPValidationError` (a `detail` array), while a few handlers raise a `422` with a string `detail` for business-rule violations: a pre-existing dual shape under one status code. Strictly conforming those error bodies is out of scope for describing current behaviour, so they are held to the no-server-error bar instead.
@@ -159,7 +161,7 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run serially (xdist is a local-only accelerator, see "Parallelism"; on the few-core hosted runner the per-worker re-imports would slow the run rather than speed it). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines, and runs the API contract tests (once, single-worker, rather than on both legs).
+- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run serially (xdist is a local-only accelerator, see "Parallelism"; on the few-core hosted runner the per-worker re-imports would slow the run rather than speed it). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines. The `full` tier (the schemathesis contract suites and OCR equivalence) does not run on the per-PR gate; it runs post-merge on a push to `main` (on the 3.14 leg, its coverage appended so the published badge reflects the full surface) and in the nightly workflow, so the per-PR gate stays fast while nothing reaches `main` un-vetted by the full suite.
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
@@ -170,7 +172,7 @@ Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
 
-A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request) and runs the mutation campaign, publishing the mutation score as a badge at the top of the README. (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
+A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request), runs the complete backend suite across all tiers under randomised order (the `full` tier, plus a cross-file isolation check the pinned per-PR legs cannot give), and runs the mutation campaign, publishing the mutation score as a badge at the top of the README. (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
 
 ## Local checks (pre-commit)
 

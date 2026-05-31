@@ -51,9 +51,11 @@ from schemathesis.specs.openapi.checks import response_schema_conformance
 import backend.routers.demo as demo_module
 from backend.main import BACKEND_PORT, app
 
-# Routed to a dedicated CI step on the coverage leg (see ci.yml) so the slower
-# schemathesis run executes once rather than on every backend matrix leg. Still
-# classified ``standard`` in conftest, so a plain local run picks it up.
+# Classified ``full`` in conftest (the slowest tier): it runs on the
+# post-merge and nightly full-suite gates, not on the per-PR matrix leg, so the
+# per-PR gate stays fast. A local ``-m full`` (or unfiltered) run picks it up;
+# ``-m "fast or standard"`` deliberately does not. The ``contract`` marker still
+# selects it for a targeted ``-m contract`` run.
 pytestmark = pytest.mark.contract
 
 # Host must match the app's allowed-host set (derived from the backend port so

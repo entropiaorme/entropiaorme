@@ -133,8 +133,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "classify this commit range (e.g. origin/main..HEAD); default is the "
-            "pull-request range read from the EVENT_NAME / PR_BASE_SHA / "
-            "PR_HEAD_SHA environment variables"
+            "pull-request or merge-queue range read from EVENT_NAME and the "
+            "matching base/head SHA environment variables"
         ),
     )
     parser.add_argument(
@@ -151,8 +151,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if commit_range is None:
         print(
-            "classify-change-scope: no pull-request range to inspect; "
-            f"code={value} (run the full gate)."
+            "classify-change-scope: no pull-request or merge-queue range to "
+            f"inspect; code={value} (run the full gate)."
         )
     else:
         print(f"classify-change-scope: range {commit_range}; code={value}.")

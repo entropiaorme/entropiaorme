@@ -21,10 +21,10 @@ permissions:
 
 jobs:
   # Detect whether the change needs the expensive jobs (the Windows backend
-  # matrix and the frontend build) or is documentation-only. A pull request that
-  # touches only Markdown skips both; any other path, and every non-pull-request
-  # event, runs them. The verdict is consumed by the gated jobs' `if:` and by the
-  # always-running `ci-gate` sentinel below, which is the required check.
+  # matrix and the frontend build) or is documentation-only. A pull request, or a
+  # merge-queue run, that touches only Markdown skips both; any other path, and a
+  # push to main, runs them. The verdict is consumed by the gated jobs' `if:` and
+  # by the always-running `ci-gate` sentinel below, which is the required check.
   changes:
     name: Detect change scope
     runs-on: ubuntu-latest

@@ -270,7 +270,7 @@ def test_main_without_a_range_runs_the_suite(
 
     assert rc == 0
     assert "code=true" in output.read_text(encoding="utf-8")
-    assert "no pull-request range" in capsys.readouterr().out
+    assert "no pull-request or merge-queue range" in capsys.readouterr().out
 
 
 def test_main_without_github_output_still_succeeds(

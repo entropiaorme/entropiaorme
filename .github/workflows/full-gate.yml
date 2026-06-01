@@ -20,15 +20,43 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether the change is documentation-only (every changed path is
+  # Markdown). A documentation-only pull request needs no full-tier run, so the
+  # sentinel below passes without the `full-gate` label, matching the per-push
+  # gate in ci.yml that also skips the backend matrix for such a change.
+  changes:
+    name: Detect change scope
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base..head range resolves to the PR's commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Classify the change scope
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.classify_change_scope
+
   full-suite:
     name: Full suite (integrated)
     runs-on: windows-latest
-    # Only when the pull request carries the `full-gate` label. A pull_request
-    # checkout resolves to refs/pull/<n>/merge by default, i.e. the head already
-    # merged into the base, so this tests the integrated result rather than the
-    # branch in isolation. Adding the label (or pushing while it is present)
-    # re-runs this against the current integrated state.
-    if: contains(github.event.pull_request.labels.*.name, 'full-gate')
+    # Only a code change carrying the `full-gate` label. A pull_request checkout
+    # resolves to refs/pull/<n>/merge by default, i.e. the head already merged
+    # into the base, so this tests the integrated result rather than the branch
+    # in isolation. Adding the label (or pushing while it is present) re-runs
+    # this against the current integrated state. A documentation-only change
+    # skips it; the sentinel below passes such a change on the docs-only verdict.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true' && contains(github.event.pull_request.labels.*.name, 'full-gate')
     # Run the property-based suites with more examples than the local default,
     # matching the backend job in ci.yml.
     env:
@@ -57,22 +85,34 @@ jobs:
     name: Pre-merge full gate
     runs-on: ubuntu-latest
     # Always runs, so it always reports a status: this is the required check on
-    # the default branch. It passes only when the full-suite job above has
-    # succeeded on the current head (the `full-gate` label is present and the
-    # integrated full tier is green). Without the label, full-suite is skipped and
-    # this fails, which is the gate: it blocks the merge until the integrated full
-    # suite has passed. An always-running sentinel is used rather than marking
-    # full-suite itself required because branch protection treats a skipped
-    # required check as passing (fail-open); inspecting the result here makes a
-    # gate that did not run an explicit failure (fail-closed).
-    needs: [full-suite]
+    # the default branch. It is fail-closed. It passes when the change is
+    # documentation-only (no full tier to run) or when the full-suite job above
+    # has succeeded on the current head (the `full-gate` label is present and the
+    # integrated full tier is green). For a code change without a green full
+    # suite it fails, which is the gate: it blocks the merge until the integrated
+    # full suite has passed. A detection that did not run cleanly also fails it,
+    # so a misfire can never open the gate. An always-running sentinel is used
+    # rather than marking full-suite itself required because branch protection
+    # treats a skipped required check as passing (fail-open); inspecting the
+    # results here makes a gate that did not run an explicit failure.
+    needs: [changes, full-suite]
     if: always()
     steps:
-      - name: Require the integrated full suite to have passed
+      - name: Require the integrated full suite to have passed (or docs-only)
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
           FULL_SUITE_RESULT: ${{ needs.full-suite.result }}
         shell: bash
         run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Change-scope detection did not succeed (result: $CHANGES_RESULT); failing closed."
+            exit 1
+          fi
+          if [ "$CODE" = "false" ]; then
+            echo "Documentation-only change; no full tier to run. The merge gate is satisfied."
+            exit 0
+          fi
           if [ "$FULL_SUITE_RESULT" = "success" ]; then
             echo "Integrated full suite passed; the merge gate is satisfied."
             exit 0

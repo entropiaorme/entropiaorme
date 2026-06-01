@@ -15,9 +15,42 @@ permissions:
   contents: read
 
 jobs:
+  # Detect whether the change needs the expensive jobs (the Windows backend
+  # matrix and the frontend build) or is documentation-only. A pull request that
+  # touches only Markdown skips both; any other path, and every non-pull-request
+  # event, runs them. The verdict is consumed by the gated jobs' `if:` and by the
+  # always-running `ci-gate` sentinel below, which is the required check.
+  changes:
+    name: Detect change scope
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base..head range resolves to the PR's commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Pure stdlib + git, so no dependency install is needed. Emits code=false
+      # only when every changed path is Markdown.
+      - name: Classify the change scope
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.classify_change_scope
+
   backend:
     name: Backend (tests, Python ${{ matrix.python-version }})
     runs-on: windows-latest
+    # Skipped on a documentation-only pull request; the ci-gate sentinel then
+    # passes on the docs-only verdict, so the required check still reports.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     permissions:
       contents: write
     # Run the property-based suites with more examples than the local default.
@@ -278,6 +311,10 @@ jobs:
   frontend:
     name: Frontend (build + check)
     runs-on: ubuntu-latest
+    # Skipped on a documentation-only pull request, like the backend matrix; the
+    # ci-gate sentinel covers the required-check report in that case.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     defaults:
       run:
         working-directory: frontend
@@ -293,3 +330,40 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run check
+
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    # The required check on the default branch, in place of the individual
+    # backend-matrix and frontend contexts. It always runs (if: always()), so it
+    # always reports a status, and it is fail-closed: it passes only when the
+    # change is documentation-only (the gated jobs were legitimately skipped) or
+    # when both gated jobs succeeded. A detection that did not run cleanly, or a
+    # code change whose jobs did not pass, fails it, so a skip can never let an
+    # untested change merge. This lets a documentation-only pull request go green
+    # in seconds without deadlocking on a never-reported required job.
+    needs: [changes, backend, frontend]
+    if: always()
+    steps:
+      - name: Require the gated jobs to have passed (or been documentation-only)
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+        shell: bash
+        run: |
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Change-scope detection did not succeed (result: $CHANGES_RESULT); failing closed."
+            exit 1
+          fi
+          if [ "$CODE" = "false" ]; then
+            echo "Documentation-only change; the backend matrix and frontend build were skipped. Gate satisfied."
+            exit 0
+          fi
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ]; then
+            echo "Backend matrix and frontend build passed. Gate satisfied."
+            exit 0
+          fi
+          echo "::error::A code change must pass the backend matrix and the frontend build (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT)."
+          exit 1

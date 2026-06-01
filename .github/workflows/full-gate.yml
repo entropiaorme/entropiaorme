@@ -1,0 +1,83 @@
+name: full-gate
+
+# The full tier (the slowest suites: the two schemathesis contract suites and
+# the OCR equivalence suite) is kept off the per-pull-request gate so day-to-day
+# iteration stays fast. This workflow runs it once, on demand, against the
+# integrated result of a pull request (the head merged into the base) so the
+# exact state that would land on the default branch is vetted by the complete
+# suite before the merge, keeping the default branch green. It is requested by
+# adding the `full-gate` label to a pull request when the change is ready to
+# merge; the per-push gate in ci.yml is unaffected.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  full-suite:
+    name: Full suite (integrated)
+    runs-on: windows-latest
+    # Only when the pull request carries the `full-gate` label. A pull_request
+    # checkout resolves to refs/pull/<n>/merge by default, i.e. the head already
+    # merged into the base, so this tests the integrated result rather than the
+    # branch in isolation. Adding the label (or pushing while it is present)
+    # re-runs this against the current integrated state.
+    if: contains(github.event.pull_request.labels.*.name, 'full-gate')
+    # Run the property-based suites with more examples than the local default,
+    # matching the backend job in ci.yml.
+    env:
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      # Single-worker with pinned order: the stateful schemathesis pass carries
+      # per-process generation state, matching the full-tier step in ci.yml. This
+      # is a pass/fail rigour gate; coverage and the badge stay on ci.yml (the
+      # per-PR coverage leg and the post-merge full append).
+      - name: Run the full-tier suites against the integrated result
+        run: python -m pytest -m full -p no:randomly
+
+  pre-merge-full-gate:
+    name: Pre-merge full gate
+    runs-on: ubuntu-latest
+    # Always runs, so it always reports a status: this is the required check on
+    # the default branch. It passes only when the full-suite job above has
+    # succeeded on the current head (the `full-gate` label is present and the
+    # integrated full tier is green). Without the label, full-suite is skipped and
+    # this fails, which is the gate: it blocks the merge until the integrated full
+    # suite has passed. An always-running sentinel is used rather than marking
+    # full-suite itself required because branch protection treats a skipped
+    # required check as passing (fail-open); inspecting the result here makes a
+    # gate that did not run an explicit failure (fail-closed).
+    needs: [full-suite]
+    if: always()
+    steps:
+      - name: Require the integrated full suite to have passed
+        env:
+          FULL_SUITE_RESULT: ${{ needs.full-suite.result }}
+        shell: bash
+        run: |
+          if [ "$FULL_SUITE_RESULT" = "success" ]; then
+            echo "Integrated full suite passed; the merge gate is satisfied."
+            exit 0
+          fi
+          echo "::error::The integrated full suite has not passed (result: $FULL_SUITE_RESULT)."
+          echo "Add the 'full-gate' label to this pull request to run the full tier"
+          echo "against the merged result, then re-check this gate."
+          exit 1

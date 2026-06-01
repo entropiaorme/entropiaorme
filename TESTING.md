@@ -63,9 +63,9 @@ Branch coverage is measured with `pytest-cov` (configuration under `[tool.covera
 
 The run must hold a total branch-coverage floor (the `fail_under` value in `pyproject.toml`; the live measured figure is the coverage badge at the top of the README). The floor sits a few points below the measured figure and ratchets upward as coverage improves; it is never lowered to make a red gate pass. Device, input-listener, screen-capture, and one-off script modules are run but excluded from measurement: they cannot be unit-covered without real hardware or a display, so the floor reflects testable logic rather than platform glue. The exclusion list lives under `[tool.coverage.run]`.
 
-The API contract suite exercises the HTTP router surface, but as the `full` tier it runs on the post-merge and nightly gates rather than the per-PR coverage leg (see "Runtime tiers" and "Continuous integration"). The per-PR coverage leg measures the `fast or standard` set and clears the floor on its own because the seeded API-surface walk and mutation tests already cover the router branches the contract suite touches. The post-merge leg appends the full tier's coverage (`pytest -m full`: the contract suites and OCR equivalence, with `--cov-append`) so the published badge reflects the full surface; order is pinned on both coverage passes, so the measured figure does not vary run to run. The local command above (`-m "not full"`) reproduces the per-PR coverage; add a `-m full --cov-append` pass to fold in the full tier.
+The API contract suite exercises the HTTP router surface, but as the `full` tier it runs on the pre-merge full gate, post-merge, and nightly rather than the per-PR coverage leg (see "Runtime tiers" and "Continuous integration"). The per-PR coverage leg measures the `fast or standard` set and clears the floor on its own because the seeded API-surface walk and mutation tests already cover the router branches the contract suite touches. The post-merge leg appends the full tier's coverage (`pytest -m full`: the contract suites and OCR equivalence, with `--cov-append`) so the published badge reflects the full surface; order is pinned on both coverage passes, so the measured figure does not vary run to run. The local command above (`-m "not full"`) reproduces the per-PR coverage; add a `-m full --cov-append` pass to fold in the full tier.
 
-On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time. A new read endpoint therefore needs a `fast` or `standard` tier test exercising it (for example an entry in the e2e API-surface walk): the contract suite that fuzzes the GET surface is the `full` tier and runs post-merge, not on the pull request, so leaning on it alone for a new route would surface as a diff-coverage miss on the PR.
+On a pull request, `diff-cover` additionally holds new and changed lines to a higher bar (85%), so coverage rises with every change even while the older surface is brought up over time. A new read endpoint therefore needs a `fast` or `standard` tier test exercising it (for example an entry in the e2e API-surface walk): the contract suite that fuzzes the GET surface is the `full` tier and does not run on the per-PR coverage leg (the pre-merge full gate runs it without measuring coverage), so leaning on it alone for a new route would surface as a diff-coverage miss on the PR.
 
 ### Typing
 
@@ -127,7 +127,7 @@ The prioritised endpoints carry response models so this has teeth: the polymorph
 .venv/Scripts/python.exe -m pytest -m contract
 ```
 
-The suite is the `full` tier, so on CI it runs on the post-merge and nightly gates rather than every pull request (see "Continuous integration"); the command above runs it locally on demand.
+The suite is the `full` tier, so on CI it runs on the pre-merge full gate, post-merge, and nightly rather than on every pull request (see "Continuous integration"); the command above runs it locally on demand.
 
 A few deliberate scoping choices keep the run honest and reproducible:
 
@@ -161,7 +161,7 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml`):
 
-- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run serially (xdist is a local-only accelerator, see "Parallelism"; on the few-core hosted runner the per-worker re-imports would slow the run rather than speed it). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines. The `full` tier (the schemathesis contract suites and OCR equivalence) does not run on the per-PR gate; it runs post-merge on a push to `main` (on the 3.14 leg, its coverage appended so the published badge reflects the full surface) and in the nightly workflow, so the per-PR gate stays fast while nothing reaches `main` un-vetted by the full suite.
+- **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run serially (xdist is a local-only accelerator, see "Parallelism"; on the few-core hosted runner the per-worker re-imports would slow the run rather than speed it). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines. The `full` tier (the schemathesis contract suites and OCR equivalence) does not run on the per-PR gate; it runs on demand as the pre-merge full gate (see "The pre-merge full gate" below), post-merge on a push to `main` (on the 3.14 leg, its coverage appended so the published badge reflects the full surface), and in the nightly workflow, so the per-PR gate stays fast while nothing reaches `main` un-vetted by the full suite.
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
 - **Dependency audit**: `pip-audit` against the pinned requirements.
@@ -169,8 +169,17 @@ Every pull request and push to `main` runs these jobs (`.github/workflows/ci.yml
 - **Golden ratification** (pull requests only): fails when a commit moves a golden file without both the `test: regenerate goldens` marker and a recorded independent `ratification-sound` verdict for the changed sets, so a regression can be ratified neither unconsciously nor by its own author (see "Goldens regeneration" above).
 - **Authoring lint** (pull requests only): flags em dashes and US spellings on the lines a pull request adds (see "Authoring lint" below). Diff-scoped, so it binds new content without forcing a drive-by sweep of the old.
 - **Frontend**: the type-check and production build.
+- **Pre-merge full gate** (pull requests, `.github/workflows/full-gate.yml`): a required check that runs the `full` tier against the pull request's integrated result before it can merge. See "The pre-merge full gate" below.
 
 The backend runs on Windows because that is the application's platform: the screen-capture and input-listener code paths target it directly.
+
+### The pre-merge full gate
+
+The `full` tier is kept off the per-pull-request gate so iteration stays fast, but nothing should reach `main` without it. A separate workflow (`.github/workflows/full-gate.yml`) closes that gap. When a pull request is ready to merge, adding the `full-gate` label runs the full tier against the pull request's integrated result (the head merged into the base, `refs/pull/<n>/merge`), so the exact state that would land is vetted by the complete suite. Pushing while the label is present re-runs it against the new state; removing the label re-blocks the merge.
+
+The required status check is a small always-running `pre-merge-full-gate` sentinel rather than the full-suite job itself, because branch protection treats a skipped required check as passing: a job gated on the label would pass by being skipped when the label is absent (fail-open). The sentinel instead reports failure whenever the full suite has not succeeded on the current head, so an un-run gate blocks the merge (fail-closed).
+
+One consequence of the fail-closed sentinel: while the full suite is running, or before the label is added, the gate reports red, because "the full suite has not yet passed" is a deliberate failure rather than a softer pending state. The check turns green once the integrated full suite passes; branch protection evaluates the most recent result for the check, so an in-progress red is superseded. Day to day: iterate without the label (the fast per-PR gate only), then add `full-gate` when the change is reviewed and ready to merge. (Because the gate is uniform, a documentation-only pull request also waits on it for now; a path filter that lets such changes skip the heavy gate is a separate refinement.)
 
 A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request), runs the complete backend suite across all tiers under randomised order (the `full` tier, plus a cross-file isolation check the pinned per-PR legs cannot give), and runs the mutation campaign, publishing the mutation score as a badge at the top of the README. (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
 

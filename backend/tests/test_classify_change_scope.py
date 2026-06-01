@@ -167,7 +167,7 @@ def test_main_writes_code_verdict_to_github_output(
     assert "code=true" in output.read_text(encoding="utf-8")
 
 
-# --- the pull-request range derived from the workflow event env -----------
+# --- the base..head range derived from the workflow event env -------------
 
 
 def test_range_from_env_builds_pull_request_range(
@@ -179,7 +179,18 @@ def test_range_from_env_builds_pull_request_range(
     assert scope._range_from_env() == "aaaa..bbbb"
 
 
-def test_range_from_env_none_for_non_pull_request(
+def test_range_from_env_builds_merge_group_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The merge queue supplies the integrated commit's base..head under the
+    # merge_group SHAs, so a documentation-only change is detected in the queue.
+    monkeypatch.setenv("EVENT_NAME", "merge_group")
+    monkeypatch.setenv("MERGE_GROUP_BASE_SHA", "cccc")
+    monkeypatch.setenv("MERGE_GROUP_HEAD_SHA", "dddd")
+    assert scope._range_from_env() == "cccc..dddd"
+
+
+def test_range_from_env_none_for_other_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("EVENT_NAME", "push")
@@ -195,6 +206,15 @@ def test_range_from_env_none_when_a_sha_is_missing(
     assert scope._range_from_env() is None
 
 
+def test_range_from_env_none_when_a_merge_group_sha_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EVENT_NAME", "merge_group")
+    monkeypatch.setenv("MERGE_GROUP_BASE_SHA", "cccc")
+    monkeypatch.delenv("MERGE_GROUP_HEAD_SHA", raising=False)
+    assert scope._range_from_env() is None
+
+
 def test_main_reads_pull_request_range_from_env(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -207,6 +227,27 @@ def test_main_reads_pull_request_range_from_env(
     monkeypatch.setenv("EVENT_NAME", "pull_request")
     monkeypatch.setenv("PR_BASE_SHA", base)
     monkeypatch.setenv("PR_HEAD_SHA", head)
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    rc = scope.main(["--repo-root", str(repo)])
+
+    assert rc == 0
+    assert "code=false" in output.read_text(encoding="utf-8")
+
+
+def test_main_reads_merge_group_range_from_env(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No --range: main derives the range from the merge_group event env, so the
+    # docs-only skip carries into the queue.
+    base = _base(repo)
+    _write(repo, "README.md", "# Project\n\nUpdated prose.\n")
+    _git(repo, "commit", "-aqm", "docs")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    monkeypatch.setenv("EVENT_NAME", "merge_group")
+    monkeypatch.setenv("MERGE_GROUP_BASE_SHA", base)
+    monkeypatch.setenv("MERGE_GROUP_HEAD_SHA", head)
     output = tmp_path / "github_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     rc = scope.main(["--repo-root", str(repo)])

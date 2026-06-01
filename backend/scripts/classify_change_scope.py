@@ -19,9 +19,13 @@ aggregator: a documentation-only skip passes the gate, but a detection that did
 not run cleanly fails it, so a misfire can never let an untested code change
 through.
 
-Run from a workflow on a pull request, reading the range from the event env::
+Run from a workflow on a pull request (or a merge-queue ``merge_group`` event),
+reading the range from the event env::
 
     EVENT_NAME=pull_request PR_BASE_SHA=<base> PR_HEAD_SHA=<head> \\
+        python -m backend.scripts.classify_change_scope
+
+    EVENT_NAME=merge_group MERGE_GROUP_BASE_SHA=<base> MERGE_GROUP_HEAD_SHA=<head> \\
         python -m backend.scripts.classify_change_scope
 
 or locally against an explicit range::
@@ -97,15 +101,25 @@ def classify(repo_root: Path, *, commit_range: str | None) -> bool:
 
 
 def _range_from_env() -> str | None:
-    """Derive the pull request's base..head range from the workflow event env.
+    """Derive the change's base..head range from the workflow event env.
 
-    Returns ``None`` for any non-pull-request event, or a pull request missing
-    either SHA, so the caller runs the jobs unconditionally.
+    A pull request supplies its base..head through ``PR_BASE_SHA`` /
+    ``PR_HEAD_SHA``; a merge-queue ``merge_group`` event supplies the integrated
+    commit's base..head through ``MERGE_GROUP_BASE_SHA`` / ``MERGE_GROUP_HEAD_SHA``
+    (the queued change merged onto the base), so a documentation-only change is
+    detected in the queue too. Returns ``None`` for any other event, or when a
+    handled event is missing either SHA, so the caller runs the jobs
+    unconditionally.
     """
-    if os.environ.get("EVENT_NAME") != "pull_request":
+    event = os.environ.get("EVENT_NAME")
+    if event == "pull_request":
+        base = os.environ.get("PR_BASE_SHA")
+        head = os.environ.get("PR_HEAD_SHA")
+    elif event == "merge_group":
+        base = os.environ.get("MERGE_GROUP_BASE_SHA")
+        head = os.environ.get("MERGE_GROUP_HEAD_SHA")
+    else:
         return None
-    base = os.environ.get("PR_BASE_SHA")
-    head = os.environ.get("PR_HEAD_SHA")
     if base and head:
         return f"{base}..{head}"
     return None

@@ -170,19 +170,25 @@ def test_main_writes_code_verdict_to_github_output(
 # --- the pull-request range derived from the workflow event env -----------
 
 
-def test_range_from_env_builds_pull_request_range(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_range_from_env_builds_pull_request_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("EVENT_NAME", "pull_request")
     monkeypatch.setenv("PR_BASE_SHA", "aaaa")
     monkeypatch.setenv("PR_HEAD_SHA", "bbbb")
     assert scope._range_from_env() == "aaaa..bbbb"
 
 
-def test_range_from_env_none_for_non_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_range_from_env_none_for_non_pull_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("EVENT_NAME", "push")
     assert scope._range_from_env() is None
 
 
-def test_range_from_env_none_when_a_sha_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_range_from_env_none_when_a_sha_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("EVENT_NAME", "pull_request")
     monkeypatch.setenv("PR_BASE_SHA", "aaaa")
     monkeypatch.delenv("PR_HEAD_SHA", raising=False)
@@ -210,7 +216,10 @@ def test_main_reads_pull_request_range_from_env(
 
 
 def test_main_without_a_range_runs_the_suite(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     # A non-pull-request event yields no range, so main reports code=true.
     monkeypatch.delenv("EVENT_NAME", raising=False)

@@ -165,3 +165,74 @@ def test_main_writes_code_verdict_to_github_output(
 
     assert rc == 0
     assert "code=true" in output.read_text(encoding="utf-8")
+
+
+# --- the pull-request range derived from the workflow event env -----------
+
+
+def test_range_from_env_builds_pull_request_range(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVENT_NAME", "pull_request")
+    monkeypatch.setenv("PR_BASE_SHA", "aaaa")
+    monkeypatch.setenv("PR_HEAD_SHA", "bbbb")
+    assert scope._range_from_env() == "aaaa..bbbb"
+
+
+def test_range_from_env_none_for_non_pull_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVENT_NAME", "push")
+    assert scope._range_from_env() is None
+
+
+def test_range_from_env_none_when_a_sha_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVENT_NAME", "pull_request")
+    monkeypatch.setenv("PR_BASE_SHA", "aaaa")
+    monkeypatch.delenv("PR_HEAD_SHA", raising=False)
+    assert scope._range_from_env() is None
+
+
+def test_main_reads_pull_request_range_from_env(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No --range: main derives the range from the pull-request event env.
+    base = _base(repo)
+    _write(repo, "README.md", "# Project\n\nUpdated prose.\n")
+    _git(repo, "commit", "-aqm", "docs")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    monkeypatch.setenv("EVENT_NAME", "pull_request")
+    monkeypatch.setenv("PR_BASE_SHA", base)
+    monkeypatch.setenv("PR_HEAD_SHA", head)
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    rc = scope.main(["--repo-root", str(repo)])
+
+    assert rc == 0
+    assert "code=false" in output.read_text(encoding="utf-8")
+
+
+def test_main_without_a_range_runs_the_suite(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A non-pull-request event yields no range, so main reports code=true.
+    monkeypatch.delenv("EVENT_NAME", raising=False)
+    output = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    rc = scope.main(["--repo-root", str(repo)])
+
+    assert rc == 0
+    assert "code=true" in output.read_text(encoding="utf-8")
+    assert "no pull-request range" in capsys.readouterr().out
+
+
+def test_main_without_github_output_still_succeeds(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Run outside a workflow (no GITHUB_OUTPUT): main prints and returns 0.
+    base = _base(repo)
+    _write(repo, "backend/app.py", "VALUE = 2\n")
+    _git(repo, "commit", "-aqm", "code")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    rc = scope.main(["--range", f"{base}..{head}", "--repo-root", str(repo)])
+
+    assert rc == 0

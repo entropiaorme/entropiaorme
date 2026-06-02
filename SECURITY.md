@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-EntropiaOrme is in active pre-1.0 development. Security fixes target the latest released version on the [Releases page](https://github.com/MikelWL/entropiaorme/releases). Older versions are not supported.
+EntropiaOrme is in active pre-1.0 development. Security fixes target the latest released version on the [Releases page](https://github.com/entropiaorme/entropiaorme/releases). Older versions are not supported.
 
 ## Reporting a Vulnerability
 

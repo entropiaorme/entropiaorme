@@ -1,8 +1,8 @@
 ![EntropiaOrme](assets/entropiaorme-github-banner.png)
 
-[![CI](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MikelWL/entropiaorme/badges/coverage.json)](https://github.com/MikelWL/entropiaorme/actions/workflows/ci.yml)
-[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MikelWL/entropiaorme/badges/mutation.json)](https://github.com/MikelWL/entropiaorme/actions/workflows/nightly.yml)
+[![CI](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/coverage.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
+[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/nightly.yml)
 
 An analytical desktop tool for Entropia Universe.
 

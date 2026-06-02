@@ -26,7 +26,7 @@
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-	import { emit, listen } from '@tauri-apps/api/event';
+	import { listen } from '@tauri-apps/api/event';
 	import {
 		OVERLAY_MENU_CLOSED_EVENT,
 		OVERLAY_MENU_HIDE_EVENT,
@@ -50,7 +50,6 @@
 	} from '$lib/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 
-	const TRACKING_STATE_CHANGED_EVENT = 'tracking-state-changed';
 	// The colon-form Tauri topic the event relay re-emits each backend tracking
 	// frame on (the wire topic `tracking.session.updated`; Tauri event names
 	// forbid dots). See lib/realtime/eventRelay.ts.
@@ -1024,7 +1023,6 @@
 		try {
 			await startTracking();
 			await hydrate();
-			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'active' });
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 400) {
 				attributionWarning = error.message;
@@ -1077,7 +1075,6 @@
 			stoppedSessionId = result.session_id;
 			lastSessionId = stoppedSessionId;
 			await hydrate();
-			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'idle' });
 		} catch { /* ignore */ }
 		toggling = false;
 

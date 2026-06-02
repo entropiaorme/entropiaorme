@@ -25,14 +25,8 @@ import { EVENTS_STREAM_URL } from '$lib/api';
 
 /** Wire topics forwarded from the SSE stream onto the Tauri bus. Grows as more
  * domain topics are added (quests, ...). Each is re-emitted on its colon-form
- * Tauri topic and covered by the reconnect nudge below; only tracking also
- * bridges onto the legacy window-to-window lifecycle event. */
+ * Tauri topic and covered by the reconnect nudge below. */
 const FORWARDED_TOPICS = ['tracking.session.updated', 'scan.status.changed'] as const;
-
-/** Existing window-to-window lifecycle event the dashboard and overlays already
- * listen on; the relay drives it from the backend in addition to the overlay's
- * own user-click emits. */
-const TRACKING_STATE_CHANGED_EVENT = 'tracking-state-changed';
 
 interface DomainEnvelope {
 	type?: string;
@@ -57,17 +51,10 @@ function forward(topic: string, raw: string): void {
 	} catch {
 		return;
 	}
-	const payload = envelope.payload ?? {};
 	// Re-emit the whole typed envelope onto the Tauri bus, so a topic-aware
 	// consumer sees the full contract (type, event_version, occurred_at,
 	// payload), not just the payload.
 	void emit(toTauriEventName(topic), envelope);
-	// Bridge the tracking lifecycle onto the existing window-to-window seam so
-	// the dashboard and overlays react with no change to their listeners.
-	if (topic === 'tracking.session.updated') {
-		const status = (payload as { status?: 'active' | 'idle' }).status;
-		void emit(TRACKING_STATE_CHANGED_EVENT, status ? { status } : {});
-	}
 }
 
 /**
@@ -96,14 +83,11 @@ export function startEventRelay(): () => void {
 	stream.onopen = () => {
 		// Hydrate on (re)connect: prompt every window to re-read its current
 		// state, so an EventSource auto-reconnect cannot leave a window showing
-		// stale data. The legacy lifecycle event drives the GET-based consumers
-		// (the dashboard's existing listener, the overlays); a payload-less typed
-		// frame on each forwarded topic drives topic-aware consumers (the tracking
-		// store) the same way. That makes the typed topic a complete subscription
-		// surface: a reconnect re-reads through it too, never leaving a typed
-		// subscriber stale, and a payload-less frame reads as "re-hydrate" rather
-		// than as an idle session.
-		void emit(TRACKING_STATE_CHANGED_EVENT, {});
+		// stale data. A payload-less typed frame on each forwarded topic drives
+		// the topic-aware consumers (the tracking and scan stores, the overlay):
+		// each subscribes through its typed topic, so a reconnect re-reads through
+		// it too, and a payload-less frame reads as "re-hydrate" rather than as an
+		// idle session.
 		for (const topic of FORWARDED_TOPICS) {
 			void emit(toTauriEventName(topic), {});
 		}

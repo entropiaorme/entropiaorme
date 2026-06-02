@@ -40,6 +40,19 @@ export interface VisiblePollOptions {
 const noopUnsubscribe = (): void => {};
 
 /**
+ * Invoke a tick, surfacing an async rejection rather than letting `void` swallow
+ * it. Current callers handle their own errors, but the helper accepts an async
+ * tick, so a future one that does not should still be debuggable rather than
+ * fail silently. A synchronous throw propagates as usual.
+ */
+function runTick(tick: () => void | Promise<void>, label: string): void {
+	const result = tick();
+	if (result instanceof Promise) {
+		result.catch((err) => console.error(`${label}: tick failed`, err));
+	}
+}
+
+/**
  * Default source: the Page Visibility API on the always-alive main window,
  * where every current poll survivor lives. Falls back to "always visible, no
  * transitions" when there is no DOM (non-browser context), so the helper is
@@ -74,9 +87,7 @@ export function useVisiblePoll(
 
 	let timer: ReturnType<typeof setInterval> | null = null;
 
-	const run = (): void => {
-		void tick();
-	};
+	const run = (): void => runTick(tick, 'useVisiblePoll');
 
 	const arm = (runNow: boolean): void => {
 		if (timer !== null) {
@@ -127,8 +138,6 @@ export function windowGeometryPoll(
 	tick: () => void | Promise<void>,
 	intervalMs: number,
 ): () => void {
-	const timer = setInterval(() => {
-		void tick();
-	}, intervalMs);
+	const timer = setInterval(() => runTick(tick, 'windowGeometryPoll'), intervalMs);
 	return () => clearInterval(timer);
 }

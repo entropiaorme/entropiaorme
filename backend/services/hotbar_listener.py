@@ -187,7 +187,7 @@ class HotbarListener:
                         },
                     )
                 elif item_type == "consumable":
-                    # Consumables are one-off actions — do NOT switch the active
+                    # Consumables are one-off actions: do NOT switch the active
                     # weapon in cost tracking.
                     pass
                 else:

@@ -9,8 +9,7 @@ disconnect. Every remaining long-lived worker is an OS thread that is named,
 daemonised, owned by a service, and cancelled on shutdown.
 
 This module pins that shape as a *checked* artefact so it cannot silently
-regress (the lane's "convention without enforcement is the failure mode"
-discipline). Three guards:
+regress ("convention without enforcement is the failure mode"). Three guards:
 
 * a static scan asserting no production code spawns a free, unsupervised
   coroutine (``create_task`` / ``ensure_future`` / ``run_in_executor`` /
@@ -72,6 +71,11 @@ def _async_spawn_findings(tree: ast.AST, label: str) -> list[str]:
                 and func.value.id == "asyncio"
             ):
                 findings.append(f"{label}:{node.lineno} (asyncio.run)")
+        elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_ASYNC_SPAWNS:
+            # A from-import bare-name spawn (``from asyncio import create_task``):
+            # the four names are distinctive enough to match unqualified without
+            # false positives. ``run`` is matched in qualified form only, above.
+            findings.append(f"{label}:{node.lineno} ({func.id})")
     return findings
 
 
@@ -155,8 +159,8 @@ def test_every_production_thread_is_named_and_daemon() -> None:
 
 
 # ── The scanners themselves must have teeth (a guideline masquerading as a gate
-#    is the failure mode the lane names): each scanner flags a planted violation
-#    and passes a compliant construction. ──
+#    is the failure mode this guard exists to prevent): each scanner flags a
+#    planted violation and passes a compliant construction. ──
 
 
 def test_async_spawn_scanner_has_teeth() -> None:
@@ -164,6 +168,8 @@ def test_async_spawn_scanner_has_teeth() -> None:
     assert _async_spawn_findings(ast.parse(bad), "x.py")
     bad_run = "import asyncio\nasyncio.run(main())\n"
     assert _async_spawn_findings(ast.parse(bad_run), "x.py")
+    from_import = "from asyncio import create_task\ncreate_task(g())\n"
+    assert _async_spawn_findings(ast.parse(from_import), "x.py")
     good = "import asyncio\nasync def f():\n    await g()\n"
     assert _async_spawn_findings(ast.parse(good), "x.py") == []
 

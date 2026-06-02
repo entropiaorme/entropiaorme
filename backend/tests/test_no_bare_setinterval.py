@@ -46,6 +46,12 @@ def test_scan_allows_setinterval_in_the_helper_home() -> None:
     assert "bare-setinterval" not in _rules(findings)
 
 
+def test_scan_flags_setinterval_with_space_before_paren() -> None:
+    """The whitespace variant ``setInterval (fn)`` does not evade Rule A."""
+    findings = scan_text("frontend/src/routes/+page.svelte", "setInterval (fn, 1000);\n")
+    assert "bare-setinterval" in _rules(findings)
+
+
 def test_scan_flags_retired_event_reference() -> None:
     # Rule B applies everywhere, including the helper home.
     for path in ("frontend/src/lib/realtime/eventRelay.ts", SETINTERVAL_HOME):
@@ -76,8 +82,9 @@ def test_evaluate_catches_planted_violations_whole_tree(tmp_path) -> None:
         "void emit('tracking-state-changed', {});\n",
         encoding="utf-8",
     )
-    # A node_modules file with the same tokens must NOT be scanned (untracked,
-    # and outside the tracked .svelte/.ts set even if added).
+    # A node_modules file with the same token must NOT be scanned: it is left
+    # untracked (and node_modules is gitignored in the real repo), so
+    # ``git ls-files`` never reports it, regardless of its suffix.
     junk = repo / "frontend" / "src" / "node_modules"
     junk.mkdir(parents=True)
     (junk / "vendor.js").write_text("setInterval(x, 1);\n", encoding="utf-8")
@@ -87,3 +94,20 @@ def test_evaluate_catches_planted_violations_whole_tree(tmp_path) -> None:
     findings = evaluate(repo)
     assert _rules(findings) == {"bare-setinterval", "legacy-event"}
     assert all(f.path == "frontend/src/routes/+page.svelte" for f in findings)
+
+
+def test_evaluate_scans_js_family_sources(tmp_path) -> None:
+    """A bare setInterval in a tracked .js module under frontend/src is caught.
+
+    Vite / SvelteKit bundle .js alongside .svelte/.ts, so the lint must not be
+    blind to a poll hiding in a first-class .js-family module.
+    """
+    repo = tmp_path
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    lib = repo / "frontend" / "src" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "legacy.js").write_text("setInterval(fn, 1000);\n", encoding="utf-8")
+    subprocess.run(["git", "add", "frontend/src/lib/legacy.js"], cwd=repo, check=True)
+
+    findings = evaluate(repo)
+    assert any(f.rule == "bare-setinterval" for f in findings)

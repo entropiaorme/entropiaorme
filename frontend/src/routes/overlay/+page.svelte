@@ -650,7 +650,7 @@
 				}
 			} catch { /* first launch or backend unreachable */ }
 
-			// Persist position every 5s — save only if changed (avoids onMoved IPC
+			// Persist position every 5s: save only if changed (avoids onMoved IPC
 			// drag interference). windowGeometryPoll keeps running while the overlay
 			// is hidden: its hidden/shown state is not reliably observable from
 			// inside its own webview, so this is the one poll the visibility gate

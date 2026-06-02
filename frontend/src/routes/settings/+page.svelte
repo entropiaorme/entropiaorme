@@ -188,11 +188,16 @@
 	// Poll recording status once a second while a recording is in progress. The
 	// poll lifecycle is driven entirely by the recording state: starting a
 	// recording flips it on; stopping, aborting, or a status read that resolves
-	// to a non-recording state flips it off. useVisiblePoll pauses the poll while
-	// the settings window is hidden, and its stop() is the effect teardown.
+	// to a non-recording state flips it off. Key the effect on the derived
+	// boolean, not the `recording` object: refreshRecordingStatus reassigns
+	// `recording` wholesale each tick, so reading it directly would re-run the
+	// effect every poll and collapse the 1 Hz cadence into a refetch-as-fast-as-
+	// the-round-trip loop. useVisiblePoll pauses the poll while the settings
+	// window is hidden, and its stop() is the effect teardown.
+	const isRecording = $derived(recording?.state === 'recording');
 	$effect(() => {
-		if (recording?.state !== 'recording') return;
-		return useVisiblePoll(refreshRecordingStatus, { intervalMs: 1000 });
+		if (!isRecording) return;
+		return useVisiblePoll(refreshRecordingStatus, { intervalMs: 1000, immediate: false });
 	});
 
 	async function handleStartRecording() {

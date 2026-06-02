@@ -15,11 +15,11 @@ window-to-window tracking event) cannot grow back:
   re-introduction is a regression.
 
 Unlike ``check_authoring_lint`` (which clones this module's CLI shape but is
-deliberately diff-scoped), this lint is WHOLE-TREE: the round drove the tree to
-zero offending sites, so the guarantee is "zero anywhere", not merely "no new
-ones". The source set is the ``git ls-files``-tracked ``.svelte`` / ``.ts`` files
-under ``frontend/src`` (tracked-only and deterministic, never descending into
-``node_modules`` or build output).
+deliberately diff-scoped), this lint is WHOLE-TREE: the tree was driven to zero
+offending sites, so the guarantee is "zero anywhere", not merely "no new ones".
+The source set is the ``git ls-files``-tracked compiled-source files (``.svelte``,
+``.ts``, and the ``.js`` family) under ``frontend/src`` (tracked-only and
+deterministic, never descending into ``node_modules`` or build output).
 
 Stdlib-only by design, so CI's pre-commit job runs it without the project
 virtual environment. Run from the repo root::
@@ -31,6 +31,7 @@ virtual environment. Run from the repo root::
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -42,16 +43,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # polling helper that every other timer must route through.
 SETINTERVAL_HOME = "frontend/src/lib/realtime/useVisiblePoll.ts"
 
-# The token a bare timer introduces.
-SETINTERVAL_TOKEN = "setInterval("
+# A bare timer call. Tolerates whitespace before the paren (``setInterval (``),
+# which is valid JS that no formatter in the toolchain would normalise away; the
+# leading word boundary still matches a qualified ``window.setInterval(`` form.
+SETINTERVAL_RE = re.compile(r"\bsetInterval\s*\(")
 
 # The retired window-to-window tracking lifecycle event, superseded by the typed
 # ``tracking:session:updated`` topic. Must not reappear in the frontend.
 LEGACY_EVENT = "tracking-state-changed"
 
-# Scanned source: tracked .svelte / .ts under the frontend source tree.
+# Scanned source: every tracked compiled-source file under the frontend tree.
+# Covers what Vite / SvelteKit bundle, so a poll cannot hide in a .js-family
+# module that a .svelte/.ts-only scan would miss.
 _SCAN_ROOT = "frontend/src"
-_SCAN_SUFFIXES = (".svelte", ".ts")
+_SCAN_SUFFIXES = (".svelte", ".ts", ".js", ".mjs", ".cjs", ".jsx", ".tsx")
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,7 @@ def _run_git(args: list[str], repo_root: Path) -> str:
 
 
 def tracked_sources(repo_root: Path) -> list[str]:
-    """Repo-relative tracked ``.svelte`` / ``.ts`` paths under ``frontend/src``.
+    """Repo-relative tracked compiled-source paths under ``frontend/src``.
 
     ``git ls-files`` is the enumeration, so the scan is tracked-only and
     deterministic and never descends into ``node_modules`` or build artefacts.
@@ -92,7 +97,7 @@ def scan_text(path: str, text: str) -> list[Finding]:
     posix = path.replace("\\", "/")
     is_home = posix == SETINTERVAL_HOME
     for lineno, line in enumerate(text.splitlines(), start=1):
-        if not is_home and SETINTERVAL_TOKEN in line:
+        if not is_home and SETINTERVAL_RE.search(line):
             findings.append(
                 Finding(
                     path=posix,

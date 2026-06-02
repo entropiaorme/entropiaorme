@@ -48,7 +48,9 @@ def test_scan_allows_setinterval_in_the_helper_home() -> None:
 
 def test_scan_flags_setinterval_with_space_before_paren() -> None:
     """The whitespace variant ``setInterval (fn)`` does not evade Rule A."""
-    findings = scan_text("frontend/src/routes/+page.svelte", "setInterval (fn, 1000);\n")
+    findings = scan_text(
+        "frontend/src/routes/+page.svelte", "setInterval (fn, 1000);\n"
+    )
     assert "bare-setinterval" in _rules(findings)
 
 
@@ -78,8 +80,7 @@ def test_evaluate_catches_planted_violations_whole_tree(tmp_path) -> None:
     src = repo / "frontend" / "src" / "routes"
     src.mkdir(parents=True)
     (src / "+page.svelte").write_text(
-        "const t = setInterval(fn, 1000);\n"
-        "void emit('tracking-state-changed', {});\n",
+        "const t = setInterval(fn, 1000);\nvoid emit('tracking-state-changed', {});\n",
         encoding="utf-8",
     )
     # A node_modules file with the same token must NOT be scanned: it is left
@@ -89,7 +90,9 @@ def test_evaluate_catches_planted_violations_whole_tree(tmp_path) -> None:
     junk.mkdir(parents=True)
     (junk / "vendor.js").write_text("setInterval(x, 1);\n", encoding="utf-8")
     # Stage so git ls-files reports the tracked source (a commit is not needed).
-    subprocess.run(["git", "add", "frontend/src/routes/+page.svelte"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", "frontend/src/routes/+page.svelte"], cwd=repo, check=True
+    )
 
     findings = evaluate(repo)
     assert _rules(findings) == {"bare-setinterval", "legacy-event"}

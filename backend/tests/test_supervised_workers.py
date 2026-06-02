@@ -121,7 +121,9 @@ def find_unsupervised_async_spawns() -> list[str]:
     findings: list[str] = []
     for path in _production_py_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        findings.extend(_async_spawn_findings(tree, str(path.relative_to(BACKEND_ROOT))))
+        findings.extend(
+            _async_spawn_findings(tree, str(path.relative_to(BACKEND_ROOT)))
+        )
     return findings
 
 

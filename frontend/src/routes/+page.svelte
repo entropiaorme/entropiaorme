@@ -10,6 +10,7 @@
 		type TrackingLive,
 	} from '$lib/api';
 	import { trackingSnapshot, hydrate, subscribeTracking } from '$lib/stores/trackingStore';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { Quest, QuestPlaylist } from '$lib/types/quests';
 	import type { CooldownStatus } from '$lib/types/common';
 	import { invoke } from '@tauri-apps/api/core';
@@ -239,11 +240,7 @@
 	// Poll quest state so chat.log auto-start/complete is reflected without route changes.
 	$effect(() => {
 		const pollMs = status?.status === 'active' ? 3000 : 5000;
-		void refreshQuestState();
-		const interval = setInterval(() => {
-			void refreshQuestState();
-		}, pollMs);
-		return () => clearInterval(interval);
+		return useVisiblePoll(refreshQuestState, { intervalMs: pollMs });
 	});
 
 	// Cooldown tick (1s)

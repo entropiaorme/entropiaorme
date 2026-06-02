@@ -97,7 +97,7 @@
     },
     "TrackingSessionUpdatedPayload": {
       "additionalProperties": false,
-      "description": "Push-to-pull invalidation signal for the live tracking session.\n\nCarries only what the frontend needs to route the change: which session, the\ncoarse active/idle state (so the relay can drive the existing\n``tracking-state-changed`` listener verbatim), and why it fired. The window\nre-hydrates the full readout via the snapshot GET.",
+      "description": "Push-to-pull invalidation signal for the live tracking session.\n\nCarries only what the frontend needs to route the change: which session, the\ncoarse active/idle state (so a subscriber can route on it without parsing the\nbody), and why it fired. The window re-hydrates the full readout via the\nsnapshot GET.",
       "properties": {
         "reason": {
           "enum": [

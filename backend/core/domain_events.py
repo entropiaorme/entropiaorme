@@ -94,9 +94,9 @@ class TrackingSessionUpdatedPayload(_EventModel):
     """Push-to-pull invalidation signal for the live tracking session.
 
     Carries only what the frontend needs to route the change: which session, the
-    coarse active/idle state (so the relay can drive the existing
-    ``tracking-state-changed`` listener verbatim), and why it fired. The window
-    re-hydrates the full readout via the snapshot GET.
+    coarse active/idle state (so a subscriber can route on it without parsing the
+    body), and why it fired. The window re-hydrates the full readout via the
+    snapshot GET.
     """
 
     sessionId: str | None = None

@@ -17,12 +17,24 @@ from backend.scripts.check_no_bare_setinterval import (
     SETINTERVAL_HOME,
     Finding,
     evaluate,
+    main,
     scan_text,
 )
 
 
 def _rules(findings: list[Finding]) -> set[str]:
     return {f.rule for f in findings}
+
+
+def _init_repo_with_violation(repo) -> None:
+    """Stage one tracked frontend source file containing a bare setInterval."""
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    src = repo / "frontend" / "src" / "routes"
+    src.mkdir(parents=True)
+    (src / "+page.svelte").write_text("setInterval(fn, 1000);\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "frontend/src/routes/+page.svelte"], cwd=repo, check=True
+    )
 
 
 def test_frontend_tree_is_clean() -> None:
@@ -114,3 +126,23 @@ def test_evaluate_scans_js_family_sources(tmp_path) -> None:
 
     findings = evaluate(repo)
     assert any(f.rule == "bare-setinterval" for f in findings)
+
+
+def test_main_returns_zero_when_clean(tmp_path, capsys) -> None:
+    """The CLI exits 0 and reports clean against a tree with no offenders."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    assert main(["--repo-root", str(tmp_path)]) == 0
+    assert "no bare setInterval" in capsys.readouterr().out
+
+
+def test_main_returns_one_on_violations(tmp_path, capsys) -> None:
+    """The CLI exits 1 and lists the offenders on a violating tree."""
+    _init_repo_with_violation(tmp_path)
+    assert main(["--repo-root", str(tmp_path)]) == 1
+    assert "polling-discipline violations" in capsys.readouterr().err
+
+
+def test_main_warn_only_exits_zero_despite_violations(tmp_path) -> None:
+    """--warn-only reports but exits 0 even when offenders are present."""
+    _init_repo_with_violation(tmp_path)
+    assert main(["--repo-root", str(tmp_path), "--warn-only"]) == 0

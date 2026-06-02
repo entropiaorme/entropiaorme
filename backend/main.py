@@ -365,7 +365,9 @@ async def lifespan(app: FastAPI):
     # number-row hotbar keys at the OS-hook boundary (input minimisation made
     # structural); subscribes to session lifecycle events on the bus; only
     # runs while a tracking session is active AND the user-facing toggle is on.
-    hotbar_keystroke_source = PynputKeystrokeSource(key_allowlist=HOTBAR_SLOT_KEYS)
+    hotbar_keystroke_source = PynputKeystrokeSource(
+        key_allowlist=HOTBAR_SLOT_KEYS, thread_name="hotbar-key-listener"
+    )
     hotbar_listener = HotbarListener(
         event_bus,
         keystroke_source=hotbar_keystroke_source,
@@ -379,7 +381,9 @@ async def lifespan(app: FastAPI):
     # the space key only; fires capture on the active skill scan when the user
     # opts in via the scan-overlay toggle. Off until the frontend explicitly
     # enables it.
-    spacebar_keystroke_source = PynputKeystrokeSource(key_allowlist={"space"})
+    spacebar_keystroke_source = PynputKeystrokeSource(
+        key_allowlist={"space"}, thread_name="spacebar-key-listener"
+    )
     spacebar_capture_listener = SpacebarCaptureListener(
         skill_scan_manual=skill_scan_manual,
         keystroke_source=spacebar_keystroke_source,

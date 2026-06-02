@@ -161,11 +161,25 @@ class PynputKeystrokeSource(KeystrokeSource):
     without crashing the app.
     """
 
-    def __init__(self, key_allowlist: set[str] | None = None) -> None:
-        """Build an idle source. ``key_allowlist=None`` admits every key."""
+    def __init__(
+        self,
+        key_allowlist: set[str] | None = None,
+        *,
+        thread_name: str | None = None,
+    ) -> None:
+        """Build an idle source. ``key_allowlist=None`` admits every key.
+
+        ``thread_name`` labels the underlying ``pynput`` listener thread so it
+        is identifiable in a thread dump alongside the other named workers.
+        ``pynput.keyboard.Listener`` ignores a ``name=`` constructor kwarg (it
+        does not forward it to its ``threading.Thread`` base), so the name is
+        applied to the listener instance before it starts. ``None`` leaves
+        pynput's default thread name.
+        """
         self._allowlist: set[str] | None = (
             set(key_allowlist) if key_allowlist is not None else None
         )
+        self._thread_name = thread_name
         self._callbacks: list[KeystrokeCallback] = []
         # pynput's keyboard.Listener (untyped C-extension), or None when stopped.
         self._listener: Any = None
@@ -204,6 +218,8 @@ class PynputKeystrokeSource(KeystrokeSource):
 
         listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         listener.daemon = True
+        if self._thread_name is not None:
+            listener.name = self._thread_name
         listener.start()
         self._listener = listener
         return True

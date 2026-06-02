@@ -10,6 +10,7 @@
 		type TrackingLive,
 	} from '$lib/api';
 	import { trackingSnapshot, hydrate, subscribeTracking } from '$lib/stores/trackingStore';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { Quest, QuestPlaylist } from '$lib/types/quests';
 	import type { CooldownStatus } from '$lib/types/common';
 	import { invoke } from '@tauri-apps/api/core';
@@ -239,17 +240,12 @@
 	// Poll quest state so chat.log auto-start/complete is reflected without route changes.
 	$effect(() => {
 		const pollMs = status?.status === 'active' ? 3000 : 5000;
-		void refreshQuestState();
-		const interval = setInterval(() => {
-			void refreshQuestState();
-		}, pollMs);
-		return () => clearInterval(interval);
+		return useVisiblePoll(refreshQuestState, { intervalMs: pollMs });
 	});
 
 	// Cooldown tick (1s)
 	$effect(() => {
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
-		return () => clearInterval(interval);
+		return useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 	});
 
 	// Elapsed timer when tracking is active
@@ -257,13 +253,9 @@
 		if (status?.status === 'active' && status.started_at) {
 			const startMs = new Date(status.started_at).getTime();
 			elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			const timerInterval = setInterval(() => {
+			return useVisiblePoll(() => {
 				elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			}, 1000);
-
-			return () => {
-				clearInterval(timerInterval);
-			};
+			}, { intervalMs: 1000, immediate: false });
 		} else {
 			elapsedSeconds = 0;
 		}

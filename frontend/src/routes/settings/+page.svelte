@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy, tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { Button, Divider, Toggle, Input, SegmentedControl } from '$lib/components';
 	import { theme, setTheme, type Theme } from '$lib/theme';
 	import { newsOptIn, setNewsOptIn } from '$lib/news';
@@ -15,6 +15,7 @@
 	} from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -174,38 +175,36 @@
 	let stopScenarioName = $state('');
 	let stopDescription = $state('');
 	let stopNotes = $state('');
-	let recordingPollTimer: ReturnType<typeof setInterval> | null = null;
-
-	function startRecordingPoll() {
-		stopRecordingPoll();
-		recordingPollTimer = setInterval(refreshRecordingStatus, 1000);
-	}
-	function stopRecordingPoll() {
-		if (recordingPollTimer) {
-			clearInterval(recordingPollTimer);
-			recordingPollTimer = null;
-		}
-	}
-
 	async function refreshRecordingStatus() {
 		try {
 			recording = await getRecordingStatus();
 			recordingError = null;
-			if (recording.state === 'recording') startRecordingPoll();
-			else stopRecordingPoll();
 		} catch (e) {
 			recordingError = e instanceof Error ? e.message : 'Failed to refresh recording status';
-			// Keep last-good state on a transient failure; stop polling only if not mid-recording.
-			if (recording?.state !== 'recording') stopRecordingPoll();
+			// Keep last-good state on a transient failure.
 		}
 	}
+
+	// Poll recording status once a second while a recording is in progress. The
+	// poll lifecycle is driven entirely by the recording state: starting a
+	// recording flips it on; stopping, aborting, or a status read that resolves
+	// to a non-recording state flips it off. Key the effect on the derived
+	// boolean, not the `recording` object: refreshRecordingStatus reassigns
+	// `recording` wholesale each tick, so reading it directly would re-run the
+	// effect every poll and collapse the 1 Hz cadence into a refetch-as-fast-as-
+	// the-round-trip loop. useVisiblePoll pauses the poll while the settings
+	// window is hidden, and its stop() is the effect teardown.
+	const isRecording = $derived(recording?.state === 'recording');
+	$effect(() => {
+		if (!isRecording) return;
+		return useVisiblePoll(refreshRecordingStatus, { intervalMs: 1000, immediate: false });
+	});
 
 	async function handleStartRecording() {
 		recordingError = null;
 		recordingResult = null;
 		try {
 			recording = await startRecording();
-			startRecordingPoll();
 		} catch (e) {
 			recordingError = e instanceof Error ? e.message : 'Failed to start recording';
 		}
@@ -220,7 +219,6 @@
 				description: stopDescription.trim(),
 				notes: stopNotes.trim()
 			});
-			stopRecordingPoll();
 			showStopForm = false;
 			stopScenarioName = '';
 			stopDescription = '';
@@ -235,15 +233,12 @@
 		recordingError = null;
 		try {
 			await abortRecording();
-			stopRecordingPoll();
 			showStopForm = false;
 			await refreshRecordingStatus();
 		} catch (e) {
 			recordingError = e instanceof Error ? e.message : 'Failed to abort recording';
 		}
 	}
-
-	onDestroy(stopRecordingPoll);
 
 	async function addFilterItem() {
 		if (!settings || !newFilterItem.trim()) return;

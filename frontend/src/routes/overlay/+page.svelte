@@ -21,11 +21,12 @@
 		type SessionQuestLinkSuggestion
 	} from '$lib/api';
 	import { tick } from 'svelte';
+	import { useVisiblePoll, windowGeometryPoll } from '$lib/realtime/useVisiblePoll';
 	import type { MobTrackingMode } from '$lib/types/settings';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-	import { emit, listen } from '@tauri-apps/api/event';
+	import { listen } from '@tauri-apps/api/event';
 	import {
 		OVERLAY_MENU_CLOSED_EVENT,
 		OVERLAY_MENU_HIDE_EVENT,
@@ -49,7 +50,6 @@
 	} from '$lib/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 
-	const TRACKING_STATE_CHANGED_EVENT = 'tracking-state-changed';
 	// The colon-form Tauri topic the event relay re-emits each backend tracking
 	// frame on (the wire topic `tracking.session.updated`; Tauri event names
 	// forbid dots). See lib/realtime/eventRelay.ts.
@@ -635,7 +635,7 @@
 	$effect(() => {
 		let lastSavedX: number | null = null;
 		let lastSavedY: number | null = null;
-		let interval: ReturnType<typeof setInterval>;
+		let stopPersist: (() => void) | undefined;
 
 		(async () => {
 			const win = getCurrentWindow();
@@ -650,8 +650,12 @@
 				}
 			} catch { /* first launch or backend unreachable */ }
 
-			// Poll position every 5s — save only if changed (avoids onMoved IPC drag interference)
-			interval = setInterval(async () => {
+			// Persist position every 5s: save only if changed (avoids onMoved IPC
+			// drag interference). windowGeometryPoll keeps running while the overlay
+			// is hidden: its hidden/shown state is not reliably observable from
+			// inside its own webview, so this is the one poll the visibility gate
+			// deliberately does not pause.
+			stopPersist = windowGeometryPoll(async () => {
 				try {
 					const pos = await win.outerPosition();
 					if (pos.x !== lastSavedX || pos.y !== lastSavedY) {
@@ -664,7 +668,7 @@
 		})();
 
 		return () => {
-			clearInterval(interval);
+			stopPersist?.();
 		};
 	});
 
@@ -774,8 +778,7 @@
 			data.elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 		};
 		tickElapsed();
-		const interval = setInterval(tickElapsed, 1000);
-		return () => clearInterval(interval);
+		return useVisiblePoll(tickElapsed, { intervalMs: 1000, immediate: false });
 	});
 
 	$effect(() => {
@@ -1020,7 +1023,6 @@
 		try {
 			await startTracking();
 			await hydrate();
-			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'active' });
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 400) {
 				attributionWarning = error.message;
@@ -1073,7 +1075,6 @@
 			stoppedSessionId = result.session_id;
 			lastSessionId = stoppedSessionId;
 			await hydrate();
-			await emit(TRACKING_STATE_CHANGED_EVENT, { status: 'idle' });
 		} catch { /* ignore */ }
 		toggling = false;
 

@@ -2,6 +2,7 @@
 	import { getSessionDetail } from '$lib/api';
 	import type { SessionDetail } from '$lib/types/tracking';
 	import { formatPed } from '$lib/utils/format';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 
 	let { sessionId }: { sessionId: string | null } = $props();
 
@@ -96,11 +97,11 @@
 		void fetchOnce().finally(() => {
 			if (!disposed) loading = false;
 		});
-		const interval = setInterval(fetchOnce, POLL_MS);
+		const stop = useVisiblePoll(fetchOnce, { intervalMs: POLL_MS, immediate: false });
 
 		return () => {
 			disposed = true;
-			clearInterval(interval);
+			stop();
 		};
 	});
 </script>

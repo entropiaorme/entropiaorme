@@ -15,6 +15,7 @@
 	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 	import { closeGuide, openGuide } from '$lib/guide/engine';
 	import { questsSurface } from '$lib/guide/surfaces/quests';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import {
 		questsDemoQuests,
 		questsDemoPlaylists,
@@ -143,7 +144,7 @@
 		void (async () => {
 			guideSeen = await getPreference<boolean>('guide_seen_quests', false);
 		})();
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
+		const stopClock = useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 		registerDemoApi('quests', {
 			setView: (v: string) => {
 				view = v as 'quests' | 'playlists' | 'analytics';
@@ -161,7 +162,7 @@
 			}
 		});
 		return () => {
-			clearInterval(interval);
+			stopClock();
 			unregisterDemoApi('quests');
 		};
 	});
@@ -170,28 +171,27 @@
 	// Check tracking status every 15s to detect session start/stop.
 	$effect(() => {
 		if (guideState.isActive) return;
-		const statusInterval = setInterval(async () => {
+		const refreshStatus = async () => {
 			try {
 				const s = await getTrackingStatus();
 				trackingActive = s.status === 'active';
 			} catch { /* ignore */ }
-		}, 15000);
-		// Initial check
-		getTrackingStatus().then(s => trackingActive = s.status === 'active').catch(() => {});
-		return () => clearInterval(statusInterval);
+		};
+		// immediate:true (the default) runs the initial check on mount.
+		return useVisiblePoll(refreshStatus, { intervalMs: 15000 });
 	});
 
 	$effect(() => {
 		if (guideState.isActive) return;
 		if (!trackingActive) return;
-		const questInterval = setInterval(async () => {
+		const refreshQuests = async () => {
 			try {
 				const [q, p] = await Promise.all([getQuests(), getPlaylists()]);
 				quests = q;
 				playlists = p;
 			} catch { /* ignore */ }
-		}, 10000);
-		return () => clearInterval(questInterval);
+		};
+		return useVisiblePoll(refreshQuests, { intervalMs: 10000, immediate: false });
 	});
 
 	async function loadData(guideMode: boolean) {

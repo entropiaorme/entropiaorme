@@ -160,34 +160,43 @@ class HotbarListener:
             threading.Thread(
                 target=self._resolve_hotbar_slot,
                 args=(ch,),
+                name="hotbar-resolve",
                 daemon=True,
             ).start()
 
     def _resolve_hotbar_slot(self, slot: str):
-        """Resolve a hotbar slot and publish tool change. Runs off the hook thread."""
-        result = self._hotbar_resolver(slot)
-        if result:
-            name, cost, item_type, reload_s = result
-            log.debug("Hotbar slot %s: %r (%s)", slot, name, item_type)
-            if item_type == "healing":
-                self._event_bus.publish(
-                    EVENT_ACTIVE_HEAL_TOOL_CHANGED,
-                    {
-                        "tool_name": name,
-                        "cost_per_use_ped": cost,
-                        "reload_seconds": reload_s,
-                        "source": f"hotbar:{slot}",
-                    },
-                )
-            elif item_type == "consumable":
-                # Consumables are one-off actions — do NOT switch the active
-                # weapon in cost tracking.
-                pass
-            else:
-                self._event_bus.publish(
-                    EVENT_ACTIVE_TOOL_CHANGED,
-                    {
-                        "tool_name": name,
-                        "source": f"hotbar:{slot}",
-                    },
-                )
+        """Resolve a hotbar slot and publish tool change. Runs off the hook thread.
+
+        Executes on a short-lived ``hotbar-resolve`` worker thread, so an
+        unhandled error here would otherwise surface on the thread's default
+        excepthook rather than anywhere actionable; contain it and log instead.
+        """
+        try:
+            result = self._hotbar_resolver(slot)
+            if result:
+                name, cost, item_type, reload_s = result
+                log.debug("Hotbar slot %s: %r (%s)", slot, name, item_type)
+                if item_type == "healing":
+                    self._event_bus.publish(
+                        EVENT_ACTIVE_HEAL_TOOL_CHANGED,
+                        {
+                            "tool_name": name,
+                            "cost_per_use_ped": cost,
+                            "reload_seconds": reload_s,
+                            "source": f"hotbar:{slot}",
+                        },
+                    )
+                elif item_type == "consumable":
+                    # Consumables are one-off actions: do NOT switch the active
+                    # weapon in cost tracking.
+                    pass
+                else:
+                    self._event_bus.publish(
+                        EVENT_ACTIVE_TOOL_CHANGED,
+                        {
+                            "tool_name": name,
+                            "source": f"hotbar:{slot}",
+                        },
+                    )
+        except Exception:
+            log.exception("Hotbar slot resolution failed for slot %s", slot)

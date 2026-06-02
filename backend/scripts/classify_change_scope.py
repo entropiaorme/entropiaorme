@@ -1,18 +1,19 @@
 """Classify a change as documentation-only or code, to gate the expensive CI jobs.
 
 The per-pull-request CI gate runs a Windows backend test matrix and a frontend
-build, and a labelled full-tier suite gates the merge. A change that touches only
-documentation (Markdown) needs none of that: there is no code to test and no
-frontend to build. This guard inspects the set of files a change touches and
-emits a single ``code`` flag that the workflows read to decide whether to run
-those jobs.
+build, and the full tier runs on the merge queue's integrated commit before a
+change lands. A change that touches only documentation (Markdown) needs none of
+that: there is no code to test and no frontend to build. This guard inspects the
+set of files a change touches and emits a single ``code`` flag that the workflows
+read to decide whether to run those jobs.
 
 The flag is deliberately conservative. ``code=false`` (documentation-only: skip
 the expensive jobs) is emitted only when *every* changed path is a Markdown file.
 Any other path (source, tests, configuration, the workflow files themselves, a
-lockfile, an image) yields ``code=true`` and the full gate runs. The safe failure
-direction is to run the suite, so an empty change set, a non-pull-request event,
-and any classification doubt all resolve to ``code=true``.
+lockfile, an image) yields ``code=true`` and the expensive jobs run. The safe
+failure direction is to run the suite, so an empty change set, an event that
+supplies no comparable range (such as a push to ``main``), and any classification
+doubt all resolve to ``code=true``.
 
 The flag gates *required* checks, so the workflows pair it with a fail-closed
 aggregator: a documentation-only skip passes the gate, but a detection that did
@@ -152,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     if commit_range is None:
         print(
             "classify-change-scope: no pull-request or merge-queue range to "
-            f"inspect; code={value} (run the full gate)."
+            f"inspect; code={value} (run the jobs)."
         )
     else:
         print(f"classify-change-scope: range {commit_range}; code={value}.")

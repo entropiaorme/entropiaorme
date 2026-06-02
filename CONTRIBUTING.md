@@ -4,7 +4,7 @@ EntropiaOrme is a personal-use-first open-core project: built primarily for my o
 
 ## Bug reports
 
-Bug reports are welcome via [GitHub issues](https://github.com/MikelWL/entropiaorme/issues). Helpful to include:
+Bug reports are welcome via [GitHub issues](https://github.com/entropiaorme/entropiaorme/issues). Helpful to include:
 
 - The app version (Settings, About panel).
 - What you expected vs what happened.

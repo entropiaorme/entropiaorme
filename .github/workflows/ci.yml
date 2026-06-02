@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The merge queue integrates a pull request onto the current main, then runs
+  # this workflow against that integrated commit before it lands. The full tier
+  # runs on this event (see the full-tier step), so the queue is the pre-merge
+  # gate that keeps the complete suite passing on the exact state being merged.
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,10 +21,10 @@ permissions:
 
 jobs:
   # Detect whether the change needs the expensive jobs (the Windows backend
-  # matrix and the frontend build) or is documentation-only. A pull request that
-  # touches only Markdown skips both; any other path, and every non-pull-request
-  # event, runs them. The verdict is consumed by the gated jobs' `if:` and by the
-  # always-running `ci-gate` sentinel below, which is the required check.
+  # matrix and the frontend build) or is documentation-only. A pull request, or a
+  # merge-queue run, that touches only Markdown skips both; any other path, and a
+  # push to main, runs them. The verdict is consumed by the gated jobs' `if:` and
+  # by the always-running `ci-gate` sentinel below, which is the required check.
   changes:
     name: Detect change scope
     runs-on: ubuntu-latest
@@ -35,13 +40,17 @@ jobs:
         with:
           python-version: '3.12'
       # Pure stdlib + git, so no dependency install is needed. Emits code=false
-      # only when every changed path is Markdown.
+      # only when every changed path is Markdown. On the merge queue the range is
+      # the integrated commit's base..head (the queued change merged onto main),
+      # so a documentation-only change skips the expensive jobs in the queue too.
       - name: Classify the change scope
         id: classify
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
         run: python -m backend.scripts.classify_change_scope
 
   backend:
@@ -79,8 +88,9 @@ jobs:
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       # The supported-floor leg runs the fast + standard tiers without coverage.
       # The full tier (the contract suites + OCR equivalence) is excluded by the
-      # marker filter; it runs post-merge on main and nightly (see the full-tier
-      # step below and nightly.yml), not on either per-PR leg.
+      # marker filter; it runs on the merge queue and post-merge on main and
+      # nightly (see the full-tier step below and nightly.yml), not on either
+      # per-PR leg.
       - name: Run backend test suite
         if: matrix.python-version == '3.11'
         # Positive tier selection (`fast or standard`) rather than a negative
@@ -99,11 +109,12 @@ jobs:
       # racing coverage files; the floor lives in pyproject.toml. On a pull
       # request this measures the fast + standard tiers alone, which clear the
       # floor on their own (the seeded API-surface tests cover the router
-      # branches). On a push to main the full-tier step below appends its
-      # coverage (--cov-append) before the report and badge, so the published
-      # figure reflects the full surface. Test order is pinned on the coverage
-      # legs so the measured figure is reproducible run to run; the 3.11 leg
-      # keeps randomised order to surface inter-test coupling.
+      # branches). On the merge queue and on a push to main the full-tier step
+      # below appends its coverage (--cov-append) before the report and badge, so
+      # the floor is enforced over the full surface there and the published badge
+      # reflects it. Test order is pinned on the coverage legs so the measured
+      # figure is reproducible run to run; the 3.11 leg keeps randomised order to
+      # surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
         # Same positive tier selection as the floor leg above, run serially for
@@ -112,15 +123,18 @@ jobs:
         run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report=
       # The full tier (the two schemathesis contract suites + OCR equivalence) is
       # the slowest part of the suite. It does not run on the per-PR gate, so a pull
-      # request waits only on the fast + standard tiers; it runs here post-merge
-      # on a push to main (and nightly, see nightly.yml) so nothing reaches main
-      # un-vetted by the full suite. Its coverage is appended to the run above so
-      # the published badge reflects the full surface. Single-worker with pinned
-      # order: the stateful schemathesis pass carries per-process generation
-      # state, and pinned serial execution makes the appended coverage
-      # reproducible run to run.
-      - name: Run the full-tier suites (post-merge to main)
-        if: matrix.python-version == '3.14' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # request waits only on the fast + standard tiers. It runs here in two places
+      # so nothing reaches main un-vetted by the full suite: on the merge queue's
+      # integrated commit (the pre-merge gate, before the change lands) and again
+      # post-merge on the push to main (confirming the squashed commit that
+      # actually landed, and where the coverage badge is published; nightly.yml
+      # carries it a third time as the scheduled safety net). Its coverage is
+      # appended to the run above so the published badge reflects the full surface.
+      # Single-worker with pinned order: the stateful schemathesis pass carries
+      # per-process generation state, and pinned serial execution makes the
+      # appended coverage reproducible run to run.
+      - name: Run the full-tier suites (merge queue + post-merge to main)
+        if: matrix.python-version == '3.14' && (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         run: python -m pytest -m full -p no:randomly --cov=backend --cov-branch --cov-append --cov-report=
       # Report once over the combined data: enforce the total floor and write the
       # XML the diff-coverage gate and the badge step consume.
@@ -245,10 +259,14 @@ jobs:
   golden-ratification:
     name: Golden ratification guard
     runs-on: ubuntu-latest
-    # Pull requests only: the guard compares the PR's commits against the base
-    # branch, so it needs a two-sided range. A push to main has already been
-    # reviewed on its PR, where this same check ran.
-    if: github.event_name == 'pull_request'
+    # The guard compares the changed commits against their base, so it needs a
+    # two-sided range. It runs on a pull request (the review-time gate) and on
+    # the merge queue's integrated commit (this is a required check, so it must
+    # report a status on the merge_group event or the queue stalls; it also
+    # re-verifies the guard on the exact state about to land). A plain push to
+    # main is excluded: that state already cleared this check on its PR and in
+    # the queue.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -275,19 +293,26 @@ jobs:
       # closed by the report being reviewer-visible and by the human merge to
       # main. Pure stdlib + git, so no dependency install is needed.
       - name: Guard golden ratification
+        # On a pull request the range is the PR's base..head; on the merge queue
+        # it is the integrated commit's base..head (the queued change merged onto
+        # main), which carries the same commits, golden edits, and ratification
+        # report the PR did.
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python -m backend.scripts.check_golden_ratification --range "$PR_BASE_SHA..$PR_HEAD_SHA"
+          RANGE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
+          RANGE_HEAD: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.check_golden_ratification --range "$RANGE_BASE..$RANGE_HEAD"
 
   authoring-lint:
     name: Authoring lint (em dash + UK spelling)
     runs-on: ubuntu-latest
-    # Pull requests only: the lint is diff-scoped, so it needs the PR's
-    # base..head range to know which lines the change adds. A push to main has
-    # already cleared this on its PR. The version-stamp parity check is whole-tree
-    # rather than diff-scoped, so it rides the pre-commit job instead of here.
-    if: github.event_name == 'pull_request'
+    # The lint is diff-scoped, so it needs a base..head range to know which lines
+    # the change adds. It runs on a pull request (review time) and on the merge
+    # queue's integrated commit (the exact lines about to land), mirroring the
+    # golden-ratification guard above. A plain push to main is excluded: that
+    # state already cleared this on its PR and in the queue. The version-stamp
+    # parity check is whole-tree rather than diff-scoped, so it rides the
+    # pre-commit job instead of here.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -303,10 +328,12 @@ jobs:
       # without forcing a drive-by sweep of the old. Pure stdlib + git, so no
       # dependency install is needed.
       - name: Lint newly authored lines
+        # PR base..head on a pull request; the integrated commit's base..head on
+        # the merge queue (the same added lines, merged onto main).
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python -m backend.scripts.check_authoring_lint --range "$PR_BASE_SHA..$PR_HEAD_SHA"
+          RANGE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
+          RANGE_HEAD: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
+        run: python -m backend.scripts.check_authoring_lint --range "$RANGE_BASE..$RANGE_HEAD"
 
   frontend:
     name: Frontend (build + check)

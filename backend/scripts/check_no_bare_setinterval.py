@@ -14,8 +14,7 @@ window-to-window tracking event) cannot grow back:
   was retired in favour of the typed ``tracking:session:updated`` topic; a
   re-introduction is a regression.
 
-Unlike ``check_authoring_lint`` (which clones this module's CLI shape but is
-deliberately diff-scoped), this lint is WHOLE-TREE: the tree was driven to zero
+This lint is WHOLE-TREE rather than diff-scoped: the tree was driven to zero
 offending sites, so the guarantee is "zero anywhere", not merely "no new ones".
 The source set is the ``git ls-files``-tracked compiled-source files (``.svelte``,
 ``.ts``, and the ``.js`` family) under ``frontend/src`` (tracked-only and

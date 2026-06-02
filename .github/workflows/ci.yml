@@ -80,12 +80,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
-          cache-dependency-path: |
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
             backend/requirements.txt
             backend/requirements-dev.txt
       - name: Install dependencies
-        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+        # uv resolves and installs the same two requirements files pip did, into
+        # the setup-python interpreter (`--system`), but parallelises the download
+        # and install so a warm-cached run drops from ~90s to a few seconds. The
+        # requirements files stay the single source of truth; uv resolves them to
+        # the same latest-compatible versions pip would, and setup-uv caches the
+        # wheel store keyed on those files.
+        run: uv pip install --system -r backend/requirements.txt -r backend/requirements-dev.txt
       # The supported-floor leg runs the fast + standard tiers without coverage.
       # The full tier (the contract suites + OCR equivalence) is excluded by the
       # marker filter; it runs on the merge queue and post-merge on main and
@@ -98,13 +106,18 @@ jobs:
         # leg until it is deliberately classified, so an unclassified slow or
         # device test cannot silently join the per-PR run. `--strict-markers`
         # plus the conftest tier-map keep the markers honest at collection time.
-        # Run serially: this leg was measured at ~3 min serial but ~14.5 min
-        # under `-n auto` on the few-core hosted Windows runner, where each
-        # xdist worker re-pays the heavy import cost (onnxruntime, OpenCV,
-        # FastAPI) and per-process spawn dwarfs the parallelism gain. xdist
-        # stays a local-only accelerator on multi-core machines (see
-        # TESTING.md "Parallelism"); it is not wired into CI.
-        run: python -m pytest -m "fast or standard"
+        # Parallelised with `--dist=loadfile -n auto`: re-benchmarked at the
+        # current suite size, the heavy per-worker import cost (onnxruntime,
+        # OpenCV, FastAPI) is now a small fraction of the run, and xdist roughly
+        # halves this leg. It was once a net loss: at a ~3-min suite the re-import
+        # cost dominated and `-n auto` measured ~14.5 min, which is why this leg
+        # ran serially; the suite has since grown and the decision reverses (see
+        # TESTING.md "Parallelism"). `loadfile` keeps each test file on one worker
+        # so module-scoped fixtures and file-local state stay intact; randomised
+        # order is preserved (pytest-randomly seeds across workers) to keep
+        # surfacing intra-file ordering coupling, and the nightly serial run is the
+        # thorough cross-file coupling net.
+        run: python -m pytest -m "fast or standard" --dist=loadfile -n auto
       # Coverage is measured on one leg only (3.14) to avoid double-counting and
       # racing coverage files; the floor lives in pyproject.toml. On a pull
       # request this measures the fast + standard tiers alone, which clear the
@@ -117,10 +130,13 @@ jobs:
       # surface inter-test coupling.
       - name: Run backend test suite with coverage
         if: matrix.python-version == '3.14'
-        # Same positive tier selection as the floor leg above, run serially for
-        # the same wall-clock reason, with pinned order so the measured coverage
-        # is reproducible run to run.
-        run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report=
+        # Same positive tier selection as the floor leg above, parallelised the
+        # same way (`--dist=loadfile -n auto`). Coverage is accurate under xdist:
+        # pytest-cov collects per-worker and combines into one dataset. Order is
+        # still pinned (`-p no:randomly`) for a run-to-run reproducible figure,
+        # though a coverage total is a set union of executed lines and so is
+        # independent of order and worker count regardless.
+        run: python -m pytest -m "fast or standard" -p no:randomly --cov=backend --cov-branch --cov-report= --dist=loadfile -n auto
       # The full tier (the two schemathesis contract suites + OCR equivalence) is
       # the slowest part of the suite. It does not run on the per-PR gate, so a pull
       # request waits only on the fast + standard tiers. It runs here in two places

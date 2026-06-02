@@ -245,8 +245,7 @@
 
 	// Cooldown tick (1s)
 	$effect(() => {
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
-		return () => clearInterval(interval);
+		return useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 	});
 
 	// Elapsed timer when tracking is active
@@ -254,13 +253,9 @@
 		if (status?.status === 'active' && status.started_at) {
 			const startMs = new Date(status.started_at).getTime();
 			elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			const timerInterval = setInterval(() => {
+			return useVisiblePoll(() => {
 				elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			}, 1000);
-
-			return () => {
-				clearInterval(timerInterval);
-			};
+			}, { intervalMs: 1000, immediate: false });
 		} else {
 			elapsedSeconds = 0;
 		}

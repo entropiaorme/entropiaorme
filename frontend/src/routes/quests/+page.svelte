@@ -144,7 +144,7 @@
 		void (async () => {
 			guideSeen = await getPreference<boolean>('guide_seen_quests', false);
 		})();
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
+		const stopClock = useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 		registerDemoApi('quests', {
 			setView: (v: string) => {
 				view = v as 'quests' | 'playlists' | 'analytics';
@@ -162,7 +162,7 @@
 			}
 		});
 		return () => {
-			clearInterval(interval);
+			stopClock();
 			unregisterDemoApi('quests');
 		};
 	});

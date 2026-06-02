@@ -21,6 +21,7 @@
 		type SessionQuestLinkSuggestion
 	} from '$lib/api';
 	import { tick } from 'svelte';
+	import { useVisiblePoll, windowGeometryPoll } from '$lib/realtime/useVisiblePoll';
 	import type { MobTrackingMode } from '$lib/types/settings';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
@@ -635,7 +636,7 @@
 	$effect(() => {
 		let lastSavedX: number | null = null;
 		let lastSavedY: number | null = null;
-		let interval: ReturnType<typeof setInterval>;
+		let stopPersist: (() => void) | undefined;
 
 		(async () => {
 			const win = getCurrentWindow();
@@ -650,8 +651,12 @@
 				}
 			} catch { /* first launch or backend unreachable */ }
 
-			// Poll position every 5s — save only if changed (avoids onMoved IPC drag interference)
-			interval = setInterval(async () => {
+			// Persist position every 5s — save only if changed (avoids onMoved IPC
+			// drag interference). windowGeometryPoll keeps running while the overlay
+			// is hidden: its hidden/shown state is not reliably observable from
+			// inside its own webview, so this is the one poll the visibility gate
+			// deliberately does not pause.
+			stopPersist = windowGeometryPoll(async () => {
 				try {
 					const pos = await win.outerPosition();
 					if (pos.x !== lastSavedX || pos.y !== lastSavedY) {
@@ -664,7 +669,7 @@
 		})();
 
 		return () => {
-			clearInterval(interval);
+			stopPersist?.();
 		};
 	});
 
@@ -774,8 +779,7 @@
 			data.elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 		};
 		tickElapsed();
-		const interval = setInterval(tickElapsed, 1000);
-		return () => clearInterval(interval);
+		return useVisiblePoll(tickElapsed, { intervalMs: 1000, immediate: false });
 	});
 
 	$effect(() => {

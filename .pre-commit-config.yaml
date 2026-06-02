@@ -45,6 +45,16 @@ repos:
   # manual stage rather than every commit.
   - repo: local
     hooks:
+      # Frontend polling discipline: a pure-stdlib, whole-tree guard (no venv
+      # dependencies, so it runs in CI's pre-commit job too, unlike mypy and the
+      # test tier below). Forbids a bare setInterval outside the visibility-gated
+      # helper, and any reference to the retired tracking-state-changed event.
+      - id: no-bare-setinterval
+        name: no bare setInterval (frontend)
+        entry: python -m backend.scripts.check_no_bare_setinterval
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: mypy
         name: mypy (backend)
         entry: python -m mypy backend

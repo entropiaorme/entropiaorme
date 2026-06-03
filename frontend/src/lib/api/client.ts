@@ -67,13 +67,24 @@ const throwApiError: Middleware = {
 	}
 };
 
-export const client = createClient<paths>({ baseUrl: API_ORIGIN });
+/* The Content-Type seed reproduces the legacy request() header behaviour
+ * byte-for-byte: it sent `Content-Type: application/json` on every call,
+ * including bodyless GETs and POSTs, where openapi-fetch would otherwise
+ * omit the header. No backend route reads it on a bodyless request, but
+ * keeping the wire bytes identical costs one line. */
+export const client = createClient<paths>({
+	baseUrl: API_ORIGIN,
+	headers: { 'Content-Type': 'application/json' }
+});
 client.use(throwApiError);
 
 /**
  * Await an openapi-fetch call and return its payload as the facade's declared
- * type. The error middleware throws on every non-2xx, so `data` is always
- * present on the non-throwing path.
+ * type. The error middleware throws on every non-2xx, and every endpoint this
+ * facade unwraps returns a non-empty 2xx JSON body (the void-returning
+ * wrappers bypass unwrap), so `data` is present on the non-throwing path.
+ * openapi-fetch would yield undefined for a 204 or empty body; no unwrapped
+ * route emits one.
  *
  * The declared type may deliberately narrow the generated schema type: the
  * hand-written interfaces in `$lib/types/*` and the facade carry literal

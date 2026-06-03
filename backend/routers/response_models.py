@@ -175,3 +175,115 @@ class CharacterProspect(_Loose):
     error: str | None = None
     rows: list[Any] | None = None
     warnings: list[Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shared acknowledgement shapes
+# ---------------------------------------------------------------------------
+
+
+class OkResponse(_Loose):
+    """A bare ``{"ok": true}`` mutation acknowledgement."""
+
+    ok: bool
+
+
+# ---------------------------------------------------------------------------
+# Quests + playlists (/quests, /quests/playlists)
+# ---------------------------------------------------------------------------
+
+
+class Quest(_Loose):
+    """A quest as returned by the quest read/write endpoints.
+
+    Mirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.
+    Every key is always emitted by ``_format_quest`` (nullables carry explicit
+    ``null``), so the shape is stable and served without an exclude flag.
+    """
+
+    id: str
+    name: str
+    category: str | None = None
+    targetMobs: list[str]
+    planet: str
+    waypoint: str | None = None
+    cooldownDurationHours: float | None = None
+    cooldownExpiresAt: str | None = None
+    reward: float | None = None
+    rewardIsSkill: bool
+    expectedRewardMarkupPercent: float | None = None
+    rewardDescription: str
+    notes: str
+    chainName: str | None = None
+    chainPosition: int | None = None
+    chainTotal: int | None = None
+    playlistIds: list[str]
+    startedAt: int | None = None
+
+
+class QuestAnalyticsRow(_Loose):
+    """Per-quest sustainability metrics from curated linked sessions."""
+
+    questId: str
+    questName: str
+    planet: str
+    category: str | None = None
+    rewardPed: float
+    rewardIsSkill: bool
+    expectedRewardMarkupPercent: float | None = None
+    totalExpectedRewardPed: float
+    linkedSessions: int
+    totalDurationSec: float
+    totalWeaponCost: float
+    totalHealCost: float
+    totalEnhancerCost: float
+    totalArmourCost: float
+    totalLootTt: float
+    totalPes: float
+
+
+class PlaylistItem(_Loose):
+    """A quest slot within a playlist."""
+
+    questId: str
+    description: str | None = None
+    groupType: str
+
+
+class QuestPlaylist(_Loose):
+    """A playlist as returned by the playlist read/write endpoints."""
+
+    id: str
+    name: str
+    planet: str
+    estimatedMinutes: int
+    questIds: list[str]
+    immediateQuestIds: list[str]
+    longHorizonQuestIds: list[str]
+    items: list[PlaylistItem]
+
+
+class PlaylistAnalyticsRow(_Loose):
+    """Per-playlist sustainability metrics from exact-match sessions."""
+
+    playlistId: str
+    playlistName: str
+    questCount: int
+    longHorizonQuestCount: int
+    matchedSessions: int
+    totalRewardPed: float
+    totalImmediateRewardPed: float
+    totalBonusRewardPed: float
+    totalPesReward: float
+    totalImmediatePesReward: float
+    totalBonusPesReward: float
+    totalExpectedRewardPed: float
+    totalExpectedImmediateRewardPed: float
+    totalExpectedBonusRewardPed: float
+    totalDurationSec: float
+    totalWeaponCost: float
+    totalHealCost: float
+    totalEnhancerCost: float
+    totalArmourCost: float
+    totalLootTt: float
+    totalPes: float

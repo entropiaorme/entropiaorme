@@ -704,6 +704,21 @@
         "title": "NotableEvent",
         "type": "object"
       },
+      "OkResponse": {
+        "additionalProperties": true,
+        "description": "A bare ``{\"ok\": true}`` mutation acknowledgement.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "OkResponse",
+        "type": "object"
+      },
       "OverlayPositionPatch": {
         "properties": {
           "x": {
@@ -720,6 +735,121 @@
           "y"
         ],
         "title": "OverlayPositionPatch",
+        "type": "object"
+      },
+      "PlaylistAnalyticsRow": {
+        "additionalProperties": true,
+        "description": "Per-playlist sustainability metrics from exact-match sessions.",
+        "properties": {
+          "longHorizonQuestCount": {
+            "title": "Longhorizonquestcount",
+            "type": "integer"
+          },
+          "matchedSessions": {
+            "title": "Matchedsessions",
+            "type": "integer"
+          },
+          "playlistId": {
+            "title": "Playlistid",
+            "type": "string"
+          },
+          "playlistName": {
+            "title": "Playlistname",
+            "type": "string"
+          },
+          "questCount": {
+            "title": "Questcount",
+            "type": "integer"
+          },
+          "totalArmourCost": {
+            "title": "Totalarmourcost",
+            "type": "number"
+          },
+          "totalBonusPesReward": {
+            "title": "Totalbonuspesreward",
+            "type": "number"
+          },
+          "totalBonusRewardPed": {
+            "title": "Totalbonusrewardped",
+            "type": "number"
+          },
+          "totalDurationSec": {
+            "title": "Totaldurationsec",
+            "type": "number"
+          },
+          "totalEnhancerCost": {
+            "title": "Totalenhancercost",
+            "type": "number"
+          },
+          "totalExpectedBonusRewardPed": {
+            "title": "Totalexpectedbonusrewardped",
+            "type": "number"
+          },
+          "totalExpectedImmediateRewardPed": {
+            "title": "Totalexpectedimmediaterewardped",
+            "type": "number"
+          },
+          "totalExpectedRewardPed": {
+            "title": "Totalexpectedrewardped",
+            "type": "number"
+          },
+          "totalHealCost": {
+            "title": "Totalhealcost",
+            "type": "number"
+          },
+          "totalImmediatePesReward": {
+            "title": "Totalimmediatepesreward",
+            "type": "number"
+          },
+          "totalImmediateRewardPed": {
+            "title": "Totalimmediaterewardped",
+            "type": "number"
+          },
+          "totalLootTt": {
+            "title": "Totalloottt",
+            "type": "number"
+          },
+          "totalPes": {
+            "title": "Totalpes",
+            "type": "number"
+          },
+          "totalPesReward": {
+            "title": "Totalpesreward",
+            "type": "number"
+          },
+          "totalRewardPed": {
+            "title": "Totalrewardped",
+            "type": "number"
+          },
+          "totalWeaponCost": {
+            "title": "Totalweaponcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "playlistId",
+          "playlistName",
+          "questCount",
+          "longHorizonQuestCount",
+          "matchedSessions",
+          "totalRewardPed",
+          "totalImmediateRewardPed",
+          "totalBonusRewardPed",
+          "totalPesReward",
+          "totalImmediatePesReward",
+          "totalBonusPesReward",
+          "totalExpectedRewardPed",
+          "totalExpectedImmediateRewardPed",
+          "totalExpectedBonusRewardPed",
+          "totalDurationSec",
+          "totalWeaponCost",
+          "totalHealCost",
+          "totalEnhancerCost",
+          "totalArmourCost",
+          "totalLootTt",
+          "totalPes"
+        ],
+        "title": "PlaylistAnalyticsRow",
         "type": "object"
       },
       "PlaylistCreate": {
@@ -765,6 +895,37 @@
           "name"
         ],
         "title": "PlaylistCreate",
+        "type": "object"
+      },
+      "PlaylistItem": {
+        "additionalProperties": true,
+        "description": "A quest slot within a playlist.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "groupType": {
+            "title": "Grouptype",
+            "type": "string"
+          },
+          "questId": {
+            "title": "Questid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "questId",
+          "groupType"
+        ],
+        "title": "PlaylistItem",
         "type": "object"
       },
       "PlaylistItemInput": {
@@ -861,6 +1022,274 @@
           }
         },
         "title": "PlaylistUpdate",
+        "type": "object"
+      },
+      "Quest": {
+        "additionalProperties": true,
+        "description": "A quest as returned by the quest read/write endpoints.\n\nMirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.\nEvery key is always emitted by ``_format_quest`` (nullables carry explicit\n``null``), so the shape is stable and served without an exclude flag.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "chainName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chainname"
+          },
+          "chainPosition": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chainposition"
+          },
+          "chainTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chaintotal"
+          },
+          "cooldownDurationHours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldowndurationhours"
+          },
+          "cooldownExpiresAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldownexpiresat"
+          },
+          "expectedRewardMarkupPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedrewardmarkuppercent"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "playlistIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Playlistids",
+            "type": "array"
+          },
+          "reward": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward"
+          },
+          "rewardDescription": {
+            "title": "Rewarddescription",
+            "type": "string"
+          },
+          "rewardIsSkill": {
+            "title": "Rewardisskill",
+            "type": "boolean"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "targetMobs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targetmobs",
+            "type": "array"
+          },
+          "waypoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waypoint"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "targetMobs",
+          "planet",
+          "rewardIsSkill",
+          "rewardDescription",
+          "notes",
+          "playlistIds"
+        ],
+        "title": "Quest",
+        "type": "object"
+      },
+      "QuestAnalyticsRow": {
+        "additionalProperties": true,
+        "description": "Per-quest sustainability metrics from curated linked sessions.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "expectedRewardMarkupPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedrewardmarkuppercent"
+          },
+          "linkedSessions": {
+            "title": "Linkedsessions",
+            "type": "integer"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "questId": {
+            "title": "Questid",
+            "type": "string"
+          },
+          "questName": {
+            "title": "Questname",
+            "type": "string"
+          },
+          "rewardIsSkill": {
+            "title": "Rewardisskill",
+            "type": "boolean"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "totalArmourCost": {
+            "title": "Totalarmourcost",
+            "type": "number"
+          },
+          "totalDurationSec": {
+            "title": "Totaldurationsec",
+            "type": "number"
+          },
+          "totalEnhancerCost": {
+            "title": "Totalenhancercost",
+            "type": "number"
+          },
+          "totalExpectedRewardPed": {
+            "title": "Totalexpectedrewardped",
+            "type": "number"
+          },
+          "totalHealCost": {
+            "title": "Totalhealcost",
+            "type": "number"
+          },
+          "totalLootTt": {
+            "title": "Totalloottt",
+            "type": "number"
+          },
+          "totalPes": {
+            "title": "Totalpes",
+            "type": "number"
+          },
+          "totalWeaponCost": {
+            "title": "Totalweaponcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "questId",
+          "questName",
+          "planet",
+          "rewardPed",
+          "rewardIsSkill",
+          "totalExpectedRewardPed",
+          "linkedSessions",
+          "totalDurationSec",
+          "totalWeaponCost",
+          "totalHealCost",
+          "totalEnhancerCost",
+          "totalArmourCost",
+          "totalLootTt",
+          "totalPes"
+        ],
+        "title": "QuestAnalyticsRow",
         "type": "object"
       },
       "QuestCancel": {
@@ -1013,6 +1442,68 @@
           "name"
         ],
         "title": "QuestCreate",
+        "type": "object"
+      },
+      "QuestPlaylist": {
+        "additionalProperties": true,
+        "description": "A playlist as returned by the playlist read/write endpoints.",
+        "properties": {
+          "estimatedMinutes": {
+            "title": "Estimatedminutes",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "immediateQuestIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Immediatequestids",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlaylistItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "longHorizonQuestIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Longhorizonquestids",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "questIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "planet",
+          "estimatedMinutes",
+          "questIds",
+          "immediateQuestIds",
+          "longHorizonQuestIds",
+          "items"
+        ],
+        "title": "QuestPlaylist",
         "type": "object"
       },
       "QuestUpdate": {
@@ -3563,7 +4054,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Quest"
+                  },
+                  "title": "Response List Quests Api Quests Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3591,7 +4088,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3621,7 +4120,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuestAnalyticsRow"
+                  },
+                  "title": "Response Quest Analytics Api Quests Analytics Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3641,7 +4146,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Mob Names Api Quests Mobs Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3661,7 +4172,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuestPlaylist"
+                  },
+                  "title": "Response List Playlists Api Quests Playlists Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3689,7 +4206,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestPlaylist"
+                }
               }
             },
             "description": "Successful Response"
@@ -3719,7 +4238,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlaylistAnalyticsRow"
+                  },
+                  "title": "Response Playlist Analytics Api Quests Playlists Analytics Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3750,7 +4275,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3799,7 +4326,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestPlaylist"
+                }
               }
             },
             "description": "Successful Response"
@@ -3840,7 +4369,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3879,7 +4410,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3928,7 +4461,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3986,7 +4521,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -4027,7 +4564,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -4068,7 +4607,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"

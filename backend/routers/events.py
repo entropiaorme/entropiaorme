@@ -10,7 +10,8 @@ middleware buffers a whole response body to hash it, which would never return on
 an unbounded stream. It is also excluded from the OpenAPI schema: an infinite
 event stream is not a request/response operation the spec (or the schemathesis
 contract walk, or the generated TS client) can model. The stream contract is
-documented in prose in the architecture note instead.
+documented in prose in the architecture note instead
+(``backend/architecture/README.md``).
 """
 
 from __future__ import annotations

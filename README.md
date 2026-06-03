@@ -81,6 +81,11 @@ Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses '127.0.0.1','
 
 Revert with `Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddresses`.
 
+## Further documentation
+
+- [`backend/architecture/README.md`](backend/architecture/README.md): how the backend is put together (the event spine, the hydration HTTP surface, the service and worker conventions, and the tests that enforce them), with a companion [`PORT-READINESS.md`](backend/architecture/PORT-READINESS.md) on how those shapes map onto a contemplated native port.
+- [`TESTING.md`](TESTING.md): the test suite, runtime tiers, and CI gates.
+
 ## License
 
 [MIT](LICENSE). Third-party components and their licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

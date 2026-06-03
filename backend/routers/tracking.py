@@ -3,7 +3,6 @@
 Returns shapes matching the frontend TrackingSession and SessionDetail types.
 """
 
-import logging
 import time
 from datetime import UTC, datetime
 
@@ -11,12 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
-from backend.routers.response_models import (
-    NotableEvent,
-    TrackingLive,
-    TrackingSnapshot,
-    TrackingStatus,
-)
+from backend.routers.response_models import TrackingSnapshot
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.config_service import active_trifecta_preset
 from backend.services.trifecta_service import validate_trifecta
@@ -45,8 +39,6 @@ def _validate_attribution(config, conn) -> tuple[bool, str | None]:
         message or "Configure the trifecta in the Equipment page before tracking.",
     )
 
-
-log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
@@ -231,79 +223,6 @@ def stop_tracking():
     }
 
 
-@router.get(
-    "/status",
-    response_model=TrackingStatus,
-    response_model_exclude_unset=True,
-)
-def tracking_status():
-    """Get current tracking status."""
-    return tracking_status_impl(get_services())
-
-
-def tracking_status_impl(svc):
-    if not hasattr(svc, "tracker") or svc.tracker is None:
-        return {"status": "unavailable"}
-
-    # True while the hotbar listener is currently active. Gated on (toggle-on AND
-    # session-active), so False when idle.
-    hotbar_listener_active = svc.hotbar_listener.is_running
-    config = svc.config_service.get()
-    weapon_attribution = _weapon_attribution(config)
-
-    # One owner-side, lock-synchronised read of the tracking readout replaces
-    # the former inline iteration over the live kills list and accumulator on
-    # this web thread, so a producer thread can no longer resize a container
-    # mid-read. The session-derived numbers come from the detached
-    # ``ActiveSessionView``; the configuration- and runtime-derived fields are
-    # merged in here, as they are not the tracker's to own.
-    active = svc.tracker.snapshot().active
-    if active is None:
-        current_mob, mob_source = _configured_manual_label(config)
-        return {
-            "status": "idle",
-            "hotbarListenerActive": hotbar_listener_active,
-            "weaponAttribution": weapon_attribution,
-            "repairOcrEnabled": config.repair_ocr_enabled,
-            "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-            "mobEntryMode": config.mob_tracking_mode,
-            "currentMob": current_mob,
-            "mobSource": mob_source,
-        }
-
-    return {
-        "status": "active",
-        "session_id": active.session_id,
-        "started_at": active.started_at,
-        "kill_count": active.kill_count,
-        "cost": active.cost,
-        "returns": active.returns,
-        "pes": active.pes,
-        "returnRate": active.return_rate,
-        "damageDealtTotal": active.damage_dealt_total,
-        "weaponDamageDealt": active.weapon_damage_dealt,
-        "weaponCost": active.weapon_cost,
-        "shotsFiredTotal": active.shots_fired_total,
-        "criticalHitsTotal": active.critical_hits_total,
-        "maxDamage": active.max_damage,
-        "globalsCount": active.globals_count,
-        "hofsCount": active.hofs_count,
-        "latestKillLoot": active.latest_kill_loot,
-        "multiplierLast": active.multiplier_last,
-        "multiplierAvg": active.multiplier_avg,
-        "multiplierMax": active.multiplier_max,
-        "multiplierHistory": list(active.multiplier_history),
-        "cumulativeNetHistory": list(active.cumulative_net_history),
-        "hotbarListenerActive": hotbar_listener_active,
-        "weaponAttribution": weapon_attribution,
-        "repairOcrEnabled": config.repair_ocr_enabled,
-        "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": active.mob_entry_mode,
-        "currentMob": active.current_mob,
-        "mobSource": active.mob_source,
-    }
-
-
 @router.post("/release-mob")
 def release_mob():
     """Release the currently locked mob."""
@@ -446,106 +365,6 @@ def tag_suggestions(q: str = "", limit: int = 10):
 
 
 @router.get(
-    "/live",
-    response_model=TrackingLive,
-    response_model_exclude_unset=True,
-)
-def tracking_live():
-    """Live session data for the overlay — compact stats + current mob."""
-    return tracking_live_impl(get_services())
-
-
-def tracking_live_impl(svc):
-    started = time.perf_counter()
-    if not hasattr(svc, "tracker") or svc.tracker is None:
-        return {"status": "unavailable"}
-
-    config = svc.config_service.get()
-    weapon_attribution = _weapon_attribution(config)
-    trifecta_attribution = (
-        _trifecta_attribution_summary(svc) if weapon_attribution == "trifecta" else None
-    )
-
-    # One owner-side, lock-synchronised read replaces this overlay poll's former
-    # inline iteration over the live kills list and accumulator on the web
-    # thread. ``current_tool`` rides the readout (set whether idle or active).
-    readout = svc.tracker.snapshot()
-    detected_tool = readout.current_tool
-    active = readout.active
-    if active is None:
-        current_mob, mob_source = _configured_manual_label(config)
-        return {
-            "status": "idle",
-            "weaponAttribution": weapon_attribution,
-            "repairOcrEnabled": config.repair_ocr_enabled,
-            "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-            "mobEntryMode": config.mob_tracking_mode,
-            "currentMob": current_mob,
-            "mobSource": mob_source,
-            "currentTool": detected_tool,
-            "trifectaAttribution": trifecta_attribution,
-        }
-
-    # The overlay's recent-events strip: tracker warnings first, then the top-5
-    # notable events (a strict prefix of the readout's top-20 feed, identical to
-    # the legacy LIMIT 5 read).
-    recent_events_list = [
-        {"type": "warning", "description": msg, "value": 0} for msg in active.warnings
-    ]
-    notable_top5 = active.notable_event_rows[:5]
-    for event_type, mob_or_item, value_ped, timestamp in notable_top5:
-        recent_events_list.append(
-            _notable_event_payload(event_type, mob_or_item, value_ped, timestamp)
-        )
-
-    payload = {
-        "status": "active",
-        "sessionId": active.session_id,
-        "elapsed": active.elapsed,
-        "killCount": active.kill_count,
-        "kills": active.kill_count,
-        "cost": active.cost,
-        "returns": active.returns,
-        "pes": active.pes,
-        "net": active.net,
-        "returnRate": active.return_rate,
-        "weaponAttribution": weapon_attribution,
-        "repairOcrEnabled": config.repair_ocr_enabled,
-        "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": active.mob_entry_mode,
-        "currentMob": active.current_mob,
-        "mobSource": active.mob_source,
-        "currentTool": detected_tool,
-        "trifectaAttribution": trifecta_attribution,
-        "recentEvents": recent_events_list,
-    }
-    duration_ms = (time.perf_counter() - started) * 1000.0
-    if log.isEnabledFor(logging.DEBUG) and duration_ms >= 10.0:
-        log.debug(
-            "/tracking/live slow-ish response: %.2f ms (kills=%d recent_events=%d warnings=%d)",
-            duration_ms,
-            active.kill_count,
-            len(notable_top5),
-            len(active.warnings),
-        )
-    return payload
-
-
-@router.get(
-    "/recent-events",
-    response_model=list[NotableEvent],
-    response_model_exclude_unset=True,
-)
-def recent_events():
-    """Recent notable events for the latest tracking session — dashboard activity feed.
-
-    Scoped to the most recent session (by started_at) so starting a fresh session
-    clears the dashboard feed; events populate again as they occur in-session.
-    """
-    return recent_events_impl(get_services())
-
-
-@router.get(
     "/snapshot",
     response_model=TrackingSnapshot,
     response_model_exclude_unset=True,
@@ -554,34 +373,6 @@ def tracking_snapshot():
     """Consolidated dashboard hydration: one response a newly mounted webview
     reads once, then keeps current from pushed events instead of re-polling."""
     return tracking_snapshot_impl(get_services())
-
-
-def recent_events_impl(svc):
-    latest = svc.app_db.conn.execute(
-        "SELECT id FROM tracking_sessions ORDER BY started_at DESC LIMIT 1"
-    ).fetchone()
-    if not latest:
-        return []
-    rows = svc.app_db.conn.execute(
-        """SELECT ne.event_type, ne.mob_or_item, ne.value_ped, ne.timestamp
-           FROM notable_events ne
-           WHERE ne.session_id = ?
-           ORDER BY ne.timestamp DESC LIMIT 20""",
-        (latest[0],),
-    ).fetchall()
-
-    events = []
-    for i, r in enumerate(rows):
-        event_type, mob_or_item, value_ped, ts = r
-        payload = _notable_event_payload(event_type, mob_or_item, value_ped)
-        events.append(
-            {
-                "id": f"ne-{i}",
-                **payload,
-                "timestamp": _ts_to_iso(ts),
-            }
-        )
-    return events
 
 
 def tracking_snapshot_impl(svc):
@@ -603,7 +394,7 @@ def tracking_snapshot_impl(svc):
     snake-case (the dashboard reads them so), while the headline numbers stay
     camelCase. The live shape's camelCase ``sessionId`` / ``killCount``
     duplicates and its bare ``kills`` count are dropped (no consumer reads them
-    off this endpoint; the overlay still has its own live readout).
+    off this endpoint).
     """
     if not hasattr(svc, "tracker") or svc.tracker is None:
         return {"status": "unavailable"}

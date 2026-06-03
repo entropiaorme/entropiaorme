@@ -26,7 +26,7 @@ from backend.core.events import (
     EVENT_COMBAT,
     EVENT_LOOT_GROUP,
 )
-from backend.routers.tracking import tracking_live_impl, tracking_status_impl
+from backend.routers.tracking import tracking_snapshot_impl
 from backend.tracking.tracker import HuntTracker
 
 # A small pool of priced tools; cycling the active tool churns the accumulator's
@@ -196,16 +196,15 @@ def test_snapshot_survives_concurrent_mutation():
     assert max_kc > 0, "the reader never observed an active session; test inert"
 
 
-def test_status_and_live_readouts_survive_concurrent_mutation():
+def test_snapshot_readout_survives_concurrent_mutation():
     tracker, db = _make_pipeline()
     svc = _make_svc(tracker, db)
 
-    def read_both():
-        # Both HTTP readouts route through the same locked aggregation; hammer
-        # them together so the router projection is covered, not just snapshot().
-        tracking_status_impl(svc)
-        return tracking_live_impl(svc)
+    def read_snapshot():
+        # The surviving HTTP readout routes through the same locked aggregation;
+        # hammer the router projection, not just snapshot() directly.
+        return tracking_snapshot_impl(svc)
 
-    errors, max_kc = _run_hammer(tracker, read_both)
-    assert not errors, f"status/live readouts raced the mutator: {errors[0]!r}"
+    errors, max_kc = _run_hammer(tracker, read_snapshot)
+    assert not errors, f"the snapshot readout raced the mutator: {errors[0]!r}"
     assert max_kc > 0, "the reader never observed an active session; test inert"

@@ -17,8 +17,8 @@ It asserts three properties together:
   snapshot read carry the whole state change with no polling;
 - the request signature is network-quiet: across the exchange the server sees
   only the snapshot hydrations and the single event stream, never a read of the
-  three collapsed endpoints (``/status``, ``/live``, ``/recent-events``) or the
-  un-collapsed ``/sessions``.
+  retired status / live / recent-events endpoints (now removed from the HTTP
+  surface) or the still-routed ``/sessions``.
 
 The frontend's adherence to this loop is the residual UAT the backend harness
 cannot reach; what is mechanised here is that the seam supports it.
@@ -57,7 +57,10 @@ _READ_TIMEOUT = 5.0
 _MAX_LINES = 50
 _STARTUP_TIMEOUT = 15.0
 
-_COLLAPSED_ENDPOINTS = {
+# The retired tracking readouts the snapshot replaced, now removed from the HTTP
+# surface. A hydrate-and-subscribe client must never request them; a regression
+# that re-added a poll would 404, and this guard names it before the 404 does.
+_REMOVED_TRACKING_ENDPOINTS = {
     "/api/tracking/status",
     "/api/tracking/live",
     "/api/tracking/recent-events",
@@ -204,18 +207,18 @@ async def _drive_dashboard_flow(port: int) -> None:
             assert idle_body["recentEvents"] == []
 
 
-def test_dashboard_data_flow_reads_no_collapsed_endpoint(
+def test_dashboard_data_flow_reads_no_removed_endpoint(
     recording_live_server: tuple[int, _RequestLog],
 ) -> None:
     """A hydrate-and-subscribe client stays current on the snapshot plus the push
     alone: the server sees the snapshot hydrations and the single event stream,
-    and never a read of the collapsed status / live / recent-events endpoints."""
+    and never a read of the removed status / live / recent-events endpoints."""
     port, log = recording_live_server
     asyncio.run(_drive_dashboard_flow(port))
 
     snapshot_reads = log.get_paths("/api/tracking/snapshot")
     event_streams = log.get_paths("/api/events")
-    collapsed = [(m, p) for (m, p) in log.requests if p in _COLLAPSED_ENDPOINTS]
+    removed = [(m, p) for (m, p) in log.requests if p in _REMOVED_TRACKING_ENDPOINTS]
     sessions = log.get_paths("/api/tracking/sessions")
 
     # One stream, opened once.
@@ -223,9 +226,9 @@ def test_dashboard_data_flow_reads_no_collapsed_endpoint(
     # Exactly the hydrations the loop issues: one on mount, one per pushed frame
     # (start, stop).
     assert len(snapshot_reads) == 3, log.requests
-    # The collapsed trio is never read, and neither is the un-collapsed sessions
-    # endpoint the dashboard no longer fetches.
-    assert collapsed == [], f"collapsed endpoints must not be read: {collapsed}"
+    # The removed trio is never requested, and neither is the still-routed
+    # sessions endpoint the dashboard no longer fetches.
+    assert removed == [], f"removed endpoints must not be requested: {removed}"
     assert sessions == [], (
         f"sessions must not be read by the dashboard flow: {sessions}"
     )
@@ -318,12 +321,13 @@ async def _drive_overlay_flow(port: int) -> None:
     plus typed-topic push as the dashboard: one snapshot read on mount, then one
     re-read per pushed ``tracking.session.updated`` frame. This drives genuine
     mutations through the producer and asserts the push-driven loop reads only the
-    snapshot and the stream, never the collapsed trio (which now includes the
-    overlay's retired ``/status`` co-poll). The overlay also issues frontend-only
-    snapshot reads not modelled here (a re-read on window-show, a pre-stop refresh
-    of the final totals); those are still snapshot reads, never a collapsed
-    endpoint, so the guarded invariant is collapsed-trio absence, and the exact
-    count below pins the push-driven hydrations (mount + start frame + stop frame).
+    snapshot and the stream, never the retired trio (which includes the overlay's
+    former ``/status`` co-poll, now removed from the surface). The overlay also
+    issues frontend-only snapshot reads not modelled here (a re-read on
+    window-show, a pre-stop refresh of the final totals); those are still snapshot
+    reads, never a removed endpoint, so the guarded invariant is removed-trio
+    absence, and the exact count below pins the push-driven hydrations (mount +
+    start frame + stop frame).
     """
     base_url = f"http://127.0.0.1:{port}"
     async with httpx.AsyncClient(
@@ -369,12 +373,12 @@ async def _drive_overlay_flow(port: int) -> None:
             assert idle.json()["status"] == "idle"
 
 
-def test_overlay_flow_reads_no_collapsed_endpoint(
+def test_overlay_flow_reads_no_removed_endpoint(
     recording_live_server: tuple[int, _RequestLog],
 ) -> None:
     """The HUD overlay stays current on the snapshot plus the push alone: the
     server sees the snapshot hydrations and the single event stream, and never a
-    read of the collapsed status / live / recent-events endpoints. This is what
+    read of the removed status / live / recent-events endpoints. This is what
     retires the overlay's 2s /live + /status double-poll, proven against a
     backend-modelled overlay client rather than convention."""
     port, log = recording_live_server
@@ -382,7 +386,7 @@ def test_overlay_flow_reads_no_collapsed_endpoint(
 
     snapshot_reads = log.get_paths("/api/tracking/snapshot")
     event_streams = log.get_paths("/api/events")
-    collapsed = [(m, p) for (m, p) in log.requests if p in _COLLAPSED_ENDPOINTS]
+    removed = [(m, p) for (m, p) in log.requests if p in _REMOVED_TRACKING_ENDPOINTS]
 
     # One stream, opened once.
     assert len(event_streams) == 1, log.requests
@@ -390,6 +394,6 @@ def test_overlay_flow_reads_no_collapsed_endpoint(
     # (start, stop). The retired 2s timer (two reads per tick) would inflate this
     # without bound; its absence is the network-quiet property.
     assert len(snapshot_reads) == 3, log.requests
-    # The collapsed trio is never read: neither /live nor the /status the overlay
-    # used to co-poll on the same timer.
-    assert collapsed == [], f"collapsed endpoints must not be read: {collapsed}"
+    # The removed trio is never requested: neither /live nor the /status the
+    # overlay used to co-poll on the same timer.
+    assert removed == [], f"removed endpoints must not be requested: {removed}"

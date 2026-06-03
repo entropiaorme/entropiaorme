@@ -245,18 +245,18 @@ def test_demo_analytics_overview_serves_seeded_non_zero_totals(contract_env):
     )
 
 
-def test_demo_tracking_status_reflects_primed_mid_hunt_session(contract_env):
-    """The demo tracking status reflects the primed mid-hunt session.
+def test_demo_tracking_snapshot_reflects_primed_mid_hunt_session(contract_env):
+    """The demo tracking snapshot reflects the primed mid-hunt session.
 
     Hitting a demo tracker-state endpoint triggers the live-injection priming
     of the parallel HuntTracker (the ``mid_hunt`` scenario), which seeds an
     active session with a fixed kill count against a canonical mob. Pinning
     the active state, the seeded kill count, and a non-empty current mob
     rejects a clone that fails to prime (idle / zero kills / no mob) yet still
-    conforms to the ``TrackingStatus`` shape.
+    conforms to the ``TrackingSnapshot`` shape.
     """
     client = contract_env
-    response = client.get("/api/demo/tracking/status", headers=REQUEST_HEADERS)
+    response = client.get("/api/demo/tracking/snapshot", headers=REQUEST_HEADERS)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "active"

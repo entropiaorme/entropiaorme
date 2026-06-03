@@ -2,11 +2,13 @@
 
 Two properties:
 
-- The consolidated readout reproduces the union of the legacy status, live, and
-  recent-events shapes (the A/B equivalence the consolidation rests on), with
-  the documented reshape (camelCase id/count duplicates dropped, the activity
-  feed taken from the identified recent-events projection, warnings split into a
-  sibling array, and the feed cleared on idle).
+- The consolidated readout carries the full tracking union directly: the status
+  superset, the live-only extras (elapsed / net / currentTool /
+  trifectaAttribution), the identified recent-events activity feed, and the
+  warnings sibling, with the camelCase id/count duplicates dropped and the feed
+  cleared on idle. (The legacy status / live / recent-events readouts it
+  consolidated have since been removed; this asserts the surviving snapshot shape
+  directly rather than against those readouts.)
 - ``HuntTracker.snapshot`` assembles the active readout in a single tight read
   sequence: two session-scoped statements, no per-field query fan-out.
 """
@@ -19,12 +21,7 @@ import pytest
 
 from backend.core.event_bus import EventBus
 from backend.core.events import EVENT_COMBAT, EVENT_LOOT_GROUP
-from backend.routers.tracking import (
-    recent_events_impl,
-    tracking_live_impl,
-    tracking_snapshot_impl,
-    tracking_status_impl,
-)
+from backend.routers.tracking import tracking_snapshot_impl
 from backend.tracking.tracker import HuntTracker
 
 
@@ -122,35 +119,55 @@ def active_pipeline():
     )
 
 
-def test_snapshot_active_reproduces_union_of_legacy_readouts(active_pipeline):
+def test_snapshot_active_carries_the_full_tracking_union(active_pipeline):
     svc = active_pipeline.svc
-    status = dict(tracking_status_impl(svc))
-    live = dict(tracking_live_impl(svc))
-    recent = recent_events_impl(svc)
-
-    # The snapshot is the documented reshape of the three legacy readouts:
-    # the status superset plus the live-only extras, the camelCase session-id /
-    # kill-count duplicates and the bare kills count dropped, the activity feed
-    # taken from the identified recent-events projection, and tracker warnings
-    # split into a sibling array.
-    expected = dict(status)
-    for key in ("elapsed", "net", "currentTool", "trifectaAttribution"):
-        expected[key] = live[key]
-    expected["recentEvents"] = recent
-    expected["warnings"] = [
-        {"type": "warning", "description": e["description"], "value": e["value"]}
-        for e in live["recentEvents"]
-        if e.get("type") == "warning"
-    ]
-
     snap = tracking_snapshot_impl(svc)
 
-    # elapsed is wall-clock; assert its shape, compare everything else exactly.
-    assert isinstance(snap["elapsed"], int) and snap["elapsed"] >= 0
-    expected.pop("elapsed", None)
-    assert {k: v for k, v in snap.items() if k != "elapsed"} == expected
+    assert snap["status"] == "active"
 
-    # The dropped duplicates must not reappear on the wire.
+    # The active snapshot carries the full union directly: the status superset,
+    # the live-only extras, and the consolidated activity feed + warnings sibling.
+    # The legacy readouts it consolidated are gone, so coverage is asserted as
+    # field presence on the surviving shape rather than against those readouts.
+    status_fields = {
+        "session_id",
+        "started_at",
+        "kill_count",
+        "cost",
+        "returns",
+        "pes",
+        "returnRate",
+        "damageDealtTotal",
+        "weaponDamageDealt",
+        "weaponCost",
+        "shotsFiredTotal",
+        "criticalHitsTotal",
+        "maxDamage",
+        "globalsCount",
+        "hofsCount",
+        "latestKillLoot",
+        "multiplierLast",
+        "multiplierAvg",
+        "multiplierMax",
+        "multiplierHistory",
+        "cumulativeNetHistory",
+        "hotbarListenerActive",
+        "weaponAttribution",
+        "repairOcrEnabled",
+        "endOfSessionArmourReminderEnabled",
+        "mobEntryMode",
+        "currentMob",
+        "mobSource",
+    }
+    live_only_fields = {"elapsed", "net", "currentTool", "trifectaAttribution"}
+    consolidated_fields = {"recentEvents", "warnings"}
+    missing = (status_fields | live_only_fields | consolidated_fields) - snap.keys()
+    assert not missing, f"snapshot dropped union fields: {sorted(missing)}"
+
+    # elapsed is wall-clock; assert its shape.
+    assert isinstance(snap["elapsed"], int) and snap["elapsed"] >= 0
+
+    # The dropped camelCase duplicates must not reappear on the wire.
     assert "sessionId" not in snap
     assert "killCount" not in snap
     assert "kills" not in snap
@@ -172,26 +189,45 @@ def test_snapshot_active_reproduces_union_of_legacy_readouts(active_pipeline):
     assert snap["multiplierMax"] is not None and snap["multiplierMax"] > 0
     assert snap["criticalHitsTotal"] >= 1
     assert len(snap["cumulativeNetHistory"]) == 3  # every kill, heal-share folded
+    # Value-pin the active-only flat pass-throughs the fixture deterministically
+    # drives, so a mis-wired field on the snapshot impl is caught rather than only
+    # a missing key: the seeded skill gain drives pes, the three kills drive the
+    # damage totals, and the critical hit sets the max single-hit damage.
+    assert snap["pes"] > 0
+    assert snap["damageDealtTotal"] > 0
+    assert snap["weaponDamageDealt"] > 0  # kills 2 and 3 fired with a tool active
+    assert snap["maxDamage"] > 0  # the critical hit
 
 
 def test_snapshot_idle_clears_the_feed_and_unions_the_config_envelope(active_pipeline):
     svc = active_pipeline.svc
     active_pipeline.tracker.stop_session()
 
-    status = dict(tracking_status_impl(svc))
-    live = dict(tracking_live_impl(svc))
-
-    # Idle union: the status idle shape plus the live-only idle fields, with the
-    # activity feed cleared (the dashboard's chosen idle behaviour).
-    expected = dict(status)
-    for key, value in live.items():
-        expected.setdefault(key, value)
-    expected["recentEvents"] = []
-
     snap = tracking_snapshot_impl(svc)
-    assert snap == expected
     assert snap["status"] == "idle"
+    # The activity feed clears on idle (the dashboard's chosen idle behaviour).
     assert snap["recentEvents"] == []
+
+    # The idle shape is the config + runtime envelope only, carrying the same
+    # envelope fields the active shape does, with no session-derived numbers.
+    idle_fields = {
+        "status",
+        "hotbarListenerActive",
+        "weaponAttribution",
+        "repairOcrEnabled",
+        "endOfSessionArmourReminderEnabled",
+        "currentTool",
+        "trifectaAttribution",
+        "mobEntryMode",
+        "currentMob",
+        "mobSource",
+        "recentEvents",
+    }
+    missing = idle_fields - snap.keys()
+    assert not missing, f"idle snapshot dropped envelope fields: {sorted(missing)}"
+    # No active-only session numbers leak into the idle shape.
+    for active_only in ("session_id", "started_at", "kill_count", "elapsed", "net"):
+        assert active_only not in snap
 
 
 def test_snapshot_issues_two_session_scoped_reads(active_pipeline):

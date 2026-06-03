@@ -151,7 +151,7 @@ class TrackingReducer(Reducer):
 
     Subscribes to the bus topics the production ``HuntTracker``
     consumes, then folds each event into a flat dict mirroring the
-    subset of ``tracking_status_impl`` that is unambiguously
+    subset of ``tracking_snapshot_impl`` that is unambiguously
     event-stream-driven: session lifecycle, kill count, weapon damage
     and shots, criticals, weapon and enhancer cost, returns, skill
     progression, globals and HoFs.
@@ -308,7 +308,7 @@ def tracking_view_state(ctx: TrackingViewContext) -> dict[str, Any]:
 
     Mirrors the ``TrackingReducer`` projection: the same keys, computed
     by reading the in-memory tracker session. The shape is a strict
-    subset of what ``tracking_status_impl`` returns over HTTP today:
+    subset of what ``tracking_snapshot_impl`` returns over HTTP today:
     only the fields whose values are unambiguously event-stream-
     derivable land here, so the reducer-vs-view comparison surfaces a
     real divergence rather than tripping on configuration-derived

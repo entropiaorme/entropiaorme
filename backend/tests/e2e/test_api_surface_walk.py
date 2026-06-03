@@ -28,9 +28,6 @@ SCENARIO = E2E_DIR / "corpus" / "scripted" / "multi_mob_hunt_loot_grouping"
 # place and must answer with a success status.
 _STATIC_GETS = (
     "/api/health",
-    "/api/tracking/status",
-    "/api/tracking/live",
-    "/api/tracking/recent-events",
     "/api/tracking/snapshot",
     "/api/tracking/sessions",
     "/api/tracking/tag-suggestions",
@@ -60,9 +57,6 @@ _STATIC_GETS = (
     "/api/scan/skills/pending",
     "/api/recording/status",
     # Demo surface mirrors tracking / analytics against the seeded demo DB.
-    "/api/demo/tracking/status",
-    "/api/demo/tracking/live",
-    "/api/demo/tracking/recent-events",
     "/api/demo/tracking/snapshot",
     "/api/demo/tracking/sessions",
     "/api/demo/analytics/overview",
@@ -274,7 +268,7 @@ def test_read_surface_with_seeded_state(e2e_http_pipeline):
     demo_rows = demo_sessions.json()
     assert isinstance(demo_rows, list) and len(demo_rows) >= 1
 
-    demo_status = client.get("/api/demo/tracking/status")
+    demo_status = client.get("/api/demo/tracking/snapshot")
     assert demo_status.status_code == 200
     dstatus = demo_status.json()
     # The primed mid-hunt session is reported active with fired shots.
@@ -359,12 +353,12 @@ def test_session_detail_unknown_id_is_404(e2e_http_pipeline):
     assert missing.status_code == 404
 
 
-def test_live_reads_while_a_session_is_active(e2e_http_pipeline):
-    """Read the live surface mid-session, before it is stopped.
+def test_snapshot_reads_while_a_session_is_active(e2e_http_pipeline):
+    """Read the snapshot surface mid-session, before it is stopped.
 
-    The status / live / recent-events handlers carry active-session
-    projection branches (the running cumulative net history and in-flight
-    totals) that the stopped-session reads in the seeded walk do not reach.
+    The snapshot's active-session projection branch (the running cumulative net
+    history and in-flight totals) is not reached by the stopped-session reads in
+    the seeded walk.
     """
     client, chatlog, watcher = e2e_http_pipeline
     tracker = get_services().tracker
@@ -372,26 +366,21 @@ def test_live_reads_while_a_session_is_active(e2e_http_pipeline):
     try:
         replay_scenario(SCENARIO, chatlog)
         wait_for_drain(watcher, chatlog)
-        status = client.get("/api/tracking/status")
-        assert status.status_code == 200
+        snapshot = client.get("/api/tracking/snapshot")
+        assert snapshot.status_code == 200
         # An in-flight session reports active with its returns/cost/returnRate
-        # wired consistently; returnRate is returns/cost (zero when cost is
-        # zero, as in this no-weapon-cost scenario).
-        st = status.json()
-        assert st["status"] == "active"
-        if st["cost"] > 0:
-            assert st["returnRate"] == round(st["returns"] / st["cost"], 4)
+        # wired consistently (returnRate is returns/cost, zero when cost is zero
+        # as in this no-weapon-cost scenario) and the running net (liquid returns
+        # minus cost) carried alongside.
+        snap = snapshot.json()
+        assert snap["status"] == "active"
+        if snap["cost"] > 0:
+            assert snap["returnRate"] == round(snap["returns"] / snap["cost"], 4)
         else:
-            assert st["returnRate"] == 0.0
-        live = client.get("/api/tracking/live")
-        assert live.status_code == 200
-        live_body = live.json()
-        # The live projection carries the running net (liquid returns minus
-        # cost) and mirrors the status totals for the same session.
-        assert live_body["status"] == "active"
-        assert live_body["net"] == round(live_body["returns"] - live_body["cost"], 2)
-        assert live_body["returns"] == st["returns"]
-        assert client.get("/api/tracking/recent-events").status_code == 200
+            assert snap["returnRate"] == 0.0
+        assert snap["net"] == round(snap["returns"] - snap["cost"], 2)
+        # The consolidated activity feed rides the active shape.
+        assert isinstance(snap["recentEvents"], list)
     finally:
         tracker.stop_session()
 

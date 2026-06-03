@@ -111,7 +111,7 @@ def test_openapi_get_surface_carries_expected_prefixes() -> None:
     spec = app.openapi()
     paths = set(spec.get("paths", {}))
     required = {
-        "/api/tracking/status",
+        "/api/tracking/snapshot",
         "/api/scan/skills/status",
         "/api/quests",
         "/api/codex/species",

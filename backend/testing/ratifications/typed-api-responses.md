@@ -48,6 +48,24 @@ a route the old snapshot actively misdescribed as JSON. Determinism is intact: n
 ambient / time / random tokens appear in any added schema, and the snapshot is a
 pure function of the decorators and models.
 
+## Amendment: numeric-form fixes
+
+A follow-up commit regenerated the snapshot once more with exactly three schema
+changes, independently re-reviewed: (1) `HpOptimizerResult.currentHp` moved from
+`integer` to `number`; the handler emits `round(current_hp, 2)`, fractional for
+any calibrated HP-contributing skill, so the old integer pin was itself the
+regression (a response-validation 500), now locked by an HTTP-layer regression
+test that exercises the route through the real serialisation stack. (2)
+`SessionSkillGain.level` / `ttValueGained` narrowed from `anyOf[integer, number]`
+to `number`; the producer genuinely emits an integer zero on the wire and the
+session-detail expectations pin it, but the comparison is value-based, so the
+narrowing was adversarially verified to break no pin (fingerprint scenarios pass
+with those expectations byte-identical) and to reject no real response (JSON
+Schema `number` admits integers; the contract suite passes). (3) The `Quest`
+schema description dropped an internal helper reference, text only. The
+amendment's golden delta is exactly these three changes and nothing else; the
+cumulative range remains response-preserving and the verdict carries forward.
+
 ```text
 ORACLE-RATIFICATION
 range: c84cac6..HEAD

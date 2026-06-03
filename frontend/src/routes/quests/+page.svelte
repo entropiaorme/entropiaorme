@@ -16,6 +16,7 @@
 	import { closeGuide, openGuide } from '$lib/guide/engine';
 	import { questsSurface } from '$lib/guide/surfaces/quests';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore';
 	import {
 		questsDemoQuests,
 		questsDemoPlaylists,
@@ -38,8 +39,7 @@
 		deletePlaylist,
 		getQuestAnalytics,
 		getPlaylistAnalytics,
-		getAnalyticsOverview,
-		getTrackingStatus
+		getAnalyticsOverview
 	} from '$lib/api';
 
 	// ── State ──
@@ -127,7 +127,7 @@
 	}
 
 	// ── Load data ──
-	let trackingActive = $state(false);
+	let trackingActive = $derived($trackingSnapshot?.status === 'active');
 
 	// Guide
 	let guideSeen = $state(true);
@@ -167,18 +167,17 @@
 		};
 	});
 
-	// Poll quest data every 10s while tracking is active to pick up chat.log mission-completion lines.
-	// Check tracking status every 15s to detect session start/stop.
+	// Quest data refreshes every 10s while tracking is active (below) to pick up
+	// chat.log mission-completion lines. The active/idle signal that gates it is
+	// event-driven: hydrate the tracking snapshot once, then keep it current from
+	// pushed session frames rather than polling for session start/stop.
 	$effect(() => {
 		if (guideState.isActive) return;
-		const refreshStatus = async () => {
-			try {
-				const s = await getTrackingStatus();
-				trackingActive = s.status === 'active';
-			} catch { /* ignore */ }
+		void hydrate();
+		const unlisten = subscribeTracking();
+		return () => {
+			void unlisten.then((un) => un());
 		};
-		// immediate:true (the default) runs the initial check on mount.
-		return useVisiblePoll(refreshStatus, { intervalMs: 15000 });
 	});
 
 	$effect(() => {

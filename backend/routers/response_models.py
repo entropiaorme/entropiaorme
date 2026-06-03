@@ -565,3 +565,99 @@ class RecordingAbortResult(_Loose):
     """Acknowledgement that the in-flight recording was discarded."""
 
     state: str
+
+
+# ---------------------------------------------------------------------------
+# Manual skill scan (/scan)
+# ---------------------------------------------------------------------------
+
+
+class ProcessingProgress(_Loose):
+    """OCR processing progress (pages done / total)."""
+
+    done: int
+    total: int
+
+
+class ScanManualStatus(_Loose):
+    """The manual skill-scan status (GET /scan/skills/status).
+
+    Every key is always emitted (``error`` and ``last_scan_time`` carry explicit
+    null when idle), so it is served without an exclude flag.
+    """
+
+    active: bool
+    processing: bool
+    captured_pages: int
+    expected_pages: int
+    last_scan_time: float | None = None
+    skills_count: int
+    configured: bool
+    game_window_present: bool
+    phase: str
+    processing_progress: ProcessingProgress
+    has_pending_result: bool
+    error: str | None = None
+
+
+class ScanManualStatusOrError(_Loose):
+    """A scan verb result: the full status on success, or just ``error``.
+
+    The status fields are all optional and the route serialises with
+    ``response_model_exclude_unset=True``, so the success branch emits the full
+    status while the refusal branch emits only ``error``.
+    """
+
+    active: bool | None = None
+    processing: bool | None = None
+    captured_pages: int | None = None
+    expected_pages: int | None = None
+    last_scan_time: float | None = None
+    skills_count: int | None = None
+    configured: bool | None = None
+    game_window_present: bool | None = None
+    phase: str | None = None
+    processing_progress: ProcessingProgress | None = None
+    has_pending_result: bool | None = None
+    error: str | None = None
+
+
+class ScanCaptureResult(ScanManualStatusOrError):
+    """A capture result: status plus the captured page number and success flag."""
+
+    page: int | None = None
+    captured: bool | None = None
+
+
+class ScanUndoResult(ScanManualStatusOrError):
+    """An undo result: status plus the page number that was undone."""
+
+    undone_page: int | None = None
+
+
+class ScanAcceptResult(_Loose):
+    """The result of accepting a pending scan: persisted count, or ``error``."""
+
+    ok: bool | None = None
+    skills_persisted: int | None = None
+    error: str | None = None
+
+
+class ScanRejectResult(_Loose):
+    """The result of rejecting a pending scan, or ``error``."""
+
+    ok: bool | None = None
+    error: str | None = None
+
+
+class SkillScanPending(_Loose):
+    """The held OCR result awaiting review: skill name to calibrated level."""
+
+    skills: dict[str, float]
+
+
+class SpacebarCaptureResult(_Loose):
+    """The spacebar-capture toggle acknowledgement."""
+
+    ok: bool
+    enabled: bool

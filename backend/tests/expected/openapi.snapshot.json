@@ -1841,6 +1841,26 @@
         "title": "PlaylistUpdate",
         "type": "object"
       },
+      "ProcessingProgress": {
+        "additionalProperties": true,
+        "description": "OCR processing progress (pages done / total).",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total"
+        ],
+        "title": "ProcessingProgress",
+        "type": "object"
+      },
       "Quest": {
         "additionalProperties": true,
         "description": "A quest as returned by the quest read/write endpoints.\n\nMirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.\nEvery key is always emitted by ``_format_quest`` (nullables carry explicit\n``null``), so the shape is stable and served without an exclude flag.",
@@ -2673,6 +2693,608 @@
         "title": "ReturnsBreakdown",
         "type": "object"
       },
+      "ScanAcceptResult": {
+        "additionalProperties": true,
+        "description": "The result of accepting a pending scan: persisted count, or ``error``.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "skills_persisted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Persisted"
+          }
+        },
+        "title": "ScanAcceptResult",
+        "type": "object"
+      },
+      "ScanCaptureResult": {
+        "additionalProperties": true,
+        "description": "A capture result: status plus the captured page number and success flag.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          }
+        },
+        "title": "ScanCaptureResult",
+        "type": "object"
+      },
+      "ScanManualStatus": {
+        "additionalProperties": true,
+        "description": "The manual skill-scan status (GET /scan/skills/status).\n\nEvery key is always emitted (``error`` and ``last_scan_time`` carry explicit\nnull when idle), so it is served without an exclude flag.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "captured_pages": {
+            "title": "Captured Pages",
+            "type": "integer"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "title": "Expected Pages",
+            "type": "integer"
+          },
+          "game_window_present": {
+            "title": "Game Window Present",
+            "type": "boolean"
+          },
+          "has_pending_result": {
+            "title": "Has Pending Result",
+            "type": "boolean"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "processing": {
+            "title": "Processing",
+            "type": "boolean"
+          },
+          "processing_progress": {
+            "$ref": "#/components/schemas/ProcessingProgress"
+          },
+          "skills_count": {
+            "title": "Skills Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "processing",
+          "captured_pages",
+          "expected_pages",
+          "skills_count",
+          "configured",
+          "game_window_present",
+          "phase",
+          "processing_progress",
+          "has_pending_result"
+        ],
+        "title": "ScanManualStatus",
+        "type": "object"
+      },
+      "ScanManualStatusOrError": {
+        "additionalProperties": true,
+        "description": "A scan verb result: the full status on success, or just ``error``.\n\nThe status fields are all optional and the route serialises with\n``response_model_exclude_unset=True``, so the success branch emits the full\nstatus while the refusal branch emits only ``error``.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          }
+        },
+        "title": "ScanManualStatusOrError",
+        "type": "object"
+      },
+      "ScanRejectResult": {
+        "additionalProperties": true,
+        "description": "The result of rejecting a pending scan, or ``error``.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "title": "ScanRejectResult",
+        "type": "object"
+      },
+      "ScanUndoResult": {
+        "additionalProperties": true,
+        "description": "An undo result: status plus the page number that was undone.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          },
+          "undone_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undone Page"
+          }
+        },
+        "title": "ScanUndoResult",
+        "type": "object"
+      },
       "SessionQuestLinkDecisionBody": {
         "properties": {
           "action": {
@@ -2839,6 +3461,44 @@
           }
         },
         "title": "SettingsPatch",
+        "type": "object"
+      },
+      "SkillScanPending": {
+        "additionalProperties": true,
+        "description": "The held OCR result awaiting review: skill name to calibrated level.",
+        "properties": {
+          "skills": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Skills",
+            "type": "object"
+          }
+        },
+        "required": [
+          "skills"
+        ],
+        "title": "SkillScanPending",
+        "type": "object"
+      },
+      "SpacebarCaptureResult": {
+        "additionalProperties": true,
+        "description": "The spacebar-capture toggle acknowledgement.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "enabled"
+        ],
+        "title": "SpacebarCaptureResult",
         "type": "object"
       },
       "StopRecordingBody": {
@@ -5906,7 +6566,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanAcceptResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5925,7 +6587,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -5944,53 +6608,15 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanCaptureResult"
+                }
               }
             },
             "description": "Successful Response"
           }
         },
         "summary": "Skill Capture",
-        "tags": [
-          "scan-manual"
-        ]
-      }
-    },
-    "/api/scan/skills/capture/{page}": {
-      "get": {
-        "operationId": "skill_capture_png_api_scan_skills_capture__page__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "page",
-            "required": true,
-            "schema": {
-              "title": "Page",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Skill Capture Png",
         "tags": [
           "scan-manual"
         ]
@@ -6003,7 +6629,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SkillScanPending"
+                }
               }
             },
             "description": "Successful Response"
@@ -6022,7 +6650,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -6041,7 +6671,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanRejectResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -6078,7 +6710,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -6107,7 +6741,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -6126,7 +6762,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanUndoResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -6156,7 +6794,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpacebarCaptureResult"
+                }
               }
             },
             "description": "Successful Response"

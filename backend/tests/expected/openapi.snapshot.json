@@ -150,6 +150,40 @@
         "title": "AddWeaponRequest",
         "type": "object"
       },
+      "AnalyticsActivity": {
+        "additionalProperties": true,
+        "description": "The activity tab's mob / tag / weapon comparison tables.",
+        "properties": {
+          "mobComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/MobComparison"
+            },
+            "title": "Mobcomparisons",
+            "type": "array"
+          },
+          "tagComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/TagComparison"
+            },
+            "title": "Tagcomparisons",
+            "type": "array"
+          },
+          "weaponComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/WeaponComparison"
+            },
+            "title": "Weaponcomparisons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mobComparisons",
+          "tagComparisons",
+          "weaponComparisons"
+        ],
+        "title": "AnalyticsActivity",
+        "type": "object"
+      },
       "AnalyticsOverview": {
         "additionalProperties": true,
         "properties": {
@@ -1129,6 +1163,21 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthStatus": {
+        "additionalProperties": true,
+        "description": "The health-check acknowledgement.",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthStatus",
+        "type": "object"
+      },
       "InventoryItemCreate": {
         "properties": {
           "acquired_at": {
@@ -1172,6 +1221,52 @@
           "markup_paid"
         ],
         "title": "InventoryItemCreate",
+        "type": "object"
+      },
+      "InventoryItemModel": {
+        "additionalProperties": true,
+        "description": "A persistent-inventory ledger item.",
+        "properties": {
+          "acquiredAt": {
+            "title": "Acquiredat",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "markupPaid": {
+            "title": "Markuppaid",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "ttValue": {
+            "title": "Ttvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ttValue",
+          "markupPaid",
+          "acquiredAt"
+        ],
+        "title": "InventoryItemModel",
         "type": "object"
       },
       "InventoryItemPatch": {
@@ -1259,6 +1354,30 @@
         "title": "InventoryItemSell",
         "type": "object"
       },
+      "InventorySellResult": {
+        "additionalProperties": true,
+        "description": "The result of selling an inventory item.\n\n``ledgerEntry`` is always present, carrying the realised-delta entry or null\non a zero-delta sale, so it is served without an exclude flag.",
+        "properties": {
+          "ledgerEntry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LedgerItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "soldItem": {
+            "$ref": "#/components/schemas/InventoryItemModel"
+          }
+        },
+        "required": [
+          "soldItem"
+        ],
+        "title": "InventorySellResult",
+        "type": "object"
+      },
       "LedgerEntryCreate": {
         "properties": {
           "amount": {
@@ -1292,6 +1411,46 @@
         "title": "LedgerEntryCreate",
         "type": "object"
       },
+      "LedgerItem": {
+        "additionalProperties": true,
+        "description": "A liquid-economy ledger entry (expense or markup).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "date",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerItem",
+        "type": "object"
+      },
       "LedgerPresetCreate": {
         "properties": {
           "amount": {
@@ -1323,6 +1482,46 @@
           "tag"
         ],
         "title": "LedgerPresetCreate",
+        "type": "object"
+      },
+      "LedgerPresetItem": {
+        "additionalProperties": true,
+        "description": "A ledger quick-entry preset (distinct from a ledger entry: name, not date).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerPresetItem",
         "type": "object"
       },
       "LossesBreakdown": {
@@ -1380,6 +1579,51 @@
           "attribute_name"
         ],
         "title": "MetaClaimRequest",
+        "type": "object"
+      },
+      "MobComparison": {
+        "additionalProperties": true,
+        "description": "A per-mob activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "mobName": {
+            "title": "Mobname",
+            "type": "string"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mobName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "MobComparison",
         "type": "object"
       },
       "MonthlyPoint": {
@@ -3543,6 +3787,51 @@
         "title": "StopRecordingBody",
         "type": "object"
       },
+      "TagComparison": {
+        "additionalProperties": true,
+        "description": "A per-tag activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "tagName": {
+            "title": "Tagname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tagName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "TagComparison",
+        "type": "object"
+      },
       "TagLockRequest": {
         "properties": {
           "tag": {
@@ -4174,6 +4463,51 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WeaponComparison": {
+        "additionalProperties": true,
+        "description": "A per-weapon activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "weaponName": {
+            "title": "Weaponname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "weaponName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "WeaponComparison",
+        "type": "object"
+      },
       "WeaponComponent": {
         "additionalProperties": true,
         "description": "A weapon, amplifier, or scope sub-object of an equipment detail.\n\nThe amplifier and scope sub-objects are emitted by the same builder as the\nweapon, so they carry ``damageEnhancers`` too (the frontend type omits it on\nthe amplifier; the handler emits it, so it is modelled here and kept).",
@@ -4241,7 +4575,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsActivity"
+                }
               }
             },
             "description": "Successful Response"
@@ -4261,7 +4597,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryItemModel"
+                  },
+                  "title": "Response List Inventory Items Api Analytics Inventory Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4289,7 +4631,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItemModel"
+                }
               }
             },
             "description": "Successful Response"
@@ -4330,7 +4674,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4379,7 +4725,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItemModel"
+                }
               }
             },
             "description": "Successful Response"
@@ -4430,7 +4778,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySellResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4460,7 +4810,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerItem"
+                  },
+                  "title": "Response List Ledger Api Analytics Ledger Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4488,7 +4844,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4518,7 +4876,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerPresetItem"
+                  },
+                  "title": "Response List Ledger Presets Api Analytics Ledger Presets Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4546,7 +4910,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerPresetItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -4587,7 +4953,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4628,7 +4996,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -5854,7 +6224,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
               }
             },
             "description": "Successful Response"

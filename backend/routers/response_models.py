@@ -661,3 +661,103 @@ class SpacebarCaptureResult(_Loose):
 
     ok: bool
     enabled: bool
+
+
+# ---------------------------------------------------------------------------
+# Analytics (/analytics) — activity, ledger, inventory
+# (AnalyticsOverview is defined above, beside the tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class MobComparison(_Loose):
+    """A per-mob activity comparison row."""
+
+    mobName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class TagComparison(_Loose):
+    """A per-tag activity comparison row."""
+
+    tagName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class WeaponComparison(_Loose):
+    """A per-weapon activity comparison row."""
+
+    weaponName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class AnalyticsActivity(_Loose):
+    """The activity tab's mob / tag / weapon comparison tables."""
+
+    mobComparisons: list[MobComparison]
+    tagComparisons: list[TagComparison]
+    weaponComparisons: list[WeaponComparison]
+
+
+class LedgerItem(_Loose):
+    """A liquid-economy ledger entry (expense or markup)."""
+
+    id: str
+    date: str
+    type: str
+    description: str
+    amount: float
+    tag: str
+
+
+class LedgerPresetItem(_Loose):
+    """A ledger quick-entry preset (distinct from a ledger entry: name, not date)."""
+
+    id: str
+    name: str
+    type: str
+    description: str
+    amount: float
+    tag: str
+
+
+class InventoryItemModel(_Loose):
+    """A persistent-inventory ledger item."""
+
+    id: str
+    name: str
+    ttValue: float
+    markupPaid: float
+    notes: str | None = None
+    acquiredAt: str
+
+
+class InventorySellResult(_Loose):
+    """The result of selling an inventory item.
+
+    ``ledgerEntry`` is always present, carrying the realised-delta entry or null
+    on a zero-delta sale, so it is served without an exclude flag.
+    """
+
+    ledgerEntry: LedgerItem | None = None
+    soldItem: InventoryItemModel
+
+
+class HealthStatus(_Loose):
+    """The health-check acknowledgement."""
+
+    status: str

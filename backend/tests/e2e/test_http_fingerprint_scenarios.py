@@ -91,9 +91,6 @@ def _capture_hydration_set(
     grows in a deterministic sequence across runs of the same scenario.
     """
     captures: tuple[tuple[str, str, str, dict | None], ...] = (
-        ("GET_tracking_status", "GET", "/api/tracking/status", None),
-        ("GET_tracking_live", "GET", "/api/tracking/live", None),
-        ("GET_tracking_recent_events", "GET", "/api/tracking/recent-events", None),
         ("GET_tracking_snapshot", "GET", "/api/tracking/snapshot", None),
         ("GET_tracking_sessions", "GET", "/api/tracking/sessions", None),
         (
@@ -165,8 +162,8 @@ def test_http_fingerprint(
     # Pin the captured-set cardinality so a future test refactor that
     # silently drops endpoints from _capture_hydration_set surfaces here
     # rather than producing a silently-shrunk golden set.
-    assert len(fp.captured_endpoint_ids) == 13, (
-        f"Expected 13 captured endpoints, got "
+    assert len(fp.captured_endpoint_ids) == 10, (
+        f"Expected 10 captured endpoints, got "
         f"{len(fp.captured_endpoint_ids)}: {fp.captured_endpoint_ids}"
     )
 
@@ -178,19 +175,18 @@ def _golden_body(scenario_dir: Path, endpoint_id: str):
 
 
 @pytest.mark.parametrize("scenario_name", HTTP_FINGERPRINT_SCENARIOS)
-def test_snapshot_reproduces_legacy_tracking_union(
+def test_snapshot_golden_carries_the_idle_tracking_union(
     corpus_root: Path, scenario_name: str, request: pytest.FixtureRequest
 ) -> None:
-    """The consolidated snapshot reproduces the union of the three legacy
-    tracking readouts (the A/B equivalence the consolidation rests on).
+    """The consolidated snapshot golden carries the full idle tracking union.
 
-    Read directly from the committed goldens, so it is a mechanical diff of the
-    captured ``before`` (status + live + recent-events) against the captured
-    ``after`` (snapshot), not a re-derivation. Every curated scenario captures
-    the stopped session, so this proves the idle union: the status shape, the
-    live-only fields, and the activity feed (cleared on idle, matching the
-    empty recent-events feed). The active numeric union is the consistency
-    suite's job, not this contract's.
+    The legacy status / live / recent-events readouts the snapshot consolidated
+    have been removed, so this no longer diffs the snapshot against their goldens.
+    It instead pins the surviving proof that the consolidation stays lossless:
+    every curated scenario captures the stopped session, so the snapshot golden is
+    the idle shape, and it must still carry the config + runtime envelope the
+    legacy idle status / live readouts carried, plus the cleared activity feed.
+    The active numeric union is the consistency suite's job, not this contract's.
 
     Assertion-only: it produces no golden, so it sits out a regeneration pass
     (where it would otherwise read goldens mid-rewrite) and runs in verify mode.
@@ -198,14 +194,23 @@ def test_snapshot_reproduces_legacy_tracking_union(
     if request.config.getoption("--update-fingerprints"):
         pytest.skip("assertion-only; no golden to regenerate")
     scenario = corpus_root / "scripted" / scenario_name
-    status = _golden_body(scenario, "GET_tracking_status")
-    live = _golden_body(scenario, "GET_tracking_live")
-    recent = _golden_body(scenario, "GET_tracking_recent_events")
     snapshot = _golden_body(scenario, "GET_tracking_snapshot")
 
-    expected = dict(status)
-    for key, value in live.items():
-        expected.setdefault(key, value)
-    expected["recentEvents"] = recent
-
-    assert snapshot == expected
+    assert snapshot["status"] == "idle"
+    idle_union_fields = {
+        "status",
+        "hotbarListenerActive",
+        "weaponAttribution",
+        "repairOcrEnabled",
+        "endOfSessionArmourReminderEnabled",
+        "currentTool",
+        "trifectaAttribution",
+        "mobEntryMode",
+        "currentMob",
+        "mobSource",
+        "recentEvents",
+    }
+    missing = idle_union_fields - snapshot.keys()
+    assert not missing, f"snapshot golden dropped idle-union fields: {sorted(missing)}"
+    # The activity feed clears on idle.
+    assert snapshot["recentEvents"] == []

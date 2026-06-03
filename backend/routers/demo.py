@@ -12,7 +12,7 @@ Architecture:
   notable events, skill gains) without ever mutating the bundled file.
 - Analytics-style endpoints (overview/activity/ledger/etc.) just need the
   conn; the tracker isn't constructed until a tracker-state endpoint
-  (status/live/recent-events) is actually hit. Surfaces that only consume
+  (the snapshot) is actually hit. Surfaces that only consume
   analytics data therefore never trigger priming, keeping their behaviour
   consistent across walks regardless of which surface the user opens first.
 - Routes here are GET-only; mutating verbs simply do not exist on this prefix
@@ -42,10 +42,7 @@ from backend.routers import analytics as analytics_router
 from backend.routers import tracking as tracking_router
 from backend.routers.response_models import (
     AnalyticsOverview,
-    NotableEvent,
-    TrackingLive,
     TrackingSnapshot,
-    TrackingStatus,
 )
 
 log = logging.getLogger(__name__)
@@ -214,33 +211,6 @@ def demo_list_sessions():
 @router.get("/tracking/session/{session_id}")
 def demo_get_session(session_id: str):
     return tracking_router.get_session_impl(_ensure_conn(), session_id)
-
-
-@router.get(
-    "/tracking/status",
-    response_model=TrackingStatus,
-    response_model_exclude_unset=True,
-)
-def demo_tracking_status():
-    return tracking_router.tracking_status_impl(_ensure_svc())
-
-
-@router.get(
-    "/tracking/live",
-    response_model=TrackingLive,
-    response_model_exclude_unset=True,
-)
-def demo_tracking_live():
-    return tracking_router.tracking_live_impl(_ensure_svc())
-
-
-@router.get(
-    "/tracking/recent-events",
-    response_model=list[NotableEvent],
-    response_model_exclude_unset=True,
-)
-def demo_recent_events():
-    return tracking_router.recent_events_impl(_ensure_svc())
 
 
 @router.get(

@@ -812,12 +812,12 @@ def test_settings_change_during_active_session_reloads_tracker(e2e_http_pipeline
         assert tag_body["mobTrackingMode"] == "tag"
         assert tag_body["mobTrackingTag"] == "Atrox"
 
-        # The session is still live after the reloads, and the live status
+        # The session is still live after the reloads, and the snapshot
         # surface reflects the toggled config (repair flag unchanged, hotbar
         # flag on), confirming the patch path threaded config through without
         # tearing down the session.
         assert tracker.is_tracking
-        status = client.get("/api/tracking/status")
+        status = client.get("/api/tracking/snapshot")
         assert status.status_code == 200
         assert status.json()["status"] == "active"
         assert status.json()["repairOcrEnabled"] is False

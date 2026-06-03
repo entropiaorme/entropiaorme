@@ -59,9 +59,6 @@ STRONG_ETAG_RE = re.compile(r'^"[0-9a-f]{64}"$')
 # enumeration); their 200-path roundtrip is exercised by the scenario-state
 # HTTP-fingerprint tests, not this contract suite.
 ROUNDTRIPPABLE_ROUTES: tuple[str, ...] = (
-    "/api/tracking/status",
-    "/api/tracking/live",
-    "/api/tracking/recent-events",
     "/api/tracking/snapshot",
     "/api/tracking/sessions",
     "/api/tracking/manual-mob-suggestions",
@@ -222,9 +219,6 @@ def test_covered_get_routes_enumerates_every_hydration_route() -> None:
         )
 
     expected_subset = {
-        "/api/tracking/status",
-        "/api/tracking/live",
-        "/api/tracking/recent-events",
         "/api/tracking/snapshot",
         "/api/tracking/sessions",
         "/api/tracking/session/{session_id}",
@@ -280,7 +274,7 @@ def test_if_none_match_weak_validator_matches_strong_etag(
     """Per RFC 7232 §2.3.2, conditional GET uses the weak-comparison
     function: a client sending ``W/"<hex>"`` against the server's
     strong ``"<hex>"`` still gets a 304."""
-    route = "/api/tracking/status"
+    route = "/api/tracking/snapshot"
     first = _get(client, route)
     assert first.status_code == 200
     strong_etag = first.headers["etag"]
@@ -299,7 +293,7 @@ def test_if_none_match_comma_separated_list_matches(client: TestClient) -> None:
     """A multi-tag If-None-Match header matches when any candidate
     matches the current ETag (common shape from clients holding
     multiple cached representations)."""
-    route = "/api/tracking/status"
+    route = "/api/tracking/snapshot"
     first = _get(client, route)
     etag = first.headers["etag"]
     bogus = '"' + ("a" * 64) + '"'
@@ -312,7 +306,7 @@ def test_if_none_match_comma_separated_list_matches(client: TestClient) -> None:
 
 def test_if_none_match_wildcard_matches(client: TestClient) -> None:
     """The ``*`` wildcard matches any current representation."""
-    route = "/api/tracking/status"
+    route = "/api/tracking/snapshot"
     response = _get(client, route, **{"If-None-Match": "*"})
     assert response.status_code == 304, (
         f"If-None-Match: * should 304; got {response.status_code}"

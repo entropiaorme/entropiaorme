@@ -30,7 +30,7 @@ class _Loose(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Notable events (shared by /tracking/recent-events and the live feed)
+# Notable events (shared by the snapshot's recentEvents feed and warnings)
 # ---------------------------------------------------------------------------
 
 
@@ -48,74 +48,6 @@ class NotableEvent(_Loose):
     eventType: str | None = None
     timestamp: str | None = None
     id: str | None = None
-
-
-# ---------------------------------------------------------------------------
-# Tracking status (/tracking/status): unavailable | idle | active
-# ---------------------------------------------------------------------------
-
-
-class TrackingStatus(_Loose):
-    status: str
-    # Shared by idle + active.
-    hotbarListenerActive: bool | None = None
-    weaponAttribution: str | None = None
-    repairOcrEnabled: bool | None = None
-    endOfSessionArmourReminderEnabled: bool | None = None
-    mobEntryMode: str | None = None
-    currentMob: str | None = None
-    mobSource: str | None = None
-    # Active only.
-    session_id: str | None = None
-    started_at: str | None = None
-    kill_count: int | None = None
-    cost: float | None = None
-    returns: float | None = None
-    pes: float | None = None
-    returnRate: float | None = None
-    damageDealtTotal: float | None = None
-    weaponDamageDealt: float | None = None
-    weaponCost: float | None = None
-    shotsFiredTotal: int | None = None
-    criticalHitsTotal: int | None = None
-    maxDamage: float | None = None
-    globalsCount: int | None = None
-    hofsCount: int | None = None
-    latestKillLoot: float | None = None
-    multiplierLast: float | None = None
-    multiplierAvg: float | None = None
-    multiplierMax: float | None = None
-    multiplierHistory: list[float] | None = None
-    cumulativeNetHistory: list[float] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Tracking live (/tracking/live): unavailable | idle | active (overlay feed)
-# ---------------------------------------------------------------------------
-
-
-class TrackingLive(_Loose):
-    status: str
-    # Shared by idle + active.
-    weaponAttribution: str | None = None
-    repairOcrEnabled: bool | None = None
-    endOfSessionArmourReminderEnabled: bool | None = None
-    mobEntryMode: str | None = None
-    currentMob: str | None = None
-    mobSource: str | None = None
-    currentTool: str | None = None
-    trifectaAttribution: dict[str, Any] | None = None
-    # Active only.
-    sessionId: str | None = None
-    elapsed: int | None = None
-    killCount: int | None = None
-    kills: int | None = None
-    cost: float | None = None
-    returns: float | None = None
-    pes: float | None = None
-    net: float | None = None
-    returnRate: float | None = None
-    recentEvents: list[NotableEvent] | None = None
 
 
 # ---------------------------------------------------------------------------

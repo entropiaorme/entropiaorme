@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components';
 	import {
-		getTrackingLive,
+		getTrackingSnapshot,
 		getQuests,
 		getPlaylists,
 		startQuest,
@@ -41,10 +41,10 @@
 	// a superset of the old status shape).
 	let status = $derived($trackingSnapshot);
 	let elapsedSeconds = $state(0);
-	// Guide-only: live overlay-strip feed sourced from /demo/tracking/live.
-	// Drives the inline <OverlayStrip> mount that replaces the spawn screenshot
-	// during the dashboard guide's overlay-spawn step. Fetched in the guide-mode
-	// re-fetch $effect alongside the snapshot hydration.
+	// Guide-only: the overlay-strip's display fields, projected from the demo
+	// tracking snapshot. Drives the inline <OverlayStrip> mount that replaces the
+	// spawn screenshot during the dashboard guide's overlay-spawn step. Read in
+	// the guide-mode re-fetch $effect alongside the snapshot hydration.
 	let demoTrackingLive = $state<TrackingLive | null>(null);
 	// Guide-only: lifecycle phase for the demo overlay strip. The overlay-spawn
 	// card mounts the strip in 'idle' first, then animates a cursor click on
@@ -600,11 +600,20 @@
 		void (async () => {
 			try {
 				const [live, loadedQuests, loadedPlaylists] = await Promise.all([
-					active ? getTrackingLive() : Promise.resolve(null),
+					active ? getTrackingSnapshot() : Promise.resolve(null),
 					loadQuests(),
 					loadPlaylists(),
 				]);
-				demoTrackingLive = live;
+				demoTrackingLive = live && {
+					status: live.status,
+					elapsed: live.elapsed,
+					currentTool: live.currentTool,
+					currentMob: live.currentMob,
+					mobEntryMode: live.mobEntryMode,
+					weaponAttribution: live.weaponAttribution,
+					trifectaAttribution: live.trifectaAttribution,
+					repairOcrEnabled: live.repairOcrEnabled
+				};
 				quests = loadedQuests;
 				playlists = loadedPlaylists;
 				if (!active && snapshotActivePlaylistId !== undefined) {
@@ -817,7 +826,7 @@
 						<OverlayStrip data={demoTrackingLive} {status} armourSessionId="demo-session" />
 					{:else}
 						<!-- Idle synth: status='idle' + nulled session fields. Carries
-							 the live response's trifectaAttribution + weaponAttribution
+							 the snapshot's trifectaAttribution + weaponAttribution
 							 so the trifecta dropdown stays populated (the Calypso preset
 							 reads as waiting-to-be-selected, not a "—" placeholder).
 							 status={null} passed to OverlayStrip so stat pills render as

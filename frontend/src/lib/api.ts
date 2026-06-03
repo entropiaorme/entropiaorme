@@ -375,10 +375,6 @@ export interface RecentEvent {
 	timestamp: string;
 }
 
-export async function getTrackingStatus(): Promise<TrackingStatus> {
-	return request(demoPath('/tracking/status'));
-}
-
 export async function startTracking(): Promise<{ session_id: string; started_at: string; status: string }> {
 	return request('/tracking/start', { method: 'POST' });
 }
@@ -500,10 +496,6 @@ export interface TrackingLive {
 		value: number;
 		timestamp?: string | number;
 	}[];
-}
-
-export async function getTrackingLive(): Promise<TrackingLive> {
-	return request(demoPath('/tracking/live'));
 }
 
 /**

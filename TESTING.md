@@ -121,7 +121,7 @@ The API's read surface is checked against its own OpenAPI schema with [schemathe
 - **No server errors** (`not_a_server_error`): no generated input drives an endpoint into an unhandled `5xx`.
 - **Schema conformance** (`response_schema_conformance`): successful (`2xx`) responses match the Pydantic `response_model` the endpoint declares.
 
-The prioritised endpoints carry response models so this has teeth: the polymorphic `tracking/status` and `tracking/live` shapes (`unavailable` / `idle` / `active`), the analytics overview, the character prospect forecast, and the notable-event feed, plus their demo equivalents. Those routes serialise with `response_model_exclude_unset=True`, so the lean shapes keep only the keys the handler actually set rather than gaining a wall of nulls; the models allow extra keys, so adding one can only ever describe a response, never truncate it.
+The prioritised endpoints carry response models so this has teeth: the polymorphic `tracking/snapshot` shape (`unavailable` / `idle` / `active`, with its embedded notable-event feed), the analytics overview, and the character prospect forecast, plus their demo equivalents. Those routes serialise with `response_model_exclude_unset=True`, so the lean shapes keep only the keys the handler actually set rather than gaining a wall of nulls; the models allow extra keys, so adding one can only ever describe a response, never truncate it.
 
 ```bash
 .venv/Scripts/python.exe -m pytest -m contract

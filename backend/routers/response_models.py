@@ -287,3 +287,92 @@ class PlaylistAnalyticsRow(_Loose):
     totalArmourCost: float
     totalLootTt: float
     totalPes: float
+
+
+# ---------------------------------------------------------------------------
+# Codex (/codex)
+# ---------------------------------------------------------------------------
+
+
+class CodexSpecies(_Loose):
+    """A mob species row with codex base cost and player rank progress."""
+
+    name: str
+    baseCost: float
+    codexType: str | None = None
+    currentRank: int
+    nextRank: int | None = None
+    nextCategory: str | None = None
+    nextCost: float | None = None
+
+
+class CodexRankItem(_Loose):
+    """One of a species' 25 codex ranks, cross-referenced with claims."""
+
+    rank: int
+    category: str
+    cost: float
+    rewardPed: float
+    cat4Bonus: bool
+    cat4RewardPed: float | None = None
+    skills: list[str]
+    cat4Skills: list[str]
+    claimed: bool
+    claimedSkill: str | None = None
+    claimedPed: float | None = None
+    isNext: bool
+
+
+class CodexRankBreakdown(_Loose):
+    """A species' full 25-rank breakdown, cross-referenced with claims."""
+
+    speciesName: str
+    baseCost: float
+    codexType: str | None = None
+    currentRank: int
+    ranks: list[CodexRankItem]
+
+
+class CodexClaimResult(_Loose):
+    """Acknowledgement of a claimed codex rank reward."""
+
+    speciesName: str
+    rank: int
+    skillName: str
+    pedValue: float
+
+
+class CodexCalibrateResult(_Loose):
+    """Acknowledgement of a direct codex-rank calibration."""
+
+    speciesName: str
+    rank: int
+
+
+class CodexSkillOption(_Loose):
+    """A skill choice for a codex rank, ranked by profession or HP gain."""
+
+    skillName: str
+    category: str
+    rewardPed: float
+    currentLevel: float | None = None
+    levelsGained: float
+    professionWeight: int
+    profContribution: float
+    hpIncrease: float | None = None
+    hpGain: float
+    recommendRank: int | None = None
+
+
+class CodexMetaAttribute(_Loose):
+    """A meta-codex attribute with its current calibrated level."""
+
+    name: str
+    currentLevel: float | None = None
+
+
+class CodexMetaClaimResult(_Loose):
+    """Acknowledgement of a claimed meta-codex attribute reward."""
+
+    attributeName: str
+    pedValue: float

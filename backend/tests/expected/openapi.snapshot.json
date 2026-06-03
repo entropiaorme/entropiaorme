@@ -329,6 +329,387 @@
         "title": "ClaimRequest",
         "type": "object"
       },
+      "CodexCalibrateResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a direct codex-rank calibration.",
+        "properties": {
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "rank"
+        ],
+        "title": "CodexCalibrateResult",
+        "type": "object"
+      },
+      "CodexClaimResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a claimed codex rank reward.",
+        "properties": {
+          "pedValue": {
+            "title": "Pedvalue",
+            "type": "number"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "rank",
+          "skillName",
+          "pedValue"
+        ],
+        "title": "CodexClaimResult",
+        "type": "object"
+      },
+      "CodexMetaAttribute": {
+        "additionalProperties": true,
+        "description": "A meta-codex attribute with its current calibrated level.",
+        "properties": {
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CodexMetaAttribute",
+        "type": "object"
+      },
+      "CodexMetaClaimResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a claimed meta-codex attribute reward.",
+        "properties": {
+          "attributeName": {
+            "title": "Attributename",
+            "type": "string"
+          },
+          "pedValue": {
+            "title": "Pedvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "attributeName",
+          "pedValue"
+        ],
+        "title": "CodexMetaClaimResult",
+        "type": "object"
+      },
+      "CodexRankBreakdown": {
+        "additionalProperties": true,
+        "description": "A species' full 25-rank breakdown, cross-referenced with claims.",
+        "properties": {
+          "baseCost": {
+            "title": "Basecost",
+            "type": "number"
+          },
+          "codexType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codextype"
+          },
+          "currentRank": {
+            "title": "Currentrank",
+            "type": "integer"
+          },
+          "ranks": {
+            "items": {
+              "$ref": "#/components/schemas/CodexRankItem"
+            },
+            "title": "Ranks",
+            "type": "array"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "baseCost",
+          "currentRank",
+          "ranks"
+        ],
+        "title": "CodexRankBreakdown",
+        "type": "object"
+      },
+      "CodexRankItem": {
+        "additionalProperties": true,
+        "description": "One of a species' 25 codex ranks, cross-referenced with claims.",
+        "properties": {
+          "cat4Bonus": {
+            "title": "Cat4Bonus",
+            "type": "boolean"
+          },
+          "cat4RewardPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cat4Rewardped"
+          },
+          "cat4Skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cat4Skills",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "claimed": {
+            "title": "Claimed",
+            "type": "boolean"
+          },
+          "claimedPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedped"
+          },
+          "claimedSkill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedskill"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "isNext": {
+            "title": "Isnext",
+            "type": "boolean"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rank",
+          "category",
+          "cost",
+          "rewardPed",
+          "cat4Bonus",
+          "skills",
+          "cat4Skills",
+          "claimed",
+          "isNext"
+        ],
+        "title": "CodexRankItem",
+        "type": "object"
+      },
+      "CodexSkillOption": {
+        "additionalProperties": true,
+        "description": "A skill choice for a codex rank, ranked by profession or HP gain.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "hpGain": {
+            "title": "Hpgain",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hpincrease"
+          },
+          "levelsGained": {
+            "title": "Levelsgained",
+            "type": "number"
+          },
+          "profContribution": {
+            "title": "Profcontribution",
+            "type": "number"
+          },
+          "professionWeight": {
+            "title": "Professionweight",
+            "type": "integer"
+          },
+          "recommendRank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommendrank"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skillName",
+          "category",
+          "rewardPed",
+          "levelsGained",
+          "professionWeight",
+          "profContribution",
+          "hpGain"
+        ],
+        "title": "CodexSkillOption",
+        "type": "object"
+      },
+      "CodexSpecies": {
+        "additionalProperties": true,
+        "description": "A mob species row with codex base cost and player rank progress.",
+        "properties": {
+          "baseCost": {
+            "title": "Basecost",
+            "type": "number"
+          },
+          "codexType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codextype"
+          },
+          "currentRank": {
+            "title": "Currentrank",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nextCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcategory"
+          },
+          "nextCost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcost"
+          },
+          "nextRank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextrank"
+          }
+        },
+        "required": [
+          "name",
+          "baseCost",
+          "currentRank"
+        ],
+        "title": "CodexSpecies",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -3282,7 +3663,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexCalibrateResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -3322,7 +3705,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexClaimResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -3352,7 +3737,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexMetaAttribute"
+                  },
+                  "title": "Response Meta Attributes Api Codex Meta Attributes Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3382,7 +3773,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexMetaClaimResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -3464,7 +3857,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexSkillOption"
+                  },
+                  "title": "Response Recommend Api Codex Recommend Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3494,7 +3893,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexSpecies"
+                  },
+                  "title": "Response List Species Api Codex Species Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3525,7 +3930,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexRankBreakdown"
+                }
               }
             },
             "description": "Successful Response"

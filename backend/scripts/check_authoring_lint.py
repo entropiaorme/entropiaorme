@@ -64,9 +64,12 @@ _EXEMPT_PATTERNS = (
     re.compile(r"(^|/)package-lock\.json$"),
     re.compile(r"(^|/)Cargo\.lock$"),
     re.compile(r"\.db$", re.IGNORECASE),
-    # Generated, not hand-authored: the OpenAPI snapshot and the coverage matrix.
+    # Generated, not hand-authored: the OpenAPI snapshot, the coverage matrix,
+    # and the frontend API types generated from that snapshot (their doc
+    # comments mirror the spec's description strings verbatim by design).
     re.compile(r"(^|/)backend/tests/expected/openapi\.snapshot\.json$"),
     re.compile(r"(^|/)backend/testing/COVERAGE\.md$"),
+    re.compile(r"(^|/)frontend/src/lib/api/schema\.d\.ts$"),
 )
 
 # Prose file types whose every line is authored prose for the UK-spelling check.

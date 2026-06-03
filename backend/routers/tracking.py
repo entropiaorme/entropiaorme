@@ -10,7 +10,24 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
-from backend.routers.response_models import TrackingSnapshot
+from backend.routers.response_models import (
+    ArmourCostResult,
+    LootItemEditResult,
+    ManualMobLockResult,
+    ManualMobSuggestion,
+    MobEditResult,
+    QuestLinkDecisionResult,
+    QuestLinkSuggestion,
+    ReleaseMobResult,
+    RepairScanResult,
+    SessionDeletedResult,
+    SessionDetail,
+    TagLockResult,
+    TrackingSession,
+    TrackingSnapshot,
+    TrackingStartResult,
+    TrackingStopResult,
+)
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.config_service import active_trifecta_preset
 from backend.services.trifecta_service import validate_trifecta
@@ -177,7 +194,7 @@ def _trifecta_attribution_summary(svc) -> dict | None:
     return summary
 
 
-@router.post("/start")
+@router.post("/start", response_model=TrackingStartResult)
 def start_tracking():
     """Start a new tracking session."""
     svc = get_services()
@@ -199,7 +216,7 @@ def start_tracking():
     }
 
 
-@router.post("/stop")
+@router.post("/stop", response_model=TrackingStopResult)
 def stop_tracking():
     """Stop the active tracking session."""
     svc = get_services()
@@ -223,7 +240,7 @@ def stop_tracking():
     }
 
 
-@router.post("/release-mob")
+@router.post("/release-mob", response_model=ReleaseMobResult)
 def release_mob():
     """Release the currently locked mob."""
     svc = get_services()
@@ -263,7 +280,7 @@ def release_mob():
     return {"released": released}
 
 
-@router.get("/manual-mob-suggestions")
+@router.get("/manual-mob-suggestions", response_model=list[ManualMobSuggestion])
 def manual_mob_suggestions(q: str = "", limit: int = 10):
     """Autocomplete suggestions for manual mob lock."""
     svc = get_services()
@@ -284,7 +301,7 @@ def manual_mob_suggestions(q: str = "", limit: int = 10):
     return svc.mob_lookup.search_mob_names(query, limit=max(1, min(limit, 20)))
 
 
-@router.post("/manual-mob-lock")
+@router.post("/manual-mob-lock", response_model=ManualMobLockResult)
 def manual_mob_lock(req: ManualMobLockRequest):
     """Immediately lock the selected catalogue mob for manual kill stamping."""
     svc = get_services()
@@ -317,7 +334,7 @@ def manual_mob_lock(req: ManualMobLockRequest):
     return {"mobName": display, "species": species, "maturity": maturity}
 
 
-@router.post("/tag-lock")
+@router.post("/tag-lock", response_model=TagLockResult)
 def tag_lock(req: TagLockRequest):
     """Immediately set the active free-text tag for tag-mode kill stamping."""
     svc = get_services()
@@ -340,7 +357,7 @@ def tag_lock(req: TagLockRequest):
     return {"tag": tag}
 
 
-@router.get("/tag-suggestions")
+@router.get("/tag-suggestions", response_model=list[str])
 def tag_suggestions(q: str = "", limit: int = 10):
     """Autocomplete suggestions for free-text session mob tags."""
     svc = get_services()
@@ -471,7 +488,7 @@ def tracking_snapshot_impl(svc):
     }
 
 
-@router.get("/sessions")
+@router.get("/sessions", response_model=list[TrackingSession])
 def list_sessions():
     """List recent tracking sessions with aggregated stats.
 
@@ -590,7 +607,7 @@ def list_sessions_impl(conn):
     return sessions
 
 
-@router.delete("/session/{session_id}")
+@router.delete("/session/{session_id}", response_model=SessionDeletedResult)
 def delete_session(session_id: str):
     """Delete a tracking session and all associated data."""
     svc = get_services()
@@ -630,7 +647,7 @@ def delete_session(session_id: str):
     return {"status": "deleted", "sessionId": session_id}
 
 
-@router.get("/session/{session_id}")
+@router.get("/session/{session_id}", response_model=SessionDetail)
 def get_session(session_id: str):
     """Get full session detail with aggregated summary.
 
@@ -707,7 +724,7 @@ def _build_mob_edit_response(conn, session_id: str, mob_name: str):
     }
 
 
-@router.post("/session/{session_id}/rename-mob")
+@router.post("/session/{session_id}/rename-mob", response_model=MobEditResult)
 def rename_session_mob(session_id: str, body: RenameMobRequest):
     """Rewrite kills.mob_name for matching kills in this session.
 
@@ -794,7 +811,7 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
     return _build_mob_edit_response(conn, session_id, to_mob)
 
 
-@router.post("/session/{session_id}/restore-mob")
+@router.post("/session/{session_id}/restore-mob", response_model=MobEditResult)
 def restore_session_mob(session_id: str, body: RestoreMobRequest):
     """Revert kills in this session whose current mob_name matches the
     request and carry a preserved `original_mob_name`.
@@ -1053,7 +1070,10 @@ def _bulk_flip_loot_item(
     )
 
 
-@router.post("/session/{session_id}/loot-item/{item_name:path}/deactivate")
+@router.post(
+    "/session/{session_id}/loot-item/{item_name:path}/deactivate",
+    response_model=LootItemEditResult,
+)
 def bulk_deactivate_loot_item(session_id: str, item_name: str):
     """Bulk-deactivate every `kill_loot_items` row matching `item_name`
     in this session (item-name is URL-path encoded so spaces survive).
@@ -1073,7 +1093,10 @@ def _bulk_deactivate_loot_item_impl(conn, session_id: str, item_name: str):
     return _bulk_flip_loot_item(conn, session_id, item_name, "deactivated")
 
 
-@router.post("/session/{session_id}/loot-item/{item_name:path}/activate")
+@router.post(
+    "/session/{session_id}/loot-item/{item_name:path}/activate",
+    response_model=LootItemEditResult,
+)
 def bulk_activate_loot_item(session_id: str, item_name: str):
     """Bulk-activate every previously-deactivated `kill_loot_items`
     row matching `item_name` in this session. Inverse of
@@ -1368,7 +1391,7 @@ def _session_skill_gains(conn, session_id: str) -> list[dict]:
 # ------------------------------------------------------------------
 
 
-@router.post("/session/{session_id}/repair-scan")
+@router.post("/session/{session_id}/repair-scan", response_model=RepairScanResult)
 def repair_scan(session_id: str):
     """Run OCR on the bundled-anchor repair region. Returns result without saving."""
     svc = get_services()
@@ -1382,7 +1405,7 @@ class ArmourCostBody(BaseModel):
     cost: float
 
 
-@router.post("/session/{session_id}/armour-cost")
+@router.post("/session/{session_id}/armour-cost", response_model=ArmourCostResult)
 def set_armour_cost(session_id: str, body: ArmourCostBody):
     """Save armour repair cost to a session."""
     svc = get_services()
@@ -1405,7 +1428,10 @@ class SessionQuestLinkDecisionBody(BaseModel):
     action: str
 
 
-@router.get("/session/{session_id}/quest-link-suggestion")
+@router.get(
+    "/session/{session_id}/quest-link-suggestion",
+    response_model=QuestLinkSuggestion,
+)
 def get_session_quest_link_suggestion(session_id: str):
     """Get the curated post-session quest analytics linkage suggestion."""
     svc = get_services()
@@ -1432,7 +1458,11 @@ def get_session_quest_link_suggestion(session_id: str):
     }
 
 
-@router.post("/session/{session_id}/quest-link")
+@router.post(
+    "/session/{session_id}/quest-link",
+    response_model=QuestLinkDecisionResult,
+    response_model_exclude_unset=True,
+)
 def decide_session_quest_link(session_id: str, body: SessionQuestLinkDecisionBody):
     """Persist the curated quest analytics linkage decision for a session."""
     svc = get_services()

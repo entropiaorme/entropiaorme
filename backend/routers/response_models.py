@@ -953,3 +953,231 @@ class CharacterCodexProgress(_Loose):
     currentLevel: float
     nextRewardValue: float
     progress: float
+
+
+# ---------------------------------------------------------------------------
+# Tracking (/tracking) — lifecycle, sessions, session detail, edits, quest link
+# (TrackingSnapshot is defined above, beside the other tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class TrackingStartResult(_Loose):
+    """Acknowledgement that a tracking session started."""
+
+    session_id: str
+    started_at: str
+    status: str
+
+
+class TrackingStopResult(_Loose):
+    """Acknowledgement that the active tracking session stopped."""
+
+    session_id: str
+    started_at: str
+    ended_at: str | None = None
+    kill_count: int
+
+
+class ReleaseMobResult(_Loose):
+    """The released mob/tag label, or null if nothing was locked."""
+
+    released: str | None = None
+
+
+class ManualMobSuggestion(_Loose):
+    """An autocomplete suggestion for manual mob lock."""
+
+    display: str
+    species: str
+    maturity: str
+
+
+class ManualMobLockResult(_Loose):
+    """Acknowledgement of a manual mob lock."""
+
+    mobName: str
+    species: str
+    maturity: str
+
+
+class TagLockResult(_Loose):
+    """Acknowledgement of a free-text tag lock."""
+
+    tag: str
+
+
+class TrackingSession(_Loose):
+    """A tracking-session summary row (history list)."""
+
+    id: str
+    startTime: str | None = None
+    endTime: str | None = None
+    duration: int
+    primaryMobs: list[str]
+    primaryWeapons: list[str]
+    cost: float
+    returns: float
+    net: float
+    returnRate: float
+    globals: int
+    hofs: int
+
+
+class SessionDeletedResult(_Loose):
+    """Acknowledgement that a session was deleted (2-key)."""
+
+    status: str
+    sessionId: str
+
+
+class TrackingCostBreakdown(_Loose):
+    """The cost breakdown within a session summary."""
+
+    weaponCost: float
+    healCost: float
+    enhancerCost: float
+    armourCost: float
+
+
+class SessionSummary(_Loose):
+    """The headline summary of a session detail."""
+
+    cost: float
+    returns: float
+    pes: float
+    net: float
+    returnRate: float
+    kills: int
+    duration: int
+    costBreakdown: TrackingCostBreakdown
+
+
+class SessionNotableEvent(_Loose):
+    """A notable event within a session detail (target/item shape)."""
+
+    type: str
+    eventType: str
+    target: str
+    item: str
+    value: float
+
+
+class LootItem(_Loose):
+    """An item-name aggregate loot row within a session detail."""
+
+    name: str
+    quantity: int
+    ttValue: float
+
+
+class MobBreakdownRow(_Loose):
+    """A per-mob row for the session metadata-edit affordance."""
+
+    currentName: str
+    originalName: str | None = None
+    killCount: int
+
+
+class ToolStat(_Loose):
+    """A per-weapon stat row within a session detail."""
+
+    weaponName: str
+    shotsFired: int
+    damageDealt: float
+    crits: int
+    costAttributed: float
+
+
+class SessionSkillGain(_Loose):
+    """A per-skill gain within a session detail.
+
+    ``level`` and ``ttValueGained`` pass through ``round()``, which yields a
+    Python int for the zero case and a float otherwise, so they are typed
+    ``int | float`` to preserve the emitted wire type exactly (the session-detail
+    golden pins integer zeros here).
+    """
+
+    skillName: str
+    level: int | float
+    ttValueGained: int | float
+
+
+class SessionDetail(_Loose):
+    """The expanded detail for a session."""
+
+    sessionId: str
+    summary: SessionSummary
+    mobEntryMode: str
+    notableEvents: list[SessionNotableEvent]
+    lootBreakdown: list[LootItem]
+    deactivatedLootBreakdown: list[LootItem]
+    mobBreakdown: list[MobBreakdownRow]
+    effectiveLoot: float
+    toolStats: list[ToolStat]
+    skillGains: list[SessionSkillGain]
+
+
+class MobEditResult(_Loose):
+    """Acknowledgement of a session mob rename / restore."""
+
+    sessionId: str
+    mobName: str
+    killCount: int
+
+
+class LootItemEditResult(_Loose):
+    """Acknowledgement of a bulk loot-item deactivate / activate."""
+
+    sessionId: str
+    itemName: str
+    affectedRows: int
+    totalValueDelta: float
+    sessionTotalReturns: float
+
+
+class RepairScanResult(_Loose):
+    """A repair-cost OCR scan result.
+
+    The ``error`` key is intentionally undeclared: the failure branch adds it and
+    ``extra="allow"`` passes it through, so the success branch never gains a null
+    error key.
+    """
+
+    cost_ped: float
+    raw_text: str
+    confidence: float
+
+
+class ArmourCostResult(_Loose):
+    """Acknowledgement of a saved armour-repair cost."""
+
+    sessionId: str
+    armourCost: float
+
+
+class QuestLinkSuggestion(_Loose):
+    """The curated post-session quest-link suggestion (link fields nullable)."""
+
+    sessionId: str
+    suggestionType: str
+    reason: str
+    questId: str | None = None
+    questName: str | None = None
+    playlistId: str | None = None
+    playlistName: str | None = None
+
+
+class QuestLinkDecisionResult(_Loose):
+    """The accept/decline outcome of a quest-link decision.
+
+    Served with ``response_model_exclude_unset=True``: accept carries the link
+    fields, decline carries only sessionId/status.
+    """
+
+    sessionId: str
+    status: str
+    linkType: str | None = None
+    questId: str | None = None
+    questName: str | None = None
+    playlistId: str | None = None
+    playlistName: str | None = None

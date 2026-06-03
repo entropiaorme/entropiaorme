@@ -20,7 +20,7 @@ A port translates those settled shapes and inherits their test oracles: the repl
 | Today (Python) | Native equivalent | Notes |
 |---|---|---|
 | `DomainEvent` discriminated union (`type` literal tag, camelCase payloads, `extra="forbid"`) | `#[serde(tag = "type")] enum DomainEvent` with `#[serde(rename_all = "camelCase")]` | Field-for-field; `occurred_at` ISO-8601 UTC maps to `chrono::DateTime<Utc>` in RFC 3339 form. The wire bytes are already golden-pinned by `test_event_schema_drift.py`. |
-| `EventStreamHub` fan-out (bounded per-connection queues, drop-oldest) | `tokio::sync::broadcast` | Drop-oldest under overflow is exactly broadcast lag-drop; safe under push-to-pull because frames are invalidation signals, not state. |
+| `EventStreamHub` fan-out (bounded per-connection queues, drop-oldest) | `tokio::sync::broadcast`, or a fan-out task feeding one bounded `mpsc` per connection | Behaviourally equivalent under push-to-pull (a slow reader loses the oldest frames and self-heals on the next hydration), but `broadcast` is a single shared ring, not the per-connection isolation the Python hub gives; the `mpsc`-per-connection shape is the structural twin. Make the capacity and isolation choice consciously. |
 | Actor-shaped services (own lock, own state, publish after release) | One struct per service owning its state; commands in, events out | The single-owner property already holds; the borrow checker verifies a design that exists rather than forcing one into existence. |
 | Named, owned worker threads (`chatlog-watcher` and friends) | Named spawned tasks owned by their service, joined on shutdown | `test_supervised_workers.py` already enforces the ownership discipline the task model wants. |
 | Hydration HTTP surface + OpenAPI golden | Any spec-generating HTTP layer (`axum` + `utoipa` is the working sketch) | The committed `openapi.snapshot.json` is the contract. Preserve the exact path strings and the deliberately mixed key casing, and the same `gen:api` run regenerates a drop-in TypeScript client; the frontend client keys on path strings, so operation naming differences are a non-issue. |
@@ -35,7 +35,7 @@ These are the places where the Python shape should **not** be translated literal
 
 ### The shared SQLite connection
 
-Today: one `check_same_thread=False` connection in WAL mode behind a wrapper whose lock is honoured unevenly (the skill tracker writes under it; several services read and write without it; the tracker holds its own lock and touches the connection only outside it, with one documented provider-callback exception ordered tracker-lock-first). The single-producer reality (chat-driven writes all run on the watcher thread) keeps this safe in practice, but it is a convention with a hole.
+Today: one `check_same_thread=False` connection in WAL mode behind a wrapper whose lock is honoured unevenly. The skill tracker writes under it; most GET handlers and the provider closures wired in the application lifespan read the bare connection from the server's worker threads without it; the tracker holds its own lock and touches the connection only outside it, with one documented provider-callback exception ordered tracker-lock-first. The single-producer reality (chat-driven writes all run on the watcher thread) rules out writer/writer races in practice, but it does not serialise a worker-thread read against a concurrent watcher-thread write, which is the multi-step cursor-coherency case the wrapper's own warning describes. It is a convention with a hole.
 
 Port decision: do not translate the lock layout. Give the database one owner (a single writer task or a connection pool with explicit transaction scope) and route every service through it. That removes the uneven discipline, the lock-ordering invariant, and the provider-callback exception in one move.
 
@@ -69,7 +69,7 @@ Port decision: the hook itself becomes a platform API binding (on Windows, a low
 
 ### Configuration persistence
 
-Today: a plain dataclass serialised by hand to `settings.json` with an atomic write-and-swap plus a `.bak` recovery file. Deliberately not a framework. Port decision: a serde struct with the same atomic-swap semantics; the only contract is the on-disk JSON shape and the recovery behaviour.
+Today: a plain dataclass serialised by hand to `settings.json` with an atomic write-and-swap plus a `.bak` recovery file. Deliberately not a framework. Port decision: a serde struct with the same atomic-swap semantics. Three contracts must survive: the on-disk JSON shape, the recovery behaviour, and the unknown-key merge-forward (a save reads the existing file and carries forward keys it does not recognise, so values written by third-party tooling survive a save by a process that does not know about them; a naive struct round-trip drops them, so the port needs an explicit catch-all field for unrecognised keys).
 
 ### Windows-specific glue
 
@@ -80,7 +80,7 @@ Today: raw `ctypes` calls against `user32` (window enumeration for the game clie
 Kept deliberately, with eyes open, because each earns its place at this boundary:
 
 - **Pydantic at the wire.** Response models are descriptive (`_Loose`, `extra="allow"`) so they can never silently truncate a handler's output; domain events are closed (`extra="forbid"`) because the wire contract is the product. The split is the design; the library is incidental and maps to serde cleanly.
-- **FastAPI middleware ordering.** CORS, then the origin guard, then ETag innermost. The order is documented in `backend/main.py` and matters for the 304 path; any replacement layer must preserve it.
+- **Middleware nesting.** ETag is the outermost layer, wrapping the origin guard, with CORS innermost (Starlette runs the last-added middleware first; `backend/main.py` adds CORS, then the origin guard, then ETag). The nesting matters for the 304 path: the ETag layer must wrap the others so a 304 still carries the headers the inner layers add (the note in `backend/middleware/etag.py` spells this out). Any replacement layer must preserve the nesting.
 - **The uniform-float numeric convention.** Numeric value fields serialise as JSON numbers in float form regardless of integral value; counts, ranks, and identifiers stay integers. Chosen because it is also the natural serialisation in an `f64`-typed implementation, removing a whole class of wire-form differences at port time.
 - **The chat-log tail loop.** A 100 ms polling tail on one named thread, rather than filesystem notifications: simple, deterministic under replay, and the cadence is part of the recorded-scenario timing model. A port keeps the loop shape (one owned task) even if it swaps the discovery mechanism.
 
@@ -100,4 +100,5 @@ What must hold on both sides for the existing oracles to carry the port:
 - OpenAPI: identical path strings; identical key casing (including the snapshot's deliberate snake-and-camel mix); the committed snapshot regenerates an identical client.
 - Events: identical topics, discriminators, and payload schemas; the event-schema golden passes unchanged.
 - Stream: identical frame format, keep-alive cadence, and ready-comment handshake; the seam tests pass against the new server.
+- Conformance: the schemathesis contract suite passes against the new server, proving live 2xx bodies conform to the declared schemas at runtime (spec byte-equality alone does not prove what a fresh implementation actually emits).
 - Behaviour: identical fingerprints over the recorded replay corpus, which is the deepest equivalence check the infrastructure offers.

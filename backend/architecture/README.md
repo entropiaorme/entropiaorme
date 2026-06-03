@@ -36,9 +36,20 @@ Events exist at two deliberately separate levels, both carried by the same in-pr
 
 ### Typed domain events
 
-`backend/core/domain_events.py` defines the coarse, frontend-facing layer: Pydantic models with a `Literal` `type` discriminator, assembled into a discriminated union (`DomainEvent`). Two events exist today:
+`backend/core/domain_events.py` defines the coarse, frontend-facing layer: Pydantic models with a `Literal` `type` discriminator, assembled into a discriminated union (`DomainEvent`). The wire form is two-level: the discriminator and bookkeeping fields sit on the envelope, and the event's own fields nest under `payload`:
 
-| Event | Topic and discriminator | Payload |
+```json
+{
+  "type": "tracking.session.updated",
+  "event_version": 1,
+  "occurred_at": "2026-01-01T00:00:00Z",
+  "payload": { "sessionId": "...", "status": "active", "reason": "updated" }
+}
+```
+
+Two events exist today:
+
+| Event | Topic and discriminator | Fields nested under `payload` |
 |---|---|---|
 | `TrackingSessionUpdated` | `tracking.session.updated` | `sessionId`, `status` (`active`/`idle`), `reason` (`started`/`updated`/`stopped`) |
 | `ScanStatusChanged` | `scan.status.changed` | `phase` (`idle`/`capturing`/`processing`/`awaiting_review`) |
@@ -92,7 +103,7 @@ Its only transform is topic renaming: Tauri event names forbid dots, so `trackin
 
 ### Consumers
 
-The consumer discipline is subscribe-then-hydrate: attach the Tauri listener first, then run the initial read, so a change landing between the first read and the listener attach is re-announced rather than lost. `frontend/src/lib/stores/trackingStore.ts` and `scanStore.ts` implement the shared pattern: a relayed frame is a pure trigger; `hydrate` coalesces overlapping reads (a frame arriving mid-read queues exactly one follow-up) and keeps the last good snapshot on a failed read. The dashboard consumes the tracking store and the character view consumes the scan store; the overlay and scan-overlay windows attach their own local listeners to the same topics with their own local refresh functions.
+The consumer discipline is subscribe-then-hydrate: attach the Tauri listener first, then run the initial read, so a change landing between the first read and the listener attach is re-announced rather than lost. The ordering is the consumer's responsibility, not a store guarantee: `frontend/src/lib/stores/trackingStore.ts` and `scanStore.ts` expose `subscribe` and `hydrate` as independent calls and contribute the shared read mechanics (a relayed frame is a pure trigger; `hydrate` coalesces overlapping reads, with a frame arriving mid-read queueing exactly one follow-up, and a failed read keeps the last good snapshot rather than blanking). The character view is the canonical implementation: it attaches the listener inside the subscribe promise, then hydrates. The dashboard and the quests route also consume the tracking store (the quests route currently runs its first read before its listener attaches, a known ordering gap); the overlay and scan-overlay windows attach their own local listeners to the same topics with their own local refresh functions.
 
 Two window-event surfaces are deliberately **not** part of this spine: the overlay popup protocols (`overlay-menu:*`, `overlay-armour-cost:*`), which are directed window-to-window IPC for transient UI, and the shell-emitted `overlay-shown` event, which prompts the overlay to re-read configuration fields that no tracking frame announces (the overlay is a pre-spawned hidden window, so no visibility event fires on show).
 
@@ -110,7 +121,9 @@ The polymorphism is carried by `response_model_exclude_unset=True` rather than s
 
 ### Conditional requests
 
-`backend/middleware/etag.py` adds strong ETags (a quoted SHA-256 of the response body) to every 2xx GET under four hydration prefixes: `/api/tracking`, `/api/scan`, `/api/quests`, `/api/codex`. A matching `If-None-Match` returns `304 Not Modified` with an empty body; comparison follows RFC 7232 weak semantics. `Cache-Control` is `no-cache`, which mandates revalidation: the goal is skipping the body and the client-side re-render when nothing changed, not skipping the network round-trip. `covered_get_routes` enumerates the covered surface so the contract test (`backend/tests/test_etag.py`) fails by name when a hydration GET silently leaves coverage.
+`backend/middleware/etag.py` adds strong ETags (a quoted SHA-256 of the response body) to every 2xx GET under four hydration prefixes: `/api/tracking`, `/api/scan`, `/api/quests`, `/api/codex`. A matching `If-None-Match` returns `304 Not Modified` with an empty body; comparison follows RFC 7232 weak semantics. `Cache-Control` is `no-cache`, which mandates revalidation: the goal is skipping the body and the client-side re-render when nothing changed, not skipping the network round-trip. `covered_get_routes` enumerates the covered surface so the contract test (`backend/tests/test_etag.py`) fails by name when a covered GET silently leaves the contract.
+
+Coverage is deliberately scoped to these four event-driven surfaces. The remaining read surfaces (analytics, character, equipment, settings) hydrate on mount and navigation rather than on a domain event, sit outside the conditional-request contract on purpose, and are pinned as such by the same test's out-of-scope assertions.
 
 ### Response models
 
@@ -168,7 +181,7 @@ The honest inventory, since most of the backend's subtlety lives here:
 
 - **Threads.** The asyncio event loop serves HTTP and the SSE fan-out. The chat-log watcher publishes synchronously from its own thread, which means every bus subscriber's handler (tracker mutation, skill-tracker DB writes, quest-service updates, SSE serialisation) runs on that single watcher thread for chat-driven events. The hotbar listener publishes from short-lived per-press threads. FastAPI handlers run on the server's worker threads.
 - **Locks.** The bus lock (subscriber list only, never held across dispatch), the tracker lock, the scan-service lock, and the shared database wrapper's lock. The one cross-lock ordering that matters: tracker lock before database lock, never the reverse.
-- **Known gap, deliberately documented rather than papered over:** database-lock discipline across services is uneven. The skill tracker writes under the shared database lock; several other services read and write the shared connection without it. In practice the single-producer reality (chat-driven writes all execute on the watcher thread) makes this safe for the chat-driven paths, but it is a convention with a hole rather than a structural guarantee, and the contemplated port closes it by construction (an owned connection behind one writer; see `PORT-READINESS.md`).
+- **Known gap, deliberately documented rather than papered over:** database-lock discipline across services is uneven. The skill tracker writes under the shared database lock, but much of the read path (most GET handlers, and the provider closures wired in the application lifespan) reads the bare shared connection from the server's worker threads without it. The single-producer reality (chat-driven writes all execute on the watcher thread) rules out writer/writer races, but a multi-step read interleaving with a concurrent watcher-thread write is exactly the cursor-coherency case the database wrapper's own warning describes. It is a convention with a hole rather than a structural guarantee, and the contemplated port closes it by construction (an owned connection behind one writer; see `PORT-READINESS.md`).
 
 ## Enforcement map
 
@@ -182,7 +195,7 @@ The architecture's properties are tests, not prose promises:
 | End-to-end stream seam over a live server | `backend/tests/test_event_stream_seam.py` |
 | Tracker read path is safe against the producer thread | `backend/tests/test_tracker_concurrency.py` |
 | Snapshot shape and idle union | `backend/tests/test_tracking_snapshot.py` |
-| ETag coverage and 304 semantics on every hydration GET | `backend/tests/test_etag.py` |
+| ETag coverage and 304 semantics on every covered hydration GET | `backend/tests/test_etag.py` |
 | OpenAPI spec matches the committed contract | `backend/tests/test_openapi_drift.py` |
 | Generated TS client matches the contract | `gen:api:check` (frontend CI job) |
 | 2xx bodies conform to declared schemas | `backend/tests/test_api_contract.py` (schemathesis) |

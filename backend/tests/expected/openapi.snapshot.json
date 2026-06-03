@@ -429,6 +429,67 @@
         "title": "CalibrateRequest",
         "type": "object"
       },
+      "CalibrationStatus": {
+        "additionalProperties": true,
+        "description": "Skill-calibration freshness status (lastCalibration null if never run).",
+        "properties": {
+          "calibrated": {
+            "title": "Calibrated",
+            "type": "boolean"
+          },
+          "lastCalibration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastcalibration"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "calibrated",
+          "stale"
+        ],
+        "title": "CalibrationStatus",
+        "type": "object"
+      },
+      "CharacterCodexProgress": {
+        "additionalProperties": true,
+        "description": "Per-skill codex progress prediction (codex-category skills only).",
+        "properties": {
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "nextRewardValue": {
+            "title": "Nextrewardvalue",
+            "type": "number"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "number"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skillName",
+          "currentLevel",
+          "nextRewardValue",
+          "progress"
+        ],
+        "title": "CharacterCodexProgress",
+        "type": "object"
+      },
       "CharacterProspect": {
         "additionalProperties": true,
         "description": "Forecast result or a not-found error shape.\n\nThe error branch sets ``error``/``rows``/``warnings``; the result branch\nomits ``error`` and carries its forecast keys (passed through via\n``extra=\"allow\"``). Served with ``response_model_exclude_unset=True`` so the\ntwo branches keep their distinct shapes.",
@@ -470,6 +531,63 @@
           }
         },
         "title": "CharacterProspect",
+        "type": "object"
+      },
+      "CharacterProspectOptions": {
+        "additionalProperties": true,
+        "description": "The tag / mob / weapon slices available for Prospect forecasts.",
+        "properties": {
+          "mobs": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Mobs",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "weapons": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Weapons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags",
+          "mobs",
+          "weapons"
+        ],
+        "title": "CharacterProspectOptions",
+        "type": "object"
+      },
+      "CharacterStats": {
+        "additionalProperties": true,
+        "description": "HP and the top profession levels.",
+        "properties": {
+          "hp": {
+            "title": "Hp",
+            "type": "integer"
+          },
+          "topProfessions": {
+            "items": {
+              "$ref": "#/components/schemas/TopProfession"
+            },
+            "title": "Topprofessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hp",
+          "topProfessions"
+        ],
+        "title": "CharacterStats",
         "type": "object"
       },
       "ClaimRequest": {
@@ -1125,6 +1243,31 @@
         "title": "EquipmentSearchResult",
         "type": "object"
       },
+      "ExcludedSkill": {
+        "additionalProperties": true,
+        "description": "A skill excluded from a path plan, with the reason.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "reason"
+        ],
+        "title": "ExcludedSkill",
+        "type": "object"
+      },
       "GameConnection": {
         "additionalProperties": true,
         "description": "The chat.log connection block of the settings response.",
@@ -1176,6 +1319,134 @@
           "status"
         ],
         "title": "HealthStatus",
+        "type": "object"
+      },
+      "HpOptimizerAttribute": {
+        "additionalProperties": true,
+        "description": "An attribute ranked by HP contribution.",
+        "properties": {
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "hpContribution": {
+            "title": "Hpcontribution",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "title": "Hpincrease",
+            "type": "number"
+          },
+          "levelsPerHp": {
+            "title": "Levelsperhp",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "hpIncrease",
+          "currentLevel",
+          "levelsPerHp",
+          "hpContribution"
+        ],
+        "title": "HpOptimizerAttribute",
+        "type": "object"
+      },
+      "HpOptimizerResult": {
+        "additionalProperties": true,
+        "description": "Skills/attributes ranked by PED cost per +1 HP.",
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/HpOptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentHp": {
+            "title": "Currenthp",
+            "type": "integer"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/HpOptimizerSkill"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "currentHp",
+          "skills",
+          "attributes"
+        ],
+        "title": "HpOptimizerResult",
+        "type": "object"
+      },
+      "HpOptimizerSkill": {
+        "additionalProperties": true,
+        "description": "A regular skill ranked by PED per +1 HP.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "title": "Hpincrease",
+            "type": "number"
+          },
+          "hpPerPed": {
+            "title": "Hpperped",
+            "type": "number"
+          },
+          "levelsPerHp": {
+            "title": "Levelsperhp",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pedPerHp": {
+            "title": "Pedperhp",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "hpIncrease",
+          "currentLevel",
+          "levelsPerHp",
+          "pedPerHp",
+          "hpPerPed"
+        ],
+        "title": "HpOptimizerSkill",
         "type": "object"
       },
       "InventoryItemCreate": {
@@ -1750,6 +2021,93 @@
         "title": "OkResponse",
         "type": "object"
       },
+      "OptimizerAttribute": {
+        "additionalProperties": true,
+        "description": "An attribute ranked by raw contribution factor.",
+        "properties": {
+          "contributionFactor": {
+            "title": "Contributionfactor",
+            "type": "number"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "contributionFactor"
+        ],
+        "title": "OptimizerAttribute",
+        "type": "object"
+      },
+      "OptimizerSkill": {
+        "additionalProperties": true,
+        "description": "A regular skill ranked by PED to the next profession level.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "levelsNeeded": {
+            "title": "Levelsneeded",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pedToNextLevel": {
+            "title": "Pedtonextlevel",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "levelsNeeded",
+          "pedToNextLevel"
+        ],
+        "title": "OptimizerSkill",
+        "type": "object"
+      },
       "OverlayPosition": {
         "additionalProperties": true,
         "description": "The persisted overlay window position (null until first placed).",
@@ -1796,6 +2154,207 @@
           "y"
         ],
         "title": "OverlayPositionPatch",
+        "type": "object"
+      },
+      "PathAllocation": {
+        "additionalProperties": true,
+        "description": "One skill's allocation within a profession-path plan.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "levelsToGain": {
+            "title": "Levelstogain",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "newLevel": {
+            "title": "Newlevel",
+            "type": "number"
+          },
+          "pedCost": {
+            "title": "Pedcost",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "levelsToGain",
+          "pedCost",
+          "newLevel"
+        ],
+        "title": "PathAllocation",
+        "type": "object"
+      },
+      "PathOptimizerResult": {
+        "additionalProperties": true,
+        "description": "The cheapest allocation to a target / for a budget, or error.\n\nServed with ``response_model_exclude_unset=True`` so the success branch keeps\nits full plan (including a genuine null for the unused mode input) and the\nnot-found branch keeps just error/allocations/attributes.",
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/PathAllocation"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "endLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endlevel"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "excluded": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExcludedSkill"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded"
+          },
+          "inputPedBudget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputpedbudget"
+          },
+          "inputTargetLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputtargetlevel"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "profession": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profession"
+          },
+          "professionLevelsGained": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Professionlevelsgained"
+          },
+          "totalPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totalped"
+          }
+        },
+        "required": [
+          "allocations",
+          "attributes"
+        ],
+        "title": "PathOptimizerResult",
         "type": "object"
       },
       "PlaylistAnalyticsRow": {
@@ -2103,6 +2662,174 @@
           "total"
         ],
         "title": "ProcessingProgress",
+        "type": "object"
+      },
+      "ProfessionLevel": {
+        "additionalProperties": true,
+        "description": "A profession level with anchor and gain-since-anchor.",
+        "properties": {
+          "anchorLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchorlevel"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "gainSinceAnchor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gainsinceanchor"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level",
+          "category"
+        ],
+        "title": "ProfessionLevel",
+        "type": "object"
+      },
+      "ProfessionOptimizerResult": {
+        "additionalProperties": true,
+        "description": "Skills/attributes ranked by cost to the next profession level, or error.\n\nServed with ``response_model_exclude_unset=True``: the success branch carries\nprofession/currentLevel/nextLevel/gap, the not-found branch carries error;\nskills/attributes appear in both.",
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap"
+          },
+          "nextLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextlevel"
+          },
+          "profession": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profession"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerSkill"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "skills",
+          "attributes"
+        ],
+        "title": "ProfessionOptimizerResult",
+        "type": "object"
+      },
+      "ProspectOption": {
+        "additionalProperties": true,
+        "description": "A slice value available for a Prospect forecast.",
+        "properties": {
+          "cycledPed": {
+            "title": "Cycledped",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "sessions",
+          "kills",
+          "hours",
+          "cycledPed"
+        ],
+        "title": "ProspectOption",
         "type": "object"
       },
       "Quest": {
@@ -3707,6 +4434,68 @@
         "title": "SettingsPatch",
         "type": "object"
       },
+      "SkillLevel": {
+        "additionalProperties": true,
+        "description": "A calibrated skill with rank, TT value, and anchor comparison.",
+        "properties": {
+          "anchorLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchorlevel"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "gainSinceAnchor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gainsinceanchor"
+          },
+          "isAttribute": {
+            "title": "Isattribute",
+            "type": "boolean"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rankName": {
+            "title": "Rankname",
+            "type": "string"
+          },
+          "ttValue": {
+            "title": "Ttvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "category",
+          "level",
+          "rankName",
+          "ttValue",
+          "isAttribute"
+        ],
+        "title": "SkillLevel",
+        "type": "object"
+      },
       "SkillScanPending": {
         "additionalProperties": true,
         "description": "The held OCR result awaiting review: skill name to calibrated level.",
@@ -3894,6 +4683,31 @@
           "ledgerLosses"
         ],
         "title": "TimelinePoint",
+        "type": "object"
+      },
+      "TopProfession": {
+        "additionalProperties": true,
+        "description": "A profession headline (name / level / category) for the stats card.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level",
+          "category"
+        ],
+        "title": "TopProfession",
         "type": "object"
       },
       "TrackingSnapshot": {
@@ -5072,7 +5886,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -5092,7 +5908,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CharacterCodexProgress"
+                  },
+                  "title": "Response Get Codex Api Character Codex Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5112,7 +5934,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HpOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5143,7 +5967,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5216,7 +6042,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PathOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5246,7 +6074,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionLevel"
+                  },
+                  "title": "Response Get Professions Api Character Professions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5354,7 +6188,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterProspectOptions"
+                }
               }
             },
             "description": "Successful Response"
@@ -5374,7 +6210,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillLevel"
+                  },
+                  "title": "Response Get Skills Api Character Skills Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5394,7 +6236,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterStats"
+                }
               }
             },
             "description": "Successful Response"

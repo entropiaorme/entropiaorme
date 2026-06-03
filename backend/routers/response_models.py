@@ -761,3 +761,195 @@ class HealthStatus(_Loose):
     """The health-check acknowledgement."""
 
     status: str
+
+
+# ---------------------------------------------------------------------------
+# Character (/character) — calibration, stats, skills, professions, optimizers
+# (CharacterProspect is defined above, beside the tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class CalibrationStatus(_Loose):
+    """Skill-calibration freshness status (lastCalibration null if never run)."""
+
+    calibrated: bool
+    lastCalibration: str | None = None
+    stale: bool
+
+
+class TopProfession(_Loose):
+    """A profession headline (name / level / category) for the stats card."""
+
+    name: str
+    level: float
+    category: str
+
+
+class CharacterStats(_Loose):
+    """HP and the top profession levels."""
+
+    hp: int
+    topProfessions: list[TopProfession]
+
+
+class SkillLevel(_Loose):
+    """A calibrated skill with rank, TT value, and anchor comparison."""
+
+    name: str
+    category: str
+    level: float
+    anchorLevel: float | None = None
+    gainSinceAnchor: float | None = None
+    rankName: str
+    ttValue: float
+    isAttribute: bool
+
+
+class ProfessionLevel(_Loose):
+    """A profession level with anchor and gain-since-anchor."""
+
+    name: str
+    level: float
+    anchorLevel: float | None = None
+    gainSinceAnchor: float | None = None
+    category: str
+
+
+class ProspectOption(_Loose):
+    """A slice value available for a Prospect forecast."""
+
+    value: str
+    label: str
+    sessions: int
+    kills: int
+    hours: float
+    cycledPed: float
+
+
+class CharacterProspectOptions(_Loose):
+    """The tag / mob / weapon slices available for Prospect forecasts."""
+
+    tags: list[ProspectOption]
+    mobs: list[ProspectOption]
+    weapons: list[ProspectOption]
+
+
+class OptimizerSkill(_Loose):
+    """A regular skill ranked by PED to the next profession level."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    levelsNeeded: float
+    pedToNextLevel: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class OptimizerAttribute(_Loose):
+    """An attribute ranked by raw contribution factor."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    contributionFactor: float
+
+
+class ProfessionOptimizerResult(_Loose):
+    """Skills/attributes ranked by cost to the next profession level, or error.
+
+    Served with ``response_model_exclude_unset=True``: the success branch carries
+    profession/currentLevel/nextLevel/gap, the not-found branch carries error;
+    skills/attributes appear in both.
+    """
+
+    skills: list[OptimizerSkill]
+    attributes: list[OptimizerAttribute]
+    profession: str | None = None
+    currentLevel: float | None = None
+    nextLevel: float | None = None
+    gap: float | None = None
+    error: str | None = None
+
+
+class PathAllocation(_Loose):
+    """One skill's allocation within a profession-path plan."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    levelsToGain: float
+    pedCost: float
+    newLevel: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class ExcludedSkill(_Loose):
+    """A skill excluded from a path plan, with the reason."""
+
+    name: str
+    weight: float
+    reason: str
+
+
+class PathOptimizerResult(_Loose):
+    """The cheapest allocation to a target / for a budget, or error.
+
+    Served with ``response_model_exclude_unset=True`` so the success branch keeps
+    its full plan (including a genuine null for the unused mode input) and the
+    not-found branch keeps just error/allocations/attributes.
+    """
+
+    allocations: list[PathAllocation]
+    attributes: list[OptimizerAttribute]
+    profession: str | None = None
+    mode: str | None = None
+    inputTargetLevel: float | None = None
+    inputPedBudget: float | None = None
+    currentLevel: float | None = None
+    endLevel: float | None = None
+    professionLevelsGained: float | None = None
+    totalPed: float | None = None
+    excluded: list[ExcludedSkill] | None = None
+    error: str | None = None
+
+
+class HpOptimizerSkill(_Loose):
+    """A regular skill ranked by PED per +1 HP."""
+
+    name: str
+    hpIncrease: float
+    currentLevel: float
+    levelsPerHp: float
+    pedPerHp: float
+    hpPerPed: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class HpOptimizerAttribute(_Loose):
+    """An attribute ranked by HP contribution."""
+
+    name: str
+    hpIncrease: float
+    currentLevel: float
+    levelsPerHp: float
+    hpContribution: float
+
+
+class HpOptimizerResult(_Loose):
+    """Skills/attributes ranked by PED cost per +1 HP."""
+
+    currentHp: int
+    skills: list[HpOptimizerSkill]
+    attributes: list[HpOptimizerAttribute]
+
+
+class CharacterCodexProgress(_Loose):
+    """Per-skill codex progress prediction (codex-category skills only)."""
+
+    skillName: str
+    currentLevel: float
+    nextRewardValue: float
+    progress: float

@@ -250,6 +250,24 @@ describe('setDashboardStats', () => {
 		expect(setPreference.mock.calls[0][0]).toBe('dashboardStats');
 		expect(setPreference.mock.calls[1][0]).toBe('overlayStats');
 	});
+
+	it('does NOT sanitise the value: duplicate ids propagate into the overlay order', async () => {
+		// Candidate defect: the setters skip sanitise, so a
+		// caller-supplied duplicate id passes straight through, and reorderToMatch
+		// reproduces it in the overlay's id list (referenceOrder.map over the raw
+		// dashboard ids). Pins the current behaviour.
+		const value = [
+			{ id: 'net' as StatId, enabled: true },
+			{ id: 'net' as StatId, enabled: false },
+		];
+		const { setDashboardStats, dashboardStats, overlayStats } = await loadModule();
+		await setDashboardStats(value);
+
+		// Dashboard keeps the duplicates verbatim (no sanitise on the setter).
+		expect(ids(get(dashboardStats))).toEqual(['net', 'net']);
+		// The overlay reslave reproduces the duplicate rather than deduping it.
+		expect(ids(get(overlayStats))).toEqual(['net', 'net']);
+	});
 });
 
 describe('setOverlayStats', () => {

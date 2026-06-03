@@ -1,6 +1,57 @@
 {
   "components": {
     "schemas": {
+      "AbsorberComponent": {
+        "additionalProperties": true,
+        "description": "The absorber sub-object of an equipment detail (carries absorption).",
+        "properties": {
+          "absorptionPercent": {
+            "title": "Absorptionpercent",
+            "type": "number"
+          },
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogid"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "markupPercent": {
+            "title": "Markuppercent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "decay",
+          "ammoBurn",
+          "absorptionPercent",
+          "markupPercent",
+          "isLimited"
+        ],
+        "title": "AbsorberComponent",
+        "type": "object"
+      },
       "AddWeaponRequest": {
         "properties": {
           "absorber_catalog_id": {
@@ -708,6 +759,255 @@
           "currentRank"
         ],
         "title": "CodexSpecies",
+        "type": "object"
+      },
+      "CostBreakdownLine": {
+        "additionalProperties": true,
+        "description": "One line of a per-use cost breakdown.",
+        "properties": {
+          "component": {
+            "title": "Component",
+            "type": "string"
+          },
+          "costPec": {
+            "title": "Costpec",
+            "type": "number"
+          },
+          "effectiveCostPec": {
+            "title": "Effectivecostpec",
+            "type": "number"
+          },
+          "markupMultiplier": {
+            "title": "Markupmultiplier",
+            "type": "number"
+          }
+        },
+        "required": [
+          "component",
+          "costPec",
+          "markupMultiplier",
+          "effectiveCostPec"
+        ],
+        "title": "CostBreakdownLine",
+        "type": "object"
+      },
+      "CostResult": {
+        "additionalProperties": true,
+        "description": "A standalone cost calculation (breakdown plus total).",
+        "properties": {
+          "costBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/CostBreakdownLine"
+            },
+            "title": "Costbreakdown",
+            "type": "array"
+          },
+          "totalCostPerUse": {
+            "title": "Totalcostperuse",
+            "type": "number"
+          }
+        },
+        "required": [
+          "costBreakdown",
+          "totalCostPerUse"
+        ],
+        "title": "CostResult",
+        "type": "object"
+      },
+      "DeletedStatus": {
+        "additionalProperties": true,
+        "description": "A ``{\"status\": \"deleted\"}`` soft-delete acknowledgement.",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "DeletedStatus",
+        "type": "object"
+      },
+      "Equipment": {
+        "additionalProperties": true,
+        "description": "A library entry with computed per-use cost (the list shape).",
+        "properties": {
+          "amplifierName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amplifiername"
+          },
+          "costPerUse": {
+            "title": "Costperuse",
+            "type": "number"
+          },
+          "damageMax": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagemax"
+          },
+          "damageMin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagemin"
+          },
+          "enrichmentLevel": {
+            "title": "Enrichmentlevel",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reloadSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reloadseconds"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "costPerUse",
+          "isLimited",
+          "enrichmentLevel"
+        ],
+        "title": "Equipment",
+        "type": "object"
+      },
+      "EquipmentDetail": {
+        "additionalProperties": true,
+        "description": "The expanded detail for a library item, with cost breakdown.",
+        "properties": {
+          "absorber": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AbsorberComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amplifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeaponComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "costBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/CostBreakdownLine"
+            },
+            "title": "Costbreakdown",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeaponComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalCostPerUse": {
+            "title": "Totalcostperuse",
+            "type": "number"
+          },
+          "weapon": {
+            "$ref": "#/components/schemas/WeaponComponent"
+          }
+        },
+        "required": [
+          "id",
+          "weapon",
+          "costBreakdown",
+          "totalCostPerUse"
+        ],
+        "title": "EquipmentDetail",
+        "type": "object"
+      },
+      "EquipmentSearchResult": {
+        "additionalProperties": true,
+        "description": "A catalogue search hit, with ammo burn already converted to PEC.",
+        "properties": {
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "title": "Catalogid",
+            "type": "string"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "catalogId",
+          "name",
+          "decay",
+          "ammoBurn",
+          "isLimited"
+        ],
+        "title": "EquipmentSearchResult",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2833,6 +3133,57 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WeaponComponent": {
+        "additionalProperties": true,
+        "description": "A weapon, amplifier, or scope sub-object of an equipment detail.\n\nThe amplifier and scope sub-objects are emitted by the same builder as the\nweapon, so they carry ``damageEnhancers`` too (the frontend type omits it on\nthe amplifier; the handler emits it, so it is modelled here and kept).",
+        "properties": {
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogid"
+          },
+          "damageEnhancers": {
+            "title": "Damageenhancers",
+            "type": "integer"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "markupPercent": {
+            "title": "Markuppercent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "decay",
+          "ammoBurn",
+          "markupPercent",
+          "isLimited",
+          "damageEnhancers"
+        ],
+        "title": "WeaponComponent",
+        "type": "object"
       }
     }
   },
@@ -4171,7 +4522,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CostResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4201,7 +4554,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Equipment"
+                  },
+                  "title": "Response Get Library Api Equipment Library Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4229,7 +4588,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Equipment"
+                }
               }
             },
             "description": "Successful Response"
@@ -4270,7 +4631,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4319,7 +4682,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Equipment"
+                }
               }
             },
             "description": "Successful Response"
@@ -4360,7 +4725,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EquipmentDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -4412,7 +4779,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EquipmentSearchResult"
+                  },
+                  "title": "Response Search Items Api Equipment Search Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"

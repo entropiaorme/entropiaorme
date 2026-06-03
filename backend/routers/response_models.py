@@ -188,6 +188,12 @@ class OkResponse(_Loose):
     ok: bool
 
 
+class DeletedStatus(_Loose):
+    """A ``{"status": "deleted"}`` soft-delete acknowledgement."""
+
+    status: str
+
+
 # ---------------------------------------------------------------------------
 # Quests + playlists (/quests, /quests/playlists)
 # ---------------------------------------------------------------------------
@@ -376,3 +382,90 @@ class CodexMetaClaimResult(_Loose):
 
     attributeName: str
     pedValue: float
+
+
+# ---------------------------------------------------------------------------
+# Equipment (/equipment)
+# ---------------------------------------------------------------------------
+
+
+class EquipmentSearchResult(_Loose):
+    """A catalogue search hit, with ammo burn already converted to PEC."""
+
+    catalogId: str
+    name: str
+    decay: float
+    ammoBurn: float
+    isLimited: bool
+
+
+class Equipment(_Loose):
+    """A library entry with computed per-use cost (the list shape)."""
+
+    id: str
+    name: str
+    type: str
+    amplifierName: str | None = None
+    costPerUse: float
+    damageMin: float | None = None
+    damageMax: float | None = None
+    reloadSeconds: float | None = None
+    isLimited: bool
+    enrichmentLevel: int
+
+
+class CostBreakdownLine(_Loose):
+    """One line of a per-use cost breakdown."""
+
+    component: str
+    costPec: float
+    markupMultiplier: float
+    effectiveCostPec: float
+
+
+class WeaponComponent(_Loose):
+    """A weapon, amplifier, or scope sub-object of an equipment detail.
+
+    The amplifier and scope sub-objects are emitted by the same builder as the
+    weapon, so they carry ``damageEnhancers`` too (the frontend type omits it on
+    the amplifier; the handler emits it, so it is modelled here and kept).
+    """
+
+    catalogId: str | None = None
+    name: str
+    decay: float
+    ammoBurn: float
+    markupPercent: int
+    isLimited: bool
+    damageEnhancers: int
+
+
+class AbsorberComponent(_Loose):
+    """The absorber sub-object of an equipment detail (carries absorption)."""
+
+    catalogId: str | None = None
+    name: str
+    decay: float
+    ammoBurn: float
+    absorptionPercent: float
+    markupPercent: int
+    isLimited: bool
+
+
+class EquipmentDetail(_Loose):
+    """The expanded detail for a library item, with cost breakdown."""
+
+    id: str
+    weapon: WeaponComponent
+    amplifier: WeaponComponent | None = None
+    scope: WeaponComponent | None = None
+    absorber: AbsorberComponent | None = None
+    costBreakdown: list[CostBreakdownLine]
+    totalCostPerUse: float
+
+
+class CostResult(_Loose):
+    """A standalone cost calculation (breakdown plus total)."""
+
+    costBreakdown: list[CostBreakdownLine]
+    totalCostPerUse: float

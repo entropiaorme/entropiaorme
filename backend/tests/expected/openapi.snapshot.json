@@ -1389,7 +1389,7 @@
           },
           "currentHp": {
             "title": "Currenthp",
-            "type": "integer"
+            "type": "number"
           },
           "skills": {
             "items": {
@@ -3020,7 +3020,7 @@
       },
       "Quest": {
         "additionalProperties": true,
-        "description": "A quest as returned by the quest read/write endpoints.\n\nMirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.\nEvery key is always emitted by ``_format_quest`` (nullables carry explicit\n``null``), so the shape is stable and served without an exclude flag.",
+        "description": "A quest as returned by the quest read/write endpoints.\n\nMirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.\nEvery key is always present; nullable fields carry an explicit null.",
         "properties": {
           "category": {
             "anyOf": [
@@ -4787,33 +4787,19 @@
       },
       "SessionSkillGain": {
         "additionalProperties": true,
-        "description": "A per-skill gain within a session detail.\n\n``level`` and ``ttValueGained`` pass through ``round()``, which yields a\nPython int for the zero case and a float otherwise, so they are typed\n``int | float`` to preserve the emitted wire type exactly (the session-detail\ngolden pins integer zeros here).",
+        "description": "A per-skill gain within a session detail.",
         "properties": {
           "level": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "number"
-              }
-            ],
-            "title": "Level"
+            "title": "Level",
+            "type": "number"
           },
           "skillName": {
             "title": "Skillname",
             "type": "string"
           },
           "ttValueGained": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "number"
-              }
-            ],
-            "title": "Ttvaluegained"
+            "title": "Ttvaluegained",
+            "type": "number"
           }
         },
         "required": [

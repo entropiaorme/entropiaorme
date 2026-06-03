@@ -1,7 +1,7 @@
 """Pydantic response models for the API's read surface.
 
-These describe the JSON shapes the handlers already return; they do not change
-behaviour. Two deliberate conventions make that guarantee hold:
+These describe the JSON shapes the handlers already return; no field is added,
+dropped, or changed in value. Three deliberate conventions make that hold:
 
 - Every model sets ``extra="allow"``. A handler may return keys a model does not
   enumerate; those pass through untouched rather than being dropped, so adding a
@@ -11,6 +11,10 @@ behaviour. Two deliberate conventions make that guarantee hold:
   and their routes serialise with ``response_model_exclude_unset=True`` so only
   the keys the handler actually set appear. Without that, the lean ``unavailable``
   and ``idle`` shapes would gain a wall of explicit nulls.
+- Numeric value fields are typed ``float`` (the contract's number form), so an
+  integer-valued number serialises in its float form, which is value-identical
+  to JSON consumers; genuinely integral fields (counts, ranks, identifiers) are
+  typed ``int``.
 
 The schema these produce is what the contract suite (``test_api_contract.py``)
 validates real responses against.
@@ -203,8 +207,7 @@ class Quest(_Loose):
     """A quest as returned by the quest read/write endpoints.
 
     Mirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.
-    Every key is always emitted by ``_format_quest`` (nullables carry explicit
-    ``null``), so the shape is stable and served without an exclude flag.
+    Every key is always present; nullable fields carry an explicit null.
     """
 
     id: str
@@ -664,7 +667,7 @@ class SpacebarCaptureResult(_Loose):
 
 
 # ---------------------------------------------------------------------------
-# Analytics (/analytics) — activity, ledger, inventory
+# Analytics (/analytics): activity, ledger, inventory
 # (AnalyticsOverview is defined above, beside the tracking-era models.)
 # ---------------------------------------------------------------------------
 
@@ -764,7 +767,7 @@ class HealthStatus(_Loose):
 
 
 # ---------------------------------------------------------------------------
-# Character (/character) — calibration, stats, skills, professions, optimizers
+# Character (/character): calibration, stats, skills, professions, optimizers
 # (CharacterProspect is defined above, beside the tracking-era models.)
 # ---------------------------------------------------------------------------
 
@@ -941,7 +944,7 @@ class HpOptimizerAttribute(_Loose):
 class HpOptimizerResult(_Loose):
     """Skills/attributes ranked by PED cost per +1 HP."""
 
-    currentHp: int
+    currentHp: float
     skills: list[HpOptimizerSkill]
     attributes: list[HpOptimizerAttribute]
 
@@ -956,7 +959,7 @@ class CharacterCodexProgress(_Loose):
 
 
 # ---------------------------------------------------------------------------
-# Tracking (/tracking) — lifecycle, sessions, session detail, edits, quest link
+# Tracking (/tracking): lifecycle, sessions, session detail, edits, quest link
 # (TrackingSnapshot is defined above, beside the other tracking-era models.)
 # ---------------------------------------------------------------------------
 
@@ -1089,17 +1092,11 @@ class ToolStat(_Loose):
 
 
 class SessionSkillGain(_Loose):
-    """A per-skill gain within a session detail.
-
-    ``level`` and ``ttValueGained`` pass through ``round()``, which yields a
-    Python int for the zero case and a float otherwise, so they are typed
-    ``int | float`` to preserve the emitted wire type exactly (the session-detail
-    golden pins integer zeros here).
-    """
+    """A per-skill gain within a session detail."""
 
     skillName: str
-    level: int | float
-    ttValueGained: int | float
+    level: float
+    ttValueGained: float
 
 
 class SessionDetail(_Loose):

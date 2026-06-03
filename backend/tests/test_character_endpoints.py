@@ -9,7 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 
 from backend.db.app_database import AppDatabase
 from backend.routers import character
@@ -280,6 +281,36 @@ def test_hp_optimizer_runs_over_calibrated_skills(app_db, monkeypatch):
     assert [s["name"] for s in result["skills"]] == ["Anatomy"]
     assert result["skills"][0]["levelsPerHp"] == pytest.approx(0.1, abs=1e-3)
     assert result["attributes"] == []
+
+
+def test_hp_optimizer_serialises_a_fractional_hp_over_http(app_db, monkeypatch):
+    """A fractional current HP must survive the response model.
+
+    The handler emits ``round(current_hp, 2)``, a fractional float for any
+    calibrated HP-contributing skill; an int-typed field would reject it with
+    a response-validation error (HTTP 500). Exercised through the real FastAPI
+    serialisation stack rather than a direct function call, so the response
+    model is actually applied.
+    """
+    _seed_calibration(app_db, "Anatomy", 137.5)
+    skills = [{"name": "Anatomy", "hp_increase": 10.0}]
+    game_data = SimpleNamespace(
+        get_entities=lambda kind: {"skills": skills}.get(kind, [])
+    )
+    monkeypatch.setattr(
+        character,
+        "get_services",
+        lambda: SimpleNamespace(app_db=app_db, game_data=game_data),
+    )
+
+    app = FastAPI()
+    app.include_router(character.router)
+    resp = TestClient(app).get("/character/hp-optimizer")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["currentHp"] == pytest.approx(93.75, abs=1e-2)
+    assert [s["name"] for s in data["skills"]] == ["Anatomy"]
 
 
 # ── Prospect forecast (drives the sample + projection machinery) ──────────────

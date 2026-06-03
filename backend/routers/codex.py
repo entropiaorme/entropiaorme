@@ -6,6 +6,15 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import (
+    CodexCalibrateResult,
+    CodexClaimResult,
+    CodexMetaAttribute,
+    CodexMetaClaimResult,
+    CodexRankBreakdown,
+    CodexSkillOption,
+    CodexSpecies,
+)
 
 router = APIRouter(prefix="/codex", tags=["codex"])
 
@@ -31,14 +40,14 @@ class MetaClaimRequest(BaseModel):
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 
-@router.get("/species")
+@router.get("/species", response_model=list[CodexSpecies])
 def list_species():
     """All mob species with codex base cost and player rank."""
     svc = get_services()
     return svc.codex_service.get_all_species()
 
 
-@router.get("/species/{name}/ranks")
+@router.get("/species/{name}/ranks", response_model=CodexRankBreakdown)
 def species_ranks(name: str):
     """25-rank breakdown for a species."""
     svc = get_services()
@@ -48,7 +57,7 @@ def species_ranks(name: str):
     return result
 
 
-@router.post("/claim")
+@router.post("/claim", response_model=CodexClaimResult)
 def claim_rank(req: ClaimRequest):
     """Claim a codex rank reward."""
     svc = get_services()
@@ -66,7 +75,7 @@ def claim_rank(req: ClaimRequest):
     return result
 
 
-@router.post("/calibrate")
+@router.post("/calibrate", response_model=CodexCalibrateResult)
 def calibrate(req: CalibrateRequest):
     """Set codex rank directly (manual calibration, no side effects)."""
     svc = get_services()
@@ -76,7 +85,7 @@ def calibrate(req: CalibrateRequest):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.get("/recommend")
+@router.get("/recommend", response_model=list[CodexSkillOption])
 def recommend(
     species_name: str,
     # Codex ranks run 1..25. Out-of-range values index past the reward and cost
@@ -92,14 +101,14 @@ def recommend(
     return svc.codex_service.get_skill_options(species_name, rank, profession, target)
 
 
-@router.get("/meta/attributes")
+@router.get("/meta/attributes", response_model=list[CodexMetaAttribute])
 def meta_attributes():
     """Return the 6 attributes with current levels."""
     svc = get_services()
     return svc.codex_service.get_meta_attributes()
 
 
-@router.post("/meta/claim")
+@router.post("/meta/claim", response_model=CodexMetaClaimResult)
 def meta_claim(req: MetaClaimRequest):
     """Claim a meta codex reward (1 PED into an attribute)."""
     svc = get_services()

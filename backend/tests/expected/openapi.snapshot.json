@@ -1,6 +1,57 @@
 {
   "components": {
     "schemas": {
+      "AbsorberComponent": {
+        "additionalProperties": true,
+        "description": "The absorber sub-object of an equipment detail (carries absorption).",
+        "properties": {
+          "absorptionPercent": {
+            "title": "Absorptionpercent",
+            "type": "number"
+          },
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogid"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "markupPercent": {
+            "title": "Markuppercent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "decay",
+          "ammoBurn",
+          "absorptionPercent",
+          "markupPercent",
+          "isLimited"
+        ],
+        "title": "AbsorberComponent",
+        "type": "object"
+      },
       "AddWeaponRequest": {
         "properties": {
           "absorber_catalog_id": {
@@ -99,6 +150,40 @@
         "title": "AddWeaponRequest",
         "type": "object"
       },
+      "AnalyticsActivity": {
+        "additionalProperties": true,
+        "description": "The activity tab's mob / tag / weapon comparison tables.",
+        "properties": {
+          "mobComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/MobComparison"
+            },
+            "title": "Mobcomparisons",
+            "type": "array"
+          },
+          "tagComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/TagComparison"
+            },
+            "title": "Tagcomparisons",
+            "type": "array"
+          },
+          "weaponComparisons": {
+            "items": {
+              "$ref": "#/components/schemas/WeaponComparison"
+            },
+            "title": "Weaponcomparisons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "mobComparisons",
+          "tagComparisons",
+          "weaponComparisons"
+        ],
+        "title": "AnalyticsActivity",
+        "type": "object"
+      },
       "AnalyticsOverview": {
         "additionalProperties": true,
         "properties": {
@@ -152,6 +237,87 @@
         "title": "AnalyticsOverview",
         "type": "object"
       },
+      "AppSettings": {
+        "additionalProperties": true,
+        "description": "The full application settings response.",
+        "properties": {
+          "appVersion": {
+            "title": "Appversion",
+            "type": "string"
+          },
+          "dbPath": {
+            "title": "Dbpath",
+            "type": "string"
+          },
+          "developerModeEnabled": {
+            "title": "Developermodeenabled",
+            "type": "boolean"
+          },
+          "endOfSessionArmourReminderEnabled": {
+            "title": "Endofsessionarmourreminderenabled",
+            "type": "boolean"
+          },
+          "gameConnection": {
+            "$ref": "#/components/schemas/GameConnection"
+          },
+          "hotbar": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Hotbar",
+            "type": "object"
+          },
+          "hotbarHooksEnabled": {
+            "title": "Hotbarhooksenabled",
+            "type": "boolean"
+          },
+          "lootFilterBlacklist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lootfilterblacklist",
+            "type": "array"
+          },
+          "mobTrackingMode": {
+            "title": "Mobtrackingmode",
+            "type": "string"
+          },
+          "mobTrackingTag": {
+            "title": "Mobtrackingtag",
+            "type": "string"
+          },
+          "repairOcrEnabled": {
+            "title": "Repairocrenabled",
+            "type": "boolean"
+          },
+          "trifecta": {
+            "$ref": "#/components/schemas/TrifectaSettings"
+          }
+        },
+        "required": [
+          "gameConnection",
+          "hotbarHooksEnabled",
+          "repairOcrEnabled",
+          "endOfSessionArmourReminderEnabled",
+          "developerModeEnabled",
+          "mobTrackingMode",
+          "mobTrackingTag",
+          "hotbar",
+          "trifecta",
+          "lootFilterBlacklist",
+          "dbPath",
+          "appVersion"
+        ],
+        "title": "AppSettings",
+        "type": "object"
+      },
       "ArmourCostBody": {
         "properties": {
           "cost": {
@@ -163,6 +329,26 @@
           "cost"
         ],
         "title": "ArmourCostBody",
+        "type": "object"
+      },
+      "ArmourCostResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a saved armour-repair cost.",
+        "properties": {
+          "armourCost": {
+            "title": "Armourcost",
+            "type": "number"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "armourCost"
+        ],
+        "title": "ArmourCostResult",
         "type": "object"
       },
       "CalculateCostRequest": {
@@ -263,6 +449,67 @@
         "title": "CalibrateRequest",
         "type": "object"
       },
+      "CalibrationStatus": {
+        "additionalProperties": true,
+        "description": "Skill-calibration freshness status (lastCalibration null if never run).",
+        "properties": {
+          "calibrated": {
+            "title": "Calibrated",
+            "type": "boolean"
+          },
+          "lastCalibration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastcalibration"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "calibrated",
+          "stale"
+        ],
+        "title": "CalibrationStatus",
+        "type": "object"
+      },
+      "CharacterCodexProgress": {
+        "additionalProperties": true,
+        "description": "Per-skill codex progress prediction (codex-category skills only).",
+        "properties": {
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "nextRewardValue": {
+            "title": "Nextrewardvalue",
+            "type": "number"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "number"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skillName",
+          "currentLevel",
+          "nextRewardValue",
+          "progress"
+        ],
+        "title": "CharacterCodexProgress",
+        "type": "object"
+      },
       "CharacterProspect": {
         "additionalProperties": true,
         "description": "Forecast result or a not-found error shape.\n\nThe error branch sets ``error``/``rows``/``warnings``; the result branch\nomits ``error`` and carries its forecast keys (passed through via\n``extra=\"allow\"``). Served with ``response_model_exclude_unset=True`` so the\ntwo branches keep their distinct shapes.",
@@ -306,6 +553,63 @@
         "title": "CharacterProspect",
         "type": "object"
       },
+      "CharacterProspectOptions": {
+        "additionalProperties": true,
+        "description": "The tag / mob / weapon slices available for Prospect forecasts.",
+        "properties": {
+          "mobs": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Mobs",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "weapons": {
+            "items": {
+              "$ref": "#/components/schemas/ProspectOption"
+            },
+            "title": "Weapons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags",
+          "mobs",
+          "weapons"
+        ],
+        "title": "CharacterProspectOptions",
+        "type": "object"
+      },
+      "CharacterStats": {
+        "additionalProperties": true,
+        "description": "HP and the top profession levels.",
+        "properties": {
+          "hp": {
+            "title": "Hp",
+            "type": "integer"
+          },
+          "topProfessions": {
+            "items": {
+              "$ref": "#/components/schemas/TopProfession"
+            },
+            "title": "Topprofessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hp",
+          "topProfessions"
+        ],
+        "title": "CharacterStats",
+        "type": "object"
+      },
       "ClaimRequest": {
         "properties": {
           "rank": {
@@ -329,6 +633,686 @@
         "title": "ClaimRequest",
         "type": "object"
       },
+      "CodexCalibrateResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a direct codex-rank calibration.",
+        "properties": {
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "rank"
+        ],
+        "title": "CodexCalibrateResult",
+        "type": "object"
+      },
+      "CodexClaimResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a claimed codex rank reward.",
+        "properties": {
+          "pedValue": {
+            "title": "Pedvalue",
+            "type": "number"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "rank",
+          "skillName",
+          "pedValue"
+        ],
+        "title": "CodexClaimResult",
+        "type": "object"
+      },
+      "CodexMetaAttribute": {
+        "additionalProperties": true,
+        "description": "A meta-codex attribute with its current calibrated level.",
+        "properties": {
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CodexMetaAttribute",
+        "type": "object"
+      },
+      "CodexMetaClaimResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a claimed meta-codex attribute reward.",
+        "properties": {
+          "attributeName": {
+            "title": "Attributename",
+            "type": "string"
+          },
+          "pedValue": {
+            "title": "Pedvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "attributeName",
+          "pedValue"
+        ],
+        "title": "CodexMetaClaimResult",
+        "type": "object"
+      },
+      "CodexRankBreakdown": {
+        "additionalProperties": true,
+        "description": "A species' full 25-rank breakdown, cross-referenced with claims.",
+        "properties": {
+          "baseCost": {
+            "title": "Basecost",
+            "type": "number"
+          },
+          "codexType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codextype"
+          },
+          "currentRank": {
+            "title": "Currentrank",
+            "type": "integer"
+          },
+          "ranks": {
+            "items": {
+              "$ref": "#/components/schemas/CodexRankItem"
+            },
+            "title": "Ranks",
+            "type": "array"
+          },
+          "speciesName": {
+            "title": "Speciesname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "speciesName",
+          "baseCost",
+          "currentRank",
+          "ranks"
+        ],
+        "title": "CodexRankBreakdown",
+        "type": "object"
+      },
+      "CodexRankItem": {
+        "additionalProperties": true,
+        "description": "One of a species' 25 codex ranks, cross-referenced with claims.",
+        "properties": {
+          "cat4Bonus": {
+            "title": "Cat4Bonus",
+            "type": "boolean"
+          },
+          "cat4RewardPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cat4Rewardped"
+          },
+          "cat4Skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Cat4Skills",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "claimed": {
+            "title": "Claimed",
+            "type": "boolean"
+          },
+          "claimedPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedped"
+          },
+          "claimedSkill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimedskill"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "isNext": {
+            "title": "Isnext",
+            "type": "boolean"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rank",
+          "category",
+          "cost",
+          "rewardPed",
+          "cat4Bonus",
+          "skills",
+          "cat4Skills",
+          "claimed",
+          "isNext"
+        ],
+        "title": "CodexRankItem",
+        "type": "object"
+      },
+      "CodexSkillOption": {
+        "additionalProperties": true,
+        "description": "A skill choice for a codex rank, ranked by profession or HP gain.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "hpGain": {
+            "title": "Hpgain",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hpincrease"
+          },
+          "levelsGained": {
+            "title": "Levelsgained",
+            "type": "number"
+          },
+          "profContribution": {
+            "title": "Profcontribution",
+            "type": "number"
+          },
+          "professionWeight": {
+            "title": "Professionweight",
+            "type": "integer"
+          },
+          "recommendRank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommendrank"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skillName",
+          "category",
+          "rewardPed",
+          "levelsGained",
+          "professionWeight",
+          "profContribution",
+          "hpGain"
+        ],
+        "title": "CodexSkillOption",
+        "type": "object"
+      },
+      "CodexSpecies": {
+        "additionalProperties": true,
+        "description": "A mob species row with codex base cost and player rank progress.",
+        "properties": {
+          "baseCost": {
+            "title": "Basecost",
+            "type": "number"
+          },
+          "codexType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codextype"
+          },
+          "currentRank": {
+            "title": "Currentrank",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "nextCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcategory"
+          },
+          "nextCost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcost"
+          },
+          "nextRank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextrank"
+          }
+        },
+        "required": [
+          "name",
+          "baseCost",
+          "currentRank"
+        ],
+        "title": "CodexSpecies",
+        "type": "object"
+      },
+      "CostBreakdownLine": {
+        "additionalProperties": true,
+        "description": "One line of a per-use cost breakdown.",
+        "properties": {
+          "component": {
+            "title": "Component",
+            "type": "string"
+          },
+          "costPec": {
+            "title": "Costpec",
+            "type": "number"
+          },
+          "effectiveCostPec": {
+            "title": "Effectivecostpec",
+            "type": "number"
+          },
+          "markupMultiplier": {
+            "title": "Markupmultiplier",
+            "type": "number"
+          }
+        },
+        "required": [
+          "component",
+          "costPec",
+          "markupMultiplier",
+          "effectiveCostPec"
+        ],
+        "title": "CostBreakdownLine",
+        "type": "object"
+      },
+      "CostResult": {
+        "additionalProperties": true,
+        "description": "A standalone cost calculation (breakdown plus total).",
+        "properties": {
+          "costBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/CostBreakdownLine"
+            },
+            "title": "Costbreakdown",
+            "type": "array"
+          },
+          "totalCostPerUse": {
+            "title": "Totalcostperuse",
+            "type": "number"
+          }
+        },
+        "required": [
+          "costBreakdown",
+          "totalCostPerUse"
+        ],
+        "title": "CostResult",
+        "type": "object"
+      },
+      "DeletedStatus": {
+        "additionalProperties": true,
+        "description": "A ``{\"status\": \"deleted\"}`` soft-delete acknowledgement.",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "DeletedStatus",
+        "type": "object"
+      },
+      "Equipment": {
+        "additionalProperties": true,
+        "description": "A library entry with computed per-use cost (the list shape).",
+        "properties": {
+          "amplifierName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amplifiername"
+          },
+          "costPerUse": {
+            "title": "Costperuse",
+            "type": "number"
+          },
+          "damageMax": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagemax"
+          },
+          "damageMin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Damagemin"
+          },
+          "enrichmentLevel": {
+            "title": "Enrichmentlevel",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reloadSeconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reloadseconds"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "costPerUse",
+          "isLimited",
+          "enrichmentLevel"
+        ],
+        "title": "Equipment",
+        "type": "object"
+      },
+      "EquipmentDetail": {
+        "additionalProperties": true,
+        "description": "The expanded detail for a library item, with cost breakdown.",
+        "properties": {
+          "absorber": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AbsorberComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amplifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeaponComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "costBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/CostBreakdownLine"
+            },
+            "title": "Costbreakdown",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WeaponComponent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalCostPerUse": {
+            "title": "Totalcostperuse",
+            "type": "number"
+          },
+          "weapon": {
+            "$ref": "#/components/schemas/WeaponComponent"
+          }
+        },
+        "required": [
+          "id",
+          "weapon",
+          "costBreakdown",
+          "totalCostPerUse"
+        ],
+        "title": "EquipmentDetail",
+        "type": "object"
+      },
+      "EquipmentSearchResult": {
+        "additionalProperties": true,
+        "description": "A catalogue search hit, with ammo burn already converted to PEC.",
+        "properties": {
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "title": "Catalogid",
+            "type": "string"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "catalogId",
+          "name",
+          "decay",
+          "ammoBurn",
+          "isLimited"
+        ],
+        "title": "EquipmentSearchResult",
+        "type": "object"
+      },
+      "ExcludedSkill": {
+        "additionalProperties": true,
+        "description": "A skill excluded from a path plan, with the reason.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "reason"
+        ],
+        "title": "ExcludedSkill",
+        "type": "object"
+      },
+      "GameConnection": {
+        "additionalProperties": true,
+        "description": "The chat.log connection block of the settings response.",
+        "properties": {
+          "chatLogPath": {
+            "title": "Chatlogpath",
+            "type": "string"
+          },
+          "chatLogValid": {
+            "title": "Chatlogvalid",
+            "type": "boolean"
+          },
+          "playerName": {
+            "title": "Playername",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chatLogPath",
+          "chatLogValid",
+          "playerName"
+        ],
+        "title": "GameConnection",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -340,6 +1324,149 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HealthStatus": {
+        "additionalProperties": true,
+        "description": "The health-check acknowledgement.",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthStatus",
+        "type": "object"
+      },
+      "HpOptimizerAttribute": {
+        "additionalProperties": true,
+        "description": "An attribute ranked by HP contribution.",
+        "properties": {
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "hpContribution": {
+            "title": "Hpcontribution",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "title": "Hpincrease",
+            "type": "number"
+          },
+          "levelsPerHp": {
+            "title": "Levelsperhp",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "hpIncrease",
+          "currentLevel",
+          "levelsPerHp",
+          "hpContribution"
+        ],
+        "title": "HpOptimizerAttribute",
+        "type": "object"
+      },
+      "HpOptimizerResult": {
+        "additionalProperties": true,
+        "description": "Skills/attributes ranked by PED cost per +1 HP.",
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/HpOptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentHp": {
+            "title": "Currenthp",
+            "type": "number"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/HpOptimizerSkill"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "currentHp",
+          "skills",
+          "attributes"
+        ],
+        "title": "HpOptimizerResult",
+        "type": "object"
+      },
+      "HpOptimizerSkill": {
+        "additionalProperties": true,
+        "description": "A regular skill ranked by PED per +1 HP.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "hpIncrease": {
+            "title": "Hpincrease",
+            "type": "number"
+          },
+          "hpPerPed": {
+            "title": "Hpperped",
+            "type": "number"
+          },
+          "levelsPerHp": {
+            "title": "Levelsperhp",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pedPerHp": {
+            "title": "Pedperhp",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "hpIncrease",
+          "currentLevel",
+          "levelsPerHp",
+          "pedPerHp",
+          "hpPerPed"
+        ],
+        "title": "HpOptimizerSkill",
         "type": "object"
       },
       "InventoryItemCreate": {
@@ -385,6 +1512,52 @@
           "markup_paid"
         ],
         "title": "InventoryItemCreate",
+        "type": "object"
+      },
+      "InventoryItemModel": {
+        "additionalProperties": true,
+        "description": "A persistent-inventory ledger item.",
+        "properties": {
+          "acquiredAt": {
+            "title": "Acquiredat",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "markupPaid": {
+            "title": "Markuppaid",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "ttValue": {
+            "title": "Ttvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ttValue",
+          "markupPaid",
+          "acquiredAt"
+        ],
+        "title": "InventoryItemModel",
         "type": "object"
       },
       "InventoryItemPatch": {
@@ -472,6 +1645,30 @@
         "title": "InventoryItemSell",
         "type": "object"
       },
+      "InventorySellResult": {
+        "additionalProperties": true,
+        "description": "The result of selling an inventory item.\n\n``ledgerEntry`` is always present, carrying the realised-delta entry or null\non a zero-delta sale, so it is served without an exclude flag.",
+        "properties": {
+          "ledgerEntry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LedgerItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "soldItem": {
+            "$ref": "#/components/schemas/InventoryItemModel"
+          }
+        },
+        "required": [
+          "soldItem"
+        ],
+        "title": "InventorySellResult",
+        "type": "object"
+      },
       "LedgerEntryCreate": {
         "properties": {
           "amount": {
@@ -505,6 +1702,46 @@
         "title": "LedgerEntryCreate",
         "type": "object"
       },
+      "LedgerItem": {
+        "additionalProperties": true,
+        "description": "A liquid-economy ledger entry (expense or markup).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "date": {
+            "title": "Date",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "date",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerItem",
+        "type": "object"
+      },
       "LedgerPresetCreate": {
         "properties": {
           "amount": {
@@ -536,6 +1773,106 @@
           "tag"
         ],
         "title": "LedgerPresetCreate",
+        "type": "object"
+      },
+      "LedgerPresetItem": {
+        "additionalProperties": true,
+        "description": "A ledger quick-entry preset (distinct from a ledger entry: name, not date).",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "description",
+          "amount",
+          "tag"
+        ],
+        "title": "LedgerPresetItem",
+        "type": "object"
+      },
+      "LootItem": {
+        "additionalProperties": true,
+        "description": "An item-name aggregate loot row within a session detail.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "ttValue": {
+            "title": "Ttvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "quantity",
+          "ttValue"
+        ],
+        "title": "LootItem",
+        "type": "object"
+      },
+      "LootItemEditResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a bulk loot-item deactivate / activate.",
+        "properties": {
+          "affectedRows": {
+            "title": "Affectedrows",
+            "type": "integer"
+          },
+          "itemName": {
+            "title": "Itemname",
+            "type": "string"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          },
+          "sessionTotalReturns": {
+            "title": "Sessiontotalreturns",
+            "type": "number"
+          },
+          "totalValueDelta": {
+            "title": "Totalvaluedelta",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sessionId",
+          "itemName",
+          "affectedRows",
+          "totalValueDelta",
+          "sessionTotalReturns"
+        ],
+        "title": "LootItemEditResult",
         "type": "object"
       },
       "LossesBreakdown": {
@@ -582,6 +1919,56 @@
         "title": "ManualMobLockRequest",
         "type": "object"
       },
+      "ManualMobLockResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a manual mob lock.",
+        "properties": {
+          "maturity": {
+            "title": "Maturity",
+            "type": "string"
+          },
+          "mobName": {
+            "title": "Mobname",
+            "type": "string"
+          },
+          "species": {
+            "title": "Species",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mobName",
+          "species",
+          "maturity"
+        ],
+        "title": "ManualMobLockResult",
+        "type": "object"
+      },
+      "ManualMobSuggestion": {
+        "additionalProperties": true,
+        "description": "An autocomplete suggestion for manual mob lock.",
+        "properties": {
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
+          "maturity": {
+            "title": "Maturity",
+            "type": "string"
+          },
+          "species": {
+            "title": "Species",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display",
+          "species",
+          "maturity"
+        ],
+        "title": "ManualMobSuggestion",
+        "type": "object"
+      },
       "MetaClaimRequest": {
         "properties": {
           "attribute_name": {
@@ -593,6 +1980,107 @@
           "attribute_name"
         ],
         "title": "MetaClaimRequest",
+        "type": "object"
+      },
+      "MobBreakdownRow": {
+        "additionalProperties": true,
+        "description": "A per-mob row for the session metadata-edit affordance.",
+        "properties": {
+          "currentName": {
+            "title": "Currentname",
+            "type": "string"
+          },
+          "killCount": {
+            "title": "Killcount",
+            "type": "integer"
+          },
+          "originalName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Originalname"
+          }
+        },
+        "required": [
+          "currentName",
+          "killCount"
+        ],
+        "title": "MobBreakdownRow",
+        "type": "object"
+      },
+      "MobComparison": {
+        "additionalProperties": true,
+        "description": "A per-mob activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "mobName": {
+            "title": "Mobname",
+            "type": "string"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mobName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "MobComparison",
+        "type": "object"
+      },
+      "MobEditResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a session mob rename / restore.",
+        "properties": {
+          "killCount": {
+            "title": "Killcount",
+            "type": "integer"
+          },
+          "mobName": {
+            "title": "Mobname",
+            "type": "string"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "mobName",
+          "killCount"
+        ],
+        "title": "MobEditResult",
         "type": "object"
       },
       "MonthlyPoint": {
@@ -704,6 +2192,138 @@
         "title": "NotableEvent",
         "type": "object"
       },
+      "OkResponse": {
+        "additionalProperties": true,
+        "description": "A bare ``{\"ok\": true}`` mutation acknowledgement.",
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "OkResponse",
+        "type": "object"
+      },
+      "OptimizerAttribute": {
+        "additionalProperties": true,
+        "description": "An attribute ranked by raw contribution factor.",
+        "properties": {
+          "contributionFactor": {
+            "title": "Contributionfactor",
+            "type": "number"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "contributionFactor"
+        ],
+        "title": "OptimizerAttribute",
+        "type": "object"
+      },
+      "OptimizerSkill": {
+        "additionalProperties": true,
+        "description": "A regular skill ranked by PED to the next profession level.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "levelsNeeded": {
+            "title": "Levelsneeded",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pedToNextLevel": {
+            "title": "Pedtonextlevel",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "levelsNeeded",
+          "pedToNextLevel"
+        ],
+        "title": "OptimizerSkill",
+        "type": "object"
+      },
+      "OverlayPosition": {
+        "additionalProperties": true,
+        "description": "The persisted overlay window position (null until first placed).",
+        "properties": {
+          "x": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
+          }
+        },
+        "title": "OverlayPosition",
+        "type": "object"
+      },
       "OverlayPositionPatch": {
         "properties": {
           "x": {
@@ -720,6 +2340,322 @@
           "y"
         ],
         "title": "OverlayPositionPatch",
+        "type": "object"
+      },
+      "PathAllocation": {
+        "additionalProperties": true,
+        "description": "One skill's allocation within a profession-path plan.",
+        "properties": {
+          "codexCategory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexcategory"
+          },
+          "codexDivisor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codexdivisor"
+          },
+          "currentLevel": {
+            "title": "Currentlevel",
+            "type": "number"
+          },
+          "levelsToGain": {
+            "title": "Levelstogain",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "newLevel": {
+            "title": "Newlevel",
+            "type": "number"
+          },
+          "pedCost": {
+            "title": "Pedcost",
+            "type": "number"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "weight",
+          "currentLevel",
+          "levelsToGain",
+          "pedCost",
+          "newLevel"
+        ],
+        "title": "PathAllocation",
+        "type": "object"
+      },
+      "PathOptimizerResult": {
+        "additionalProperties": true,
+        "description": "The cheapest allocation to a target / for a budget, or error.\n\nServed with ``response_model_exclude_unset=True`` so the success branch keeps\nits full plan (including a genuine null for the unused mode input) and the\nnot-found branch keeps just error/allocations/attributes.",
+        "properties": {
+          "allocations": {
+            "items": {
+              "$ref": "#/components/schemas/PathAllocation"
+            },
+            "title": "Allocations",
+            "type": "array"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "endLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endlevel"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "excluded": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExcludedSkill"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excluded"
+          },
+          "inputPedBudget": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputpedbudget"
+          },
+          "inputTargetLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inputtargetlevel"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "profession": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profession"
+          },
+          "professionLevelsGained": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Professionlevelsgained"
+          },
+          "totalPed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Totalped"
+          }
+        },
+        "required": [
+          "allocations",
+          "attributes"
+        ],
+        "title": "PathOptimizerResult",
+        "type": "object"
+      },
+      "PlaylistAnalyticsRow": {
+        "additionalProperties": true,
+        "description": "Per-playlist sustainability metrics from exact-match sessions.",
+        "properties": {
+          "longHorizonQuestCount": {
+            "title": "Longhorizonquestcount",
+            "type": "integer"
+          },
+          "matchedSessions": {
+            "title": "Matchedsessions",
+            "type": "integer"
+          },
+          "playlistId": {
+            "title": "Playlistid",
+            "type": "string"
+          },
+          "playlistName": {
+            "title": "Playlistname",
+            "type": "string"
+          },
+          "questCount": {
+            "title": "Questcount",
+            "type": "integer"
+          },
+          "totalArmourCost": {
+            "title": "Totalarmourcost",
+            "type": "number"
+          },
+          "totalBonusPesReward": {
+            "title": "Totalbonuspesreward",
+            "type": "number"
+          },
+          "totalBonusRewardPed": {
+            "title": "Totalbonusrewardped",
+            "type": "number"
+          },
+          "totalDurationSec": {
+            "title": "Totaldurationsec",
+            "type": "number"
+          },
+          "totalEnhancerCost": {
+            "title": "Totalenhancercost",
+            "type": "number"
+          },
+          "totalExpectedBonusRewardPed": {
+            "title": "Totalexpectedbonusrewardped",
+            "type": "number"
+          },
+          "totalExpectedImmediateRewardPed": {
+            "title": "Totalexpectedimmediaterewardped",
+            "type": "number"
+          },
+          "totalExpectedRewardPed": {
+            "title": "Totalexpectedrewardped",
+            "type": "number"
+          },
+          "totalHealCost": {
+            "title": "Totalhealcost",
+            "type": "number"
+          },
+          "totalImmediatePesReward": {
+            "title": "Totalimmediatepesreward",
+            "type": "number"
+          },
+          "totalImmediateRewardPed": {
+            "title": "Totalimmediaterewardped",
+            "type": "number"
+          },
+          "totalLootTt": {
+            "title": "Totalloottt",
+            "type": "number"
+          },
+          "totalPes": {
+            "title": "Totalpes",
+            "type": "number"
+          },
+          "totalPesReward": {
+            "title": "Totalpesreward",
+            "type": "number"
+          },
+          "totalRewardPed": {
+            "title": "Totalrewardped",
+            "type": "number"
+          },
+          "totalWeaponCost": {
+            "title": "Totalweaponcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "playlistId",
+          "playlistName",
+          "questCount",
+          "longHorizonQuestCount",
+          "matchedSessions",
+          "totalRewardPed",
+          "totalImmediateRewardPed",
+          "totalBonusRewardPed",
+          "totalPesReward",
+          "totalImmediatePesReward",
+          "totalBonusPesReward",
+          "totalExpectedRewardPed",
+          "totalExpectedImmediateRewardPed",
+          "totalExpectedBonusRewardPed",
+          "totalDurationSec",
+          "totalWeaponCost",
+          "totalHealCost",
+          "totalEnhancerCost",
+          "totalArmourCost",
+          "totalLootTt",
+          "totalPes"
+        ],
+        "title": "PlaylistAnalyticsRow",
         "type": "object"
       },
       "PlaylistCreate": {
@@ -765,6 +2701,37 @@
           "name"
         ],
         "title": "PlaylistCreate",
+        "type": "object"
+      },
+      "PlaylistItem": {
+        "additionalProperties": true,
+        "description": "A quest slot within a playlist.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "groupType": {
+            "title": "Grouptype",
+            "type": "string"
+          },
+          "questId": {
+            "title": "Questid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "questId",
+          "groupType"
+        ],
+        "title": "PlaylistItem",
         "type": "object"
       },
       "PlaylistItemInput": {
@@ -861,6 +2828,462 @@
           }
         },
         "title": "PlaylistUpdate",
+        "type": "object"
+      },
+      "ProcessingProgress": {
+        "additionalProperties": true,
+        "description": "OCR processing progress (pages done / total).",
+        "properties": {
+          "done": {
+            "title": "Done",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total"
+        ],
+        "title": "ProcessingProgress",
+        "type": "object"
+      },
+      "ProfessionLevel": {
+        "additionalProperties": true,
+        "description": "A profession level with anchor and gain-since-anchor.",
+        "properties": {
+          "anchorLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchorlevel"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "gainSinceAnchor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gainsinceanchor"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level",
+          "category"
+        ],
+        "title": "ProfessionLevel",
+        "type": "object"
+      },
+      "ProfessionOptimizerResult": {
+        "additionalProperties": true,
+        "description": "Skills/attributes ranked by cost to the next profession level, or error.\n\nServed with ``response_model_exclude_unset=True``: the success branch carries\nprofession/currentLevel/nextLevel/gap, the not-found branch carries error;\nskills/attributes appear in both.",
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerAttribute"
+            },
+            "title": "Attributes",
+            "type": "array"
+          },
+          "currentLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentlevel"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap"
+          },
+          "nextLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextlevel"
+          },
+          "profession": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profession"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/OptimizerSkill"
+            },
+            "title": "Skills",
+            "type": "array"
+          }
+        },
+        "required": [
+          "skills",
+          "attributes"
+        ],
+        "title": "ProfessionOptimizerResult",
+        "type": "object"
+      },
+      "ProspectOption": {
+        "additionalProperties": true,
+        "description": "A slice value available for a Prospect forecast.",
+        "properties": {
+          "cycledPed": {
+            "title": "Cycledped",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "sessions",
+          "kills",
+          "hours",
+          "cycledPed"
+        ],
+        "title": "ProspectOption",
+        "type": "object"
+      },
+      "Quest": {
+        "additionalProperties": true,
+        "description": "A quest as returned by the quest read/write endpoints.\n\nMirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.\nEvery key is always present; nullable fields carry an explicit null.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "chainName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chainname"
+          },
+          "chainPosition": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chainposition"
+          },
+          "chainTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chaintotal"
+          },
+          "cooldownDurationHours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldowndurationhours"
+          },
+          "cooldownExpiresAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cooldownexpiresat"
+          },
+          "expectedRewardMarkupPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedrewardmarkuppercent"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "playlistIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Playlistids",
+            "type": "array"
+          },
+          "reward": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reward"
+          },
+          "rewardDescription": {
+            "title": "Rewarddescription",
+            "type": "string"
+          },
+          "rewardIsSkill": {
+            "title": "Rewardisskill",
+            "type": "boolean"
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
+          "targetMobs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Targetmobs",
+            "type": "array"
+          },
+          "waypoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Waypoint"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "targetMobs",
+          "planet",
+          "rewardIsSkill",
+          "rewardDescription",
+          "notes",
+          "playlistIds"
+        ],
+        "title": "Quest",
+        "type": "object"
+      },
+      "QuestAnalyticsRow": {
+        "additionalProperties": true,
+        "description": "Per-quest sustainability metrics from curated linked sessions.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "expectedRewardMarkupPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedrewardmarkuppercent"
+          },
+          "linkedSessions": {
+            "title": "Linkedsessions",
+            "type": "integer"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "questId": {
+            "title": "Questid",
+            "type": "string"
+          },
+          "questName": {
+            "title": "Questname",
+            "type": "string"
+          },
+          "rewardIsSkill": {
+            "title": "Rewardisskill",
+            "type": "boolean"
+          },
+          "rewardPed": {
+            "title": "Rewardped",
+            "type": "number"
+          },
+          "totalArmourCost": {
+            "title": "Totalarmourcost",
+            "type": "number"
+          },
+          "totalDurationSec": {
+            "title": "Totaldurationsec",
+            "type": "number"
+          },
+          "totalEnhancerCost": {
+            "title": "Totalenhancercost",
+            "type": "number"
+          },
+          "totalExpectedRewardPed": {
+            "title": "Totalexpectedrewardped",
+            "type": "number"
+          },
+          "totalHealCost": {
+            "title": "Totalhealcost",
+            "type": "number"
+          },
+          "totalLootTt": {
+            "title": "Totalloottt",
+            "type": "number"
+          },
+          "totalPes": {
+            "title": "Totalpes",
+            "type": "number"
+          },
+          "totalWeaponCost": {
+            "title": "Totalweaponcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "questId",
+          "questName",
+          "planet",
+          "rewardPed",
+          "rewardIsSkill",
+          "totalExpectedRewardPed",
+          "linkedSessions",
+          "totalDurationSec",
+          "totalWeaponCost",
+          "totalHealCost",
+          "totalEnhancerCost",
+          "totalArmourCost",
+          "totalLootTt",
+          "totalPes"
+        ],
+        "title": "QuestAnalyticsRow",
         "type": "object"
       },
       "QuestCancel": {
@@ -1013,6 +3436,212 @@
           "name"
         ],
         "title": "QuestCreate",
+        "type": "object"
+      },
+      "QuestLinkDecisionResult": {
+        "additionalProperties": true,
+        "description": "The accept/decline outcome of a quest-link decision.\n\nServed with ``response_model_exclude_unset=True``: accept carries the link\nfields, decline carries only sessionId/status.",
+        "properties": {
+          "linkType": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linktype"
+          },
+          "playlistId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlistid"
+          },
+          "playlistName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlistname"
+          },
+          "questId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questid"
+          },
+          "questName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questname"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "status"
+        ],
+        "title": "QuestLinkDecisionResult",
+        "type": "object"
+      },
+      "QuestLinkSuggestion": {
+        "additionalProperties": true,
+        "description": "The curated post-session quest-link suggestion (link fields nullable).",
+        "properties": {
+          "playlistId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlistid"
+          },
+          "playlistName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlistname"
+          },
+          "questId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questid"
+          },
+          "questName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Questname"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          },
+          "suggestionType": {
+            "title": "Suggestiontype",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "suggestionType",
+          "reason"
+        ],
+        "title": "QuestLinkSuggestion",
+        "type": "object"
+      },
+      "QuestPlaylist": {
+        "additionalProperties": true,
+        "description": "A playlist as returned by the playlist read/write endpoints.",
+        "properties": {
+          "estimatedMinutes": {
+            "title": "Estimatedminutes",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "immediateQuestIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Immediatequestids",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlaylistItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "longHorizonQuestIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Longhorizonquestids",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "planet": {
+            "title": "Planet",
+            "type": "string"
+          },
+          "questIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "planet",
+          "estimatedMinutes",
+          "questIds",
+          "immediateQuestIds",
+          "longHorizonQuestIds",
+          "items"
+        ],
+        "title": "QuestPlaylist",
         "type": "object"
       },
       "QuestUpdate": {
@@ -1178,6 +3807,144 @@
         "title": "QuestUpdate",
         "type": "object"
       },
+      "RecordingAbortResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement that the in-flight recording was discarded.",
+        "properties": {
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "RecordingAbortResult",
+        "type": "object"
+      },
+      "RecordingStatus": {
+        "additionalProperties": true,
+        "description": "Recording lifecycle state plus live capture counters.",
+        "properties": {
+          "captures": {
+            "title": "Captures",
+            "type": "integer"
+          },
+          "keystrokes": {
+            "title": "Keystrokes",
+            "type": "integer"
+          },
+          "lines": {
+            "title": "Lines",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "lines",
+          "captures",
+          "keystrokes"
+        ],
+        "title": "RecordingStatus",
+        "type": "object"
+      },
+      "RecordingStopResult": {
+        "additionalProperties": true,
+        "description": "The outcome of finalising a recording.\n\nPolymorphic: the success branch carries ``finalized_path`` + ``determinism``\n(and ``diff`` only on a determinism leak); the failure branch carries\n``error`` + ``recovery_path``. Served with ``response_model_exclude_unset=True``\nso each branch keeps its own keys rather than gaining a wall of nulls.",
+        "properties": {
+          "determinism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Determinism"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finalized_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalized Path"
+          },
+          "recovery_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Path"
+          }
+        },
+        "title": "RecordingStopResult",
+        "type": "object"
+      },
+      "ReleaseMobResult": {
+        "additionalProperties": true,
+        "description": "The released mob/tag label, or null if nothing was locked.",
+        "properties": {
+          "released": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released"
+          }
+        },
+        "title": "ReleaseMobResult",
+        "type": "object"
+      },
       "RenameMobRequest": {
         "properties": {
           "fromMobName": {
@@ -1194,6 +3961,31 @@
           "toMobName"
         ],
         "title": "RenameMobRequest",
+        "type": "object"
+      },
+      "RepairScanResult": {
+        "additionalProperties": true,
+        "description": "A repair-cost OCR scan result.\n\nThe ``error`` key is intentionally undeclared: the failure branch adds it and\n``extra=\"allow\"`` passes it through, so the success branch never gains a null\nerror key.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "cost_ped": {
+            "title": "Cost Ped",
+            "type": "number"
+          },
+          "raw_text": {
+            "title": "Raw Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cost_ped",
+          "raw_text",
+          "confidence"
+        ],
+        "title": "RepairScanResult",
         "type": "object"
       },
       "RestoreMobRequest": {
@@ -1246,6 +4038,740 @@
         "title": "ReturnsBreakdown",
         "type": "object"
       },
+      "ScanAcceptResult": {
+        "additionalProperties": true,
+        "description": "The result of accepting a pending scan: persisted count, or ``error``.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          },
+          "skills_persisted": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Persisted"
+          }
+        },
+        "title": "ScanAcceptResult",
+        "type": "object"
+      },
+      "ScanCaptureResult": {
+        "additionalProperties": true,
+        "description": "A capture result: status plus the captured page number and success flag.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          }
+        },
+        "title": "ScanCaptureResult",
+        "type": "object"
+      },
+      "ScanManualStatus": {
+        "additionalProperties": true,
+        "description": "The manual skill-scan status (GET /scan/skills/status).\n\nEvery key is always emitted (``error`` and ``last_scan_time`` carry explicit\nnull when idle), so it is served without an exclude flag.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "captured_pages": {
+            "title": "Captured Pages",
+            "type": "integer"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "title": "Expected Pages",
+            "type": "integer"
+          },
+          "game_window_present": {
+            "title": "Game Window Present",
+            "type": "boolean"
+          },
+          "has_pending_result": {
+            "title": "Has Pending Result",
+            "type": "boolean"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "processing": {
+            "title": "Processing",
+            "type": "boolean"
+          },
+          "processing_progress": {
+            "$ref": "#/components/schemas/ProcessingProgress"
+          },
+          "skills_count": {
+            "title": "Skills Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "active",
+          "processing",
+          "captured_pages",
+          "expected_pages",
+          "skills_count",
+          "configured",
+          "game_window_present",
+          "phase",
+          "processing_progress",
+          "has_pending_result"
+        ],
+        "title": "ScanManualStatus",
+        "type": "object"
+      },
+      "ScanManualStatusOrError": {
+        "additionalProperties": true,
+        "description": "A scan verb result: the full status on success, or just ``error``.\n\nThe status fields are all optional and the route serialises with\n``response_model_exclude_unset=True``, so the success branch emits the full\nstatus while the refusal branch emits only ``error``.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          }
+        },
+        "title": "ScanManualStatusOrError",
+        "type": "object"
+      },
+      "ScanRejectResult": {
+        "additionalProperties": true,
+        "description": "The result of rejecting a pending scan, or ``error``.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok"
+          }
+        },
+        "title": "ScanRejectResult",
+        "type": "object"
+      },
+      "ScanUndoResult": {
+        "additionalProperties": true,
+        "description": "An undo result: status plus the page number that was undone.",
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "captured_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured Pages"
+          },
+          "configured": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Configured"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expected_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Pages"
+          },
+          "game_window_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Game Window Present"
+          },
+          "has_pending_result": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Pending Result"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "processing": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Processing"
+          },
+          "processing_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "skills_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skills Count"
+          },
+          "undone_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undone Page"
+          }
+        },
+        "title": "ScanUndoResult",
+        "type": "object"
+      },
+      "SessionDeletedResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement that a session was deleted (2-key).",
+        "properties": {
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "sessionId"
+        ],
+        "title": "SessionDeletedResult",
+        "type": "object"
+      },
+      "SessionDetail": {
+        "additionalProperties": true,
+        "description": "The expanded detail for a session.",
+        "properties": {
+          "deactivatedLootBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/LootItem"
+            },
+            "title": "Deactivatedlootbreakdown",
+            "type": "array"
+          },
+          "effectiveLoot": {
+            "title": "Effectiveloot",
+            "type": "number"
+          },
+          "lootBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/LootItem"
+            },
+            "title": "Lootbreakdown",
+            "type": "array"
+          },
+          "mobBreakdown": {
+            "items": {
+              "$ref": "#/components/schemas/MobBreakdownRow"
+            },
+            "title": "Mobbreakdown",
+            "type": "array"
+          },
+          "mobEntryMode": {
+            "title": "Mobentrymode",
+            "type": "string"
+          },
+          "notableEvents": {
+            "items": {
+              "$ref": "#/components/schemas/SessionNotableEvent"
+            },
+            "title": "Notableevents",
+            "type": "array"
+          },
+          "sessionId": {
+            "title": "Sessionid",
+            "type": "string"
+          },
+          "skillGains": {
+            "items": {
+              "$ref": "#/components/schemas/SessionSkillGain"
+            },
+            "title": "Skillgains",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/SessionSummary"
+          },
+          "toolStats": {
+            "items": {
+              "$ref": "#/components/schemas/ToolStat"
+            },
+            "title": "Toolstats",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessionId",
+          "summary",
+          "mobEntryMode",
+          "notableEvents",
+          "lootBreakdown",
+          "deactivatedLootBreakdown",
+          "mobBreakdown",
+          "effectiveLoot",
+          "toolStats",
+          "skillGains"
+        ],
+        "title": "SessionDetail",
+        "type": "object"
+      },
+      "SessionNotableEvent": {
+        "additionalProperties": true,
+        "description": "A notable event within a session detail (target/item shape).",
+        "properties": {
+          "eventType": {
+            "title": "Eventtype",
+            "type": "string"
+          },
+          "item": {
+            "title": "Item",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "eventType",
+          "target",
+          "item",
+          "value"
+        ],
+        "title": "SessionNotableEvent",
+        "type": "object"
+      },
       "SessionQuestLinkDecisionBody": {
         "properties": {
           "action": {
@@ -1257,6 +4783,80 @@
           "action"
         ],
         "title": "SessionQuestLinkDecisionBody",
+        "type": "object"
+      },
+      "SessionSkillGain": {
+        "additionalProperties": true,
+        "description": "A per-skill gain within a session detail.",
+        "properties": {
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "skillName": {
+            "title": "Skillname",
+            "type": "string"
+          },
+          "ttValueGained": {
+            "title": "Ttvaluegained",
+            "type": "number"
+          }
+        },
+        "required": [
+          "skillName",
+          "level",
+          "ttValueGained"
+        ],
+        "title": "SessionSkillGain",
+        "type": "object"
+      },
+      "SessionSummary": {
+        "additionalProperties": true,
+        "description": "The headline summary of a session detail.",
+        "properties": {
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "costBreakdown": {
+            "$ref": "#/components/schemas/TrackingCostBreakdown"
+          },
+          "duration": {
+            "title": "Duration",
+            "type": "integer"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "net": {
+            "title": "Net",
+            "type": "number"
+          },
+          "pes": {
+            "title": "Pes",
+            "type": "number"
+          },
+          "returnRate": {
+            "title": "Returnrate",
+            "type": "number"
+          },
+          "returns": {
+            "title": "Returns",
+            "type": "number"
+          }
+        },
+        "required": [
+          "cost",
+          "returns",
+          "pes",
+          "net",
+          "returnRate",
+          "kills",
+          "duration",
+          "costBreakdown"
+        ],
+        "title": "SessionSummary",
         "type": "object"
       },
       "SettingsPatch": {
@@ -1414,6 +5014,106 @@
         "title": "SettingsPatch",
         "type": "object"
       },
+      "SkillLevel": {
+        "additionalProperties": true,
+        "description": "A calibrated skill with rank, TT value, and anchor comparison.",
+        "properties": {
+          "anchorLevel": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchorlevel"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "gainSinceAnchor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gainsinceanchor"
+          },
+          "isAttribute": {
+            "title": "Isattribute",
+            "type": "boolean"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rankName": {
+            "title": "Rankname",
+            "type": "string"
+          },
+          "ttValue": {
+            "title": "Ttvalue",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "category",
+          "level",
+          "rankName",
+          "ttValue",
+          "isAttribute"
+        ],
+        "title": "SkillLevel",
+        "type": "object"
+      },
+      "SkillScanPending": {
+        "additionalProperties": true,
+        "description": "The held OCR result awaiting review: skill name to calibrated level.",
+        "properties": {
+          "skills": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Skills",
+            "type": "object"
+          }
+        },
+        "required": [
+          "skills"
+        ],
+        "title": "SkillScanPending",
+        "type": "object"
+      },
+      "SpacebarCaptureResult": {
+        "additionalProperties": true,
+        "description": "The spacebar-capture toggle acknowledgement.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "enabled"
+        ],
+        "title": "SpacebarCaptureResult",
+        "type": "object"
+      },
       "StopRecordingBody": {
         "properties": {
           "character_context": {
@@ -1456,6 +5156,51 @@
         "title": "StopRecordingBody",
         "type": "object"
       },
+      "TagComparison": {
+        "additionalProperties": true,
+        "description": "A per-tag activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "tagName": {
+            "title": "Tagname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tagName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "TagComparison",
+        "type": "object"
+      },
       "TagLockRequest": {
         "properties": {
           "tag": {
@@ -1467,6 +5212,21 @@
           "tag"
         ],
         "title": "TagLockRequest",
+        "type": "object"
+      },
+      "TagLockResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement of a free-text tag lock.",
+        "properties": {
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "title": "TagLockResult",
         "type": "object"
       },
       "TimelinePoint": {
@@ -1518,6 +5278,184 @@
           "ledgerLosses"
         ],
         "title": "TimelinePoint",
+        "type": "object"
+      },
+      "ToolStat": {
+        "additionalProperties": true,
+        "description": "A per-weapon stat row within a session detail.",
+        "properties": {
+          "costAttributed": {
+            "title": "Costattributed",
+            "type": "number"
+          },
+          "crits": {
+            "title": "Crits",
+            "type": "integer"
+          },
+          "damageDealt": {
+            "title": "Damagedealt",
+            "type": "number"
+          },
+          "shotsFired": {
+            "title": "Shotsfired",
+            "type": "integer"
+          },
+          "weaponName": {
+            "title": "Weaponname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "weaponName",
+          "shotsFired",
+          "damageDealt",
+          "crits",
+          "costAttributed"
+        ],
+        "title": "ToolStat",
+        "type": "object"
+      },
+      "TopProfession": {
+        "additionalProperties": true,
+        "description": "A profession headline (name / level / category) for the stats card.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "level",
+          "category"
+        ],
+        "title": "TopProfession",
+        "type": "object"
+      },
+      "TrackingCostBreakdown": {
+        "additionalProperties": true,
+        "description": "The cost breakdown within a session summary.",
+        "properties": {
+          "armourCost": {
+            "title": "Armourcost",
+            "type": "number"
+          },
+          "enhancerCost": {
+            "title": "Enhancercost",
+            "type": "number"
+          },
+          "healCost": {
+            "title": "Healcost",
+            "type": "number"
+          },
+          "weaponCost": {
+            "title": "Weaponcost",
+            "type": "number"
+          }
+        },
+        "required": [
+          "weaponCost",
+          "healCost",
+          "enhancerCost",
+          "armourCost"
+        ],
+        "title": "TrackingCostBreakdown",
+        "type": "object"
+      },
+      "TrackingSession": {
+        "additionalProperties": true,
+        "description": "A tracking-session summary row (history list).",
+        "properties": {
+          "cost": {
+            "title": "Cost",
+            "type": "number"
+          },
+          "duration": {
+            "title": "Duration",
+            "type": "integer"
+          },
+          "endTime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endtime"
+          },
+          "globals": {
+            "title": "Globals",
+            "type": "integer"
+          },
+          "hofs": {
+            "title": "Hofs",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "net": {
+            "title": "Net",
+            "type": "number"
+          },
+          "primaryMobs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Primarymobs",
+            "type": "array"
+          },
+          "primaryWeapons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Primaryweapons",
+            "type": "array"
+          },
+          "returnRate": {
+            "title": "Returnrate",
+            "type": "number"
+          },
+          "returns": {
+            "title": "Returns",
+            "type": "number"
+          },
+          "startTime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starttime"
+          }
+        },
+        "required": [
+          "id",
+          "duration",
+          "primaryMobs",
+          "primaryWeapons",
+          "cost",
+          "returns",
+          "net",
+          "returnRate",
+          "globals",
+          "hofs"
+        ],
+        "title": "TrackingSession",
         "type": "object"
       },
       "TrackingSnapshot": {
@@ -1922,6 +5860,192 @@
         "title": "TrackingSnapshot",
         "type": "object"
       },
+      "TrackingStartResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement that a tracking session started.",
+        "properties": {
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "started_at",
+          "status"
+        ],
+        "title": "TrackingStartResult",
+        "type": "object"
+      },
+      "TrackingStopResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement that the active tracking session stopped.",
+        "properties": {
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "kill_count": {
+            "title": "Kill Count",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "started_at",
+          "kill_count"
+        ],
+        "title": "TrackingStopResult",
+        "type": "object"
+      },
+      "TrifectaPreset": {
+        "additionalProperties": true,
+        "description": "One trifecta loadout preset with its readiness state.",
+        "properties": {
+          "bigWeaponId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bigweaponid"
+          },
+          "healId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healid"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "smallWeaponId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smallweaponid"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ready"
+        ],
+        "title": "TrifectaPreset",
+        "type": "object"
+      },
+      "TrifectaSettings": {
+        "additionalProperties": true,
+        "description": "The trifecta block of the settings response.",
+        "properties": {
+          "activePresetId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activepresetid"
+          },
+          "activePresetName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activepresetname"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "presets": {
+            "items": {
+              "$ref": "#/components/schemas/TrifectaPreset"
+            },
+            "title": "Presets",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "presets",
+          "ready"
+        ],
+        "title": "TrifectaSettings",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -1961,6 +6085,102 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WeaponComparison": {
+        "additionalProperties": true,
+        "description": "A per-weapon activity comparison row.",
+        "properties": {
+          "cycled": {
+            "title": "Cycled",
+            "type": "number"
+          },
+          "hours": {
+            "title": "Hours",
+            "type": "number"
+          },
+          "kills": {
+            "title": "Kills",
+            "type": "integer"
+          },
+          "lootRate": {
+            "title": "Lootrate",
+            "type": "number"
+          },
+          "pesPer100Ped": {
+            "title": "Pesper100Ped",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "weaponName": {
+            "title": "Weaponname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "weaponName",
+          "sessions",
+          "kills",
+          "hours",
+          "cycled",
+          "pesPer100Ped",
+          "lootRate"
+        ],
+        "title": "WeaponComparison",
+        "type": "object"
+      },
+      "WeaponComponent": {
+        "additionalProperties": true,
+        "description": "A weapon, amplifier, or scope sub-object of an equipment detail.\n\nThe amplifier and scope sub-objects are emitted by the same builder as the\nweapon, so they carry ``damageEnhancers`` too (the frontend type omits it on\nthe amplifier; the handler emits it, so it is modelled here and kept).",
+        "properties": {
+          "ammoBurn": {
+            "title": "Ammoburn",
+            "type": "number"
+          },
+          "catalogId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalogid"
+          },
+          "damageEnhancers": {
+            "title": "Damageenhancers",
+            "type": "integer"
+          },
+          "decay": {
+            "title": "Decay",
+            "type": "number"
+          },
+          "isLimited": {
+            "title": "Islimited",
+            "type": "boolean"
+          },
+          "markupPercent": {
+            "title": "Markuppercent",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "decay",
+          "ammoBurn",
+          "markupPercent",
+          "isLimited",
+          "damageEnhancers"
+        ],
+        "title": "WeaponComponent",
+        "type": "object"
       }
     }
   },
@@ -1978,7 +6198,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsActivity"
+                }
               }
             },
             "description": "Successful Response"
@@ -1998,7 +6220,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryItemModel"
+                  },
+                  "title": "Response List Inventory Items Api Analytics Inventory Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2026,7 +6254,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItemModel"
+                }
               }
             },
             "description": "Successful Response"
@@ -2067,7 +6297,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2116,7 +6348,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryItemModel"
+                }
               }
             },
             "description": "Successful Response"
@@ -2167,7 +6401,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/InventorySellResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2197,7 +6433,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerItem"
+                  },
+                  "title": "Response List Ledger Api Analytics Ledger Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2225,7 +6467,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -2255,7 +6499,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerPresetItem"
+                  },
+                  "title": "Response List Ledger Presets Api Analytics Ledger Presets Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2283,7 +6533,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerPresetItem"
+                }
               }
             },
             "description": "Successful Response"
@@ -2324,7 +6576,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2365,7 +6619,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2439,7 +6695,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CalibrationStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -2459,7 +6717,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CharacterCodexProgress"
+                  },
+                  "title": "Response Get Codex Api Character Codex Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2479,7 +6743,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HpOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2510,7 +6776,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ProfessionOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2583,7 +6851,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PathOptimizerResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2613,7 +6883,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfessionLevel"
+                  },
+                  "title": "Response Get Professions Api Character Professions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2721,7 +6997,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterProspectOptions"
+                }
               }
             },
             "description": "Successful Response"
@@ -2741,7 +7019,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillLevel"
+                  },
+                  "title": "Response Get Skills Api Character Skills Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2761,7 +7045,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CharacterStats"
+                }
               }
             },
             "description": "Successful Response"
@@ -2791,7 +7077,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexCalibrateResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2831,7 +7119,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexClaimResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2861,7 +7151,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexMetaAttribute"
+                  },
+                  "title": "Response Meta Attributes Api Codex Meta Attributes Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -2891,7 +7187,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexMetaClaimResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -2973,7 +7271,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexSkillOption"
+                  },
+                  "title": "Response Recommend Api Codex Recommend Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3003,7 +7307,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CodexSpecies"
+                  },
+                  "title": "Response List Species Api Codex Species Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3034,7 +7344,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CodexRankBreakdown"
+                }
               }
             },
             "description": "Successful Response"
@@ -3063,7 +7375,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsActivity"
+                }
               }
             },
             "description": "Successful Response"
@@ -3082,7 +7396,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryItemModel"
+                  },
+                  "title": "Response Demo List Inventory Items Api Demo Analytics Inventory Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3101,7 +7421,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerItem"
+                  },
+                  "title": "Response Demo List Ledger Api Demo Analytics Ledger Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3120,7 +7446,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LedgerPresetItem"
+                  },
+                  "title": "Response Demo List Ledger Presets Api Demo Analytics Ledger Presets Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3193,7 +7525,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -3222,7 +7556,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackingSession"
+                  },
+                  "title": "Response Demo List Sessions Api Demo Tracking Sessions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3273,7 +7613,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CostResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -3303,7 +7645,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Equipment"
+                  },
+                  "title": "Response Get Library Api Equipment Library Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3331,7 +7679,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Equipment"
+                }
               }
             },
             "description": "Successful Response"
@@ -3372,7 +7722,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -3421,7 +7773,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Equipment"
+                }
               }
             },
             "description": "Successful Response"
@@ -3462,7 +7816,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/EquipmentDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -3514,7 +7870,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EquipmentSearchResult"
+                  },
+                  "title": "Response Search Items Api Equipment Search Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3543,7 +7905,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -3563,7 +7927,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Quest"
+                  },
+                  "title": "Response List Quests Api Quests Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3591,7 +7961,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3621,7 +7993,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuestAnalyticsRow"
+                  },
+                  "title": "Response Quest Analytics Api Quests Analytics Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3641,7 +8019,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Mob Names Api Quests Mobs Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3661,7 +8045,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuestPlaylist"
+                  },
+                  "title": "Response List Playlists Api Quests Playlists Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3689,7 +8079,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestPlaylist"
+                }
               }
             },
             "description": "Successful Response"
@@ -3719,7 +8111,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlaylistAnalyticsRow"
+                  },
+                  "title": "Response Playlist Analytics Api Quests Playlists Analytics Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -3750,7 +8148,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3799,7 +8199,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestPlaylist"
+                }
               }
             },
             "description": "Successful Response"
@@ -3840,7 +8242,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -3879,7 +8283,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3928,7 +8334,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -3986,7 +8394,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -4027,7 +8437,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -4068,7 +8480,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/Quest"
+                }
               }
             },
             "description": "Successful Response"
@@ -4098,7 +8512,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingAbortResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4118,7 +8534,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4138,7 +8556,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4168,7 +8588,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStopResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4197,7 +8619,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanAcceptResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4216,7 +8640,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -4235,53 +8661,15 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanCaptureResult"
+                }
               }
             },
             "description": "Successful Response"
           }
         },
         "summary": "Skill Capture",
-        "tags": [
-          "scan-manual"
-        ]
-      }
-    },
-    "/api/scan/skills/capture/{page}": {
-      "get": {
-        "operationId": "skill_capture_png_api_scan_skills_capture__page__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "page",
-            "required": true,
-            "schema": {
-              "title": "Page",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Skill Capture Png",
         "tags": [
           "scan-manual"
         ]
@@ -4294,7 +8682,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SkillScanPending"
+                }
               }
             },
             "description": "Successful Response"
@@ -4313,7 +8703,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -4332,7 +8724,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanRejectResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4369,7 +8763,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatusOrError"
+                }
               }
             },
             "description": "Successful Response"
@@ -4398,7 +8794,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanManualStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -4417,7 +8815,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ScanUndoResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4447,7 +8847,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SpacebarCaptureResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4477,7 +8879,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"
@@ -4505,7 +8909,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"
@@ -4534,7 +8940,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayPosition"
+                }
               }
             },
             "description": "Successful Response"
@@ -4561,7 +8969,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -4591,7 +9001,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"
@@ -4621,7 +9033,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ManualMobLockResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4673,7 +9087,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManualMobSuggestion"
+                  },
+                  "title": "Response Manual Mob Suggestions Api Tracking Manual Mob Suggestions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -4703,7 +9123,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseMobResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4734,7 +9156,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDeletedResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4773,7 +9197,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
               }
             },
             "description": "Successful Response"
@@ -4824,7 +9250,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ArmourCostResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4874,7 +9302,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LootItemEditResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4924,7 +9354,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/LootItemEditResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -4975,7 +9407,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestLinkDecisionResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5016,7 +9450,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/QuestLinkSuggestion"
+                }
               }
             },
             "description": "Successful Response"
@@ -5067,7 +9503,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MobEditResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5108,7 +9546,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RepairScanResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5159,7 +9599,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/MobEditResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5189,7 +9631,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrackingSession"
+                  },
+                  "title": "Response List Sessions Api Tracking Sessions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5231,7 +9679,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingStartResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5251,7 +9701,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingStopResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5281,7 +9733,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/TagLockResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5333,7 +9787,13 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Tag Suggestions Api Tracking Tag Suggestions Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"

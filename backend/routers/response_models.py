@@ -1,7 +1,7 @@
 """Pydantic response models for the API's read surface.
 
-These describe the JSON shapes the handlers already return; they do not change
-behaviour. Two deliberate conventions make that guarantee hold:
+These describe the JSON shapes the handlers already return; no field is added,
+dropped, or changed in value. Three deliberate conventions make that hold:
 
 - Every model sets ``extra="allow"``. A handler may return keys a model does not
   enumerate; those pass through untouched rather than being dropped, so adding a
@@ -11,6 +11,10 @@ behaviour. Two deliberate conventions make that guarantee hold:
   and their routes serialise with ``response_model_exclude_unset=True`` so only
   the keys the handler actually set appear. Without that, the lean ``unavailable``
   and ``idle`` shapes would gain a wall of explicit nulls.
+- Numeric value fields are typed ``float`` (the contract's number form), so an
+  integer-valued number serialises in its float form, which is value-identical
+  to JSON consumers; genuinely integral fields (counts, ranks, identifiers) are
+  typed ``int``.
 
 The schema these produce is what the contract suite (``test_api_contract.py``)
 validates real responses against.
@@ -175,3 +179,1002 @@ class CharacterProspect(_Loose):
     error: str | None = None
     rows: list[Any] | None = None
     warnings: list[Any] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shared acknowledgement shapes
+# ---------------------------------------------------------------------------
+
+
+class OkResponse(_Loose):
+    """A bare ``{"ok": true}`` mutation acknowledgement."""
+
+    ok: bool
+
+
+class DeletedStatus(_Loose):
+    """A ``{"status": "deleted"}`` soft-delete acknowledgement."""
+
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# Quests + playlists (/quests, /quests/playlists)
+# ---------------------------------------------------------------------------
+
+
+class Quest(_Loose):
+    """A quest as returned by the quest read/write endpoints.
+
+    Mirrors the frontend ``Quest`` type field-for-field, camelCase verbatim.
+    Every key is always present; nullable fields carry an explicit null.
+    """
+
+    id: str
+    name: str
+    category: str | None = None
+    targetMobs: list[str]
+    planet: str
+    waypoint: str | None = None
+    cooldownDurationHours: float | None = None
+    cooldownExpiresAt: str | None = None
+    reward: float | None = None
+    rewardIsSkill: bool
+    expectedRewardMarkupPercent: float | None = None
+    rewardDescription: str
+    notes: str
+    chainName: str | None = None
+    chainPosition: int | None = None
+    chainTotal: int | None = None
+    playlistIds: list[str]
+    startedAt: float | None = None  # unix timestamp (time.time()), fractional
+
+
+class QuestAnalyticsRow(_Loose):
+    """Per-quest sustainability metrics from curated linked sessions."""
+
+    questId: str
+    questName: str
+    planet: str
+    category: str | None = None
+    rewardPed: float
+    rewardIsSkill: bool
+    expectedRewardMarkupPercent: float | None = None
+    totalExpectedRewardPed: float
+    linkedSessions: int
+    totalDurationSec: float
+    totalWeaponCost: float
+    totalHealCost: float
+    totalEnhancerCost: float
+    totalArmourCost: float
+    totalLootTt: float
+    totalPes: float
+
+
+class PlaylistItem(_Loose):
+    """A quest slot within a playlist."""
+
+    questId: str
+    description: str | None = None
+    groupType: str
+
+
+class QuestPlaylist(_Loose):
+    """A playlist as returned by the playlist read/write endpoints."""
+
+    id: str
+    name: str
+    planet: str
+    estimatedMinutes: int
+    questIds: list[str]
+    immediateQuestIds: list[str]
+    longHorizonQuestIds: list[str]
+    items: list[PlaylistItem]
+
+
+class PlaylistAnalyticsRow(_Loose):
+    """Per-playlist sustainability metrics from exact-match sessions."""
+
+    playlistId: str
+    playlistName: str
+    questCount: int
+    longHorizonQuestCount: int
+    matchedSessions: int
+    totalRewardPed: float
+    totalImmediateRewardPed: float
+    totalBonusRewardPed: float
+    totalPesReward: float
+    totalImmediatePesReward: float
+    totalBonusPesReward: float
+    totalExpectedRewardPed: float
+    totalExpectedImmediateRewardPed: float
+    totalExpectedBonusRewardPed: float
+    totalDurationSec: float
+    totalWeaponCost: float
+    totalHealCost: float
+    totalEnhancerCost: float
+    totalArmourCost: float
+    totalLootTt: float
+    totalPes: float
+
+
+# ---------------------------------------------------------------------------
+# Codex (/codex)
+# ---------------------------------------------------------------------------
+
+
+class CodexSpecies(_Loose):
+    """A mob species row with codex base cost and player rank progress."""
+
+    name: str
+    baseCost: float
+    codexType: str | None = None
+    currentRank: int
+    nextRank: int | None = None
+    nextCategory: str | None = None
+    nextCost: float | None = None
+
+
+class CodexRankItem(_Loose):
+    """One of a species' 25 codex ranks, cross-referenced with claims."""
+
+    rank: int
+    category: str
+    cost: float
+    rewardPed: float
+    cat4Bonus: bool
+    cat4RewardPed: float | None = None
+    skills: list[str]
+    cat4Skills: list[str]
+    claimed: bool
+    claimedSkill: str | None = None
+    claimedPed: float | None = None
+    isNext: bool
+
+
+class CodexRankBreakdown(_Loose):
+    """A species' full 25-rank breakdown, cross-referenced with claims."""
+
+    speciesName: str
+    baseCost: float
+    codexType: str | None = None
+    currentRank: int
+    ranks: list[CodexRankItem]
+
+
+class CodexClaimResult(_Loose):
+    """Acknowledgement of a claimed codex rank reward."""
+
+    speciesName: str
+    rank: int
+    skillName: str
+    pedValue: float
+
+
+class CodexCalibrateResult(_Loose):
+    """Acknowledgement of a direct codex-rank calibration."""
+
+    speciesName: str
+    rank: int
+
+
+class CodexSkillOption(_Loose):
+    """A skill choice for a codex rank, ranked by profession or HP gain."""
+
+    skillName: str
+    category: str
+    rewardPed: float
+    currentLevel: float | None = None
+    levelsGained: float
+    professionWeight: int
+    profContribution: float
+    hpIncrease: float | None = None
+    hpGain: float
+    recommendRank: int | None = None
+
+
+class CodexMetaAttribute(_Loose):
+    """A meta-codex attribute with its current calibrated level."""
+
+    name: str
+    currentLevel: float | None = None
+
+
+class CodexMetaClaimResult(_Loose):
+    """Acknowledgement of a claimed meta-codex attribute reward."""
+
+    attributeName: str
+    pedValue: float
+
+
+# ---------------------------------------------------------------------------
+# Equipment (/equipment)
+# ---------------------------------------------------------------------------
+
+
+class EquipmentSearchResult(_Loose):
+    """A catalogue search hit, with ammo burn already converted to PEC."""
+
+    catalogId: str
+    name: str
+    decay: float
+    ammoBurn: float
+    isLimited: bool
+
+
+class Equipment(_Loose):
+    """A library entry with computed per-use cost (the list shape)."""
+
+    id: str
+    name: str
+    type: str
+    amplifierName: str | None = None
+    costPerUse: float
+    damageMin: float | None = None
+    damageMax: float | None = None
+    reloadSeconds: float | None = None
+    isLimited: bool
+    enrichmentLevel: int
+
+
+class CostBreakdownLine(_Loose):
+    """One line of a per-use cost breakdown."""
+
+    component: str
+    costPec: float
+    markupMultiplier: float
+    effectiveCostPec: float
+
+
+class WeaponComponent(_Loose):
+    """A weapon, amplifier, or scope sub-object of an equipment detail.
+
+    The amplifier and scope sub-objects are emitted by the same builder as the
+    weapon, so they carry ``damageEnhancers`` too (the frontend type omits it on
+    the amplifier; the handler emits it, so it is modelled here and kept).
+    """
+
+    catalogId: str | None = None
+    name: str
+    decay: float
+    ammoBurn: float
+    markupPercent: int
+    isLimited: bool
+    damageEnhancers: int
+
+
+class AbsorberComponent(_Loose):
+    """The absorber sub-object of an equipment detail (carries absorption)."""
+
+    catalogId: str | None = None
+    name: str
+    decay: float
+    ammoBurn: float
+    absorptionPercent: float
+    markupPercent: int
+    isLimited: bool
+
+
+class EquipmentDetail(_Loose):
+    """The expanded detail for a library item, with cost breakdown."""
+
+    id: str
+    weapon: WeaponComponent
+    amplifier: WeaponComponent | None = None
+    scope: WeaponComponent | None = None
+    absorber: AbsorberComponent | None = None
+    costBreakdown: list[CostBreakdownLine]
+    totalCostPerUse: float
+
+
+class CostResult(_Loose):
+    """A standalone cost calculation (breakdown plus total)."""
+
+    costBreakdown: list[CostBreakdownLine]
+    totalCostPerUse: float
+
+
+# ---------------------------------------------------------------------------
+# Settings (/settings)
+# ---------------------------------------------------------------------------
+
+
+class GameConnection(_Loose):
+    """The chat.log connection block of the settings response."""
+
+    chatLogPath: str
+    chatLogValid: bool
+    playerName: str
+
+
+class TrifectaPreset(_Loose):
+    """One trifecta loadout preset with its readiness state."""
+
+    id: str
+    name: str
+    smallWeaponId: int | None = None
+    bigWeaponId: int | None = None
+    healId: int | None = None
+    ready: bool
+    message: str | None = None
+
+
+class TrifectaSettings(_Loose):
+    """The trifecta block of the settings response."""
+
+    activePresetId: str | None = None
+    activePresetName: str | None = None
+    presets: list[TrifectaPreset]
+    ready: bool
+    message: str | None = None
+
+
+class AppSettings(_Loose):
+    """The full application settings response."""
+
+    gameConnection: GameConnection
+    hotbarHooksEnabled: bool
+    repairOcrEnabled: bool
+    endOfSessionArmourReminderEnabled: bool
+    developerModeEnabled: bool
+    mobTrackingMode: str
+    mobTrackingTag: str
+    hotbar: dict[str, int | None]
+    trifecta: TrifectaSettings
+    lootFilterBlacklist: list[str]
+    dbPath: str
+    appVersion: str
+
+
+class OverlayPosition(_Loose):
+    """The persisted overlay window position (null until first placed)."""
+
+    x: int | None = None
+    y: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Recording (developer-only) (/recording)
+# ---------------------------------------------------------------------------
+
+
+class RecordingStatus(_Loose):
+    """Recording lifecycle state plus live capture counters."""
+
+    state: str
+    started_at: str | None = None
+    lines: int
+    captures: int
+    keystrokes: int
+
+
+class RecordingStopResult(_Loose):
+    """The outcome of finalising a recording.
+
+    Polymorphic: the success branch carries ``finalized_path`` + ``determinism``
+    (and ``diff`` only on a determinism leak); the failure branch carries
+    ``error`` + ``recovery_path``. Served with ``response_model_exclude_unset=True``
+    so each branch keeps its own keys rather than gaining a wall of nulls.
+    """
+
+    finalized_path: str | None = None
+    determinism: str | None = None
+    diff: str | None = None
+    error: str | None = None
+    recovery_path: str | None = None
+
+
+class RecordingAbortResult(_Loose):
+    """Acknowledgement that the in-flight recording was discarded."""
+
+    state: str
+
+
+# ---------------------------------------------------------------------------
+# Manual skill scan (/scan)
+# ---------------------------------------------------------------------------
+
+
+class ProcessingProgress(_Loose):
+    """OCR processing progress (pages done / total)."""
+
+    done: int
+    total: int
+
+
+class ScanManualStatus(_Loose):
+    """The manual skill-scan status (GET /scan/skills/status).
+
+    Every key is always emitted (``error`` and ``last_scan_time`` carry explicit
+    null when idle), so it is served without an exclude flag.
+    """
+
+    active: bool
+    processing: bool
+    captured_pages: int
+    expected_pages: int
+    last_scan_time: float | None = None
+    skills_count: int
+    configured: bool
+    game_window_present: bool
+    phase: str
+    processing_progress: ProcessingProgress
+    has_pending_result: bool
+    error: str | None = None
+
+
+class ScanManualStatusOrError(_Loose):
+    """A scan verb result: the full status on success, or just ``error``.
+
+    The status fields are all optional and the route serialises with
+    ``response_model_exclude_unset=True``, so the success branch emits the full
+    status while the refusal branch emits only ``error``.
+    """
+
+    active: bool | None = None
+    processing: bool | None = None
+    captured_pages: int | None = None
+    expected_pages: int | None = None
+    last_scan_time: float | None = None
+    skills_count: int | None = None
+    configured: bool | None = None
+    game_window_present: bool | None = None
+    phase: str | None = None
+    processing_progress: ProcessingProgress | None = None
+    has_pending_result: bool | None = None
+    error: str | None = None
+
+
+class ScanCaptureResult(ScanManualStatusOrError):
+    """A capture result: status plus the captured page number and success flag."""
+
+    page: int | None = None
+    captured: bool | None = None
+
+
+class ScanUndoResult(ScanManualStatusOrError):
+    """An undo result: status plus the page number that was undone."""
+
+    undone_page: int | None = None
+
+
+class ScanAcceptResult(_Loose):
+    """The result of accepting a pending scan: persisted count, or ``error``."""
+
+    ok: bool | None = None
+    skills_persisted: int | None = None
+    error: str | None = None
+
+
+class ScanRejectResult(_Loose):
+    """The result of rejecting a pending scan, or ``error``."""
+
+    ok: bool | None = None
+    error: str | None = None
+
+
+class SkillScanPending(_Loose):
+    """The held OCR result awaiting review: skill name to calibrated level."""
+
+    skills: dict[str, float]
+
+
+class SpacebarCaptureResult(_Loose):
+    """The spacebar-capture toggle acknowledgement."""
+
+    ok: bool
+    enabled: bool
+
+
+# ---------------------------------------------------------------------------
+# Analytics (/analytics): activity, ledger, inventory
+# (AnalyticsOverview is defined above, beside the tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class MobComparison(_Loose):
+    """A per-mob activity comparison row."""
+
+    mobName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class TagComparison(_Loose):
+    """A per-tag activity comparison row."""
+
+    tagName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class WeaponComparison(_Loose):
+    """A per-weapon activity comparison row."""
+
+    weaponName: str
+    sessions: int
+    kills: int
+    hours: float
+    cycled: float
+    pesPer100Ped: float
+    lootRate: float
+
+
+class AnalyticsActivity(_Loose):
+    """The activity tab's mob / tag / weapon comparison tables."""
+
+    mobComparisons: list[MobComparison]
+    tagComparisons: list[TagComparison]
+    weaponComparisons: list[WeaponComparison]
+
+
+class LedgerItem(_Loose):
+    """A liquid-economy ledger entry (expense or markup)."""
+
+    id: str
+    date: str
+    type: str
+    description: str
+    amount: float
+    tag: str
+
+
+class LedgerPresetItem(_Loose):
+    """A ledger quick-entry preset (distinct from a ledger entry: name, not date)."""
+
+    id: str
+    name: str
+    type: str
+    description: str
+    amount: float
+    tag: str
+
+
+class InventoryItemModel(_Loose):
+    """A persistent-inventory ledger item."""
+
+    id: str
+    name: str
+    ttValue: float
+    markupPaid: float
+    notes: str | None = None
+    acquiredAt: str
+
+
+class InventorySellResult(_Loose):
+    """The result of selling an inventory item.
+
+    ``ledgerEntry`` is always present, carrying the realised-delta entry or null
+    on a zero-delta sale, so it is served without an exclude flag.
+    """
+
+    ledgerEntry: LedgerItem | None = None
+    soldItem: InventoryItemModel
+
+
+class HealthStatus(_Loose):
+    """The health-check acknowledgement."""
+
+    status: str
+
+
+# ---------------------------------------------------------------------------
+# Character (/character): calibration, stats, skills, professions, optimizers
+# (CharacterProspect is defined above, beside the tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class CalibrationStatus(_Loose):
+    """Skill-calibration freshness status (lastCalibration null if never run)."""
+
+    calibrated: bool
+    lastCalibration: str | None = None
+    stale: bool
+
+
+class TopProfession(_Loose):
+    """A profession headline (name / level / category) for the stats card."""
+
+    name: str
+    level: float
+    category: str
+
+
+class CharacterStats(_Loose):
+    """HP and the top profession levels."""
+
+    hp: int
+    topProfessions: list[TopProfession]
+
+
+class SkillLevel(_Loose):
+    """A calibrated skill with rank, TT value, and anchor comparison."""
+
+    name: str
+    category: str
+    level: float
+    anchorLevel: float | None = None
+    gainSinceAnchor: float | None = None
+    rankName: str
+    ttValue: float
+    isAttribute: bool
+
+
+class ProfessionLevel(_Loose):
+    """A profession level with anchor and gain-since-anchor."""
+
+    name: str
+    level: float
+    anchorLevel: float | None = None
+    gainSinceAnchor: float | None = None
+    category: str
+
+
+class ProspectOption(_Loose):
+    """A slice value available for a Prospect forecast."""
+
+    value: str
+    label: str
+    sessions: int
+    kills: int
+    hours: float
+    cycledPed: float
+
+
+class CharacterProspectOptions(_Loose):
+    """The tag / mob / weapon slices available for Prospect forecasts."""
+
+    tags: list[ProspectOption]
+    mobs: list[ProspectOption]
+    weapons: list[ProspectOption]
+
+
+class OptimizerSkill(_Loose):
+    """A regular skill ranked by PED to the next profession level."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    levelsNeeded: float
+    pedToNextLevel: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class OptimizerAttribute(_Loose):
+    """An attribute ranked by raw contribution factor."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    contributionFactor: float
+
+
+class ProfessionOptimizerResult(_Loose):
+    """Skills/attributes ranked by cost to the next profession level, or error.
+
+    Served with ``response_model_exclude_unset=True``: the success branch carries
+    profession/currentLevel/nextLevel/gap, the not-found branch carries error;
+    skills/attributes appear in both.
+    """
+
+    skills: list[OptimizerSkill]
+    attributes: list[OptimizerAttribute]
+    profession: str | None = None
+    currentLevel: float | None = None
+    nextLevel: float | None = None
+    gap: float | None = None
+    error: str | None = None
+
+
+class PathAllocation(_Loose):
+    """One skill's allocation within a profession-path plan."""
+
+    name: str
+    weight: float
+    currentLevel: float
+    levelsToGain: float
+    pedCost: float
+    newLevel: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class ExcludedSkill(_Loose):
+    """A skill excluded from a path plan, with the reason."""
+
+    name: str
+    weight: float
+    reason: str
+
+
+class PathOptimizerResult(_Loose):
+    """The cheapest allocation to a target / for a budget, or error.
+
+    Served with ``response_model_exclude_unset=True`` so the success branch keeps
+    its full plan (including a genuine null for the unused mode input) and the
+    not-found branch keeps just error/allocations/attributes.
+    """
+
+    allocations: list[PathAllocation]
+    attributes: list[OptimizerAttribute]
+    profession: str | None = None
+    mode: str | None = None
+    inputTargetLevel: float | None = None
+    inputPedBudget: float | None = None
+    currentLevel: float | None = None
+    endLevel: float | None = None
+    professionLevelsGained: float | None = None
+    totalPed: float | None = None
+    excluded: list[ExcludedSkill] | None = None
+    error: str | None = None
+
+
+class HpOptimizerSkill(_Loose):
+    """A regular skill ranked by PED per +1 HP."""
+
+    name: str
+    hpIncrease: float
+    currentLevel: float
+    levelsPerHp: float
+    pedPerHp: float
+    hpPerPed: float
+    codexCategory: str | None = None
+    codexDivisor: float | None = None
+
+
+class HpOptimizerAttribute(_Loose):
+    """An attribute ranked by HP contribution."""
+
+    name: str
+    hpIncrease: float
+    currentLevel: float
+    levelsPerHp: float
+    hpContribution: float
+
+
+class HpOptimizerResult(_Loose):
+    """Skills/attributes ranked by PED cost per +1 HP."""
+
+    currentHp: float
+    skills: list[HpOptimizerSkill]
+    attributes: list[HpOptimizerAttribute]
+
+
+class CharacterCodexProgress(_Loose):
+    """Per-skill codex progress prediction (codex-category skills only)."""
+
+    skillName: str
+    currentLevel: float
+    nextRewardValue: float
+    progress: float
+
+
+# ---------------------------------------------------------------------------
+# Tracking (/tracking): lifecycle, sessions, session detail, edits, quest link
+# (TrackingSnapshot is defined above, beside the other tracking-era models.)
+# ---------------------------------------------------------------------------
+
+
+class TrackingStartResult(_Loose):
+    """Acknowledgement that a tracking session started."""
+
+    session_id: str
+    started_at: str
+    status: str
+
+
+class TrackingStopResult(_Loose):
+    """Acknowledgement that the active tracking session stopped."""
+
+    session_id: str
+    started_at: str
+    ended_at: str | None = None
+    kill_count: int
+
+
+class ReleaseMobResult(_Loose):
+    """The released mob/tag label, or null if nothing was locked."""
+
+    released: str | None = None
+
+
+class ManualMobSuggestion(_Loose):
+    """An autocomplete suggestion for manual mob lock."""
+
+    display: str
+    species: str
+    maturity: str
+
+
+class ManualMobLockResult(_Loose):
+    """Acknowledgement of a manual mob lock."""
+
+    mobName: str
+    species: str
+    maturity: str
+
+
+class TagLockResult(_Loose):
+    """Acknowledgement of a free-text tag lock."""
+
+    tag: str
+
+
+class TrackingSession(_Loose):
+    """A tracking-session summary row (history list)."""
+
+    id: str
+    startTime: str | None = None
+    endTime: str | None = None
+    duration: int
+    primaryMobs: list[str]
+    primaryWeapons: list[str]
+    cost: float
+    returns: float
+    net: float
+    returnRate: float
+    globals: int
+    hofs: int
+
+
+class SessionDeletedResult(_Loose):
+    """Acknowledgement that a session was deleted (2-key)."""
+
+    status: str
+    sessionId: str
+
+
+class TrackingCostBreakdown(_Loose):
+    """The cost breakdown within a session summary."""
+
+    weaponCost: float
+    healCost: float
+    enhancerCost: float
+    armourCost: float
+
+
+class SessionSummary(_Loose):
+    """The headline summary of a session detail."""
+
+    cost: float
+    returns: float
+    pes: float
+    net: float
+    returnRate: float
+    kills: int
+    duration: int
+    costBreakdown: TrackingCostBreakdown
+
+
+class SessionNotableEvent(_Loose):
+    """A notable event within a session detail (target/item shape)."""
+
+    type: str
+    eventType: str
+    target: str
+    item: str
+    value: float
+
+
+class LootItem(_Loose):
+    """An item-name aggregate loot row within a session detail."""
+
+    name: str
+    quantity: int
+    ttValue: float
+
+
+class MobBreakdownRow(_Loose):
+    """A per-mob row for the session metadata-edit affordance."""
+
+    currentName: str
+    originalName: str | None = None
+    killCount: int
+
+
+class ToolStat(_Loose):
+    """A per-weapon stat row within a session detail."""
+
+    weaponName: str
+    shotsFired: int
+    damageDealt: float
+    crits: int
+    costAttributed: float
+
+
+class SessionSkillGain(_Loose):
+    """A per-skill gain within a session detail."""
+
+    skillName: str
+    level: float
+    ttValueGained: float
+
+
+class SessionDetail(_Loose):
+    """The expanded detail for a session."""
+
+    sessionId: str
+    summary: SessionSummary
+    mobEntryMode: str
+    notableEvents: list[SessionNotableEvent]
+    lootBreakdown: list[LootItem]
+    deactivatedLootBreakdown: list[LootItem]
+    mobBreakdown: list[MobBreakdownRow]
+    effectiveLoot: float
+    toolStats: list[ToolStat]
+    skillGains: list[SessionSkillGain]
+
+
+class MobEditResult(_Loose):
+    """Acknowledgement of a session mob rename / restore."""
+
+    sessionId: str
+    mobName: str
+    killCount: int
+
+
+class LootItemEditResult(_Loose):
+    """Acknowledgement of a bulk loot-item deactivate / activate."""
+
+    sessionId: str
+    itemName: str
+    affectedRows: int
+    totalValueDelta: float
+    sessionTotalReturns: float
+
+
+class RepairScanResult(_Loose):
+    """A repair-cost OCR scan result.
+
+    The ``error`` key is intentionally undeclared: the failure branch adds it and
+    ``extra="allow"`` passes it through, so the success branch never gains a null
+    error key.
+    """
+
+    cost_ped: float
+    raw_text: str
+    confidence: float
+
+
+class ArmourCostResult(_Loose):
+    """Acknowledgement of a saved armour-repair cost."""
+
+    sessionId: str
+    armourCost: float
+
+
+class QuestLinkSuggestion(_Loose):
+    """The curated post-session quest-link suggestion (link fields nullable)."""
+
+    sessionId: str
+    suggestionType: str
+    reason: str
+    questId: str | None = None
+    questName: str | None = None
+    playlistId: str | None = None
+    playlistName: str | None = None
+
+
+class QuestLinkDecisionResult(_Loose):
+    """The accept/decline outcome of a quest-link decision.
+
+    Served with ``response_model_exclude_unset=True``: accept carries the link
+    fields, decline carries only sessionId/status.
+    """
+
+    sessionId: str
+    status: str
+    linkType: str | None = None
+    questId: str | None = None
+    questName: str | None = None
+    playlistId: str | None = None
+    playlistName: str | None = None

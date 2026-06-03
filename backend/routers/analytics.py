@@ -13,7 +13,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
-from backend.routers.response_models import AnalyticsOverview
+from backend.routers.response_models import (
+    AnalyticsActivity,
+    AnalyticsOverview,
+    DeletedStatus,
+    InventoryItemModel,
+    InventorySellResult,
+    LedgerItem,
+    LedgerPresetItem,
+)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 ACTIVITY_DOMINANCE_THRESHOLD = 0.6
@@ -698,7 +706,7 @@ def _build_activity_slice_rows(
     return rows
 
 
-@router.get("/activity")
+@router.get("/activity", response_model=AnalyticsActivity)
 def analytics_activity():
     """Per-mob, per-tag, and per-weapon activity comparisons."""
     return activity_impl(get_services().app_db.conn)
@@ -774,7 +782,7 @@ class LedgerEntryCreate(BaseModel):
     tag: str
 
 
-@router.get("/ledger")
+@router.get("/ledger", response_model=list[LedgerItem])
 def list_ledger():
     """List all ledger entries.
 
@@ -805,7 +813,7 @@ def list_ledger_impl(conn):
     ]
 
 
-@router.post("/ledger")
+@router.post("/ledger", response_model=LedgerItem)
 def create_ledger_entry(entry: LedgerEntryCreate):
     """Create a new ledger entry."""
     svc = get_services()
@@ -825,7 +833,7 @@ def create_ledger_entry(entry: LedgerEntryCreate):
     }
 
 
-@router.delete("/ledger/{entry_id}")
+@router.delete("/ledger/{entry_id}", response_model=DeletedStatus)
 def delete_ledger_entry(entry_id: str):
     """Delete a ledger entry."""
     svc = get_services()
@@ -863,7 +871,7 @@ def _preset_row_to_dict(row) -> dict:
     }
 
 
-@router.get("/ledger/presets")
+@router.get("/ledger/presets", response_model=list[LedgerPresetItem])
 def list_ledger_presets():
     """List all ledger quick-entry presets."""
     return list_ledger_presets_impl(get_services().app_db.conn)
@@ -877,7 +885,7 @@ def list_ledger_presets_impl(conn):
     return [_preset_row_to_dict(r) for r in rows]
 
 
-@router.post("/ledger/presets")
+@router.post("/ledger/presets", response_model=LedgerPresetItem)
 def create_ledger_preset(preset: LedgerPresetCreate):
     """Create a new ledger quick-entry preset."""
     if preset.type not in ("expense", "markup"):
@@ -909,7 +917,7 @@ def create_ledger_preset(preset: LedgerPresetCreate):
     }
 
 
-@router.delete("/ledger/presets/{preset_id}")
+@router.delete("/ledger/presets/{preset_id}", response_model=DeletedStatus)
 def delete_ledger_preset(preset_id: str):
     """Delete a ledger quick-entry preset."""
     svc = get_services()
@@ -964,7 +972,7 @@ def _inventory_row_to_dict(row) -> dict:
     }
 
 
-@router.get("/inventory")
+@router.get("/inventory", response_model=list[InventoryItemModel])
 def list_inventory_items():
     """List all inventory items, newest first."""
     return list_inventory_items_impl(get_services().app_db.conn)
@@ -978,7 +986,7 @@ def list_inventory_items_impl(conn):
     return [_inventory_row_to_dict(r) for r in rows]
 
 
-@router.post("/inventory")
+@router.post("/inventory", response_model=InventoryItemModel)
 def create_inventory_item(item: InventoryItemCreate):
     """Create a new inventory item."""
     svc = get_services()
@@ -998,7 +1006,7 @@ def create_inventory_item(item: InventoryItemCreate):
     return _inventory_row_to_dict(row)
 
 
-@router.patch("/inventory/{item_id}")
+@router.patch("/inventory/{item_id}", response_model=InventoryItemModel)
 def update_inventory_item(item_id: str, patch: InventoryItemPatch):
     """Edit fields on an inventory item. Bumps updated_at."""
     svc = get_services()
@@ -1041,7 +1049,7 @@ def update_inventory_item(item_id: str, patch: InventoryItemPatch):
     return _inventory_row_to_dict(row)
 
 
-@router.delete("/inventory/{item_id}")
+@router.delete("/inventory/{item_id}", response_model=DeletedStatus)
 def delete_inventory_item(item_id: str):
     """Hard delete an inventory item (correction path, no ledger entry emitted)."""
     svc = get_services()
@@ -1055,7 +1063,7 @@ def delete_inventory_item(item_id: str):
     return {"status": "deleted"}
 
 
-@router.post("/inventory/{item_id}/sell")
+@router.post("/inventory/{item_id}/sell", response_model=InventorySellResult)
 def sell_inventory_item(item_id: str, payload: InventoryItemSell):
     """Sell an inventory item: emit realised delta to ledger + remove row, atomically.
 

@@ -41,7 +41,13 @@ from backend.core.event_bus import EventBus
 from backend.routers import analytics as analytics_router
 from backend.routers import tracking as tracking_router
 from backend.routers.response_models import (
+    AnalyticsActivity,
     AnalyticsOverview,
+    InventoryItemModel,
+    LedgerItem,
+    LedgerPresetItem,
+    SessionDetail,
+    TrackingSession,
     TrackingSnapshot,
 )
 
@@ -180,22 +186,22 @@ def demo_analytics_overview(period: str = "all"):
     return analytics_router.overview_impl(_ensure_conn(), period)
 
 
-@router.get("/analytics/activity")
+@router.get("/analytics/activity", response_model=AnalyticsActivity)
 def demo_analytics_activity():
     return analytics_router.activity_impl(_ensure_conn())
 
 
-@router.get("/analytics/ledger")
+@router.get("/analytics/ledger", response_model=list[LedgerItem])
 def demo_list_ledger():
     return analytics_router.list_ledger_impl(_ensure_conn())
 
 
-@router.get("/analytics/ledger/presets")
+@router.get("/analytics/ledger/presets", response_model=list[LedgerPresetItem])
 def demo_list_ledger_presets():
     return analytics_router.list_ledger_presets_impl(_ensure_conn())
 
 
-@router.get("/analytics/inventory")
+@router.get("/analytics/inventory", response_model=list[InventoryItemModel])
 def demo_list_inventory_items():
     return analytics_router.list_inventory_items_impl(_ensure_conn())
 
@@ -203,12 +209,12 @@ def demo_list_inventory_items():
 # ── Tracking ───────────────────────────────────────────────────────────────
 
 
-@router.get("/tracking/sessions")
+@router.get("/tracking/sessions", response_model=list[TrackingSession])
 def demo_list_sessions():
     return tracking_router.list_sessions_impl(_ensure_conn())
 
 
-@router.get("/tracking/session/{session_id}")
+@router.get("/tracking/session/{session_id}", response_model=SessionDetail)
 def demo_get_session(session_id: str):
     return tracking_router.get_session_impl(_ensure_conn(), session_id)
 

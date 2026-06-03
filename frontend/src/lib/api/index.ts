@@ -1,66 +1,33 @@
 /**
  * Backend API client: typed fetch wrappers for the Python backend.
  *
- * All backend communication goes through this module.
+ * All backend communication goes through this module. Since the generated
+ * client landed, each wrapper delegates to `client` (openapi-fetch over the
+ * generated `schema.d.ts`), which verifies the path, method, parameters, and
+ * request body against the backend's OpenAPI contract at compile time. The
+ * wrappers keep their hand-written return types: those interfaces are the
+ * authoritative frontend contract and may deliberately narrow the generated
+ * schema (see `unwrap` in `./client`). The public surface of this module is
+ * unchanged from its hand-rolled predecessor.
  */
 
-const API_BASE = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT}/api`;
+export { ApiError, request, EVENTS_STREAM_URL, manualSkillScanCapturePngUrl } from './client';
 
-/** Server-sent-events stream the main-window relay subscribes to (see
- * `$lib/realtime/eventRelay`). Lives on the same loopback origin as every other
- * `/api/*` call, so it needs no separate CSP `connect-src` entry. */
-export const EVENTS_STREAM_URL = `${API_BASE}/events`;
-
+import { ApiError, client, unwrap } from './client';
 import type { NotableEventCategory, NotableEventType } from '$lib/types/common';
 import { guideState } from '$lib/guide/state.svelte';
 
-/**
+/*
  * Guide-mode route swap for analytics-flavoured endpoints.
  *
  * When the interactive user guide is active on an analytics-backed surface
  * (analytics or dashboard), reads of analytics / tracking / ledger / inventory
  * are transparently retargeted onto the parallel `/api/demo/*` namespace
  * served by the curated demo DB. Surface components stay unchanged. Only the
- * read endpoints below are wrapped; everything else (live tracking, mutating
- * verbs, etc.) goes to the real backend regardless of guide state.
+ * read wrappers below branch on guide state, per call (never at client
+ * construction); everything else (live tracking, mutating verbs, etc.) goes
+ * to the real backend regardless of guide state.
  */
-function demoPath(path: string): string {
-	return guideState.isActive ? `/demo${path}` : path;
-}
-
-export class ApiError extends Error {
-	constructor(
-		public status: number,
-		message: string
-	) {
-		super(message);
-		this.name = 'ApiError';
-	}
-}
-
-export async function request<T>(path: string, options?: RequestInit): Promise<T> {
-	const url = `${API_BASE}${path}`;
-	const resp = await fetch(url, {
-		headers: { 'Content-Type': 'application/json' },
-		...options
-	});
-
-	if (!resp.ok) {
-		const text = await resp.text().catch(() => resp.statusText);
-		let message = text || resp.statusText;
-		try {
-			const parsed = JSON.parse(text);
-			if (typeof parsed?.detail === 'string' && parsed.detail.trim()) {
-				message = parsed.detail;
-			}
-		} catch {
-			// Plain-text or non-JSON error body
-		}
-		throw new ApiError(resp.status, message);
-	}
-
-	return resp.json();
-}
 
 // --- Character stats ---
 
@@ -83,42 +50,44 @@ import type {
 } from '$lib/types/analytics';
 
 export async function getCalibrationStatus(): Promise<CalibrationStatus> {
-	return request('/character/calibration');
+	return unwrap(client.GET('/api/character/calibration'));
 }
 
 export async function getCharacterStats(): Promise<ComputedCharacterStats> {
-	return request('/character/stats');
+	return unwrap(client.GET('/api/character/stats'));
 }
 
 export async function getCharacterSkills(): Promise<SkillLevel[]> {
-	return request('/character/skills');
+	return unwrap(client.GET('/api/character/skills'));
 }
 
 export async function getCharacterProfessions(): Promise<ProfessionLevel[]> {
-	return request('/character/professions');
+	return unwrap(client.GET('/api/character/professions'));
 }
 
 export async function getProfessionOptimizer(profession: string): Promise<ProfessionOptimizerResult> {
-	return request(`/character/profession-optimizer?profession=${encodeURIComponent(profession)}`);
+	return unwrap(
+		client.GET('/api/character/profession-optimizer', { params: { query: { profession } } })
+	);
 }
 
 export async function getProfessionPathOptimizer(
 	profession: string,
 	params: { targetLevel: number } | { pedBudget: number },
 ): Promise<PathOptimizerResult> {
-	const base = `/character/profession-path-optimizer?profession=${encodeURIComponent(profession)}`;
-	const suffix = 'targetLevel' in params
-		? `&target_level=${params.targetLevel}`
-		: `&ped_budget=${params.pedBudget}`;
-	return request(base + suffix);
+	const query =
+		'targetLevel' in params
+			? { profession, target_level: params.targetLevel }
+			: { profession, ped_budget: params.pedBudget };
+	return unwrap(client.GET('/api/character/profession-path-optimizer', { params: { query } }));
 }
 
 export async function getHpOptimizer(): Promise<HpOptimizerResult> {
-	return request('/character/hp-optimizer');
+	return unwrap(client.GET('/api/character/hp-optimizer'));
 }
 
 export async function getCharacterProspectOptions(): Promise<CharacterProspectOptions> {
-	return request('/character/prospect-options');
+	return unwrap(client.GET('/api/character/prospect-options'));
 }
 
 export async function getCharacterProspect(params: {
@@ -128,18 +97,24 @@ export async function getCharacterProspect(params: {
 	sliceValue?: string | null;
 	markupUplift?: number;
 }): Promise<ProspectResult> {
-	const search = new URLSearchParams({
+	const query: {
+		profession: string;
+		target_level: number;
+		slice_type: string;
+		slice_value?: string;
+		markup_uplift?: number;
+	} = {
 		profession: params.profession,
-		target_level: String(params.targetLevel),
+		target_level: params.targetLevel,
 		slice_type: params.sliceType,
-	});
+	};
 	if (params.sliceType !== 'global' && params.sliceValue) {
-		search.set('slice_value', params.sliceValue);
+		query.slice_value = params.sliceValue;
 	}
 	if ((params.markupUplift ?? 0) > 0) {
-		search.set('markup_uplift', String(params.markupUplift));
+		query.markup_uplift = params.markupUplift;
 	}
-	return request(`/character/prospect?${search.toString()}`);
+	return unwrap(client.GET('/api/character/prospect', { params: { query } }));
 }
 
 // --- Manual scan flow (public, user-driven page-by-page capture) ---
@@ -165,46 +140,43 @@ export interface SkillScanPending {
 	skills: Record<string, number>;
 }
 
-export function manualSkillScanCapturePngUrl(page: number): string {
-	return `${API_BASE}/scan/skills/capture/${page}`;
-}
-
 export async function getManualSkillScanStatus(): Promise<ScanManualStatus> {
-	return request('/scan/skills/status');
+	return unwrap(client.GET('/api/scan/skills/status'));
 }
 
 export async function startManualSkillScan(pageCount?: number): Promise<ScanManualStatus & { error?: string }> {
-	const suffix = pageCount !== undefined ? `?page_count=${pageCount}` : '';
-	return request(`/scan/skills/start${suffix}`, { method: 'POST' });
+	return unwrap(
+		client.POST('/api/scan/skills/start', { params: { query: { page_count: pageCount } } })
+	);
 }
 
 export async function captureManualSkillPage(): Promise<ScanManualStatus & { page?: number; captured?: boolean; error?: string }> {
-	return request('/scan/skills/capture', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/capture'));
 }
 
 export async function cancelManualSkillScan(): Promise<ScanManualStatus & { error?: string }> {
-	return request('/scan/skills/cancel', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/cancel'));
 }
 
 export async function undoManualSkillCapture(): Promise<ScanManualStatus & { undone_page?: number; error?: string }> {
-	return request('/scan/skills/undo', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/undo'));
 }
 
 export async function processManualSkillScan(): Promise<ScanManualStatus & { error?: string }> {
-	return request('/scan/skills/process', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/process'));
 }
 
 export async function acceptManualSkillScan(): Promise<{ ok?: boolean; skills_persisted?: number; error?: string }> {
-	return request('/scan/skills/accept', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/accept'));
 }
 
 export async function rejectManualSkillScan(): Promise<{ ok?: boolean; error?: string }> {
-	return request('/scan/skills/reject', { method: 'POST' });
+	return unwrap(client.POST('/api/scan/skills/reject'));
 }
 
 export async function getManualSkillScanPending(): Promise<SkillScanPending | null> {
 	try {
-		return await request<SkillScanPending>('/scan/skills/pending');
+		return await unwrap<SkillScanPending>(client.GET('/api/scan/skills/pending'));
 	} catch (err) {
 		if (err instanceof ApiError && err.status === 404) return null;
 		throw err;
@@ -212,17 +184,17 @@ export async function getManualSkillScanPending(): Promise<SkillScanPending | nu
 }
 
 export async function setSpacebarCapture(enabled: boolean): Promise<{ ok?: boolean; enabled?: boolean; error?: string }> {
-	return request(`/scan/spacebar-capture?enabled=${enabled}`, { method: 'POST' });
+	return unwrap(client.POST('/api/scan/spacebar-capture', { params: { query: { enabled } } }));
 }
 
 // --- Codex ---
 
 export async function getCodexSpecies(): Promise<CodexSpecies[]> {
-	return request('/codex/species');
+	return unwrap(client.GET('/api/codex/species'));
 }
 
 export async function getCodexSpeciesRanks(name: string): Promise<CodexRankBreakdown> {
-	return request(`/codex/species/${encodeURIComponent(name)}/ranks`);
+	return unwrap(client.GET('/api/codex/species/{name}/ranks', { params: { path: { name } } }));
 }
 
 export async function claimCodexRank(
@@ -230,17 +202,17 @@ export async function claimCodexRank(
 	rank: number,
 	skillName: string
 ): Promise<CodexClaimResult> {
-	return request('/codex/claim', {
-		method: 'POST',
-		body: JSON.stringify({ species_name: speciesName, rank, skill_name: skillName })
-	});
+	return unwrap(
+		client.POST('/api/codex/claim', {
+			body: { species_name: speciesName, rank, skill_name: skillName }
+		})
+	);
 }
 
 export async function calibrateCodex(speciesName: string, rank: number): Promise<{ speciesName: string; rank: number }> {
-	return request('/codex/calibrate', {
-		method: 'POST',
-		body: JSON.stringify({ species_name: speciesName, rank })
-	});
+	return unwrap(
+		client.POST('/api/codex/calibrate', { body: { species_name: speciesName, rank } })
+	);
 }
 
 export async function getCodexRecommendation(
@@ -248,23 +220,28 @@ export async function getCodexRecommendation(
 	rank: number,
 	options?: { target?: 'profession' | 'hp'; profession?: string }
 ): Promise<CodexSkillOption[]> {
-	let url = `/codex/recommend?species_name=${encodeURIComponent(speciesName)}&rank=${rank}`;
-	if (options?.target) url += `&target=${encodeURIComponent(options.target)}`;
-	if (options?.profession) url += `&profession=${encodeURIComponent(options.profession)}`;
-	return request(url);
+	return unwrap(
+		client.GET('/api/codex/recommend', {
+			params: {
+				query: {
+					species_name: speciesName,
+					rank,
+					target: options?.target,
+					profession: options?.profession
+				}
+			}
+		})
+	);
 }
 
 // --- Codex Meta ---
 
 export async function getCodexMetaAttributes(): Promise<CodexMetaAttribute[]> {
-	return request('/codex/meta/attributes');
+	return unwrap(client.GET('/api/codex/meta/attributes'));
 }
 
 export async function claimCodexMeta(attributeName: string): Promise<CodexMetaClaimResult> {
-	return request('/codex/meta/claim', {
-		method: 'POST',
-		body: JSON.stringify({ attribute_name: attributeName })
-	});
+	return unwrap(client.POST('/api/codex/meta/claim', { body: { attribute_name: attributeName } }));
 }
 
 // --- Equipment ---
@@ -301,33 +278,34 @@ export async function searchEquipmentItems(
 	type: 'weapon' | 'amp' | 'healer' | 'scope' | 'absorber' | 'consumable'
 ): Promise<EquipmentSearchResult[]> {
 	if (q.length < 2) return [];
-	return request(`/equipment/search?q=${encodeURIComponent(q)}&type=${type}`);
+	return unwrap(client.GET('/api/equipment/search', { params: { query: { q, type } } }));
 }
 
 export async function getEquipmentLibrary(): Promise<Equipment[]> {
-	return request('/equipment/library');
+	return unwrap(client.GET('/api/equipment/library'));
 }
 
 export async function addToLibrary(req: AddLibraryRequest): Promise<Equipment> {
-	return request('/equipment/library', {
-		method: 'POST',
-		body: JSON.stringify(req)
-	});
+	return unwrap(client.POST('/api/equipment/library', { body: req }));
 }
 
 export async function removeFromLibrary(id: string): Promise<void> {
-	await request(`/equipment/library/${id}`, { method: 'DELETE' });
+	await client.DELETE('/api/equipment/library/{item_id}', { params: { path: { item_id: Number(id) } } });
 }
 
 export async function updateLibrary(id: string, req: AddLibraryRequest): Promise<Equipment> {
-	return request(`/equipment/library/${id}`, {
-		method: 'PUT',
-		body: JSON.stringify(req)
-	});
+	return unwrap(
+		client.PUT('/api/equipment/library/{item_id}', {
+			params: { path: { item_id: Number(id) } },
+			body: req
+		})
+	);
 }
 
 export async function getEquipmentDetail(id: string): Promise<EquipmentDetail> {
-	return request(`/equipment/library/${id}/detail`);
+	return unwrap(
+		client.GET('/api/equipment/library/{item_id}/detail', { params: { path: { item_id: Number(id) } } })
+	);
 }
 
 // --- Tracking ---
@@ -376,23 +354,34 @@ export interface RecentEvent {
 }
 
 export async function startTracking(): Promise<{ session_id: string; started_at: string; status: string }> {
-	return request('/tracking/start', { method: 'POST' });
+	return unwrap(client.POST('/api/tracking/start'));
 }
 
 export async function stopTracking(): Promise<{ session_id: string; kill_count: number }> {
-	return request('/tracking/stop', { method: 'POST' });
+	return unwrap(client.POST('/api/tracking/stop'));
 }
 
 export async function getTrackingSessions(): Promise<TrackingSession[]> {
-	return request(demoPath('/tracking/sessions'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/tracking/sessions')
+			: client.GET('/api/tracking/sessions')
+	);
 }
 
 export async function getSessionDetail(sessionId: string): Promise<SessionDetail> {
-	return request(demoPath(`/tracking/session/${encodeURIComponent(sessionId)}`));
+	const params = { path: { session_id: sessionId } };
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/tracking/session/{session_id}', { params })
+			: client.GET('/api/tracking/session/{session_id}', { params })
+	);
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
-	await request(`/tracking/session/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+	await client.DELETE('/api/tracking/session/{session_id}', {
+		params: { path: { session_id: sessionId } }
+	});
 }
 
 /** Response shape from the loot-item deactivate / activate endpoints.
@@ -410,9 +399,10 @@ export async function deactivateLootItem(
 	sessionId: string,
 	itemName: string,
 ): Promise<LootItemEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/deactivate`,
-		{ method: 'POST' },
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/loot-item/{item_name}/deactivate', {
+			params: { path: { session_id: sessionId, item_name: itemName } }
+		})
 	);
 }
 
@@ -420,9 +410,10 @@ export async function activateLootItem(
 	sessionId: string,
 	itemName: string,
 ): Promise<LootItemEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/loot-item/${encodeURIComponent(itemName)}/activate`,
-		{ method: 'POST' },
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/loot-item/{item_name}/activate', {
+			params: { path: { session_id: sessionId, item_name: itemName } }
+		})
 	);
 }
 
@@ -438,12 +429,11 @@ export async function renameSessionMob(
 	fromMobName: string,
 	toMobName: string,
 ): Promise<MobEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/rename-mob`,
-		{
-			method: 'POST',
-			body: JSON.stringify({ fromMobName, toMobName }),
-		},
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/rename-mob', {
+			params: { path: { session_id: sessionId } },
+			body: { fromMobName, toMobName }
+		})
 	);
 }
 
@@ -451,12 +441,11 @@ export async function restoreSessionMob(
 	sessionId: string,
 	currentMobName: string,
 ): Promise<MobEditResponse> {
-	return request(
-		`/tracking/session/${encodeURIComponent(sessionId)}/restore-mob`,
-		{
-			method: 'POST',
-			body: JSON.stringify({ currentMobName }),
-		},
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/restore-mob', {
+			params: { path: { session_id: sessionId } },
+			body: { currentMobName }
+		})
 	);
 }
 
@@ -520,11 +509,15 @@ export interface TrackingSnapshot extends TrackingStatus {
 }
 
 export async function getTrackingSnapshot(): Promise<TrackingSnapshot> {
-	return request(demoPath('/tracking/snapshot'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/tracking/snapshot')
+			: client.GET('/api/tracking/snapshot')
+	);
 }
 
 export async function releaseMob(): Promise<{ released: string | null }> {
-	return request('/tracking/release-mob', { method: 'POST' });
+	return unwrap(client.POST('/api/tracking/release-mob'));
 }
 
 export interface ManualMobSuggestion {
@@ -535,19 +528,20 @@ export interface ManualMobSuggestion {
 
 export async function getTrackingTagSuggestions(query: string): Promise<string[]> {
 	if (!query.trim()) return [];
-	return request(`/tracking/tag-suggestions?q=${encodeURIComponent(query.trim())}`);
+	return unwrap(
+		client.GET('/api/tracking/tag-suggestions', { params: { query: { q: query.trim() } } })
+	);
 }
 
 export async function lockTrackingTag(tag: string): Promise<{ tag: string }> {
-	return request('/tracking/tag-lock', {
-		method: 'POST',
-		body: JSON.stringify({ tag })
-	});
+	return unwrap(client.POST('/api/tracking/tag-lock', { body: { tag } }));
 }
 
 export async function getManualMobSuggestions(query: string): Promise<ManualMobSuggestion[]> {
 	if (!query.trim()) return [];
-	return request(`/tracking/manual-mob-suggestions?q=${encodeURIComponent(query.trim())}`);
+	return unwrap(
+		client.GET('/api/tracking/manual-mob-suggestions', { params: { query: { q: query.trim() } } })
+	);
 }
 
 export async function lockManualMob(species: string, maturity = ''): Promise<{
@@ -555,22 +549,24 @@ export async function lockManualMob(species: string, maturity = ''): Promise<{
 	species: string;
 	maturity: string;
 }> {
-	return request('/tracking/manual-mob-lock', {
-		method: 'POST',
-		body: JSON.stringify({ species, maturity })
-	});
+	return unwrap(client.POST('/api/tracking/manual-mob-lock', { body: { species, maturity } }));
 }
 
 export async function scanRepairCost(sessionId: string): Promise<{ cost_ped: number; raw_text: string; confidence: number; error?: string }> {
-	return request(`/tracking/session/${encodeURIComponent(sessionId)}/repair-scan`, { method: 'POST' });
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/repair-scan', {
+			params: { path: { session_id: sessionId } }
+		})
+	);
 }
 
 export async function saveArmourCost(sessionId: string, cost: number): Promise<{ sessionId: string; armourCost: number }> {
-	return request(`/tracking/session/${encodeURIComponent(sessionId)}/armour-cost`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ cost }),
-	});
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/armour-cost', {
+			params: { path: { session_id: sessionId } },
+			body: { cost }
+		})
+	);
 }
 
 export interface SessionQuestLinkSuggestion {
@@ -594,17 +590,23 @@ export interface SessionQuestLinkDecision {
 }
 
 export async function getSessionQuestLinkSuggestion(sessionId: string): Promise<SessionQuestLinkSuggestion> {
-	return request(`/tracking/session/${encodeURIComponent(sessionId)}/quest-link-suggestion`);
+	return unwrap(
+		client.GET('/api/tracking/session/{session_id}/quest-link-suggestion', {
+			params: { path: { session_id: sessionId } }
+		})
+	);
 }
 
 export async function decideSessionQuestLink(
 	sessionId: string,
 	action: 'accept' | 'decline'
 ): Promise<SessionQuestLinkDecision> {
-	return request(`/tracking/session/${encodeURIComponent(sessionId)}/quest-link`, {
-		method: 'POST',
-		body: JSON.stringify({ action }),
-	});
+	return unwrap(
+		client.POST('/api/tracking/session/{session_id}/quest-link', {
+			params: { path: { session_id: sessionId } },
+			body: { action }
+		})
+	);
 }
 
 // --- Analytics ---
@@ -627,41 +629,54 @@ export interface ActivityData {
 }
 
 export async function getAnalyticsOverview(period: string = 'all'): Promise<OverviewStats> {
-	return request(demoPath(`/analytics/overview?period=${encodeURIComponent(period)}`));
+	const params = { query: { period } };
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/analytics/overview', { params })
+			: client.GET('/api/analytics/overview', { params })
+	);
 }
 
 export async function getAnalyticsActivity(): Promise<ActivityData> {
-	return request(demoPath('/analytics/activity'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/analytics/activity')
+			: client.GET('/api/analytics/activity')
+	);
 }
 
 export async function getLedgerEntries(): Promise<LedgerEntry[]> {
-	return request(demoPath('/analytics/ledger'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/analytics/ledger')
+			: client.GET('/api/analytics/ledger')
+	);
 }
 
 export async function addLedgerEntry(entry: Omit<LedgerEntry, 'id'>): Promise<LedgerEntry> {
-	return request('/analytics/ledger', {
-		method: 'POST',
-		body: JSON.stringify(entry)
-	});
+	return unwrap(client.POST('/api/analytics/ledger', { body: entry }));
 }
 
 export async function deleteLedgerEntry(id: string): Promise<void> {
-	await request(`/analytics/ledger/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	await client.DELETE('/api/analytics/ledger/{entry_id}', { params: { path: { entry_id: id } } });
 }
 
 export async function getLedgerPresets(): Promise<LedgerPreset[]> {
-	return request(demoPath('/analytics/ledger/presets'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/analytics/ledger/presets')
+			: client.GET('/api/analytics/ledger/presets')
+	);
 }
 
 export async function addLedgerPreset(preset: Omit<LedgerPreset, 'id'>): Promise<LedgerPreset> {
-	return request('/analytics/ledger/presets', {
-		method: 'POST',
-		body: JSON.stringify(preset)
-	});
+	return unwrap(client.POST('/api/analytics/ledger/presets', { body: preset }));
 }
 
 export async function deleteLedgerPreset(id: string): Promise<void> {
-	await request(`/analytics/ledger/presets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	await client.DELETE('/api/analytics/ledger/presets/{preset_id}', {
+		params: { path: { preset_id: id } }
+	});
 }
 
 // --- Inventory Ledger ---
@@ -688,38 +703,45 @@ export interface InventorySellPayload {
 }
 
 export async function getInventoryItems(): Promise<InventoryItem[]> {
-	return request(demoPath('/analytics/inventory'));
+	return unwrap(
+		guideState.isActive
+			? client.GET('/api/demo/analytics/inventory')
+			: client.GET('/api/analytics/inventory')
+	);
 }
 
 export async function addInventoryItem(payload: InventoryItemPayload): Promise<InventoryItem> {
-	return request('/analytics/inventory', {
-		method: 'POST',
-		body: JSON.stringify(payload),
-	});
+	return unwrap(client.POST('/api/analytics/inventory', { body: payload }));
 }
 
 export async function updateInventoryItem(
 	id: string,
 	patch: InventoryItemPatchPayload,
 ): Promise<InventoryItem> {
-	return request(`/analytics/inventory/${encodeURIComponent(id)}`, {
-		method: 'PATCH',
-		body: JSON.stringify(patch),
-	});
+	return unwrap(
+		client.PATCH('/api/analytics/inventory/{item_id}', {
+			params: { path: { item_id: id } },
+			body: patch
+		})
+	);
 }
 
 export async function deleteInventoryItem(id: string): Promise<void> {
-	await request(`/analytics/inventory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	await client.DELETE('/api/analytics/inventory/{item_id}', {
+		params: { path: { item_id: id } }
+	});
 }
 
 export async function sellInventoryItem(
 	id: string,
 	payload: InventorySellPayload,
 ): Promise<InventorySellResult> {
-	return request(`/analytics/inventory/${encodeURIComponent(id)}/sell`, {
-		method: 'POST',
-		body: JSON.stringify(payload),
-	});
+	return unwrap(
+		client.POST('/api/analytics/inventory/{item_id}/sell', {
+			params: { path: { item_id: id } },
+			body: payload
+		})
+	);
 }
 
 // --- Quests ---
@@ -736,62 +758,77 @@ import type {
 } from '$lib/types/quests';
 
 export async function getQuests(): Promise<Quest[]> {
-	return request('/quests');
+	return unwrap(client.GET('/api/quests'));
 }
 
 export async function getQuest(id: string): Promise<Quest> {
-	return request(`/quests/${id}`);
+	return unwrap(client.GET('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } } }));
 }
 
 export async function createQuest(data: QuestCreateData): Promise<Quest> {
-	return request('/quests', { method: 'POST', body: JSON.stringify(data) });
+	return unwrap(client.POST('/api/quests', { body: data }));
 }
 
 export async function updateQuest(id: string, data: QuestUpdateData): Promise<Quest> {
-	return request(`/quests/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+	return unwrap(
+		client.PUT('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } }, body: data })
+	);
 }
 
 export async function deleteQuest(id: string): Promise<void> {
-	await request(`/quests/${id}`, { method: 'DELETE' });
+	await client.DELETE('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } } });
 }
 
 export async function startQuest(id: string): Promise<Quest> {
-	return request(`/quests/${id}/start`, { method: 'POST' });
+	return unwrap(
+		client.POST('/api/quests/{quest_id}/start', { params: { path: { quest_id: Number(id) } } })
+	);
 }
 
 export async function completeQuest(id: string): Promise<Quest> {
-	return request(`/quests/${id}/complete`, { method: 'POST' });
+	return unwrap(
+		client.POST('/api/quests/{quest_id}/complete', { params: { path: { quest_id: Number(id) } } })
+	);
 }
 
 export async function cancelQuest(id: string, undoReward = false): Promise<Quest> {
-	return request(`/quests/${id}/cancel`, {
-		method: 'POST',
-		body: JSON.stringify({ undo_reward: undoReward })
-	});
+	return unwrap(
+		client.POST('/api/quests/{quest_id}/cancel', {
+			params: { path: { quest_id: Number(id) } },
+			body: { undo_reward: undoReward }
+		})
+	);
 }
 
 export async function getQuestAnalytics(): Promise<QuestAnalyticsRow[]> {
-	return request('/quests/analytics');
+	return unwrap(client.GET('/api/quests/analytics'));
 }
 
 export async function getPlaylistAnalytics(): Promise<PlaylistAnalyticsRow[]> {
-	return request('/quests/playlists/analytics');
+	return unwrap(client.GET('/api/quests/playlists/analytics'));
 }
 
 export async function getPlaylists(): Promise<QuestPlaylist[]> {
-	return request('/quests/playlists');
+	return unwrap(client.GET('/api/quests/playlists'));
 }
 
 export async function createPlaylist(data: PlaylistCreateData): Promise<QuestPlaylist> {
-	return request('/quests/playlists', { method: 'POST', body: JSON.stringify(data) });
+	return unwrap(client.POST('/api/quests/playlists', { body: data }));
 }
 
 export async function updatePlaylist(id: string, data: PlaylistUpdateData): Promise<QuestPlaylist> {
-	return request(`/quests/playlists/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+	return unwrap(
+		client.PUT('/api/quests/playlists/{playlist_id}', {
+			params: { path: { playlist_id: Number(id) } },
+			body: data
+		})
+	);
 }
 
 export async function deletePlaylist(id: string): Promise<void> {
-	await request(`/quests/playlists/${id}`, { method: 'DELETE' });
+	await client.DELETE('/api/quests/playlists/{playlist_id}', {
+		params: { path: { playlist_id: Number(id) } }
+	});
 }
 
 // --- Settings ---
@@ -820,11 +857,11 @@ export interface SettingsUpdate {
 }
 
 export async function getSettings(): Promise<AppSettings> {
-	return request('/settings');
+	return unwrap(client.GET('/api/settings'));
 }
 
 export async function updateSettings(updates: SettingsUpdate): Promise<AppSettings> {
-	return request('/settings', { method: 'PATCH', body: JSON.stringify(updates) });
+	return unwrap(client.PATCH('/api/settings', { body: updates }));
 }
 
 // --- Recording (developer-only) ---
@@ -855,30 +892,27 @@ export interface StopRecordingResult {
 }
 
 export async function startRecording(): Promise<RecordingStatus> {
-	return request('/recording/start', { method: 'POST' });
+	return unwrap(client.POST('/api/recording/start'));
 }
 
 export async function getRecordingStatus(): Promise<RecordingStatus> {
-	return request('/recording/status');
+	return unwrap(client.GET('/api/recording/status'));
 }
 
 export async function stopRecording(meta: StopRecordingMeta): Promise<StopRecordingResult> {
-	return request('/recording/stop', { method: 'POST', body: JSON.stringify(meta) });
+	return unwrap(client.POST('/api/recording/stop', { body: meta }));
 }
 
 export async function abortRecording(): Promise<{ state: string }> {
-	return request('/recording/abort', { method: 'POST' });
+	return unwrap(client.POST('/api/recording/abort'));
 }
 
 // --- Overlay ---
 
 export async function getOverlayPosition(): Promise<{ x: number | null; y: number | null }> {
-	return request('/settings/overlay-position');
+	return unwrap(client.GET('/api/settings/overlay-position'));
 }
 
 export async function saveOverlayPosition(x: number, y: number): Promise<void> {
-	await request('/settings/overlay-position', {
-		method: 'PUT',
-		body: JSON.stringify({ x, y }),
-	});
+	await client.PUT('/api/settings/overlay-position', { body: { x, y } });
 }

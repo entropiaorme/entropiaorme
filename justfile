@@ -52,6 +52,17 @@ smoke:
     @echo "just smoke: headless smoke verification is not yet implemented."
     @exit 1
 
+# Regenerate the typed frontend API client from the committed OpenAPI
+# snapshot (backend/tests/expected/openapi.snapshot.json). Run after any
+# backend change that regenerates the snapshot.
+gen-api:
+    npm --prefix frontend run gen:api
+
+# Verify the committed generated client matches the OpenAPI snapshot
+# (matches the CI freshness step).
+gen-api-check:
+    npm --prefix frontend run gen:api:check
+
 # Start Caddy in the background using the main worktree's Caddyfile.
 # Routes through caddy-lifecycle.ps1 so the main worktree (resolved via
 # `git worktree list`) is the canonical config home, regardless of

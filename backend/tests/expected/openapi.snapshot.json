@@ -203,6 +203,87 @@
         "title": "AnalyticsOverview",
         "type": "object"
       },
+      "AppSettings": {
+        "additionalProperties": true,
+        "description": "The full application settings response.",
+        "properties": {
+          "appVersion": {
+            "title": "Appversion",
+            "type": "string"
+          },
+          "dbPath": {
+            "title": "Dbpath",
+            "type": "string"
+          },
+          "developerModeEnabled": {
+            "title": "Developermodeenabled",
+            "type": "boolean"
+          },
+          "endOfSessionArmourReminderEnabled": {
+            "title": "Endofsessionarmourreminderenabled",
+            "type": "boolean"
+          },
+          "gameConnection": {
+            "$ref": "#/components/schemas/GameConnection"
+          },
+          "hotbar": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Hotbar",
+            "type": "object"
+          },
+          "hotbarHooksEnabled": {
+            "title": "Hotbarhooksenabled",
+            "type": "boolean"
+          },
+          "lootFilterBlacklist": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lootfilterblacklist",
+            "type": "array"
+          },
+          "mobTrackingMode": {
+            "title": "Mobtrackingmode",
+            "type": "string"
+          },
+          "mobTrackingTag": {
+            "title": "Mobtrackingtag",
+            "type": "string"
+          },
+          "repairOcrEnabled": {
+            "title": "Repairocrenabled",
+            "type": "boolean"
+          },
+          "trifecta": {
+            "$ref": "#/components/schemas/TrifectaSettings"
+          }
+        },
+        "required": [
+          "gameConnection",
+          "hotbarHooksEnabled",
+          "repairOcrEnabled",
+          "endOfSessionArmourReminderEnabled",
+          "developerModeEnabled",
+          "mobTrackingMode",
+          "mobTrackingTag",
+          "hotbar",
+          "trifecta",
+          "lootFilterBlacklist",
+          "dbPath",
+          "appVersion"
+        ],
+        "title": "AppSettings",
+        "type": "object"
+      },
       "ArmourCostBody": {
         "properties": {
           "cost": {
@@ -1010,6 +1091,31 @@
         "title": "EquipmentSearchResult",
         "type": "object"
       },
+      "GameConnection": {
+        "additionalProperties": true,
+        "description": "The chat.log connection block of the settings response.",
+        "properties": {
+          "chatLogPath": {
+            "title": "Chatlogpath",
+            "type": "string"
+          },
+          "chatLogValid": {
+            "title": "Chatlogvalid",
+            "type": "boolean"
+          },
+          "playerName": {
+            "title": "Playername",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chatLogPath",
+          "chatLogValid",
+          "playerName"
+        ],
+        "title": "GameConnection",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1398,6 +1504,36 @@
           "ok"
         ],
         "title": "OkResponse",
+        "type": "object"
+      },
+      "OverlayPosition": {
+        "additionalProperties": true,
+        "description": "The persisted overlay window position (null until first placed).",
+        "properties": {
+          "x": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
+          }
+        },
+        "title": "OverlayPosition",
         "type": "object"
       },
       "OverlayPositionPatch": {
@@ -1831,7 +1967,7 @@
           "startedAt": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "number"
               },
               {
                 "type": "null"
@@ -2348,6 +2484,125 @@
           }
         },
         "title": "QuestUpdate",
+        "type": "object"
+      },
+      "RecordingAbortResult": {
+        "additionalProperties": true,
+        "description": "Acknowledgement that the in-flight recording was discarded.",
+        "properties": {
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "RecordingAbortResult",
+        "type": "object"
+      },
+      "RecordingStatus": {
+        "additionalProperties": true,
+        "description": "Recording lifecycle state plus live capture counters.",
+        "properties": {
+          "captures": {
+            "title": "Captures",
+            "type": "integer"
+          },
+          "keystrokes": {
+            "title": "Keystrokes",
+            "type": "integer"
+          },
+          "lines": {
+            "title": "Lines",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "lines",
+          "captures",
+          "keystrokes"
+        ],
+        "title": "RecordingStatus",
+        "type": "object"
+      },
+      "RecordingStopResult": {
+        "additionalProperties": true,
+        "description": "The outcome of finalising a recording.\n\nPolymorphic: the success branch carries ``finalized_path`` + ``determinism``\n(and ``diff`` only on a determinism leak); the failure branch carries\n``error`` + ``recovery_path``. Served with ``response_model_exclude_unset=True``\nso each branch keeps its own keys rather than gaining a wall of nulls.",
+        "properties": {
+          "determinism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Determinism"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finalized_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalized Path"
+          },
+          "recovery_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Path"
+          }
+        },
+        "title": "RecordingStopResult",
         "type": "object"
       },
       "RenameMobRequest": {
@@ -3092,6 +3347,131 @@
           "status"
         ],
         "title": "TrackingSnapshot",
+        "type": "object"
+      },
+      "TrifectaPreset": {
+        "additionalProperties": true,
+        "description": "One trifecta loadout preset with its readiness state.",
+        "properties": {
+          "bigWeaponId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bigweaponid"
+          },
+          "healId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healid"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "smallWeaponId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smallweaponid"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "ready"
+        ],
+        "title": "TrifectaPreset",
+        "type": "object"
+      },
+      "TrifectaSettings": {
+        "additionalProperties": true,
+        "description": "The trifecta block of the settings response.",
+        "properties": {
+          "activePresetId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activepresetid"
+          },
+          "activePresetName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activepresetname"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "presets": {
+            "items": {
+              "$ref": "#/components/schemas/TrifectaPreset"
+            },
+            "title": "Presets",
+            "type": "array"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "presets",
+          "ready"
+        ],
+        "title": "TrifectaSettings",
         "type": "object"
       },
       "ValidationError": {
@@ -5419,7 +5799,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingAbortResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5439,7 +5821,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -5459,7 +5843,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStatus"
+                }
               }
             },
             "description": "Successful Response"
@@ -5489,7 +5875,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/RecordingStopResult"
+                }
               }
             },
             "description": "Successful Response"
@@ -5798,7 +6186,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"
@@ -5826,7 +6216,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"
@@ -5855,7 +6247,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayPosition"
+                }
               }
             },
             "description": "Successful Response"
@@ -5882,7 +6276,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
               }
             },
             "description": "Successful Response"
@@ -5912,7 +6308,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AppSettings"
+                }
               }
             },
             "description": "Successful Response"

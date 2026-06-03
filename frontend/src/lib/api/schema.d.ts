@@ -1795,21 +1795,21 @@ export interface components {
              * Absorber Markup
              * @default 100
              */
-            absorber_markup: number;
+            absorber_markup?: number;
             /** Amp Catalog Id */
             amp_catalog_id?: string | null;
             /**
              * Amp Markup
              * @default 100
              */
-            amp_markup: number;
+            amp_markup?: number;
             /** Catalog Id */
             catalog_id?: string | null;
             /**
              * Damage Enhancers
              * @default 0
              */
-            damage_enhancers: number;
+            damage_enhancers?: number;
             /** Name */
             name?: string | null;
             /** Scope Catalog Id */
@@ -1818,7 +1818,7 @@ export interface components {
              * Scope Markup
              * @default 100
              */
-            scope_markup: number;
+            scope_markup?: number;
             /**
              * Type
              * @enum {string}
@@ -1828,7 +1828,7 @@ export interface components {
              * Weapon Markup
              * @default 100
              */
-            weapon_markup: number;
+            weapon_markup?: number;
         };
         /**
          * AnalyticsActivity
@@ -1920,39 +1920,39 @@ export interface components {
              * Absorber Markup
              * @default 100
              */
-            absorber_markup: number;
+            absorber_markup?: number;
             /** Amp Catalog Id */
             amp_catalog_id?: string | null;
             /**
              * Amp Markup
              * @default 100
              */
-            amp_markup: number;
+            amp_markup?: number;
             /** Catalog Id */
             catalog_id: string;
             /**
              * Damage Enhancers
              * @default 0
              */
-            damage_enhancers: number;
+            damage_enhancers?: number;
             /** Scope Catalog Id */
             scope_catalog_id?: string | null;
             /**
              * Scope Markup
              * @default 100
              */
-            scope_markup: number;
+            scope_markup?: number;
             /**
              * Type
              * @default weapon
              * @enum {string}
              */
-            type: "weapon" | "healing";
+            type?: "weapon" | "healing";
             /**
              * Weapon Markup
              * @default 100
              */
-            weapon_markup: number;
+            weapon_markup?: number;
         };
         /** CalibrateRequest */
         CalibrateRequest: {
@@ -2581,7 +2581,7 @@ export interface components {
              * Maturity
              * @default
              */
-            maturity: string;
+            maturity?: string;
             /** Species */
             species: string;
         };
@@ -2900,7 +2900,7 @@ export interface components {
              * Estimated Minutes
              * @default 30
              */
-            estimated_minutes: number;
+            estimated_minutes?: number;
             /** Items */
             items?: components["schemas"]["PlaylistItemInput"][] | null;
             /** Name */
@@ -2909,12 +2909,12 @@ export interface components {
              * Planet
              * @default Calypso
              */
-            planet: string;
+            planet?: string;
             /**
              * Quest Ids
              * @default []
              */
-            quest_ids: number[];
+            quest_ids?: number[];
         };
         /**
          * PlaylistItem
@@ -2938,7 +2938,7 @@ export interface components {
              * Group Type
              * @default immediate
              */
-            group_type: string;
+            group_type?: string;
             /** Quest Id */
             quest_id: number;
         };
@@ -3124,7 +3124,7 @@ export interface components {
              * Undo Reward
              * @default false
              */
-            undo_reward: boolean;
+            undo_reward?: boolean;
         };
         /** QuestCreate */
         QuestCreate: {
@@ -3144,7 +3144,7 @@ export interface components {
              * Mobs
              * @default []
              */
-            mobs: string[];
+            mobs?: string[];
             /** Name */
             name: string;
             /** Notes */
@@ -3153,14 +3153,14 @@ export interface components {
              * Planet
              * @default Calypso
              */
-            planet: string;
+            planet?: string;
             /** Reward Description */
             reward_description?: string | null;
             /**
              * Reward Is Skill
              * @default false
              */
-            reward_is_skill: boolean;
+            reward_is_skill?: boolean;
             /** Reward Ped */
             reward_ped?: number | null;
             /** Waypoint */
@@ -3727,12 +3727,12 @@ export interface components {
              * Description
              * @default
              */
-            description: string;
+            description?: string;
             /**
              * Notes
              * @default
              */
-            notes: string;
+            notes?: string;
             /** Rare Event Flags */
             rare_event_flags?: string[];
             /** Scenario Name */

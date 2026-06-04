@@ -214,6 +214,9 @@
 				statusRefetchQueued = false;
 				try {
 					status = await getManualSkillScanStatus();
+					// A good read clears a prior transient read-failure notice; an
+					// action message (start/capture/undo result) is left intact.
+					if (message.startsWith('status error:')) message = '';
 				} catch (err) {
 					// Transient read failure: keep the last good status and surface
 					// the error. The catch is INSIDE the loop so a re-read a frame

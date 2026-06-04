@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from backend.scripts.check_no_bare_setinterval import (
     REPO_ROOT,
     SETINTERVAL_HOME,
@@ -126,6 +128,34 @@ def test_evaluate_scans_js_family_sources(tmp_path) -> None:
 
     findings = evaluate(repo)
     assert any(f.rule == "bare-setinterval" for f in findings)
+
+
+def test_evaluate_skips_deleted_but_tracked_file(tmp_path) -> None:
+    """An unstaged on-disk deletion is skipped, not a crash and not a finding.
+
+    ``git ls-files`` enumerates the index, so a tracked file deleted from the
+    working tree is still listed; it carries no live content to scan.
+    """
+    _init_repo_with_violation(tmp_path)
+    (tmp_path / "frontend" / "src" / "routes" / "+page.svelte").unlink()
+
+    assert evaluate(tmp_path) == []
+
+
+def test_evaluate_fails_loudly_on_unreadable_tracked_file(tmp_path) -> None:
+    """A read failure other than on-disk absence propagates.
+
+    A guard that silently skipped an unreadable source could return a false
+    clean; reading a directory in place of the tracked file raises an
+    ``OSError`` that is not ``FileNotFoundError`` on every platform.
+    """
+    _init_repo_with_violation(tmp_path)
+    target = tmp_path / "frontend" / "src" / "routes" / "+page.svelte"
+    target.unlink()
+    target.mkdir()
+
+    with pytest.raises(OSError):
+        evaluate(tmp_path)
 
 
 def test_main_returns_zero_when_clean(tmp_path, capsys) -> None:

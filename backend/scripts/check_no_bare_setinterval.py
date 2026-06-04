@@ -133,8 +133,13 @@ def evaluate(repo_root: Path) -> list[Finding]:
     for path in tracked_sources(repo_root):
         try:
             text = (repo_root / path).read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except FileNotFoundError:
+            # `git ls-files` enumerates the index, so a tracked file deleted
+            # from the working tree (an unstaged deletion mid-edit) is
+            # legitimately absent on disk and carries no live content to scan.
             continue
+        # Any other read failure (permissions, I/O) must fail loudly: a guard
+        # that silently skips an unreadable source can return a false clean.
         findings.extend(scan_text(path, text))
     return findings
 

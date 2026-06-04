@@ -12,7 +12,7 @@ The desktop app is three cooperating pieces:
 - the Tauri shell (`frontend/src-tauri/`): window chrome and sidecar launch, no business logic;
 - this Python backend: a FastAPI process on the loopback interface, shipped as a sidecar binary.
 
-All gameplay logic lives in the backend. The frontend reaches it two ways: request/response HTTP for state reads and mutations, and a one-way server-sent-events stream for change notifications. The combination is deliberately **push-to-pull**: an event frame is a minimal invalidation signal (which surface changed and why), and the window that receives one re-reads the full state from a hydration GET. Rendered state always comes from a snapshot read; it is never folded together from event payloads.
+All domain logic lives in the backend. The frontend reaches it two ways: request/response HTTP for state reads and mutations, and a one-way server-sent-events stream for change notifications. The combination is deliberately **push-to-pull**: an event frame is a minimal invalidation signal (which surface changed and why), and the window that receives one re-reads the full state from a hydration GET. Rendered state always comes from a snapshot read; it is never folded together from event payloads.
 
 The payoff is a network-quiet steady state: an idle dashboard performs its mount-time hydration reads, opens one event stream, and then issues no further requests until the backend announces a change. `backend/tests/test_network_quiet_seam.py` pins this by recording every request the app serves while driving real state changes through the production producers.
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -100,6 +101,11 @@ def live_server() -> Iterator[int]:
             os.environ.pop("ENTROPIAORME_DATA_DIR", None)
         else:
             os.environ["ENTROPIAORME_DATA_DIR"] = original_data_dir
+        # ignore_errors: Windows may briefly hold the SQLite file open
+        # past lifespan shutdown via the per-thread connection pool; a
+        # leftover temp dir on a stuck handle is preferable to a teardown
+        # crash that masks a real test failure.
+        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 async def _read_session_frame(port: int) -> tuple[str | None, str | None, str]:

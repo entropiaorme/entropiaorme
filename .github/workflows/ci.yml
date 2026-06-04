@@ -269,7 +269,7 @@ jobs:
       # dependency tree a second time.
       - name: Run pre-commit hooks
         env:
-          SKIP: mypy,pytest-fast
+          SKIP: mypy,pytest-fast,biome
         run: pre-commit run --all-files --show-diff-on-failure
 
   golden-ratification:
@@ -376,6 +376,9 @@ jobs:
       - run: npm run gen:api:check
       - run: npm run build
       - run: npm run check
+      # Biome lint + format gate over the TypeScript and JavaScript sources
+      # (Svelte components stay under svelte-check above).
+      - run: npm run lint
       - run: npm run test
 
   ci-gate:

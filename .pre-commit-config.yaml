@@ -55,6 +55,18 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # Frontend lint + format gate, mirroring the CI frontend job's
+      # `npm run lint` step. Runs the lockfile-pinned Biome from
+      # frontend/node_modules so the hook and CI agree on the version (the
+      # same drift argument as mypy below); needs `npm ci` run once in
+      # frontend/. The CI pre-commit job SKIPs it (no node_modules there);
+      # the dedicated frontend job is the enforcing gate.
+      - id: biome
+        name: biome check (frontend)
+        entry: bash -c 'cd frontend && npx --no-install biome check .'
+        language: system
+        pass_filenames: false
+        files: ^frontend/
       - id: mypy
         name: mypy (backend)
         entry: python -m mypy backend

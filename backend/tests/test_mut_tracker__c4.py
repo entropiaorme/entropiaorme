@@ -107,7 +107,7 @@ class TestHealWarningEmission:
         # mutmut_9 ("" heal time) -> subtraction crashes before the warning.
         # mutmut_13 (already-emitted True) -> `not True` suppresses the warning.
         assert tracker._session_warnings == [
-            "Healing detected \u2014 no heal tool equipped via hotbar"
+            "Healing detected: no heal tool equipped via hotbar"
         ]
         assert tracker._heal_warning_emitted is True
 

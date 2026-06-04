@@ -546,7 +546,7 @@ class TestOnCombatHealWarning:
             {"type": "self_heal", "amount": 50.0, "timestamp": datetime(2024, 1, 1)}
         )
         assert tracker._session_warnings == [
-            "Healing detected \u2014 no heal tool equipped via hotbar"
+            "Healing detected: no heal tool equipped via hotbar"
         ]
         assert tracker._heal_warning_emitted is True
 
@@ -579,7 +579,7 @@ class TestOnCombatHealWarning:
             }
         )
         assert tracker._session_warnings == [
-            "Healing detected \u2014 no heal tool equipped via hotbar"
+            "Healing detected: no heal tool equipped via hotbar"
         ]
 
 

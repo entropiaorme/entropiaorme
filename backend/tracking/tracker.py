@@ -1297,7 +1297,7 @@ class HuntTracker:
                             self._active_heal_tool_name is None
                             and not self._heal_warning_emitted
                         ):
-                            msg = "Healing detected — no heal tool equipped via hotbar"
+                            msg = "Healing detected: no heal tool equipped via hotbar"
                             self._session_warnings.append(msg)
                             self._heal_warning_emitted = True
                             log.warning(
@@ -1314,7 +1314,7 @@ class HuntTracker:
         # Defensive incoming events stay out of the kills model.
 
     def _on_loot(self, data: dict) -> None:
-        """Handle a loot group from chat.log — creates a Kill record.
+        """Handle a loot group from chat.log: creates a Kill record.
 
         The kill is built from the accumulator, the accumulator reset, and the
         kill appended to the session under the lock so a reader never iterates
@@ -1576,7 +1576,7 @@ class HuntTracker:
         self._db.commit()
 
     def _on_enhancer_break(self, data: dict) -> None:
-        """Handle an enhancer break event — update enhancer state for future shots.
+        """Handle an enhancer break event: update enhancer state for future shots.
 
         Mutates the per-weapon enhancer state that the chat-log thread's shots
         and the hotbar thread's ``_ensure_weapon_state`` both touch, so the body
@@ -1592,7 +1592,7 @@ class HuntTracker:
             remaining = data.get("remaining")
 
             log.debug(
-                "Enhancer break: %s — shrapnel=%.2f, remaining=%s",
+                "Enhancer break: %s (shrapnel=%.2f, remaining=%s)",
                 enhancer_name,
                 shrapnel_ped,
                 remaining,

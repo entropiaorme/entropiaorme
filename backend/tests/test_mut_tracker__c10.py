@@ -541,8 +541,9 @@ def test_missing_enhancer_name_empty_default_renders_in_debug(caplog):
         {"item_name": "MyGun", "remaining": 1, "shrapnel_ped": 0.5},
     )
     assert "XXXX" not in line
-    # Empty enhancer name renders as nothing between the colon-space and the em dash.
-    assert line.startswith("Enhancer break:  \u2014")
+    # Empty enhancer name renders as nothing between the colon-space and the
+    # opening parenthesis.
+    assert line.startswith("Enhancer break:  (")
 
 
 def test_state_none_guard_short_circuits_without_touching_stacks():

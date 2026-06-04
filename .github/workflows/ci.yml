@@ -381,6 +381,75 @@ jobs:
       - run: npm run lint
       - run: npm run test
 
+  rust-policy:
+    name: Rust shell (fmt + audit + deny)
+    runs-on: ubuntu-latest
+    # Cheap source- and manifest-level checks on the Tauri shell crate, so they
+    # run unconditionally like the other lint-class jobs above. Formatting reads
+    # the source; the audit and licence/ban gates read Cargo.lock, so none of
+    # them compile the crate and an ubuntu runner is sufficient and fast.
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Prebuilt binaries rather than cargo install, which would compile both
+      # tools from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Check formatting
+        run: cargo fmt --check
+      # -D warnings makes the ignore policy in .cargo/audit.toml load-bearing:
+      # an advisory not explicitly ignored there fails the job rather than
+      # scrolling past as a warning.
+      - name: Audit the dependency tree (RustSec advisories)
+        run: cargo audit -D warnings
+      # Advisories, licence allowlist, bans, and registry sources, per the
+      # policy in deny.toml.
+      - name: Check the supply-chain policy (licences, bans, sources)
+        run: cargo deny check
+
+  rust:
+    name: Rust shell (clippy + build + test, Windows)
+    runs-on: windows-latest
+    # Compiles the shell crate, so it runs on the application's real target
+    # rather than linting the Linux configuration of a Windows-only artefact
+    # (most of the crate sits behind cfg(windows)). Skipped on a
+    # documentation-only pull request like the backend matrix; the ci-gate
+    # sentinel covers the required-check report in that case.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      # --all-targets lints the test code too; -D warnings promotes every lint
+      # to a failure so the gate cannot drift into an ignored-warnings state.
+      - name: Lint (clippy)
+        run: cargo clippy --all-targets -- -D warnings
+      # A debug compile check; the release bundle (tauri build) stays a manual
+      # release-time step. The debug profile resolves the frontend through the
+      # dev URL, so the crate compiles without a frontend build present.
+      - name: Compile check
+        run: cargo build
+      - name: Run shell tests
+        run: cargo test
+
   ci-gate:
     name: CI gate
     runs-on: ubuntu-latest
@@ -392,7 +461,7 @@ jobs:
     # code change whose jobs did not pass, fails it, so a skip can never let an
     # untested change merge. This lets a documentation-only pull request go green
     # in seconds without deadlocking on a never-reported required job.
-    needs: [changes, backend, frontend]
+    needs: [changes, backend, frontend, rust-policy, rust]
     if: always()
     steps:
       - name: Require the gated jobs to have passed (or been documentation-only)
@@ -401,19 +470,27 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
+          RUST_POLICY_RESULT: ${{ needs.rust-policy.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
         shell: bash
         run: |
           if [ "$CHANGES_RESULT" != "success" ]; then
             echo "::error::Change-scope detection did not succeed (result: $CHANGES_RESULT); failing closed."
             exit 1
           fi
+          # The Rust policy job is unconditional (it does not compile, so it is
+          # not gated on change scope) and must pass on every run.
+          if [ "$RUST_POLICY_RESULT" != "success" ]; then
+            echo "::error::The Rust shell policy checks (fmt, audit, deny) did not pass (result: $RUST_POLICY_RESULT)."
+            exit 1
+          fi
           if [ "$CODE" = "false" ]; then
-            echo "Documentation-only change; the backend matrix and frontend build were skipped. Gate satisfied."
+            echo "Documentation-only change; the backend matrix, frontend build, and Rust shell build were skipped. Gate satisfied."
             exit 0
           fi
-          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ]; then
-            echo "Backend matrix and frontend build passed. Gate satisfied."
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ]; then
+            echo "Backend matrix, frontend build, and Rust shell build passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the backend matrix and the frontend build (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT)."
+          echo "::error::A code change must pass the backend matrix, the frontend build, and the Rust shell build (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, rust: $RUST_RESULT)."
           exit 1

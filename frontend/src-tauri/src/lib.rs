@@ -1,7 +1,7 @@
-use std::process::Command as StdCommand;
-use std::sync::Mutex;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::process::Command as StdCommand;
+use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -271,6 +271,41 @@ mod windows_runtime_icons {
                 Some(WPARAM(icon_type as usize)),
                 Some(LPARAM(icon.0 as isize)),
             );
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{choose_icon_size, ICON_SIZES};
+
+        #[test]
+        fn icon_sizes_are_strictly_ascending() {
+            // choose_icon_size's `find` returns the first entry >= desired,
+            // which is only the *smallest sufficient* size if the table is
+            // sorted; this pins that load-bearing ordering invariant.
+            assert!(ICON_SIZES.windows(2).all(|pair| pair[0] < pair[1]));
+        }
+
+        #[test]
+        fn standard_dpi_maps_to_exact_base_sizes() {
+            assert_eq!(choose_icon_size(16, 96), 16);
+            assert_eq!(choose_icon_size(24, 96), 24);
+        }
+
+        #[test]
+        fn scaled_dpi_rounds_up_to_next_available_size() {
+            // 150% scaling: 16 -> 24 (exact), 24 -> 36 -> next size up is 48.
+            assert_eq!(choose_icon_size(16, 144), 24);
+            assert_eq!(choose_icon_size(24, 144), 48);
+            // 125% scaling: 16 -> 20 (exact table entry via div_ceil).
+            assert_eq!(choose_icon_size(16, 120), 20);
+        }
+
+        #[test]
+        fn oversized_demand_clamps_to_largest_icon() {
+            assert_eq!(choose_icon_size(256, 480), 256);
+            // Saturating multiply keeps absurd DPI values from overflowing.
+            assert_eq!(choose_icon_size(u32::MAX, u32::MAX), 256);
         }
     }
 }

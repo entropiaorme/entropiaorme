@@ -1,0 +1,70 @@
+# cargo-deny configuration: supply-chain policy for the Tauri shell crate.
+#
+# Four check classes run in CI (`cargo deny check`):
+#   - advisories: RUSTSEC advisories against the Windows-target dependency
+#     graph. The ignore list is the subset of .cargo/audit.toml entries
+#     that exist in that graph (cargo-audit scans the whole lockfile,
+#     including Linux-only subtrees, so its list is the superset); the
+#     per-advisory rationale lives there. Review both files together on
+#     every Tauri bump.
+#   - licenses: an explicit allowlist derived from the actual dependency
+#     tree. A new dependency carrying a licence outside this list fails CI
+#     and forces a deliberate decision rather than a silent acceptance.
+#   - bans: duplicate-version reporting stays advisory (the Tauri tree
+#     legitimately carries several); explicitly banned crates fail.
+#   - sources: every crate must come from crates.io; git dependencies and
+#     alternative registries fail until allowlisted here.
+
+[graph]
+# The shell ships on Windows only; resolve the policy against the real
+# target rather than the full cross-platform graph so Linux-only subtrees
+# (GTK et al.) do not drive licensing decisions for artefacts we ship.
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# The Windows-graph subset of .cargo/audit.toml (single source of
+# rationale). All are `unmaintained` warnings on transitive crates inside
+# the Tauri toolchain; none are vulnerability advisories, none are
+# actionable without an upstream Tauri release.
+ignore = [
+    "RUSTSEC-2025-0075", # unic-char-range (build-time Unicode data)
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+    "RUSTSEC-2025-0057", # fxhash (no trust-bearing usage)
+]
+
+[licenses]
+version = 2
+# Allowlist derived from the resolved Windows dependency tree. Additions
+# require a deliberate edit here, reviewed like any other policy change.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# The Tauri tree carries legitimate duplicate versions (e.g. windows-sys);
+# keep duplicates advisory and reserve hard failure for explicit bans.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -159,9 +159,9 @@ The metric has teeth precisely because it is not coverage: a test that executes 
 
 ## Continuous integration
 
-Every pull request, push to `main`, and merge-queue run executes these jobs (`.github/workflows/ci.yml`); on a documentation-only change the backend matrix and the frontend build are skipped, as described under "Documentation-only changes" below:
+Every pull request, push to `main`, and merge-queue run executes these jobs (`.github/workflows/ci.yml`); on a documentation-only change the backend matrix, the frontend build, and the Rust shell build are skipped, as described under "Documentation-only changes" below:
 
-- **Change scope and CI gate**: a quick detection job classifies whether the pull request touches code or only documentation (every changed file is Markdown), and the backend matrix and frontend build run only for a code change. A small always-running `CI gate` sentinel is the required check in their place: it passes when the change is documentation-only (those jobs were legitimately skipped) or when both gated jobs succeeded, and fails closed otherwise, so a skip can never let an untested change merge.
+- **Change scope and CI gate**: a quick detection job classifies whether the pull request touches code or only documentation (every changed file is Markdown), and the backend matrix, the frontend build, and the Rust shell build run only for a code change. A small always-running `CI gate` sentinel is the required check in their place: it passes when the change is documentation-only (those jobs were legitimately skipped) or when all gated jobs succeeded, and fails closed otherwise, so a skip can never let an untested change merge. The Rust shell policy checks are unconditional and must pass on every run.
 - **Backend**, on Windows across Python 3.11 and 3.14: the `fast or standard` tiers, run under xdist (`--dist=loadfile -n auto`, see "Parallelism"). The 3.14 leg additionally reports branch coverage and, on pull requests, enforces diff coverage on the changed lines. The `full` tier (the schemathesis contract suites and OCR equivalence) does not run on the per-PR gate; it runs on the merge queue's integrated commit before a change lands (see "The merge queue" below), post-merge on a push to `main` (on the 3.14 leg, its coverage appended so the published badge reflects the full surface), and in the nightly workflow, so the per-PR gate stays fast while nothing reaches `main` un-vetted by the full suite.
 - **Lint**: `ruff check` and `ruff format --check`.
 - **Typing**: `mypy backend`.
@@ -170,6 +170,8 @@ Every pull request, push to `main`, and merge-queue run executes these jobs (`.g
 - **Golden ratification** (pull requests and the merge queue): fails when a commit moves a golden file without both the `test: regenerate goldens` marker and a recorded independent `ratification-sound` verdict for the changed sets, so a regression can be ratified neither unconsciously nor by its own author (see "Goldens regeneration" above).
 - **Authoring lint** (pull requests and the merge queue): flags em dashes and US spellings on the lines a change adds (see "Authoring lint" below). Diff-scoped, so it binds new content without forcing a drive-by sweep of the old.
 - **Frontend**: the type-check and production build.
+- **Rust shell policy** (`fmt` + `audit` + `deny`): formatting, RustSec advisory audit, and supply-chain policy (licence allowlist, bans, registry sources) for the Tauri shell crate. Source- and lockfile-level only, so it runs unconditionally on a cheap Linux runner (see "Rust shell checks" below).
+- **Rust shell build** (`clippy` + `build` + `test`, Windows): lints, compiles, and tests the shell crate on the application's real target. Gated on change scope like the backend matrix.
 
 On the merge queue these same jobs run against the integrated commit, and the backend `full` tier runs there too, so the queue is the pre-merge gate (see "The merge queue" below).
 
@@ -183,9 +185,9 @@ Because the queue tests the integrated result, it keeps `main` green without the
 
 ### Documentation-only changes
 
-A change that touches only documentation (every changed file is Markdown) needs neither the backend test matrix, the frontend build, nor the full tier: there is no code to test and no frontend to build. The change-scope detection job classifies it on both a pull request and the merge queue (it reads the queue's integrated range as well as the pull request's), so the heavy jobs are skipped in both places.
+A change that touches only documentation (every changed file is Markdown) needs neither the backend test matrix, the frontend build, the Rust shell build, nor the full tier: there is no code to test and no frontend to build. The change-scope detection job classifies it on both a pull request and the merge queue (it reads the queue's integrated range as well as the pull request's), so the heavy jobs are skipped in both places.
 
-Skipping a *required* check is the hazard: branch protection treats a never-reported required check as pending (deadlocking the merge) and a skipped one as passing (fail-open). The `CI gate` avoids this with an always-running sentinel: it stands in for the backend and frontend contexts, always reports, and is fail-closed. A documentation-only change passes on that verdict alone, but a detection that did not run cleanly, or a code change whose jobs did not pass, fails the gate. So a documentation-only change goes green in seconds, while a code change still runs and must pass everything. The classification is deliberately conservative: anything other than Markdown (source, configuration, the workflow files themselves, an asset) counts as code, so the safe direction (run the suite) is the default whenever there is any doubt.
+Skipping a *required* check is the hazard: branch protection treats a never-reported required check as pending (deadlocking the merge) and a skipped one as passing (fail-open). The `CI gate` avoids this with an always-running sentinel: it stands in for the backend, frontend, and Rust shell contexts, always reports, and is fail-closed. A documentation-only change passes on that verdict alone, but a detection that did not run cleanly, or a code change whose jobs did not pass, fails the gate. So a documentation-only change goes green in seconds, while a code change still runs and must pass everything. The classification is deliberately conservative: anything other than Markdown (source, configuration, the workflow files themselves, an asset) counts as code, so the safe direction (run the suite) is the default whenever there is any doubt.
 
 A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request), runs the complete backend suite across all tiers under randomised order (the `full` tier, plus a cross-file isolation check the pinned per-PR legs cannot give), and runs the mutation campaign, publishing the mutation score as a badge at the top of the README. (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
 
@@ -379,3 +381,26 @@ npm run format   # biome format --write: apply formatting
 ```
 
 The `frontend` CI job runs `npm run lint` on every change, and a pre-commit hook mirrors it locally through the lockfile-pinned Biome (run `npm ci` in `frontend/` once so the hook can resolve it). The tree went through a one-time formatting normalisation when the gate landed; `biome format` is a verified no-op from there on, so any diff the formatter wants is a real violation.
+
+## Rust shell checks
+
+The Tauri shell crate (`frontend/src-tauri`) carries the window orchestration and sidecar lifecycle in Rust, and is gated by two CI jobs. All of the commands below run from the crate directory:
+
+```sh
+cd frontend/src-tauri
+cargo fmt --check                        # formatting (apply with `cargo fmt`)
+cargo clippy --all-targets -- -D warnings  # lints, warnings promoted to errors
+cargo build                              # compile check (debug profile)
+cargo test                               # the shell unit tests
+cargo audit -D warnings                  # RustSec advisories against Cargo.lock
+cargo deny check                         # licences, bans, sources, advisories
+```
+
+The **policy job** (`fmt` + `audit` + `deny`) is source- and lockfile-level, so it runs unconditionally on a Linux runner. The **build job** (`clippy` + `build` + `test`) compiles the crate, so it runs on Windows: most of the crate sits behind `cfg(windows)`, and linting only the Linux configuration would gate the wrong code. The build step is a debug-profile compile check; the debug profile resolves the frontend through the dev URL, so no frontend build is needed, and the release bundle (`tauri build`) stays a release-time step.
+
+Two policy files make the audit and licence gates deliberate rather than advisory:
+
+- `.cargo/audit.toml`: the RustSec ignore list, every entry a transitive crate inside the Tauri toolchain with a per-advisory rationale comment. `-D warnings` makes the list load-bearing: an advisory not explicitly ignored there fails CI.
+- `deny.toml`: the supply-chain policy. An explicit licence allowlist (a new dependency carrying any other licence fails until the list is deliberately edited), crates-io-only sources, wildcard-version denial, and the Windows-graph subset of the advisory ignores (`cargo audit` scans the whole lockfile including Linux-only subtrees, so its list is the superset).
+
+Review both files together on every Tauri bump. The shell tests live in `src/lib.rs` under `#[cfg(test)]`; they cover the pure logic (the DPI-aware icon-size selection) and are the rail the Rust test surface extends as the shell grows.

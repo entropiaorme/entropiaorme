@@ -352,7 +352,7 @@ jobs:
         run: python -m backend.scripts.check_authoring_lint --range "$RANGE_BASE..$RANGE_HEAD"
 
   frontend:
-    name: Frontend (build + check)
+    name: Frontend (build + check + test)
     runs-on: ubuntu-latest
     # Skipped on a documentation-only pull request, like the backend matrix; the
     # ci-gate sentinel covers the required-check report in that case.
@@ -376,6 +376,7 @@ jobs:
       - run: npm run gen:api:check
       - run: npm run build
       - run: npm run check
+      - run: npm run test
 
   ci-gate:
     name: CI gate

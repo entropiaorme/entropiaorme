@@ -344,3 +344,25 @@ Conventions:
 ## Posture
 
 This suite is the core integrated coverage: the pipelines, formulas, and database contracts the rest of the app composes against, gated on every change by continuous integration. Router-level tests, OCR-pipeline tests, property-based tests, and broader unit coverage are being expanded on top of this foundation.
+
+## Frontend tests
+
+The Svelte frontend has its own unit track, run with Vitest from the `frontend/` directory and gated by the `frontend` CI job alongside `npm run build` and `npm run check`.
+
+```sh
+cd frontend
+npm run test            # run the suites once (CI mode)
+npm run test:watch      # re-run on change during development
+npm run test:coverage   # run with a v8 coverage report
+```
+
+Scope is the cleanly-separated pure-TypeScript logic layer (the rendering, formatting, preference, and store-coordination modules under `src/lib/`), not Svelte component rendering or end-to-end flows. Suites are colocated as `<module>.test.ts` next to their source.
+
+Conventions:
+
+- The config is `frontend/vitest.config.ts`: it declares the `$lib` alias explicitly (the SvelteKit plugin that normally provides it does not run under Vitest), defaults to the `node` environment, and pins `TZ=UTC` so date-formatting tests are deterministic. A suite that needs a DOM (`window`/`localStorage`) opts in with a `// @vitest-environment happy-dom` docblock.
+- The backend seams (the Tauri store, IPC `emit`, and the `preferences` adapter) are mocked with `vi.mock`/`vi.fn`; the module logic under test runs unmocked.
+- `preferences.ts` captures its `inTauri` flag at import time, so its suite sets or deletes `window.__TAURI_INTERNALS__` and then `vi.resetModules()` + dynamic `import()` per scenario.
+- Tests assert the code's actual behaviour; where a module's behaviour diverges from what a reader might expect, the divergence is asserted and flagged in-file as a candidate defect rather than papered over.
+
+A Biome lint/format gate for the frontend is planned as a follow-up.

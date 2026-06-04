@@ -20,7 +20,10 @@
 		"gen:api:check": "npm run gen:api && git diff --exit-code -- src/lib/api/schema.d.ts",
 		"tauri": "tauri",
 		"tauri:dev": "node src-tauri/build-dev-config.mjs && tauri dev --config src-tauri/tauri.dev.conf.json --config src-tauri/tauri.dev.local.json",
-		"tauri:build": "tauri build --bundles nsis"
+		"tauri:build": "tauri build --bundles nsis",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",
@@ -29,12 +32,15 @@
 		"@tailwindcss/vite": "^4.2.2",
 		"@tauri-apps/cli": "^2.10.1",
 		"@types/node": "^25.9.0",
+		"@vitest/coverage-v8": "^3.2.6",
+		"happy-dom": "^20.9.0",
 		"openapi-typescript": "^7.13.0",
 		"svelte": "^5.51.0",
 		"svelte-check": "^4.4.2",
 		"tailwindcss": "^4.2.2",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.1"
+		"vite": "^7.3.1",
+		"vitest": "^3.2.6"
 	},
 	"dependencies": {
 		"@tauri-apps/api": "^2.10.1",

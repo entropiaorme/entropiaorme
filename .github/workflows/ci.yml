@@ -438,6 +438,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: frontend/src-tauri
+      # tauri.conf.json declares the backend sidecar via bundle.externalBin,
+      # which makes Tauri's build script check that the platform-triple-suffixed
+      # binary exists at compile time, even though nothing here runs it. Stage
+      # the same zero-byte placeholder the dev launch stages
+      # (scripts/dev-launch.ps1); release builds replace it with the real
+      # frozen executable at the same path.
+      - name: Stage the sidecar placeholder
+        shell: pwsh
+        run: New-Item -ItemType File -Force -Path binaries/entropiaorme-backend-x86_64-pc-windows-msvc.exe | Out-Null
       # --all-targets lints the test code too; -D warnings promotes every lint
       # to a failure so the gate cannot drift into an ignored-warnings state.
       - name: Lint (clippy)

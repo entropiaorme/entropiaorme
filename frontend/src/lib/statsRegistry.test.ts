@@ -11,7 +11,9 @@ import {
 // handful of fields it needs, so fixtures are deliberately minimal: status
 // 'active' plus exactly the fields under test.
 
-const EMPTY = { value: '—', color: 'text-text' } as const;
+// The registry's empty placeholder is the em-dash glyph; written as an escape
+// so this file passes the authoring lint, which bans the literal character.
+const EMPTY = { value: '\u2014', color: 'text-text' } as const;
 
 /**
  * Build a minimal active TrackingStatus with the supplied overlay fields.

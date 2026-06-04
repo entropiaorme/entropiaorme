@@ -35,8 +35,7 @@ export type StatDef = {
 	render: (status: TrackingStatus | null) => StatRender;
 };
 
-const isActive = (s: TrackingStatus | null): s is TrackingStatus =>
-	s?.status === 'active';
+const isActive = (s: TrackingStatus | null): s is TrackingStatus => s?.status === 'active';
 
 const PLAIN = 'text-text';
 const EMPTY: StatRender = { value: '—', color: PLAIN };
@@ -54,18 +53,14 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Cycled',
 		defaultEnabled: true,
 		render: (status) =>
-			isActive(status)
-				? { value: formatPed(status.cost ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: formatPed(status.cost ?? 0), color: PLAIN } : EMPTY,
 	},
 	loot_tt: {
 		id: 'loot_tt',
 		label: 'Loot TT',
 		defaultEnabled: true,
 		render: (status) =>
-			isActive(status)
-				? { value: formatPed(status.returns ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: formatPed(status.returns ?? 0), color: PLAIN } : EMPTY,
 	},
 	net: {
 		id: 'net',
@@ -87,18 +82,14 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Rate',
 		defaultEnabled: true,
 		render: (status) =>
-			isActive(status)
-				? { value: formatPercent(status.returnRate ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: formatPercent(status.returnRate ?? 0), color: PLAIN } : EMPTY,
 	},
 	pes: {
 		id: 'pes',
 		label: 'PES',
 		defaultEnabled: false,
 		render: (status) =>
-			isActive(status)
-				? { value: formatPed(status.pes ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: formatPed(status.pes ?? 0), color: PLAIN } : EMPTY,
 	},
 	pes_per_100: {
 		id: 'pes_per_100',
@@ -108,7 +99,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			if (!isActive(status)) return EMPTY;
 			const cost = status.cost ?? 0;
 			if (cost <= 0) return EMPTY;
-			return { value: ((status.pes ?? 0) / cost * 100).toFixed(2), color: PLAIN };
+			return { value: (((status.pes ?? 0) / cost) * 100).toFixed(2), color: PLAIN };
 		},
 	},
 	latest_kill_loot: {
@@ -229,27 +220,21 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Kills',
 		defaultEnabled: false,
 		render: (status) =>
-			isActive(status)
-				? { value: String(status.kill_count ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: String(status.kill_count ?? 0), color: PLAIN } : EMPTY,
 	},
 	globals_count: {
 		id: 'globals_count',
 		label: 'Globals',
 		defaultEnabled: false,
 		render: (status) =>
-			isActive(status)
-				? { value: String(status.globalsCount ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: String(status.globalsCount ?? 0), color: PLAIN } : EMPTY,
 	},
 	hofs_count: {
 		id: 'hofs_count',
 		label: 'HOFs',
 		defaultEnabled: false,
 		render: (status) =>
-			isActive(status)
-				? { value: String(status.hofsCount ?? 0), color: PLAIN }
-				: EMPTY,
+			isActive(status) ? { value: String(status.hofsCount ?? 0), color: PLAIN } : EMPTY,
 	},
 };
 

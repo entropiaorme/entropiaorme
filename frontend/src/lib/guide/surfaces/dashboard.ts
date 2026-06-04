@@ -118,15 +118,17 @@ export const dashboardSurface: GuideSurface = {
 			prose: {
 				title: 'Dashboard',
 				body: [
-					{ kind: 'p', text: 'The Dashboard is the main page to have open while you are playing. It has 3 areas:' },
-					{ kind: 'ul', items: [
-						'The modular stats',
-						'The recent events',
-						'The dashboard widgets'
-					] }
+					{
+						kind: 'p',
+						text: 'The Dashboard is the main page to have open while you are playing. It has 3 areas:',
+					},
+					{
+						kind: 'ul',
+						items: ['The modular stats', 'The recent events', 'The dashboard widgets'],
+					},
 				],
-				note: 'Note: Guide uses demo data.'
-			}
+				note: 'Note: Guide uses demo data.',
+			},
 		},
 		{
 			id: 'overlay-spawn',
@@ -140,12 +142,10 @@ export const dashboardSurface: GuideSurface = {
 			// unmounts and the cascade falls back to the button for the next sweep.
 			anchor: () => {
 				const spawn = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-overlay-spawn"]'
+					'[data-guide-anchor="dashboard-overlay-spawn"]',
 				);
 				if (spawn && spawn.offsetParent !== null) return spawn;
-				return document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-overlay-btn"]'
-				);
+				return document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-btn"]');
 			},
 			placement: 'bottom-centre',
 			// Anchored to the always-mounted slot wrapper (not the conditionally-
@@ -156,17 +156,15 @@ export const dashboardSurface: GuideSurface = {
 			// gap. The slot has the strip's exact dimensions (the strip mounts
 			// inside, just opacity-0 when hidden), so flush-below + centred
 			// placement lands correctly in all phases.
-			placementAnchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="dashboard-overlay-spawn-slot"]'
-			),
+			placementAnchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-spawn-slot"]'),
 			prose: {
 				title: 'Overlay',
-				body: 'The Overlay is the main control area for tracking.'
+				body: 'The Overlay is the main control area for tracking.',
 			},
 			async play({ cursor, demoApi }) {
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 				const api = demoApi as Partial<DashboardDemoApi>;
 				// Explicit start-state reset: overlay hidden, lifecycle idle.
 				// Forward 1→2 inherits false/false from beforeStart so this
@@ -180,7 +178,7 @@ export const dashboardSurface: GuideSurface = {
 				while (stillActive()) {
 					// === Phase 1: cursor → dashboard Overlay button, click, strip mounts idle ===
 					const btn = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="dashboard-overlay-btn"]'
+						'[data-guide-anchor="dashboard-overlay-btn"]',
 					);
 					if (!btn) {
 						if (!(await abortableWait(500, stillActive))) break;
@@ -203,7 +201,7 @@ export const dashboardSurface: GuideSurface = {
 					// the target with no visible slide).
 					await cursor.moveTo(btn, {
 						duration: 900,
-						from: { x: startX, y: startY }
+						from: { x: startX, y: startY },
 					});
 					if (!stillActive()) break;
 					await cursor.clickRipple();
@@ -244,7 +242,7 @@ export const dashboardSurface: GuideSurface = {
 					if (!stillActive()) break;
 					await cursor.moveTo(trackBtn, {
 						duration: 900,
-						from: { x: trackStartX, y: trackStartY }
+						from: { x: trackStartX, y: trackStartY },
 					});
 					if (!stillActive()) break;
 					await cursor.clickRipple();
@@ -283,7 +281,7 @@ export const dashboardSurface: GuideSurface = {
 				// engine.ts).
 				dashboardApi().setOverlayDemoVisible?.(false);
 				dashboardApi().setOverlayDemoTrackingStarted?.(false);
-			}
+			},
 		},
 		{
 			id: 'overlay-mob-section',
@@ -291,9 +289,8 @@ export const dashboardSurface: GuideSurface = {
 			// wrapper. Single-element anchor (vs. DOMRect[]) because the affordances
 			// sit in the same parent flex container; codex-overview's DOMRect[]
 			// pattern is reserved for non-adjacent regions.
-			anchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="overlay-mob-section"]'
-			),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="overlay-mob-section"]'),
 			placement: 'bottom-centre',
 			// Same placement slot as overlay-spawn so the prose card stays seated
 			// beneath the strip across the Next-transition. The slot wrapper is
@@ -302,16 +299,21 @@ export const dashboardSurface: GuideSurface = {
 			// (status='idle' + lastSessionId=null hits the same template branch as
 			// status='active'), so the cutout d-attribute tweens smoothly from the
 			// prior card's strip-wrapper shape to this card's mob-section shape.
-			placementAnchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="dashboard-overlay-spawn-slot"]'
-			),
+			placementAnchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-spawn-slot"]'),
 			prose: {
 				title: 'Mob and tag',
 				body: [
-					{ kind: 'p', text: 'Track sessions by mob name or a free-text tag. Later analytics build on this.' },
-					{ kind: 'p', text: 'Tags are more versatile when a hunt involves different mobs, so the analysis describes the overall activity.' }
+					{
+						kind: 'p',
+						text: 'Track sessions by mob name or a free-text tag. Later analytics build on this.',
+					},
+					{
+						kind: 'p',
+						text: 'Tags are more versatile when a hunt involves different mobs, so the analysis describes the overall activity.',
+					},
 				],
-				note: 'Note: OCR auto-detection was attempted but proved too inconsistent. The manual Mob/Tag approach is less flexible but more reliable.'
+				note: 'Note: OCR auto-detection was attempted but proved too inconsistent. The manual Mob/Tag approach is less flexible but more reliable.',
 			},
 			async play({ demoApi }) {
 				// Re-establish (or no-op) the active lifecycle state: strip
@@ -329,7 +331,7 @@ export const dashboardSurface: GuideSurface = {
 				const api = demoApi as Partial<DashboardDemoApi>;
 				api.setOverlayDemoVisible?.(true);
 				api.setOverlayDemoTrackingStarted?.(true);
-			}
+			},
 			// No resetDemo: the next card (overlay-equipment-section) also
 			// wants the strip mounted active; reverting state here would
 			// cause an 80ms flicker the next card immediately undoes.
@@ -342,28 +344,29 @@ export const dashboardSurface: GuideSurface = {
 			// The strip stays mounted active across the Next-transition; the
 			// cutout d-attribute tweens from the mob-section rect to the
 			// equipment-section rect via the 350ms cubic-bezier.
-			anchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="overlay-equipment-section"]'
-			),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="overlay-equipment-section"]'),
 			placement: 'bottom-centre',
-			placementAnchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="dashboard-overlay-spawn-slot"]'
-			),
+			placementAnchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-spawn-slot"]'),
 			prose: {
 				title: 'Equipment',
 				body: [
-					{ kind: 'ul', items: [
-						'Hotbar mode: shows the currently active tool',
-						'Trifecta mode: choose which preset to use'
-					] }
+					{
+						kind: 'ul',
+						items: [
+							'Hotbar mode: shows the currently active tool',
+							'Trifecta mode: choose which preset to use',
+						],
+					},
 				],
-				note: 'Note: See the equipment area for an intro to the Hotbar and Trifecta.'
+				note: 'Note: See the equipment area for an intro to the Hotbar and Trifecta.',
 			},
 			async play({ demoApi }) {
 				const api = demoApi as Partial<DashboardDemoApi>;
 				api.setOverlayDemoVisible?.(true);
 				api.setOverlayDemoTrackingStarted?.(true);
-			}
+			},
 			// No resetDemo: adjacent overlay-state cards (mob ↔ armour) own
 			// the same active state, so reverting here would cause a flicker
 			// the next card immediately undoes. See overlay-mob-section.
@@ -377,10 +380,10 @@ export const dashboardSurface: GuideSurface = {
 			// cutout shape).
 			anchor: () => {
 				const section = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="overlay-armour-section"]'
+					'[data-guide-anchor="overlay-armour-section"]',
 				);
 				const popup = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="overlay-armour-popup"]'
+					'[data-guide-anchor="overlay-armour-popup"]',
 				);
 				if (section && popup && popup.offsetParent !== null) {
 					return [section.getBoundingClientRect(), popup.getBoundingClientRect()];
@@ -389,9 +392,8 @@ export const dashboardSurface: GuideSurface = {
 				return null;
 			},
 			placement: 'bottom-centre',
-			placementAnchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="dashboard-overlay-spawn-slot"]'
-			),
+			placementAnchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-spawn-slot"]'),
 			// Push the prose card below the slot's natural placement to clear
 			// the fake popup that mounts below the Cost button (popup sits
 			// ~8px below the strip and is ~36px tall, total ~44px below
@@ -401,9 +403,17 @@ export const dashboardSurface: GuideSurface = {
 			prose: {
 				title: 'Armour costs',
 				body: [
-					{ kind: 'p', text: 'Armour costs can be added to a session. You can type them in manually, or set up automatic screen capture (OCR) of your repair terminal cost.' },
-					{ kind: 'p', text: 'Place the repair terminal at the bottom right of the screen and hit Record.' },
-					{ kind: 'svg', svg: `<svg viewBox="0 0 220 150" width="220" height="150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+					{
+						kind: 'p',
+						text: 'Armour costs can be added to a session. You can type them in manually, or set up automatic screen capture (OCR) of your repair terminal cost.',
+					},
+					{
+						kind: 'p',
+						text: 'Place the repair terminal at the bottom right of the screen and hit Record.',
+					},
+					{
+						kind: 'svg',
+						svg: `<svg viewBox="0 0 220 150" width="220" height="150" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <defs>
     <style>
       .armour-svg-monitor { fill: none; stroke: rgba(255,255,255,0.18); stroke-width: 1.5; }
@@ -427,9 +437,10 @@ export const dashboardSurface: GuideSurface = {
   <rect class="armour-svg-stand" x="78" y="134" width="64" height="4" rx="1"/>
   <rect class="armour-svg-window" id="armour-svg-window" x="14" y="14" width="64" height="44" rx="3"/>
   <rect class="armour-svg-flash" id="armour-svg-flash" x="146" y="76" width="64" height="44" rx="3"/>
-</svg>` }
+</svg>`,
+					},
 				],
-				note: 'Note: Enable repair OCR in settings. Cost for (L) armour is work in progress.'
+				note: 'Note: Enable repair OCR in settings. Cost for (L) armour is work in progress.',
 			},
 			async play({ cursor, demoApi }) {
 				// Looped sync: cursor → Cost click → fake popup mounts + SVG
@@ -439,8 +450,7 @@ export const dashboardSurface: GuideSurface = {
 				// one-shot 500ms keyframe; the 1500ms post-flash dwell lets the
 				// user absorb the "screen capture taken" beat before reset.
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 				const api = demoApi as Partial<DashboardDemoApi>;
 				// Re-establish lifecycle state (same handoff as overlay-mob /
 				// overlay-equipment cards). Strip must be active so the Cost
@@ -453,7 +463,7 @@ export const dashboardSurface: GuideSurface = {
 				while (stillActive()) {
 					// === Phase 1: cursor → Cost button, click, popup mounts + drag starts ===
 					const costBtn = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="overlay-armour-cost-btn"]'
+						'[data-guide-anchor="overlay-armour-cost-btn"]',
 					);
 					if (!costBtn) {
 						if (!(await abortableWait(500, stillActive))) break;
@@ -467,7 +477,7 @@ export const dashboardSurface: GuideSurface = {
 					if (!stillActive()) break;
 					await cursor.moveTo(costBtn, {
 						duration: 900,
-						from: { x: startX, y: startY }
+						from: { x: startX, y: startY },
 					});
 					if (!stillActive()) break;
 					await cursor.clickRipple();
@@ -481,7 +491,7 @@ export const dashboardSurface: GuideSurface = {
 
 					// === Phase 2: cursor → Record button, click, flash fires, popup closes ===
 					const recordBtn = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="overlay-armour-record-btn"]'
+						'[data-guide-anchor="overlay-armour-record-btn"]',
 					);
 					if (!recordBtn) {
 						// Popup didn't mount in time; back out and let the next
@@ -499,7 +509,7 @@ export const dashboardSurface: GuideSurface = {
 					if (!stillActive()) break;
 					await cursor.moveTo(recordBtn, {
 						duration: 700,
-						from: { x: recordStartX, y: recordStartY }
+						from: { x: recordStartX, y: recordStartY },
 					});
 					if (!stillActive()) break;
 					await cursor.clickRipple();
@@ -533,7 +543,7 @@ export const dashboardSurface: GuideSurface = {
 				// gate, which unmounts on close regardless.
 				dashboardApi().setOverlayArmourPopupVisible?.(false);
 				dashboardApi().resetArmourSvg?.();
-			}
+			},
 		},
 		{
 			id: 'dashboard-widgets',
@@ -544,10 +554,10 @@ export const dashboardSurface: GuideSurface = {
 			// so the play() hides the overlay strip first to un-hide them.
 			anchor: () => {
 				const events = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-recent-events"]'
+					'[data-guide-anchor="dashboard-recent-events"]',
 				);
 				const widgets = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-widgets-area"]'
+					'[data-guide-anchor="dashboard-widgets-area"]',
 				);
 				if (events && widgets) {
 					return [events.getBoundingClientRect(), widgets.getBoundingClientRect()];
@@ -561,13 +571,15 @@ export const dashboardSurface: GuideSurface = {
 				title: 'Dashboard widgets',
 				body: [
 					{ kind: 'p', text: 'Recent events show globals, quest completions, alerts, and more.' },
-					{ kind: 'p', text: 'Switch between monitoring widgets: loot charts, composition, and quest info.' }
-				]
+					{
+						kind: 'p',
+						text: 'Switch between monitoring widgets: loot charts, composition, and quest info.',
+					},
+				],
 			},
 			async play({ cursor, demoApi }) {
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 				const api = demoApi as Partial<DashboardDemoApi>;
 				// Hide the overlay strip so the recent-events + widgets sections
 				// un-hide (they're gated on the negated overlay-visible flag in
@@ -589,7 +601,7 @@ export const dashboardSurface: GuideSurface = {
 
 					// === Phase 1: cursor → Loot Composition tab, click, switch ===
 					const lootBtn = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="dashboard-widgets-area"] [role="tab"][data-tab-id="loot"]'
+						'[data-guide-anchor="dashboard-widgets-area"] [role="tab"][data-tab-id="loot"]',
 					);
 					if (lootBtn) {
 						const rect = lootBtn.getBoundingClientRect();
@@ -600,7 +612,7 @@ export const dashboardSurface: GuideSurface = {
 						if (!stillActive()) break;
 						await cursor.moveTo(lootBtn, {
 							duration: 700,
-							from: { x: startX, y: startY }
+							from: { x: startX, y: startY },
 						});
 						if (!stillActive()) break;
 						await cursor.clickRipple();
@@ -616,7 +628,7 @@ export const dashboardSurface: GuideSurface = {
 
 					// === Phase 2: cursor → Quests tab, click, switch ===
 					const questsBtn = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="dashboard-widgets-area"] [role="tab"][data-tab-id="quests"]'
+						'[data-guide-anchor="dashboard-widgets-area"] [role="tab"][data-tab-id="quests"]',
 					);
 					if (questsBtn) {
 						const rect = questsBtn.getBoundingClientRect();
@@ -627,7 +639,7 @@ export const dashboardSurface: GuideSurface = {
 						if (!stillActive()) break;
 						await cursor.moveTo(questsBtn, {
 							duration: 700,
-							from: { x: startX, y: startY }
+							from: { x: startX, y: startY },
 						});
 						if (!stillActive()) break;
 						await cursor.clickRipple();
@@ -663,13 +675,13 @@ export const dashboardSurface: GuideSurface = {
 			// to the area below.
 			anchor: () => {
 				const grid = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-stats-grid"]'
+					'[data-guide-anchor="dashboard-stats-grid"]',
 				);
 				const subtab = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="dashboard-widgets-area"] [data-tab-id="customise"]'
+					'[data-guide-anchor="dashboard-widgets-area"] [data-tab-id="customise"]',
 				);
 				const customise = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="customise-stats-area"]'
+					'[data-guide-anchor="customise-stats-area"]',
 				);
 				const rects: DOMRect[] = [];
 				if (grid) rects.push(grid.getBoundingClientRect());
@@ -683,20 +695,21 @@ export const dashboardSurface: GuideSurface = {
 			// the upper-right region rather than viewport-centre. The middle-right
 			// placement honours placementAnchor by pinning the card's top to the
 			// anchor's top (mirror of bottom-centre's anchor-aware variant).
-			placementAnchor: () => document.querySelector<HTMLElement>(
-				'[data-guide-anchor="dashboard-recent-events"]'
-			),
+			placementAnchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-recent-events"]'),
 			prose: {
 				title: 'Modular stats',
 				body: [
 					{ kind: 'p', text: 'Customise what stats to show in your dashboard and overlay.' },
-					{ kind: 'p', text: 'Drag and drop stats in the dashboard to reorder them. The order applies to the overlay too.' }
-				]
+					{
+						kind: 'p',
+						text: 'Drag and drop stats in the dashboard to reorder them. The order applies to the overlay too.',
+					},
+				],
 			},
 			async play({ cursor, demoApi }) {
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 				const api = demoApi as Partial<DashboardDemoApi>;
 				// Hide overlay so the dashboard sections (stats grid + widgets)
 				// render: they're gated on !(isActive && demoOverlayVisible).
@@ -724,14 +737,14 @@ export const dashboardSurface: GuideSurface = {
 				const pillsToToggle: Array<{ id: string; label: string }> = [
 					{ id: 'pes', label: 'PES' },
 					{ id: 'multiplier_max', label: 'Max Multi' },
-					{ id: 'loot_tt', label: 'Loot TT' }
+					{ id: 'loot_tt', label: 'Loot TT' },
 				];
 
 				while (stillActive()) {
 					// === Phase 1: 3 pill clicks ===
 					for (const pill of pillsToToggle) {
 						const pillEl = document.querySelector<HTMLElement>(
-							`[data-customise-surface="dashboard"] [data-pill-id="${pill.id}"]`
+							`[data-customise-surface="dashboard"] [data-pill-id="${pill.id}"]`,
 						);
 						if (!pillEl) continue;
 						const rect = pillEl.getBoundingClientRect();
@@ -742,7 +755,7 @@ export const dashboardSurface: GuideSurface = {
 						if (!stillActive()) break;
 						await cursor.moveTo(pillEl, {
 							duration: 600,
-							from: { x: startX, y: startY }
+							from: { x: startX, y: startY },
 						});
 						if (!stillActive()) break;
 						await cursor.clickRipple();
@@ -764,12 +777,8 @@ export const dashboardSurface: GuideSurface = {
 					// Drag multi_max (idx 3) to position 0 (front of grid).
 					const FROM_IDX = 3;
 					const TO_IDX = 0;
-					const sourceCell = document.querySelector<HTMLElement>(
-						`[data-stat-cell="${FROM_IDX}"]`
-					);
-					const targetCell = document.querySelector<HTMLElement>(
-						`[data-stat-cell="${TO_IDX}"]`
-					);
+					const sourceCell = document.querySelector<HTMLElement>(`[data-stat-cell="${FROM_IDX}"]`);
+					const targetCell = document.querySelector<HTMLElement>(`[data-stat-cell="${TO_IDX}"]`);
 					if (sourceCell && targetCell) {
 						const srcRect = sourceCell.getBoundingClientRect();
 						const tgtRect = targetCell.getBoundingClientRect();
@@ -783,7 +792,7 @@ export const dashboardSurface: GuideSurface = {
 						// Slide up to the source cell
 						await cursor.moveTo(sourceCell, {
 							duration: 800,
-							from: { x: startX, y: startY }
+							from: { x: startX, y: startY },
 						});
 						if (!stillActive()) break;
 						// Pickup: cursor grab + cell drag visual
@@ -797,7 +806,7 @@ export const dashboardSurface: GuideSurface = {
 						// Slide to target cell with grab still held
 						await cursor.moveTo(targetCell, {
 							duration: 900,
-							from: { x: srcCx, y: srcCy }
+							from: { x: srcCx, y: srcCy },
 						});
 						if (!stillActive()) {
 							cursor.setState('idle');
@@ -836,7 +845,7 @@ export const dashboardSurface: GuideSurface = {
 					statsSnapshot = null;
 				}
 				dashboardApi().setDragVisualIndex?.(null);
-			}
-		}
-	]
+			},
+		},
+	],
 };

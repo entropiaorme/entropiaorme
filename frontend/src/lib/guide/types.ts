@@ -16,7 +16,7 @@ export interface CursorAPI {
 			duration?: number;
 			offset?: { x: number; y: number };
 			from?: { x: number; y: number };
-		}
+		},
 	): Promise<void>;
 	/** Play a one-shot click-ripple animation at the cursor's current position. */
 	clickRipple(): Promise<void>;

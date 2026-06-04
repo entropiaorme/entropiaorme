@@ -38,8 +38,8 @@ export const equipmentSurface: GuideSurface = {
 			prose: {
 				title: 'Equipment',
 				body: 'The Equipment tab sets up the loadout used for hunting cost tracking.',
-				note: 'Note: Guide uses demo data.'
-			}
+				note: 'Note: Guide uses demo data.',
+			},
 		},
 		{
 			id: 'three-subtabs-overview',
@@ -49,22 +49,22 @@ export const equipmentSurface: GuideSurface = {
 				body: [
 					{
 						kind: 'p',
-						text: 'There are two cost-tracking modes: Trifecta and Hotbar.'
+						text: 'There are two cost-tracking modes: Trifecta and Hotbar.',
 					},
 					{
 						kind: 'p',
-						text: 'The Library tab is where you add new equipment used by both.'
-					}
-				]
-			}
+						text: 'The Library tab is where you add new equipment used by both.',
+					},
+				],
+			},
 		},
 		{
 			id: 'add-equipment-button',
 			anchor: () => anchor('add-equipment-button'),
 			prose: {
 				title: 'Add Equipment',
-				body: 'The in-game item catalogue is built in: search for weapons and their mods (amps, enhancers, etc.); cost-per-use is calculated automatically.'
-			}
+				body: 'The in-game item catalogue is built in: search for weapons and their mods (amps, enhancers, etc.); cost-per-use is calculated automatically.',
+			},
 		},
 		{
 			id: 'trifecta-selectors',
@@ -72,7 +72,7 @@ export const equipmentSurface: GuideSurface = {
 			prose: {
 				title: 'Trifecta mode',
 				body: 'In Trifecta mode, you create presets of a small (tagger) weapon, a big (main) weapon, and your primary healing tool.',
-				note: 'More healing tools, like restoration chip + FAP at the same time, coming soon.'
+				note: 'More healing tools, like restoration chip + FAP at the same time, coming soon.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<EquipmentDemoApi>;
@@ -84,7 +84,7 @@ export const equipmentSurface: GuideSurface = {
 				const api = equipApi();
 				api.setActiveTab?.('library');
 				api.setDemoHotbarEnabled?.(true);
-			}
+			},
 		},
 		{
 			id: 'trifecta-damage-ranges',
@@ -92,7 +92,7 @@ export const equipmentSurface: GuideSurface = {
 			prose: {
 				title: 'Range-based attribution',
 				body: "This chart shows each weapon's damage range. With non-overlapping ranges, every hit logged in chat.log is attributed to the weapon whose range contains it.",
-				note: 'If small crits overlap big-weapon hits, the big weapon wins. This introduces some cost-attribution inaccuracy; use Hotbar mode to avoid it.'
+				note: 'If small crits overlap big-weapon hits, the big weapon wins. This introduces some cost-attribution inaccuracy; use Hotbar mode to avoid it.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<EquipmentDemoApi>;
@@ -104,14 +104,14 @@ export const equipmentSurface: GuideSurface = {
 				const api = equipApi();
 				api.setActiveTab?.('library');
 				api.setDemoHotbarEnabled?.(true);
-			}
+			},
 		},
 		{
 			id: 'hotbar-slot-list',
 			anchor: () => anchor('hotbar-slot-list'),
 			prose: {
 				title: 'Hotbar mode',
-				body: 'When Hotbar mode is active, keyboard presses in your number hotbar assign costs.'
+				body: 'When Hotbar mode is active, keyboard presses in your number hotbar assign costs.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<EquipmentDemoApi>;
@@ -122,14 +122,14 @@ export const equipmentSurface: GuideSurface = {
 			resetDemo() {
 				const api = equipApi();
 				api.setActiveTab?.('library');
-			}
+			},
 		},
 		{
 			id: 'trifecta-default',
 			prose: {
 				title: 'Trifecta by default',
-				body: 'Trifecta mode is on by default; you can switch to Hotbar mode in Settings.'
-			}
-		}
-	]
+				body: 'Trifecta mode is on by default; you can switch to Hotbar mode in Settings.',
+			},
+		},
+	],
 };

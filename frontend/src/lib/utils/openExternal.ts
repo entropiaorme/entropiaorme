@@ -42,9 +42,7 @@ export async function openExternalUrl(href: string | null | undefined): Promise<
 export function isExternalHref(href: string): boolean {
 	const trimmed = href.trim().toLowerCase();
 	return (
-		trimmed.startsWith('http:') ||
-		trimmed.startsWith('https:') ||
-		trimmed.startsWith('mailto:')
+		trimmed.startsWith('http:') || trimmed.startsWith('https:') || trimmed.startsWith('mailto:')
 	);
 }
 

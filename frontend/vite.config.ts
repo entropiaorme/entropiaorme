@@ -29,9 +29,9 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		port,
-		strictPort: true
+		strictPort: true,
 	},
 	define: {
-		'import.meta.env.ENTROPIAORME_BACKEND_PORT': JSON.stringify(String(backendPort))
-	}
+		'import.meta.env.ENTROPIAORME_BACKEND_PORT': JSON.stringify(String(backendPort)),
+	},
 });

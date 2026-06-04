@@ -25,7 +25,11 @@ async function loadModule(): Promise<Mod> {
 }
 
 /** A manually resolvable snapshot read, for driving the coalescer mid-flight. */
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (err: unknown) => void } {
+function deferred<T>(): {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
+	reject: (err: unknown) => void;
+} {
 	let resolve!: (value: T) => void;
 	let reject!: (err: unknown) => void;
 	const promise = new Promise<T>((res, rej) => {

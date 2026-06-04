@@ -22,22 +22,22 @@
 // generated overlay is the smallest portable shim that keeps the
 // env-driven devUrl honoured by Tauri's webview-loading side without
 // hardcoding values in committed config.
-import { writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-const hostname = (process.env.ENTROPIAORME_HOSTNAME ?? "").trim();
+const hostname = (process.env.ENTROPIAORME_HOSTNAME ?? '').trim();
 let devUrl;
 if (hostname) {
 	devUrl = `https://${hostname}`;
 } else {
-	const rawPort = (process.env.ENTROPIAORME_FRONTEND_PORT ?? "5173").trim();
+	const rawPort = (process.env.ENTROPIAORME_FRONTEND_PORT ?? '5173').trim();
 	const port = Number(rawPort);
 	if (!Number.isInteger(port) || port < 1 || port > 65535) {
-		throw new Error("ENTROPIAORME_FRONTEND_PORT must be an integer between 1 and 65535");
+		throw new Error('ENTROPIAORME_FRONTEND_PORT must be an integer between 1 and 65535');
 	}
 	devUrl = `http://localhost:${port}`;
 }
 const overlay = { build: { devUrl } };
-const out = join(dirname(fileURLToPath(import.meta.url)), "tauri.dev.local.json");
-writeFileSync(out, JSON.stringify(overlay, null, 2) + "\n");
+const out = join(dirname(fileURLToPath(import.meta.url)), 'tauri.dev.local.json');
+writeFileSync(out, JSON.stringify(overlay, null, 2) + '\n');

@@ -225,8 +225,7 @@ describe('setDashboardStats', () => {
 	});
 
 	it('persists the reordered overlay and emits the change event exactly once', async () => {
-		const { setDashboardStats, OVERLAY_STATS_CHANGED_EVENT, overlayStats } =
-			await loadModule();
+		const { setDashboardStats, OVERLAY_STATS_CHANGED_EVENT, overlayStats } = await loadModule();
 		const value = [
 			{ id: 'cycled' as StatId, enabled: true },
 			{ id: 'net' as StatId, enabled: false },
@@ -292,8 +291,7 @@ describe('setOverlayStats', () => {
 	});
 
 	it('persists the reordered overlay and emits exactly once', async () => {
-		const { setOverlayStats, OVERLAY_STATS_CHANGED_EVENT, overlayStats } =
-			await loadModule();
+		const { setOverlayStats, OVERLAY_STATS_CHANGED_EVENT, overlayStats } = await loadModule();
 		const value = [{ id: 'net' as StatId, enabled: true }];
 		await setOverlayStats(value);
 		const reordered = get(overlayStats);

@@ -21,7 +21,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		damageMax: 22.5,
 		reloadSeconds: 2.5,
 		isLimited: false,
-		enrichmentLevel: 2
+		enrichmentLevel: 2,
 	},
 	{
 		id: '2',
@@ -33,7 +33,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		damageMax: 137.0,
 		reloadSeconds: 4.2,
 		isLimited: false,
-		enrichmentLevel: 3
+		enrichmentLevel: 3,
 	},
 	{
 		id: '3',
@@ -45,7 +45,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		damageMax: 48.0,
 		reloadSeconds: 3.1,
 		isLimited: true,
-		enrichmentLevel: 1
+		enrichmentLevel: 1,
 	},
 	{
 		id: '4',
@@ -57,7 +57,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		damageMax: null,
 		reloadSeconds: 3.5,
 		isLimited: false,
-		enrichmentLevel: 2
+		enrichmentLevel: 2,
 	},
 	{
 		id: '5',
@@ -69,8 +69,8 @@ export const equipmentDemoLibrary: Equipment[] = [
 		damageMax: null,
 		reloadSeconds: null,
 		isLimited: false,
-		enrichmentLevel: 0
-	}
+		enrichmentLevel: 0,
+	},
 ];
 
 export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
@@ -83,16 +83,26 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 			ammoBurn: 0.24,
 			markupPercent: 100,
 			isLimited: false,
-			damageEnhancers: 0
+			damageEnhancers: 0,
 		},
 		amplifier: null,
 		scope: null,
 		absorber: null,
 		costBreakdown: [
-			{ component: 'Jester D-1 decay', costPec: 0.18, markupMultiplier: 1.0, effectiveCostPec: 0.18 },
-			{ component: 'Jester D-1 ammo', costPec: 0.24, markupMultiplier: 1.0, effectiveCostPec: 0.24 }
+			{
+				component: 'Jester D-1 decay',
+				costPec: 0.18,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 0.18,
+			},
+			{
+				component: 'Jester D-1 ammo',
+				costPec: 0.24,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 0.24,
+			},
 		],
-		totalCostPerUse: 0.42
+		totalCostPerUse: 0.42,
 	},
 	'2': {
 		id: '2',
@@ -103,7 +113,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 			ammoBurn: 1.62,
 			markupPercent: 100,
 			isLimited: false,
-			damageEnhancers: 2
+			damageEnhancers: 2,
 		},
 		amplifier: {
 			catalogId: 'omegaton-a104',
@@ -111,18 +121,38 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 			decay: 1.61,
 			ammoBurn: 0.55,
 			markupPercent: 100,
-			isLimited: false
+			isLimited: false,
 		},
 		scope: null,
 		absorber: null,
 		costBreakdown: [
-			{ component: 'Korss H400 decay', costPec: 0.398, markupMultiplier: 1.0, effectiveCostPec: 0.398 },
-			{ component: 'Korss H400 ammo', costPec: 1.62, markupMultiplier: 1.0, effectiveCostPec: 1.62 },
-			{ component: 'Omegaton A104 decay', costPec: 1.61, markupMultiplier: 1.0, effectiveCostPec: 1.61 },
-			{ component: 'Omegaton A104 ammo', costPec: 0.55, markupMultiplier: 1.0, effectiveCostPec: 0.55 }
+			{
+				component: 'Korss H400 decay',
+				costPec: 0.398,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 0.398,
+			},
+			{
+				component: 'Korss H400 ammo',
+				costPec: 1.62,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 1.62,
+			},
+			{
+				component: 'Omegaton A104 decay',
+				costPec: 1.61,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 1.61,
+			},
+			{
+				component: 'Omegaton A104 ammo',
+				costPec: 0.55,
+				markupMultiplier: 1.0,
+				effectiveCostPec: 0.55,
+			},
 		],
-		totalCostPerUse: 4.18
-	}
+		totalCostPerUse: 4.18,
+	},
 };
 
 export const equipmentDemoTrifecta: TrifectaSettings = {
@@ -136,11 +166,11 @@ export const equipmentDemoTrifecta: TrifectaSettings = {
 			bigWeaponId: 2,
 			healId: 4,
 			ready: true,
-			message: null
-		}
+			message: null,
+		},
 	],
 	ready: true,
-	message: null
+	message: null,
 };
 
 export const equipmentDemoHotbar: Hotbar = {
@@ -153,5 +183,5 @@ export const equipmentDemoHotbar: Hotbar = {
 	'7': null,
 	'8': null,
 	'9': null,
-	'0': null
+	'0': null,
 };

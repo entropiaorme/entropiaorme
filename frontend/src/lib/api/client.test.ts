@@ -53,9 +53,7 @@ describe('URL builders', () => {
 
 	it('builds the capture preview PNG URL per page', async () => {
 		const { manualSkillScanCapturePngUrl } = await loadModule();
-		expect(manualSkillScanCapturePngUrl(3)).toBe(
-			'http://127.0.0.1:8421/api/scan/skills/capture/3',
-		);
+		expect(manualSkillScanCapturePngUrl(3)).toBe('http://127.0.0.1:8421/api/scan/skills/capture/3');
 	});
 });
 

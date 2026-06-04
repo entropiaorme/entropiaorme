@@ -1,9 +1,4 @@
-import type {
-	Quest,
-	QuestPlaylist,
-	QuestAnalyticsRow,
-	PlaylistAnalyticsRow
-} from '$lib/types';
+import type { Quest, QuestPlaylist, QuestAnalyticsRow, PlaylistAnalyticsRow } from '$lib/types';
 
 /**
  * Inline demo data for the quests surface guide-mode mount.
@@ -33,7 +28,7 @@ export const questsDemoQuests: Quest[] = [
 		chainPosition: 10,
 		chainTotal: 12,
 		playlistIds: ['pl1', 'pl2'],
-		startedAt: null
+		startedAt: null,
 	},
 	{
 		id: 'q2',
@@ -53,7 +48,7 @@ export const questsDemoQuests: Quest[] = [
 		chainPosition: null,
 		chainTotal: null,
 		playlistIds: ['pl1'],
-		startedAt: null
+		startedAt: null,
 	},
 	{
 		id: 'q3',
@@ -73,7 +68,7 @@ export const questsDemoQuests: Quest[] = [
 		chainPosition: null,
 		chainTotal: null,
 		playlistIds: ['pl1'],
-		startedAt: null
+		startedAt: null,
 	},
 	{
 		id: 'q4',
@@ -93,8 +88,8 @@ export const questsDemoQuests: Quest[] = [
 		chainPosition: null,
 		chainTotal: null,
 		playlistIds: ['pl2'],
-		startedAt: null
-	}
+		startedAt: null,
+	},
 ];
 
 export const questsDemoPlaylists: QuestPlaylist[] = [
@@ -109,8 +104,8 @@ export const questsDemoPlaylists: QuestPlaylist[] = [
 		items: [
 			{ questId: 'q2', description: 'Caboria field east of waypoint', groupType: 'immediate' },
 			{ questId: 'q3', description: null, groupType: 'immediate' },
-			{ questId: 'q1', description: 'Drop while passing through', groupType: 'long_horizon' }
-		]
+			{ questId: 'q1', description: 'Drop while passing through', groupType: 'long_horizon' },
+		],
 	},
 	{
 		id: 'pl2',
@@ -122,9 +117,9 @@ export const questsDemoPlaylists: QuestPlaylist[] = [
 		longHorizonQuestIds: ['q1'],
 		items: [
 			{ questId: 'q4', description: null, groupType: 'immediate' },
-			{ questId: 'q1', description: null, groupType: 'long_horizon' }
-		]
-	}
+			{ questId: 'q1', description: null, groupType: 'long_horizon' },
+		],
+	},
 ];
 
 export const questsDemoQuestAnalytics: QuestAnalyticsRow[] = [
@@ -144,7 +139,7 @@ export const questsDemoQuestAnalytics: QuestAnalyticsRow[] = [
 		totalEnhancerCost: 4.1,
 		totalArmourCost: 6.0,
 		totalLootTt: 138.6,
-		totalPes: 0
+		totalPes: 0,
 	},
 	{
 		questId: 'q3',
@@ -162,7 +157,7 @@ export const questsDemoQuestAnalytics: QuestAnalyticsRow[] = [
 		totalEnhancerCost: 2.6,
 		totalArmourCost: 3.8,
 		totalLootTt: 92.2,
-		totalPes: 0
+		totalPes: 0,
 	},
 	{
 		questId: 'q4',
@@ -180,8 +175,8 @@ export const questsDemoQuestAnalytics: QuestAnalyticsRow[] = [
 		totalEnhancerCost: 3.0,
 		totalArmourCost: 4.2,
 		totalLootTt: 128.8,
-		totalPes: 0
-	}
+		totalPes: 0,
+	},
 ];
 
 export const questsDemoPlaylistAnalytics: PlaylistAnalyticsRow[] = [
@@ -206,7 +201,7 @@ export const questsDemoPlaylistAnalytics: PlaylistAnalyticsRow[] = [
 		totalEnhancerCost: 2.6,
 		totalArmourCost: 4.0,
 		totalLootTt: 96.8,
-		totalPes: 0
+		totalPes: 0,
 	},
 	{
 		playlistId: 'pl2',
@@ -229,8 +224,8 @@ export const questsDemoPlaylistAnalytics: PlaylistAnalyticsRow[] = [
 		totalEnhancerCost: 2.0,
 		totalArmourCost: 2.8,
 		totalLootTt: 84.4,
-		totalPes: 0
-	}
+		totalPes: 0,
+	},
 ];
 
 /** Plausible global rates derived from a recent Atrox/Caboria stretch. */

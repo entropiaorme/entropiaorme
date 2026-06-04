@@ -392,12 +392,7 @@ describe('plain delegating wrappers map to the expected verb, path, and shape', 
 			{ body: { scenario_name: 'baseline' } },
 		],
 		['abortRecording', () => api.abortRecording(), 'POST', '/api/recording/abort'],
-		[
-			'getOverlayPosition',
-			() => api.getOverlayPosition(),
-			'GET',
-			'/api/settings/overlay-position',
-		],
+		['getOverlayPosition', () => api.getOverlayPosition(), 'GET', '/api/settings/overlay-position'],
 	];
 
 	it.each(rows)('%s', async (_name, call, verb, path, options) => {
@@ -533,25 +528,24 @@ describe('guide-mode demo dispatch', () => {
 		],
 	];
 
-	it.each(rows)(
-		'%s reads the real route normally and the demo route in guide mode',
-		async (_name, call, realPath, demoPath, options) => {
-			guideState.isActive = false;
-			await call();
-			expect(clientGet).toHaveBeenCalledTimes(1);
-			expect(clientGet.mock.calls[0][0]).toBe(realPath);
+	it.each(
+		rows,
+	)('%s reads the real route normally and the demo route in guide mode', async (_name, call, realPath, demoPath, options) => {
+		guideState.isActive = false;
+		await call();
+		expect(clientGet).toHaveBeenCalledTimes(1);
+		expect(clientGet.mock.calls[0][0]).toBe(realPath);
 
-			clientGet.mockClear();
-			clientGet.mockResolvedValue({ data: DATA });
-			guideState.isActive = true;
-			await call();
-			expect(clientGet).toHaveBeenCalledTimes(1);
-			expect(clientGet.mock.calls[0][0]).toBe(demoPath);
-			if (options !== undefined) {
-				expect(clientGet.mock.calls[0][1]).toEqual(options);
-			}
-		},
-	);
+		clientGet.mockClear();
+		clientGet.mockResolvedValue({ data: DATA });
+		guideState.isActive = true;
+		await call();
+		expect(clientGet).toHaveBeenCalledTimes(1);
+		expect(clientGet.mock.calls[0][0]).toBe(demoPath);
+		if (options !== undefined) {
+			expect(clientGet.mock.calls[0][1]).toEqual(options);
+		}
+	});
 
 	it('getAnalyticsOverview defaults the period to "all" in both modes', async () => {
 		await api.getAnalyticsOverview();

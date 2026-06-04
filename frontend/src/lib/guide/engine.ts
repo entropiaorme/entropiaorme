@@ -42,18 +42,14 @@ const cursorAPI: CursorAPI = {
 		const keyframes = opts.from
 			? { x: [opts.from.x, targetX], y: [opts.from.y, targetY] }
 			: { x: targetX, y: targetY };
-		await animate(
-			cursorEl,
-			keyframes,
-			{ duration: durationSec, ease: [0.4, 0.0, 0.2, 1] }
-		);
+		await animate(cursorEl, keyframes, { duration: durationSec, ease: [0.4, 0.0, 0.2, 1] });
 	},
 	async clickRipple() {
 		if (!cursorRippleEl) return;
 		await animate(
 			cursorRippleEl,
 			{ scale: [0, 1.6], opacity: [0.7, 0] },
-			{ duration: 0.45, ease: 'easeOut' }
+			{ duration: 0.45, ease: 'easeOut' },
 		);
 	},
 	setState(state) {
@@ -64,12 +60,12 @@ const cursorAPI: CursorAPI = {
 	},
 	hide() {
 		guideState.cursorVisible = false;
-	}
+	},
 };
 
 /** Resolve an anchor target with retry; elements may only mount after a prior beat. */
 async function resolveTarget(
-	target: HTMLElement | (() => HTMLElement | null)
+	target: HTMLElement | (() => HTMLElement | null),
 ): Promise<HTMLElement | null> {
 	if (target instanceof HTMLElement) return target;
 	for (let i = 0; i < 40; i++) {
@@ -104,14 +100,14 @@ function makePlayCtx(surfaceId: string): PlayCtx {
 			const init = {
 				bubbles: true,
 				clientX: rect.left + rect.width / 2,
-				clientY: rect.top + rect.height / 2
+				clientY: rect.top + rect.height / 2,
 			};
 			el.dispatchEvent(new MouseEvent('mouseenter', init));
 			el.dispatchEvent(new MouseEvent('mousemove', init));
 		},
 		wait(ms) {
 			return new Promise((r) => setTimeout(r, ms));
-		}
+		},
 	};
 }
 

@@ -36,5 +36,4 @@ export type NotableEventType =
 	| 'hof_item'
 	| 'quest_started'
 	| 'quest_completed'
-	| 'quest_completed_pes'
-	;
+	| 'quest_completed_pes';

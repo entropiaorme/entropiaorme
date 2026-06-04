@@ -47,9 +47,7 @@ export const SLOT_ORDER: SlotId[] = ['community', 'release', 'foundations'];
  *
  * Returns a map from slot id to either the occupying entry or null.
  */
-export function resolvePinSlots(
-	entries: NewsEntry[],
-): Record<SlotId, NewsEntry | null> {
+export function resolvePinSlots(entries: NewsEntry[]): Record<SlotId, NewsEntry | null> {
 	const slots: Record<SlotId, NewsEntry | null> = {
 		community: null,
 		release: null,
@@ -83,9 +81,7 @@ export function resolvePinSlots(
  * Slugs of all currently-pinned entries. The /news chronological list
  * filters these out so pinned articles do not duplicate below the strip.
  */
-export function pinnedSlugSet(
-	slots: Record<SlotId, NewsEntry | null>,
-): Set<string> {
+export function pinnedSlugSet(slots: Record<SlotId, NewsEntry | null>): Set<string> {
 	const slugs = new Set<string>();
 	for (const slot of SLOT_ORDER) {
 		const entry = slots[slot];

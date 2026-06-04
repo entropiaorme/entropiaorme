@@ -65,9 +65,11 @@ export async function getCharacterProfessions(): Promise<ProfessionLevel[]> {
 	return unwrap(client.GET('/api/character/professions'));
 }
 
-export async function getProfessionOptimizer(profession: string): Promise<ProfessionOptimizerResult> {
+export async function getProfessionOptimizer(
+	profession: string,
+): Promise<ProfessionOptimizerResult> {
 	return unwrap(
-		client.GET('/api/character/profession-optimizer', { params: { query: { profession } } })
+		client.GET('/api/character/profession-optimizer', { params: { query: { profession } } }),
 	);
 }
 
@@ -144,13 +146,17 @@ export async function getManualSkillScanStatus(): Promise<ScanManualStatus> {
 	return unwrap(client.GET('/api/scan/skills/status'));
 }
 
-export async function startManualSkillScan(pageCount?: number): Promise<ScanManualStatus & { error?: string }> {
+export async function startManualSkillScan(
+	pageCount?: number,
+): Promise<ScanManualStatus & { error?: string }> {
 	return unwrap(
-		client.POST('/api/scan/skills/start', { params: { query: { page_count: pageCount } } })
+		client.POST('/api/scan/skills/start', { params: { query: { page_count: pageCount } } }),
 	);
 }
 
-export async function captureManualSkillPage(): Promise<ScanManualStatus & { page?: number; captured?: boolean; error?: string }> {
+export async function captureManualSkillPage(): Promise<
+	ScanManualStatus & { page?: number; captured?: boolean; error?: string }
+> {
 	return unwrap(client.POST('/api/scan/skills/capture'));
 }
 
@@ -158,7 +164,9 @@ export async function cancelManualSkillScan(): Promise<ScanManualStatus & { erro
 	return unwrap(client.POST('/api/scan/skills/cancel'));
 }
 
-export async function undoManualSkillCapture(): Promise<ScanManualStatus & { undone_page?: number; error?: string }> {
+export async function undoManualSkillCapture(): Promise<
+	ScanManualStatus & { undone_page?: number; error?: string }
+> {
 	return unwrap(client.POST('/api/scan/skills/undo'));
 }
 
@@ -166,7 +174,11 @@ export async function processManualSkillScan(): Promise<ScanManualStatus & { err
 	return unwrap(client.POST('/api/scan/skills/process'));
 }
 
-export async function acceptManualSkillScan(): Promise<{ ok?: boolean; skills_persisted?: number; error?: string }> {
+export async function acceptManualSkillScan(): Promise<{
+	ok?: boolean;
+	skills_persisted?: number;
+	error?: string;
+}> {
 	return unwrap(client.POST('/api/scan/skills/accept'));
 }
 
@@ -183,7 +195,9 @@ export async function getManualSkillScanPending(): Promise<SkillScanPending | nu
 	}
 }
 
-export async function setSpacebarCapture(enabled: boolean): Promise<{ ok?: boolean; enabled?: boolean; error?: string }> {
+export async function setSpacebarCapture(
+	enabled: boolean,
+): Promise<{ ok?: boolean; enabled?: boolean; error?: string }> {
 	return unwrap(client.POST('/api/scan/spacebar-capture', { params: { query: { enabled } } }));
 }
 
@@ -200,25 +214,26 @@ export async function getCodexSpeciesRanks(name: string): Promise<CodexRankBreak
 export async function claimCodexRank(
 	speciesName: string,
 	rank: number,
-	skillName: string
+	skillName: string,
 ): Promise<CodexClaimResult> {
 	return unwrap(
 		client.POST('/api/codex/claim', {
-			body: { species_name: speciesName, rank, skill_name: skillName }
-		})
+			body: { species_name: speciesName, rank, skill_name: skillName },
+		}),
 	);
 }
 
-export async function calibrateCodex(speciesName: string, rank: number): Promise<{ speciesName: string; rank: number }> {
-	return unwrap(
-		client.POST('/api/codex/calibrate', { body: { species_name: speciesName, rank } })
-	);
+export async function calibrateCodex(
+	speciesName: string,
+	rank: number,
+): Promise<{ speciesName: string; rank: number }> {
+	return unwrap(client.POST('/api/codex/calibrate', { body: { species_name: speciesName, rank } }));
 }
 
 export async function getCodexRecommendation(
 	speciesName: string,
 	rank: number,
-	options?: { target?: 'profession' | 'hp'; profession?: string }
+	options?: { target?: 'profession' | 'hp'; profession?: string },
 ): Promise<CodexSkillOption[]> {
 	return unwrap(
 		client.GET('/api/codex/recommend', {
@@ -227,10 +242,10 @@ export async function getCodexRecommendation(
 					species_name: speciesName,
 					rank,
 					target: options?.target,
-					profession: options?.profession
-				}
-			}
-		})
+					profession: options?.profession,
+				},
+			},
+		}),
 	);
 }
 
@@ -275,7 +290,7 @@ interface AddLibraryRequest {
 
 export async function searchEquipmentItems(
 	q: string,
-	type: 'weapon' | 'amp' | 'healer' | 'scope' | 'absorber' | 'consumable'
+	type: 'weapon' | 'amp' | 'healer' | 'scope' | 'absorber' | 'consumable',
 ): Promise<EquipmentSearchResult[]> {
 	if (q.length < 2) return [];
 	return unwrap(client.GET('/api/equipment/search', { params: { query: { q, type } } }));
@@ -290,21 +305,25 @@ export async function addToLibrary(req: AddLibraryRequest): Promise<Equipment> {
 }
 
 export async function removeFromLibrary(id: string): Promise<void> {
-	await client.DELETE('/api/equipment/library/{item_id}', { params: { path: { item_id: Number(id) } } });
+	await client.DELETE('/api/equipment/library/{item_id}', {
+		params: { path: { item_id: Number(id) } },
+	});
 }
 
 export async function updateLibrary(id: string, req: AddLibraryRequest): Promise<Equipment> {
 	return unwrap(
 		client.PUT('/api/equipment/library/{item_id}', {
 			params: { path: { item_id: Number(id) } },
-			body: req
-		})
+			body: req,
+		}),
 	);
 }
 
 export async function getEquipmentDetail(id: string): Promise<EquipmentDetail> {
 	return unwrap(
-		client.GET('/api/equipment/library/{item_id}/detail', { params: { path: { item_id: Number(id) } } })
+		client.GET('/api/equipment/library/{item_id}/detail', {
+			params: { path: { item_id: Number(id) } },
+		}),
 	);
 }
 
@@ -353,7 +372,11 @@ export interface RecentEvent {
 	timestamp: string;
 }
 
-export async function startTracking(): Promise<{ session_id: string; started_at: string; status: string }> {
+export async function startTracking(): Promise<{
+	session_id: string;
+	started_at: string;
+	status: string;
+}> {
 	return unwrap(client.POST('/api/tracking/start'));
 }
 
@@ -365,7 +388,7 @@ export async function getTrackingSessions(): Promise<TrackingSession[]> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/tracking/sessions')
-			: client.GET('/api/tracking/sessions')
+			: client.GET('/api/tracking/sessions'),
 	);
 }
 
@@ -374,13 +397,13 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/tracking/session/{session_id}', { params })
-			: client.GET('/api/tracking/session/{session_id}', { params })
+			: client.GET('/api/tracking/session/{session_id}', { params }),
 	);
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {
 	await client.DELETE('/api/tracking/session/{session_id}', {
-		params: { path: { session_id: sessionId } }
+		params: { path: { session_id: sessionId } },
 	});
 }
 
@@ -401,8 +424,8 @@ export async function deactivateLootItem(
 ): Promise<LootItemEditResponse> {
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/loot-item/{item_name}/deactivate', {
-			params: { path: { session_id: sessionId, item_name: itemName } }
-		})
+			params: { path: { session_id: sessionId, item_name: itemName } },
+		}),
 	);
 }
 
@@ -412,8 +435,8 @@ export async function activateLootItem(
 ): Promise<LootItemEditResponse> {
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/loot-item/{item_name}/activate', {
-			params: { path: { session_id: sessionId, item_name: itemName } }
-		})
+			params: { path: { session_id: sessionId, item_name: itemName } },
+		}),
 	);
 }
 
@@ -432,8 +455,8 @@ export async function renameSessionMob(
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/rename-mob', {
 			params: { path: { session_id: sessionId } },
-			body: { fromMobName, toMobName }
-		})
+			body: { fromMobName, toMobName },
+		}),
 	);
 }
 
@@ -444,8 +467,8 @@ export async function restoreSessionMob(
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/restore-mob', {
 			params: { path: { session_id: sessionId } },
-			body: { currentMobName }
-		})
+			body: { currentMobName },
+		}),
 	);
 }
 
@@ -512,7 +535,7 @@ export async function getTrackingSnapshot(): Promise<TrackingSnapshot> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/tracking/snapshot')
-			: client.GET('/api/tracking/snapshot')
+			: client.GET('/api/tracking/snapshot'),
 	);
 }
 
@@ -529,7 +552,7 @@ export interface ManualMobSuggestion {
 export async function getTrackingTagSuggestions(query: string): Promise<string[]> {
 	if (!query.trim()) return [];
 	return unwrap(
-		client.GET('/api/tracking/tag-suggestions', { params: { query: { q: query.trim() } } })
+		client.GET('/api/tracking/tag-suggestions', { params: { query: { q: query.trim() } } }),
 	);
 }
 
@@ -540,11 +563,14 @@ export async function lockTrackingTag(tag: string): Promise<{ tag: string }> {
 export async function getManualMobSuggestions(query: string): Promise<ManualMobSuggestion[]> {
 	if (!query.trim()) return [];
 	return unwrap(
-		client.GET('/api/tracking/manual-mob-suggestions', { params: { query: { q: query.trim() } } })
+		client.GET('/api/tracking/manual-mob-suggestions', { params: { query: { q: query.trim() } } }),
 	);
 }
 
-export async function lockManualMob(species: string, maturity = ''): Promise<{
+export async function lockManualMob(
+	species: string,
+	maturity = '',
+): Promise<{
 	mobName: string;
 	species: string;
 	maturity: string;
@@ -552,27 +578,39 @@ export async function lockManualMob(species: string, maturity = ''): Promise<{
 	return unwrap(client.POST('/api/tracking/manual-mob-lock', { body: { species, maturity } }));
 }
 
-export async function scanRepairCost(sessionId: string): Promise<{ cost_ped: number; raw_text: string; confidence: number; error?: string }> {
+export async function scanRepairCost(
+	sessionId: string,
+): Promise<{ cost_ped: number; raw_text: string; confidence: number; error?: string }> {
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/repair-scan', {
-			params: { path: { session_id: sessionId } }
-		})
+			params: { path: { session_id: sessionId } },
+		}),
 	);
 }
 
-export async function saveArmourCost(sessionId: string, cost: number): Promise<{ sessionId: string; armourCost: number }> {
+export async function saveArmourCost(
+	sessionId: string,
+	cost: number,
+): Promise<{ sessionId: string; armourCost: number }> {
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/armour-cost', {
 			params: { path: { session_id: sessionId } },
-			body: { cost }
-		})
+			body: { cost },
+		}),
 	);
 }
 
 export interface SessionQuestLinkSuggestion {
 	sessionId: string;
 	suggestionType: 'quest' | 'playlist' | 'none';
-	reason: 'single_quest' | 'exact_playlist' | 'no_completions' | 'unclean' | 'ambiguous_playlist' | 'declined' | 'already_linked';
+	reason:
+		| 'single_quest'
+		| 'exact_playlist'
+		| 'no_completions'
+		| 'unclean'
+		| 'ambiguous_playlist'
+		| 'declined'
+		| 'already_linked';
 	questId: string | null;
 	questName: string | null;
 	playlistId: string | null;
@@ -589,23 +627,25 @@ export interface SessionQuestLinkDecision {
 	playlistName?: string | null;
 }
 
-export async function getSessionQuestLinkSuggestion(sessionId: string): Promise<SessionQuestLinkSuggestion> {
+export async function getSessionQuestLinkSuggestion(
+	sessionId: string,
+): Promise<SessionQuestLinkSuggestion> {
 	return unwrap(
 		client.GET('/api/tracking/session/{session_id}/quest-link-suggestion', {
-			params: { path: { session_id: sessionId } }
-		})
+			params: { path: { session_id: sessionId } },
+		}),
 	);
 }
 
 export async function decideSessionQuestLink(
 	sessionId: string,
-	action: 'accept' | 'decline'
+	action: 'accept' | 'decline',
 ): Promise<SessionQuestLinkDecision> {
 	return unwrap(
 		client.POST('/api/tracking/session/{session_id}/quest-link', {
 			params: { path: { session_id: sessionId } },
-			body: { action }
-		})
+			body: { action },
+		}),
 	);
 }
 
@@ -619,7 +659,7 @@ import type {
 	LedgerEntry,
 	LedgerPreset,
 	InventoryItem,
-	InventorySellResult
+	InventorySellResult,
 } from '$lib/types/analytics';
 
 export interface ActivityData {
@@ -633,7 +673,7 @@ export async function getAnalyticsOverview(period: string = 'all'): Promise<Over
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/analytics/overview', { params })
-			: client.GET('/api/analytics/overview', { params })
+			: client.GET('/api/analytics/overview', { params }),
 	);
 }
 
@@ -641,7 +681,7 @@ export async function getAnalyticsActivity(): Promise<ActivityData> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/analytics/activity')
-			: client.GET('/api/analytics/activity')
+			: client.GET('/api/analytics/activity'),
 	);
 }
 
@@ -649,7 +689,7 @@ export async function getLedgerEntries(): Promise<LedgerEntry[]> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/analytics/ledger')
-			: client.GET('/api/analytics/ledger')
+			: client.GET('/api/analytics/ledger'),
 	);
 }
 
@@ -665,7 +705,7 @@ export async function getLedgerPresets(): Promise<LedgerPreset[]> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/analytics/ledger/presets')
-			: client.GET('/api/analytics/ledger/presets')
+			: client.GET('/api/analytics/ledger/presets'),
 	);
 }
 
@@ -675,7 +715,7 @@ export async function addLedgerPreset(preset: Omit<LedgerPreset, 'id'>): Promise
 
 export async function deleteLedgerPreset(id: string): Promise<void> {
 	await client.DELETE('/api/analytics/ledger/presets/{preset_id}', {
-		params: { path: { preset_id: id } }
+		params: { path: { preset_id: id } },
 	});
 }
 
@@ -706,7 +746,7 @@ export async function getInventoryItems(): Promise<InventoryItem[]> {
 	return unwrap(
 		guideState.isActive
 			? client.GET('/api/demo/analytics/inventory')
-			: client.GET('/api/analytics/inventory')
+			: client.GET('/api/analytics/inventory'),
 	);
 }
 
@@ -721,14 +761,14 @@ export async function updateInventoryItem(
 	return unwrap(
 		client.PATCH('/api/analytics/inventory/{item_id}', {
 			params: { path: { item_id: id } },
-			body: patch
-		})
+			body: patch,
+		}),
 	);
 }
 
 export async function deleteInventoryItem(id: string): Promise<void> {
 	await client.DELETE('/api/analytics/inventory/{item_id}', {
-		params: { path: { item_id: id } }
+		params: { path: { item_id: id } },
 	});
 }
 
@@ -739,8 +779,8 @@ export async function sellInventoryItem(
 	return unwrap(
 		client.POST('/api/analytics/inventory/{item_id}/sell', {
 			params: { path: { item_id: id } },
-			body: payload
-		})
+			body: payload,
+		}),
 	);
 }
 
@@ -754,7 +794,7 @@ import type {
 	PlaylistCreateData,
 	PlaylistUpdateData,
 	QuestAnalyticsRow,
-	PlaylistAnalyticsRow
+	PlaylistAnalyticsRow,
 } from '$lib/types/quests';
 
 export async function getQuests(): Promise<Quest[]> {
@@ -762,7 +802,9 @@ export async function getQuests(): Promise<Quest[]> {
 }
 
 export async function getQuest(id: string): Promise<Quest> {
-	return unwrap(client.GET('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } } }));
+	return unwrap(
+		client.GET('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } } }),
+	);
 }
 
 export async function createQuest(data: QuestCreateData): Promise<Quest> {
@@ -771,7 +813,10 @@ export async function createQuest(data: QuestCreateData): Promise<Quest> {
 
 export async function updateQuest(id: string, data: QuestUpdateData): Promise<Quest> {
 	return unwrap(
-		client.PUT('/api/quests/{quest_id}', { params: { path: { quest_id: Number(id) } }, body: data })
+		client.PUT('/api/quests/{quest_id}', {
+			params: { path: { quest_id: Number(id) } },
+			body: data,
+		}),
 	);
 }
 
@@ -781,13 +826,13 @@ export async function deleteQuest(id: string): Promise<void> {
 
 export async function startQuest(id: string): Promise<Quest> {
 	return unwrap(
-		client.POST('/api/quests/{quest_id}/start', { params: { path: { quest_id: Number(id) } } })
+		client.POST('/api/quests/{quest_id}/start', { params: { path: { quest_id: Number(id) } } }),
 	);
 }
 
 export async function completeQuest(id: string): Promise<Quest> {
 	return unwrap(
-		client.POST('/api/quests/{quest_id}/complete', { params: { path: { quest_id: Number(id) } } })
+		client.POST('/api/quests/{quest_id}/complete', { params: { path: { quest_id: Number(id) } } }),
 	);
 }
 
@@ -795,8 +840,8 @@ export async function cancelQuest(id: string, undoReward = false): Promise<Quest
 	return unwrap(
 		client.POST('/api/quests/{quest_id}/cancel', {
 			params: { path: { quest_id: Number(id) } },
-			body: { undo_reward: undoReward }
-		})
+			body: { undo_reward: undoReward },
+		}),
 	);
 }
 
@@ -820,14 +865,14 @@ export async function updatePlaylist(id: string, data: PlaylistUpdateData): Prom
 	return unwrap(
 		client.PUT('/api/quests/playlists/{playlist_id}', {
 			params: { path: { playlist_id: Number(id) } },
-			body: data
-		})
+			body: data,
+		}),
 	);
 }
 
 export async function deletePlaylist(id: string): Promise<void> {
 	await client.DELETE('/api/quests/playlists/{playlist_id}', {
-		params: { path: { playlist_id: Number(id) } }
+		params: { path: { playlist_id: Number(id) } },
 	});
 }
 

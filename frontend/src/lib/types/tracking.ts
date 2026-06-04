@@ -1,4 +1,12 @@
-import type { Ped, Pes, Seconds, ISODate, Ratio, NotableEventCategory, NotableEventType } from './common';
+import type {
+	Ped,
+	Pes,
+	Seconds,
+	ISODate,
+	Ratio,
+	NotableEventCategory,
+	NotableEventType,
+} from './common';
 
 /** A tracking session summary (shown in session history list) */
 export interface TrackingSession {

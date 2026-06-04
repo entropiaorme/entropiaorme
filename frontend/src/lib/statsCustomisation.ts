@@ -1,5 +1,5 @@
-import { writable, get, type Writable } from 'svelte/store';
 import { emit } from '@tauri-apps/api/event';
+import { get, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 import { ALL_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
 

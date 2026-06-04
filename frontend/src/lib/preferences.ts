@@ -1,5 +1,5 @@
-import { load, type Store } from '@tauri-apps/plugin-store';
 import { dataDir, join } from '@tauri-apps/api/path';
+import { load, type Store } from '@tauri-apps/plugin-store';
 
 const APP_DATA_FOLDER = 'EntropiaOrme';
 const STORE_FILE = 'settings.json';

@@ -1,4 +1,4 @@
-import type { Quest, QuestPlaylist, QuestAnalyticsRow, PlaylistAnalyticsRow } from '$lib/types';
+import type { PlaylistAnalyticsRow, Quest, QuestAnalyticsRow, QuestPlaylist } from '$lib/types';
 
 /**
  * Inline demo data for the quests surface guide-mode mount.

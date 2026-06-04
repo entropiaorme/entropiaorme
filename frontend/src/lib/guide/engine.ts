@@ -1,6 +1,6 @@
 import { animate } from 'motion';
 import { setPreference } from '$lib/preferences';
-import { guideState, getDemoApi } from './state.svelte';
+import { getDemoApi, guideState } from './state.svelte';
 import type { CursorAPI, GuideStep, GuideSurface, PlayCtx } from './types';
 
 /** Cursor element handles registered by GuideOverlay on mount. */
@@ -29,7 +29,9 @@ const cursorAPI: CursorAPI = {
 		// at its prior position (Motion sets fill: forwards by default). The next animate()
 		// call reads the freshly-written inline transform as its starting state.
 		if (durationSec === 0) {
-			cursorEl.getAnimations().forEach((a) => a.cancel());
+			cursorEl.getAnimations().forEach((a) => {
+				a.cancel();
+			});
 			cursorEl.style.transform = `translate(${targetX}px, ${targetY}px)`;
 			return;
 		}

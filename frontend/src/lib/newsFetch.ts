@@ -1,5 +1,5 @@
 import { get } from 'svelte/store';
-import { newsOptIn, persistNewsCache, type NewsCache, type NewsEntry, type NewsFeed } from './news';
+import { type NewsCache, type NewsEntry, type NewsFeed, newsOptIn, persistNewsCache } from './news';
 
 // This file is the sole site of outbound non-loopback HTTP in the app.
 // The CSP `connect-src` entry in frontend/src-tauri/tauri.conf.json gates

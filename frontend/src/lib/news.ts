@@ -1,4 +1,4 @@
-import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
+import { derived, get, type Readable, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 
 export type NewsCategory = 'article' | 'changelog';

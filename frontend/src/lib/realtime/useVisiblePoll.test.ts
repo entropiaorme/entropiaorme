@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	documentVisibility,
 	useVisiblePoll,
-	windowGeometryPoll,
 	type VisibilitySource,
+	windowGeometryPoll,
 } from './useVisiblePoll';
 
 // A hand-driven visibility source: tests flip `visible` and fire the captured

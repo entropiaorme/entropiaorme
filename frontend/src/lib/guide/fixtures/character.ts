@@ -1,14 +1,14 @@
 import type {
 	CalibrationStatus,
-	ComputedCharacterStats,
-	SkillLevel,
-	ProfessionLevel,
 	CharacterProspectOptions,
-	ProspectResult,
-	PathOptimizerResult,
-	CodexSpecies,
 	CodexRankBreakdown,
 	CodexSkillOption,
+	CodexSpecies,
+	ComputedCharacterStats,
+	PathOptimizerResult,
+	ProfessionLevel,
+	ProspectResult,
+	SkillLevel,
 } from '$lib/types/analytics';
 
 /**

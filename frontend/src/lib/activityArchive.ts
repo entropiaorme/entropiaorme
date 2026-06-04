@@ -1,4 +1,4 @@
-import { writable, get, type Writable } from 'svelte/store';
+import { get, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 
 export type ArchiveKind = 'mob' | 'tag' | 'weapon';

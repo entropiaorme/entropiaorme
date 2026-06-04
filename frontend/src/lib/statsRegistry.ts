@@ -1,5 +1,5 @@
 import type { TrackingStatus } from './api';
-import { formatPed, formatPercent, formatMultiplier } from './utils/format';
+import { formatMultiplier, formatPed, formatPercent } from './utils/format';
 
 export type StatId =
 	| 'cycled'

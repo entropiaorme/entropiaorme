@@ -1,4 +1,4 @@
-import type { Ped, ISODate, CooldownStatus } from './common';
+import type { ISODate, Ped } from './common';
 
 export type PlaylistItemGroup = 'immediate' | 'long_horizon';
 

@@ -1,6 +1,6 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TrackingStatus } from '$lib/api';
-import { STAT_DEFS, ALL_STAT_IDS, getStatDef, type StatId } from '$lib/statsRegistry';
+import { ALL_STAT_IDS, getStatDef, STAT_DEFS, type StatId } from '$lib/statsRegistry';
 
 // Pure render functions over a TrackingStatus. Each stat only ever reads the
 // handful of fields it needs, so fixtures are deliberately minimal: status

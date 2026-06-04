@@ -16,8 +16,9 @@
  * nudge carries no payload, and because we re-read rather than reduce, an absent
  * payload can never be mistaken for an idle scan.
  */
-import { writable, type Writable } from 'svelte/store';
+
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { type Writable, writable } from 'svelte/store';
 
 import { getManualSkillScanStatus, type ScanManualStatus } from '$lib/api';
 

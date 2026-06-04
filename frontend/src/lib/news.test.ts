@@ -9,12 +9,13 @@ vi.mock('./preferences', () => ({
 	setPreference: vi.fn(),
 }));
 
-import { getPreference, setPreference } from './preferences';
 import {
 	initNews,
 	markNewsAsRead,
 	markNewsOptInSeen,
 	NEWS_PREFERENCE_KEYS,
+	type NewsCache,
+	type NewsEntry,
 	newsCache,
 	newsHasUnread,
 	newsLastViewedAt,
@@ -23,9 +24,8 @@ import {
 	persistNewsCache,
 	purgeNewsCache,
 	setNewsOptIn,
-	type NewsCache,
-	type NewsEntry,
 } from './news';
+import { getPreference, setPreference } from './preferences';
 
 const getPreferenceMock = vi.mocked(getPreference);
 const setPreferenceMock = vi.mocked(setPreference);

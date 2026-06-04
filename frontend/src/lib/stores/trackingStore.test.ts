@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the two side-effecting seams: the snapshot read and the Tauri event
 // bus. The module under test holds singleton coalescer state (inFlight /

@@ -23,8 +23,8 @@
 // env-driven devUrl honoured by Tauri's webview-loading side without
 // hardcoding values in committed config.
 import { writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const hostname = (process.env.ENTROPIAORME_HOSTNAME ?? '').trim();
 let devUrl;
@@ -40,4 +40,4 @@ if (hostname) {
 }
 const overlay = { build: { devUrl } };
 const out = join(dirname(fileURLToPath(import.meta.url)), 'tauri.dev.local.json');
-writeFileSync(out, JSON.stringify(overlay, null, 2) + '\n');
+writeFileSync(out, `${JSON.stringify(overlay, null, 2)}\n`);

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { render, screen, waitFor } from '@testing-library/svelte';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The realtime store->render path, end to end minus the wire: the REAL
 // trackingStore feeds a minimal fixture component through real Svelte 5

@@ -29,6 +29,7 @@ export interface CursorAPI {
 }
 
 /** Imperative shim a surface exposes for guide-driven state mutations. */
+// biome-ignore lint/suspicious/noExplicitAny: deliberately loose dynamic-dispatch boundary; each surface narrows its own shim signatures
 export type DemoApi = Record<string, (...args: any[]) => any>;
 
 /** Inline span in a `p` block. `href` upgrades the span to an external link (target=_blank). */

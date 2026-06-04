@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { render, screen } from '@testing-library/svelte';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StatId } from '$lib/statsRegistry';
 import { getStatDef } from '$lib/statsRegistry';
 
@@ -34,9 +35,8 @@ vi.mock('$lib/statsCustomisation', () => ({
 	overlayStats,
 }));
 
-import OverlayStrip from './OverlayStrip.svelte';
-
 import type { TrackingLive, TrackingStatus } from '$lib/api';
+import OverlayStrip from './OverlayStrip.svelte';
 
 function liveData(overrides: Partial<TrackingLive> = {}): TrackingLive {
 	return { status: 'idle', ...overrides };
@@ -224,7 +224,8 @@ describe('customisable stat pills', () => {
 		expect(netDef && screen.getByText(netDef.label)).toBeTruthy();
 		expect(killsDef && screen.queryByText(killsDef.label)).toBeNull();
 		// net = returns - cost, rendered by the registry's own formatter.
-		expect(screen.getByText(netDef!.render(status).value)).toBeTruthy();
+		const netRender = netDef ? netDef.render(status) : null;
+		expect(netRender && screen.getByText(netRender.value)).toBeTruthy();
 	});
 
 	it('renders nothing when no overlay stat is enabled', () => {

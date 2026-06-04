@@ -1,6 +1,6 @@
+import type { StatPref } from '$lib/statsCustomisation';
 import { getDemoApi, guideState } from '../state.svelte';
 import type { GuideSurface } from '../types';
-import type { StatPref } from '$lib/statsCustomisation';
 
 /** Dashboard-surface demoApi method names (declared here for documentation). */
 type DashboardDemoApi = {
@@ -781,7 +781,6 @@ export const dashboardSurface: GuideSurface = {
 					const targetCell = document.querySelector<HTMLElement>(`[data-stat-cell="${TO_IDX}"]`);
 					if (sourceCell && targetCell) {
 						const srcRect = sourceCell.getBoundingClientRect();
-						const tgtRect = targetCell.getBoundingClientRect();
 						const srcCx = srcRect.left + srcRect.width / 2;
 						const srcCy = srcRect.top + srcRect.height / 2;
 						const startX = Math.max(40, srcRect.left - 200);

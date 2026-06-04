@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mirrors trackingStore.test.ts: the same coalescer pattern over the scan
 // status read. Singleton module state, so fresh import per test.

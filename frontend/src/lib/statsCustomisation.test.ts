@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALL_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
 
 // Mock the two side-effecting seams. These vi.fn()s are hoisted alongside the

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { act, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The overlay window's popup orchestration: a hidden popup webview is spawned
 // once, and showing a menu must wait on the popup route's readiness handshake

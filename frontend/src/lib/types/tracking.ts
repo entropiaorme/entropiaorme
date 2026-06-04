@@ -1,11 +1,11 @@
 import type {
-	Ped,
-	Pes,
-	Seconds,
 	ISODate,
-	Ratio,
 	NotableEventCategory,
 	NotableEventType,
+	Ped,
+	Pes,
+	Ratio,
+	Seconds,
 } from './common';
 
 /** A tracking session summary (shown in session history list) */

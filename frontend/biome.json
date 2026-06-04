@@ -13,12 +13,12 @@
 			"**/*.json",
 			"!**/*.svelte",
 			"!**/package-lock.json",
-			"!.svelte-kit/**",
-			"!build/**",
-			"!coverage/**",
-			"!static/**",
-			"!src-tauri/target/**",
-			"!src-tauri/gen/**",
+			"!.svelte-kit",
+			"!build",
+			"!coverage",
+			"!static",
+			"!src-tauri/target",
+			"!src-tauri/gen",
 			"!src/lib/api/schema.d.ts"
 		]
 	},

@@ -30,7 +30,7 @@ export const EVENTS_STREAM_URL = `${API_BASE}/events`;
 export class ApiError extends Error {
 	constructor(
 		public status: number,
-		message: string
+		message: string,
 	) {
 		super(message);
 		this.name = 'ApiError';
@@ -64,7 +64,7 @@ const throwApiError: Middleware = {
 			throw new ApiError(response.status, message);
 		}
 		return undefined;
-	}
+	},
 };
 
 /* The Content-Type seed reproduces the legacy request() header behaviour
@@ -74,7 +74,7 @@ const throwApiError: Middleware = {
  * keeping the wire bytes identical costs one line. */
 export const client = createClient<paths>({
 	baseUrl: API_ORIGIN,
-	headers: { 'Content-Type': 'application/json' }
+	headers: { 'Content-Type': 'application/json' },
 });
 client.use(throwApiError);
 
@@ -105,7 +105,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
 	const url = `${API_BASE}${path}`;
 	const resp = await fetch(url, {
 		headers: { 'Content-Type': 'application/json' },
-		...options
+		...options,
 	});
 
 	if (!resp.ok) {

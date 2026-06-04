@@ -18,8 +18,9 @@
  * ordinary frame and re-reads to the idle snapshot, where the activity feed is
  * empty (the feed clears on idle).
  */
-import { writable, type Writable } from 'svelte/store';
+
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { type Writable, writable } from 'svelte/store';
 
 import { getTrackingSnapshot, type TrackingSnapshot } from '$lib/api';
 

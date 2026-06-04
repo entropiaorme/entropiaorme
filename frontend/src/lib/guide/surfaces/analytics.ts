@@ -54,27 +54,32 @@ export const analyticsSurface: GuideSurface = {
 	steps: [
 		{
 			id: 'overview-intro',
-			anchor: () => document.querySelector<HTMLElement>('[data-guide-anchor="analytics-overview-area"]'),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="analytics-overview-area"]'),
 			placement: 'top-right',
 			prose: {
 				title: 'Analytics',
 				body: 'The Analytics tab combines your tracked hunts and out-of-gameplay data into one unified view.',
-				note: 'Note: Guide uses demo data.'
-			}
+				note: 'Note: Guide uses demo data.',
+			},
 		},
 		{
 			id: 'ledger-intro',
-			anchor: () => document.querySelector<HTMLElement>('[data-guide-anchor="analytics-ledger-area"]'),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="analytics-ledger-area"]'),
 			placement: 'top-right',
 			prose: {
 				title: 'Ledger',
 				body: [
-					{ kind: 'p', text: 'The Ledger records your out-of-gameplay activity. There are two surfaces:' },
+					{
+						kind: 'p',
+						text: 'The Ledger records your out-of-gameplay activity. There are two surfaces:',
+					},
 					{
 						kind: 'ul',
-						items: ['The main ledger.', 'The inventory.']
-					}
-				]
+						items: ['The main ledger.', 'The inventory.'],
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<AnalyticsDemoApi>;
@@ -83,7 +88,7 @@ export const analyticsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				analyticsApi().setTab?.('overview');
-			}
+			},
 		},
 		{
 			id: 'ledger-add-entry',
@@ -91,14 +96,18 @@ export const analyticsSurface: GuideSurface = {
 			// ledger area (strip + table) otherwise. The 120ms anchor poll + 350ms CSS
 			// path transition give a smooth shift each loop iteration.
 			anchor: () => {
-				const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add Entry"]');
+				const dialog = document.querySelector<HTMLElement>(
+					'[role="dialog"][aria-label="Add Entry"]',
+				);
 				if (dialog && dialog.offsetParent !== null) return dialog;
-				return document.querySelector<HTMLElement>('[data-guide-anchor="analytics-ledger-main-area"]');
+				return document.querySelector<HTMLElement>(
+					'[data-guide-anchor="analytics-ledger-main-area"]',
+				);
 			},
 			placement: 'bottom-left',
 			prose: {
 				title: 'Add entry',
-				body: 'Add gains and expenses to your ledger. This could include markup gained from sales, costs of travelling between planets, etc.'
+				body: 'Add gains and expenses to your ledger. This could include markup gained from sales, costs of travelling between planets, etc.',
 			},
 			async play({ cursor, demoApi, wait }) {
 				const stepIdx = guideState.currentStepIndex;
@@ -117,7 +126,9 @@ export const analyticsSurface: GuideSurface = {
 				}
 
 				while (stillActive()) {
-					const addBtn = document.querySelector<HTMLElement>('[data-guide-anchor="ledger-add-entry-btn"]');
+					const addBtn = document.querySelector<HTMLElement>(
+						'[data-guide-anchor="ledger-add-entry-btn"]',
+					);
 					if (!addBtn) {
 						if (!(await abortableWait(200, stillActive))) return;
 						continue;
@@ -147,7 +158,7 @@ export const analyticsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				ledgerApi().closeAddEntryModal?.();
-			}
+			},
 		},
 		{
 			id: 'inventory-sell-flow',
@@ -156,27 +167,24 @@ export const analyticsSurface: GuideSurface = {
 			// The 120ms anchor poll + 350ms CSS path transition smooth-shift the
 			// cutout between the three phases each loop iteration.
 			anchor: () => {
-				const dialog = document.querySelector<HTMLElement>(
-					'[role="dialog"][aria-label^="Sell "]'
-				);
+				const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label^="Sell "]');
 				if (dialog && dialog.offsetParent !== null) return dialog;
 				const entryRow = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="ledger-entry-row"][data-entry-id="demo-inventory-sale"]'
+					'[data-guide-anchor="ledger-entry-row"][data-entry-id="demo-inventory-sale"]',
 				);
 				if (entryRow && entryRow.offsetParent !== null) return entryRow;
 				return document.querySelector<HTMLElement>(
-					'[data-guide-anchor="analytics-ledger-inventory-area"]'
+					'[data-guide-anchor="analytics-ledger-inventory-area"]',
 				);
 			},
 			placement: 'bottom-left',
 			prose: {
 				title: 'Inventory',
-				body: 'Manage inventory items by initial purchase price and sale price. The difference is added to your ledger.'
+				body: 'Manage inventory items by initial purchase price and sale price. The difference is added to your ledger.',
 			},
 			async play({ cursor, demoApi, wait }) {
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 
 				const aapi = demoApi as Partial<AnalyticsDemoApi>;
 				aapi.setTab?.('ledger');
@@ -197,7 +205,7 @@ export const analyticsSurface: GuideSurface = {
 				while (stillActive()) {
 					// === Phase A: scroll inventory into view + cursor → Sell button ===
 					const inventoryArea = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="analytics-ledger-inventory-area"]'
+						'[data-guide-anchor="analytics-ledger-inventory-area"]',
 					);
 					if (inventoryArea) {
 						inventoryArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -205,7 +213,7 @@ export const analyticsSurface: GuideSurface = {
 					}
 
 					const sellBtn = document.querySelector<HTMLElement>(
-						`[data-guide-anchor="inventory-sell-btn"][data-item-name="${ITEM_NAME}"]`
+						`[data-guide-anchor="inventory-sell-btn"][data-item-name="${ITEM_NAME}"]`,
 					);
 					if (!sellBtn) {
 						if (!(await abortableWait(200, stillActive))) return;
@@ -229,7 +237,7 @@ export const analyticsSurface: GuideSurface = {
 					if (!(await abortableWait(1200, stillActive))) break;
 
 					const dialog = document.querySelector<HTMLElement>(
-						'[role="dialog"][aria-label^="Sell "]'
+						'[role="dialog"][aria-label^="Sell "]',
 					);
 					if (!dialog) {
 						ledgerApi().closeInventorySellModal?.();
@@ -255,7 +263,10 @@ export const analyticsSurface: GuideSurface = {
 					await cursor.moveTo(confirmStartRect, { duration: 0 });
 					cursor.show();
 					if (!stillActive()) break;
-					await cursor.moveTo(confirmBtn, { duration: 900, from: { x: confirmStartX, y: confirmStartY } });
+					await cursor.moveTo(confirmBtn, {
+						duration: 900,
+						from: { x: confirmStartX, y: confirmStartY },
+					});
 					if (!stillActive()) break;
 					await cursor.clickRipple();
 					cursor.hide();
@@ -267,7 +278,7 @@ export const analyticsSurface: GuideSurface = {
 					if (!(await abortableWait(300, stillActive))) break;
 
 					const entryRow = document.querySelector<HTMLElement>(
-						'[data-guide-anchor="ledger-entry-row"][data-entry-id="demo-inventory-sale"]'
+						'[data-guide-anchor="ledger-entry-row"][data-entry-id="demo-inventory-sale"]',
 					);
 					if (entryRow) {
 						entryRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -287,7 +298,7 @@ export const analyticsSurface: GuideSurface = {
 			resetDemo() {
 				ledgerApi().closeInventorySellModal?.();
 				ledgerApi().clearDemoSaleEntry?.();
-			}
+			},
 		},
 		{
 			id: 'activity-intro',
@@ -299,19 +310,19 @@ export const analyticsSurface: GuideSurface = {
 				body: [
 					{
 						kind: 'p',
-						text: 'The Activity tab lets you review aggregated stats by mob, tag, or weapon.'
+						text: 'The Activity tab lets you review aggregated stats by mob, tag, or weapon.',
 					},
 					{
 						kind: 'p',
-						text: 'The currently most interesting stat is PES/100, showing which activity results in the most skilling per 100 PED cycled.'
+						text: 'The currently most interesting stat is PES/100, showing which activity results in the most skilling per 100 PED cycled.',
 					},
-					{ kind: 'p', text: 'More activity insights to come.' }
+					{ kind: 'p', text: 'More activity insights to come.' },
 				],
 				note: [
 					{ text: 'See ' },
 					{ text: 'What is PES?', href: 'https://entropiaorme.com/articles/what-is-pes' },
-					{ text: '.' }
-				]
+					{ text: '.' },
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<AnalyticsDemoApi>;
@@ -320,7 +331,7 @@ export const analyticsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				analyticsApi().setTab?.('ledger');
-			}
+			},
 		},
 		{
 			id: 'sessions-intro',
@@ -330,12 +341,11 @@ export const analyticsSurface: GuideSurface = {
 			placementOffset: { x: 100 },
 			prose: {
 				title: 'Sessions',
-				body: 'Review individual hunts from the Sessions tab.'
+				body: 'Review individual hunts from the Sessions tab.',
 			},
 			async play({ cursor, demoApi, wait }) {
 				const stepIdx = guideState.currentStepIndex;
-				const stillActive = () =>
-					guideState.isActive && guideState.currentStepIndex === stepIdx;
+				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 
 				const aapi = demoApi as Partial<AnalyticsDemoApi>;
 				aapi.setTab?.('sessions');
@@ -357,7 +367,7 @@ export const analyticsSurface: GuideSurface = {
 					if (!(await abortableWait(300, stillActive))) break;
 
 					const chevron = document.querySelector<HTMLElement>(
-						`[data-guide-anchor="sessions-row-chevron"][data-session-index="${TARGET_INDEX}"]`
+						`[data-guide-anchor="sessions-row-chevron"][data-session-index="${TARGET_INDEX}"]`,
 					);
 					if (!chevron) {
 						if (!(await abortableWait(200, stillActive))) return;
@@ -392,7 +402,7 @@ export const analyticsSurface: GuideSurface = {
 			resetDemo() {
 				sessionsApi().collapseAllSessions?.();
 				analyticsApi().setTab?.('activity');
-			}
-		}
-	]
+			},
+		},
+	],
 };

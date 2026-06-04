@@ -1,5 +1,5 @@
-import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
 // Read a port from env, validate range, fall back to a default when unset.
@@ -29,9 +29,9 @@ export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
 		port,
-		strictPort: true
+		strictPort: true,
 	},
 	define: {
-		'import.meta.env.ENTROPIAORME_BACKEND_PORT': JSON.stringify(String(backendPort))
-	}
+		'import.meta.env.ENTROPIAORME_BACKEND_PORT': JSON.stringify(String(backendPort)),
+	},
 });

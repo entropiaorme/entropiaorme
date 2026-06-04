@@ -1,4 +1,4 @@
-import { derived, get, writable, type Readable, type Writable } from 'svelte/store';
+import { derived, get, type Readable, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 
 export type NewsCategory = 'article' | 'changelog';
@@ -105,10 +105,7 @@ export async function persistNewsCache(cache: NewsCache): Promise<void> {
 export async function markNewsAsRead(): Promise<void> {
 	const cache = get(newsCache);
 	if (!cache || cache.items.length === 0) return;
-	const newest = cache.items.reduce(
-		(max, e) => (e.date > max ? e.date : max),
-		'',
-	);
+	const newest = cache.items.reduce((max, e) => (e.date > max ? e.date : max), '');
 	if (!newest) return;
 	const current = get(newsLastViewedAt);
 	if (current && current >= newest) return;
@@ -122,10 +119,7 @@ export const newsHasUnread: Readable<boolean> = derived(
 	[newsCache, newsLastViewedAt],
 	([$cache, $lastViewed]) => {
 		if (!$cache || $cache.items.length === 0) return false;
-		const newest = $cache.items.reduce(
-			(max, e) => (e.date > max ? e.date : max),
-			'',
-		);
+		const newest = $cache.items.reduce((max, e) => (e.date > max ? e.date : max), '');
 		if (!newest) return false;
 		if (!$lastViewed) return true;
 		return newest > $lastViewed;

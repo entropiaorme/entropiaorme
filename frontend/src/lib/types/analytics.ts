@@ -1,4 +1,4 @@
-import type { Ped, Pes, Ratio, Trend, ISODate } from './common';
+import type { ISODate, Ped, Pes, Ratio, Trend } from './common';
 
 // ── Overview tab ──
 

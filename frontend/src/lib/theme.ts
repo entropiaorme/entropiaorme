@@ -1,4 +1,4 @@
-import { writable, type Writable } from 'svelte/store';
+import { type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 
 export type Theme = 'dark' | 'light';

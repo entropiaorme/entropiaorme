@@ -356,13 +356,26 @@ npm run test:watch      # re-run on change during development
 npm run test:coverage   # run with a v8 coverage report
 ```
 
-Scope is the cleanly-separated pure-TypeScript logic layer (the rendering, formatting, preference, and store-coordination modules under `src/lib/`), not Svelte component rendering or end-to-end flows. Suites are colocated as `<module>.test.ts` next to their source.
+Scope is two layers, with end-to-end flows out of scope:
+
+- **Unit**: the cleanly-separated pure-TypeScript logic layer (the rendering, formatting, preference, API-facade, realtime, and store-coordination modules under `src/lib/`). Suites are colocated as `<module>.test.ts` next to their source.
+- **Component**: the high-logic Svelte surfaces, rendered under Testing Library with `happy-dom` and the Tauri/backend seams mocked: the overlay strip's render contract, the realtime store-to-render path (a fixture consumer bound to the real tracking store), and the overlay window's popup readiness handshake.
 
 Conventions:
 
-- The config is `frontend/vitest.config.ts`: it declares the `$lib` alias explicitly (the SvelteKit plugin that normally provides it does not run under Vitest), defaults to the `node` environment, and pins `TZ=UTC` so date-formatting tests are deterministic. A suite that needs a DOM (`window`/`localStorage`) opts in with a `// @vitest-environment happy-dom` docblock.
-- The backend seams (the Tauri store, IPC `emit`, and the `preferences` adapter) are mocked with `vi.mock`/`vi.fn`; the module logic under test runs unmocked.
-- `preferences.ts` captures its `inTauri` flag at import time, so its suite sets or deletes `window.__TAURI_INTERNALS__` and then `vi.resetModules()` + dynamic `import()` per scenario.
+- The config is `frontend/vitest.config.ts`: it declares the `$lib` alias explicitly (the SvelteKit plugin that normally provides it does not run under Vitest), loads the plain Svelte plugin so component and runes-module sources compile, defaults to the `node` environment, and pins `TZ=UTC` so date-formatting tests are deterministic. A suite that needs a DOM opts in with a `// @vitest-environment happy-dom` docblock.
+- The backend seams (the Tauri store, IPC `emit`/`listen`, the window and webview APIs, `fetch`, and the `preferences` adapter) are mocked with `vi.mock`/`vi.fn`; the module logic under test runs unmocked.
+- Several modules capture state at import time (`preferences.ts` its `inTauri` flag, the generated API client its `fetch`), so their suites stub the global first and re-import per scenario via `vi.resetModules()` + dynamic `import()`.
 - Tests assert the code's actual behaviour; where a module's behaviour diverges from what a reader might expect, the divergence is asserted and flagged in-file as a candidate defect rather than papered over.
 
-A Biome lint/format gate for the frontend is planned as a follow-up.
+### Frontend lint and format (Biome)
+
+Biome owns linting and formatting for the frontend's TypeScript, JavaScript, and JSON (lint only for JSON; Svelte components stay under `svelte-check`). The configuration is `frontend/biome.json`, set to the codebase's established style; the generated `src/lib/api/schema.d.ts` and the lockfile are excluded.
+
+```sh
+cd frontend
+npm run lint     # biome check: lint + format verification (the CI gate)
+npm run format   # biome format --write: apply formatting
+```
+
+The `frontend` CI job runs `npm run lint` on every change, and a pre-commit hook mirrors it locally through the lockfile-pinned Biome (run `npm ci` in `frontend/` once so the hook can resolve it). The tree went through a one-time formatting normalisation when the gate landed; `biome format` is a verified no-op from there on, so any diff the formatter wants is a real violation.

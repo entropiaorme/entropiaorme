@@ -1,5 +1,5 @@
-import { writable, get, type Writable } from 'svelte/store';
 import { emit } from '@tauri-apps/api/event';
+import { get, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 import { ALL_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
 
@@ -67,7 +67,10 @@ export async function initStatsCustomisation(): Promise<void> {
 	]);
 	const dashboard = sanitise(d);
 	dashboardStats.set(dashboard);
-	const overlay = reorderToMatch(sanitise(o), dashboard.map((p) => p.id));
+	const overlay = reorderToMatch(
+		sanitise(o),
+		dashboard.map((p) => p.id),
+	);
 	overlayStats.set(overlay);
 }
 
@@ -75,7 +78,10 @@ export async function setDashboardStats(value: StatPref[]): Promise<void> {
 	dashboardStats.set(value);
 	await setPreference(KEY_DASHBOARD, value);
 	// Slave overlay's order to the new dashboard order; preserve its enabled flags.
-	const reorderedOverlay = reorderToMatch(get(overlayStats), value.map((p) => p.id));
+	const reorderedOverlay = reorderToMatch(
+		get(overlayStats),
+		value.map((p) => p.id),
+	);
 	overlayStats.set(reorderedOverlay);
 	await setPreference(KEY_OVERLAY, reorderedOverlay);
 	void emit(OVERLAY_STATS_CHANGED_EVENT, reorderedOverlay);
@@ -83,7 +89,10 @@ export async function setDashboardStats(value: StatPref[]): Promise<void> {
 
 export async function setOverlayStats(value: StatPref[]): Promise<void> {
 	// Clamp to dashboard's canonical order — overlay never owns ordering.
-	const reordered = reorderToMatch(value, get(dashboardStats).map((p) => p.id));
+	const reordered = reorderToMatch(
+		value,
+		get(dashboardStats).map((p) => p.id),
+	);
 	overlayStats.set(reordered);
 	await setPreference(KEY_OVERLAY, reordered);
 	void emit(OVERLAY_STATS_CHANGED_EVENT, reordered);

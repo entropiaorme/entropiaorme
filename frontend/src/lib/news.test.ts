@@ -9,12 +9,13 @@ vi.mock('./preferences', () => ({
 	setPreference: vi.fn(),
 }));
 
-import { getPreference, setPreference } from './preferences';
 import {
 	initNews,
 	markNewsAsRead,
 	markNewsOptInSeen,
 	NEWS_PREFERENCE_KEYS,
+	type NewsCache,
+	type NewsEntry,
 	newsCache,
 	newsHasUnread,
 	newsLastViewedAt,
@@ -23,9 +24,8 @@ import {
 	persistNewsCache,
 	purgeNewsCache,
 	setNewsOptIn,
-	type NewsCache,
-	type NewsEntry,
 } from './news';
+import { getPreference, setPreference } from './preferences';
 
 const getPreferenceMock = vi.mocked(getPreference);
 const setPreferenceMock = vi.mocked(setPreference);
@@ -207,10 +207,7 @@ describe('markNewsAsRead', () => {
 		await markNewsAsRead();
 
 		expect(get(newsLastViewedAt)).toBe('2026-03-15');
-		expect(setPreferenceMock).toHaveBeenCalledWith(
-			NEWS_PREFERENCE_KEYS.lastViewedAt,
-			'2026-03-15',
-		);
+		expect(setPreferenceMock).toHaveBeenCalledWith(NEWS_PREFERENCE_KEYS.lastViewedAt, '2026-03-15');
 	});
 
 	it('is a no-op when current cursor already equals the newest date', async () => {
@@ -264,10 +261,7 @@ describe('markNewsAsRead', () => {
 		await markNewsAsRead();
 
 		expect(get(newsLastViewedAt)).toBe('2026-04-01');
-		expect(setPreferenceMock).toHaveBeenCalledWith(
-			NEWS_PREFERENCE_KEYS.lastViewedAt,
-			'2026-04-01',
-		);
+		expect(setPreferenceMock).toHaveBeenCalledWith(NEWS_PREFERENCE_KEYS.lastViewedAt, '2026-04-01');
 	});
 
 	it('advances to the true max from an intermediate cursor regardless of item order', async () => {
@@ -284,10 +278,7 @@ describe('markNewsAsRead', () => {
 		await markNewsAsRead();
 
 		expect(get(newsLastViewedAt)).toBe('2026-03-15');
-		expect(setPreferenceMock).toHaveBeenCalledWith(
-			NEWS_PREFERENCE_KEYS.lastViewedAt,
-			'2026-03-15',
-		);
+		expect(setPreferenceMock).toHaveBeenCalledWith(NEWS_PREFERENCE_KEYS.lastViewedAt, '2026-03-15');
 	});
 
 	it('is a no-op when a non-empty cache yields a falsy newest (empty dates)', async () => {

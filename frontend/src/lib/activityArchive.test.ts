@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The `./preferences` seam is mocked so the suite never touches Tauri or
 // localStorage: getPreference feeds the persisted-shape fixtures into

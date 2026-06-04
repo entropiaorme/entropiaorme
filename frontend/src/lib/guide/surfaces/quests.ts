@@ -34,12 +34,12 @@ export const questsSurface: GuideSurface = {
 						items: [
 							'Cooldown timers.',
 							'Automatically detecting quest start/completions, and automatically adding quest rewards to your ledger.',
-							'Analysing cost/reward of completing a quest or a quest playlist.'
-						]
-					}
+							'Analysing cost/reward of completing a quest or a quest playlist.',
+						],
+					},
 				],
-				note: 'Note: Guide uses demo data.'
-			}
+				note: 'Note: Guide uses demo data.',
+			},
 		},
 		{
 			id: 'new-quest-form',
@@ -54,10 +54,10 @@ export const questsSurface: GuideSurface = {
 						items: [
 							'The name must match the in-game quest name. chat.log is read to automatically detect when a quest has been started/completed.',
 							'Set up reward value/cooldown to automatically add that reward to your ledger upon completion, and track cooldown.',
-							'Additional details are for your convenience.'
-						]
-					}
-				]
+							'Additional details are for your convenience.',
+						],
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<QuestsDemoApi>;
@@ -66,14 +66,15 @@ export const questsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				questsApi().closeNewQuestModal?.();
-			}
+			},
 		},
 		{
 			id: 'playlists-overview',
-			anchor: () => document.querySelector<HTMLElement>('[data-guide-anchor="quests-playlists-view"]'),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="quests-playlists-view"]'),
 			prose: {
 				title: 'Playlists',
-				body: 'By creating playlists, you can access them in the Quests dashboard widget to have them handy during gameplay, as well as analysing quest playlist rewards as one unit.'
+				body: 'By creating playlists, you can access them in the Quests dashboard widget to have them handy during gameplay, as well as analysing quest playlist rewards as one unit.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<QuestsDemoApi>;
@@ -83,13 +84,13 @@ export const questsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				questsApi().setView?.('quests');
-			}
+			},
 		},
 		{
 			id: 'analytics-tip',
 			prose: {
 				title: 'Quest analytics',
-				body: 'Tip: When tracking a session, start tracking right before a quest/playlist, and finish tracking right after completing the quest/playlist. If the session matches a single quest/playlist, your overlay will suggest if you want to link that session to the given quest/playlist. That enables quest/playlist analytics.'
+				body: 'Tip: When tracking a session, start tracking right before a quest/playlist, and finish tracking right after completing the quest/playlist. If the session matches a single quest/playlist, your overlay will suggest if you want to link that session to the given quest/playlist. That enables quest/playlist analytics.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<QuestsDemoApi>;
@@ -98,7 +99,7 @@ export const questsSurface: GuideSurface = {
 			},
 			resetDemo() {
 				questsApi().setView?.('quests');
-			}
-		}
-	]
+			},
+		},
+	],
 };

@@ -1,11 +1,6 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TrackingStatus } from '$lib/api';
-import {
-	STAT_DEFS,
-	ALL_STAT_IDS,
-	getStatDef,
-	type StatId,
-} from '$lib/statsRegistry';
+import { ALL_STAT_IDS, getStatDef, STAT_DEFS, type StatId } from '$lib/statsRegistry';
 
 // Pure render functions over a TrackingStatus. Each stat only ever reads the
 // handful of fields it needs, so fixtures are deliberately minimal: status
@@ -150,9 +145,7 @@ describe('divide-by-zero guards (denominator <= 0 -> EMPTY)', () => {
 	});
 
 	it('avg_damage: kill_count <= 0 -> EMPTY; positive -> formatPed(damage/kills)', () => {
-		expect(render('avg_damage', active({ damageDealtTotal: 500, kill_count: 0 }))).toEqual(
-			EMPTY,
-		);
+		expect(render('avg_damage', active({ damageDealtTotal: 500, kill_count: 0 }))).toEqual(EMPTY);
 		expect(render('avg_damage', active({ damageDealtTotal: 500, kill_count: 5 }))).toEqual({
 			value: '100.00',
 			color: 'text-text',
@@ -165,16 +158,17 @@ describe('divide-by-zero guards (denominator <= 0 -> EMPTY)', () => {
 	});
 
 	it('crit_rate: shotsFiredTotal <= 0 -> EMPTY; positive -> formatPercent(crits/shots)', () => {
-		expect(
-			render('crit_rate', active({ criticalHitsTotal: 5, shotsFiredTotal: 0 })),
-		).toEqual(EMPTY);
-		expect(
-			render('crit_rate', active({ criticalHitsTotal: 5, shotsFiredTotal: -2 })),
-		).toEqual(EMPTY);
+		expect(render('crit_rate', active({ criticalHitsTotal: 5, shotsFiredTotal: 0 }))).toEqual(
+			EMPTY,
+		);
+		expect(render('crit_rate', active({ criticalHitsTotal: 5, shotsFiredTotal: -2 }))).toEqual(
+			EMPTY,
+		);
 		// 10 / 200 = 0.05 -> 5.0%
-		expect(
-			render('crit_rate', active({ criticalHitsTotal: 10, shotsFiredTotal: 200 })),
-		).toEqual({ value: '5.0%', color: 'text-text' });
+		expect(render('crit_rate', active({ criticalHitsTotal: 10, shotsFiredTotal: 200 }))).toEqual({
+			value: '5.0%',
+			color: 'text-text',
+		});
 	});
 
 	it('dpp: weaponCost <= 0 -> EMPTY', () => {
@@ -294,9 +288,9 @@ describe('avg_dps: wall-clock dependent', () => {
 	it('invalid started_at (NaN time) -> EMPTY', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(NOW);
-		expect(
-			render('avg_dps', active({ damageDealtTotal: 1000, started_at: 'not-a-date' })),
-		).toEqual(EMPTY);
+		expect(render('avg_dps', active({ damageDealtTotal: 1000, started_at: 'not-a-date' }))).toEqual(
+			EMPTY,
+		);
 	});
 
 	it('elapsed <= 0 (started_at in the future) -> EMPTY', () => {
@@ -304,9 +298,9 @@ describe('avg_dps: wall-clock dependent', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(NOW);
 		const future = new Date(NOW.getTime() + 60_000).toISOString();
-		expect(
-			render('avg_dps', active({ damageDealtTotal: 1000, started_at: future })),
-		).toEqual(EMPTY);
+		expect(render('avg_dps', active({ damageDealtTotal: 1000, started_at: future }))).toEqual(
+			EMPTY,
+		);
 	});
 
 	it('elapsed exactly 0 (started_at === now) -> EMPTY', () => {
@@ -322,9 +316,10 @@ describe('avg_dps: wall-clock dependent', () => {
 		vi.setSystemTime(NOW);
 		// started 100s before now; 1000 damage / 100s = 10.00.
 		const started = new Date(NOW.getTime() - 100_000).toISOString();
-		expect(
-			render('avg_dps', active({ damageDealtTotal: 1000, started_at: started })),
-		).toEqual({ value: '10.00', color: 'text-text' });
+		expect(render('avg_dps', active({ damageDealtTotal: 1000, started_at: started }))).toEqual({
+			value: '10.00',
+			color: 'text-text',
+		});
 	});
 
 	it('positive elapsed, missing damage -> 0.00', () => {

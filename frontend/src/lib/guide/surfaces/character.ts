@@ -70,29 +70,30 @@ export const characterSurface: GuideSurface = {
 						items: [
 							'Scan your character skills.',
 							'Enable skills tracking based on your scanned skills.',
-							'Study skilling goals, optimisations, and codex reward recommendations.'
-						]
-					}
+							'Study skilling goals, optimisations, and codex reward recommendations.',
+						],
+					},
 				],
-				note: 'Note: Guide uses demo data.'
-			}
+				note: 'Note: Guide uses demo data.',
+			},
 		},
 		{
 			id: 'skill-scanner-spawn',
-			anchor: () => document.querySelector<HTMLElement>('[data-guide-anchor="character-scanner-spawn"]'),
+			anchor: () =>
+				document.querySelector<HTMLElement>('[data-guide-anchor="character-scanner-spawn"]'),
 			prose: {
 				title: 'Skill scanner',
 				body: [
 					{
 						kind: 'p',
-						text: 'The skill scanner detects your EU window, and performs OCR in pre-selected coordinates.'
+						text: 'The skill scanner detects your EU window, and performs OCR in pre-selected coordinates.',
 					},
 					{
 						kind: 'p',
-						text: 'Dock your skills tab at the bottom right of your EU window, and follow the skill scanner overlay steps.'
+						text: 'Dock your skills tab at the bottom right of your EU window, and follow the skill scanner overlay steps.',
 					},
-					{ kind: 'svg', svg: skillScannerWorkflowSvg }
-				]
+					{ kind: 'svg', svg: skillScannerWorkflowSvg },
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -103,7 +104,7 @@ export const characterSurface: GuideSurface = {
 			},
 			resetDemo() {
 				characterApi().setFakeScannerVisible?.(false);
-			}
+			},
 		},
 		{
 			id: 'skill-progression-columns',
@@ -113,7 +114,7 @@ export const characterSurface: GuideSurface = {
 			// path on GuideStep.anchor lets us composite from the relevant <th>s and tbody.
 			anchor: () => {
 				const table = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-skills-table"]'
+					'[data-guide-anchor="character-skills-table"]',
 				);
 				if (!table) return null;
 				const headerCells = table.querySelectorAll<HTMLElement>('thead th');
@@ -136,14 +137,14 @@ export const characterSurface: GuideSurface = {
 						items: [
 							'Anchor: your stats at your last skills scan.',
 							'Gain: your tracked skill gains.',
-							"Level: Anchor + Gain, the app's understanding of your current level."
-						]
+							"Level: Anchor + Gain, the app's understanding of your current level.",
+						],
 					},
 					{
 						kind: 'p',
-						text: "It's recommended to re-scan your skills every once in a while to refresh the anchor point."
-					}
-				]
+						text: "It's recommended to re-scan your skills every once in a while to refresh the anchor point.",
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -153,7 +154,7 @@ export const characterSurface: GuideSurface = {
 				// Push the table into the lower half of the viewport so the top-placed prose card
 				// has clearance above the header row.
 				const table = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-skills-table"]'
+					'[data-guide-anchor="character-skills-table"]',
 				);
 				if (table) {
 					const rect = table.getBoundingClientRect();
@@ -167,14 +168,14 @@ export const characterSurface: GuideSurface = {
 			resetDemo() {
 				characterApi().setStatsSubTab?.('attributes');
 				window.scrollTo({ top: 0, behavior: 'smooth' });
-			}
+			},
 		},
 		{
 			id: 'skill-pes-column',
 			// Synthetic rect spanning the PES column header + its tbody column extent.
 			anchor: () => {
 				const table = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-skills-table"]'
+					'[data-guide-anchor="character-skills-table"]',
 				);
 				if (!table) return null;
 				const headerCells = table.querySelectorAll<HTMLElement>('thead th');
@@ -192,13 +193,15 @@ export const characterSurface: GuideSurface = {
 					{
 						kind: 'p',
 						text: [
-							{ text: 'Here you can see the value of your skills, in PES (PED, but for skills). See our article ' },
+							{
+								text: 'Here you can see the value of your skills, in PES (PED, but for skills). See our article ',
+							},
 							{ text: '"What is PES?"', href: 'https://entropiaorme.com/articles/what-is-pes' },
-							{ text: ' for the rationale behind separating skills from PED.' }
-						]
+							{ text: ' for the rationale behind separating skills from PED.' },
+						],
 					},
-					{ kind: 'p', text: 'The app uses PES as the denomination for skills value throughout.' }
-				]
+					{ kind: 'p', text: 'The app uses PES as the denomination for skills value throughout.' },
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -208,20 +211,22 @@ export const characterSurface: GuideSurface = {
 			},
 			resetDemo() {
 				characterApi().setStatsSubTab?.('attributes');
-			}
+			},
 		},
 		{
 			id: 'prospect-overview',
 			anchor: () =>
-				document.querySelector<HTMLElement>('[data-guide-anchor="character-prospect-result-tiles"]'),
+				document.querySelector<HTMLElement>(
+					'[data-guide-anchor="character-prospect-result-tiles"]',
+				),
 			prose: {
 				title: 'Prospect',
 				body: [
 					{
 						kind: 'p',
-						text: 'The Prospect page projects your recorded sessions forward: how much cycle and how long to reach a profession level goal, at your current activity.'
-					}
-				]
+						text: 'The Prospect page projects your recorded sessions forward: how much cycle and how long to reach a profession level goal, at your current activity.',
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -234,17 +239,17 @@ export const characterSurface: GuideSurface = {
 				api.setProspectSeed?.(false);
 				api.setMainTab?.('stats');
 				api.setStatsSubTab?.('attributes');
-			}
+			},
 		},
 		{
 			id: 'prospect-knobs',
 			// Combined rect spanning the form section: profession row + slice-type segmented control + 4-col grid.
 			anchor: () => {
 				const first = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-prospect-knob-first"]'
+					'[data-guide-anchor="character-prospect-knob-first"]',
 				);
 				const last = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-prospect-knob-last"]'
+					'[data-guide-anchor="character-prospect-knob-last"]',
 				);
 				if (!first || !last) return null;
 				const a = first.getBoundingClientRect();
@@ -264,10 +269,10 @@ export const characterSurface: GuideSurface = {
 							'Activity type (global, tag, mob, or weapon).',
 							'Session group within that activity.',
 							'Target level.',
-							'Average markup you expect from loot in that activity.'
-						]
-					}
-				]
+							'Average markup you expect from loot in that activity.',
+						],
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -280,7 +285,7 @@ export const characterSurface: GuideSurface = {
 				api.setProspectSeed?.(false);
 				api.setMainTab?.('stats');
 				api.setStatsSubTab?.('attributes');
-			}
+			},
 		},
 		{
 			id: 'optimizer-overview',
@@ -292,13 +297,13 @@ export const characterSurface: GuideSurface = {
 				body: [
 					{
 						kind: 'p',
-						text: 'Optimiser works as a traditional chip-in optimiser, using the official wiki chip-in tool data.'
+						text: 'Optimiser works as a traditional chip-in optimiser, using the official wiki chip-in tool data.',
 					},
 					{
 						kind: 'p',
-						text: 'For HP, it shows which skills increase your HP with the least amount of PES put into them.'
-					}
-				]
+						text: 'For HP, it shows which skills increase your HP with the least amount of PES put into them.',
+					},
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -311,7 +316,7 @@ export const characterSurface: GuideSurface = {
 				api.setOptimizerSeed?.(false);
 				api.setMainTab?.('stats');
 				api.setStatsSubTab?.('attributes');
-			}
+			},
 		},
 		{
 			id: 'codex-overview',
@@ -320,10 +325,10 @@ export const characterSurface: GuideSurface = {
 			// path stitches both holes together visually under the same dim layer.
 			anchor: () => {
 				const select = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-codex-profession-select"]'
+					'[data-guide-anchor="character-codex-profession-select"]',
 				);
 				const claim = document.querySelector<HTMLElement>(
-					'[data-guide-anchor="character-codex-recommendation"]'
+					'[data-guide-anchor="character-codex-recommendation"]',
 				);
 				const rects: DOMRect[] = [];
 				if (select) rects.push(select.getBoundingClientRect());
@@ -332,13 +337,18 @@ export const characterSurface: GuideSurface = {
 			},
 			placement: 'bottom-left',
 			placementAnchor: () =>
-				document.querySelector<HTMLElement>('[data-guide-anchor="character-codex-mobs-list-placement"]'),
+				document.querySelector<HTMLElement>(
+					'[data-guide-anchor="character-codex-mobs-list-placement"]',
+				),
 			prose: {
 				title: 'Codex',
 				body: [
-					{ kind: 'p', text: 'Calibrate your codex rank per mob, then pick a profession to prioritise.' },
-					{ kind: 'p', text: 'The reward options rank by contribution to that profession.' }
-				]
+					{
+						kind: 'p',
+						text: 'Calibrate your codex rank per mob, then pick a profession to prioritise.',
+					},
+					{ kind: 'p', text: 'The reward options rank by contribution to that profession.' },
+				],
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<CharacterDemoApi>;
@@ -351,7 +361,7 @@ export const characterSurface: GuideSurface = {
 				api.setCodexSeed?.(false);
 				api.setMainTab?.('stats');
 				api.setStatsSubTab?.('attributes');
-			}
-		}
-	]
+			},
+		},
+	],
 };

@@ -1,4 +1,4 @@
-import { writable, get, type Writable } from 'svelte/store';
+import { get, type Writable, writable } from 'svelte/store';
 import { getPreference, setPreference } from './preferences';
 
 export type ArchiveKind = 'mob' | 'tag' | 'weapon';
@@ -18,7 +18,9 @@ export const activityArchive: Writable<ActivityArchiveState> = writable(EMPTY);
 function sanitise(value: unknown): ActivityArchiveState {
 	const v = (value ?? {}) as Partial<ActivityArchiveState>;
 	const arr = (x: unknown): string[] =>
-		Array.isArray(x) ? Array.from(new Set(x.filter((s): s is string => typeof s === 'string'))) : [];
+		Array.isArray(x)
+			? Array.from(new Set(x.filter((s): s is string => typeof s === 'string')))
+			: [];
 	return {
 		mobs: arr(v.mobs),
 		tags: arr(v.tags),

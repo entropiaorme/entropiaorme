@@ -1,18 +1,33 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/tracking/status",
+    "path": "/api/tracking/snapshot",
     "query": {}
   },
   "response": {
     "body": {
       "currentMob": null,
+      "currentTool": null,
       "endOfSessionArmourReminderEnabled": false,
       "hotbarListenerActive": false,
       "mobEntryMode": "mob",
       "mobSource": null,
+      "recentEvents": [],
       "repairOcrEnabled": false,
       "status": "idle",
+      "trifectaAttribution": {
+        "activePresetId": "default",
+        "bigWeapon": null,
+        "healTool": null,
+        "presetName": "Default",
+        "presets": [
+          {
+            "id": "default",
+            "name": "Default"
+          }
+        ],
+        "smallWeapon": null
+      },
       "weaponAttribution": "trifecta"
     },
     "headers": {

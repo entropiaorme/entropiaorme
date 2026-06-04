@@ -15,6 +15,8 @@
 	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 	import { closeGuide, openGuide } from '$lib/guide/engine';
 	import { questsSurface } from '$lib/guide/surfaces/quests';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore';
 	import {
 		questsDemoQuests,
 		questsDemoPlaylists,
@@ -37,8 +39,7 @@
 		deletePlaylist,
 		getQuestAnalytics,
 		getPlaylistAnalytics,
-		getAnalyticsOverview,
-		getTrackingStatus
+		getAnalyticsOverview
 	} from '$lib/api';
 
 	// ── State ──
@@ -126,7 +127,7 @@
 	}
 
 	// ── Load data ──
-	let trackingActive = $state(false);
+	let trackingActive = $derived($trackingSnapshot?.status === 'active');
 
 	// Guide
 	let guideSeen = $state(true);
@@ -143,7 +144,7 @@
 		void (async () => {
 			guideSeen = await getPreference<boolean>('guide_seen_quests', false);
 		})();
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
+		const stopClock = useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 		registerDemoApi('quests', {
 			setView: (v: string) => {
 				view = v as 'quests' | 'playlists' | 'analytics';
@@ -161,37 +162,35 @@
 			}
 		});
 		return () => {
-			clearInterval(interval);
+			stopClock();
 			unregisterDemoApi('quests');
 		};
 	});
 
-	// Poll quest data every 10s while tracking is active to pick up chat.log mission-completion lines.
-	// Check tracking status every 15s to detect session start/stop.
+	// Quest data refreshes every 10s while tracking is active (below) to pick up
+	// chat.log mission-completion lines. The active/idle signal that gates it is
+	// event-driven: hydrate the tracking snapshot once, then keep it current from
+	// pushed session frames rather than polling for session start/stop.
 	$effect(() => {
 		if (guideState.isActive) return;
-		const statusInterval = setInterval(async () => {
-			try {
-				const s = await getTrackingStatus();
-				trackingActive = s.status === 'active';
-			} catch { /* ignore */ }
-		}, 15000);
-		// Initial check
-		getTrackingStatus().then(s => trackingActive = s.status === 'active').catch(() => {});
-		return () => clearInterval(statusInterval);
+		void hydrate();
+		const unlisten = subscribeTracking();
+		return () => {
+			void unlisten.then((un) => un());
+		};
 	});
 
 	$effect(() => {
 		if (guideState.isActive) return;
 		if (!trackingActive) return;
-		const questInterval = setInterval(async () => {
+		const refreshQuests = async () => {
 			try {
 				const [q, p] = await Promise.all([getQuests(), getPlaylists()]);
 				quests = q;
 				playlists = p;
 			} catch { /* ignore */ }
-		}, 10000);
-		return () => clearInterval(questInterval);
+		};
+		return useVisiblePoll(refreshQuests, { intervalMs: 10000, immediate: false });
 	});
 
 	async function loadData(guideMode: boolean) {

@@ -1,24 +1,19 @@
 <script lang="ts">
 	import { Button } from '$lib/components';
 	import {
-		getTrackingStatus,
-		getTrackingLive,
-		getTrackingSessions,
+		getTrackingSnapshot,
 		getQuests,
 		getPlaylists,
 		startQuest,
 		completeQuest,
 		cancelQuest,
-		getRecentEvents,
-		type TrackingStatus,
 		type TrackingLive,
-		type RecentEvent,
 	} from '$lib/api';
-	import type { TrackingSession } from '$lib/types/tracking';
+	import { trackingSnapshot, hydrate, subscribeTracking } from '$lib/stores/trackingStore';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { Quest, QuestPlaylist } from '$lib/types/quests';
 	import type { CooldownStatus } from '$lib/types/common';
 	import { invoke } from '@tauri-apps/api/core';
-	import { emit, listen } from '@tauri-apps/api/event';
 	import { flip } from 'svelte/animate';
 	import { quintOut } from 'svelte/easing';
 	import { get } from 'svelte/store';
@@ -40,16 +35,16 @@
 	import { closeGuide, openGuide } from '$lib/guide/engine';
 	import { dashboardSurface } from '$lib/guide/surfaces/dashboard';
 
-	const TRACKING_STATE_CHANGED_EVENT = 'tracking-state-changed';
-
-	let status = $state<TrackingStatus | null>(null);
-	let lastSession = $state<TrackingSession | null>(null);
+	// The consolidated tracking readout, sourced from the store: the dashboard's
+	// single source of live-session render shape. `status` keeps its name so the
+	// session island, stats grid, and widgets read it unchanged (the snapshot is
+	// a superset of the old status shape).
+	let status = $derived($trackingSnapshot);
 	let elapsedSeconds = $state(0);
-	let loading = $state(true);
-	// Guide-only: live overlay-strip feed sourced from /demo/tracking/live.
-	// Drives the inline <OverlayStrip> mount that replaces the spawn screenshot
-	// during the dashboard guide's overlay-spawn step. Fetched in the guide-mode
-	// re-fetch $effect alongside getTrackingStatus.
+	// Guide-only: the overlay-strip's display fields, projected from the demo
+	// tracking snapshot. Drives the inline <OverlayStrip> mount that replaces the
+	// spawn screenshot during the dashboard guide's overlay-spawn step. Read in
+	// the guide-mode re-fetch $effect alongside the snapshot hydration.
 	let demoTrackingLive = $state<TrackingLive | null>(null);
 	// Guide-only: lifecycle phase for the demo overlay strip. The overlay-spawn
 	// card mounts the strip in 'idle' first, then animates a cursor click on
@@ -139,7 +134,7 @@
 	let now = $state(Date.now());
 	let copiedWp = $state<string | null>(null);
 	let pendingCancelChoiceQuestId = $state<string | null>(null);
-	let recentEvents = $state<RecentEvent[]>([]);
+	let recentEvents = $derived($trackingSnapshot?.recentEvents ?? []);
 
 	// Stats grid drag-reorder via pointer events (not HTML5 drag — the latter cedes
 	// cursor control to the OS, so we can't keep the grabbing hand stable through
@@ -242,67 +237,15 @@
 		document.body.classList.remove('stat-drag-active');
 	}
 
-	$effect(() => {
-		let disposed = false;
-		let unlisten: (() => void) | undefined;
-
-		(async () => {
-			unlisten = await listen<{ status?: 'active' | 'idle' }>(
-				TRACKING_STATE_CHANGED_EVENT,
-				async () => {
-					if (disposed) return;
-					try {
-						const [s, sessions, events] = await Promise.all([
-							getTrackingStatus(),
-							getTrackingSessions(),
-							getRecentEvents(),
-						]);
-						if (disposed) return;
-						status = s;
-						lastSession = sessions.length > 0 ? sessions[0] : null;
-						recentEvents = events;
-						if (s.status !== 'active') elapsedSeconds = 0;
-					} catch { /* ignore */ }
-				}
-			);
-		})();
-
-		return () => {
-			disposed = true;
-			unlisten?.();
-		};
-	});
-
 	// Poll quest state so chat.log auto-start/complete is reflected without route changes.
 	$effect(() => {
 		const pollMs = status?.status === 'active' ? 3000 : 5000;
-		void refreshQuestState();
-		const interval = setInterval(() => {
-			void refreshQuestState();
-		}, pollMs);
-		return () => clearInterval(interval);
-	});
-
-	// Poll tracking status and events — 5s when active, 3s when idle
-	$effect(() => {
-		const pollMs = status?.status === 'active' ? 5000 : 3000;
-		const interval = setInterval(async () => {
-			try {
-				const [s, events] = await Promise.all([
-					getTrackingStatus(),
-					getRecentEvents(),
-				]);
-				status = s;
-				recentEvents = events;
-			} catch { /* ignore */ }
-		}, pollMs);
-		return () => clearInterval(interval);
+		return useVisiblePoll(refreshQuestState, { intervalMs: pollMs });
 	});
 
 	// Cooldown tick (1s)
 	$effect(() => {
-		const interval = setInterval(() => { now = Date.now(); }, 1000);
-		return () => clearInterval(interval);
+		return useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 	});
 
 	// Elapsed timer when tracking is active
@@ -310,37 +253,13 @@
 		if (status?.status === 'active' && status.started_at) {
 			const startMs = new Date(status.started_at).getTime();
 			elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			const timerInterval = setInterval(() => {
+			return useVisiblePoll(() => {
 				elapsedSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
-			}, 1000);
-
-			return () => {
-				clearInterval(timerInterval);
-			};
+			}, { intervalMs: 1000, immediate: false });
 		} else {
 			elapsedSeconds = 0;
 		}
 	});
-
-	async function loadDashboard() {
-		loading = true;
-		try {
-			const [s, sessions, loadedQuests, loadedPlaylists, events] = await Promise.all([
-				getTrackingStatus(),
-				getTrackingSessions(),
-				loadQuests(),
-				loadPlaylists(),
-				getRecentEvents(),
-			]);
-			status = s;
-			lastSession = sessions.length > 0 ? sessions[0] : null;
-			quests = loadedQuests;
-			playlists = loadedPlaylists;
-			recentEvents = events;
-			syncActivePlaylist(loadedPlaylists);
-		} catch { /* offline — show idle state */ }
-		loading = false;
-	}
 
 	async function refreshQuestState() {
 		try {
@@ -490,6 +409,17 @@
 		void (async () => {
 			guideSeen = await getPreference<boolean>('guide_seen_dashboard', false);
 		})();
+		// Keep the consolidated snapshot current by subscribing to the relayed
+		// backend tracking events: each one re-reads the snapshot, so the session
+		// island and stats grid update by subscription rather than by polling.
+		let unsubscribeTracking: (() => void) | undefined;
+		let unmounted = false;
+		void subscribeTracking().then((unlisten) => {
+			// Guard the unmount-before-resolve race: if teardown already ran,
+			// detach immediately rather than leaking the listener.
+			if (unmounted) unlisten();
+			else unsubscribeTracking = unlisten;
+		});
 		registerDemoApi('dashboard', {
 			setOverlayDemoVisible: (visible: boolean) => {
 				demoOverlayVisible = visible;
@@ -603,7 +533,11 @@
 				if (flash) flash.style.animation = 'none';
 			}
 		});
-		return () => unregisterDemoApi('dashboard');
+		return () => {
+			unmounted = true;
+			unregisterDemoApi('dashboard');
+			unsubscribeTracking?.();
+		};
 	});
 
 	// Re-fetch tracking + quest data when guide-mode flips so the dashboard
@@ -658,20 +592,28 @@
 				wapi.setTab?.(restored);
 			});
 		}
+		// Re-read the consolidated snapshot through the guide-aware client so the
+		// switch between real and demo data is immediate (the snapshot GET routes
+		// to the demo namespace automatically while the guide is active). This is
+		// also the dashboard's initial load on mount.
+		void hydrate();
 		void (async () => {
 			try {
-				const [s, sessions, events, live, loadedQuests, loadedPlaylists] = await Promise.all([
-					getTrackingStatus(),
-					getTrackingSessions(),
-					getRecentEvents(),
-					active ? getTrackingLive() : Promise.resolve(null),
+				const [live, loadedQuests, loadedPlaylists] = await Promise.all([
+					active ? getTrackingSnapshot() : Promise.resolve(null),
 					loadQuests(),
 					loadPlaylists(),
 				]);
-				status = s;
-				lastSession = sessions.length > 0 ? sessions[0] : null;
-				recentEvents = events;
-				demoTrackingLive = live;
+				demoTrackingLive = live && {
+					status: live.status,
+					elapsed: live.elapsed,
+					currentTool: live.currentTool,
+					currentMob: live.currentMob,
+					mobEntryMode: live.mobEntryMode,
+					weaponAttribution: live.weaponAttribution,
+					trifectaAttribution: live.trifectaAttribution,
+					repairOcrEnabled: live.repairOcrEnabled
+				};
 				quests = loadedQuests;
 				playlists = loadedPlaylists;
 				if (!active && snapshotActivePlaylistId !== undefined) {
@@ -884,7 +826,7 @@
 						<OverlayStrip data={demoTrackingLive} {status} armourSessionId="demo-session" />
 					{:else}
 						<!-- Idle synth: status='idle' + nulled session fields. Carries
-							 the live response's trifectaAttribution + weaponAttribution
+							 the snapshot's trifectaAttribution + weaponAttribution
 							 so the trifecta dropdown stays populated (the Calypso preset
 							 reads as waiting-to-be-selected, not a "—" placeholder).
 							 status={null} passed to OverlayStrip so stat pills render as

@@ -3,6 +3,7 @@
 	import { externalLinks } from '$lib/utils/openExternal';
 	import { guideState } from './state.svelte';
 	import { closeGuide, nextStep, previousStep, replayCurrentStep, setCursorElement } from './engine';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 
 	let cursorEl = $state<HTMLDivElement>();
 	let rippleEl = $state<HTMLDivElement>();
@@ -99,10 +100,10 @@
 			}
 		};
 		tick();
-		const interval = setInterval(tick, 120);
+		const stop = useVisiblePoll(tick, { intervalMs: 120, immediate: false });
 		return () => {
 			cancelled = true;
-			clearInterval(interval);
+			stop();
 		};
 	});
 

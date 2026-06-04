@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import AppSettings, OkResponse, OverlayPosition
 from backend.services.trifecta_service import validate_trifecta
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -86,7 +87,7 @@ def _validate_chatlog_path(value: str) -> str:
     return str(path)
 
 
-@router.get("")
+@router.get("", response_model=AppSettings)
 def get_settings():
     """Return full settings including live cache stats."""
     svc = get_services()
@@ -108,7 +109,7 @@ class SettingsPatch(BaseModel):
     loot_filter_blacklist: list[str] | None = None
 
 
-@router.patch("")
+@router.patch("", response_model=AppSettings)
 def update_settings(patch: SettingsPatch):
     """Partial update — only provided fields are written."""
     svc = get_services()
@@ -143,7 +144,7 @@ def update_settings(patch: SettingsPatch):
     return _build_response(svc)
 
 
-@router.post("/reset")
+@router.post("/reset", response_model=AppSettings)
 def reset_settings():
     """Reset all settings to defaults."""
     svc = get_services()
@@ -160,13 +161,13 @@ class OverlayPositionPatch(BaseModel):
     y: int
 
 
-@router.get("/overlay-position")
+@router.get("/overlay-position", response_model=OverlayPosition)
 def get_overlay_position():
     config = get_services().config_service.get()
     return {"x": config.overlay_x, "y": config.overlay_y}
 
 
-@router.put("/overlay-position")
+@router.put("/overlay-position", response_model=OkResponse)
 def set_overlay_position(body: OverlayPositionPatch):
     svc = get_services()
     svc.config_service.update({"overlay_x": body.x, "overlay_y": body.y})

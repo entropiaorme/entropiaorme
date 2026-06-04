@@ -4,6 +4,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import (
+    OkResponse,
+    PlaylistAnalyticsRow,
+    Quest,
+    QuestAnalyticsRow,
+    QuestPlaylist,
+)
 
 router = APIRouter(prefix="/quests", tags=["quests"])
 
@@ -125,7 +132,7 @@ def _format_playlist(pl: dict) -> dict:
 # ── Static quest endpoints (must be before /{quest_id} parameter routes) ───
 
 
-@router.get("")
+@router.get("", response_model=list[Quest])
 def list_quests():
     """List all active quests."""
     svc = get_services()
@@ -133,7 +140,7 @@ def list_quests():
     return [_format_quest(q) for q in quests]
 
 
-@router.post("")
+@router.post("", response_model=Quest)
 def create_quest(req: QuestCreate):
     """Create a new quest."""
     svc = get_services()
@@ -141,14 +148,14 @@ def create_quest(req: QuestCreate):
     return _format_quest(q)
 
 
-@router.get("/mobs")
+@router.get("/mobs", response_model=list[str])
 def list_mob_names():
     """All distinct mob names for autocomplete."""
     svc = get_services()
     return svc.quest_service.get_all_mob_names()
 
 
-@router.get("/analytics")
+@router.get("/analytics", response_model=list[QuestAnalyticsRow])
 def quest_analytics():
     """Per-quest sustainability metrics from curated linked sessions."""
     svc = get_services()
@@ -181,7 +188,7 @@ def _format_quest_analytics(row: dict) -> dict:
 # ── Playlist endpoints (must be before /{quest_id} to avoid route clash) ───
 
 
-@router.get("/playlists")
+@router.get("/playlists", response_model=list[QuestPlaylist])
 def list_playlists():
     """List all active playlists."""
     svc = get_services()
@@ -189,7 +196,7 @@ def list_playlists():
     return [_format_playlist(pl) for pl in playlists]
 
 
-@router.get("/playlists/analytics")
+@router.get("/playlists/analytics", response_model=list[PlaylistAnalyticsRow])
 def playlist_analytics():
     """Per-playlist sustainability metrics from curated linked sessions."""
     svc = get_services()
@@ -226,7 +233,7 @@ def _format_playlist_analytics(row: dict) -> dict:
     }
 
 
-@router.post("/playlists")
+@router.post("/playlists", response_model=QuestPlaylist)
 def create_playlist(req: PlaylistCreate):
     """Create a new playlist."""
     svc = get_services()
@@ -234,7 +241,7 @@ def create_playlist(req: PlaylistCreate):
     return _format_playlist(pl)
 
 
-@router.put("/playlists/{playlist_id}")
+@router.put("/playlists/{playlist_id}", response_model=QuestPlaylist)
 def update_playlist(playlist_id: int, req: PlaylistUpdate):
     """Update a playlist."""
     svc = get_services()
@@ -245,7 +252,7 @@ def update_playlist(playlist_id: int, req: PlaylistUpdate):
     return _format_playlist(pl)
 
 
-@router.delete("/playlists/{playlist_id}")
+@router.delete("/playlists/{playlist_id}", response_model=OkResponse)
 def delete_playlist(playlist_id: int):
     """Soft-delete a playlist."""
     svc = get_services()
@@ -257,7 +264,7 @@ def delete_playlist(playlist_id: int):
 # ── Parameterised quest endpoints ──────────────────────────────────────────
 
 
-@router.get("/{quest_id}")
+@router.get("/{quest_id}", response_model=Quest)
 def get_quest(quest_id: int):
     """Get a single quest."""
     svc = get_services()
@@ -267,7 +274,7 @@ def get_quest(quest_id: int):
     return _format_quest(q)
 
 
-@router.put("/{quest_id}")
+@router.put("/{quest_id}", response_model=Quest)
 def update_quest(quest_id: int, req: QuestUpdate):
     """Update a quest."""
     svc = get_services()
@@ -278,7 +285,7 @@ def update_quest(quest_id: int, req: QuestUpdate):
     return _format_quest(q)
 
 
-@router.delete("/{quest_id}")
+@router.delete("/{quest_id}", response_model=OkResponse)
 def delete_quest(quest_id: int):
     """Soft-delete a quest."""
     svc = get_services()
@@ -287,7 +294,7 @@ def delete_quest(quest_id: int):
     return {"ok": True}
 
 
-@router.post("/{quest_id}/start")
+@router.post("/{quest_id}/start", response_model=Quest)
 def start_quest(quest_id: int):
     """Mark a quest as in-progress."""
     svc = get_services()
@@ -297,7 +304,7 @@ def start_quest(quest_id: int):
     return _format_quest(q)
 
 
-@router.post("/{quest_id}/complete")
+@router.post("/{quest_id}/complete", response_model=Quest)
 def complete_quest(quest_id: int):
     """Complete a quest — resets cooldown, increments counter, auto-creates ledger entry."""
     svc = get_services()
@@ -307,7 +314,7 @@ def complete_quest(quest_id: int):
     return _format_quest(q)
 
 
-@router.post("/{quest_id}/cancel")
+@router.post("/{quest_id}/cancel", response_model=Quest)
 def cancel_quest(quest_id: int, req: QuestCancel | None = None):
     """Cancel a started quest or undo an active cooldown reset."""
     svc = get_services()

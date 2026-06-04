@@ -7,6 +7,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.dependencies import get_services
+from backend.routers.response_models import (
+    CostResult,
+    DeletedStatus,
+    Equipment,
+    EquipmentDetail,
+    EquipmentSearchResult,
+)
 from backend.services.cost_engine import (
     cost_per_shot,
     cost_per_shot_from_props,
@@ -338,7 +345,7 @@ class CalculateCostRequest(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
-@router.get("/search")
+@router.get("/search", response_model=list[EquipmentSearchResult])
 def search_items(q: str = "", type: str = "weapon"):
     """Search the bundled equipment catalogue by name and type.
 
@@ -356,7 +363,7 @@ def search_items(q: str = "", type: str = "weapon"):
     return [_entity_to_search_result(r) for r in rows]
 
 
-@router.get("/library")
+@router.get("/library", response_model=list[Equipment])
 def get_library():
     """Return all items in the user's equipment library with computed costs."""
     svc = get_services()
@@ -366,7 +373,7 @@ def get_library():
     return [_library_row_to_equipment(r) for r in rows]
 
 
-@router.post("/library")
+@router.post("/library", response_model=Equipment)
 def add_to_library(req: AddWeaponRequest):
     """Add an item to the equipment library."""
     svc = get_services()
@@ -445,7 +452,7 @@ def add_to_library(req: AddWeaponRequest):
     return _library_row_to_equipment(row)
 
 
-@router.put("/library/{item_id}")
+@router.put("/library/{item_id}", response_model=Equipment)
 def update_library_item(item_id: int, req: AddWeaponRequest):
     """Update an existing equipment library entry."""
     svc = get_services()
@@ -533,7 +540,7 @@ def update_library_item(item_id: int, req: AddWeaponRequest):
     return _library_row_to_equipment(row)
 
 
-@router.delete("/library/{item_id}")
+@router.delete("/library/{item_id}", response_model=DeletedStatus)
 def remove_from_library(item_id: int):
     """Remove an item from the equipment library."""
     svc = get_services()
@@ -554,7 +561,7 @@ def remove_from_library(item_id: int):
     return {"status": "deleted"}
 
 
-@router.get("/library/{item_id}/detail")
+@router.get("/library/{item_id}/detail", response_model=EquipmentDetail)
 def get_library_detail(item_id: int):
     """Return full detail with cost breakdown for a library item."""
     svc = get_services()
@@ -569,7 +576,7 @@ def get_library_detail(item_id: int):
     return _library_row_to_detail(row)
 
 
-@router.post("/cost/calculate")
+@router.post("/cost/calculate", response_model=CostResult)
 def calculate_cost(req: CalculateCostRequest):
     """Calculate cost breakdown for a weapon configuration without saving."""
     svc = get_services()

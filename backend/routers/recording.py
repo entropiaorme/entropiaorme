@@ -11,6 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.dependencies import get_services
+from backend.routers.response_models import (
+    RecordingAbortResult,
+    RecordingStatus,
+    RecordingStopResult,
+)
 from backend.testing.recording_controller import (
     RecordingStateError,
     RecordingValidationError,
@@ -34,7 +39,7 @@ class StopRecordingBody(BaseModel):
     notes: str = ""
 
 
-@router.post("/start")
+@router.post("/start", response_model=RecordingStatus)
 def start_recording():
     """Begin a recording session."""
     svc = get_services()
@@ -45,7 +50,7 @@ def start_recording():
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/status")
+@router.get("/status", response_model=RecordingStatus)
 def recording_status():
     """Current recording state plus live capture counters."""
     svc = get_services()
@@ -53,7 +58,9 @@ def recording_status():
     return svc.recording_controller.status()
 
 
-@router.post("/stop")
+@router.post(
+    "/stop", response_model=RecordingStopResult, response_model_exclude_unset=True
+)
 def stop_recording(body: StopRecordingBody):
     """Finalise the recording into the recorded-scenario corpus."""
     svc = get_services()
@@ -66,7 +73,7 @@ def stop_recording(body: StopRecordingBody):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.post("/abort")
+@router.post("/abort", response_model=RecordingAbortResult)
 def abort_recording():
     """Discard the in-flight recording without finalising."""
     svc = get_services()

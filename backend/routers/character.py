@@ -10,7 +10,18 @@ from fastapi import APIRouter, HTTPException
 from backend.data.codex_categories import get_codex_category
 from backend.data.tt_value_curve import levels_for_tt_value, tt_value_at
 from backend.dependencies import get_services
-from backend.routers.response_models import CharacterProspect
+from backend.routers.response_models import (
+    CalibrationStatus,
+    CharacterCodexProgress,
+    CharacterProspect,
+    CharacterProspectOptions,
+    CharacterStats,
+    HpOptimizerResult,
+    PathOptimizerResult,
+    ProfessionLevel,
+    ProfessionOptimizerResult,
+    SkillLevel,
+)
 from backend.services.character_calc import (
     ATTRIBUTE_SKILLS,
     all_profession_levels,
@@ -476,7 +487,7 @@ def _build_prospect_result(
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
-@router.get("/calibration")
+@router.get("/calibration", response_model=CalibrationStatus)
 def get_calibration():
     """Return skill calibration status."""
     svc = get_services()
@@ -499,7 +510,7 @@ def get_calibration():
     }
 
 
-@router.get("/stats")
+@router.get("/stats", response_model=CharacterStats)
 def get_character_stats():
     """Return HP and top profession levels.
 
@@ -528,7 +539,7 @@ def get_character_stats():
     return {"hp": hp, "topProfessions": top}
 
 
-@router.get("/skills")
+@router.get("/skills", response_model=list[SkillLevel])
 def get_skills():
     """Return calibrated skill levels with ranks and TT values.
 
@@ -578,7 +589,7 @@ def get_skills():
     return result
 
 
-@router.get("/professions")
+@router.get("/professions", response_model=list[ProfessionLevel])
 def get_professions():
     """Return profession levels with anchor and gain-since-anchor breakdown.
 
@@ -620,7 +631,7 @@ def get_professions():
     return result
 
 
-@router.get("/prospect-options")
+@router.get("/prospect-options", response_model=CharacterProspectOptions)
 def get_character_prospect_options():
     """Return slice values available for Prospect forecasts."""
     svc = get_services()
@@ -685,7 +696,11 @@ def get_character_prospect(
     )
 
 
-@router.get("/profession-optimizer")
+@router.get(
+    "/profession-optimizer",
+    response_model=ProfessionOptimizerResult,
+    response_model_exclude_unset=True,
+)
 def get_profession_optimizer(profession: str):
     """Return skills ranked by PED cost to next profession level.
 
@@ -715,7 +730,11 @@ def get_profession_optimizer(profession: str):
     return result
 
 
-@router.get("/profession-path-optimizer")
+@router.get(
+    "/profession-path-optimizer",
+    response_model=PathOptimizerResult,
+    response_model_exclude_unset=True,
+)
 def get_profession_path_optimizer(
     profession: str,
     target_level: float | None = None,
@@ -756,7 +775,7 @@ def get_profession_path_optimizer(
     return result
 
 
-@router.get("/hp-optimizer")
+@router.get("/hp-optimizer", response_model=HpOptimizerResult)
 def get_hp_optimizer():
     """Return skills ranked by PED cost per +1 HP.
 
@@ -770,7 +789,7 @@ def get_hp_optimizer():
     return hp_skill_optimizer(skill_levels, skills_data)
 
 
-@router.get("/codex")
+@router.get("/codex", response_model=list[CharacterCodexProgress])
 def get_codex():
     """Return codex progress predictions for calibrated skills in codex categories."""
     svc = get_services()

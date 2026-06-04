@@ -72,7 +72,9 @@ def test_openapi_snapshot_matches_golden(update_fingerprints: bool) -> None:
             print(diff)
             print("--- End OpenAPI snapshot update ---\n")
         EXPECTED_PATH.parent.mkdir(parents=True, exist_ok=True)
-        EXPECTED_PATH.write_text(actual_text, encoding="utf-8")
+        # newline="\n" so a Windows regen writes LF directly, matching the repo's
+        # `*.json eol=lf` policy rather than emitting CRLF in text mode.
+        EXPECTED_PATH.write_text(actual_text, encoding="utf-8", newline="\n")
         return
 
     assert EXPECTED_PATH.exists(), (
@@ -109,7 +111,7 @@ def test_openapi_get_surface_carries_expected_prefixes() -> None:
     spec = app.openapi()
     paths = set(spec.get("paths", {}))
     required = {
-        "/api/tracking/status",
+        "/api/tracking/snapshot",
         "/api/scan/skills/status",
         "/api/quests",
         "/api/codex/species",

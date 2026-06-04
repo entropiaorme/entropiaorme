@@ -14,12 +14,20 @@ from __future__ import annotations
 import logging
 import sqlite3
 import sys
+import threading
 import time as _time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Literal
 
+from backend.core.domain_events import (
+    TOPIC_TRACKING_SESSION_UPDATED,
+    TrackingSessionUpdated,
+    TrackingSessionUpdatedPayload,
+    to_iso_utc,
+)
 from backend.core.event_bus import EventBus
 from backend.core.events import (
     EVENT_ACTIVE_HEAL_TOOL_CHANGED,
@@ -30,14 +38,28 @@ from backend.core.events import (
     EVENT_LOOT_GROUP,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
+    EVENT_TICK_FLUSHED,
 )
 from backend.services.cost_engine import cost_per_shot_from_props
 from backend.tracking.loot_filter import is_tracked_loot, normalize_blacklist
-from backend.tracking.models import Kill, LootItem, ToolStats, TrackingSession
+from backend.tracking.models import (
+    ActiveSessionView,
+    Kill,
+    LootItem,
+    ToolStats,
+    TrackingReadout,
+    TrackingSession,
+)
 from backend.tracking.schema import init_tracking_tables
 from backend.tracking.tool_inference import DamageAttributor
 
 log = logging.getLogger(__name__)
+
+# Sentinel distinguishing "caller did not supply a resolved trifecta" from a
+# resolved value that is legitimately None (trifecta mode on, none configured).
+# Lets the session-lifecycle callers resolve the trifecta (a DB read) before
+# taking the tracker lock and pass it in, while direct callers omit it.
+_TRIFECTA_UNRESOLVED: object = object()
 
 
 @dataclass
@@ -194,9 +216,62 @@ class HuntTracker:
         # Recover any sessions left open by a crash
         self._recover_orphaned_sessions()
 
+        # Serialises access to the owned in-memory session state (``_session``,
+        # ``_accumulator`` and its ``tool_stats`` dict, ``_session_warnings``,
+        # ``_session_heal_cost``, ``_last_kill``, the mob-attribution scalars,
+        # the weapon-enhancer states and cost caches). Every producer handler
+        # that mutates this state and every reader that aggregates it (the
+        # ``snapshot`` readout, which the status/live HTTP readouts route
+        # through) holds this lock, so a reader on the web threadpool never
+        # iterates a kills list or a ``tool_stats`` dict while the chat-log or
+        # hotbar producer thread resizes it. It is the one synchronisation
+        # boundary for this service's owned in-memory state.
+        #
+        # ``RLock`` (re-entrant) is the defensive default: no current locked
+        # region re-acquires the lock (``start_session`` calls ``stop_session``
+        # BEFORE taking the lock, and publishes happen after release), so a
+        # plain ``Lock`` would also be correct today; ``RLock`` keeps the
+        # tracker safe if a locked region is later changed to call another
+        # method that takes the lock. A single-owner design that processed one
+        # update at a time would not need re-entrancy at all.
+        # Load-bearing invariants:
+        #   - ``event_bus.publish`` is called only AFTER releasing this lock, so
+        #     a subscriber never runs under it (publish copies its subscriber
+        #     list under the bus lock then releases it before dispatch, so no
+        #     bus-lock <-> tracker-lock cycle can form).
+        #   - The tracker's own session-persistence WRITES (``_persist_kill``,
+        #     the ``_on_global`` UPDATE/INSERT, the session-lifecycle UPDATE, the
+        #     ledger and summary writes) run only AFTER releasing this lock. Most
+        #     reads are likewise hoisted out, BUT the equipment-cost / weapon-
+        #     profile provider callbacks reached from the combat and tool-change
+        #     handlers (``_equipment_cost_lookup`` / ``_equipment_profile_lookup``
+        #     via ``_current_cost_for_tool``) DO read ``app_db.conn`` while the
+        #     lock is held, on a cache miss (at most once per distinct tool).
+        #     That is deadlock-free ONLY because those providers call
+        #     ``conn.execute`` directly and never take ``app_db.lock``: the global
+        #     order is ``tracker._lock`` -> ``app_db.lock`` and no ``app_db.lock``
+        #     holder ever acquires this lock, so no cycle can form. Do NOT wrap a
+        #     provider in ``with app_db.lock:`` without first hoisting its read
+        #     out of the locked region, or that reverse edge would close a
+        #     deadlock cycle.
+        self._lock = threading.RLock()
+
         # Session state
         self._session: TrackingSession | None = None
         self._accumulator: _Accumulator | None = None
+        # Set by the P&L handlers when a tick mutates the live session readout,
+        # cleared when the coalesced tracking.session.updated is emitted at the
+        # settled-tick boundary. Lets one domain event stand for a tick's worth
+        # of low-level mutations rather than one per raw mutation.
+        self._session_dirty = False
+        # Session-readout fields, initialised here rather than sprung lazily in
+        # start_session so they are always-present owned state: the owner-side
+        # snapshot read (and any reader before the first session) sees them
+        # unconditionally, with no defensive hasattr/getattr at the call site.
+        # start_session resets them at each session boundary.
+        self._session_heal_cost: float = 0.0
+        self._heal_warning_emitted: bool = False
+        self._session_warnings: list[str] = []
         self._loot_blacklist = normalize_blacklist(loot_filter_blacklist)
         self._refresh_loot_filter()
 
@@ -321,6 +396,160 @@ class HuntTracker:
     @property
     def current_accumulator(self) -> _Accumulator | None:
         return self._accumulator
+
+    def snapshot(self) -> TrackingReadout:
+        """Return an owned, immutable view of the current tracking readout.
+
+        The owner computes the session-derived readout here rather than letting
+        a caller iterate ``self._session.kills`` and the in-progress accumulator
+        from another thread: the caller receives a detached value and never
+        holds a live reference into mutating session state. ``active`` is None
+        when idle. The active path issues exactly two reads, both scoped to the
+        live session: the session skill-gain total and the session notable-event
+        feed. Configuration- and runtime-derived fields (attribution mode, the
+        repair-OCR flag, the hotbar-listener running flag) are not the tracker's
+        to own and are merged in by the HTTP layer.
+
+        The in-memory aggregation runs under ``self._lock`` so a producer thread
+        cannot resize the kills list or a ``tool_stats`` dict mid-iteration; the
+        readout's values are captured into locals under the lock and no live
+        container is touched after release. The two session-scoped DB reads then
+        run OUTSIDE the lock (the global order is ``tracker._lock`` ->
+        ``app_db.lock``; the lock is never held across SQLite), keyed on a
+        session id captured under the lock so a concurrent ``stop_session``
+        cannot null the session between the aggregation and the reads.
+        """
+        with self._lock:
+            current_tool = self._active_hotbar_tool_name
+            session = self._session
+            if session is None:
+                return TrackingReadout(current_tool=current_tool, active=None)
+
+            # Captured under the lock; the post-lock DB reads key on this id so a
+            # concurrent stop_session cannot null the session beneath them.
+            session_id = session.id
+            started_at = session.start_time.isoformat()
+            start_ts = session.start_time.timestamp()
+
+            kills = session.kills
+            acc = self._accumulator
+            kill_count = len(kills)
+
+            weapon_cost = sum(
+                ts.cost_per_shot * ts.shots_fired
+                for kill in kills
+                for ts in kill.tool_stats.values()
+            )
+            enhancer_cost = sum(k.enhancer_cost for k in kills)
+            if acc:
+                weapon_cost += acc.weapon_cost
+                enhancer_cost += acc.enhancer_cost
+            heal_cost = self._session_heal_cost
+            cost = weapon_cost + heal_cost + enhancer_cost
+            returns = sum(k.loot_total_ped for k in kills)
+
+            damage_total = sum(k.damage_dealt for k in kills)
+            shots_total = sum(k.shots_fired for k in kills)
+            crits_total = sum(k.critical_hits for k in kills)
+            max_damage = max((k.damage_dealt for k in kills), default=0.0)
+            live_weapon_damage = damage_total + (acc.damage_dealt if acc else 0.0)
+            globals_count = sum(1 for k in kills if k.is_global)
+            hofs_count = sum(1 for k in kills if k.is_hof)
+            latest_kill_loot = kills[-1].loot_total_ped if kills else None
+
+            # Multipliers use kill.cost_ped (weapon cost only) per EU convention.
+            mult_per_kill = [
+                k.loot_total_ped / k.cost_ped for k in kills if k.cost_ped > 0
+            ]
+            multiplier_avg = (
+                sum(mult_per_kill) / len(mult_per_kill) if mult_per_kill else None
+            )
+            multiplier_max = max(mult_per_kill, default=None) if mult_per_kill else None
+            multiplier_last = (
+                kills[-1].loot_total_ped / kills[-1].cost_ped
+                if kills and kills[-1].cost_ped > 0
+                else None
+            )
+            multiplier_history = tuple(round(m, 4) for m in mult_per_kill[-120:])
+
+            # Cumulative-net history (per kill), distributing the session-level
+            # heal cost pro-rata across kills by their weapon-cost share so the
+            # curve's final point reconciles with the displayed Net stat
+            # (returns - cost).
+            per_kill_weapon = [
+                sum(ts.cost_per_shot * ts.shots_fired for ts in k.tool_stats.values())
+                for k in kills
+            ]
+            total_weapon = sum(per_kill_weapon)
+            cumulative_net: list[float] = []
+            if kills:
+                running = 0.0
+                for k, w in zip(kills, per_kill_weapon, strict=True):
+                    heal_share = (
+                        heal_cost * (w / total_weapon) if total_weapon > 0 else 0.0
+                    )
+                    running += k.loot_total_ped - w - k.enhancer_cost - heal_share
+                    cumulative_net.append(round(running, 2))
+                cumulative_net = cumulative_net[-120:]
+
+            confirmed_mob_name = self._confirmed_mob_name
+            mob_source = self._mob_source
+            mob_entry_mode = self._session_mob_tracking_mode
+            warnings = tuple(self._session_warnings)
+
+        skill_tt = self._db.execute(
+            "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+
+        # Latest-session notable-event feed (top 20). The live session is the
+        # latest session, so this single read serves the activity feed.
+        notable_rows = self._db.execute(
+            "SELECT event_type, mob_or_item, value_ped, timestamp "
+            "FROM notable_events WHERE session_id = ? "
+            "ORDER BY timestamp DESC LIMIT 20",
+            (session_id,),
+        ).fetchall()
+
+        active = ActiveSessionView(
+            session_id=session_id,
+            started_at=started_at,
+            kill_count=kill_count,
+            elapsed=int(self._now_fn().timestamp() - start_ts),
+            cost=round(cost, 2),
+            returns=round(returns, 2),
+            pes=round(float(skill_tt), 2),
+            net=round(returns - cost, 2),
+            return_rate=round(returns / cost, 4) if cost > 0 else 0.0,
+            damage_dealt_total=round(damage_total, 1),
+            weapon_damage_dealt=round(live_weapon_damage, 1),
+            weapon_cost=round(weapon_cost, 6),
+            shots_fired_total=shots_total,
+            critical_hits_total=crits_total,
+            max_damage=round(max_damage, 1),
+            globals_count=globals_count,
+            hofs_count=hofs_count,
+            latest_kill_loot=round(latest_kill_loot, 2)
+            if latest_kill_loot is not None
+            else None,
+            multiplier_last=round(multiplier_last, 4)
+            if multiplier_last is not None
+            else None,
+            multiplier_avg=round(multiplier_avg, 4)
+            if multiplier_avg is not None
+            else None,
+            multiplier_max=round(multiplier_max, 4)
+            if multiplier_max is not None
+            else None,
+            multiplier_history=multiplier_history,
+            cumulative_net_history=tuple(cumulative_net),
+            current_mob=confirmed_mob_name or None,
+            mob_source=mob_source if confirmed_mob_name else None,
+            mob_entry_mode=mob_entry_mode,
+            notable_event_rows=tuple((r[0], r[1], r[2], r[3]) for r in notable_rows),
+            warnings=warnings,
+        )
+        return TrackingReadout(current_tool=current_tool, active=active)
 
     def _is_weapon_attribution_trifecta(self) -> bool:
         return self._weapon_attribution_trifecta_provider()
@@ -530,94 +759,120 @@ class HuntTracker:
         self._perf_cost_lookup_seconds = 0.0
 
     def reload_config(self) -> None:
-        """Refresh trifecta-attribution state after config changes."""
-        self._refresh_loot_filter()
-        if not self._session:
-            return
-        if self._is_weapon_attribution_trifecta():
-            self._load_trifecta_weapon_profiles()
-        else:
-            self._damage_attributor.clear()
-            self._active_heal_tool_name = None
-            self._heal_cost_per_use_ped = 0.0
-            self._heal_reload_seconds = 2.5
-            self._heal_amount_min = None
-            self._heal_amount_max = None
-            self._heal_warning_emitted = False
-            self._reset_weapon_runtime_state()
+        """Refresh trifecta-attribution state after config changes.
 
-        if self.is_session_tag_mode():
-            return
-
-        if self._is_manual_mob_entry_enabled():
-            manual_mob = self._manual_mob_provider()
-            if manual_mob is None:
-                if self._mob_source == "manual":
-                    self._clear_mob_state()
+        Runs on the web threadpool and rewrites the attribution/heal/mob state
+        the producer threads read, so the body holds the lock. The trifecta is
+        resolved (a DB read) before the lock so only the in-memory load runs
+        under it; there is no DB write or publish.
+        """
+        trifecta_mode = self._is_weapon_attribution_trifecta()
+        trifecta = self._trifecta_resolver() if trifecta_mode else None
+        with self._lock:
+            self._refresh_loot_filter()
+            if not self._session:
                 return
-            species, maturity = manual_mob
-            display = f"{maturity} {species}" if maturity else species
-            self._set_manual_mob_state(display, species, maturity)
-            return
+            if trifecta_mode:
+                self._load_trifecta_weapon_profiles(trifecta)
+            else:
+                self._damage_attributor.clear()
+                self._active_heal_tool_name = None
+                self._heal_cost_per_use_ped = 0.0
+                self._heal_reload_seconds = 2.5
+                self._heal_amount_min = None
+                self._heal_amount_max = None
+                self._heal_warning_emitted = False
+                self._reset_weapon_runtime_state()
 
-        if self._mob_source == "manual":
-            self._clear_mob_state()
+            if self.is_session_tag_mode():
+                return
 
-    def start_session(self) -> TrackingSession:
-        """Start a new tracking session."""
-        if self._session:
-            self.stop_session()
-
-        self._refresh_loot_filter()
-
-        session_mob_tracking_mode = self._mob_tracking_mode_provider()
-        session_mob_tracking_tag = self._mob_tracking_tag_provider().strip()
-
-        session_id = str(uuid.uuid4())
-        self._session = TrackingSession(id=session_id)
-        self._session.start_time = self._now_fn()
-        self._accumulator = _Accumulator()
-
-        self._active_hotbar_tool_name = None
-        self._last_heal_time = None
-        self._session_heal_cost = 0.0
-        self._heal_warning_emitted = False
-        self._session_warnings: list[str] = []
-        self._last_kill = None
-        self._last_loot_fingerprint = None
-        self._last_loot_time = None
-        self._confirmed_mob_name = ""
-        self._confirmed_mob_species = ""
-        self._confirmed_mob_maturity = ""
-        self._mob_source = None
-        self._session_mob_tracking_mode = session_mob_tracking_mode
-        self._session_mob_tracking_tag = session_mob_tracking_tag
-        self._clear_mob_state()
-        self._trifecta_unmatched_warning_emitted = False
-        self._damage_attributor.clear()
-        self._reset_weapon_runtime_state()
-
-        if self._is_weapon_attribution_trifecta():
-            self._load_trifecta_weapon_profiles()
-
-        if self.is_session_tag_mode() and self._session_mob_tracking_tag:
-            self._set_session_tag(self._session_mob_tracking_tag)
-        elif self._is_manual_mob_entry_enabled():
-            manual_mob = self._manual_mob_provider()
-            if manual_mob is not None:
+            if self._is_manual_mob_entry_enabled():
+                manual_mob = self._manual_mob_provider()
+                if manual_mob is None:
+                    if self._mob_source == "manual":
+                        self._clear_mob_state()
+                    return
                 species, maturity = manual_mob
                 display = f"{maturity} {species}" if maturity else species
                 self._set_manual_mob_state(display, species, maturity)
+                return
 
-        # Subscribe to events
-        self._event_bus.subscribe(EVENT_COMBAT, self._on_combat)
-        self._event_bus.subscribe(EVENT_LOOT_GROUP, self._on_loot)
-        self._event_bus.subscribe(EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed)
-        self._event_bus.subscribe(
-            EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
-        )
-        self._event_bus.subscribe(EVENT_GLOBAL, self._on_global)
-        self._event_bus.subscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+            if self._mob_source == "manual":
+                self._clear_mob_state()
+
+    def start_session(self) -> TrackingSession:
+        """Start a new tracking session.
+
+        Any prior session is stopped first (outside the lock, so its own stop
+        events publish cleanly). The new session state is then built wholesale
+        under the lock so a reader never observes a half-built session; the DB
+        insert and the start events run AFTER the lock.
+        """
+        if self._session:
+            self.stop_session()
+
+        session_mob_tracking_mode = self._mob_tracking_mode_provider()
+        session_mob_tracking_tag = self._mob_tracking_tag_provider().strip()
+        session_id = str(uuid.uuid4())
+        # Resolve the trifecta (a DB read) before the lock; only the in-memory
+        # load runs under it.
+        trifecta_mode = self._is_weapon_attribution_trifecta()
+        trifecta = self._trifecta_resolver() if trifecta_mode else None
+
+        with self._lock:
+            self._refresh_loot_filter()
+            self._session = TrackingSession(id=session_id)
+            self._session.start_time = self._now_fn()
+            self._accumulator = _Accumulator()
+
+            self._active_hotbar_tool_name = None
+            self._last_heal_time = None
+            self._session_heal_cost = 0.0
+            self._heal_warning_emitted = False
+            self._session_warnings = []
+            self._last_kill = None
+            self._last_loot_fingerprint = None
+            self._last_loot_time = None
+            self._confirmed_mob_name = ""
+            self._confirmed_mob_species = ""
+            self._confirmed_mob_maturity = ""
+            self._mob_source = None
+            self._session_mob_tracking_mode = session_mob_tracking_mode
+            self._session_mob_tracking_tag = session_mob_tracking_tag
+            self._clear_mob_state()
+            self._trifecta_unmatched_warning_emitted = False
+            # Reset under the lock, ordered with the handler subscribes below, so
+            # a producer mutation arriving after release correctly re-sets it.
+            self._session_dirty = False
+            self._damage_attributor.clear()
+            self._reset_weapon_runtime_state()
+
+            if trifecta_mode:
+                self._load_trifecta_weapon_profiles(trifecta)
+
+            if self.is_session_tag_mode() and self._session_mob_tracking_tag:
+                self._set_session_tag(self._session_mob_tracking_tag)
+            elif self._is_manual_mob_entry_enabled():
+                manual_mob = self._manual_mob_provider()
+                if manual_mob is not None:
+                    species, maturity = manual_mob
+                    display = f"{maturity} {species}" if maturity else species
+                    self._set_manual_mob_state(display, species, maturity)
+
+            # Subscribe to events
+            self._event_bus.subscribe(EVENT_COMBAT, self._on_combat)
+            self._event_bus.subscribe(EVENT_LOOT_GROUP, self._on_loot)
+            self._event_bus.subscribe(EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed)
+            self._event_bus.subscribe(
+                EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
+            )
+            self._event_bus.subscribe(EVENT_GLOBAL, self._on_global)
+            self._event_bus.subscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+            self._event_bus.subscribe(EVENT_TICK_FLUSHED, self._on_tick_flushed)
+
+            session = self._session
+            start_ts = self._session.start_time.timestamp()
 
         # Persist session start. `mob_tracking_mode` records the input
         # mode the session was captured under so post-hoc UI surfaces
@@ -629,15 +884,16 @@ class HuntTracker:
             "VALUES (?, ?, 1, ?)",
             (
                 session_id,
-                self._session.start_time.timestamp(),
-                self._session_mob_tracking_mode,
+                start_ts,
+                session_mob_tracking_mode,
             ),
         )
         self._db.commit()
 
         log.info("Session started: %s", session_id[:8])
         self._event_bus.publish(EVENT_SESSION_STARTED, {"session_id": session_id})
-        return self._session
+        self._emit_session_event("started", "active", start_ts, session_id)
+        return session
 
     def _refresh_loot_filter(self) -> None:
         blacklist = self._loot_filter_blacklist
@@ -645,8 +901,15 @@ class HuntTracker:
             blacklist = self._loot_filter_blacklist_provider()
         self._loot_blacklist = normalize_blacklist(blacklist)
 
-    def _load_trifecta_weapon_profiles(self) -> None:
-        """Load damage signatures + heal tool from configured trifecta."""
+    def _load_trifecta_weapon_profiles(self, trifecta=_TRIFECTA_UNRESOLVED) -> None:
+        """Load damage signatures + heal tool from the configured trifecta.
+
+        ``trifecta`` is the resolved configuration. The locked session-lifecycle
+        callers (``start_session`` / ``reload_config``) resolve it BEFORE taking
+        the tracker lock and pass it in, so the resolver's DB read does not run
+        under the lock; only the in-memory assignment below does. Direct callers
+        may omit it, in which case it is resolved here.
+        """
         self._damage_attributor.clear()
         self._active_heal_tool_name = None
         self._heal_cost_per_use_ped = 0.0
@@ -658,7 +921,8 @@ class HuntTracker:
         self._active_weapon_state_key = None
         self._active_weapon_observed_name = None
 
-        trifecta = self._trifecta_resolver()
+        if trifecta is _TRIFECTA_UNRESOLVED:
+            trifecta = self._trifecta_resolver()
         if not trifecta:
             return
 
@@ -686,67 +950,87 @@ class HuntTracker:
             self._heal_amount_max = heal_tool.get("heal_max")
 
     def stop_session(self) -> TrackingSession | None:
-        """Stop the active session, compute dangling cost."""
-        if not self._session:
-            return None
+        """Stop the active session, compute dangling cost.
 
-        # Compute dangling cost from unresolved accumulator
-        dangling_cost = 0.0
-        if self._accumulator:
-            dangling_cost = self._accumulator.total_cost
+        The dangling-cost read, the handler unsubscribes and the end-time stamp
+        run under the lock (capturing the values the DB writes need); the
+        persistence, ledger entries, summary and stop events run AFTER the lock;
+        then the in-memory session is cleared under the lock so a reader sees a
+        clean idle state, never a half-torn one.
+        """
+        with self._lock:
+            if not self._session:
+                return None
 
-        # Unsubscribe
-        self._event_bus.unsubscribe(EVENT_COMBAT, self._on_combat)
-        self._event_bus.unsubscribe(EVENT_LOOT_GROUP, self._on_loot)
-        self._event_bus.unsubscribe(EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed)
-        self._event_bus.unsubscribe(
-            EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
-        )
-        self._event_bus.unsubscribe(EVENT_GLOBAL, self._on_global)
-        self._event_bus.unsubscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+            # Compute dangling cost from unresolved accumulator
+            dangling_cost = 0.0
+            if self._accumulator:
+                dangling_cost = self._accumulator.total_cost
 
-        # Finalise session
-        self._session.end_time = self._now_fn()
-        self._session.dangling_cost = dangling_cost
+            # Unsubscribe so no producer event mutates the session past here.
+            self._event_bus.unsubscribe(EVENT_COMBAT, self._on_combat)
+            self._event_bus.unsubscribe(EVENT_LOOT_GROUP, self._on_loot)
+            self._event_bus.unsubscribe(
+                EVENT_ACTIVE_TOOL_CHANGED, self._on_tool_changed
+            )
+            self._event_bus.unsubscribe(
+                EVENT_ACTIVE_HEAL_TOOL_CHANGED, self._on_heal_tool_changed
+            )
+            self._event_bus.unsubscribe(EVENT_GLOBAL, self._on_global)
+            self._event_bus.unsubscribe(EVENT_ENHANCER_BREAK, self._on_enhancer_break)
+            self._event_bus.unsubscribe(EVENT_TICK_FLUSHED, self._on_tick_flushed)
+
+            # Finalise session
+            self._session.end_time = self._now_fn()
+            self._session.dangling_cost = dangling_cost
+            session = self._session
+            session_id = self._session.id
+            end_time = self._session.end_time
+            heal_cost = self._session_heal_cost
+
         self._db.execute(
             "UPDATE tracking_sessions SET ended_at = ?, is_active = 0, "
             "heal_cost = ?, dangling_cost = ? WHERE id = ?",
             (
-                self._session.end_time.timestamp(),
-                self._session_heal_cost,
+                end_time.timestamp(),
+                heal_cost,
                 dangling_cost,
-                self._session.id,
+                session_id,
             ),
         )
 
         # Auto-generate ledger gains derived from persisted loot rows.
-        self._create_enhancer_rebate_ledger_entry(
-            self._session.id, self._session.end_time
-        )
-        self._create_shrapnel_ledger_entry(self._session.id, self._session.end_time)
+        self._create_enhancer_rebate_ledger_entry(session_id, end_time)
+        self._create_shrapnel_ledger_entry(session_id, end_time)
 
         from backend.services.session_summary import write_session_summary
 
-        write_session_summary(self._db, self._session.id)
+        write_session_summary(self._db, session_id)
 
         self._db.commit()
 
-        session = self._session
         log.info(
             "Session stopped: %s (%d kills, %.2f PED dangling cost)",
             session.id[:8],
             len(session.kills),
             dangling_cost,
         )
-        self._event_bus.publish(EVENT_SESSION_STOPPED, {"session_id": session.id})
+        self._event_bus.publish(EVENT_SESSION_STOPPED, {"session_id": session_id})
+        self._emit_session_event(
+            "stopped",
+            "idle",
+            end_time.timestamp() if end_time else None,
+            session_id,
+        )
 
-        # Cleanup
-        self._session = None
-        self._accumulator = None
-        self._active_hotbar_tool_name = None
-        self._last_kill = None
-        self._reset_weapon_runtime_state()
-        self._clear_mob_state()
+        # Clear the in-memory session under the lock.
+        with self._lock:
+            self._session = None
+            self._accumulator = None
+            self._active_hotbar_tool_name = None
+            self._last_kill = None
+            self._reset_weapon_runtime_state()
+            self._clear_mob_state()
 
         return session
 
@@ -788,8 +1072,11 @@ class HuntTracker:
         if not cleaned:
             raise ValueError("Tag cannot be empty")
 
-        self._session_mob_tracking_tag = cleaned
-        self._set_session_tag(cleaned)
+        # The mob-attribution scalars are read by the loot handler and the
+        # readers, so the writes hold the lock.
+        with self._lock:
+            self._session_mob_tracking_tag = cleaned
+            self._set_session_tag(cleaned)
 
     def set_manual_mob(self, mob_name: str, species: str, maturity: str) -> None:
         """Immediately set the active mob for manual kill stamping."""
@@ -800,12 +1087,14 @@ class HuntTracker:
         if not self._is_manual_mob_entry_enabled():
             raise RuntimeError("Manual mob entry is not enabled for this session")
 
-        self._set_manual_mob_state(mob_name, species, maturity)
+        with self._lock:
+            self._set_manual_mob_state(mob_name, species, maturity)
 
     def release_current_mob(self) -> str | None:
         """Clear the current/confirmed mob state."""
-        released = self._confirmed_mob_name or self._current_mob_name or None
-        self._clear_mob_state()
+        with self._lock:
+            released = self._confirmed_mob_name or self._current_mob_name or None
+            self._clear_mob_state()
         return released
 
     def _create_shrapnel_ledger_entry(
@@ -886,138 +1175,231 @@ class HuntTracker:
     # Event handlers
     # ------------------------------------------------------------------
 
+    def _emit_session_event(
+        self,
+        reason: Literal["started", "updated", "stopped"],
+        status: Literal["active", "idle"],
+        occurred_ts: float | None,
+        session_id: str | None,
+    ) -> None:
+        """Publish the coarse, frontend-facing tracking.session.updated event.
+
+        A typed ``DomainEvent`` instance (not a dict) is published, so the bus
+        carries the same shape the SSE bridge serialises and a future Rust
+        emitter reproduces. ``occurred_at`` is stamped from the domain timestamp
+        that triggered the event (the tick time, or the session start/stop
+        time), not a fresh clock read: those values already exist in the
+        scenario's event stream and DB columns, so the event is deterministic
+        under replay and reuses the harness's existing timestamp symbols rather
+        than minting wall-clock ones.
+
+        ``session_id`` is captured by the caller under the tracker lock and
+        passed in rather than re-read off ``self._session`` here, so the
+        published id provably belongs to the session whose mutation the event
+        describes even if a concurrent ``stop_session`` has since cleared it.
+        """
+        self._event_bus.publish(
+            TOPIC_TRACKING_SESSION_UPDATED,
+            TrackingSessionUpdated(
+                occurred_at=to_iso_utc(occurred_ts),
+                payload=TrackingSessionUpdatedPayload(
+                    sessionId=session_id,
+                    status=status,
+                    reason=reason,
+                ),
+            ),
+        )
+
+    def _on_tick_flushed(self, data: dict) -> None:
+        """Coalesce a settled tick's mutations into one domain event.
+
+        Subscribed only while a session is active. Emits a single
+        ``tracking.session.updated`` when the tick actually changed the live
+        session readout (the P&L handlers set ``_session_dirty``), so a tick of
+        unrelated chat traffic does not wake every frontend listener. The
+        event is stamped with the tick's own timestamp, which already appears
+        on the tick's loot/combat events.
+        """
+        # Read/reset the dirty flag under the lock; publish AFTER release so a
+        # subscriber never runs while this tracker holds its lock.
+        with self._lock:
+            if self._session is None or not self._session_dirty:
+                return
+            self._session_dirty = False
+            session_id = self._session.id
+        raw_ts = data.get("timestamp")
+        occurred_ts = (
+            raw_ts.timestamp()
+            if isinstance(raw_ts, datetime)
+            else (float(raw_ts) if raw_ts is not None else None)
+        )
+        self._emit_session_event("updated", "active", occurred_ts, session_id)
+
     def _on_combat(self, data: dict) -> None:
-        """Handle a parsed combat event from chat.log."""
-        if not self._accumulator:
-            return
+        """Handle a parsed combat event from chat.log.
 
-        event_type = data.get("type", "")
-        amount = data.get("amount", 0.0)
-        timestamp = data.get("timestamp")
+        The whole body mutates owned in-memory state (the accumulator, its
+        ``tool_stats`` dict via ``_record_offensive_shot``, and the heal
+        scalars), so it runs under the lock; there is no DB write or publish to
+        keep outside it.
+        """
+        with self._lock:
+            if not self._accumulator:
+                return
 
-        if event_type in ("damage_dealt", "critical_hit"):
-            self._record_offensive_shot(
-                amount=amount,
-                is_crit=(event_type == "critical_hit"),
-                allow_damage_inference=True,
-            )
+            event_type = data.get("type", "")
+            amount = data.get("amount", 0.0)
+            timestamp = data.get("timestamp")
+            # Whether this event actually changed the live session readout. The
+            # coalesced tracking.session.updated fires only on a real mutation,
+            # so a duplicate self-heal tick or an unhandled event type does not
+            # wake listeners for a no-op.
+            mutated = False
 
-        elif event_type in ("target_dodge", "target_evade", "target_jam"):
-            self._record_offensive_shot(
-                amount=0.0,
-                is_crit=False,
-                allow_damage_inference=False,
-            )
-
-        elif event_type == "damage_received":
-            self._accumulator.damage_taken += amount
-
-        # Kept as nested ifs rather than one combined condition so each
-        # event-type branch dispatches on a single comparison.
-        elif event_type == "self_heal":  # noqa: SIM102
-            # Deduplicate: tool activations produce multiple heal ticks in chat.log.
-            # Use the tool's reload time as the dedup window.
-            if timestamp:
-                is_new_heal_activation = (
-                    self._last_heal_time is None
-                    or (timestamp - self._last_heal_time).total_seconds()
-                    >= self._heal_reload_seconds
+            if event_type in ("damage_dealt", "critical_hit"):
+                self._record_offensive_shot(
+                    amount=amount,
+                    is_crit=(event_type == "critical_hit"),
+                    allow_damage_inference=True,
                 )
-                if is_new_heal_activation:
-                    if (
-                        self._is_weapon_attribution_trifecta()
-                        and not self._heal_amount_matches_trifecta_tool(amount)
-                    ):
-                        return
-                    if (
-                        self._active_heal_tool_name is None
-                        and not self._heal_warning_emitted
-                    ):
-                        msg = "Healing detected — no heal tool equipped via hotbar"
-                        self._session_warnings.append(msg)
-                        self._heal_warning_emitted = True
-                        log.warning(
-                            "Healing detected with no heal tool equipped via hotbar"
-                        )
-                    if self._heal_cost_per_use_ped > 0:
-                        self._session_heal_cost += self._heal_cost_per_use_ped
-                    self._last_heal_time = timestamp
+                mutated = True
+
+            elif event_type in ("target_dodge", "target_evade", "target_jam"):
+                self._record_offensive_shot(
+                    amount=0.0,
+                    is_crit=False,
+                    allow_damage_inference=False,
+                )
+                mutated = True
+
+            elif event_type == "damage_received":
+                self._accumulator.damage_taken += amount
+                mutated = True
+
+            # Kept as nested ifs rather than one combined condition so each
+            # event-type branch dispatches on a single comparison.
+            elif event_type == "self_heal":  # noqa: SIM102
+                # Deduplicate: tool activations produce multiple heal ticks in
+                # chat.log. Use the tool's reload time as the dedup window.
+                if timestamp:
+                    is_new_heal_activation = (
+                        self._last_heal_time is None
+                        or (timestamp - self._last_heal_time).total_seconds()
+                        >= self._heal_reload_seconds
+                    )
+                    if is_new_heal_activation:
+                        if (
+                            self._is_weapon_attribution_trifecta()
+                            and not self._heal_amount_matches_trifecta_tool(amount)
+                        ):
+                            return
+                        if (
+                            self._active_heal_tool_name is None
+                            and not self._heal_warning_emitted
+                        ):
+                            msg = "Healing detected: no heal tool equipped via hotbar"
+                            self._session_warnings.append(msg)
+                            self._heal_warning_emitted = True
+                            log.warning(
+                                "Healing detected with no heal tool equipped via hotbar"
+                            )
+                        if self._heal_cost_per_use_ped > 0:
+                            self._session_heal_cost += self._heal_cost_per_use_ped
+                        self._last_heal_time = timestamp
+                        mutated = True
+
+            if mutated:
+                self._session_dirty = True
 
         # Defensive incoming events stay out of the kills model.
 
     def _on_loot(self, data: dict) -> None:
-        """Handle a loot group from chat.log — creates a Kill record."""
-        if not self._accumulator or not self._session:
-            return
+        """Handle a loot group from chat.log: creates a Kill record.
 
-        items_raw = data.get("items", [])
-        total_ped = data.get("total_ped", 0.0)
-        timestamp = data.get("timestamp")
-        now = timestamp or datetime.now(tz=None)
-        now_epoch = now.timestamp() if isinstance(now, datetime) else float(now)
+        The kill is built from the accumulator, the accumulator reset, and the
+        kill appended to the session under the lock so a reader never iterates
+        the kills list or ``tool_stats`` mid-append. The kill is a detached
+        value by then, so the persisting DB write runs AFTER releasing the lock
+        (the lock is never held across SQLite).
+        """
+        with self._lock:
+            if not self._accumulator or not self._session:
+                return
 
-        # Loot deduplication (same fingerprint within 2s window)
-        first_item = items_raw[0].get("item_name", "") if items_raw else ""
-        fingerprint = (round(total_ped, 4), len(items_raw), first_item)
-        if (
-            self._last_loot_fingerprint == fingerprint
-            and self._last_loot_time is not None
-            and (now - self._last_loot_time) < self.LOOT_DEDUP_WINDOW
-        ):
-            return
-        self._last_loot_fingerprint = fingerprint
-        self._last_loot_time = now
+            items_raw = data.get("items", [])
+            total_ped = data.get("total_ped", 0.0)
+            timestamp = data.get("timestamp")
+            now = timestamp or datetime.now(tz=None)
+            now_epoch = now.timestamp() if isinstance(now, datetime) else float(now)
 
-        # Filter items
-        items = []
-        for item in items_raw:
-            name = item.get("item_name", "")
-            if is_tracked_loot(name, self._loot_blacklist):
-                items.append(
-                    LootItem(
-                        item_name=name,
-                        quantity=item.get("quantity", 1),
-                        value_ped=item.get("value_ped", 0.0),
-                        is_enhancer_shrapnel=bool(
-                            item.get("is_enhancer_shrapnel", False)
-                        ),
+            # Loot deduplication (same fingerprint within 2s window)
+            first_item = items_raw[0].get("item_name", "") if items_raw else ""
+            fingerprint = (round(total_ped, 4), len(items_raw), first_item)
+            if (
+                self._last_loot_fingerprint == fingerprint
+                and self._last_loot_time is not None
+                and (now - self._last_loot_time) < self.LOOT_DEDUP_WINDOW
+            ):
+                return
+            self._last_loot_fingerprint = fingerprint
+            self._last_loot_time = now
+            # Past the dedup guard a Kill is always recorded, so the readout
+            # changes.
+            self._session_dirty = True
+
+            # Filter items
+            items = []
+            for item in items_raw:
+                name = item.get("item_name", "")
+                if is_tracked_loot(name, self._loot_blacklist):
+                    items.append(
+                        LootItem(
+                            item_name=name,
+                            quantity=item.get("quantity", 1),
+                            value_ped=item.get("value_ped", 0.0),
+                            is_enhancer_shrapnel=bool(
+                                item.get("is_enhancer_shrapnel", False)
+                            ),
+                        )
                     )
-                )
-        filtered_total_ped = round(
-            sum(item.value_ped for item in items if not item.is_enhancer_shrapnel),
-            4,
-        )
+            filtered_total_ped = round(
+                sum(item.value_ped for item in items if not item.is_enhancer_shrapnel),
+                4,
+            )
 
-        # Snapshot mob/tag from manual configuration.
-        mob_name = self._confirmed_mob_name or "Unknown"
-        mob_species = self._confirmed_mob_species
-        mob_maturity = self._confirmed_mob_maturity
+            # Snapshot mob/tag from manual configuration.
+            mob_name = self._confirmed_mob_name or "Unknown"
+            mob_species = self._confirmed_mob_species
+            mob_maturity = self._confirmed_mob_maturity
 
-        # Create Kill from accumulator
-        kill = Kill(
-            id=str(uuid.uuid4()),
-            session_id=self._session.id,
-            mob_name=mob_name,
-            mob_species=mob_species,
-            mob_maturity=mob_maturity,
-            timestamp=now_epoch,
-            shots_fired=self._accumulator.shots_fired,
-            damage_dealt=self._accumulator.damage_dealt,
-            damage_taken=self._accumulator.damage_taken,
-            critical_hits=self._accumulator.critical_hits,
-            cost_ped=self._accumulator.weapon_cost,
-            enhancer_cost=self._accumulator.enhancer_cost,
-            loot_total_ped=filtered_total_ped,
-            loot_items=items,
-            tool_stats=dict(self._accumulator.tool_stats),
-        )
+            # Create Kill from accumulator
+            kill = Kill(
+                id=str(uuid.uuid4()),
+                session_id=self._session.id,
+                mob_name=mob_name,
+                mob_species=mob_species,
+                mob_maturity=mob_maturity,
+                timestamp=now_epoch,
+                shots_fired=self._accumulator.shots_fired,
+                damage_dealt=self._accumulator.damage_dealt,
+                damage_taken=self._accumulator.damage_taken,
+                critical_hits=self._accumulator.critical_hits,
+                cost_ped=self._accumulator.weapon_cost,
+                enhancer_cost=self._accumulator.enhancer_cost,
+                loot_total_ped=filtered_total_ped,
+                loot_items=items,
+                tool_stats=dict(self._accumulator.tool_stats),
+            )
 
-        # Reset accumulator for next kill
-        self._accumulator.reset()
+            # Reset accumulator for next kill
+            self._accumulator.reset()
 
-        # Persist and finalise
-        self._session.kills.append(kill)
-        self._last_kill = kill
+            # Append the finalised kill to the session
+            self._session.kills.append(kill)
+            self._last_kill = kill
+
+        # Persist outside the lock: ``kill`` is a detached value and the global
+        # lock order is tracker._lock -> app_db.lock, never the reverse.
         self._persist_kill(kill)
 
         log.debug(
@@ -1031,47 +1413,56 @@ class HuntTracker:
         """Handle hotbar-driven weapon tool change.
 
         Merges any 'Unknown' tool stats into the real tool when first detected.
+        Runs on the hotbar-listener thread and mutates the same
+        ``_accumulator.tool_stats`` dict the chat-log thread mutates and the
+        readers iterate, so the whole body holds the lock.
         """
-        if self._is_weapon_attribution_trifecta():
-            return
-        tool_name = data.get("tool_name")
-        if not tool_name:
-            return
-        self._active_hotbar_tool_name = tool_name
-        if not self._accumulator:
-            return
+        with self._lock:
+            if self._is_weapon_attribution_trifecta():
+                return
+            tool_name = data.get("tool_name")
+            if not tool_name:
+                return
+            self._active_hotbar_tool_name = tool_name
+            if not self._accumulator:
+                return
 
-        current_cost = self._current_cost_for_tool(tool_name)
+            current_cost = self._current_cost_for_tool(tool_name)
 
-        # Merge "Unknown" stats into the real tool on first identification
-        unknown = self._accumulator.tool_stats.pop("Unknown", None)
-        if unknown:
-            if current_cost > 0:
-                real = self._tool_stats_for_phase(tool_name, current_cost)
-            else:
-                if tool_name not in self._accumulator.tool_stats:
-                    self._accumulator.tool_stats[tool_name] = ToolStats(
-                        tool_name=tool_name
-                    )
-                real = self._accumulator.tool_stats[tool_name]
-            real.shots_fired += unknown.shots_fired
-            real.damage_dealt += unknown.damage_dealt
-            real.critical_hits += unknown.critical_hits
+            # Merge "Unknown" stats into the real tool on first identification
+            unknown = self._accumulator.tool_stats.pop("Unknown", None)
+            if unknown:
+                if current_cost > 0:
+                    real = self._tool_stats_for_phase(tool_name, current_cost)
+                else:
+                    if tool_name not in self._accumulator.tool_stats:
+                        self._accumulator.tool_stats[tool_name] = ToolStats(
+                            tool_name=tool_name
+                        )
+                    real = self._accumulator.tool_stats[tool_name]
+                real.shots_fired += unknown.shots_fired
+                real.damage_dealt += unknown.damage_dealt
+                real.critical_hits += unknown.critical_hits
 
     def _on_heal_tool_changed(self, data: dict) -> None:
-        """Handle hotbar-driven heal tool equip."""
+        """Handle hotbar-driven heal tool equip.
+
+        Runs on the hotbar-listener thread and writes the heal scalars the
+        chat-log thread's self-heal branch reads, so the writes hold the lock.
+        """
         if self._is_weapon_attribution_trifecta():
             return
         name = data.get("tool_name")
         cost = data.get("cost_per_use_ped", 0.0)
         reload_s = data.get("reload_seconds", 2.5)
 
-        self._active_heal_tool_name = name
-        self._heal_cost_per_use_ped = cost
-        self._heal_reload_seconds = reload_s
-        self._heal_amount_min = None
-        self._heal_amount_max = None
-        self._heal_warning_emitted = False
+        with self._lock:
+            self._active_heal_tool_name = name
+            self._heal_cost_per_use_ped = cost
+            self._heal_reload_seconds = reload_s
+            self._heal_amount_min = None
+            self._heal_amount_max = None
+            self._heal_warning_emitted = False
 
         log.info(
             "Heal tool equipped: %s (cost=%.4f PED, reload=%.1fs)",
@@ -1116,38 +1507,58 @@ class HuntTracker:
 
         Tags the most recently created kill (globals arrive shortly after loot).
         """
-        if not self._session:
-            return
+        # Tag the in-memory kill under the lock (the readers iterate the kills
+        # list reading is_global/is_hof), capturing the values the DB writes
+        # need; the UPDATE/INSERT/commit then run AFTER releasing the lock.
+        with self._lock:
+            if not self._session:
+                return
 
-        # Filter for own player
-        player = data.get("player", "")
-        if not self._player_name or player.lower() != self._player_name.lower():
-            return
+            # Filter for own player
+            player = data.get("player", "")
+            if not self._player_name or player.lower() != self._player_name.lower():
+                return
 
-        event_type = data.get("type", "")
-        mob_or_item = data.get("creature") or data.get("item") or "Unknown"
-        value_ped = data.get("value", 0.0)
-        is_hof = event_type in ("hof_kill", "hof_item")
-        timestamp = data.get("timestamp")
-        ts = timestamp.timestamp() if timestamp else datetime.now(tz=None).timestamp()
+            self._session_dirty = True
+            session_id = self._session.id
+            event_type = data.get("type", "")
+            mob_or_item = data.get("creature") or data.get("item") or "Unknown"
+            value_ped = data.get("value", 0.0)
+            is_hof = event_type in ("hof_kill", "hof_item")
+            timestamp = data.get("timestamp")
+            ts = (
+                timestamp.timestamp()
+                if timestamp
+                else datetime.now(tz=None).timestamp()
+            )
 
-        # Tag the most recently created kill (staleness check: within 5s)
-        kill_id = None
-        target = self._last_kill
-        if target and abs(ts - target.timestamp) < 5.0:
-            target.is_global = True
-            if is_hof:
-                target.is_hof = True
-            kill_id = target.id
+            # Tag the most recently created kill (staleness check: within 5s).
+            # Narrow on ``target is not None`` directly (rather than capturing
+            # the match in a separate bool) so the type checker can prove the
+            # kill is present before its fields are read; ``target_id`` then
+            # carries the "a kill was tagged" signal to the post-lock DB writes.
+            kill_id: str | None = None
+            target_id: str | None = None
+            target_is_hof = False
+            target = self._last_kill
+            if target is not None and abs(ts - target.timestamp) < 5.0:
+                target.is_global = True
+                if is_hof:
+                    target.is_hof = True
+                kill_id = target.id
+                target_id = target.id
+                target_is_hof = target.is_hof
+
+        if target_id is not None:
             self._db.execute(
                 "UPDATE kills SET is_global = 1, is_hof = ? WHERE id = ?",
-                (int(target.is_hof), target.id),
+                (int(target_is_hof), target_id),
             )
             log.info(
                 "Global/HoF correlated: %s %.2f PED → kill %s",
                 event_type,
                 value_ped,
-                target.id[:8],
+                target_id[:8],
             )
         else:
             log.warning(
@@ -1160,45 +1571,54 @@ class HuntTracker:
             """INSERT INTO notable_events
                (session_id, kill_id, event_type, mob_or_item, value_ped, timestamp)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (self._session.id, kill_id, event_type, mob_or_item, value_ped, ts),
+            (session_id, kill_id, event_type, mob_or_item, value_ped, ts),
         )
         self._db.commit()
 
     def _on_enhancer_break(self, data: dict) -> None:
-        """Handle an enhancer break event — update enhancer state for future shots."""
-        if not self._accumulator:
-            return
+        """Handle an enhancer break event: update enhancer state for future shots.
 
-        shrapnel_ped = data.get("shrapnel_ped", 0.0)
-        enhancer_name = data.get("enhancer_name", "")
-        item_name = data.get("item_name", "")
-        remaining = data.get("remaining")
+        Mutates the per-weapon enhancer state that the chat-log thread's shots
+        and the hotbar thread's ``_ensure_weapon_state`` both touch, so the body
+        holds the lock; there is no DB write or publish.
+        """
+        with self._lock:
+            if not self._accumulator:
+                return
 
-        log.debug(
-            "Enhancer break: %s — shrapnel=%.2f, remaining=%s",
-            enhancer_name,
-            shrapnel_ped,
-            remaining,
-        )
+            shrapnel_ped = data.get("shrapnel_ped", 0.0)
+            enhancer_name = data.get("enhancer_name", "")
+            item_name = data.get("item_name", "")
+            remaining = data.get("remaining")
 
-        state = self._active_weapon_state()
-        if (
-            state is None
-            or not state.stacks
-            or "damage" not in enhancer_name.lower()
-            or not self._break_matches_active_weapon(item_name)
-        ):
-            return
-
-        slot_changed = state.apply_break(
-            remaining if isinstance(remaining, int) else None
-        )
-        if slot_changed:
-            log.info(
-                "Damage enhancer slot depleted on %s: %d active slot(s) remain",
-                state.tool_name,
-                state.active_slots,
+            log.debug(
+                "Enhancer break: %s (shrapnel=%.2f, remaining=%s)",
+                enhancer_name,
+                shrapnel_ped,
+                remaining,
             )
+
+            state = self._active_weapon_state()
+            if (
+                state is None
+                or not state.stacks
+                or "damage" not in enhancer_name.lower()
+                or not self._break_matches_active_weapon(item_name)
+            ):
+                return
+
+            # The break applies to the active weapon, so the readout reflects it;
+            # an ignored break (filtered out above) leaves the session unchanged.
+            self._session_dirty = True
+            slot_changed = state.apply_break(
+                remaining if isinstance(remaining, int) else None
+            )
+            if slot_changed:
+                log.info(
+                    "Damage enhancer slot depleted on %s: %d active slot(s) remain",
+                    state.tool_name,
+                    state.active_slots,
+                )
 
     # ------------------------------------------------------------------
     # Persistence

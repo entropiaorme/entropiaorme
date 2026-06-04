@@ -15,10 +15,18 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from backend.core.domain_events import (
+    TOPIC_SCAN_STATUS_CHANGED,
+    ScanStatusChanged,
+    ScanStatusChangedPayload,
+    to_iso_utc,
+)
+from backend.core.event_bus import EventBus
 from backend.services.scan_presets import skill_region
 from backend.services.skill_scan_core import PAGE_COUNT, SkillScanCore
 
@@ -35,11 +43,18 @@ class SkillScanManual:
         config_service: Any,
         data_dir: Path,
         *,
+        event_bus: EventBus | None = None,
         initial_scan_time: float | None = None,
         initial_skills_count: int = 0,
     ):
         self._core = SkillScanCore(config_service, data_dir)
         self._lock = threading.RLock()
+        # Typed outbox: a ``scan.status.changed`` envelope is published on the
+        # in-process bus (and forwarded over the SSE bridge) whenever the status
+        # settles to a new value. None in pure-OCR unit tests, where status
+        # changes simply go unannounced. Mirrors the tracker's typed-instance
+        # publish discipline.
+        self._event_bus = event_bus
 
         self._active = False
         self._region: tuple[list[int], list[int]] | None = None
@@ -63,6 +78,13 @@ class SkillScanManual:
         # recording controller to copy each captured page into a bundle.
         # Called as tap(panel: str, region: dict, image_png_bytes: bytes).
         self._capture_tap: Callable[..., None] | None = None
+
+        # Baseline the settled-boundary coalescer at the construction-time (idle)
+        # status, so the first genuine change emits but a no-op publish on the
+        # resting state does not: listeners hydrate the idle status via the GET
+        # on mount, so an initial idle frame would be redundant. (See
+        # ``_publish_status``.)
+        self._last_emitted_key: tuple = self._status_key()
 
     def set_capture_tap(self, tap: Callable[..., None]) -> None:
         """Install a capture observer (called after each successful page grab)."""
@@ -102,7 +124,9 @@ class SkillScanManual:
                 "error": self._error,
             }
 
-    def _derive_phase(self) -> str:
+    def _derive_phase(
+        self,
+    ) -> Literal["idle", "capturing", "processing", "awaiting_review"]:
         if self._pending_result is not None:
             return "awaiting_review"
         if self._processing:
@@ -110,6 +134,58 @@ class SkillScanManual:
         if self._active:
             return "capturing"
         return "idle"
+
+    # ── Status push (typed outbox) ──
+
+    def _status_key(self) -> tuple:
+        """The owned-state projection used to detect a settled status change.
+
+        Captured under ``_lock``; an emit fires only when this differs from the
+        last published frame, so the producer coalesces to one frame per
+        discrete status change rather than one per call (the settled boundary
+        ``SkillScanManual`` otherwise lacks, unlike the tracker's tick flush).
+        Excludes the environmental fields (engine availability, game-window
+        presence) that no verb mutates. Used only for equality, so the element
+        types are immaterial.
+        """
+        return (
+            self._derive_phase(),
+            sum(1 for c in self._captures if c is not None),
+            self._expected_pages,
+            self._processing_progress,
+            self._pending_result is not None,
+            self._error,
+            self._last_scan_time,
+            self._last_skills_count,
+        )
+
+    def _publish_status(self) -> None:
+        """Publish a ``scan.status.changed`` envelope iff the status moved.
+
+        Call AFTER releasing ``_lock``, at every settled mutation point (verb
+        completion, each per-page OCR step, worker completion). The key compare
+        and advance happen under the lock so the main and worker threads cannot
+        both emit the same transition; the typed publish happens after release,
+        so no subscriber runs while this service holds its lock. Push-to-pull:
+        the payload is the coarse phase only; a listener re-hydrates the full
+        status via the scan-status GET, so per-page progress liveness rides the
+        hydration without widening the wire.
+        """
+        if self._event_bus is None:
+            return
+        with self._lock:
+            key = self._status_key()
+            if key == self._last_emitted_key:
+                return
+            self._last_emitted_key = key
+            phase = self._derive_phase()
+        self._event_bus.publish(
+            TOPIC_SCAN_STATUS_CHANGED,
+            ScanStatusChanged(
+                occurred_at=to_iso_utc(time.time()),
+                payload=ScanStatusChangedPayload(phase=phase),
+            ),
+        )
 
     # ── Flow ──
 
@@ -144,7 +220,9 @@ class SkillScanManual:
                 region,
                 self._expected_pages,
             )
-            return self.get_status()
+            status = self.get_status()
+        self._publish_status()
+        return status
 
     def capture_current_page(self) -> dict:
         with self._lock:
@@ -169,6 +247,7 @@ class SkillScanManual:
             log.info("Manual skill scan: captured page %d/%d", page_num, expected)
         else:
             log.warning("Manual skill scan: page %d capture failed", page_num)
+        self._publish_status()
         return {"page": page_num, "captured": ok, **self.get_status()}
 
     def cancel(self) -> dict:
@@ -177,6 +256,7 @@ class SkillScanManual:
                 return {"error": "Cannot cancel while processing: wait for completion"}
             self._reset()
         log.info("Manual skill scan cancelled")
+        self._publish_status()
         return self.get_status()
 
     def undo_last_capture(self) -> dict:
@@ -200,6 +280,7 @@ class SkillScanManual:
             popped_idx = len(self._captures)
             self._captures.pop()
         log.info("Manual skill scan: undid capture %d", popped_idx)
+        self._publish_status()
         return {"undone_page": popped_idx, **self.get_status()}
 
     def get_capture_png(self, page: int) -> bytes | None:
@@ -249,16 +330,19 @@ class SkillScanManual:
                     else:
                         self._pending_result = result["skills"]
                     self._processing = False
+                self._publish_status()
             except Exception as exc:
                 log.exception("Manual skill scan: process thread crashed")
                 with self._lock:
                     self._error = str(exc)
                     self._processing = False
+                self._publish_status()
 
         t = threading.Thread(target=_worker, name="skill-scan-process", daemon=True)
         with self._lock:
             self._processing_thread = t
         t.start()
+        self._publish_status()
         return self.get_status()
 
     def accept(self) -> dict:
@@ -275,15 +359,15 @@ class SkillScanManual:
                 log.error("Manual skill scan completion callback error: %s", exc)
                 with self._lock:
                     self._error = str(exc)
+                self._publish_status()
                 return {"error": f"Persist failed: {exc}"}
-
-        import time
 
         with self._lock:
             self._last_scan_time = time.time()
             self._last_skills_count = len(skills)
             self._reset()
         log.info("Manual skill scan accepted — %d skills persisted", len(skills))
+        self._publish_status()
         return {"ok": True, "skills_persisted": len(skills)}
 
     def reject(self) -> dict:
@@ -293,6 +377,7 @@ class SkillScanManual:
                 return {"error": "No pending result to reject"}
             self._reset()
         log.info("Manual skill scan rejected — pending result discarded")
+        self._publish_status()
         return {"ok": True}
 
     # ── Internals ──
@@ -335,6 +420,10 @@ class SkillScanManual:
                 page_num,
                 len(levels),
             )
+            # Per-page settled boundary: announce the advanced done/total so the
+            # overlay's progress stays live without re-introducing a poll. The
+            # coalescer makes this exactly one frame per page, not per tick.
+            self._publish_status()
 
         if not all_skills:
             return {"error": "No skills extracted from any page"}

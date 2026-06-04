@@ -17,7 +17,7 @@ type DashboardDemoApi = {
 	/**
 	 * Flip the demo strip's lifecycle phase. False → idle (synthesised
 	 * no-session TrackingLive, em-dash stat pills); true → active (real
-	 * mid-hunt readout via /demo/tracking/live). The card's play() loop
+	 * mid-hunt readout via /demo/tracking/snapshot). The card's play() loop
 	 * starts idle, animates a cursor click on the strip's TRACK button,
 	 * then sets this to true to flip the strip to mid-hunt.
 	 */

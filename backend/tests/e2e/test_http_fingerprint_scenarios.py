@@ -22,6 +22,7 @@ job, not this contract's.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -90,9 +91,7 @@ def _capture_hydration_set(
     grows in a deterministic sequence across runs of the same scenario.
     """
     captures: tuple[tuple[str, str, str, dict | None], ...] = (
-        ("GET_tracking_status", "GET", "/api/tracking/status", None),
-        ("GET_tracking_live", "GET", "/api/tracking/live", None),
-        ("GET_tracking_recent_events", "GET", "/api/tracking/recent-events", None),
+        ("GET_tracking_snapshot", "GET", "/api/tracking/snapshot", None),
         ("GET_tracking_sessions", "GET", "/api/tracking/sessions", None),
         (
             "GET_tracking_session_detail",
@@ -163,7 +162,55 @@ def test_http_fingerprint(
     # Pin the captured-set cardinality so a future test refactor that
     # silently drops endpoints from _capture_hydration_set surfaces here
     # rather than producing a silently-shrunk golden set.
-    assert len(fp.captured_endpoint_ids) == 12, (
-        f"Expected 12 captured endpoints, got "
+    assert len(fp.captured_endpoint_ids) == 10, (
+        f"Expected 10 captured endpoints, got "
         f"{len(fp.captured_endpoint_ids)}: {fp.captured_endpoint_ids}"
     )
+
+
+def _golden_body(scenario_dir: Path, endpoint_id: str):
+    """Read the normalised response body from a committed HTTP-response golden."""
+    path = scenario_dir / "expected" / "http_responses" / f"{endpoint_id}.json"
+    return json.loads(path.read_text(encoding="utf-8"))["response"]["body"]
+
+
+@pytest.mark.parametrize("scenario_name", HTTP_FINGERPRINT_SCENARIOS)
+def test_snapshot_golden_carries_the_idle_tracking_union(
+    corpus_root: Path, scenario_name: str, request: pytest.FixtureRequest
+) -> None:
+    """The consolidated snapshot golden carries the full idle tracking union.
+
+    The legacy status / live / recent-events readouts the snapshot consolidated
+    have been removed, so this no longer diffs the snapshot against their goldens.
+    It instead pins the surviving proof that the consolidation stays lossless:
+    every curated scenario captures the stopped session, so the snapshot golden is
+    the idle shape, and it must still carry the config + runtime envelope the
+    legacy idle status / live readouts carried, plus the cleared activity feed.
+    The active numeric union is the consistency suite's job, not this contract's.
+
+    Assertion-only: it produces no golden, so it sits out a regeneration pass
+    (where it would otherwise read goldens mid-rewrite) and runs in verify mode.
+    """
+    if request.config.getoption("--update-fingerprints"):
+        pytest.skip("assertion-only; no golden to regenerate")
+    scenario = corpus_root / "scripted" / scenario_name
+    snapshot = _golden_body(scenario, "GET_tracking_snapshot")
+
+    assert snapshot["status"] == "idle"
+    idle_union_fields = {
+        "status",
+        "hotbarListenerActive",
+        "weaponAttribution",
+        "repairOcrEnabled",
+        "endOfSessionArmourReminderEnabled",
+        "currentTool",
+        "trifectaAttribution",
+        "mobEntryMode",
+        "currentMob",
+        "mobSource",
+        "recentEvents",
+    }
+    missing = idle_union_fields - snapshot.keys()
+    assert not missing, f"snapshot golden dropped idle-union fields: {sorted(missing)}"
+    # The activity feed clears on idle.
+    assert snapshot["recentEvents"] == []

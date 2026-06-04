@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "ScanStatusChanged": {
+      "additionalProperties": false,
+      "description": "The manual skill-scan status changed (phase transition or capture/OCR progress).",
+      "properties": {
+        "event_version": {
+          "default": 1,
+          "title": "Event Version",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurred At"
+        },
+        "payload": {
+          "$ref": "#/$defs/ScanStatusChangedPayload"
+        },
+        "type": {
+          "const": "scan.status.changed",
+          "default": "scan.status.changed",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "ScanStatusChanged",
+      "type": "object"
+    },
+    "ScanStatusChangedPayload": {
+      "additionalProperties": false,
+      "description": "Push-to-pull invalidation signal for the manual skill-scan flow.\n\nCarries only the coarse phase so a listener can route (and a human can read\nthe wire). The window re-hydrates the full status via the scan-status GET on\nevery frame, so per-page capture/OCR progress liveness comes from the\nhydration rather than from widening this payload: the emitter still fires on\nevery discrete progress change (see ``SkillScanManual``), but the wire stays\na minimal invalidation signal.",
+      "properties": {
+        "phase": {
+          "enum": [
+            "idle",
+            "capturing",
+            "processing",
+            "awaiting_review"
+          ],
+          "title": "Phase",
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "title": "ScanStatusChangedPayload",
+      "type": "object"
+    },
+    "TrackingSessionUpdated": {
+      "additionalProperties": false,
+      "description": "The session aggregates changed (started, advanced a tick, or stopped).",
+      "properties": {
+        "event_version": {
+          "default": 1,
+          "title": "Event Version",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Occurred At"
+        },
+        "payload": {
+          "$ref": "#/$defs/TrackingSessionUpdatedPayload"
+        },
+        "type": {
+          "const": "tracking.session.updated",
+          "default": "tracking.session.updated",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "payload"
+      ],
+      "title": "TrackingSessionUpdated",
+      "type": "object"
+    },
+    "TrackingSessionUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "Push-to-pull invalidation signal for the live tracking session.\n\nCarries only what the frontend needs to route the change: which session, the\ncoarse active/idle state (so a subscriber can route on it without parsing the\nbody), and why it fired. The window re-hydrates the full readout via the\nsnapshot GET.",
+      "properties": {
+        "reason": {
+          "enum": [
+            "started",
+            "updated",
+            "stopped"
+          ],
+          "title": "Reason",
+          "type": "string"
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sessionid"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "idle"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "reason"
+      ],
+      "title": "TrackingSessionUpdatedPayload",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "scan.status.changed": "#/$defs/ScanStatusChanged",
+      "tracking.session.updated": "#/$defs/TrackingSessionUpdated"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/TrackingSessionUpdated"
+    },
+    {
+      "$ref": "#/$defs/ScanStatusChanged"
+    }
+  ]
+}

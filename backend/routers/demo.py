@@ -12,7 +12,7 @@ Architecture:
   notable events, skill gains) without ever mutating the bundled file.
 - Analytics-style endpoints (overview/activity/ledger/etc.) just need the
   conn; the tracker isn't constructed until a tracker-state endpoint
-  (status/live/recent-events) is actually hit. Surfaces that only consume
+  (the snapshot) is actually hit. Surfaces that only consume
   analytics data therefore never trigger priming, keeping their behaviour
   consistent across walks regardless of which surface the user opens first.
 - Routes here are GET-only; mutating verbs simply do not exist on this prefix
@@ -41,10 +41,14 @@ from backend.core.event_bus import EventBus
 from backend.routers import analytics as analytics_router
 from backend.routers import tracking as tracking_router
 from backend.routers.response_models import (
+    AnalyticsActivity,
     AnalyticsOverview,
-    NotableEvent,
-    TrackingLive,
-    TrackingStatus,
+    InventoryItemModel,
+    LedgerItem,
+    LedgerPresetItem,
+    SessionDetail,
+    TrackingSession,
+    TrackingSnapshot,
 )
 
 log = logging.getLogger(__name__)
@@ -182,22 +186,22 @@ def demo_analytics_overview(period: str = "all"):
     return analytics_router.overview_impl(_ensure_conn(), period)
 
 
-@router.get("/analytics/activity")
+@router.get("/analytics/activity", response_model=AnalyticsActivity)
 def demo_analytics_activity():
     return analytics_router.activity_impl(_ensure_conn())
 
 
-@router.get("/analytics/ledger")
+@router.get("/analytics/ledger", response_model=list[LedgerItem])
 def demo_list_ledger():
     return analytics_router.list_ledger_impl(_ensure_conn())
 
 
-@router.get("/analytics/ledger/presets")
+@router.get("/analytics/ledger/presets", response_model=list[LedgerPresetItem])
 def demo_list_ledger_presets():
     return analytics_router.list_ledger_presets_impl(_ensure_conn())
 
 
-@router.get("/analytics/inventory")
+@router.get("/analytics/inventory", response_model=list[InventoryItemModel])
 def demo_list_inventory_items():
     return analytics_router.list_inventory_items_impl(_ensure_conn())
 
@@ -205,38 +209,20 @@ def demo_list_inventory_items():
 # ── Tracking ───────────────────────────────────────────────────────────────
 
 
-@router.get("/tracking/sessions")
+@router.get("/tracking/sessions", response_model=list[TrackingSession])
 def demo_list_sessions():
     return tracking_router.list_sessions_impl(_ensure_conn())
 
 
-@router.get("/tracking/session/{session_id}")
+@router.get("/tracking/session/{session_id}", response_model=SessionDetail)
 def demo_get_session(session_id: str):
     return tracking_router.get_session_impl(_ensure_conn(), session_id)
 
 
 @router.get(
-    "/tracking/status",
-    response_model=TrackingStatus,
+    "/tracking/snapshot",
+    response_model=TrackingSnapshot,
     response_model_exclude_unset=True,
 )
-def demo_tracking_status():
-    return tracking_router.tracking_status_impl(_ensure_svc())
-
-
-@router.get(
-    "/tracking/live",
-    response_model=TrackingLive,
-    response_model_exclude_unset=True,
-)
-def demo_tracking_live():
-    return tracking_router.tracking_live_impl(_ensure_svc())
-
-
-@router.get(
-    "/tracking/recent-events",
-    response_model=list[NotableEvent],
-    response_model_exclude_unset=True,
-)
-def demo_recent_events():
-    return tracking_router.recent_events_impl(_ensure_svc())
+def demo_tracking_snapshot():
+    return tracking_router.tracking_snapshot_impl(_ensure_svc())

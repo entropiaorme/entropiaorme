@@ -472,17 +472,23 @@ def _prime_mid_hunt(tracker: HuntTracker, payload: dict) -> None:
         start_time=datetime.fromtimestamp(started_at_epoch),
         kills=kills,
     )
-    tracker._session = session
-    tracker._session_heal_cost = 0.0
-    tracker._session_warnings = []
-    tracker._confirmed_mob_name = "Caboria Old"
-    tracker._confirmed_mob_species = "Caboria"
-    tracker._confirmed_mob_maturity = "Old"
-    tracker._mob_source = "manual"
-    tracker._session_mob_tracking_mode = "mob"
-    tracker._session_mob_tracking_tag = ""
-    tracker._accumulator = None
-    tracker._last_kill = kills[-1]
+    # These direct writes bypass start_session but still touch the tracker's
+    # lock-guarded state; hold the lock so the "every write to the owned state
+    # holds the lock" invariant has no exceptions. (This priming runs once at
+    # construction, before any producer thread exists, so it cannot race; the
+    # lock is for uniformity, not contention.)
+    with tracker._lock:
+        tracker._session = session
+        tracker._session_heal_cost = 0.0
+        tracker._session_warnings = []
+        tracker._confirmed_mob_name = "Caboria Old"
+        tracker._confirmed_mob_species = "Caboria"
+        tracker._confirmed_mob_maturity = "Old"
+        tracker._mob_source = "manual"
+        tracker._session_mob_tracking_mode = "mob"
+        tracker._session_mob_tracking_tag = ""
+        tracker._accumulator = None
+        tracker._last_kill = kills[-1]
 
     realised_cost = sum(k.cost_ped for k in kills)
     realised_loot = sum(k.loot_total_ped for k in kills)

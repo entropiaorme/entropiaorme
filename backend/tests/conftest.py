@@ -59,6 +59,7 @@ _MODULE_TIERS = {
     "test_mob_lookup_service": "fast",
     "test_scan_completion": "fast",
     "test_scan_drift": "fast",
+    "test_skill_scan_producer": "fast",  # producer coalescer; in-memory bus
     "test_tool_inference": "fast",
     "test_tt_curve_properties": "fast",
     # Property suites over pure-logic services (in-memory, sub-second).
@@ -94,6 +95,7 @@ _MODULE_TIERS = {
     "test_quests": "standard",
     "test_skill_tracker": "standard",
     "test_spacebar_capture_listener": "standard",  # threading.Event waits on capture
+    "test_tracker_concurrency": "standard",  # two-thread read/write hammer
     "test_tracker_integration": "standard",
     "test_tracking_endpoints": "standard",
     "test_trifecta_service": "standard",
@@ -110,10 +112,14 @@ _MODULE_TIERS = {
     "test_consistency_codex_isolation_midpoint": "standard",
     "test_etag": "standard",  # boots the app lifespan via TestClient
     "test_openapi_drift": "fast",  # introspects app.openapi() at module load
+    "test_event_schema_drift": "fast",  # introspects the event union at module load
+    "test_event_stream": "fast",  # hub fan-out driven via asyncio.run; no lifespan
     "test_coverage_matrix_drift": "fast",  # renders the matrix from source files
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
+    "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE
+    "test_network_quiet_seam": "standard",  # boots the app lifespan; streams SSE + records requests
     # Property and metamorphic suites that touch a db / filesystem / the app path.
     "test_codex_properties": "standard",  # now drives CodexService over a temp db
     "test_consistency_property": "standard",  # generated sequences through the watcher

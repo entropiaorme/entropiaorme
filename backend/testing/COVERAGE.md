@@ -4,18 +4,19 @@ Every backend service mapped to the tests and scenarios that exercise its extern
 
 The mechanical gates are the source of truth for *how much* is covered: branch coverage (the floor in `pyproject.toml`, the published badge) and the nightly mutation score over the pure-logic core. This matrix is the human-readable layer on top: it shows *that* every service has at least one exercising test, and names the device/IO modules that are exempt from the coverage floor by design (they need a real display, capture device, or OS hook, so they are exercised through seams and fixtures rather than measured).
 
-Services: 24.
+Services: 25.
 
 | Service | Externally-observable behaviour | Covering tests | Held to account by |
 | --- | --- | --- | --- |
 | `__init__` | Package marker (no runtime behaviour). | exercised transitively (see notes) | branch coverage |
 | `character_calc` | Skill / profession / HP optimisers and prospect forecasts. | `test_character_calc.py`<br>`test_character_calc_properties.py`<br>`test_character_properties.py`<br>`test_mut_character_calc__c0.py`<br>`test_mut_character_calc__c1.py`<br>`test_mut_character_calc__c2.py`<br>`test_mut_character_calc__c3.py`<br>`test_mut_session_summary__c0.py`<br>`test_mut_session_summary__c1.py`<br>`test_mut_session_summary__c3.py`<br>`test_session_summary_properties.py` | branch coverage + mutation |
 | `chatlog_parser` | Parses chat.log lines into typed gameplay events. | `test_chatlog_parser.py`<br>`test_chatlog_parser_properties.py`<br>`test_dsl.py`<br>`test_metamorphic.py`<br>`test_mut_chatlog_parser.py` | branch coverage + mutation |
-| `chatlog_watcher` | Tails chat.log, buffers ticks, publishes events on the bus. | `e2e/test_consistency_codex_isolation_midpoint.py`<br>`e2e/test_consistency_negative_control.py`<br>`e2e/test_consistency_quests_mission_lifecycle_midpoint.py`<br>`e2e/test_consistency_scan_isolation_midpoint.py`<br>`e2e/test_consistency_tracking_hunt_midpoint.py`<br>`e2e/test_http_fingerprint_scenarios.py`<br>`e2e/test_quest_automation_with_playlist_match.py`<br>`test_chatlog_watcher.py`<br>`test_consistency_property.py`<br>`test_metamorphic.py`<br>`test_recorder.py` | branch coverage |
+| `chatlog_watcher` | Tails chat.log, buffers ticks, publishes events on the bus. | `e2e/test_consistency_codex_isolation_midpoint.py`<br>`e2e/test_consistency_negative_control.py`<br>`e2e/test_consistency_quests_mission_lifecycle_midpoint.py`<br>`e2e/test_consistency_scan_isolation_midpoint.py`<br>`e2e/test_consistency_tracking_hunt_midpoint.py`<br>`e2e/test_http_fingerprint_scenarios.py`<br>`e2e/test_quest_automation_with_playlist_match.py`<br>`test_chatlog_watcher.py`<br>`test_consistency_property.py`<br>`test_metamorphic.py`<br>`test_recorder.py`<br>`test_supervised_workers.py` | branch coverage |
 | `codex_service` | Codex rank progress, claims, calibration, recommendations. | `test_codex_properties.py`<br>`test_codex_service.py`<br>`test_mut_codex_service__c0.py`<br>`test_mut_codex_service__c1.py` | branch coverage + mutation |
 | `config_service` | Loads, validates, and persists the app settings overlay. | `test_config_service.py`<br>`test_config_service_properties.py` | branch coverage |
 | `cost_engine` | Per-shot weapon / amp / heal cost from the equipment catalogue. | `test_cost_engine.py`<br>`test_cost_engine_properties.py`<br>`test_mut_cost_engine.py`<br>`test_trifecta_service_properties.py` | branch coverage + mutation |
 | `eu_window` | Locates the Entropia Universe window for screen capture. | `test_eu_window_properties.py` | device / IO (exempt from the coverage floor) |
+| `event_stream` | Fans typed domain events from the bus out to SSE clients. | `test_event_stream.py` | branch coverage |
 | `game_data_store` | Read-only access to the bundled game-data tables. | `test_game_data_store.py`<br>`test_game_data_store_properties.py`<br>`test_mut_codex_service__c0.py`<br>`test_mut_codex_service__c1.py` | branch coverage |
 | `hotbar_listener` | Maps hotbar keystrokes to active-tool change events. | `e2e/test_hotbar_slot_use.py`<br>`e2e/test_input_listening_minimisation.py`<br>`test_hotbar_listener.py` | device / IO (exempt from the coverage floor) |
 | `local_ocr` | ONNX skill-panel OCR engine, screen grab, and orchestration. | `test_local_ocr_postprocess.py`<br>`test_repair_ocr_properties.py` | device / IO (exempt from the coverage floor) |
@@ -28,7 +29,7 @@ Services: 24.
 | `session_summary` | Composes the end-of-session summary projection. | `test_character_properties.py`<br>`test_mut_session_summary__c0.py`<br>`test_mut_session_summary__c1.py`<br>`test_mut_session_summary__c2.py`<br>`test_mut_session_summary__c3.py`<br>`test_session_summary_properties.py` | branch coverage + mutation |
 | `skill_panel_parse` | Pure skill-panel parsing (name / level / bar / cells). | `test_mut_skill_panel_parse.py`<br>`test_skill_panel_parse_properties.py` | branch coverage + mutation |
 | `skill_scan_core` | Skill-scan capture and recognition pipeline core. | `e2e/test_ocr_equivalence.py`<br>`test_capturer.py`<br>`test_skill_scan_core_extract.py` | branch coverage |
-| `skill_scan_manual` | Manual skill-scan lifecycle and capture orchestration. | `e2e/test_ocr_equivalence.py` | device / IO (exempt from the coverage floor) |
+| `skill_scan_manual` | Manual skill-scan lifecycle and capture orchestration. | `e2e/test_ocr_equivalence.py`<br>`test_skill_scan_producer.py` | device / IO (exempt from the coverage floor) |
 | `skill_tracker` | Records chat.log skill gains during a tracking session. | `test_skill_tracker.py` | branch coverage |
 | `spacebar_capture_listener` | Maps the spacebar to a skill-scan capture trigger. | `e2e/test_spacebar_scan_capture.py`<br>`test_spacebar_capture_listener.py` | device / IO (exempt from the coverage floor) |
 | `trifecta_service` | Validates and describes the weapon / heal trifecta loadout. | `test_mut_trifecta_service.py`<br>`test_trifecta_service.py`<br>`test_trifecta_service_properties.py` | branch coverage + mutation |

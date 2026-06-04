@@ -205,6 +205,14 @@ def test_start_constructs_and_starts_listener(fake_pynput) -> None:
     assert listener.started == 1
 
 
+def test_start_names_the_listener_thread_when_configured(fake_pynput) -> None:
+    """A configured ``thread_name`` labels the listener thread (observability)."""
+    source = PynputKeystrokeSource(thread_name="hotbar-key-listener")
+    source.start()
+
+    assert fake_pynput.listener.name == "hotbar-key-listener"
+
+
 def test_start_is_idempotent(fake_pynput) -> None:
     """A second ``start()`` while already running is a no-op."""
     source = PynputKeystrokeSource()

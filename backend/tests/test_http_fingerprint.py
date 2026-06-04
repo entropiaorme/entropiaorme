@@ -59,7 +59,7 @@ def test_normalise_path_symbolises_uuids():
     uuid = "12345678-1234-1234-1234-1234567890ab"
     out = normalise_path(f"/api/tracking/session/{uuid}", norm)
     assert uuid not in out
-    assert normalise_path("/api/tracking/status", norm) == "/api/tracking/status"
+    assert normalise_path("/api/tracking/snapshot", norm) == "/api/tracking/snapshot"
 
 
 def test_normalise_body_json_empty_and_binary():

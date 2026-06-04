@@ -14,8 +14,13 @@
 	import { initNews, newsOptIn, newsHasUnread } from '$lib/news';
 	import { maybeRefreshOnMount } from '$lib/newsFetch';
 	import { getPreference } from '$lib/preferences';
+	import { startEventRelay } from '$lib/realtime/eventRelay';
 
 	let { children } = $props();
+
+	// Open the backend event stream once for the app. Guarded to the main
+	// window inside the relay; the returned stopper runs on window teardown.
+	onMount(() => startEventRelay());
 
 	let onboardingChecked = $state(false);
 	let welcomingIn = $state(false);

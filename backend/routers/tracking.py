@@ -3,7 +3,6 @@
 Returns shapes matching the frontend TrackingSession and SessionDetail types.
 """
 
-import logging
 import time
 from datetime import UTC, datetime
 
@@ -12,9 +11,22 @@ from pydantic import BaseModel
 
 from backend.dependencies import get_services
 from backend.routers.response_models import (
-    NotableEvent,
-    TrackingLive,
-    TrackingStatus,
+    ArmourCostResult,
+    LootItemEditResult,
+    ManualMobLockResult,
+    ManualMobSuggestion,
+    MobEditResult,
+    QuestLinkDecisionResult,
+    QuestLinkSuggestion,
+    ReleaseMobResult,
+    RepairScanResult,
+    SessionDeletedResult,
+    SessionDetail,
+    TagLockResult,
+    TrackingSession,
+    TrackingSnapshot,
+    TrackingStartResult,
+    TrackingStopResult,
 )
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.config_service import active_trifecta_preset
@@ -44,8 +56,6 @@ def _validate_attribution(config, conn) -> tuple[bool, str | None]:
         message or "Configure the trifecta in the Equipment page before tracking.",
     )
 
-
-log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
 
@@ -184,7 +194,7 @@ def _trifecta_attribution_summary(svc) -> dict | None:
     return summary
 
 
-@router.post("/start")
+@router.post("/start", response_model=TrackingStartResult)
 def start_tracking():
     """Start a new tracking session."""
     svc = get_services()
@@ -206,7 +216,7 @@ def start_tracking():
     }
 
 
-@router.post("/stop")
+@router.post("/stop", response_model=TrackingStopResult)
 def stop_tracking():
     """Stop the active tracking session."""
     svc = get_services()
@@ -230,158 +240,7 @@ def stop_tracking():
     }
 
 
-@router.get(
-    "/status",
-    response_model=TrackingStatus,
-    response_model_exclude_unset=True,
-)
-def tracking_status():
-    """Get current tracking status."""
-    return tracking_status_impl(get_services())
-
-
-def tracking_status_impl(svc):
-    if not hasattr(svc, "tracker") or svc.tracker is None:
-        return {"status": "unavailable"}
-
-    # True while the hotbar listener is currently active. Gated on (toggle-on AND
-    # session-active), so False when idle.
-    hotbar_listener_active = svc.hotbar_listener.is_running
-    config = svc.config_service.get()
-    weapon_attribution = _weapon_attribution(config)
-
-    if not svc.tracker.is_tracking:
-        current_mob, mob_source = _configured_manual_label(config)
-        return {
-            "status": "idle",
-            "hotbarListenerActive": hotbar_listener_active,
-            "weaponAttribution": weapon_attribution,
-            "repairOcrEnabled": config.repair_ocr_enabled,
-            "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-            "mobEntryMode": config.mob_tracking_mode,
-            "currentMob": current_mob,
-            "mobSource": mob_source,
-        }
-
-    session = svc.tracker.session
-
-    # Compute live cost/returns from completed kills + in-progress accumulator
-    weapon_cost = sum(
-        ts.cost_per_shot * ts.shots_fired
-        for kill in session.kills
-        for ts in kill.tool_stats.values()
-    )
-    enhancer_cost = sum(k.enhancer_cost for k in session.kills)
-
-    # Add in-progress accumulator (shots not yet resolved to a kill)
-    acc = svc.tracker.current_accumulator
-    if acc:
-        weapon_cost += acc.weapon_cost
-        enhancer_cost += acc.enhancer_cost
-
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
-    cost = weapon_cost + heal_cost + enhancer_cost
-    returns = sum(k.loot_total_ped for k in session.kills)
-
-    # Per-kill aggregates for the modular dashboard pills.
-    kills = session.kills
-    damage_total = sum(k.damage_dealt for k in kills)
-    shots_total = sum(k.shots_fired for k in kills)
-    crits_total = sum(k.critical_hits for k in kills)
-    max_damage = max((k.damage_dealt for k in kills), default=0.0)
-    live_weapon_damage = damage_total + (acc.damage_dealt if acc else 0.0)
-    globals_count = sum(1 for k in kills if k.is_global)
-    hofs_count = sum(1 for k in kills if k.is_hof)
-    latest_kill_loot = kills[-1].loot_total_ped if kills else None
-    # Multipliers use kill.cost_ped (weapon cost only) per EU community convention.
-    mult_per_kill = [k.loot_total_ped / k.cost_ped for k in kills if k.cost_ped > 0]
-    multiplier_avg = (
-        (sum(mult_per_kill) / len(mult_per_kill)) if mult_per_kill else None
-    )
-    multiplier_max = max(mult_per_kill, default=None) if mult_per_kill else None
-    multiplier_last = (
-        kills[-1].loot_total_ped / kills[-1].cost_ped
-        if kills and kills[-1].cost_ped > 0
-        else None
-    )
-    # Recent per-kill multipliers (chronological, oldest → newest) for the
-    # Loot Pulse chart. Cap at 120 — the frontend picks how many to render
-    # based on available width, so we just need enough headroom for a wide
-    # window. 120 floats is ~1 KB, negligible at this poll cadence.
-    multiplier_history = [round(m, 4) for m in mult_per_kill[-120:]]
-
-    # Cumulative-net history (per kill) for the Loot Pulse P&L chart.
-    # Heal cost is session-level and not per-kill-attributable, so we
-    # distribute it pro-rata across kills by their weapon cost share. This
-    # makes the curve's final point reconcile exactly with the displayed
-    # Net stat (returns - cost), modulo rounding.
-    per_kill_weapon = [
-        sum(ts.cost_per_shot * ts.shots_fired for ts in k.tool_stats.values())
-        for k in kills
-    ]
-    total_weapon = sum(per_kill_weapon)
-    cumulative_net_history: list[float] = []
-    if kills:
-        running = 0.0
-        for k, w in zip(kills, per_kill_weapon, strict=True):
-            heal_share = (heal_cost * (w / total_weapon)) if total_weapon > 0 else 0.0
-            running += k.loot_total_ped - w - k.enhancer_cost - heal_share
-            cumulative_net_history.append(round(running, 2))
-        cumulative_net_history = cumulative_net_history[-120:]
-
-    skill_tt = svc.app_db.conn.execute(
-        "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
-        (session.id,),
-    ).fetchone()[0]
-
-    return {
-        "status": "active",
-        "session_id": session.id,
-        "started_at": session.start_time.isoformat(),
-        "kill_count": len(session.kills),
-        "cost": round(cost, 2),
-        "returns": round(returns, 2),
-        "pes": round(float(skill_tt), 2),
-        "returnRate": round(returns / cost, 4) if cost > 0 else 0.0,
-        "damageDealtTotal": round(damage_total, 1),
-        "weaponDamageDealt": round(live_weapon_damage, 1),
-        "weaponCost": round(weapon_cost, 6),
-        "shotsFiredTotal": shots_total,
-        "criticalHitsTotal": crits_total,
-        "maxDamage": round(max_damage, 1),
-        "globalsCount": globals_count,
-        "hofsCount": hofs_count,
-        "latestKillLoot": round(latest_kill_loot, 2)
-        if latest_kill_loot is not None
-        else None,
-        "multiplierLast": round(multiplier_last, 4)
-        if multiplier_last is not None
-        else None,
-        "multiplierAvg": round(multiplier_avg, 4)
-        if multiplier_avg is not None
-        else None,
-        "multiplierMax": round(multiplier_max, 4)
-        if multiplier_max is not None
-        else None,
-        "multiplierHistory": multiplier_history,
-        "cumulativeNetHistory": cumulative_net_history,
-        "hotbarListenerActive": hotbar_listener_active,
-        "weaponAttribution": weapon_attribution,
-        "repairOcrEnabled": config.repair_ocr_enabled,
-        "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": svc.tracker._session_mob_tracking_mode,
-        "currentMob": svc.tracker._confirmed_mob_name or None,
-        "mobSource": svc.tracker._mob_source
-        if svc.tracker._confirmed_mob_name
-        else None,
-    }
-
-
-@router.post("/release-mob")
+@router.post("/release-mob", response_model=ReleaseMobResult)
 def release_mob():
     """Release the currently locked mob."""
     svc = get_services()
@@ -421,7 +280,7 @@ def release_mob():
     return {"released": released}
 
 
-@router.get("/manual-mob-suggestions")
+@router.get("/manual-mob-suggestions", response_model=list[ManualMobSuggestion])
 def manual_mob_suggestions(q: str = "", limit: int = 10):
     """Autocomplete suggestions for manual mob lock."""
     svc = get_services()
@@ -442,7 +301,7 @@ def manual_mob_suggestions(q: str = "", limit: int = 10):
     return svc.mob_lookup.search_mob_names(query, limit=max(1, min(limit, 20)))
 
 
-@router.post("/manual-mob-lock")
+@router.post("/manual-mob-lock", response_model=ManualMobLockResult)
 def manual_mob_lock(req: ManualMobLockRequest):
     """Immediately lock the selected catalogue mob for manual kill stamping."""
     svc = get_services()
@@ -475,7 +334,7 @@ def manual_mob_lock(req: ManualMobLockRequest):
     return {"mobName": display, "species": species, "maturity": maturity}
 
 
-@router.post("/tag-lock")
+@router.post("/tag-lock", response_model=TagLockResult)
 def tag_lock(req: TagLockRequest):
     """Immediately set the active free-text tag for tag-mode kill stamping."""
     svc = get_services()
@@ -498,7 +357,7 @@ def tag_lock(req: TagLockRequest):
     return {"tag": tag}
 
 
-@router.get("/tag-suggestions")
+@router.get("/tag-suggestions", response_model=list[str])
 def tag_suggestions(q: str = "", limit: int = 10):
     """Autocomplete suggestions for free-text session mob tags."""
     svc = get_services()
@@ -523,178 +382,113 @@ def tag_suggestions(q: str = "", limit: int = 10):
 
 
 @router.get(
-    "/live",
-    response_model=TrackingLive,
+    "/snapshot",
+    response_model=TrackingSnapshot,
     response_model_exclude_unset=True,
 )
-def tracking_live():
-    """Live session data for the overlay — compact stats + current mob."""
-    return tracking_live_impl(get_services())
+def tracking_snapshot():
+    """Consolidated dashboard hydration: one response a newly mounted webview
+    reads once, then keeps current from pushed events instead of re-polling."""
+    return tracking_snapshot_impl(get_services())
 
 
-def tracking_live_impl(svc):
-    started = time.perf_counter()
+def tracking_snapshot_impl(svc):
+    """Single hydration readout for a newly mounted dashboard.
+
+    Returns the union of the status, live, and recent-events shapes in one
+    response. The session-derived numbers come from ``tracker.snapshot()`` as an
+    owned value, so this handler never iterates the live kills list off the web
+    thread; the configuration- and runtime-derived fields (attribution mode, the
+    repair-OCR flag, whether the hotbar listener is running, the trifecta
+    attribution summary) are merged in here, since they are not the tracker's to
+    own. The activity feed adopts the recent-events identified projection as
+    canonical and splits tracker warnings into a sibling ``warnings`` array; per
+    the dashboard's clear-on-idle behaviour the idle branch carries an empty
+    feed.
+
+    Key casing is preserved non-destructively from the readouts it unions: the
+    status shape's ``session_id`` / ``started_at`` / ``kill_count`` stay
+    snake-case (the dashboard reads them so), while the headline numbers stay
+    camelCase. The live shape's camelCase ``sessionId`` / ``killCount``
+    duplicates and its bare ``kills`` count are dropped (no consumer reads them
+    off this endpoint).
+    """
     if not hasattr(svc, "tracker") or svc.tracker is None:
         return {"status": "unavailable"}
 
-    detected_tool = getattr(svc.tracker, "_active_hotbar_tool_name", None)
     config = svc.config_service.get()
     weapon_attribution = _weapon_attribution(config)
     trifecta_attribution = (
         _trifecta_attribution_summary(svc) if weapon_attribution == "trifecta" else None
     )
+    readout = svc.tracker.snapshot()
 
-    if not svc.tracker.is_tracking:
-        current_mob, mob_source = _configured_manual_label(config)
-        return {
-            "status": "idle",
-            "weaponAttribution": weapon_attribution,
-            "repairOcrEnabled": config.repair_ocr_enabled,
-            "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-            "mobEntryMode": config.mob_tracking_mode,
-            "currentMob": current_mob,
-            "mobSource": mob_source,
-            "currentTool": detected_tool,
-            "trifectaAttribution": trifecta_attribution,
-        }
-
-    session = svc.tracker.session
-    start_ts = session.start_time.timestamp()
-    elapsed = int(time.time() - start_ts)
-
-    # Compute live cost/returns from completed kills + in-progress accumulator
-    weapon_cost = sum(
-        ts.cost_per_shot * ts.shots_fired
-        for kill in session.kills
-        for ts in kill.tool_stats.values()
-    )
-    enhancer_cost = sum(k.enhancer_cost for k in session.kills)
-
-    acc = svc.tracker.current_accumulator
-    if acc:
-        weapon_cost += acc.weapon_cost
-        enhancer_cost += acc.enhancer_cost
-
-    heal_cost = (
-        svc.tracker._session_heal_cost
-        if hasattr(svc.tracker, "_session_heal_cost")
-        else 0.0
-    )
-    cost = weapon_cost + heal_cost + enhancer_cost
-    returns = sum(k.loot_total_ped for k in session.kills)
-    kills = len(session.kills)
-
-    current_mob = svc.tracker._confirmed_mob_name or None
-
-    # Recent notable events from this session
-    notable = svc.app_db.conn.execute(
-        """SELECT event_type, mob_or_item, value_ped, timestamp
-           FROM notable_events WHERE session_id = ?
-           ORDER BY timestamp DESC LIMIT 5""",
-        (session.id,),
-    ).fetchall()
-
-    recent_events_list = []
-
-    # Warnings from the tracker (e.g., heal tool not equipped)
-    if hasattr(svc.tracker, "_session_warnings"):
-        for msg in svc.tracker._session_warnings:
-            recent_events_list.append(
-                {
-                    "type": "warning",
-                    "description": msg,
-                    "value": 0,
-                }
-            )
-
-    for r in notable:
-        event_type, mob_or_item, value_ped, timestamp = r[0], r[1], r[2], r[3]
-        recent_events_list.append(
-            _notable_event_payload(event_type, mob_or_item, value_ped, timestamp)
-        )
-
-    # Skill TT from this session
-    skill_tt = svc.app_db.conn.execute(
-        "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains WHERE session_id = ?",
-        (session.id,),
-    ).fetchone()[0]
-
-    payload = {
-        "status": "active",
-        "sessionId": session.id,
-        "elapsed": elapsed,
-        "killCount": len(session.kills),
-        "kills": kills,
-        "cost": round(cost, 2),
-        "returns": round(returns, 2),
-        "pes": round(float(skill_tt), 2),
-        "net": round(returns - cost, 2),
-        "returnRate": round(returns / cost, 4) if cost > 0 else 0.0,
+    envelope = {
+        "hotbarListenerActive": svc.hotbar_listener.is_running,
         "weaponAttribution": weapon_attribution,
         "repairOcrEnabled": config.repair_ocr_enabled,
         "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
-        "mobEntryMode": svc.tracker._session_mob_tracking_mode,
-        "currentMob": current_mob,
-        "mobSource": svc.tracker._mob_source if current_mob else None,
-        "currentTool": detected_tool,
+        "currentTool": readout.current_tool,
         "trifectaAttribution": trifecta_attribution,
-        "recentEvents": recent_events_list,
     }
-    duration_ms = (time.perf_counter() - started) * 1000.0
-    if log.isEnabledFor(logging.DEBUG) and duration_ms >= 10.0:
-        log.debug(
-            "/tracking/live slow-ish response: %.2f ms (kills=%d recent_events=%d warnings=%d)",
-            duration_ms,
-            kills,
-            len(notable),
-            len(getattr(svc.tracker, "_session_warnings", [])),
-        )
-    return payload
 
+    active = readout.active
+    if active is None:
+        current_mob, mob_source = _configured_manual_label(config)
+        return {
+            "status": "idle",
+            **envelope,
+            "mobEntryMode": config.mob_tracking_mode,
+            "currentMob": current_mob,
+            "mobSource": mob_source,
+            "recentEvents": [],
+        }
 
-@router.get(
-    "/recent-events",
-    response_model=list[NotableEvent],
-    response_model_exclude_unset=True,
-)
-def recent_events():
-    """Recent notable events for the latest tracking session — dashboard activity feed.
-
-    Scoped to the most recent session (by started_at) so starting a fresh session
-    clears the dashboard feed; events populate again as they occur in-session.
-    """
-    return recent_events_impl(get_services())
-
-
-def recent_events_impl(svc):
-    latest = svc.app_db.conn.execute(
-        "SELECT id FROM tracking_sessions ORDER BY started_at DESC LIMIT 1"
-    ).fetchone()
-    if not latest:
-        return []
-    rows = svc.app_db.conn.execute(
-        """SELECT ne.event_type, ne.mob_or_item, ne.value_ped, ne.timestamp
-           FROM notable_events ne
-           WHERE ne.session_id = ?
-           ORDER BY ne.timestamp DESC LIMIT 20""",
-        (latest[0],),
-    ).fetchall()
-
-    events = []
-    for i, r in enumerate(rows):
-        event_type, mob_or_item, value_ped, ts = r
+    recent_events = []
+    for i, (event_type, mob_or_item, value_ped, ts) in enumerate(
+        active.notable_event_rows
+    ):
         payload = _notable_event_payload(event_type, mob_or_item, value_ped)
-        events.append(
-            {
-                "id": f"ne-{i}",
-                **payload,
-                "timestamp": _ts_to_iso(ts),
-            }
-        )
-    return events
+        recent_events.append({"id": f"ne-{i}", **payload, "timestamp": _ts_to_iso(ts)})
+    warnings = [
+        {"type": "warning", "description": msg, "value": 0} for msg in active.warnings
+    ]
+
+    return {
+        "status": "active",
+        "session_id": active.session_id,
+        "started_at": active.started_at,
+        "kill_count": active.kill_count,
+        "elapsed": active.elapsed,
+        "cost": active.cost,
+        "returns": active.returns,
+        "pes": active.pes,
+        "net": active.net,
+        "returnRate": active.return_rate,
+        "damageDealtTotal": active.damage_dealt_total,
+        "weaponDamageDealt": active.weapon_damage_dealt,
+        "weaponCost": active.weapon_cost,
+        "shotsFiredTotal": active.shots_fired_total,
+        "criticalHitsTotal": active.critical_hits_total,
+        "maxDamage": active.max_damage,
+        "globalsCount": active.globals_count,
+        "hofsCount": active.hofs_count,
+        "latestKillLoot": active.latest_kill_loot,
+        "multiplierLast": active.multiplier_last,
+        "multiplierAvg": active.multiplier_avg,
+        "multiplierMax": active.multiplier_max,
+        "multiplierHistory": list(active.multiplier_history),
+        "cumulativeNetHistory": list(active.cumulative_net_history),
+        **envelope,
+        "mobEntryMode": active.mob_entry_mode,
+        "currentMob": active.current_mob,
+        "mobSource": active.mob_source,
+        "recentEvents": recent_events,
+        "warnings": warnings,
+    }
 
 
-@router.get("/sessions")
+@router.get("/sessions", response_model=list[TrackingSession])
 def list_sessions():
     """List recent tracking sessions with aggregated stats.
 
@@ -813,7 +607,7 @@ def list_sessions_impl(conn):
     return sessions
 
 
-@router.delete("/session/{session_id}")
+@router.delete("/session/{session_id}", response_model=SessionDeletedResult)
 def delete_session(session_id: str):
     """Delete a tracking session and all associated data."""
     svc = get_services()
@@ -853,7 +647,7 @@ def delete_session(session_id: str):
     return {"status": "deleted", "sessionId": session_id}
 
 
-@router.get("/session/{session_id}")
+@router.get("/session/{session_id}", response_model=SessionDetail)
 def get_session(session_id: str):
     """Get full session detail with aggregated summary.
 
@@ -930,7 +724,7 @@ def _build_mob_edit_response(conn, session_id: str, mob_name: str):
     }
 
 
-@router.post("/session/{session_id}/rename-mob")
+@router.post("/session/{session_id}/rename-mob", response_model=MobEditResult)
 def rename_session_mob(session_id: str, body: RenameMobRequest):
     """Rewrite kills.mob_name for matching kills in this session.
 
@@ -1017,7 +811,7 @@ def _rename_session_mob_impl(conn, session_id: str, from_mob: str, to_mob: str):
     return _build_mob_edit_response(conn, session_id, to_mob)
 
 
-@router.post("/session/{session_id}/restore-mob")
+@router.post("/session/{session_id}/restore-mob", response_model=MobEditResult)
 def restore_session_mob(session_id: str, body: RestoreMobRequest):
     """Revert kills in this session whose current mob_name matches the
     request and carry a preserved `original_mob_name`.
@@ -1276,7 +1070,10 @@ def _bulk_flip_loot_item(
     )
 
 
-@router.post("/session/{session_id}/loot-item/{item_name:path}/deactivate")
+@router.post(
+    "/session/{session_id}/loot-item/{item_name:path}/deactivate",
+    response_model=LootItemEditResult,
+)
 def bulk_deactivate_loot_item(session_id: str, item_name: str):
     """Bulk-deactivate every `kill_loot_items` row matching `item_name`
     in this session (item-name is URL-path encoded so spaces survive).
@@ -1296,7 +1093,10 @@ def _bulk_deactivate_loot_item_impl(conn, session_id: str, item_name: str):
     return _bulk_flip_loot_item(conn, session_id, item_name, "deactivated")
 
 
-@router.post("/session/{session_id}/loot-item/{item_name:path}/activate")
+@router.post(
+    "/session/{session_id}/loot-item/{item_name:path}/activate",
+    response_model=LootItemEditResult,
+)
 def bulk_activate_loot_item(session_id: str, item_name: str):
     """Bulk-activate every previously-deactivated `kill_loot_items`
     row matching `item_name` in this session. Inverse of
@@ -1591,7 +1391,7 @@ def _session_skill_gains(conn, session_id: str) -> list[dict]:
 # ------------------------------------------------------------------
 
 
-@router.post("/session/{session_id}/repair-scan")
+@router.post("/session/{session_id}/repair-scan", response_model=RepairScanResult)
 def repair_scan(session_id: str):
     """Run OCR on the bundled-anchor repair region. Returns result without saving."""
     svc = get_services()
@@ -1605,7 +1405,7 @@ class ArmourCostBody(BaseModel):
     cost: float
 
 
-@router.post("/session/{session_id}/armour-cost")
+@router.post("/session/{session_id}/armour-cost", response_model=ArmourCostResult)
 def set_armour_cost(session_id: str, body: ArmourCostBody):
     """Save armour repair cost to a session."""
     svc = get_services()
@@ -1628,7 +1428,10 @@ class SessionQuestLinkDecisionBody(BaseModel):
     action: str
 
 
-@router.get("/session/{session_id}/quest-link-suggestion")
+@router.get(
+    "/session/{session_id}/quest-link-suggestion",
+    response_model=QuestLinkSuggestion,
+)
 def get_session_quest_link_suggestion(session_id: str):
     """Get the curated post-session quest analytics linkage suggestion."""
     svc = get_services()
@@ -1655,7 +1458,11 @@ def get_session_quest_link_suggestion(session_id: str):
     }
 
 
-@router.post("/session/{session_id}/quest-link")
+@router.post(
+    "/session/{session_id}/quest-link",
+    response_model=QuestLinkDecisionResult,
+    response_model_exclude_unset=True,
+)
 def decide_session_quest_link(session_id: str, body: SessionQuestLinkDecisionBody):
     """Persist the curated quest analytics linkage decision for a session."""
     svc = get_services()

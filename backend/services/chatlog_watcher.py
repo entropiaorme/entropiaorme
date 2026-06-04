@@ -30,6 +30,7 @@ from backend.core.events import (
     EVENT_LOOT_GROUP,
     EVENT_MISSION_RECEIVED,
     EVENT_SKILL_GAIN,
+    EVENT_TICK_FLUSHED,
 )
 from backend.services.chatlog_parser import ChatEvent, EventType, parse_line
 
@@ -491,6 +492,13 @@ class ChatlogWatcher:
                         **event.data,
                     },
                 )
+
+        # Signal the settled-tick boundary last, after every per-event publish
+        # above has been dispatched (and its subscribers have mutated state
+        # synchronously). A stateful subscriber can coalesce this tick's worth
+        # of mutations into one coarse domain event here rather than emitting
+        # per raw mutation.
+        self._event_bus.publish(EVENT_TICK_FLUSHED, {"timestamp": self._tick_ts})
 
         # Reset tick
         self._tick_ts = None

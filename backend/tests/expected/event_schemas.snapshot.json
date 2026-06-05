@@ -10,16 +10,8 @@
           "type": "integer"
         },
         "occurred_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Occurred At"
+          "title": "Occurred At",
+          "type": "string"
         },
         "payload": {
           "$ref": "#/$defs/ScanStatusChangedPayload"
@@ -32,6 +24,7 @@
         }
       },
       "required": [
+        "occurred_at",
         "payload"
       ],
       "title": "ScanStatusChanged",
@@ -68,16 +61,8 @@
           "type": "integer"
         },
         "occurred_at": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Occurred At"
+          "title": "Occurred At",
+          "type": "string"
         },
         "payload": {
           "$ref": "#/$defs/TrackingSessionUpdatedPayload"
@@ -90,6 +75,7 @@
         }
       },
       "required": [
+        "occurred_at",
         "payload"
       ],
       "title": "TrackingSessionUpdated",

@@ -18,17 +18,22 @@ longer surfaces a real divergence, this control fires.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from backend.core.event_bus import EventBus
 from backend.core.events import EVENT_COMBAT, EVENT_SESSION_STARTED
+from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     Reducer,
     TrackingViewContext,
     tracking_view_state,
 )
+from backend.tracking.tracker import HuntTracker
+
+_Pipeline = Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
 
 
 class _DropLootReducer(Reducer):
@@ -72,7 +77,7 @@ class _DropLootReducer(Reducer):
 
 
 def test_consistency_property_catches_a_broken_reducer(
-    make_e2e_pipeline,
+    make_e2e_pipeline: _Pipeline,
     scenario_clock,
     corpus_root: Path,
 ) -> None:

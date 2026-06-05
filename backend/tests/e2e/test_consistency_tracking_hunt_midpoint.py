@@ -20,18 +20,24 @@ projection surfaces as a golden diff for review before ratification.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
+from backend.core.event_bus import EventBus
+from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     TrackingReducer,
     TrackingViewContext,
     tracking_view_state,
 )
+from backend.tracking.tracker import HuntTracker
+
+_Pipeline = Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
 
 
 def test_tracking_snapshot_event_stream_consistency(
-    make_e2e_pipeline,
+    make_e2e_pipeline: _Pipeline,
     scenario_clock,
     corpus_root: Path,
     data_regression,

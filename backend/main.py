@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Load .env.local at startup so direct invocations (python -m backend.main,
@@ -150,10 +151,34 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
-from backend.testing.clock import RealClock
+from backend.testing.clock import Clock, MockClock, RealClock
 from backend.testing.keystroke_source import PynputKeystrokeSource
 from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
+
+
+def _build_clock() -> Clock:
+    """Construct the process-wide time source.
+
+    Production runs on the real clock. A replay harness driving this backend
+    as a whole process freezes it instead by setting
+    ``ENTROPIA_TEST_CLOCK_START`` to the scenario clock plan's naive
+    ISO-8601 start instant (see ``backend/testing/clock_plan.py``); every
+    injected read then returns that frozen instant, keeping each stamped
+    timestamp deterministic and independent of how many times the
+    implementation reads time.
+    """
+    raw = os.environ.get("ENTROPIA_TEST_CLOCK_START", "").strip()
+    if not raw:
+        return RealClock()
+    try:
+        start = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
+        ) from exc
+    log.info("Deterministic clock active: frozen at %s", start.isoformat())
+    return MockClock(start=start)
 
 
 @asynccontextmanager
@@ -317,10 +342,15 @@ async def lifespan(app: FastAPI):
 
     # The process-wide time source. One instance is constructed here at the
     # composition root and injected into every service that reads the clock,
-    # so a test-mode composition can swap in a deterministic clock at exactly
-    # one place. RealClock preserves the stdlib semantics each call site had
-    # before injection.
-    clock = RealClock()
+    # so a deterministic clock can be swapped in at exactly one place.
+    # RealClock preserves the stdlib semantics each call site had before
+    # injection. The watcher is the one exception: its monotonic reads are
+    # drain timeouts and perf windows (never output-reaching), so they stay
+    # on the real clock even when the app clock is frozen; a frozen drain
+    # deadline would turn a failing drain into a hang instead of a
+    # TimeoutError.
+    clock = _build_clock()
+    watcher_clock = clock if isinstance(clock, RealClock) else RealClock()
 
     tracker = HuntTracker(
         event_bus,
@@ -347,7 +377,7 @@ async def lifespan(app: FastAPI):
         event_bus,
         config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
-        clock=clock,
+        clock=watcher_clock,
     )
 
     # Skill tracking: records chat.log skill gains during sessions

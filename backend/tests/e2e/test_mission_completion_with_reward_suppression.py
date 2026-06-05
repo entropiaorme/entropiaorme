@@ -25,20 +25,22 @@ MISSION_NAME = "Codex Argonaut Stage 1"
 
 
 def test_mission_lifecycle_with_skill_gain(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, watcher, chatlog = e2e_pipeline
-
     scenario = corpus_root / "scripted" / "mission_completion_with_reward_suppression"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Single kill in the middle of the mission lifecycle.

@@ -26,6 +26,7 @@ from backend.core.event_bus import EventBus
 from backend.db.app_database import AppDatabase
 from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.services.quest_service import QuestService
+from backend.testing.clock_plan import load_clock_plan
 from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     QuestsReducer,
@@ -44,10 +45,20 @@ def quests_consistency_pipeline(
     """Boot the quests-consistency pipeline with QuestService bus-wired."""
     chatlog_path = tmp_path / "chat_testing.log"
     chatlog_path.touch()
+    # The scenario's committed clock plan drives every timestamp this
+    # pipeline stamps; the watcher stays on its real default clock per
+    # the drain-timeout caveat. The harness's mid-flow snapshots need no
+    # advancement: a frozen instant is deterministic, and no golden
+    # observes the session boundaries here.
+    clock = load_clock_plan(
+        Path(__file__).parent.joinpath(
+            "corpus", "scripted", "consistency_quests_mission_lifecycle_midpoint"
+        )
+    ).build_clock()
     app_db = AppDatabase(tmp_path / "test.db")
     bus = EventBus()
-    quest_service = QuestService(app_db, event_bus=bus)
-    tracker = HuntTracker(bus, app_db.conn)
+    quest_service = QuestService(app_db, event_bus=bus, clock=clock)
+    tracker = HuntTracker(bus, app_db.conn, clock=clock)
     watcher = ChatlogWatcher(bus, chatlog_path)
     watcher.start()
     try:

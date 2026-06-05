@@ -24,22 +24,24 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_placeholder_recorded_hunt_replays_against_goldens(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
 ) -> None:
     """Replay the placeholder recorded hunt; assert two kills and the full
     event/DB state matches the goldens."""
-    bus, tracker, watcher, chatlog = e2e_pipeline
-
     scenario = corpus_root / "recorded" / "placeholder_recorded_hunt"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     assert len(result.kills) == 2, (

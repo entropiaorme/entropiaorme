@@ -29,7 +29,8 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_basic_hunt_produces_three_kills_via_real_tail_loop(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
@@ -43,15 +44,16 @@ def test_basic_hunt_produces_three_kills_via_real_tail_loop(
     ``stop_session`` so the ledger-entry rows created at session-stop
     time appear in the golden too.
     """
-    bus, tracker, watcher, chatlog = e2e_pipeline
-
     scenario = corpus_root / "scripted" / "basic_hunt_10_events"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Three loot ticks (10:00:02, 10:00:06, 10:00:10) each close an

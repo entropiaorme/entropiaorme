@@ -248,6 +248,22 @@ The pull-request gate runs it over the PR's `base..head` range. Pass `--warn-onl
 
 A companion check, `backend/scripts/check_version_stamps.py`, asserts the three application version stamps (`frontend/package.json`, the `[workspace.package]` version in `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/entropia-orme/tauri.conf.json`) carry an identical version, so a release bump cannot update some and miss others. It is whole-tree rather than diff-scoped (the invariant holds over the current tree at all times), so it runs in the pre-commit job rather than the diff-scoped authoring-lint job. `CURRENT_TOS_VERSION` in `frontend/src/lib/tos.ts` is deliberately excluded: it versions the terms-of-service document, a separate namespace that moves independently of the application release.
 
+## Deterministic scenario clocks
+
+Every corpus scenario commits a clock plan in its `metadata.yaml`:
+
+```yaml
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0
+```
+
+The plan defines a **frozen, driver-advanced** clock for the replay: the scenario clock starts frozen at `start` (a naive instant, interpreted in the host timezone exactly as chat-log line instants are), and only the replay driver advances it, by `step_seconds` at scenario-defined points; canonically once after the replay has fully drained, before the session stops, so the session boundaries are distinct deterministic instants. Production code under test only ever reads the clock. Reads never advance it, so the instants a scenario produces are independent of how many times the implementation reads time; that is what keeps timestamp-bearing outputs comparable across runs and across implementations replaying the same scenario, regardless of their internal read counts. `start` values are chosen away from the scenario's chat-log instants so a plan-stamped timestamp never merges with a domain timestamp under the fingerprint normaliser's encounter-order symbols. The contract lives in `backend/testing/clock_plan.py`.
+
+In-process scenario tests build the clock through the `scenario_clock` fixture and inject it into the pipeline; whole-process runs freeze the app's composition-root clock instead by exporting `ENTROPIA_TEST_CLOCK_START=<plan start>` (the `make_e2e_http_pipeline` factory does this from the scenario's plan, and the test, as the replay driver, advances the in-process clock object at the canonical point). Production composes `RealClock` and is unaffected.
+
+The static half of the guarantee is the no-ambient-time guard (`backend/scripts/check_ambient_time.py`, pinned green by `test_ambient_time_guard.py`): no backend production module reads the ambient clock; every wall-clock or monotonic read flows through the injected `backend/testing/clock.py` `Clock`, constructed once at the composition root. Golden stability alone cannot prove this (a clock-coupled surface with no golden passes vacuously), so the zero-ambient-reads scan is the enforcement. One deliberate carve-out: the chat-log watcher's drain-deadline reads go through its own injected clock, which plan-driven runs leave **real**, so a failing drain still raises `TimeoutError` instead of hanging under a frozen monotonic stream.
+
 ## Goldens regeneration
 
 Several e2e suites assert against committed golden files: the per-scenario event-stream fingerprint (`fingerprint.jsonl`) and DB-state snapshot (`db_state.json`), the per-endpoint HTTP-response goldens, the OpenAPI spec snapshot (`backend/tests/expected/openapi.snapshot.json`), and the `pytest-regressions` goldens (OCR equivalence, snapshot / event-stream consistency). The default mode asserts; a deliberate behaviour change is re-ratified by regenerating the affected goldens and reviewing the resulting diff.

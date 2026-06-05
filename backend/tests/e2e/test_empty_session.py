@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.testing.clock import MockClock
 from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_empty_session_produces_no_kills_via_real_tail_loop(
     make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
@@ -39,17 +39,16 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
     # makes the golden order-dependent. Drive a deterministic clock and step
     # it forward before the stop so the session boundaries are always
     # distinct and the golden is reproducible regardless of test order.
-    clock = MockClock()
-    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
-
     scenario = corpus_root / "scripted" / "empty_session"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
-    clock.advance(1.0)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     assert len(result.kills) == 0, (

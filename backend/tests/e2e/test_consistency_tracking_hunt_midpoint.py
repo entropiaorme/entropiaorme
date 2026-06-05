@@ -22,26 +22,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.core.event_bus import EventBus
-from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     TrackingReducer,
     TrackingViewContext,
     tracking_view_state,
 )
-from backend.tracking.tracker import HuntTracker
 
 
 def test_tracking_snapshot_event_stream_consistency(
-    e2e_pipeline: tuple[EventBus, HuntTracker, ChatlogWatcher, Path],
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     data_regression,
 ) -> None:
     """Hydrate from T0 + apply post-midpoint events == fresh T1 snapshot."""
 
-    bus, tracker, watcher, chatlog = e2e_pipeline
     scenario_dir = corpus_root / "scripted" / "consistency_tracking_hunt_midpoint"
+    clock, _plan = scenario_clock(scenario_dir)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
 
     tracker.start_session()
     try:

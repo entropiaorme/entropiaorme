@@ -69,6 +69,46 @@ jobs:
       - name: Run the complete backend suite, all tiers
         run: python -m pytest
 
+  determinism:
+    name: Multi-seed determinism (seed slot ${{ matrix.seed-slot }})
+    # The order-determinism guard: three concurrently seeded runs of the
+    # per-PR suite shape (fast + standard, xdist loadfile) under explicitly
+    # set, logged pytest-randomly seeds. Every golden-asserting test runs in
+    # each leg, so a red leg means some output depended on test order or on
+    # residual wall-clock state; the printed seed reproduces it exactly
+    # (locally: pytest -m "fast or standard" -n auto --dist=loadfile
+    # --randomly-seed=<seed>). Seeds derive from the run number, so the
+    # explored seed space rotates nightly while any failure stays
+    # deterministic to replay. This lives here rather than on the per-PR
+    # gate so the wall-clock cost of multiplied runs never lands on a pull
+    # request; the per-PR 3.11 leg keeps its fresh-seed randomised order as
+    # the always-on early warning.
+    runs-on: windows-latest
+    env:
+      HYPOTHESIS_PROFILE: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        seed-slot: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Run the suite under the slot's seed
+        run: |
+          $seed = ${{ github.run_number }} * 10 + ${{ matrix.seed-slot }}
+          Write-Output "Determinism seed: $seed"
+          python -m pytest backend/tests/ -m "fast or standard" -n auto --dist=loadfile --randomly-seed=$seed
+
   mutation:
     name: Mutation testing (mutmut)
     # The mutation engine has no native Windows support, so the campaign runs on

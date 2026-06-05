@@ -23,13 +23,15 @@ def _write_stamps(
     tauri: str,
 ) -> None:
     (root / "frontend").mkdir(parents=True, exist_ok=True)
-    (root / "frontend/src-tauri").mkdir(parents=True, exist_ok=True)
+    (root / "frontend/src-tauri/entropia-orme").mkdir(parents=True, exist_ok=True)
     (root / stamps.PACKAGE_JSON).write_text(
         '{\n  "name": "x",\n  "version": "' + package + '"\n}\n',
         encoding="utf-8",
     )
     (root / stamps.CARGO_TOML).write_text(
-        '[package]\nname = "x"\nversion = "' + cargo + '"\nedition = "2021"\n',
+        '[workspace]\nmembers = ["x"]\n\n[workspace.package]\nversion = "'
+        + cargo
+        + '"\nedition = "2021"\n',
         encoding="utf-8",
     )
     (root / stamps.TAURI_CONF).write_text(

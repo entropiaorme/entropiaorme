@@ -72,7 +72,7 @@ if (-not (Test-Path $frontendDir)) {
 # real PyInstaller-frozen exe at the same path. The guard is strictly
 # "create if missing" so a frozen sidecar from a prior release build
 # survives launch re-invocations untouched.
-$sidecarDir = Join-Path $frontendDir "src-tauri\binaries"
+$sidecarDir = Join-Path $frontendDir "src-tauri\entropia-orme\binaries"
 $sidecarStub = Join-Path $sidecarDir "entropiaorme-backend-x86_64-pc-windows-msvc.exe"
 if (-not (Test-Path $sidecarStub)) {
     New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null

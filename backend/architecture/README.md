@@ -9,7 +9,7 @@ Code is the source of truth; every section names the modules it describes so cla
 The desktop app is three cooperating pieces:
 
 - the SvelteKit frontend, rendered in Tauri webviews: one main window plus pre-spawned, initially hidden overlay windows;
-- the Tauri shell (`frontend/src-tauri/`): window chrome and sidecar launch, no business logic;
+- the Tauri shell (the `entropia-orme` member of the `frontend/src-tauri/` cargo workspace): window chrome and sidecar launch, no business logic;
 - this Python backend: a FastAPI process on the loopback interface, shipped as a sidecar binary.
 
 All domain logic lives in the backend. The frontend reaches it two ways: request/response HTTP for state reads and mutations, and a one-way server-sent-events stream for change notifications. The combination is deliberately **push-to-pull**: an event frame is a minimal invalidation signal (which surface changed and why), and the window that receives one re-reads the full state from a hydration GET. Rendered state always comes from a snapshot read; it is never folded together from event payloads.

@@ -25,8 +25,8 @@ reviews:
     - "!backend/data/*.csv"
     - "!assets/**"
     - "!frontend/static/**"
-    - "!frontend/src-tauri/icons/**"
-    - "!frontend/src-tauri/installer/*.bmp"
+    - "!frontend/src-tauri/entropia-orme/icons/**"
+    - "!frontend/src-tauri/entropia-orme/installer/*.bmp"
     - "!THIRD-PARTY-NOTICES.md"
   path_instructions:
     - path: "frontend/src/**/*.{svelte,ts}"
@@ -77,13 +77,13 @@ reviews:
         - Sidecar lifecycle paths (spawn / drain / kill) must walk the PID tree (PyInstaller onefile spawns a bootloader + python child; TerminateProcess on the bootloader orphans the child).
         - Async tasks reading from a sidecar's pipes must drain continuously; Windows pipe buffers are ~4 KB and a stalled drain blocks the child's logging.
 
-    - path: "frontend/src-tauri/tauri.conf.json"
+    - path: "frontend/src-tauri/entropia-orme/tauri.conf.json"
       instructions: |
         Security posture for changes to the Tauri config:
         - CSP changes must be narrowly scoped. Don't introduce wildcards. Any new connect-src / img-src / script-src host must have a corresponding code consumer (a fetch or img tag against that host); flag changes that loosen scope without an identifiable consumer.
         - Bundle resources must be attributed in THIRD-PARTY-NOTICES.md if they originate from a third party.
 
-    - path: "frontend/src-tauri/capabilities/*.json"
+    - path: "frontend/src-tauri/entropia-orme/capabilities/*.json"
       instructions: |
         Capability scoping:
         - Prefer scope-restricted permission variants (with `validate` regex / URL allowlists) over blanket grants where the upstream schema supports it.

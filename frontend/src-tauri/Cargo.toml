@@ -1,29 +1,44 @@
-[package]
-name = "entropia-orme"
+# Cargo workspace for the desktop application's Rust side.
+#
+# Members:
+#   - entropia-orme: the Tauri shell (window chrome, sidecar lifecycle). The
+#     only member coupled to the Tauri toolchain.
+#   - eo-http:     HTTP substrate for the native backend (router, middleware).
+#   - eo-services: domain services behind that HTTP surface.
+#   - eo-wire:     wire-format contracts (response/event types, serialisation).
+#
+# The eo-* members are the landing zone for the native backend port (see
+# backend/architecture/PORT-READINESS.md and PORTING-RULEBOOK.md). They are
+# deliberately Tauri-free: CI builds and tests them on a runner without the
+# Tauri toolchain's system stack, which structurally prevents a GUI dependency
+# from creeping into backend code.
+
+[workspace]
+resolver = "2"
+members = ["entropia-orme", "eo-http", "eo-services", "eo-wire"]
+
+[workspace.package]
 version = "0.1.0"
-description = "EntropiaOrme: an analytical desktop tool for Entropia Universe."
 authors = ["Mikel Williams-Lekuona <MikelWL@protonmail.com>"]
 edition = "2021"
 license = "MIT"
 
-[lib]
-name = "entropia_orme_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
-
-[dependencies]
-tauri = { version = "2", features = [] }
+[workspace.dependencies]
+# Tauri is pinned to the 2.11 minor (the known-good release line when this
+# workspace was laid down). The backend port runs a long-lived hybrid inside
+# the shell process, and a mid-flight Tauri minor bump is a moving-target risk
+# the pin removes; re-evaluate only on a major release with material benefit.
+# tauri-build rides its matching minor for the same reason. Review the
+# .cargo/audit.toml and deny.toml ignore lists together with any bump.
+tauri = { version = "~2.11", features = [] }
+tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+windows = "0.61"
+criterion = "0.8"
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_HiDpi",
-  "Win32_UI_WindowsAndMessaging"
-] }
+eo-http = { path = "eo-http" }
+eo-services = { path = "eo-services" }
+eo-wire = { path = "eo-wire" }

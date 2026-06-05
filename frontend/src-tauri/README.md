@@ -1,31 +1,21 @@
-# Tauri config
+# Rust workspace
 
-## Files
+Cargo workspace for the desktop application's Rust side.
 
-- **`tauri.conf.json`**: base config. Authoritative for release builds.
-- **`tauri.dev.conf.json`**: dev-only CSP overlay. Applied by the `tauri:dev` npm script (which `just dev` invokes); release builds via `npm run tauri:build` ignore it and use the base config's strict CSP.
-- **`build-dev-config.mjs`**: generates `tauri.dev.local.json` ahead of each dev launch. Writes the env-driven `build.devUrl`: the HTTPS hostname when `ENTROPIAORME_HOSTNAME` is set (served through the local Caddy reverse proxy), otherwise an `http://localhost:<port>` fallback driven by `ENTROPIAORME_FRONTEND_PORT`. Tauri 2 cannot interpolate env vars inside config field values, so this generated overlay is the shim that keeps the dev URL env-driven.
-- **`tauri.dev.local.json`**: generated per-checkout overlay (output of `build-dev-config.mjs`), gitignored because its `devUrl` differs per checkout and environment. Regenerated on every `tauri:dev` run, so do not hand-edit it.
+## Members
 
-## Why a separate dev CSP
+- **`entropia-orme/`**: the Tauri shell. Window chrome, the overlay windows, and the backend sidecar lifecycle. The only member coupled to the Tauri toolchain; `tauri.conf.json` and its dev overlays live here (see that directory's README).
+- **`eo-http/`**: HTTP substrate for the native backend (router and middleware).
+- **`eo-services/`**: domain services behind that HTTP surface.
+- **`eo-wire/`**: wire-format contracts (response and event types, serialisation).
 
-The base `tauri.conf.json` ships a strict Content Security Policy appropriate for the production webview. The dev overlay broadens `connect-src` and `img-src` beyond the base policy:
+The `eo-*` members are the landing zone for the native backend port; see `backend/architecture/PORT-READINESS.md` and `backend/architecture/PORTING-RULEBOOK.md` for the plan and the porting rules. They are deliberately Tauri-free, and CI keeps them that way structurally: a Linux job without the Tauri toolchain's system stack builds and tests them in isolation, so a GUI dependency creeping into backend code fails the gate rather than landing silently.
 
-- `http://127.0.0.1:*` and `http://localhost:*` for direct access to the dev server and backend.
-- `ws://127.0.0.1:*` and `ws://localhost:*` for Vite's HMR websocket.
-- `https://*.localhost` and `wss://*.localhost` for access through the local reverse proxy over HTTPS.
+## Workspace-level files
 
-So that:
+- **`Cargo.toml`**: the virtual manifest. Shared dependency versions live in `[workspace.dependencies]`, including the Tauri minor pin (see the comment there before bumping).
+- **`Cargo.lock`**: the single lockfile for all members.
+- **`.cargo/audit.toml`** / **`deny.toml`**: the dependency audit and supply-chain policies enforced in CI; review both together on any Tauri bump.
+- **`.sqlx/`**: offline query metadata for compile-time-checked SQL (consumed with `SQLX_OFFLINE=true` in CI). Empty until persistence code lands; regenerate with `cargo sqlx prepare` whenever a query or the schema changes.
 
-- The dev server (Vite) and the dev backend (FastAPI sidecar) can be reached from the webview during local development, whether directly on a port or through the reverse proxy over HTTPS.
-- Vite's HMR websocket can connect.
-
-The release build retains the strict CSP because the production webview talks only to the bundled sidecar over IPC, never to arbitrary localhost ports.
-
-## When to edit
-
-- **Adding a new external host the release app needs to reach**: edit the base `tauri.conf.json` CSP. The dev overlay inherits via the merge; you don't need to also widen it there.
-- **Adding a dev-only host (e.g. a temporary mock server)**: edit `tauri.dev.conf.json` so the relaxation never reaches release.
-- **Changing the dev URL** (hostname vs plain localhost port): set `ENTROPIAORME_HOSTNAME` / `ENTROPIAORME_FRONTEND_PORT` in the environment. Do not edit `tauri.dev.local.json` directly; it is regenerated on every dev launch.
-
-Any CSP change should be reviewed against the standing security posture before merging; the dev overlay's permissiveness is a deliberate dev-affordance, not a template for production.
+Commands for the CI gates that cover this workspace are documented in `TESTING.md` ("Rust workspace checks").

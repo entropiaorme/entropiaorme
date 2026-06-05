@@ -34,7 +34,7 @@ The Python sidecar's runtime dependencies (`backend/requirements.txt`) and dev d
 
 ## Frontend dependencies
 
-The Tauri shell's npm dependencies (`frontend/package.json`) and Rust dependencies (`frontend/src-tauri/Cargo.toml`) are pulled from npm and crates.io under their published licenses. The Tauri framework itself is dual-licensed Apache 2.0 / MIT.
+The Tauri shell's npm dependencies (`frontend/package.json`) and Rust dependencies (the `frontend/src-tauri/` cargo workspace) are pulled from npm and crates.io under their published licenses. The Tauri framework itself is dual-licensed Apache 2.0 / MIT.
 
 ## Game references
 

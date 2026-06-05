@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.db.app_database import AppDatabase
 from backend.routers import character
+from backend.testing.clock import RealClock
 
 
 def _game_data(professions=None):
@@ -238,7 +239,9 @@ def test_get_professions_empty_without_catalogue(app_db, monkeypatch):
 def test_get_calibration_reports_status_after_a_scan(app_db, monkeypatch):
     _seed_calibration(app_db, "Handgun", 50.0)  # scanned_at far in the past
     monkeypatch.setattr(
-        character, "get_services", lambda: SimpleNamespace(app_db=app_db)
+        character,
+        "get_services",
+        lambda: SimpleNamespace(app_db=app_db, clock=RealClock()),
     )
 
     result = character.get_calibration()

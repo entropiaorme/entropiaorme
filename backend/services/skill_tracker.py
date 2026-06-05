@@ -8,7 +8,6 @@ between full scans.
 
 import logging
 import threading
-import time as _time
 from datetime import datetime
 
 from backend.core.event_bus import EventBus
@@ -19,6 +18,7 @@ from backend.core.events import (
 )
 from backend.data.tt_value_curve import tt_value_of_gain
 from backend.services.character_calc import ATTRIBUTE_SKILLS
+from backend.testing.clock import Clock, RealClock
 
 log = logging.getLogger(__name__)
 
@@ -26,13 +26,17 @@ log = logging.getLogger(__name__)
 class SkillTracker:
     """Records skill gains from chat.log during active tracking sessions."""
 
-    def __init__(self, event_bus: EventBus, app_db):
+    def __init__(self, event_bus: EventBus, app_db, clock: Clock | None = None):
         self._event_bus = event_bus
         self._app_db = app_db
         self._db = app_db.conn
         self._db_lock: threading.RLock = app_db.lock
         self._active = False
         self._session_id: str | None = None
+        # Time source for the codex-claim suppression expiry; injected so
+        # replay scenarios stamp deterministic instants. Defaults to the
+        # real clock.
+        self._clock = clock or RealClock()
 
         # In-memory session totals
         self._session_skills: dict[str, float] = {}  # name → total amount
@@ -92,7 +96,7 @@ class SkillTracker:
         if skill_name in self._suppressed_claims:
             expiry = self._suppressed_claims[skill_name]
             del self._suppressed_claims[skill_name]
-            if _time.time() < expiry:
+            if self._clock.now().timestamp() < expiry:
                 log.info(
                     "Codex-claim gain suppressed: %s +%.4f levels", skill_name, amount
                 )
@@ -151,5 +155,5 @@ class SkillTracker:
         suppression so it isn't double-counted alongside the ledger entry the
         claim already recorded.
         """
-        self._suppressed_claims[skill_name] = _time.time() + timeout
+        self._suppressed_claims[skill_name] = self._clock.now().timestamp() + timeout
         log.info("Suppressing next %s gain (expires in %.0fs)", skill_name, timeout)

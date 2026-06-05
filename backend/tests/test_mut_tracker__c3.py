@@ -6,17 +6,18 @@ state refresh after a config change).
 
 Both methods are exercised against the real ``backend.tracking.tracker``
 module with an in-memory SQLite DB and an in-process event bus, with no
-device, OS, or GPU dependency. Time is driven through a fake injected for
-the ``backend.tracking.tracker._time`` module alias so the perf-window
-flush is fully deterministic.
+device, OS, or GPU dependency. Time is driven through a fake ``Clock``
+injected at construction so the perf-window flush is fully deterministic.
 """
 
 import logging
 import sqlite3
+from datetime import datetime
 
 import pytest
 
 from backend.core.event_bus import EventBus
+from backend.testing.clock import Clock
 from backend.tracking import tracker as tracker_mod
 from backend.tracking.tracker import HuntTracker
 
@@ -25,41 +26,37 @@ from backend.tracking.tracker import HuntTracker
 # ---------------------------------------------------------------------------
 
 
-class _FakeTime:
-    """Deterministic stand-in for the ``time`` module alias.
+class _FakeClock(Clock):
+    """Deterministic clock with a directly settable monotonic stream.
 
-    ``monotonic`` returns whatever value is queued; ``perf_counter`` advances
-    by a fixed step on each call so shot-second accumulation is predictable.
+    ``_record_shot_perf`` reads ``monotonic()`` twice per call (the shot
+    delta and the perf-window check); both reads return the value the test
+    queued, so each assertion fully controls the arithmetic under test.
     """
 
     def __init__(self, monotonic_value: float = 0.0):
+        self._now = datetime(2026, 1, 1)
         self._monotonic = monotonic_value
-        self._perf = 0.0
-        self.perf_step = 0.0
 
-    def set_monotonic(self, value: float) -> None:
-        self._monotonic = value
+    def now(self) -> datetime:
+        return self._now
 
     def monotonic(self) -> float:
         return self._monotonic
 
-    def perf_counter(self) -> float:
-        value = self._perf
-        self._perf += self.perf_step
-        return value
+    def set_monotonic(self, value: float) -> None:
+        self._monotonic = value
 
 
 @pytest.fixture
-def fake_time(monkeypatch):
-    ft = _FakeTime()
-    monkeypatch.setattr(tracker_mod, "_time", ft)
-    return ft
+def fake_clock():
+    return _FakeClock()
 
 
 @pytest.fixture
-def tracker():
+def tracker(fake_clock):
     db = sqlite3.connect(":memory:", check_same_thread=False)
-    return HuntTracker(EventBus(), db)
+    return HuntTracker(EventBus(), db, clock=fake_clock)
 
 
 @pytest.fixture
@@ -88,20 +85,19 @@ def debug_records():
 # ---------------------------------------------------------------------------
 
 
-def test_record_shot_perf_increments_counters_within_window(tracker, fake_time):
+def test_record_shot_perf_increments_counters_within_window(tracker, fake_clock):
     """One call within the window bumps each counter by exactly one and adds
     the shot's wall time. Kills the increment/assignment mutants on the
     accumulation lines (count, unknown, miss, shot-seconds)."""
-    fake_time.set_monotonic(1000.0)
-    tracker._perf_window_started = 1000.0  # elapsed == 0 -> no flush
+    fake_clock.set_monotonic(7.0)
+    tracker._perf_window_started = 7.0  # elapsed == 0 -> no flush
     tracker._perf_shot_count = 0
     tracker._perf_unknown_tool_shots = 0
     tracker._perf_inference_misses = 0
     tracker._perf_shot_seconds = 0.0
 
-    # perf_counter() called once inside; shot_started passed as 5.0, the
-    # internal call returns 7.0 -> adds exactly 2.0 seconds.
-    fake_time._perf = 7.0
+    # monotonic() reads 7.0 inside; shot_started passed as 5.0 -> adds
+    # exactly 2.0 seconds.
     tracker._record_shot_perf(True, True, 5.0)
 
     assert tracker._perf_shot_count == 1
@@ -110,38 +106,37 @@ def test_record_shot_perf_increments_counters_within_window(tracker, fake_time):
     assert tracker._perf_shot_seconds == pytest.approx(2.0)
 
 
-def test_record_shot_perf_does_not_count_unknown_or_miss_when_false(tracker, fake_time):
+def test_record_shot_perf_does_not_count_unknown_or_miss_when_false(
+    tracker, fake_clock
+):
     """unknown_tool / inference_miss False -> those counters stay put.
     Pins that the increments are gated behind their flags."""
-    fake_time.set_monotonic(2000.0)
+    fake_clock.set_monotonic(2000.0)
     tracker._perf_window_started = 2000.0
     tracker._perf_shot_count = 0
     tracker._perf_unknown_tool_shots = 0
     tracker._perf_inference_misses = 0
     tracker._perf_shot_seconds = 0.0
 
-    fake_time._perf = 0.0
-    tracker._record_shot_perf(False, False, 0.0)
+    tracker._record_shot_perf(False, False, 2000.0)
 
     assert tracker._perf_shot_count == 1
     assert tracker._perf_unknown_tool_shots == 0
     assert tracker._perf_inference_misses == 0
 
 
-def test_record_shot_perf_accumulates_across_calls(tracker, fake_time):
+def test_record_shot_perf_accumulates_across_calls(tracker, fake_clock):
     """Two within-window calls accumulate (catches ``= 1`` vs ``+= 1`` and
     sign-flip mutants on every accumulator)."""
-    fake_time.set_monotonic(3000.0)
-    tracker._perf_window_started = 3000.0
+    fake_clock.set_monotonic(0.0)
+    tracker._perf_window_started = 0.0
     tracker._perf_shot_count = 0
     tracker._perf_unknown_tool_shots = 0
     tracker._perf_inference_misses = 0
     tracker._perf_shot_seconds = 0.0
 
-    fake_time._perf = 0.0
-    fake_time.perf_step = 0.0
     tracker._record_shot_perf(True, True, 0.0)
-    tracker._record_shot_perf(True, True, -1.0)  # internal perf_counter() == 0.0
+    tracker._record_shot_perf(True, True, -1.0)  # internal monotonic() == 0.0
 
     assert tracker._perf_shot_count == 2
     assert tracker._perf_unknown_tool_shots == 2
@@ -150,27 +145,26 @@ def test_record_shot_perf_accumulates_across_calls(tracker, fake_time):
     assert tracker._perf_shot_seconds == pytest.approx(1.0)
 
 
-def test_record_shot_perf_shot_seconds_uses_difference_not_sum(tracker, fake_time):
-    """``perf_counter() - shot_started`` (not ``+``): a large shot_started
+def test_record_shot_perf_shot_seconds_uses_difference_not_sum(tracker, fake_clock):
+    """``monotonic() - shot_started`` (not ``+``): a large shot_started
     yields a small/negative delta, never the sum."""
-    fake_time.set_monotonic(3500.0)
-    tracker._perf_window_started = 3500.0
+    fake_clock.set_monotonic(10.0)
+    tracker._perf_window_started = 10.0
     tracker._perf_shot_seconds = 0.0
-    fake_time._perf = 10.0
     tracker._record_shot_perf(False, False, 4.0)
     assert tracker._perf_shot_seconds == pytest.approx(6.0)  # 10 - 4, not 14
 
 
 def test_record_shot_perf_within_window_does_not_flush(
-    tracker, fake_time, debug_records
+    tracker, fake_clock, debug_records
 ):
     """elapsed < 15 -> no log, no reset. Catches ``elapsed = now + started``
     (always huge -> would flush) and the early-return removal."""
     records = debug_records
-    fake_time.set_monotonic(5000.0)
+    fake_clock.set_monotonic(5000.0)
     tracker._perf_window_started = 4990.0  # elapsed == 10 < 15
     tracker._perf_shot_count = 4
-    tracker._record_shot_perf(False, False, 0.0)
+    tracker._record_shot_perf(False, False, 5000.0)
 
     assert tracker._perf_shot_count == 5  # incremented, NOT reset to 0
     assert records == []  # no flush log emitted
@@ -182,26 +176,30 @@ def test_record_shot_perf_within_window_does_not_flush(
 # ---------------------------------------------------------------------------
 
 
-def _seed_for_flush(tracker, fake_time, *, now, window_started):
-    fake_time.set_monotonic(now)
+def _seed_for_flush(tracker, fake_clock, *, now, window_started):
+    """Seed counters for a flush test.
+
+    Callers pass ``shot_started=now`` into ``_record_shot_perf`` so the
+    in-call shot delta is exactly zero and the seeded ``shot_seconds`` /
+    ``cost_lookup_seconds`` reach the flush arithmetic unchanged.
+    """
+    fake_clock.set_monotonic(now)
     tracker._perf_window_started = window_started
     tracker._perf_shot_count = 5
     tracker._perf_unknown_tool_shots = 2
     tracker._perf_inference_misses = 1
     tracker._perf_shot_seconds = 0.6
     tracker._perf_cost_lookup_seconds = 0.12
-    fake_time._perf = 0.0
-    fake_time.perf_step = 0.0
 
 
-def test_record_shot_perf_flush_resets_all_counters(tracker, fake_time, debug_records):
+def test_record_shot_perf_flush_resets_all_counters(tracker, fake_clock, debug_records):
     """elapsed >= 15 -> emits the debug record and resets every counter.
     Kills the reset-line mutants (= None / = 1 / = 1.0) and the window
     advance."""
     records = debug_records
-    _seed_for_flush(tracker, fake_time, now=10_000.0, window_started=9_980.0)  # 20s
+    _seed_for_flush(tracker, fake_clock, now=10_000.0, window_started=9_980.0)  # 20s
 
-    tracker._record_shot_perf(False, False, 0.0)
+    tracker._record_shot_perf(False, False, 10_000.0)
 
     assert len(records) == 1
     assert tracker._perf_shot_count == 0
@@ -212,14 +210,16 @@ def test_record_shot_perf_flush_resets_all_counters(tracker, fake_time, debug_re
     assert tracker._perf_window_started == 10_000.0  # advanced to ``now``
 
 
-def test_record_shot_perf_flush_log_message_and_args(tracker, fake_time, debug_records):
+def test_record_shot_perf_flush_log_message_and_args(
+    tracker, fake_clock, debug_records
+):
     """The flush log carries the exact template and the exact substitution
     args. Kills the message-string mutants and the per-arg ``None`` /
     dropped-argument mutants on the ``log.debug`` call."""
     records = debug_records
-    _seed_for_flush(tracker, fake_time, now=20_000.0, window_started=19_980.0)  # 20s
+    _seed_for_flush(tracker, fake_clock, now=20_000.0, window_started=19_980.0)  # 20s
 
-    tracker._record_shot_perf(True, True, 0.0)
+    tracker._record_shot_perf(True, True, 20_000.0)
     # this call also bumps count 5->6, unknown 2->3, misses 1->2 before flush
 
     assert len(records) == 1
@@ -247,22 +247,20 @@ def test_record_shot_perf_flush_log_message_and_args(tracker, fake_time, debug_r
 
 
 def test_record_shot_perf_flush_avg_values_are_scaled_per_shot(
-    tracker, fake_time, debug_records
+    tracker, fake_clock, debug_records
 ):
     """avg_*_ms == seconds / shots * 1000. Kills the */÷ swap, the ÷-vs-* on
     the 1000 factor, and the 1000->1001 constant mutants on both averages."""
     records = debug_records
-    fake_time.set_monotonic(30_000.0)
+    fake_clock.set_monotonic(30_000.0)
     tracker._perf_window_started = 29_980.0  # 20s
     tracker._perf_shot_count = 3  # +1 inside -> shots == 4
     tracker._perf_unknown_tool_shots = 0
     tracker._perf_inference_misses = 0
     tracker._perf_shot_seconds = 0.8
     tracker._perf_cost_lookup_seconds = 0.4
-    fake_time._perf = 0.0
-    fake_time.perf_step = 0.0
 
-    tracker._record_shot_perf(False, False, 0.0)
+    tracker._record_shot_perf(False, False, 30_000.0)
 
     rec = records[0]
     shots = 4
@@ -273,22 +271,20 @@ def test_record_shot_perf_flush_avg_values_are_scaled_per_shot(
 
 
 def test_record_shot_perf_flush_zero_shots_uses_zero_average(
-    tracker, fake_time, debug_records
+    tracker, fake_clock, debug_records
 ):
     """When shots == 0 the averages fall back to 0.0 (not 1.0). Kills the
     ``else 0.0`` -> ``else 1.0`` mutants on both averages."""
     records = debug_records
-    fake_time.set_monotonic(40_000.0)
+    fake_clock.set_monotonic(40_000.0)
     tracker._perf_window_started = 39_980.0  # 20s
     tracker._perf_shot_count = -1  # +1 inside -> shots == 0 (falsy)
     tracker._perf_unknown_tool_shots = 0
     tracker._perf_inference_misses = 0
     tracker._perf_shot_seconds = 0.5
     tracker._perf_cost_lookup_seconds = 0.5
-    fake_time._perf = 0.0
-    fake_time.perf_step = 0.0
 
-    tracker._record_shot_perf(False, False, 0.0)
+    tracker._record_shot_perf(False, False, 40_000.0)
 
     rec = records[0]
     assert rec.args[1] == 0
@@ -297,32 +293,32 @@ def test_record_shot_perf_flush_zero_shots_uses_zero_average(
 
 
 def test_record_shot_perf_flush_boundary_at_exactly_15(
-    tracker, fake_time, debug_records
+    tracker, fake_clock, debug_records
 ):
     """elapsed == 15.0 must flush (``< 15.0`` is False). Kills ``<`` -> ``<=``."""
     records = debug_records
-    _seed_for_flush(tracker, fake_time, now=50_015.0, window_started=50_000.0)  # 15.0s
-    tracker._record_shot_perf(False, False, 0.0)
+    _seed_for_flush(tracker, fake_clock, now=50_015.0, window_started=50_000.0)  # 15.0s
+    tracker._record_shot_perf(False, False, 50_015.0)
     assert len(records) == 1
     assert tracker._perf_shot_count == 0  # flushed
 
 
-def test_record_shot_perf_no_flush_just_below_15(tracker, fake_time, debug_records):
+def test_record_shot_perf_no_flush_just_below_15(tracker, fake_clock, debug_records):
     """elapsed == 15.5 with a ``< 15.0`` threshold flushes; a ``< 16.0``
     mutant would suppress it. Kills the 15.0 -> 16.0 constant mutant."""
     records = debug_records
-    _seed_for_flush(tracker, fake_time, now=60_015.5, window_started=60_000.0)  # 15.5s
-    tracker._record_shot_perf(False, False, 0.0)
+    _seed_for_flush(tracker, fake_clock, now=60_015.5, window_started=60_000.0)  # 15.5s
+    tracker._record_shot_perf(False, False, 60_015.5)
     assert len(records) == 1  # orig flushes at 15.5; ``< 16.0`` would not
 
 
-def test_record_shot_perf_does_not_crash_on_flush(tracker, fake_time, debug_records):
+def test_record_shot_perf_does_not_crash_on_flush(tracker, fake_clock, debug_records):
     """A normal flush computes ``now`` and ``elapsed`` as real numbers and
     completes. Kills ``now = None`` / ``elapsed = None`` (both raise on the
     subtraction / comparison)."""
     records = debug_records
-    _seed_for_flush(tracker, fake_time, now=70_020.0, window_started=70_000.0)  # 20s
-    tracker._record_shot_perf(False, False, 0.0)  # must not raise
+    _seed_for_flush(tracker, fake_clock, now=70_020.0, window_started=70_000.0)  # 20s
+    tracker._record_shot_perf(False, False, 70_020.0)  # must not raise
     assert len(records) == 1
 
 

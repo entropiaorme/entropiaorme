@@ -6,7 +6,6 @@ player progress from app_db, and handles claim recording with ledger
 """
 
 import logging
-import time
 
 from backend.data.codex_categories import (
     CODEX_SKILL_CATEGORIES,
@@ -18,6 +17,7 @@ from backend.data.codex_categories import (
 from backend.data.tt_value_curve import levels_for_tt_value
 from backend.db.app_database import AppDatabase
 from backend.services.game_data_store import GameDataStore
+from backend.testing.clock import Clock, RealClock
 
 log = logging.getLogger(__name__)
 
@@ -25,9 +25,17 @@ log = logging.getLogger(__name__)
 class CodexService:
     """Codex operations: species listing, rank breakdowns, claim recording."""
 
-    def __init__(self, app_db: AppDatabase, game_data: GameDataStore):
+    def __init__(
+        self,
+        app_db: AppDatabase,
+        game_data: GameDataStore,
+        clock: Clock | None = None,
+    ):
         self._app_db = app_db
         self._game_data = game_data
+        # Time source for claim/progress timestamps; injected so replay
+        # scenarios stamp deterministic instants. Defaults to the real clock.
+        self._clock = clock or RealClock()
 
     # ── Species listing ─────────────────────────────────────────────────────
 
@@ -165,7 +173,7 @@ class CodexService:
         else:
             ped_value = get_reward_ped(rank, species["baseCost"], category)
 
-        now = time.time()
+        now = self._clock.now().timestamp()
 
         with self._app_db.lock:
             # Insert claim — codex_claims is the canonical record for codex PES.
@@ -214,7 +222,7 @@ class CodexService:
         """Set codex rank directly, no side effects. For manual calibration."""
         if rank < 0 or rank > 25:
             raise ValueError("Rank must be 0-25")
-        now = time.time()
+        now = self._clock.now().timestamp()
         self._app_db.conn.execute(
             "INSERT INTO codex_progress (species_name, current_rank, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(species_name) DO UPDATE SET current_rank = ?, updated_at = ?",
@@ -367,7 +375,7 @@ class CodexService:
                 f"'{attribute_name}' is not an attribute. Valid: {sorted(self.ATTRIBUTES)}"
             )
 
-        now = time.time()
+        now = self._clock.now().timestamp()
 
         self._app_db.conn.execute(
             "INSERT INTO codex_claims "

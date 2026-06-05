@@ -150,6 +150,7 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
+from backend.testing.clock import RealClock
 from backend.testing.keystroke_source import PynputKeystrokeSource
 from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
@@ -314,6 +315,13 @@ async def lifespan(app: FastAPI):
         )
         return trifecta
 
+    # The process-wide time source. One instance is constructed here at the
+    # composition root and injected into every service that reads the clock,
+    # so a test-mode composition can swap in a deterministic clock at exactly
+    # one place. RealClock preserves the stdlib semantics each call site had
+    # before injection.
+    clock = RealClock()
+
     tracker = HuntTracker(
         event_bus,
         app_db.conn,
@@ -331,23 +339,25 @@ async def lifespan(app: FastAPI):
         manual_mob_entry_enabled_provider=_is_manual_mob_entry_enabled,
         manual_mob_provider=_get_manual_mob,
         trifecta_resolver=_resolve_trifecta,
+        clock=clock,
     )
 
-    quest_service = QuestService(app_db, event_bus)
+    quest_service = QuestService(app_db, event_bus, clock=clock)
     chatlog_watcher = ChatlogWatcher(
         event_bus,
         config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
+        clock=clock,
     )
 
     # Skill tracking: records chat.log skill gains during sessions
-    skill_tracker = SkillTracker(event_bus, app_db)
+    skill_tracker = SkillTracker(event_bus, app_db, clock=clock)
 
     # Hydrate last scan stats from DB so status survives backend restart
     _skill_scan_time, _skill_scan_count = hydrate_skill_scan_state(app_db)
 
     # Skill-scan completion callback — persists scanned levels and emits drift logs
-    on_skill_scan_complete = make_skill_scan_completion(app_db)
+    on_skill_scan_complete = make_skill_scan_completion(app_db, clock=clock)
 
     # Manual skill scan service
     skill_scan_manual = SkillScanManual(
@@ -356,10 +366,11 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
+        clock=clock,
     )
     skill_scan_manual.set_completion_callback(on_skill_scan_complete)
 
-    codex_service = CodexService(app_db, game_data)
+    codex_service = CodexService(app_db, game_data, clock=clock)
 
     # Hotbar key listener. Consumes a PynputKeystrokeSource filtered to the
     # number-row hotbar keys at the OS-hook boundary (input minimisation made
@@ -417,6 +428,7 @@ async def lifespan(app: FastAPI):
         repair_ocr=repair_ocr,
         spacebar_capture_listener=spacebar_capture_listener,
         recording_controller=recording_controller,
+        clock=clock,
     )
     set_services(services)
 

@@ -15,7 +15,6 @@ import logging
 import sqlite3
 import sys
 import threading
-import time as _time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -41,6 +40,7 @@ from backend.core.events import (
     EVENT_TICK_FLUSHED,
 )
 from backend.services.cost_engine import cost_per_shot_from_props
+from backend.testing.clock import Clock, RealClock
 from backend.tracking.loot_filter import is_tracked_loot, normalize_blacklist
 from backend.tracking.models import (
     ActiveSessionView,
@@ -170,14 +170,15 @@ class HuntTracker:
         manual_mob_entry_enabled_provider: Callable[[], bool] | None = None,
         manual_mob_provider: Callable[[], tuple[str, str] | None] | None = None,
         trifecta_resolver: Callable[[], dict | None] | None = None,
-        now_fn: Callable[[], datetime] | None = None,
+        clock: Clock | None = None,
     ):
         self._event_bus = event_bus
         self._db = db_conn
-        # Time source for session-boundary timestamps. Injected so replay
-        # tests can drive deterministic session start/stop instants; defaults
-        # to wall-clock time, leaving production behaviour unchanged.
-        self._now_fn = now_fn or (lambda: datetime.now(tz=None))
+        # Time source for every wall-clock and monotonic read in this
+        # service. Injected so replay tests can drive deterministic
+        # instants; defaults to the real clock, leaving production
+        # behaviour unchanged.
+        self._clock = clock or RealClock()
         self._equipment_cost_lookup = equipment_cost_lookup or (lambda _: 0.0)
         self._equipment_profile_lookup = equipment_profile_lookup or (lambda _: None)
         self._player_name = player_name.strip()
@@ -298,7 +299,7 @@ class HuntTracker:
         # For global/HoF correlation
         self._last_kill: Kill | None = None
         self._trifecta_unmatched_warning_emitted = False
-        self._perf_window_started = _time.monotonic()
+        self._perf_window_started = self._clock.monotonic()
         self._perf_shot_count = 0
         self._perf_unknown_tool_shots = 0
         self._perf_inference_misses = 0
@@ -515,7 +516,7 @@ class HuntTracker:
             session_id=session_id,
             started_at=started_at,
             kill_count=kill_count,
-            elapsed=int(self._now_fn().timestamp() - start_ts),
+            elapsed=int(self._clock.now().timestamp() - start_ts),
             cost=round(cost, 2),
             returns=round(returns, 2),
             pes=round(float(skill_tt), 2),
@@ -653,7 +654,7 @@ class HuntTracker:
         if not self._accumulator:
             return
         debug_perf = log.isEnabledFor(logging.DEBUG)
-        shot_started = _time.perf_counter() if debug_perf else 0.0
+        shot_started = self._clock.monotonic() if debug_perf else 0.0
 
         self._accumulator.shots_fired += 1
         if amount > 0:
@@ -686,12 +687,14 @@ class HuntTracker:
         tool_key = tool or "Unknown"
         current_cost = 0.0
         if tool is not None:
-            lookup_started = _time.perf_counter() if debug_perf else 0.0
+            lookup_started = self._clock.monotonic() if debug_perf else 0.0
             current_cost = self._current_cost_for_tool(
                 tool, inferred_cost=inferred_cost
             )
             if debug_perf:
-                self._perf_cost_lookup_seconds += _time.perf_counter() - lookup_started
+                self._perf_cost_lookup_seconds += (
+                    self._clock.monotonic() - lookup_started
+                )
 
         phase_key = tool_key
         if tool is not None and current_cost > 0:
@@ -730,9 +733,9 @@ class HuntTracker:
             self._perf_unknown_tool_shots += 1
         if inference_miss:
             self._perf_inference_misses += 1
-        self._perf_shot_seconds += _time.perf_counter() - shot_started
+        self._perf_shot_seconds += self._clock.monotonic() - shot_started
 
-        now = _time.monotonic()
+        now = self._clock.monotonic()
         elapsed = now - self._perf_window_started
         if elapsed < 15.0:
             return
@@ -822,8 +825,7 @@ class HuntTracker:
 
         with self._lock:
             self._refresh_loot_filter()
-            self._session = TrackingSession(id=session_id)
-            self._session.start_time = self._now_fn()
+            self._session = TrackingSession(id=session_id, start_time=self._clock.now())
             self._accumulator = _Accumulator()
 
             self._active_hotbar_tool_name = None
@@ -981,7 +983,7 @@ class HuntTracker:
             self._event_bus.unsubscribe(EVENT_TICK_FLUSHED, self._on_tick_flushed)
 
             # Finalise session
-            self._session.end_time = self._now_fn()
+            self._session.end_time = self._clock.now()
             self._session.dangling_cost = dangling_cost
             session = self._session
             session_id = self._session.id
@@ -1329,7 +1331,7 @@ class HuntTracker:
             items_raw = data.get("items", [])
             total_ped = data.get("total_ped", 0.0)
             timestamp = data.get("timestamp")
-            now = timestamp or datetime.now(tz=None)
+            now = timestamp or self._clock.now()
             now_epoch = now.timestamp() if isinstance(now, datetime) else float(now)
 
             # Loot deduplication (same fingerprint within 2s window)
@@ -1526,11 +1528,7 @@ class HuntTracker:
             value_ped = data.get("value", 0.0)
             is_hof = event_type in ("hof_kill", "hof_item")
             timestamp = data.get("timestamp")
-            ts = (
-                timestamp.timestamp()
-                if timestamp
-                else datetime.now(tz=None).timestamp()
-            )
+            ts = timestamp.timestamp() if timestamp else self._clock.now().timestamp()
 
             # Tag the most recently created kill (staleness check: within 5s).
             # Narrow on ``target is not None`` directly (rather than capturing

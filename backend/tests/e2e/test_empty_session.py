@@ -40,7 +40,7 @@ def test_empty_session_produces_no_kills_via_real_tail_loop(
     # it forward before the stop so the session boundaries are always
     # distinct and the golden is reproducible regardless of test order.
     clock = MockClock()
-    bus, tracker, watcher, chatlog = make_e2e_pipeline(now_fn=clock.now)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
 
     scenario = corpus_root / "scripted" / "empty_session"
     goldens = golden_set(scenario)

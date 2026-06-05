@@ -32,9 +32,10 @@ from backend.services.event_stream import DEFAULT_MAX_QUEUE, EventStreamHub
 
 def _session_event(session_id: str) -> TrackingSessionUpdated:
     return TrackingSessionUpdated(
+        occurred_at="2026-01-01T00:00:00+00:00",
         payload=TrackingSessionUpdatedPayload(
             sessionId=session_id, status="active", reason="started"
-        )
+        ),
     )
 
 

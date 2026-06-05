@@ -24,10 +24,13 @@ redesign:
   evolution bumps it), independent of the app's FastAPI version, so the frontend
   and a future Rust emitter can reason about shape evolution without coupling to
   the app version.
-- ``occurred_at`` is an ISO-8601 UTC string (never the bus's raw float), ported
-  to Rust ``chrono::DateTime<Utc>`` -> RFC3339. The conversion is re-implemented
-  here (``to_iso_utc``) rather than imported from the routers layer so ``core``
-  does not depend upward on ``routers``.
+- ``occurred_at`` is a required ISO-8601 UTC string (never the bus's raw
+  float, never null), ported to Rust ``chrono::DateTime<Utc>`` -> RFC3339. An
+  emitter whose domain carries no instant for the change (a settled tick with
+  no timestamp) synthesises one from its injected clock rather than threading
+  None to the wire. The conversion is re-implemented here (``to_iso_utc``)
+  rather than imported from the routers layer so ``core`` does not depend
+  upward on ``routers``.
 - payload field names are spelled camelCase literally (house style: no alias
   generators anywhere; Rust uses ``#[serde(rename_all = "camelCase")]``). The
   envelope never spreads a raw bus dict, so snake_case keys and float timestamps
@@ -73,14 +76,15 @@ TOPIC_TRACKING_SESSION_UPDATED: Literal["tracking.session.updated"] = (
 TOPIC_SCAN_STATUS_CHANGED: Literal["scan.status.changed"] = "scan.status.changed"
 
 
-def to_iso_utc(ts: float | None) -> str | None:
+def to_iso_utc(ts: float) -> str:
     """Render a Unix timestamp (SQLite REAL / bus float) as ISO-8601 UTC.
 
     Mirrors the routers-layer ``_ts_to_iso`` boundary, re-implemented here so
-    ``core`` carries no upward dependency on ``routers``.
+    ``core`` carries no upward dependency on ``routers``. Total on purpose:
+    ``occurred_at`` is a required envelope field, so every emitter supplies a
+    real instant (synthesising one from its injected clock where the domain
+    carries none) rather than threading None to the wire.
     """
-    if ts is None:
-        return None
     return datetime.fromtimestamp(ts, tz=UTC).isoformat()
 
 
@@ -109,7 +113,7 @@ class TrackingSessionUpdated(_EventModel):
 
     type: Literal["tracking.session.updated"] = TOPIC_TRACKING_SESSION_UPDATED
     event_version: int = 1
-    occurred_at: str | None = None
+    occurred_at: str
     payload: TrackingSessionUpdatedPayload
 
 
@@ -132,7 +136,7 @@ class ScanStatusChanged(_EventModel):
 
     type: Literal["scan.status.changed"] = TOPIC_SCAN_STATUS_CHANGED
     event_version: int = 1
-    occurred_at: str | None = None
+    occurred_at: str
     payload: ScanStatusChangedPayload
 
 

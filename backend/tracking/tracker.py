@@ -1018,10 +1018,12 @@ class HuntTracker:
             dangling_cost,
         )
         self._event_bus.publish(EVENT_SESSION_STOPPED, {"session_id": session_id})
+        # ``end_time`` was stamped from the injected clock above, so the
+        # required ``occurred_at`` always carries the stop instant.
         self._emit_session_event(
             "stopped",
             "idle",
-            end_time.timestamp() if end_time else None,
+            end_time.timestamp(),
             session_id,
         )
 
@@ -1181,7 +1183,7 @@ class HuntTracker:
         self,
         reason: Literal["started", "updated", "stopped"],
         status: Literal["active", "idle"],
-        occurred_ts: float | None,
+        occurred_ts: float,
         session_id: str | None,
     ) -> None:
         """Publish the coarse, frontend-facing tracking.session.updated event.
@@ -1193,7 +1195,9 @@ class HuntTracker:
         time), not a fresh clock read: those values already exist in the
         scenario's event stream and DB columns, so the event is deterministic
         under replay and reuses the harness's existing timestamp symbols rather
-        than minting wall-clock ones.
+        than minting wall-clock ones. The field is required on the wire, so a
+        caller whose domain carries no instant synthesises one from the
+        injected clock before calling.
 
         ``session_id`` is captured by the caller under the tracker lock and
         passed in rather than re-read off ``self._session`` here, so the
@@ -1220,7 +1224,9 @@ class HuntTracker:
         session readout (the P&L handlers set ``_session_dirty``), so a tick of
         unrelated chat traffic does not wake every frontend listener. The
         event is stamped with the tick's own timestamp, which already appears
-        on the tick's loot/combat events.
+        on the tick's loot/combat events; a settled tick that carries no
+        timestamp falls back to the injected clock so the required
+        ``occurred_at`` always names a real instant.
         """
         # Read/reset the dirty flag under the lock; publish AFTER release so a
         # subscriber never runs while this tracker holds its lock.
@@ -1230,11 +1236,12 @@ class HuntTracker:
             self._session_dirty = False
             session_id = self._session.id
         raw_ts = data.get("timestamp")
-        occurred_ts = (
-            raw_ts.timestamp()
-            if isinstance(raw_ts, datetime)
-            else (float(raw_ts) if raw_ts is not None else None)
-        )
+        if isinstance(raw_ts, datetime):
+            occurred_ts = raw_ts.timestamp()
+        elif raw_ts is not None:
+            occurred_ts = float(raw_ts)
+        else:
+            occurred_ts = self._clock.now().timestamp()
         self._emit_session_event("updated", "active", occurred_ts, session_id)
 
     def _on_combat(self, data: dict) -> None:

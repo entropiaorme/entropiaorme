@@ -57,7 +57,7 @@ Two events exist today:
 The envelope discipline:
 
 - The `type` literal doubles as the bus topic and the frontend topic; the mapping is identity by construction.
-- Every envelope carries `event_version` (per-event schema version, currently 1) and `occurred_at` (an ISO-8601 UTC string stamped from the domain timestamp, not a fresh clock read, so events are deterministic under replay).
+- Every envelope carries `event_version` (per-event schema version, currently 1) and `occurred_at` (a required, never-null ISO-8601 UTC string stamped from the domain timestamp, with the injected clock supplying the instant when the domain carries none, so events are deterministic under replay).
 - Envelope and payload models set `extra="forbid"`: the wire contract is closed, and an undeclared key is a bug. Payload field names are spelled camelCase literally, with no alias generator. This is the deliberate opposite of the read surface's `_Loose` response models (below).
 - The JSON schema of every envelope is pinned by a golden (`backend/tests/test_event_schema_drift.py` against `backend/tests/expected/event_schemas.snapshot.json`), so a payload change is a reviewed, ratified event rather than an accident.
 

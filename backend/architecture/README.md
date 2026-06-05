@@ -42,7 +42,7 @@ Events exist at two deliberately separate levels, both carried by the same in-pr
 {
   "type": "tracking.session.updated",
   "event_version": 1,
-  "occurred_at": "2026-01-01T00:00:00Z",
+  "occurred_at": "2026-01-01T00:00:00+00:00",
   "payload": { "sessionId": "...", "status": "active", "reason": "updated" }
 }
 ```
@@ -206,6 +206,7 @@ The architecture's properties are tests, not prose promises:
 ## Related documents
 
 - [`PORT-READINESS.md`](PORT-READINESS.md): how these shapes map onto a contemplated native port, and what does not port mechanically.
+- [`PORTING-RULEBOOK.md`](PORTING-RULEBOOK.md): the application-ready rule set for the port; boundary fidelity, interior latitude, the deliberate-divergence register, and the verification obligations.
 - [`../../TESTING.md`](../../TESTING.md): the test suite, tiers, and gates that enforce the properties above.
 - [`../testing/CONSISTENCY.md`](../testing/CONSISTENCY.md): the snapshot and event-stream consistency apparatus.
 - [`../testing/CONFORMANCE.md`](../testing/CONFORMANCE.md): the HTTP conformance substrate (ETag, OpenAPI, contract tests).

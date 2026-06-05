@@ -4,8 +4,9 @@ The app version is written in three places that a release bump must keep
 identical:
 
 - ``frontend/package.json`` (``version``),
-- ``frontend/src-tauri/Cargo.toml`` (``[package] version``),
-- ``frontend/src-tauri/tauri.conf.json`` (``version``).
+- ``frontend/src-tauri/Cargo.toml`` (``[workspace.package] version``, which every
+  workspace member inherits),
+- ``frontend/src-tauri/entropia-orme/tauri.conf.json`` (``version``).
 
 If a bump updates some but not all of these, the packaged artefacts disagree
 about what version they are. This guard reads all three and fails when they are
@@ -38,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # The three app-version stamp locations, each with how to read its version.
 PACKAGE_JSON = "frontend/package.json"
 CARGO_TOML = "frontend/src-tauri/Cargo.toml"
-TAURI_CONF = "frontend/src-tauri/tauri.conf.json"
+TAURI_CONF = "frontend/src-tauri/entropia-orme/tauri.conf.json"
 
 
 def _read_json_version(path: Path) -> str:
@@ -47,8 +48,10 @@ def _read_json_version(path: Path) -> str:
 
 
 def _read_cargo_version(path: Path) -> str:
+    # The workspace manifest is the single Rust-side version source: members
+    # inherit it via `version.workspace = true`.
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    return str(data["package"]["version"])
+    return str(data["workspace"]["package"]["version"])
 
 
 def read_stamps(repo_root: Path) -> dict[str, str]:

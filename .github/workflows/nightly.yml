@@ -122,7 +122,9 @@ jobs:
       # from mutants/<path>.meta (same accounting as backend.scripts.mutation_score
       # and analysis/permodule) and fails if any targeted module regresses below
       # its own floor. Inline here rather than a committed script so the gate lives
-      # with the workflow it guards.
+      # with the workflow it guards. The rust-mutation job below inherits these
+      # floors as services port: a ported module's Rust mutation score is held to
+      # at least the floor its Python original carries here.
       - name: Enforce the per-module mutation floors
         run: |
           python - <<'PY'
@@ -199,3 +201,40 @@ jobs:
               print("Per-module mutation-score floor regression.", file=sys.stderr)
           sys.exit(1 if fail else 0)
           PY
+
+  rust-mutation:
+    name: Mutation testing (cargo-mutants)
+    # The Rust counterpart of the mutmut campaign above, over the native-backend
+    # workspace members. The Tauri shell stays out of the campaign: its logic is
+    # OS-window plumbing behind cfg(windows), and building it needs the Tauri
+    # system toolchain this Linux runner deliberately lacks. While the members
+    # are small the acceptance bar is cargo-mutants' default (any missed mutant
+    # fails the run); as ported services land, per-module floors take over,
+    # inheriting each module's floor from the mutmut FLOORS map above so a port
+    # cannot regress below the test strength of the code it replaces.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    env:
+      # Compile-time-checked SQL resolves against the committed .sqlx offline
+      # cache; empty until persistence code lands.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      # Prebuilt binary rather than cargo install, which would compile the
+      # tool from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # Package selection scopes both the mutants and the per-mutant test runs
+      # to the backend members, keeping the Tauri-coupled shell out of the
+      # build graph entirely.
+      - name: Run mutation campaign (backend members)
+        run: cargo mutants --package eo-wire --package eo-http --package eo-services

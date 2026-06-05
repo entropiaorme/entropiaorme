@@ -1,4 +1,5 @@
-# cargo-deny configuration: supply-chain policy for the Tauri shell crate.
+# cargo-deny configuration: supply-chain policy for the Rust workspace
+# (the Tauri shell and the native-backend members).
 #
 # Four check classes run in CI (`cargo deny check`):
 #   - advisories: RUSTSEC advisories against the Windows-target dependency

@@ -1,0 +1,10 @@
+[package]
+name = "eo-wire"
+version.workspace = true
+description = "Wire-format contracts for the EntropiaOrme backend: response and event types and their serialisation."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

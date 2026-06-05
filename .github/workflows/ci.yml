@@ -21,10 +21,11 @@ permissions:
 
 jobs:
   # Detect whether the change needs the expensive jobs (the Windows backend
-  # matrix and the frontend build) or is documentation-only. A pull request, or a
-  # merge-queue run, that touches only Markdown skips both; any other path, and a
-  # push to main, runs them. The verdict is consumed by the gated jobs' `if:` and
-  # by the always-running `ci-gate` sentinel below, which is the required check.
+  # matrix, the frontend build, and the compiling Rust workspace jobs) or is
+  # documentation-only. A pull request, or a merge-queue run, that touches only
+  # Markdown skips them; any other path, and a push to main, runs them. The
+  # verdict is consumed by the gated jobs' `if:` and by the always-running
+  # `ci-gate` sentinel below, which is the required check.
   changes:
     name: Detect change scope
     runs-on: ubuntu-latest
@@ -382,12 +383,13 @@ jobs:
       - run: npm run test
 
   rust-policy:
-    name: Rust shell (fmt + audit + deny)
+    name: Rust workspace (fmt + audit + deny)
     runs-on: ubuntu-latest
-    # Cheap source- and manifest-level checks on the Tauri shell crate, so they
-    # run unconditionally like the other lint-class jobs above. Formatting reads
-    # the source; the audit and licence/ban gates read Cargo.lock, so none of
-    # them compile the crate and an ubuntu runner is sufficient and fast.
+    # Cheap source- and manifest-level checks on the Rust workspace (the Tauri
+    # shell plus the native-backend members), so they run unconditionally like
+    # the other lint-class jobs above. Formatting reads the source of every
+    # member; the audit and licence/ban gates read the workspace Cargo.lock, so
+    # none of them compile anything and an ubuntu runner is sufficient and fast.
     defaults:
       run:
         working-directory: frontend/src-tauri
@@ -416,11 +418,11 @@ jobs:
         run: cargo deny check
 
   rust:
-    name: Rust shell (clippy + build + test, Windows)
+    name: Rust workspace (clippy + build + test, Windows)
     runs-on: windows-latest
-    # Compiles the shell crate, so it runs on the application's real target
+    # Compiles the whole workspace, so it runs on the application's real target
     # rather than linting the Linux configuration of a Windows-only artefact
-    # (most of the crate sits behind cfg(windows)). Skipped on a
+    # (most of the shell sits behind cfg(windows)). Skipped on a
     # documentation-only pull request like the backend matrix; the ci-gate
     # sentinel covers the required-check report in that case.
     needs: [changes]
@@ -428,6 +430,12 @@ jobs:
     defaults:
       run:
         working-directory: frontend/src-tauri
+    env:
+      # Compile-time-checked SQL resolves against the committed .sqlx offline
+      # cache rather than a live database. The cache is empty until persistence
+      # code lands; once it holds query metadata, a stale cache fails the build
+      # loudly (regenerate with `cargo sqlx prepare`).
+      SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -446,18 +454,97 @@ jobs:
       # frozen executable at the same path.
       - name: Stage the sidecar placeholder
         shell: pwsh
-        run: New-Item -ItemType File -Force -Path binaries/entropiaorme-backend-x86_64-pc-windows-msvc.exe | Out-Null
-      # --all-targets lints the test code too; -D warnings promotes every lint
-      # to a failure so the gate cannot drift into an ignored-warnings state.
+        run: New-Item -ItemType File -Force -Path entropia-orme/binaries/entropiaorme-backend-x86_64-pc-windows-msvc.exe | Out-Null
+      # --all-targets lints the test and bench code too; -D warnings promotes
+      # every lint to a failure so the gate cannot drift into an
+      # ignored-warnings state.
       - name: Lint (clippy)
-        run: cargo clippy --all-targets -- -D warnings
-      # A debug compile check; the release bundle (tauri build) stays a manual
-      # release-time step. The debug profile resolves the frontend through the
-      # dev URL, so the crate compiles without a frontend build present.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # A debug compile check of every member; the release bundle (tauri build)
+      # stays a manual release-time step. The debug profile resolves the
+      # frontend through the dev URL, so the shell compiles without a frontend
+      # build present.
       - name: Compile check
         run: cargo build
-      - name: Run shell tests
-        run: cargo test
+      - name: Run workspace tests
+        run: cargo test --workspace
+
+  rust-members:
+    name: Rust backend members (nextest, Linux)
+    runs-on: ubuntu-latest
+    # The native-backend members (eo-http, eo-services, eo-wire) must build and
+    # test without the Tauri toolchain. This runner is the structural proof: it
+    # has none of the Tauri system stack installed (webkit2gtk et al.), and the
+    # package selection keeps the shell crate (the only Tauri-coupled member)
+    # out of the dependency graph entirely, so a GUI dependency creeping into
+    # backend code fails this job rather than landing silently. Skipped on a
+    # documentation-only pull request like the backend matrix; the ci-gate
+    # sentinel covers the required-check report in that case.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    env:
+      # See the Windows workspace job: the committed .sqlx offline cache backs
+      # compile-time-checked SQL; empty until persistence code lands.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      # Prebuilt binary rather than cargo install (same rationale as the
+      # policy job's tools).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Run the backend-member tests (nextest)
+        run: cargo nextest run -p eo-wire -p eo-http -p eo-services
+      # The criterion micro-benchmark rail, compile-check only: shared CI
+      # runners produce noisy timings, so benchmark figures are taken locally
+      # when a hot path lands, and CI guarantees the benches keep building.
+      - name: Compile the criterion benches
+        run: cargo bench -p eo-services --no-run
+
+  rust-coverage:
+    name: Rust backend members (branch coverage)
+    runs-on: ubuntu-latest
+    # Measures per-member branch coverage over the native-backend members.
+    # The figure is review evidence, not vanity: a ported service's branch
+    # coverage shows whether its tests actually exercise the code paths its
+    # behavioural-equivalence claim rests on, so it is read against the
+    # service's pre-port coverage whenever a port lands. Branch-level
+    # instrumentation is a nightly-only compiler feature, hence the pinned
+    # nightly toolchain on this measurement job (the gating test run stays on
+    # stable in the members job above; this job re-runs the same tests, so a
+    # test failure fails here too). Skipped on documentation-only pull
+    # requests like the backend matrix.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Measure branch coverage (cargo-llvm-cov)
+        run: cargo llvm-cov nextest --branch -p eo-wire -p eo-http -p eo-services
 
   ci-gate:
     name: CI gate
@@ -466,11 +553,11 @@ jobs:
     # backend-matrix and frontend contexts. It always runs (if: always()), so it
     # always reports a status, and it is fail-closed: it passes only when the
     # change is documentation-only (the gated jobs were legitimately skipped) or
-    # when both gated jobs succeeded. A detection that did not run cleanly, or a
+    # when every gated job succeeded. A detection that did not run cleanly, or a
     # code change whose jobs did not pass, fails it, so a skip can never let an
     # untested change merge. This lets a documentation-only pull request go green
     # in seconds without deadlocking on a never-reported required job.
-    needs: [changes, backend, frontend, rust-policy, rust]
+    needs: [changes, backend, frontend, rust-policy, rust, rust-members, rust-coverage]
     if: always()
     steps:
       - name: Require the gated jobs to have passed (or been documentation-only)
@@ -481,6 +568,8 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           RUST_POLICY_RESULT: ${{ needs.rust-policy.result }}
           RUST_RESULT: ${{ needs.rust.result }}
+          RUST_MEMBERS_RESULT: ${{ needs.rust-members.result }}
+          RUST_COVERAGE_RESULT: ${{ needs.rust-coverage.result }}
         shell: bash
         run: |
           if [ "$CHANGES_RESULT" != "success" ]; then
@@ -490,16 +579,16 @@ jobs:
           # The Rust policy job is unconditional (it does not compile, so it is
           # not gated on change scope) and must pass on every run.
           if [ "$RUST_POLICY_RESULT" != "success" ]; then
-            echo "::error::The Rust shell policy checks (fmt, audit, deny) did not pass (result: $RUST_POLICY_RESULT)."
+            echo "::error::The Rust workspace policy checks (fmt, audit, deny) did not pass (result: $RUST_POLICY_RESULT)."
             exit 1
           fi
           if [ "$CODE" = "false" ]; then
-            echo "Documentation-only change; the backend matrix, frontend build, and Rust shell build were skipped. Gate satisfied."
+            echo "Documentation-only change; the backend matrix, frontend build, and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ]; then
-            echo "Backend matrix, frontend build, and Rust shell build passed. Gate satisfied."
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
+            echo "Backend matrix, frontend build, and Rust workspace jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the backend matrix, the frontend build, and the Rust shell build (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, rust: $RUST_RESULT)."
+          echo "::error::A code change must pass the backend matrix, the frontend build, and the Rust workspace jobs (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT)."
           exit 1

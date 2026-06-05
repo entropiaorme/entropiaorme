@@ -74,6 +74,7 @@ _MODULE_TIERS = {
     "test_loot_filter_properties": "fast",
     "test_golden_ratification_guard": "fast",  # pure stdlib + git, no app
     "test_authoring_lint": "fast",  # pure stdlib + git, no app
+    "test_ambient_time_guard": "fast",  # pure stdlib + git, no app
     "test_classify_change_scope": "fast",  # pure stdlib + git, no app
     "test_version_stamps": "fast",  # pure stdlib, reads tracked manifests
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation

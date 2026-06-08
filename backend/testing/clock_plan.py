@@ -73,6 +73,11 @@ def load_clock_plan(scenario_dir: Path) -> ClockPlan:
             "scenario must commit a clock plan (see backend/testing/clock_plan.py)."
         )
     doc = yaml.safe_load(metadata_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(doc, dict):
+        raise ValueError(
+            f"Scenario {scenario_dir.name!r} metadata.yaml must be a mapping at "
+            f"the root, got {type(doc).__name__}."
+        )
     block = doc.get("clock")
     if not isinstance(block, dict):
         raise ValueError(
@@ -84,7 +89,13 @@ def load_clock_plan(scenario_dir: Path) -> ClockPlan:
     if isinstance(raw_start, datetime):
         start = raw_start  # yaml parses bare ISO timestamps natively
     elif isinstance(raw_start, str):
-        start = datetime.fromisoformat(raw_start)
+        try:
+            start = datetime.fromisoformat(raw_start)
+        except ValueError as exc:
+            raise ValueError(
+                f"Scenario {scenario_dir.name!r} clock.start must be a valid "
+                f"ISO-8601 instant, got {raw_start!r}."
+            ) from exc
     else:
         raise ValueError(
             f"Scenario {scenario_dir.name!r} clock.start must be an ISO-8601 "

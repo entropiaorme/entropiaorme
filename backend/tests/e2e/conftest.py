@@ -260,6 +260,10 @@ def make_e2e_http_pipeline(
         if scenario_dir is not None:
             plan = load_clock_plan(scenario_dir)
             os.environ["ENTROPIA_TEST_CLOCK_START"] = plan.start.isoformat()
+        else:
+            # Real-clock run: clear any inherited override so the app cannot
+            # boot on a frozen clock left in the ambient environment.
+            os.environ.pop("ENTROPIA_TEST_CLOCK_START", None)
 
         try:
             with TestClient(app, base_url=f"http://localhost:{BACKEND_PORT}") as client:

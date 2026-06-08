@@ -42,6 +42,7 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 _MODULE_TIERS = {
     "test_capturer": "fast",  # mss session is stubbed; no real device touched
     "test_clock": "fast",
+    "test_clock_plan": "fast",  # loader over a temp metadata.yaml; no app
     "test_testing_config": "fast",  # env-loader logic; no real env touched
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",

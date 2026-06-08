@@ -43,8 +43,8 @@ def _stream_ticks(lines: list[str], chatlog_path: Path) -> None:
     """Append ``lines`` to ``chatlog_path``, flushing once per timestamp tick.
 
     The watcher closes the current tick whenever its tail loop reaches
-    end-of-file, so if it caught up to a writer mid-tick — between two lines
-    sharing one timestamp — it would flush a partial tick and the trailing
+    end-of-file, so if it caught up to a writer mid-tick (between two lines
+    sharing one timestamp), it would flush a partial tick and the trailing
     same-second line would land in a fresh (wrong) tick, splitting one app
     tick into two. Under parallel load that interleaving is exactly what made
     the metamorphic combat-reorder property flake. Writing each timestamp
@@ -92,7 +92,7 @@ def replay_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
     flush per timestamp tick (see :func:`_stream_ticks`). The scenario's
     timestamps drive tracker behaviour; wall-clock spacing between ticks is
     unimportant for tick-boundary correctness because the tick boundary is
-    derived from the parsed timestamp, not from when a line landed on disk —
+    derived from the parsed timestamp, not from when a line landed on disk,
     an invariant the per-tick flush is what actually upholds.
     """
 

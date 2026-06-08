@@ -528,7 +528,7 @@ def test_group_by_tick_keeps_same_timestamp_lines_in_one_group() -> None:
 
 def test_group_by_tick_splits_on_timestamp_change() -> None:
     combat, loot1, _loot2 = _one_kill_with_same_second_loot()
-    # Combat at 10:00:00, loot at 10:00:01 — distinct ticks, distinct groups.
+    # Combat at 10:00:00, loot at 10:00:01: distinct ticks, distinct groups.
     assert list(_group_by_tick([combat, loot1])) == [[combat], [loot1]]
 
 
@@ -574,8 +574,8 @@ def test_idle_boundary_between_same_second_lines_splits_the_tick() -> None:
     """Detection-power companion: an idle boundary mid-tick splits the kill.
 
     Draining between the two same-second loot writes forces the watcher to
-    reach end-of-file mid-tick — the exact interleaving a per-line feed allowed
-    under parallel load — so it closes the first loot line into one kill and the
+    reach end-of-file mid-tick (the exact interleaving a per-line feed allowed
+    under parallel load), so it closes the first loot line into one kill and the
     second into a fresh, empty-combat kill. This pins that the no-split
     guarantee above is non-vacuous: the hazard is real, and any feed that lets
     the watcher idle mid-tick reintroduces it.

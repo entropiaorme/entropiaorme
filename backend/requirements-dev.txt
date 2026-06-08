@@ -14,6 +14,11 @@ diff-cover>=9.0
 # Static type checker (config in pyproject.toml). Ratchets from a lenient-clean
 # baseline toward strict via a per-module allow-list.
 mypy>=1.13
+# YAML parsing for the test harness: scenario metadata / clock plans, the
+# session recorder, and the equivalence-runner mirrors all read committed YAML.
+# Declared explicitly here (rather than relied on transitively) since the test
+# infrastructure imports it directly.
+PyYAML>=6.0
 # Type stubs for PyYAML, consumed by the type checker (the session recorder
 # reads and writes scenario metadata as YAML).
 types-PyYAML>=6.0

@@ -47,6 +47,10 @@ _MODULE_TIERS = {
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",
     "test_http_fingerprint": "fast",  # pure projection helpers
+    "test_normalizer_conformance": "fast",  # oracle over a committed fixture; no app
+    "test_equivalence_emitters": "fast",  # oracle over committed raw fixtures; no app
+    "test_equivalence_yml_family": "fast",  # mirrors over committed .yml pins; no app
+    "test_equivalence_clis": "fast",  # CLI stdin/stdout + generator entry points; no app
     "test_character_calc": "fast",
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",

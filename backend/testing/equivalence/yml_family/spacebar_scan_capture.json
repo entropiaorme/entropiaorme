@@ -1,0 +1,21 @@
+{
+  "capture_calls": 1,
+  "tap_edges": [
+    {
+      "key": "space",
+      "kind": "press"
+    },
+    {
+      "key": "space",
+      "kind": "release"
+    },
+    {
+      "key": "space",
+      "kind": "press"
+    },
+    {
+      "key": "space",
+      "kind": "release"
+    }
+  ]
+}

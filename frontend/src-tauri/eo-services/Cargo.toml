@@ -13,9 +13,17 @@ publish = false
 bench = false
 
 [dependencies]
+eo-wire = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+proptest = { workspace = true }
+
+[features]
+# Tests that shell out to the Python oracle at runtime (the cost-engine
+# differential). Off by default so the hermetic Rust CI jobs need no Python.
+cross-language = []
 
 [[bench]]
 name = "smoke"

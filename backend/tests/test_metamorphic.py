@@ -54,7 +54,12 @@ from backend.testing.consistency import _diff_state, replay_segment
 from backend.testing.db_snapshot import capture
 from backend.testing.dsl import Scenario
 from backend.testing.fingerprint import Normalizer
-from backend.testing.replay import replay_scenario, wait_for_drain
+from backend.testing.replay import (
+    _group_by_tick,
+    _stream_ticks,
+    replay_scenario,
+    wait_for_drain,
+)
 from backend.testing.store_reducers import (
     TrackingViewContext,
     tracking_view_state,
@@ -480,3 +485,110 @@ def test_parse_file_distributes_over_concatenation(
     parsed_ab = parse_file(path_ab)
 
     assert _project(parsed_ab) == _project(parsed_a) + _project(parsed_b)
+
+
+# --- feed tick-atomicity (the determinism the combat-reorder property needs) -
+
+# The watcher closes an app tick whenever its tail loop reaches end-of-file (a
+# tick is closed when the timestamp advances OR the file goes idle). So the
+# replay feed must never let the watcher reach end-of-file in the middle of a
+# same-timestamp tick: that flushes a partial tick and lands the trailing
+# same-second line in a fresh, wrong tick, splitting one kill into two. Under
+# parallel load that interleaving is what made the combat-reorder property
+# above flake (a per-line feed let the tail thread reach end-of-file in the gap
+# between the two same-second loot lines). The feed groups same-timestamp lines
+# into one write so a tick is the atomic streaming unit; these guards pin that
+# grouping and the no-split property it buys, with a deterministic companion
+# proving the hazard is real so the no-split assertion is non-vacuous.
+
+
+def _same_second_loot_pair() -> list[str]:
+    """Two loot lines sharing one timestamp: one parser tick, one feed write."""
+    s = Scenario("pair").at(_EPOCH)
+    s.loot.received("Shrapnel", 5.00)
+    s.loot.received("Animal Muscle Oil", 0.12)
+    return s.lines()
+
+
+def _one_kill_with_same_second_loot() -> list[str]:
+    """One combat shot then a same-second two-item loot group: one kill."""
+    s = Scenario("kill").at(_EPOCH)
+    s.combat.damage_dealt(10.0)
+    s.tick()
+    s.loot.received("Shrapnel", 5.00)
+    s.loot.received("Animal Muscle Oil", 0.12)
+    s.tick()
+    return s.lines()
+
+
+def test_group_by_tick_keeps_same_timestamp_lines_in_one_group() -> None:
+    a, b = _same_second_loot_pair()
+    assert list(_group_by_tick([a, b])) == [[a, b]]
+
+
+def test_group_by_tick_splits_on_timestamp_change() -> None:
+    combat, loot1, _loot2 = _one_kill_with_same_second_loot()
+    # Combat at 10:00:00, loot at 10:00:01 — distinct ticks, distinct groups.
+    assert list(_group_by_tick([combat, loot1])) == [[combat], [loot1]]
+
+
+def test_group_by_tick_attaches_untimestamped_continuation_to_current_tick() -> None:
+    a, b = _same_second_loot_pair()
+    cont = "    wrapped continuation with no timestamp\n"
+    # A line the parser cannot timestamp neither opens nor closes a tick, so it
+    # rides with the tick currently streaming rather than forcing a flush.
+    assert list(_group_by_tick([a, cont, b])) == [[a, cont, b]]
+
+
+def test_group_by_tick_streams_leading_untimestamped_line_alone() -> None:
+    cont = "no timestamp here\n"
+    combat = _one_kill_with_same_second_loot()[0]
+    # With no tick to join, a leading untimestamped line streams on its own and
+    # the first timestamped line opens the first real tick.
+    assert list(_group_by_tick([cont, combat])) == [[cont], [combat]]
+
+
+def test_group_by_tick_is_empty_for_no_lines() -> None:
+    assert list(_group_by_tick([])) == []
+
+
+def test_feed_keeps_same_second_loot_in_one_kill() -> None:
+    """The tick-atomic feed lands both same-second loot items in one kill.
+
+    The two loot lines share a timestamp, so they belong to one app tick and
+    one kill. The production :func:`_stream_ticks` writes that tick in a single
+    flush, so the watcher can never reach end-of-file between the two lines.
+    """
+    with _pipeline() as (watcher, tracker, chatlog, db):
+        tracker.start_session()
+        _stream_ticks(_one_kill_with_same_second_loot(), chatlog)
+        wait_for_drain(watcher, chatlog)
+        tracker.stop_session()
+        snapshot = capture(db, Normalizer())
+
+    assert len(snapshot["kills"]) == 1
+    assert len(snapshot["kill_loot_items"]) == 2
+
+
+def test_idle_boundary_between_same_second_lines_splits_the_tick() -> None:
+    """Detection-power companion: an idle boundary mid-tick splits the kill.
+
+    Draining between the two same-second loot writes forces the watcher to
+    reach end-of-file mid-tick — the exact interleaving a per-line feed allowed
+    under parallel load — so it closes the first loot line into one kill and the
+    second into a fresh, empty-combat kill. This pins that the no-split
+    guarantee above is non-vacuous: the hazard is real, and any feed that lets
+    the watcher idle mid-tick reintroduces it.
+    """
+    combat, loot1, loot2 = _one_kill_with_same_second_loot()
+    with _pipeline() as (watcher, tracker, chatlog, db):
+        tracker.start_session()
+        # Each same-second loot line written and drained separately, so the
+        # watcher idles (and flushes) between them: the splitting schedule.
+        for chunk in ([combat], [loot1], [loot2]):
+            _stream_ticks(chunk, chatlog)
+            wait_for_drain(watcher, chatlog)
+        tracker.stop_session()
+        snapshot = capture(db, Normalizer())
+
+    assert len(snapshot["kills"]) == 2

@@ -21,3 +21,11 @@ notes: >
   Synthetic: authored by hand. No OCR fixtures, no keystrokes, no
   real-time replay. Timestamps are wall-clock-zero; the watcher reads
   each line as the test writes it.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (see backend/testing/clock_plan.py). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

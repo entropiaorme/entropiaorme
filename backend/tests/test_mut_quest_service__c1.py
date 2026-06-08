@@ -9,13 +9,14 @@ an on-disk SQLite database.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-import backend.services.quest_service as qs_mod
 from backend.db.app_database import AppDatabase
 from backend.services.quest_service import QuestService
+from backend.testing.clock import Clock
 
 
 @pytest.fixture
@@ -162,23 +163,38 @@ class TestCompleteQuest:
         assert _ledger_rows(svc) == []
 
     def test_completion_uses_captured_now_not_a_fresh_clock_read(
-        self, svc: QuestService, monkeypatch
+        self, svc: QuestService
     ):
-        """complete_quest captures `now = time.time()` once and threads that
+        """complete_quest captures the clock's now once and threads that
         SAME timestamp into _record_session_completion. A mutant that passes
         None there forces _record_session_completion to read the clock again,
         recording a later, different timestamp."""
         q = svc.create_quest({"name": "Clock"})  # no reward -> single clock read
         svc._current_session_id = "sessX"
 
-        ticks = iter([1000.0, 2000.0, 3000.0, 4000.0])
-        monkeypatch.setattr(qs_mod.time, "time", lambda: next(ticks))
+        class _TickingClock(Clock):
+            """Each ``now()`` read returns the next queued epoch instant."""
+
+            def __init__(self, epochs):
+                self._epochs = iter(epochs)
+
+            def now(self) -> datetime:
+                return datetime.fromtimestamp(next(self._epochs))
+
+            def monotonic(self) -> float:
+                return 0.0
+
+        # Epochs sit comfortably after 1970 so the naive fromtimestamp
+        # round-trip is valid in any host timezone (Windows rejects
+        # pre-epoch local instants).
+        svc._clock = _TickingClock([1_000_000.0, 2_000_000.0, 3_000_000.0])
 
         svc.complete_quest(q["id"])
         rows = _completion_rows(svc, "sessX")
         assert len(rows) == 1
-        # `now` was the first read (1000.0); a re-read would be 2000.0.
-        assert rows[0]["completed_at"] == 1000.0
+        # `now` was the first read (1_000_000.0); a re-read would be
+        # 2_000_000.0.
+        assert rows[0]["completed_at"] == 1_000_000.0
 
     def test_skill_claim_log_message_is_exact(self, svc: QuestService, caplog):
         q = svc.create_quest(

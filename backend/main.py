@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Load .env.local at startup so direct invocations (python -m backend.main,
@@ -150,9 +151,40 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
+from backend.testing.clock import Clock, MockClock, RealClock
 from backend.testing.keystroke_source import PynputKeystrokeSource
 from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
+
+
+def _build_clock() -> Clock:
+    """Construct the process-wide time source.
+
+    Production runs on the real clock. A replay harness driving this backend
+    as a whole process freezes it instead by setting
+    ``ENTROPIA_TEST_CLOCK_START`` to the scenario clock plan's naive
+    ISO-8601 start instant (see ``backend/testing/clock_plan.py``); every
+    injected read then returns that frozen instant, keeping each stamped
+    timestamp deterministic and independent of how many times the
+    implementation reads time.
+    """
+    raw = os.environ.get("ENTROPIA_TEST_CLOCK_START", "").strip()
+    if not raw:
+        return RealClock()
+    try:
+        start = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
+        ) from exc
+    if start.tzinfo is not None:
+        # An aware instant would be reinterpreted by MockClock's later
+        # ``.timestamp()`` conversion (UTC vs host-local), silently shifting
+        # replay semantics away from the naive plan. Reject it, matching the
+        # same guard in backend/testing/clock_plan.py.
+        raise RuntimeError("ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant")
+    log.info("Deterministic clock active: frozen at %s", start.isoformat())
+    return MockClock(start=start)
 
 
 @asynccontextmanager
@@ -314,6 +346,15 @@ async def lifespan(app: FastAPI):
         )
         return trifecta
 
+    # The process-wide time source. One instance is constructed here at the
+    # composition root and injected into every service that reads the clock,
+    # so a deterministic clock can be swapped in at exactly one place.
+    # RealClock preserves the stdlib semantics each call site had before
+    # injection. The watcher takes this clock too, but guards its own drain
+    # timeout against a frozen clock internally (see ChatlogWatcher), so the
+    # composition root injects it uniformly with every other service.
+    clock = _build_clock()
+
     tracker = HuntTracker(
         event_bus,
         app_db.conn,
@@ -331,23 +372,25 @@ async def lifespan(app: FastAPI):
         manual_mob_entry_enabled_provider=_is_manual_mob_entry_enabled,
         manual_mob_provider=_get_manual_mob,
         trifecta_resolver=_resolve_trifecta,
+        clock=clock,
     )
 
-    quest_service = QuestService(app_db, event_bus)
+    quest_service = QuestService(app_db, event_bus, clock=clock)
     chatlog_watcher = ChatlogWatcher(
         event_bus,
         config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
+        clock=clock,
     )
 
     # Skill tracking: records chat.log skill gains during sessions
-    skill_tracker = SkillTracker(event_bus, app_db)
+    skill_tracker = SkillTracker(event_bus, app_db, clock=clock)
 
     # Hydrate last scan stats from DB so status survives backend restart
     _skill_scan_time, _skill_scan_count = hydrate_skill_scan_state(app_db)
 
     # Skill-scan completion callback — persists scanned levels and emits drift logs
-    on_skill_scan_complete = make_skill_scan_completion(app_db)
+    on_skill_scan_complete = make_skill_scan_completion(app_db, clock=clock)
 
     # Manual skill scan service
     skill_scan_manual = SkillScanManual(
@@ -356,10 +399,11 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
+        clock=clock,
     )
     skill_scan_manual.set_completion_callback(on_skill_scan_complete)
 
-    codex_service = CodexService(app_db, game_data)
+    codex_service = CodexService(app_db, game_data, clock=clock)
 
     # Hotbar key listener. Consumes a PynputKeystrokeSource filtered to the
     # number-row hotbar keys at the OS-hook boundary (input minimisation made
@@ -417,6 +461,7 @@ async def lifespan(app: FastAPI):
         repair_ocr=repair_ocr,
         spacebar_capture_listener=spacebar_capture_listener,
         recording_controller=recording_controller,
+        clock=clock,
     )
     set_services(services)
 

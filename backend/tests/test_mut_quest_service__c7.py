@@ -8,31 +8,27 @@ under SQLite and are recorded as equivalents rather than killed here.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-import backend.services.quest_service as qs_module
 from backend.db.app_database import AppDatabase
 from backend.services.quest_service import QuestService
+from backend.testing.clock import MockClock
 
 LOGGER_NAME = "backend.services.quest_service"
+
+# The frozen instant the cooling tests reason against. Constructed through a
+# naive fromtimestamp/timestamp round-trip so MockClock.now().timestamp()
+# returns exactly this epoch value.
+NOW = 1_000_000.0
 
 
 @pytest.fixture
 def svc(tmp_path: Path) -> QuestService:
     db = AppDatabase(tmp_path / "test.db")
-    return QuestService(db)
-
-
-class _FakeTime:
-    """Stand-in for the ``time`` module exposing a fixed ``time()``."""
-
-    NOW = 1_000_000.0
-
-    @staticmethod
-    def time() -> float:
-        return _FakeTime.NOW
+    return QuestService(db, clock=MockClock(start=datetime.fromtimestamp(NOW)))
 
 
 # ── _record_session_completion ────────────────────────────────────────────
@@ -213,9 +209,7 @@ def test_is_quest_cooling_missing_cooldown_with_last(svc: QuestService):
     # last set and cd_hours None the original returns False (the mutant would
     # raise comparing None <= 0).
     assert (
-        svc._is_quest_cooling(
-            {"last_completed_at": _FakeTime.NOW, "cooldown_hours": None}
-        )
+        svc._is_quest_cooling({"last_completed_at": NOW, "cooldown_hours": None})
         is False
     )
 
@@ -229,25 +223,20 @@ def test_is_quest_cooling_missing_last_with_cooldown(svc: QuestService):
     )
 
 
-def test_is_quest_cooling_zero_cooldown_not_cooling(svc: QuestService, monkeypatch):
+def test_is_quest_cooling_zero_cooldown_not_cooling(svc: QuestService):
     # mutmut_13: `cd_hours <= 0` -> `cd_hours < 0`; cd_hours == 0 must be
     # treated as "no cooldown" even when last is in the future.
-    monkeypatch.setattr(qs_module, "time", _FakeTime)
     assert (
-        svc._is_quest_cooling(
-            {"last_completed_at": _FakeTime.NOW + 10_000, "cooldown_hours": 0}
-        )
+        svc._is_quest_cooling({"last_completed_at": NOW + 10_000, "cooldown_hours": 0})
         is False
     )
 
 
-def test_is_quest_cooling_one_hour_cooldown_is_cooling(svc: QuestService, monkeypatch):
+def test_is_quest_cooling_one_hour_cooldown_is_cooling(svc: QuestService):
     # mutmut_14: `cd_hours <= 0` -> `cd_hours <= 1`; a 1-hour cooldown that
     # just completed is still cooling.
-    monkeypatch.setattr(qs_module, "time", _FakeTime)
     assert (
-        svc._is_quest_cooling({"last_completed_at": _FakeTime.NOW, "cooldown_hours": 1})
-        is True
+        svc._is_quest_cooling({"last_completed_at": NOW, "cooldown_hours": 1}) is True
     )
 
 
@@ -259,37 +248,30 @@ def test_is_quest_cooling_guard_returns_false(svc: QuestService):
     )
 
 
-def test_is_quest_cooling_multiplies_hours_to_seconds(svc: QuestService, monkeypatch):
+def test_is_quest_cooling_multiplies_hours_to_seconds(svc: QuestService):
     # mutmut_17: `cd_hours * 3600` -> `cd_hours / 3600`. A quest completed
     # 100s ago with a 1h cooldown is cooling under x3600 but not under /3600.
-    monkeypatch.setattr(qs_module, "time", _FakeTime)
     assert (
-        svc._is_quest_cooling(
-            {"last_completed_at": _FakeTime.NOW - 100, "cooldown_hours": 1}
-        )
+        svc._is_quest_cooling({"last_completed_at": NOW - 100, "cooldown_hours": 1})
         is True
     )
 
 
-def test_is_quest_cooling_seconds_factor_exact(svc: QuestService, monkeypatch):
+def test_is_quest_cooling_seconds_factor_exact(svc: QuestService):
     # mutmut_18: `cd_hours * 3600` -> `* 3601`. With a huge cooldown placed so
     # the expiry straddles "now" only under the off-by-one factor.
-    monkeypatch.setattr(qs_module, "time", _FakeTime)
-    last = _FakeTime.NOW - 1_000_000 * 3600 - 500_000
+    last = NOW - 1_000_000 * 3600 - 500_000
     assert (
         svc._is_quest_cooling({"last_completed_at": last, "cooldown_hours": 1_000_000})
         is False
     )
 
 
-def test_is_quest_cooling_strict_greater_than(svc: QuestService, monkeypatch):
-    # mutmut_19: `> time.time()` -> `>= time.time()`. Expiry exactly equal to
+def test_is_quest_cooling_strict_greater_than(svc: QuestService):
+    # mutmut_19: `> clock-now` -> `>= clock-now`. Expiry exactly equal to
     # now is NOT cooling.
-    monkeypatch.setattr(qs_module, "time", _FakeTime)
     assert (
-        svc._is_quest_cooling(
-            {"last_completed_at": _FakeTime.NOW - 3600, "cooldown_hours": 1}
-        )
+        svc._is_quest_cooling({"last_completed_at": NOW - 3600, "cooldown_hours": 1})
         is False
     )
 

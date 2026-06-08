@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from backend.services.skill_scan_manual import SkillScanManual
     from backend.services.skill_tracker import SkillTracker
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
+    from backend.testing.clock import Clock
     from backend.testing.recording_controller import RecordingController
     from backend.tracking.tracker import HuntTracker
 
@@ -44,6 +45,10 @@ class Services:
     repair_ocr: RepairOcrService
     spacebar_capture_listener: SpacebarCaptureListener
     recording_controller: RecordingController
+    # The process-wide time source (the same instance every service above was
+    # constructed with), exposed so the stateless router layer reads time
+    # through it instead of the ambient stdlib clock.
+    clock: Clock
 
 
 _services: Services | None = None

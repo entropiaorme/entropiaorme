@@ -62,7 +62,8 @@ def _record_bus(bus: EventBus, topics: Iterable[str]) -> list[dict]:
 
 
 def test_hotbar_slot_use_drives_listener_via_keystroke_source(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     in_memory_db,
     data_regression,
@@ -72,8 +73,9 @@ def test_hotbar_slot_use_drives_listener_via_keystroke_source(
     ACTIVE_HEAL_TOOL_CHANGED, consumable → no event.
     """
 
-    bus, tracker, watcher, chatlog = e2e_pipeline
     scenario = corpus_root / "scripted" / "hotbar_slot_use"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
 
     # Capture every tool-change publication, in order, before the
     # listener is wired so subscription is in place when its callbacks
@@ -109,6 +111,7 @@ def test_hotbar_slot_use_drives_listener_via_keystroke_source(
     wait_for_drain(watcher, chatlog)
     # Listener's resolver runs off-thread; give it a brief moment to land.
     _spin_until(lambda: len(seen) >= 2)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Chat-side sanity: two damage shots + one loot tick = one kill.

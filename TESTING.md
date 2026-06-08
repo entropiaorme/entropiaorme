@@ -191,7 +191,7 @@ A change that touches only documentation (every changed file is Markdown) needs 
 
 Skipping a *required* check is the hazard: branch protection treats a never-reported required check as pending (deadlocking the merge) and a skipped one as passing (fail-open). The `CI gate` avoids this with an always-running sentinel: it stands in for the backend, frontend, and Rust workspace contexts, always reports, and is fail-closed. A documentation-only change passes on that verdict alone, but a detection that did not run cleanly, or a code change whose jobs did not pass, fails the gate. So a documentation-only change goes green in seconds, while a code change still runs and must pass everything. The classification is deliberately conservative: anything other than Markdown (source, configuration, the workflow files themselves, an asset) counts as code, so the safe direction (run the suite) is the default whenever there is any doubt.
 
-A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request), runs the complete backend suite across all tiers under randomised order (the `full` tier, plus a cross-file isolation check the pinned per-PR legs cannot give), runs the Python mutation campaign, publishing the mutation score as a badge at the top of the README, and runs the `cargo-mutants` campaign over the Rust backend members (see "Rust workspace checks" below). (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
+A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: it re-runs the dependency audit (so an advisory published after a change has landed is surfaced without waiting for the next pull request), runs the complete backend suite across all tiers under randomised order (the `full` tier, plus a cross-file isolation check the pinned per-PR legs cannot give), runs the multi-seed determinism matrix (three runs of the per-PR suite shape under explicitly set, logged `pytest-randomly` seeds, so order-dependence fails loudly with the exact seed that reproduces it, rather than one-in-N on someone's pull request; the per-PR 3.11 leg keeps its fresh-seed randomised order as the always-on early warning), runs the Python mutation campaign, publishing the mutation score as a badge at the top of the README, and runs the `cargo-mutants` campaign over the Rust backend members (see "Rust workspace checks" below). (The coverage badge is refreshed separately, by the main-branch run of the CI workflow above.)
 
 ## Local checks (pre-commit)
 
@@ -247,6 +247,22 @@ Run it against the staged change (the pre-commit invocation) or an explicit rang
 The pull-request gate runs it over the PR's `base..head` range. Pass `--warn-only` to print findings without failing.
 
 A companion check, `backend/scripts/check_version_stamps.py`, asserts the three application version stamps (`frontend/package.json`, the `[workspace.package]` version in `frontend/src-tauri/Cargo.toml`, `frontend/src-tauri/entropia-orme/tauri.conf.json`) carry an identical version, so a release bump cannot update some and miss others. It is whole-tree rather than diff-scoped (the invariant holds over the current tree at all times), so it runs in the pre-commit job rather than the diff-scoped authoring-lint job. `CURRENT_TOS_VERSION` in `frontend/src/lib/tos.ts` is deliberately excluded: it versions the terms-of-service document, a separate namespace that moves independently of the application release.
+
+## Deterministic scenario clocks
+
+Every corpus scenario commits a clock plan in its `metadata.yaml`:
+
+```yaml
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0
+```
+
+The plan defines a **frozen, driver-advanced** clock for the replay: the scenario clock starts frozen at `start` (a naive instant, interpreted in the host timezone exactly as chat-log line instants are), and only the replay driver advances it, by `step_seconds` at scenario-defined points; canonically once after the replay has fully drained, before the session stops, so the session boundaries are distinct deterministic instants. Production code under test only ever reads the clock. Reads never advance it, so the instants a scenario produces are independent of how many times the implementation reads time; that is what keeps timestamp-bearing outputs comparable across runs and across implementations replaying the same scenario, regardless of their internal read counts. `start` values are chosen away from the scenario's chat-log instants so a plan-stamped timestamp never merges with a domain timestamp under the fingerprint normaliser's encounter-order symbols. The contract lives in `backend/testing/clock_plan.py`.
+
+In-process scenario tests build the clock through the `scenario_clock` fixture and inject it into the pipeline; whole-process runs freeze the app's composition-root clock instead by exporting `ENTROPIA_TEST_CLOCK_START=<plan start>` (the `make_e2e_http_pipeline` factory does this from the scenario's plan, and the test, as the replay driver, advances the in-process clock object at the canonical point). Production composes `RealClock` and is unaffected.
+
+The static half of the guarantee is the no-ambient-time guard (`backend/scripts/check_ambient_time.py`, pinned green by `test_ambient_time_guard.py`): no backend production module reads the ambient clock; every wall-clock or monotonic read flows through the injected `backend/testing/clock.py` `Clock`, constructed once at the composition root. Golden stability alone cannot prove this (a clock-coupled surface with no golden passes vacuously), so the zero-ambient-reads scan is the enforcement. One deliberate carve-out: the chat-log watcher's drain-deadline reads go through its own injected clock, which plan-driven runs leave **real**, so a failing drain still raises `TimeoutError` instead of hanging under a frozen monotonic stream.
 
 ## Goldens regeneration
 

@@ -29,6 +29,8 @@ import pytest
 
 from backend.dependencies import get_services
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.clock import MockClock
+from backend.testing.clock_plan import load_clock_plan
 from backend.testing.http_fingerprint import HttpFingerprinter
 from backend.testing.replay import wait_for_drain
 
@@ -130,7 +132,7 @@ def _capture_hydration_set(
 
 @pytest.mark.parametrize("scenario_name", HTTP_FINGERPRINT_SCENARIOS)
 def test_http_fingerprint(
-    e2e_http_pipeline,
+    make_e2e_http_pipeline,
     corpus_root: Path,
     http_fingerprinter,
     scenario_name: str,
@@ -143,21 +145,34 @@ def test_http_fingerprint(
     endpoint's start-time attribution gate. The HTTP contract under
     test is on the read surface, which the tracker shape exercises
     identically.
+
+    The lifespan app runs on the scenario's committed clock plan (the
+    whole-process frozen-clock seam), so every timestamp the app stamps
+    into these goldens is plan-derived rather than wall-clock. The test
+    is the replay driver, so it advances the app clock once after the
+    replay drains (the canonical driver point) to keep the session
+    boundaries distinct deterministic instants.
     """
-    client, chatlog, watcher = e2e_http_pipeline
     scenario = corpus_root / "scripted" / scenario_name
-
-    tracker = get_services().tracker
-    session = tracker.start_session()
-    try:
-        _replay_full_scenario(scenario, chatlog, watcher)
-        tracker.stop_session()
-    finally:
-        if tracker.is_tracking:
+    plan = load_clock_plan(scenario)
+    with make_e2e_http_pipeline(scenario) as (client, chatlog, watcher):
+        services = get_services()
+        app_clock = services.clock
+        assert isinstance(app_clock, MockClock), (
+            "the scenario pipeline must run on the plan-driven frozen clock"
+        )
+        tracker = services.tracker
+        session = tracker.start_session()
+        try:
+            _replay_full_scenario(scenario, chatlog, watcher)
+            app_clock.advance(plan.step_seconds)
             tracker.stop_session()
+        finally:
+            if tracker.is_tracking:
+                tracker.stop_session()
 
-    fp = http_fingerprinter(scenario)
-    _capture_hydration_set(fp, client, session.id)
+        fp = http_fingerprinter(scenario)
+        _capture_hydration_set(fp, client, session.id)
 
     # Pin the captured-set cardinality so a future test refactor that
     # silently drops endpoints from _capture_hydration_set surfaces here

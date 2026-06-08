@@ -42,6 +42,7 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 _MODULE_TIERS = {
     "test_capturer": "fast",  # mss session is stubbed; no real device touched
     "test_clock": "fast",
+    "test_clock_plan": "fast",  # loader over a temp metadata.yaml; no app
     "test_testing_config": "fast",  # env-loader logic; no real env touched
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",
@@ -74,6 +75,7 @@ _MODULE_TIERS = {
     "test_loot_filter_properties": "fast",
     "test_golden_ratification_guard": "fast",  # pure stdlib + git, no app
     "test_authoring_lint": "fast",  # pure stdlib + git, no app
+    "test_ambient_time_guard": "fast",  # pure stdlib + git, no app
     "test_classify_change_scope": "fast",  # pure stdlib + git, no app
     "test_version_stamps": "fast",  # pure stdlib, reads tracked manifests
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation

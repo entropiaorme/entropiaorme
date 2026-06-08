@@ -25,6 +25,7 @@ import pytest
 from backend.core.event_bus import EventBus
 from backend.db.app_database import AppDatabase
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.clock_plan import load_clock_plan
 from backend.testing.consistency import ConsistencyHarness, SurfaceAdapter
 from backend.testing.store_reducers import (
     CodexReducer,
@@ -43,9 +44,19 @@ def codex_consistency_pipeline(
     snapshot query."""
     chatlog_path = tmp_path / "chat_testing.log"
     chatlog_path.touch()
+    # The scenario's committed clock plan drives every timestamp this
+    # pipeline stamps; the watcher stays on its real default clock per
+    # the drain-timeout caveat. The harness's mid-flow snapshots need no
+    # advancement: a frozen instant is deterministic, and no golden
+    # observes the session boundaries here.
+    clock = load_clock_plan(
+        Path(__file__).parent.joinpath(
+            "corpus", "scripted", "consistency_codex_isolation_midpoint"
+        )
+    ).build_clock()
     app_db = AppDatabase(tmp_path / "test.db")
     bus = EventBus()
-    tracker = HuntTracker(bus, app_db.conn)
+    tracker = HuntTracker(bus, app_db.conn, clock=clock)
     watcher = ChatlogWatcher(bus, chatlog_path)
     watcher.start()
     try:

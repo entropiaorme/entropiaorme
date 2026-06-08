@@ -19,6 +19,7 @@ from backend.core.events import (
     EVENT_SKILL_GAIN,
 )
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.clock import MockClock
 
 
 def _make_loot_line(ts: str, item: str, value: str) -> str:
@@ -580,6 +581,30 @@ class TestDrainSeams:
                 TimeoutError, match=r"did not drain to 1 line.*within 0\.3s.*read 0"
             ):
                 # Nothing is ever written, so line one never arrives.
+                watcher.wait_until_drained(1, timeout=0.3)
+        finally:
+            watcher.stop()
+
+    def test_wait_until_drained_times_out_with_a_frozen_injected_clock(self, tmp_path):
+        """A frozen injected clock cannot turn a failed drain into a hang.
+
+        The drain deadline runs on the watcher's own real, advancing clock,
+        not the injected one, so a deterministic-replay harness that injects a
+        frozen clock still gets a TimeoutError rather than an infinite wait
+        (a frozen monotonic stream would otherwise hold ``remaining`` above
+        zero forever).
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        # MockClock().monotonic() never advances: routed through the deadline
+        # arithmetic it would freeze the timeout. The dedicated timeout clock
+        # must ignore it and still expire.
+        watcher = ChatlogWatcher(EventBus(), chatlog, clock=MockClock())
+        watcher.start()
+        try:
+            with pytest.raises(
+                TimeoutError, match=r"did not drain to 1 line.*within 0\.3s"
+            ):
                 watcher.wait_until_drained(1, timeout=0.3)
         finally:
             watcher.stop()

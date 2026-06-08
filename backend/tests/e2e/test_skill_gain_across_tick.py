@@ -16,20 +16,22 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_skill_gain_does_not_partition_kills(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, watcher, chatlog = e2e_pipeline
-
     scenario = corpus_root / "scripted" / "skill_gain_across_tick"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     assert len(result.kills) == 2, (

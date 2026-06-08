@@ -36,7 +36,7 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Callable, Iterator
-from contextlib import redirect_stdout
+from contextlib import AbstractContextManager, contextmanager, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -44,6 +44,8 @@ from fastapi.testclient import TestClient
 
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.clock import MockClock
+from backend.testing.clock_plan import ClockPlan, load_clock_plan
 from backend.testing.fingerprint import Normalizer
 from backend.testing.golden import GoldenSet
 from backend.testing.http_fingerprint import HttpFingerprinter
@@ -145,6 +147,26 @@ def make_e2e_pipeline(
 
 
 @pytest.fixture
+def scenario_clock() -> Callable[[Path], tuple[MockClock, ClockPlan]]:
+    """Factory: build the scenario's plan-driven frozen clock.
+
+    Loads the committed ``clock:`` block from the scenario's
+    ``metadata.yaml`` and returns ``(clock, plan)``: the frozen
+    ``MockClock`` to inject into the pipeline under test, and the plan
+    whose ``step_seconds`` the test advances by at its driver points
+    (canonically once after the replay drains, before ``stop_session``,
+    so the session boundaries are distinct deterministic instants). See
+    ``backend/testing/clock_plan.py`` for the contract.
+    """
+
+    def _make(scenario_dir: Path) -> tuple[MockClock, ClockPlan]:
+        plan = load_clock_plan(scenario_dir)
+        return plan.build_clock(), plan
+
+    return _make
+
+
+@pytest.fixture
 def update_fingerprints(request) -> bool:
     """True when the run was invoked with ``--update-fingerprints``."""
     return bool(request.config.getoption("--update-fingerprints"))
@@ -167,10 +189,10 @@ def golden_set(update_fingerprints: bool) -> Callable[[Path], GoldenSet]:
 
 
 @pytest.fixture
-def e2e_http_pipeline(
+def make_e2e_http_pipeline(
     tmp_path: Path,
-) -> Iterator[tuple[TestClient, Path, ChatlogWatcher]]:
-    """Boot the full FastAPI lifespan against a temp data dir + chatlog.
+) -> Callable[..., AbstractContextManager[tuple[TestClient, Path, ChatlogWatcher]]]:
+    """Factory: boot the full FastAPI lifespan against a temp data dir.
 
     ``settings.json`` is pre-seeded so the in-lifespan ``ChatlogWatcher``
     tails the temp file the scenario will write into; the demo router's
@@ -179,65 +201,107 @@ def e2e_http_pipeline(
     enabled on the live config so the recording router's dev-gated
     surface is exercised in the same shape the contract suite sees.
 
-    Yields ``(client, chatlog_path, watcher)``. The watcher inside the
-    lifespan is started during ``with TestClient(app)``; the test streams
-    the scenario's chat lines into the temp file via the existing
-    ``replay_scenario`` helper and drains against the yielded watcher.
-    Teardown stops the lifespan, restores env, and removes the temp data
-    dirs.
+    Called with a ``scenario_dir``, the factory additionally exports the
+    scenario's committed clock plan through the composition root's
+    ``ENTROPIA_TEST_CLOCK_START`` seam, so every timestamp the lifespan
+    app stamps is frozen at the plan's start instant (the whole-process
+    flavour of the in-process plan-driven clock; see
+    ``backend/testing/clock_plan.py``). Without a scenario the app runs
+    on the real clock, which suits the surface walks that pin no
+    timestamp-bearing goldens.
+
+    The context manager yields ``(client, chatlog_path, watcher)``. The
+    watcher inside the lifespan is started during ``with
+    TestClient(app)``; the test streams the scenario's chat lines into
+    the temp file via the existing ``replay_scenario`` helper and drains
+    against the yielded watcher. Teardown stops the lifespan, restores
+    env, and removes the temp data dirs.
     """
-    data_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_data_"))
-    demo_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_demo_"))
-    chatlog = tmp_path / "chat_testing.log"
-    chatlog.touch()
 
-    # Pre-seed settings.json so the lifespan-built ChatlogWatcher tails
-    # the scenario's temp file rather than ~/Documents/Entropia/chat.log.
-    (data_dir / "settings.json").write_text(
-        json.dumps(
-            {
-                "chatlog_path": str(chatlog),
-                "developer_mode_enabled": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    @contextmanager
+    def _make(
+        scenario_dir: Path | None = None,
+    ) -> Iterator[tuple[TestClient, Path, ChatlogWatcher]]:
+        data_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_data_"))
+        demo_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_demo_"))
+        chatlog = tmp_path / "chat_testing.log"
+        chatlog.touch()
 
-    # Import lazily so the env override is in place when backend.main's
-    # lifespan reads ENTROPIAORME_DATA_DIR on TestClient enter.
-    import backend.routers.demo as demo_module
-    from backend.dependencies import get_services
-    from backend.main import BACKEND_PORT, app
-    from backend.scripts.demo_seed.__main__ import main as seed_demo
+        # Pre-seed settings.json so the lifespan-built ChatlogWatcher tails
+        # the scenario's temp file rather than ~/Documents/Entropia/chat.log.
+        (data_dir / "settings.json").write_text(
+            json.dumps(
+                {
+                    "chatlog_path": str(chatlog),
+                    "developer_mode_enabled": True,
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    with redirect_stdout(io.StringIO()):
-        seed_demo(["--reseed", "--out", str(demo_dir)])
-    demo_db = demo_dir / "entropia_orme.db"
-    original_resolver = demo_module._resolve_demo_db_path
-    demo_module._resolve_demo_db_path = lambda: demo_db
-    demo_module._state["conn"] = None
-    demo_module._state["svc"] = None
+        # Import lazily so the env override is in place when backend.main's
+        # lifespan reads ENTROPIAORME_DATA_DIR on TestClient enter.
+        import backend.routers.demo as demo_module
+        from backend.dependencies import get_services
+        from backend.main import BACKEND_PORT, app
+        from backend.scripts.demo_seed.__main__ import main as seed_demo
 
-    original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
-    os.environ["ENTROPIAORME_DATA_DIR"] = str(data_dir)
-
-    try:
-        with TestClient(app, base_url=f"http://localhost:{BACKEND_PORT}") as client:
-            yield client, chatlog, get_services().chatlog_watcher
-    finally:
-        demo_module._resolve_demo_db_path = original_resolver
+        with redirect_stdout(io.StringIO()):
+            seed_demo(["--reseed", "--out", str(demo_dir)])
+        demo_db = demo_dir / "entropia_orme.db"
+        original_resolver = demo_module._resolve_demo_db_path
+        demo_module._resolve_demo_db_path = lambda: demo_db
         demo_module._state["conn"] = None
         demo_module._state["svc"] = None
-        if original_data_dir is None:
-            os.environ.pop("ENTROPIAORME_DATA_DIR", None)
+
+        original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
+        os.environ["ENTROPIAORME_DATA_DIR"] = str(data_dir)
+        original_clock_start = os.environ.get("ENTROPIA_TEST_CLOCK_START")
+        if scenario_dir is not None:
+            plan = load_clock_plan(scenario_dir)
+            os.environ["ENTROPIA_TEST_CLOCK_START"] = plan.start.isoformat()
         else:
-            os.environ["ENTROPIAORME_DATA_DIR"] = original_data_dir
-        # ignore_errors: Windows may briefly hold the SQLite file open
-        # past lifespan shutdown via the per-thread connection pool; a
-        # leftover temp dir on a stuck handle is preferable to a teardown
-        # crash that masks a real test failure.
-        shutil.rmtree(data_dir, ignore_errors=True)
-        shutil.rmtree(demo_dir, ignore_errors=True)
+            # Real-clock run: clear any inherited override so the app cannot
+            # boot on a frozen clock left in the ambient environment.
+            os.environ.pop("ENTROPIA_TEST_CLOCK_START", None)
+
+        try:
+            with TestClient(app, base_url=f"http://localhost:{BACKEND_PORT}") as client:
+                yield client, chatlog, get_services().chatlog_watcher
+        finally:
+            demo_module._resolve_demo_db_path = original_resolver
+            demo_module._state["conn"] = None
+            demo_module._state["svc"] = None
+            if original_data_dir is None:
+                os.environ.pop("ENTROPIAORME_DATA_DIR", None)
+            else:
+                os.environ["ENTROPIAORME_DATA_DIR"] = original_data_dir
+            if original_clock_start is None:
+                os.environ.pop("ENTROPIA_TEST_CLOCK_START", None)
+            else:
+                os.environ["ENTROPIA_TEST_CLOCK_START"] = original_clock_start
+            # ignore_errors: Windows may briefly hold the SQLite file open
+            # past lifespan shutdown via the per-thread connection pool; a
+            # leftover temp dir on a stuck handle is preferable to a teardown
+            # crash that masks a real test failure.
+            shutil.rmtree(data_dir, ignore_errors=True)
+            shutil.rmtree(demo_dir, ignore_errors=True)
+
+    return _make
+
+
+@pytest.fixture
+def e2e_http_pipeline(
+    make_e2e_http_pipeline,
+) -> Iterator[tuple[TestClient, Path, ChatlogWatcher]]:
+    """Plain real-clock lifespan pipeline (no scenario clock plan).
+
+    The surface-walk and mutation tests use this shape; scenario tests
+    that pin timestamp-bearing goldens call ``make_e2e_http_pipeline``
+    with their scenario directory instead.
+    """
+    with make_e2e_http_pipeline() as triple:
+        yield triple
 
 
 @pytest.fixture

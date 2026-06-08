@@ -75,3 +75,37 @@ class TestMockClock:
 
     def test_is_a_clock(self):
         assert isinstance(MockClock(), Clock)
+
+
+class TestBuildClock:
+    """The whole-process clock seam parses ``ENTROPIA_TEST_CLOCK_START``."""
+
+    def test_rejects_timezone_aware_start(self, monkeypatch):
+        """An aware instant is refused.
+
+        ``MockClock``'s later ``.timestamp()`` conversion would reinterpret an
+        aware value (UTC vs host-local), silently shifting replay semantics
+        away from the naive plan, so the seam rejects it (matching the
+        naive-only guard in ``clock_plan``).
+        """
+        from backend.main import _build_clock
+
+        monkeypatch.setenv("ENTROPIA_TEST_CLOCK_START", "2026-01-01T00:00:00+00:00")
+        with pytest.raises(RuntimeError, match="must be a naive ISO-8601 instant"):
+            _build_clock()
+
+    def test_accepts_naive_start_and_freezes(self, monkeypatch):
+        """A naive instant builds a ``MockClock`` frozen at that instant."""
+        from backend.main import _build_clock
+
+        monkeypatch.setenv("ENTROPIA_TEST_CLOCK_START", "2030-06-15T12:30:00")
+        clock = _build_clock()
+        assert isinstance(clock, MockClock)
+        assert clock.now() == datetime(2030, 6, 15, 12, 30, 0)
+
+    def test_unset_returns_real_clock(self, monkeypatch):
+        """No override: production runs on the real clock."""
+        from backend.main import _build_clock
+
+        monkeypatch.delenv("ENTROPIA_TEST_CLOCK_START", raising=False)
+        assert isinstance(_build_clock(), RealClock)

@@ -585,9 +585,7 @@ class TestDrainSeams:
         finally:
             watcher.stop()
 
-    def test_wait_until_drained_times_out_with_a_frozen_injected_clock(
-        self, tmp_path
-    ):
+    def test_wait_until_drained_times_out_with_a_frozen_injected_clock(self, tmp_path):
         """A frozen injected clock cannot turn a failed drain into a hang.
 
         The drain deadline runs on the watcher's own real, advancing clock,

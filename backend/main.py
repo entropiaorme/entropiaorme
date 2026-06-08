@@ -182,9 +182,7 @@ def _build_clock() -> Clock:
         # ``.timestamp()`` conversion (UTC vs host-local), silently shifting
         # replay semantics away from the naive plan. Reject it, matching the
         # same guard in backend/testing/clock_plan.py.
-        raise RuntimeError(
-            "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
-        )
+        raise RuntimeError("ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant")
     log.info("Deterministic clock active: frozen at %s", start.isoformat())
     return MockClock(start=start)
 

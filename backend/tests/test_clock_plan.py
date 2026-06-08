@@ -47,5 +47,6 @@ def test_timezone_aware_start_is_rejected(tmp_path):
         tmp_path,
         'clock:\n  start: "2026-01-01T00:00:00+00:00"\n  step_seconds: 1.0\n',
     )
-    with pytest.raises(ValueError, match="must be naive"):
+    with pytest.raises(ValueError, match="must be naive") as exc:
         load_clock_plan(tmp_path)
+    assert tmp_path.name in str(exc.value)

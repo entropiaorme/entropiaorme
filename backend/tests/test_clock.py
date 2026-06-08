@@ -90,9 +90,7 @@ class TestBuildClock:
         """
         from backend.main import _build_clock
 
-        monkeypatch.setenv(
-            "ENTROPIA_TEST_CLOCK_START", "2026-01-01T00:00:00+00:00"
-        )
+        monkeypatch.setenv("ENTROPIA_TEST_CLOCK_START", "2026-01-01T00:00:00+00:00")
         with pytest.raises(RuntimeError, match="must be a naive ISO-8601 instant"):
             _build_clock()
 

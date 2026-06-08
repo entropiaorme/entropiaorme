@@ -8,3 +8,15 @@ license.workspace = true
 publish = false
 
 [dependencies]
+serde_json = { workspace = true }
+ryu = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+base64 = { workspace = true }
+
+[features]
+# Tests that shell out to the Python oracle at runtime (the differential
+# fuzz). Off by default so the hermetic Rust CI jobs need no Python; the
+# cross-language CI job and the local equivalence runner enable it.
+cross-language = []

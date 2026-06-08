@@ -38,6 +38,16 @@ dev:
 test-backend:
     .venv/Scripts/python.exe -m pytest backend/tests/
 
+# Run the cross-language equivalence runner end to end: the Rust-native
+# per-unit gate (Normalizer conformance, DB-snapshot + HTTP fingerprint emitter
+# byte-equality, the .yml-family mirrors, the cost-engine numeric loop) PLUS the
+# live differential fuzzes against the Python oracle (the `cross-language`
+# feature) and the Python faithfulness legs. The virtualenv must be installed
+# (the differentials shell out to it). No ignore list: every divergence fails.
+test-equivalence:
+    $env:EO_ORACLE_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path; cargo test --manifest-path frontend/src-tauri/Cargo.toml -p eo-wire -p eo-services --features cross-language
+    .venv/Scripts/python.exe -m pytest backend/tests/test_normalizer_conformance.py backend/tests/test_equivalence_emitters.py backend/tests/test_equivalence_yml_family.py
+
 # Each step is its own recipe line (just stops on the first non-zero exit)
 # rather than an `&&` chain, so the body runs under any shell, including
 # Windows PowerShell, which does not support `&&`. `npm --prefix` runs each

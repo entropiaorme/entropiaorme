@@ -5,6 +5,11 @@
 //! service is ported from the Python implementation. Porting rules and
 //! the per-service equivalence obligations are documented in
 //! `backend/architecture/PORTING-RULEBOOK.md`.
+//!
+//! First ported service: [`cost_engine`], the pure-arithmetic leaf the
+//! equivalence runner proves its per-unit `cargo test` loop on.
+
+pub mod cost_engine;
 
 /// Identifies this crate in diagnostics and smoke checks.
 pub fn crate_name() -> &'static str {

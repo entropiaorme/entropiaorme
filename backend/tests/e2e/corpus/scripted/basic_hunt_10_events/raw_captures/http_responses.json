@@ -1,0 +1,142 @@
+[
+  {
+    "endpoint_id": "GET_tracking_snapshot",
+    "method": "GET",
+    "path": "/api/tracking/snapshot",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"17403762ca937f96aec45eb819e4248c2052703cd2ab8fd1aa3be98d47ec898b\"",
+      "cache-control": "no-cache",
+      "content-length": "409"
+    },
+    "body_b64": "eyJzdGF0dXMiOiJpZGxlIiwiaG90YmFyTGlzdGVuZXJBY3RpdmUiOmZhbHNlLCJ3ZWFwb25BdHRyaWJ1dGlvbiI6InRyaWZlY3RhIiwicmVwYWlyT2NyRW5hYmxlZCI6ZmFsc2UsImVuZE9mU2Vzc2lvbkFybW91clJlbWluZGVyRW5hYmxlZCI6ZmFsc2UsIm1vYkVudHJ5TW9kZSI6Im1vYiIsImN1cnJlbnRNb2IiOm51bGwsIm1vYlNvdXJjZSI6bnVsbCwiY3VycmVudFRvb2wiOm51bGwsInRyaWZlY3RhQXR0cmlidXRpb24iOnsiYWN0aXZlUHJlc2V0SWQiOiJkZWZhdWx0IiwicHJlc2V0TmFtZSI6IkRlZmF1bHQiLCJwcmVzZXRzIjpbeyJpZCI6ImRlZmF1bHQiLCJuYW1lIjoiRGVmYXVsdCJ9XSwic21hbGxXZWFwb24iOm51bGwsImJpZ1dlYXBvbiI6bnVsbCwiaGVhbFRvb2wiOm51bGx9LCJyZWNlbnRFdmVudHMiOltdfQ=="
+  },
+  {
+    "endpoint_id": "GET_tracking_sessions",
+    "method": "GET",
+    "path": "/api/tracking/sessions",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"116ce084cb590fa12c2b936a558f87810cec1401dda982e5d30403d311407f0b\"",
+      "cache-control": "no-cache",
+      "content-length": "250"
+    },
+    "body_b64": "W3siaWQiOiIyYmQzMTVmMi1hODE5LTQzMGEtOTBhNy1mMjYzNGYzYmVkZTkiLCJzdGFydFRpbWUiOiIyMDI2LTAxLTAxVDAwOjAwOjAwKzAwOjAwIiwiZW5kVGltZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDErMDA6MDAiLCJkdXJhdGlvbiI6MSwicHJpbWFyeU1vYnMiOltdLCJwcmltYXJ5V2VhcG9ucyI6W10sImNvc3QiOjAuMCwicmV0dXJucyI6OC42MiwibmV0Ijo4LjYyLCJyZXR1cm5SYXRlIjowLjAsImdsb2JhbHMiOjAsImhvZnMiOjB9XQ=="
+  },
+  {
+    "endpoint_id": "GET_tracking_session_detail",
+    "method": "GET",
+    "path": "/api/tracking/session/2bd315f2-a819-430a-90a7-f2634f3bede9",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"d0b723897946e2d425ba04266f8891442afbfb24e525cb720b31e60684695c44\"",
+      "cache-control": "no-cache",
+      "content-length": "753"
+    },
+    "body_b64": "eyJzZXNzaW9uSWQiOiIyYmQzMTVmMi1hODE5LTQzMGEtOTBhNy1mMjYzNGYzYmVkZTkiLCJzdW1tYXJ5Ijp7ImNvc3QiOjAuMCwicmV0dXJucyI6OC42MiwicGVzIjowLjAsIm5ldCI6OC42MiwicmV0dXJuUmF0ZSI6MC4wLCJraWxscyI6MywiZHVyYXRpb24iOjEsImNvc3RCcmVha2Rvd24iOnsid2VhcG9uQ29zdCI6MC4wLCJoZWFsQ29zdCI6MC4wLCJlbmhhbmNlckNvc3QiOjAuMCwiYXJtb3VyQ29zdCI6MC4wfX0sIm1vYkVudHJ5TW9kZSI6Im1vYiIsIm5vdGFibGVFdmVudHMiOltdLCJsb290QnJlYWtkb3duIjpbeyJuYW1lIjoiU2hyYXBuZWwiLCJxdWFudGl0eSI6NzAwLCJ0dFZhbHVlIjo3LjB9LHsibmFtZSI6Ildvb2wiLCJxdWFudGl0eSI6MywidHRWYWx1ZSI6MS41fSx7Im5hbWUiOiJBbmltYWwgTXVzY2xlIE9pbCIsInF1YW50aXR5IjoxLCJ0dFZhbHVlIjowLjEyfV0sImRlYWN0aXZhdGVkTG9vdEJyZWFrZG93biI6W10sIm1vYkJyZWFrZG93biI6W3siY3VycmVudE5hbWUiOiJVbmtub3duIiwib3JpZ2luYWxOYW1lIjpudWxsLCJraWxsQ291bnQiOjN9XSwiZWZmZWN0aXZlTG9vdCI6OC42MiwidG9vbFN0YXRzIjpbeyJ3ZWFwb25OYW1lIjoiVW5rbm93biIsInNob3RzRmlyZWQiOjUsImRhbWFnZURlYWx0IjoxMDAuNSwiY3JpdHMiOjAsImNvc3RBdHRyaWJ1dGVkIjowLjB9XSwic2tpbGxHYWlucyI6W3sic2tpbGxOYW1lIjoiQmlvcmVnZW5lc2lzIiwibGV2ZWwiOjAuMCwidHRWYWx1ZUdhaW5lZCI6MC4wfV19"
+  },
+  {
+    "endpoint_id": "GET_tracking_session_quest_link_suggestion",
+    "method": "GET",
+    "path": "/api/tracking/session/2bd315f2-a819-430a-90a7-f2634f3bede9/quest-link-suggestion",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"fcc35a7373ceed71f3fe025b1e3d272aebdb1a95b5f0a4d8df82b7b1dd8dac48\"",
+      "cache-control": "no-cache",
+      "content-length": "172"
+    },
+    "body_b64": "eyJzZXNzaW9uSWQiOiIyYmQzMTVmMi1hODE5LTQzMGEtOTBhNy1mMjYzNGYzYmVkZTkiLCJzdWdnZXN0aW9uVHlwZSI6Im5vbmUiLCJyZWFzb24iOiJub19jb21wbGV0aW9ucyIsInF1ZXN0SWQiOm51bGwsInF1ZXN0TmFtZSI6bnVsbCwicGxheWxpc3RJZCI6bnVsbCwicGxheWxpc3ROYW1lIjpudWxsfQ=="
+  },
+  {
+    "endpoint_id": "GET_quests",
+    "method": "GET",
+    "path": "/api/quests",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"",
+      "cache-control": "no-cache",
+      "content-length": "2"
+    },
+    "body_b64": "W10="
+  },
+  {
+    "endpoint_id": "GET_quests_mobs",
+    "method": "GET",
+    "path": "/api/quests/mobs",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"",
+      "cache-control": "no-cache",
+      "content-length": "2"
+    },
+    "body_b64": "W10="
+  },
+  {
+    "endpoint_id": "GET_quests_analytics",
+    "method": "GET",
+    "path": "/api/quests/analytics",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"",
+      "cache-control": "no-cache",
+      "content-length": "2"
+    },
+    "body_b64": "W10="
+  },
+  {
+    "endpoint_id": "GET_quests_playlists",
+    "method": "GET",
+    "path": "/api/quests/playlists",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"",
+      "cache-control": "no-cache",
+      "content-length": "2"
+    },
+    "body_b64": "W10="
+  },
+  {
+    "endpoint_id": "GET_scan_skills_status",
+    "method": "GET",
+    "path": "/api/scan/skills/status",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"e688e84e0bdf8817e93218852d9125ac7a72f6596daa5a054309189c8aeb2add\"",
+      "cache-control": "no-cache",
+      "content-length": "257"
+    },
+    "body_b64": "eyJhY3RpdmUiOmZhbHNlLCJwcm9jZXNzaW5nIjpmYWxzZSwiY2FwdHVyZWRfcGFnZXMiOjAsImV4cGVjdGVkX3BhZ2VzIjoxMiwibGFzdF9zY2FuX3RpbWUiOm51bGwsInNraWxsc19jb3VudCI6MCwiY29uZmlndXJlZCI6dHJ1ZSwiZ2FtZV93aW5kb3dfcHJlc2VudCI6ZmFsc2UsInBoYXNlIjoiaWRsZSIsInByb2Nlc3NpbmdfcHJvZ3Jlc3MiOnsiZG9uZSI6MCwidG90YWwiOjB9LCJoYXNfcGVuZGluZ19yZXN1bHQiOmZhbHNlLCJlcnJvciI6bnVsbH0="
+  },
+  {
+    "endpoint_id": "GET_codex_meta_attributes",
+    "method": "GET",
+    "path": "/api/codex/meta/attributes",
+    "query": {},
+    "status_code": 200,
+    "headers": {
+      "content-type": "application/json",
+      "etag": "\"656ef570064c1a23149af79eb43cd04529f2ddc0efbae036dd9c86e368fa6adb\"",
+      "cache-control": "no-cache",
+      "content-length": "239"
+    },
+    "body_b64": "W3sibmFtZSI6IkFnaWxpdHkiLCJjdXJyZW50TGV2ZWwiOm51bGx9LHsibmFtZSI6IkhlYWx0aCIsImN1cnJlbnRMZXZlbCI6bnVsbH0seyJuYW1lIjoiSW50ZWxsaWdlbmNlIiwiY3VycmVudExldmVsIjpudWxsfSx7Im5hbWUiOiJQc3ljaGUiLCJjdXJyZW50TGV2ZWwiOm51bGx9LHsibmFtZSI6IlN0YW1pbmEiLCJjdXJyZW50TGV2ZWwiOm51bGx9LHsibmFtZSI6IlN0cmVuZ3RoIiwiY3VycmVudExldmVsIjpudWxsfV0="
+  }
+]

@@ -1,0 +1,132 @@
+{
+  "tracking_sessions": [
+    {
+      "id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "started_at": 1767225600.0,
+      "ended_at": 1767225601.0,
+      "is_active": 0,
+      "heal_cost": 0.0,
+      "dangling_cost": 0.0
+    }
+  ],
+  "kills": [
+    {
+      "id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "mob_maturity": "",
+      "timestamp": 1779181202.0,
+      "shots_fired": 3,
+      "damage_dealt": 55.5,
+      "damage_taken": 0.0,
+      "critical_hits": 0,
+      "cost_ped": 0.0,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 5.12,
+      "is_global": 0,
+      "is_hof": 0
+    },
+    {
+      "id": "ab9406e7-1f59-410a-9520-afce6d773530",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "mob_maturity": "",
+      "timestamp": 1779181206.0,
+      "shots_fired": 1,
+      "damage_dealt": 20.0,
+      "damage_taken": 0.0,
+      "critical_hits": 0,
+      "cost_ped": 0.0,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.0,
+      "is_global": 0,
+      "is_hof": 0
+    },
+    {
+      "id": "ffd13408-4c54-4faf-be8f-0c104ad64222",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "mob_maturity": "",
+      "timestamp": 1779181210.0,
+      "shots_fired": 1,
+      "damage_dealt": 25.0,
+      "damage_taken": 0.0,
+      "critical_hits": 0,
+      "cost_ped": 0.0,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.5,
+      "is_global": 0,
+      "is_hof": 0
+    }
+  ],
+  "kill_loot_items": [
+    {
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "item_name": "Shrapnel",
+      "quantity": 500,
+      "value_ped": 5.0,
+      "is_enhancer_shrapnel": 0
+    },
+    {
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "item_name": "Animal Muscle Oil",
+      "quantity": 1,
+      "value_ped": 0.12,
+      "is_enhancer_shrapnel": 0
+    },
+    {
+      "kill_id": "ab9406e7-1f59-410a-9520-afce6d773530",
+      "item_name": "Shrapnel",
+      "quantity": 200,
+      "value_ped": 2.0,
+      "is_enhancer_shrapnel": 0
+    },
+    {
+      "kill_id": "ffd13408-4c54-4faf-be8f-0c104ad64222",
+      "item_name": "Wool",
+      "quantity": 3,
+      "value_ped": 1.5,
+      "is_enhancer_shrapnel": 0
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "tool_name": "Unknown",
+      "shots_fired": 3,
+      "damage_dealt": 55.5,
+      "critical_hits": 0,
+      "cost_per_shot": 0.0
+    },
+    {
+      "kill_id": "ab9406e7-1f59-410a-9520-afce6d773530",
+      "tool_name": "Unknown",
+      "shots_fired": 1,
+      "damage_dealt": 20.0,
+      "critical_hits": 0,
+      "cost_per_shot": 0.0
+    },
+    {
+      "kill_id": "ffd13408-4c54-4faf-be8f-0c104ad64222",
+      "tool_name": "Unknown",
+      "shots_fired": 1,
+      "damage_dealt": 25.0,
+      "critical_hits": 0,
+      "cost_per_shot": 0.0
+    }
+  ],
+  "ledger_entries": [
+    {
+      "id": "adfeb5ba-0d3a-4c6c-8168-f43bebf0b69e",
+      "date": "2026-01-01T00:00:01",
+      "type": "markup",
+      "description": "Shrapnel Conversion",
+      "amount": 0.07,
+      "tag": "convert"
+    }
+  ],
+  "notable_events": []
+}

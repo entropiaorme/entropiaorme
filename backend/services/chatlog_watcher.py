@@ -123,13 +123,17 @@ class ChatlogWatcher:
     ):
         self._event_bus = event_bus
         self._path = Path(chatlog_path)
-        # Time source for the watcher's monotonic reads (drain deadlines and
-        # debug perf windows; none of them reach an output). Defaults to the
-        # real clock. Deterministic-replay harnesses should LEAVE this real
-        # even when they inject a frozen clock elsewhere: a frozen monotonic
-        # stream would stop the drain timeout from ever expiring, turning a
-        # failing drain into a hang instead of a TimeoutError.
+        # Time source for the watcher's debug perf windows (never
+        # output-reaching). Defaults to the real clock; a deterministic-replay
+        # harness may inject its frozen clock here without harm, since these
+        # reads only feed optional perf logging.
         self._clock = clock or RealClock()
+        # The drain timeout runs on its OWN real, always-advancing clock,
+        # never the injected one: a frozen injected clock would freeze the
+        # monotonic stream and stop the timeout from ever expiring, turning a
+        # failing drain into a hang. Owning the invariant here means it holds
+        # regardless of what the composition root injects above.
+        self._timeout_clock = RealClock()
         self._running = False
         self._thread: threading.Thread | None = None
         self._quest_reward_filter = quest_reward_filter
@@ -205,10 +209,10 @@ class ChatlogWatcher:
         that state within ``timeout`` seconds: a watcher that never drains is
         a bug to surface, not a flake to sleep through.
         """
-        deadline = self._clock.monotonic() + timeout
+        deadline = self._timeout_clock.monotonic() + timeout
         with self._idle:
             while self._perf_lines_seen < min_lines or self.has_pending_tick:
-                remaining = deadline - self._clock.monotonic()
+                remaining = deadline - self._timeout_clock.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(
                         f"chatlog watcher did not drain to {min_lines} line(s) "

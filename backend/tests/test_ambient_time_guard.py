@@ -114,6 +114,23 @@ def test_pragma_with_reason_suppresses_and_bare_pragma_fails() -> None:
     assert "no reason" in findings[0].detail
 
 
+def test_pragma_inside_a_string_does_not_suppress_a_real_finding() -> None:
+    """The escape hatch is honoured only in a comment token.
+
+    Pragma text inside a string literal on the same line as a genuine ambient
+    read must not silently suppress the finding: the line carries no comment,
+    so the read is still flagged. A whole-line match would wrongly suppress
+    it, vacuously defeating the guard.
+    """
+    src = (
+        "import time\n"
+        'a = time.time(); s = "# ambient-time: allowed (not a real pragma)"\n'
+    )
+    findings = scan_source("backend/services/x.py", src)
+    assert len(findings) == 1
+    assert findings[0].lineno == 2
+
+
 def test_scan_reports_unparseable_source_loudly() -> None:
     """A syntactically broken production file is a finding, not a skip."""
     findings = scan_source("backend/db/x.py", "def broken(:\n")

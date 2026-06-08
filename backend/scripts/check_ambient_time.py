@@ -40,9 +40,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import io
 import re
 import subprocess
 import sys
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,7 +136,19 @@ def scan_source(path: str, text: str) -> list[Finding]:
     except SyntaxError as exc:  # a broken production file must fail loudly
         return [Finding(posix, exc.lineno or 0, f"unparseable source: {exc.msg}")]
 
-    lines = text.splitlines()
+    # Comment text by 1-based line number. The escape-hatch pragma is honoured
+    # ONLY in a real comment token: matching the whole source line would let
+    # the pragma text inside a string literal silently suppress a genuine
+    # ambient-time finding on that same line. The file already parsed as AST
+    # above, so tokenizing it succeeds; the guard fails safe (no comment map,
+    # so no suppression) if tokenize nonetheless raises.
+    comments_by_line: dict[int, str] = {}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.COMMENT:
+                comments_by_line[tok.start[0]] = tok.string
+    except (tokenize.TokenError, IndentationError):
+        comments_by_line = {}
 
     # Local aliases for the time/datetime modules and for the datetime/date
     # classes, so aliased reads (``import time as _time``;
@@ -145,9 +159,10 @@ def scan_source(path: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
 
     def _allowed(lineno: int) -> str | None:
-        """Return the pragma reason when the line carries a valid pragma."""
-        if 1 <= lineno <= len(lines):
-            match = _PRAGMA_RE.search(lines[lineno - 1])
+        """Return the pragma reason when the line's comment carries a pragma."""
+        comment = comments_by_line.get(lineno)
+        if comment:
+            match = _PRAGMA_RE.search(comment)
             if match:
                 return match.group("reason").strip()
         return None

@@ -177,6 +177,14 @@ def _build_clock() -> Clock:
         raise RuntimeError(
             "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
         ) from exc
+    if start.tzinfo is not None:
+        # An aware instant would be reinterpreted by MockClock's later
+        # ``.timestamp()`` conversion (UTC vs host-local), silently shifting
+        # replay semantics away from the naive plan. Reject it, matching the
+        # same guard in backend/testing/clock_plan.py.
+        raise RuntimeError(
+            "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
+        )
     log.info("Deterministic clock active: frozen at %s", start.isoformat())
     return MockClock(start=start)
 
@@ -344,13 +352,10 @@ async def lifespan(app: FastAPI):
     # composition root and injected into every service that reads the clock,
     # so a deterministic clock can be swapped in at exactly one place.
     # RealClock preserves the stdlib semantics each call site had before
-    # injection. The watcher is the one exception: its monotonic reads are
-    # drain timeouts and perf windows (never output-reaching), so they stay
-    # on the real clock even when the app clock is frozen; a frozen drain
-    # deadline would turn a failing drain into a hang instead of a
-    # TimeoutError.
+    # injection. The watcher takes this clock too, but guards its own drain
+    # timeout against a frozen clock internally (see ChatlogWatcher), so the
+    # composition root injects it uniformly with every other service.
     clock = _build_clock()
-    watcher_clock = clock if isinstance(clock, RealClock) else RealClock()
 
     tracker = HuntTracker(
         event_bus,
@@ -377,7 +382,7 @@ async def lifespan(app: FastAPI):
         event_bus,
         config.chatlog_path,
         quest_reward_filter=quest_service.quest_reward_filter,
-        clock=watcher_clock,
+        clock=clock,
     )
 
     # Skill tracking: records chat.log skill gains during sessions

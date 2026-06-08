@@ -34,7 +34,7 @@ from typing import Any
 
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
-from backend.testing.replay import DRAIN_TIMEOUT_S, wait_for_drain
+from backend.testing.replay import DRAIN_TIMEOUT_S, _stream_ticks, wait_for_drain
 from backend.testing.store_reducers import Reducer
 
 
@@ -91,13 +91,20 @@ def replay_segment(
     """Stream one segment file into the watcher's chatlog and drain.
 
     The segment file lives at ``scenario_dir / segment_name`` and is
-    appended line-by-line to ``chatlog_path`` so the running
-    ``ChatlogWatcher`` reads each line through its real tail loop. A
+    appended to ``chatlog_path`` one flush per timestamp tick so the
+    running ``ChatlogWatcher`` reads it through its real tail loop without
+    ever reaching end-of-file mid-tick (see ``replay._stream_ticks``). A
     missing segment file is a contract error rather than a silent
     no-op: a consistency scenario authoring mistake should surface
     loudly, not skip events. After every write completes, the segment
     waits on ``watcher`` until the tail loop has read the last line and
     flushed its idle tick (see ``replay.wait_for_drain``).
+
+    The per-tick atomicity ``_stream_ticks`` gives holds *within* a
+    segment; the drain between segments deliberately closes the current
+    tick, so the two-file midpoint must fall on a tick boundary (the
+    authoring contract: a second's events live in one segment, never
+    straddle the split). Scenarios honour this by construction.
     """
     source = scenario_dir / segment_name
     if not source.exists():
@@ -108,10 +115,7 @@ def replay_segment(
             "midpoint convention."
         )
     lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
-    with chatlog_path.open("a", encoding="utf-8") as sink:
-        for line in lines:
-            sink.write(line)
-            sink.flush()
+    _stream_ticks(lines, chatlog_path)
     wait_for_drain(watcher, chatlog_path, timeout=timeout)
 
 

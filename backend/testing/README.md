@@ -45,7 +45,7 @@ document.
   single-shot and sequenced.
 - `external_process.py`: boots the backend as a whole subprocess, drives a
   scenario over HTTP, and captures the three equivalence surfaces in golden
-  form; the launch command is a parameter so a second implementation of the
+  form; the launch command is a parameter, so a second implementation of the
   same surface can take one leg.
 
 ## External whole-process runs
@@ -92,6 +92,6 @@ the captured `events.jsonl`, database file, and hydration responses
 byte-identical to the committed scenario goldens.
 `backend/tests/e2e/test_dual_process_equivalence.py` boots two
 processes per scenario and proves the same surfaces byte-identical
-between the legs as well as to the goldens: the comparison shape a
-second implementation of the surface plugs into by overriding one leg's
-launch command.
+between the legs as well as to the goldens: the comparison that a
+second implementation of the surface plugs into by overriding one
+leg's launch command.

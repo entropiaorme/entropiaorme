@@ -412,7 +412,8 @@ cargo build                              # compile check, all members (debug pro
 cargo test --workspace                   # unit tests, all members
 cargo nextest run -p eo-wire -p eo-http -p eo-services  # backend members alone, no Tauri toolchain needed
 cargo llvm-cov nextest --branch -p eo-wire -p eo-http -p eo-services  # branch coverage (nightly toolchain)
-cargo mutants -p eo-wire -p eo-http -p eo-services      # mutation testing (nightly CI cadence)
+cargo mutants -p eo-wire -p eo-http -p eo-services --in-place  # mutation testing (nightly CI cadence)
+python3 backend/scripts/rust_mutation_floors.py --outcomes frontend/src-tauri/mutants.out/outcomes.json  # the floor gate (from the repo root)
 cargo bench -p eo-services               # criterion micro-benchmarks (hot-path figures)
 cargo audit -D warnings                  # RustSec advisories against Cargo.lock
 cargo deny check                         # licences, bans, sources, advisories
@@ -425,7 +426,7 @@ Four CI jobs cover the workspace, split by what they need to compile:
 - The **members job** runs `cargo nextest` on the backend members (plus a compile check of the criterion benches) on a plain Linux runner with no Tauri system stack installed. That environment is load-bearing: the backend members must stay buildable and testable without the Tauri toolchain, so a GUI dependency creeping into backend code fails this job structurally rather than landing silently.
 - The **coverage job** runs `cargo llvm-cov nextest --branch` over the same members (branch coverage needs the nightly toolchain) and prints the per-member branch-coverage report. A ported service's branch coverage is the evidence its tests exercise the code paths its behavioural-equivalence claim rests on, so the figure is reviewed per port, not just collected.
 
-The nightly workflow adds a `cargo-mutants` campaign over the backend members, the Rust counterpart of the Python mutation gate above: any missed mutant fails the run while the members are small, and per-module floors (inheriting each ported module's Python floor) take over as services land. Benchmarks run on demand rather than in CI: shared runners produce noisy timings, so CI only compile-checks the benches and real figures are taken locally when a hot path ports.
+The nightly workflow adds a `cargo-mutants` campaign over the backend members, the Rust counterpart of the Python mutation gate above. The campaign runs `--in-place` (member tests read committed fixtures from the repo outside the cargo workspace, which the default copied build tree would not contain), and the acceptance bar is the per-file floor map in `backend/scripts/rust_mutation_floors.py`: a file without an adopted floor is held to no-missed-mutants, floors only ratchet up, and each ported module's floor rises to its Python original's floor when that port completes. Benchmarks run on demand rather than in CI: shared runners produce noisy timings, so CI only compile-checks the benches and real figures are taken locally when a hot path ports.
 
 Two policy files make the audit and licence gates deliberate rather than advisory:
 

@@ -203,6 +203,12 @@ class ExternalBackendLeg:
             time.sleep(0.1)
         raise RuntimeError(f"backend did not serve health within {BOOT_TIMEOUT_S:g}s")
 
+    @property
+    def pid(self) -> int:
+        """The running child's process id (for resource measurements)."""
+        proc, _ = self._require_started()
+        return proc.pid
+
     def replay(self) -> dict[str, Any]:
         """Drive the loaded scenario; return the settled replay summary.
 

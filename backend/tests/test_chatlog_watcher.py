@@ -6,6 +6,7 @@ Verifies that:
   • Mission completion triggers quest reward suppression when a filter is installed.
 """
 
+import logging
 from datetime import datetime
 
 import pytest
@@ -18,7 +19,7 @@ from backend.core.events import (
     EVENT_MISSION_RECEIVED,
     EVENT_SKILL_GAIN,
 )
-from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.services.chatlog_watcher import PERF_LOG_INTERVAL_S, ChatlogWatcher
 from backend.testing.clock import MockClock
 
 
@@ -650,3 +651,28 @@ class TestDrainSeams:
         assert watcher.has_pending_tick
         watcher._flush_tick()
         assert not watcher.has_pending_tick
+
+    def test_drain_counter_survives_debug_perf_window_reset(self, caplog):
+        """``lines_seen`` keeps counting across a DEBUG perf-window reset.
+
+        The perf summary zeroes its window counters every interval when DEBUG
+        logging is enabled; the cumulative counter the drain helpers compare
+        against must be immune to that reset, or ``wait_until_drained`` would
+        silently stop converging the moment verbose logging is switched on.
+        """
+        clock = MockClock()
+        watcher = ChatlogWatcher(EventBus(), "dummy.log", clock=clock)
+        caplog.set_level(logging.DEBUG, logger="backend.services.chatlog_watcher")
+
+        watcher._process_line("not a chat line\n")
+        assert watcher.lines_seen == 1
+
+        # Step the injected clock past the perf interval so the next processed
+        # line triggers the window reset, then keep feeding lines.
+        clock.advance(PERF_LOG_INTERVAL_S + 1.0)
+        watcher._process_line("not a chat line\n")
+        watcher._process_line("not a chat line\n")
+
+        # The reset must actually have fired for this test to mean anything.
+        assert any("Chatlog watcher perf" in rec.message for rec in caplog.records)
+        assert watcher.lines_seen == 3

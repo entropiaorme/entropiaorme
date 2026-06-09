@@ -10,18 +10,33 @@ lifecycle: no game-event sequence can reach or perturb them.
 The properties drive the real control flow while substituting the single
 OS seam, the module-level ``_user32`` handle, with a fake that feeds
 generated window state into the genuine callback / guard logic rather than
-touching a live device. Every input is drawn from the domain the OS layer
+touching a live device. The seam-driving properties are win32-only: the
+production body imports ``ctypes`` and constructs a ``ctypes.WINFUNCTYPE``
+callback at call time, neither of which exists off Windows, so on POSIX
+hosts they skip visibly (the backend CI matrix runs them on Windows) rather
+than pass vacuously against the platform early-return. The early-return
+contract itself is covered by the platform-gate tests at the bottom, which
+run on every platform. Every input is drawn from the domain the OS layer
 genuinely produces: arbitrary window titles and visibility flags, and client
 rects whose corners span the full integer range (so degenerate and inverted
 rects are exercised alongside well-formed ones).
 """
 
+import sys
 from unittest.mock import patch
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from backend.services import eu_window as ew
+
+# The production win32 arm imports ctypes and builds a ctypes.WINFUNCTYPE
+# callback at call time, so the seam-driving properties cannot run off Windows.
+_win32_only = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="drives the win32 body (module-scoped ctypes, WINFUNCTYPE callback)",
+)
 
 # ── find_game_window: title + visibility fake ────────────────────────────────
 
@@ -103,6 +118,7 @@ def _windows(draw):
     return [(h, draw(_TITLE), draw(st.booleans())) for h in hwnds]
 
 
+@_win32_only
 @given(_windows())
 def test_returned_window_passes_every_gate(windows):
     """A non-None result is a window that had a non-empty title starting with
@@ -125,6 +141,7 @@ def test_returned_window_passes_every_gate(windows):
     assert visible
 
 
+@_win32_only
 @given(_windows())
 def test_result_matches_first_eligible_window(windows):
     """The result equals the first window (in enumeration order) that clears
@@ -173,6 +190,7 @@ class _GeomFake:
 _COORD = st.integers(min_value=-5000, max_value=5000)
 
 
+@_win32_only
 @given(
     rect=st.tuples(_COORD, _COORD, _COORD, _COORD),
     point=st.tuples(_COORD, _COORD),

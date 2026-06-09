@@ -27,18 +27,18 @@ from __future__ import annotations
 import base64
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 
 from backend.dependencies import get_services
 from backend.testing import db_snapshot
 from backend.testing.clock import MockClock
 from backend.testing.clock_plan import load_clock_plan
+from backend.testing.http_fingerprint import HYDRATION_ENDPOINTS
 from backend.testing.replay import replay_scenario, wait_for_drain
+from backend.testing.wire import wire
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("EO_DUMP_RAW"),
@@ -46,26 +46,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 SCENARIO_NAME = "basic_hunt_10_events"
-
-# The curated hydration GET surface, in the fixed order the HTTP fingerprint
-# contract captures it (so the shared Normalizer's symbol table grows the same
-# way). Mirrors ``_capture_hydration_set`` in test_http_fingerprint_scenarios.
-HYDRATION_ENDPOINTS = (
-    ("GET_tracking_snapshot", "GET", "/api/tracking/snapshot"),
-    ("GET_tracking_sessions", "GET", "/api/tracking/sessions"),
-    ("GET_tracking_session_detail", "GET", "/api/tracking/session/{session_id}"),
-    (
-        "GET_tracking_session_quest_link_suggestion",
-        "GET",
-        "/api/tracking/session/{session_id}/quest-link-suggestion",
-    ),
-    ("GET_quests", "GET", "/api/quests"),
-    ("GET_quests_mobs", "GET", "/api/quests/mobs"),
-    ("GET_quests_analytics", "GET", "/api/quests/analytics"),
-    ("GET_quests_playlists", "GET", "/api/quests/playlists"),
-    ("GET_scan_skills_status", "GET", "/api/scan/skills/status"),
-    ("GET_codex_meta_attributes", "GET", "/api/codex/meta/attributes"),
-)
 
 
 def _raw_captures_dir(scenario: Path) -> Path:
@@ -80,31 +60,6 @@ def _write_json(path: Path, payload: Any) -> None:
         encoding="utf-8",
         newline="\n",
     )
-
-
-def _wire(payload: Any) -> Any:
-    """Reduce a published payload to its JSON wire form.
-
-    Mirrors the Normalizer's pre-walk reductions so a Rust leg fed the wire
-    form normalises identically to the Python leg fed the live object:
-
-    - a ``BaseModel`` reduces via ``model_dump(mode="json")`` (the Normalizer's
-      BaseModel branch);
-    - a raw ``datetime`` reduces to ``isoformat()`` (the Normalizer's datetime
-      branch keys its symbol table on exactly ``value.isoformat()``, so the
-      string form lands on the same ``<TS_N>`` symbol);
-    - dicts and lists recurse so a nested datetime in a plain dict payload is
-      reduced too.
-    """
-    if isinstance(payload, BaseModel):
-        return _wire(payload.model_dump(mode="json"))
-    if isinstance(payload, datetime):
-        return payload.isoformat()
-    if isinstance(payload, dict):
-        return {key: _wire(value) for key, value in payload.items()}
-    if isinstance(payload, (list, tuple)):
-        return [_wire(item) for item in payload]
-    return payload
 
 
 def test_dump_fingerprint_and_db(
@@ -128,7 +83,7 @@ def test_dump_fingerprint_and_db(
     tracker.stop_session()
 
     raw_events = [
-        {"topic": topic, "payload": _wire(payload)}
+        {"topic": topic, "payload": wire(payload)}
         for topic, payload in goldens.recorder.events
     ]
     raw_db_rows = {

@@ -161,6 +161,13 @@ class ChatlogWatcher:
         # run yet (a startup race that surfaces under heavy parallel load).
         self._ready = threading.Event()
 
+        # Cumulative line counter backing the drain helpers. Deliberately
+        # separate from the perf-window counter below: the perf window resets
+        # itself every interval under DEBUG logging, and a drain predicate on
+        # a resettable counter would silently stop converging the moment
+        # verbose logging is enabled.
+        self._lines_seen_total = 0
+
         # Rate-limited watcher perf counters. These stay debug-only.
         self._perf_window_started = self._clock.monotonic()
         self._perf_lines_seen = 0
@@ -173,6 +180,11 @@ class ChatlogWatcher:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def path(self) -> Path:
+        """The file the tail loop is bound to."""
+        return self._path
 
     def set_line_tap(self, tap: Callable[[str], None]) -> None:
         """Install a verbatim line observer (called with each tailed line)."""
@@ -191,7 +203,7 @@ class ChatlogWatcher:
         since: the drain helpers compare it to the line count of the chatlog
         to know when every streamed line has been consumed.
         """
-        return self._perf_lines_seen
+        return self._lines_seen_total
 
     @property
     def has_pending_tick(self) -> bool:
@@ -211,12 +223,12 @@ class ChatlogWatcher:
         """
         deadline = self._timeout_clock.monotonic() + timeout
         with self._idle:
-            while self._perf_lines_seen < min_lines or self.has_pending_tick:
+            while self._lines_seen_total < min_lines or self.has_pending_tick:
                 remaining = deadline - self._timeout_clock.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(
                         f"chatlog watcher did not drain to {min_lines} line(s) "
-                        f"within {timeout:g}s (read {self._perf_lines_seen}, "
+                        f"within {timeout:g}s (read {self._lines_seen_total}, "
                         f"pending tick={self.has_pending_tick})"
                     )
                 self._idle.wait(remaining)
@@ -308,6 +320,7 @@ class ChatlogWatcher:
         break the tick boundary (chat messages from other channels can
         interleave with System events at the same timestamp).
         """
+        self._lines_seen_total += 1
         self._perf_lines_seen += 1
         if self._can_skip_idle_combat_line(line):
             self._perf_lines_skipped += 1

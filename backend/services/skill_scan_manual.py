@@ -47,8 +47,11 @@ class SkillScanManual:
         initial_scan_time: float | None = None,
         initial_skills_count: int = 0,
         clock: Clock | None = None,
+        capturer_factory: Callable[[], Any] | None = None,
     ):
-        self._core = SkillScanCore(config_service, data_dir)
+        self._core = SkillScanCore(
+            config_service, data_dir, capturer_factory=capturer_factory
+        )
         self._lock = threading.RLock()
         # Time source for the scan status event's publish-time stamp and the
         # last-scan instant; injected so replay scenarios stamp deterministic

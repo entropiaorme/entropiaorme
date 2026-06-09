@@ -97,10 +97,12 @@ def _spawn_backend(
     kwargs: dict[str, Any] = {}
     if sys.platform == "win32":
         # A fresh process group so the graceful console event reaches only the
-        # child; no console window on the CI runner.
-        kwargs["creationflags"] = (
-            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-        )
+        # child. The child must SHARE this process's console (no
+        # CREATE_NO_WINDOW / CREATE_NEW_CONSOLE): the console ctrl event that
+        # delivers CTRL_BREAK can only reach process groups attached to the
+        # sender's own console, so a child on a private console would be
+        # unreachable and the graceful-shutdown contract below would fail.
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     return subprocess.Popen(
         [sys.executable, "-m", "backend.main"],
         cwd=REPO_ROOT,

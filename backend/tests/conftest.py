@@ -44,6 +44,8 @@ _MODULE_TIERS = {
     "test_clock": "fast",
     "test_clock_plan": "fast",  # loader over a temp metadata.yaml; no app
     "test_testing_config": "fast",  # env-loader logic; no real env touched
+    "test_event_bus": "fast",  # in-memory pub/sub + tap contracts; no app
+    "test_events_sink": "fast",  # tap-to-file sink over a temp path; no app
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",
     "test_http_fingerprint": "fast",  # pure projection helpers
@@ -122,6 +124,8 @@ _MODULE_TIERS = {
     "test_event_stream": "fast",  # hub fan-out driven via asyncio.run; no lifespan
     "test_coverage_matrix_drift": "fast",  # renders the matrix from source files
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
+    "test_test_mode_wiring": "standard",  # boots fresh app lifespans via TestClient
+    "test_external_process_equivalence": "standard",  # one real backend subprocess
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
     "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE

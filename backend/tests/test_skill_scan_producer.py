@@ -182,3 +182,22 @@ def test_undo_publishes_the_capture_decrement() -> None:
 
     assert len(frames) == 1
     assert frames[0].payload.phase == "capturing"
+
+
+def test_capturer_factory_threads_through_to_the_core() -> None:
+    """The manual scan hands its injected capturer factory to the core.
+
+    The composition root selects the fixture capturer on ``SkillScanManual``;
+    the capture call the core makes must come off that factory.
+    """
+    served: list[tuple[int, int, int, int]] = []
+
+    class _Fixture:
+        def capture_region_png(self, x, y, w, h) -> bytes:
+            served.append((x, y, w, h))
+            return b"FIXTURE"
+
+    svc = SkillScanManual(None, Path("."), capturer_factory=_Fixture)
+
+    assert svc._core.capture_region([0, 0], [10, 10]) == b"FIXTURE"
+    assert served == [(0, 0, 10, 10)]

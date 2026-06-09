@@ -65,6 +65,29 @@ ETAG_SENTINEL = "<STRONG_ETAG>"
 # of how quickly the watcher drained the scenario.
 SESSION_DURATION_SENTINEL = "<SESSION_DURATION>"
 
+# The curated hydration GET surface, in the fixed order the fingerprint
+# contract captures it: the per-scenario captures share one Normalizer, so
+# the symbol table must grow the same way on every run and on every leg
+# (the in-process scenario suite, the raw-capture dumper, the external
+# whole-process harness, and the native emitters all walk this order).
+# ``{session_id}`` is formatted with the replayed session's id.
+HYDRATION_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
+    ("GET_tracking_snapshot", "GET", "/api/tracking/snapshot"),
+    ("GET_tracking_sessions", "GET", "/api/tracking/sessions"),
+    ("GET_tracking_session_detail", "GET", "/api/tracking/session/{session_id}"),
+    (
+        "GET_tracking_session_quest_link_suggestion",
+        "GET",
+        "/api/tracking/session/{session_id}/quest-link-suggestion",
+    ),
+    ("GET_quests", "GET", "/api/quests"),
+    ("GET_quests_mobs", "GET", "/api/quests/mobs"),
+    ("GET_quests_analytics", "GET", "/api/quests/analytics"),
+    ("GET_quests_playlists", "GET", "/api/quests/playlists"),
+    ("GET_scan_skills_status", "GET", "/api/scan/skills/status"),
+    ("GET_codex_meta_attributes", "GET", "/api/codex/meta/attributes"),
+)
+
 
 @dataclass(frozen=True)
 class HttpRequest:

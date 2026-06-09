@@ -7,9 +7,12 @@ dependencies (mock keystroke source, fixture capturer, redirected
 chatlog path) for the lifetime of the process. No service has a
 runtime ``if test_mode`` branch in its hot path.
 
-This module lands the dataclass shape and the env-var loader; the seam
-is wired through ``backend/main.py``'s composition root as each
-consuming service adopts its part of the harness.
+The seam is wired through ``backend/main.py``'s composition root: under
+test mode it redirects the chatlog tail, swaps the keystroke sources for
+injectable mocks, serves screen captures from the scenario's recorded
+fixtures, installs the ``events.jsonl`` bus sink, and registers the
+test-only API routes (see ``backend/testing/README.md``, "External
+whole-process runs"). Frozen builds refuse test mode outright.
 """
 
 from __future__ import annotations

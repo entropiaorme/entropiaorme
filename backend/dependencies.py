@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from backend.services.skill_tracker import SkillTracker
     from backend.services.spacebar_capture_listener import SpacebarCaptureListener
     from backend.testing.clock import Clock
+    from backend.testing.config import TestModeConfig
+    from backend.testing.keystroke_source import KeystrokeSource
     from backend.testing.recording_controller import RecordingController
     from backend.tracking.tracker import HuntTracker
 
@@ -49,6 +51,14 @@ class Services:
     # constructed with), exposed so the stateless router layer reads time
     # through it instead of the ambient stdlib clock.
     clock: Clock
+    # The resolved test-mode overlay (inert in production) and the keystroke
+    # sources the listeners were wired with. Exposed so the test-only routes
+    # can re-check the gate and drive the mock sources without reaching into
+    # listener internals; in production these are the live pynput sources and
+    # nothing reads them.
+    test_mode: TestModeConfig
+    hotbar_keystroke_source: KeystrokeSource
+    spacebar_keystroke_source: KeystrokeSource
 
 
 _services: Services | None = None

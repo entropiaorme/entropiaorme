@@ -126,6 +126,11 @@ _MODULE_TIERS = {
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
     "test_test_mode_wiring": "standard",  # boots fresh app lifespans via TestClient
     "test_external_process_equivalence": "standard",  # one real backend subprocess
+    # Two real backend subprocesses per scenario with overlapped boots; sits
+    # with the single-process control above so the per-push gate exercises
+    # the whole external-drive surface on both platforms.
+    "test_dual_process_equivalence": "standard",
+    "test_external_process_harness": "fast",  # harness edges; one tiny exec, no backend boot
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
     "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE

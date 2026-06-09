@@ -43,6 +43,10 @@ document.
 - `recorder.py`, `recording_controller.py`: the live-session recorder.
 - `capturer.py`: the fixture-backed screen-capture seam for OCR replay,
   single-shot and sequenced.
+- `external_process.py`: boots the backend as a whole subprocess, drives a
+  scenario over HTTP, and captures the three equivalence surfaces in golden
+  form; the launch command is a parameter so a second implementation of the
+  same surface can take one leg.
 
 ## External whole-process runs
 
@@ -79,7 +83,15 @@ changes that restart the watcher onto the user-configured path (such as
 `PATCH /api/settings` with a new `chatlog_path`) are not test-mode-aware
 and would undo the redirection; scenarios must not exercise them.
 
-`backend/tests/e2e/test_external_process_equivalence.py` is the working
-reference: it boots a subprocess this way and proves the captured
-`events.jsonl`, database file, and hydration responses byte-identical to
-the committed scenario goldens.
+`backend/testing/external_process.py` packages this whole lifecycle
+(spawn with a parametrised launch command, health wait, replay drive,
+surface capture and normalisation, graceful shutdown) for reuse.
+`backend/tests/e2e/test_external_process_equivalence.py` is the
+single-process reference: it boots one subprocess this way and proves
+the captured `events.jsonl`, database file, and hydration responses
+byte-identical to the committed scenario goldens.
+`backend/tests/e2e/test_dual_process_equivalence.py` boots two
+processes per scenario and proves the same surfaces byte-identical
+between the legs as well as to the goldens: the comparison shape a
+second implementation of the surface plugs into by overriding one leg's
+launch command.

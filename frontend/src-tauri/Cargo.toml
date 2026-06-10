@@ -51,6 +51,13 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
 http = "1"
 http-body-util = "0.1"
+# The chatlog parser's line grammar: plain regular expressions (the one
+# Python lookahead is reproduced as an explicit post-match check), the
+# client's timestamp format via chrono, and the HTML5 named-entity set
+# matching the original's unescaping.
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+html-escape = "0.2"
 # The persistence stack: sqlx is pinned to the 0.9 minor for the duration
 # of the hybrid, mirroring the Tauri and axum pins above; the database
 # layer sits behind a narrow handle so the driver stays swappable.

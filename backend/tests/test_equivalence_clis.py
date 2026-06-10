@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from backend.testing import (
+    chatlog_parser_cli,
     config_service_cli,
     cost_engine_cli,
     normalize_cli,
@@ -237,4 +238,22 @@ def test_static_tables_cli_serves_the_scan_geometry_ops(monkeypatch) -> None:
     anchors = json.loads(lines[0])
     assert anchors["skill"]["width"] == 635
     assert anchors["repair"]["cells"] == {}
+    assert json.loads(lines[1]) is None
+
+
+def test_chatlog_parser_cli_round_trips_lines(monkeypatch) -> None:
+    out = io.StringIO()
+    requests = [
+        {"line": "2026-05-19 10:00:00 [System] [] You inflicted 10.5 points of damage"},
+        {"line": "not a chat line"},
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    chatlog_parser_cli.main()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == len(requests)
+    first = json.loads(lines[0])
+    assert first["type"] == "damage_dealt"
+    assert first["data"] == {"amount": 10.5}
     assert json.loads(lines[1]) is None

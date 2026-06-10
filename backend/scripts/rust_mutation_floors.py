@@ -53,6 +53,15 @@ FLOORS: dict[str, float] = {
     # strictness and top-anchor guard are NOT equivalent and are pinned
     # by oracle-valued tests instead.
     "eo-services/src/tt_value_curve.rs": 92.0,
+    # Measured 96.7. The residual survivors are equivalent: the dead
+    # defensive clamp after the rank bisect (the index is always in
+    # range; Python carries the same dead clamp), the greedy loops'
+    # exact-equality boundary flips (a fractional step of exactly one
+    # level prices identically to a whole step on both branches), and
+    # the zero-level HP gates (a zero level contributes zero either
+    # way). The cross-language differential drives the same loops
+    # against the backend over the real snapshots.
+    "eo-services/src/character_calc.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

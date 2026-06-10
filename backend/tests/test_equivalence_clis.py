@@ -159,3 +159,29 @@ def test_static_tables_cli_serves_the_game_data_ops(monkeypatch) -> None:
     assert json.loads(lines[1]) is None
     assert json.loads(lines[2]) is False
     assert json.loads(lines[3]) == []
+
+
+def test_static_tables_cli_serves_the_character_calc_ops(monkeypatch) -> None:
+    out = io.StringIO()
+    requests = [
+        {
+            "op": "profession_level",
+            "skill_levels": {"Rifle": 1000, "Agility": 50},
+            "profession": {
+                "skills": [
+                    {"skill": {"name": "Rifle"}, "weight": 5},
+                    {"skill": {"name": "Agility"}, "weight": 2},
+                ]
+            },
+        },
+        {"op": "skill_rank", "level": 5, "ranks": []},
+        {"op": "codex_next_reward", "skill_name": "No Such Skill", "current_level": 9},
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    static_tables_cli.main()
+    lines = out.getvalue().splitlines()
+    assert json.loads(lines[0]) == 0.7
+    assert json.loads(lines[1]) == "Unknown"
+    assert json.loads(lines[2]) is None

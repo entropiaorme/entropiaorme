@@ -498,4 +498,22 @@ mod tests {
     fn from_props_rejects_a_null_weapon_entity() {
         let _ = cost_per_shot_from_props(&json!({"weapon_entity": null}), None);
     }
+
+    #[test]
+    fn from_props_passes_optional_components_through() {
+        let props = json!({
+            "weapon_entity": {"economy": {"decay": 0.05, "ammo_burn": 0}},
+            "amp_entity": {"economy": {"decay": 0.02, "ammo_burn": 0}},
+        });
+        let result = cost_per_shot_from_props(&props, None);
+        // Weapon decay 0.05 + amp decay 0.02, both at default markup.
+        assert_eq!(result["totalCostPerUse"], 0.07);
+        let components: Vec<&str> = result["costBreakdown"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(components, ["Weapon decay", "Amp decay"]);
+    }
 }

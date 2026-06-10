@@ -15,10 +15,13 @@ bench = false
 [dependencies]
 eo-wire = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
 proptest = { workspace = true }
+tempfile = { workspace = true }
 
 [features]
 # Tests that shell out to the Python oracle at runtime (the cost-engine

@@ -327,7 +327,7 @@ impl HuntTracker {
             subscriptions: Mutex::new(Vec::new()),
             subscribed: AtomicBool::new(false),
         });
-        tracker.refresh_loot_filter_locked(&mut tracker.state.lock().expect("tracker state"));
+        tracker.refresh_loot_filter_locked(&mut tracker.lock_state());
         tracker.recover_orphaned_sessions()?;
         Ok(tracker)
     }
@@ -344,8 +344,18 @@ impl HuntTracker {
         }
     }
 
+    /// The state guard, tolerating poison: a panicking provider or
+    /// cost computation must not brick the tracker, mirroring the
+    /// original's per-event exception containment (its state stays
+    /// serviceable after a contained failure).
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, TrackerState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn is_tracking(&self) -> bool {
-        self.state.lock().expect("tracker state").session.is_some()
+        self.lock_state().session.is_some()
     }
 
     /// Close sessions left open by a crash: end at the latest kill
@@ -423,7 +433,7 @@ impl HuntTracker {
         }
 
         let (current_tool, aggregated) = {
-            let state = self.state.lock().expect("tracker state");
+            let state = self.lock_state();
             let current_tool = state.active_hotbar_tool_name.clone();
             let Some(session) = state.session.as_ref() else {
                 return Ok(TrackingReadout {
@@ -642,7 +652,7 @@ impl HuntTracker {
         } else {
             None
         };
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         self.refresh_loot_filter_locked(&mut state);
         if state.session.is_none() {
             return;
@@ -688,7 +698,7 @@ impl HuntTracker {
     /// Immediately set the active free-text tag for tag-mode kill
     /// stamping.
     pub fn set_manual_tag(&self, tag: &str) -> Result<(), TrackerCommandError> {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         if state.session.is_none() {
             return Err(TrackerCommandError::NoActiveSession);
         }
@@ -711,7 +721,7 @@ impl HuntTracker {
         species: &str,
         maturity: &str,
     ) -> Result<(), TrackerCommandError> {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         if state.session.is_none() {
             return Err(TrackerCommandError::NoActiveSession);
         }
@@ -728,7 +738,7 @@ impl HuntTracker {
     /// Clear the current/confirmed mob state, returning the released
     /// name.
     pub fn release_current_mob(&self) -> Option<String> {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         let released = if !state.confirmed_mob_name.is_empty() {
             Some(state.confirmed_mob_name.clone())
         } else if !state.current_mob_name.is_empty() {
@@ -762,7 +772,7 @@ impl HuntTracker {
         };
 
         let (session, start_ts) = {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             self.refresh_loot_filter_locked(&mut state);
             let session = TrackingSession {
                 id: session_id.clone(),
@@ -850,7 +860,7 @@ impl HuntTracker {
     /// in-memory clear.
     pub fn stop_session(&self) -> Result<Option<TrackingSession>, DbError> {
         let (session, session_id, end_time, heal_cost, dangling_cost) = {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             let dangling_cost = state
                 .accumulator
                 .as_ref()
@@ -910,7 +920,7 @@ impl HuntTracker {
         );
 
         {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             state.session = None;
             state.accumulator = None;
             state.active_hotbar_tool_name = None;
@@ -1270,20 +1280,21 @@ impl HuntTracker {
             state.last_offensive_tool_name = Some(tool.clone());
         }
 
-        let tool_key = tool.clone().unwrap_or_else(|| "Unknown".to_string());
+        // `tool or "Unknown"`: the falsy coercion, so an empty name
+        // also keys the fallback entry.
+        let tool_key = tool
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Unknown")
+            .to_string();
         let mut current_cost = 0.0;
         if let Some(tool) = &tool {
             current_cost = self.current_cost_for_tool(state, tool, inferred_cost);
         }
 
-        let stats: &mut ToolStats = if tool.is_some() && current_cost > 0.0 {
-            Self::tool_stats_for_phase(state, &tool_key, current_cost)
+        let stats: &mut ToolStats = if let (Some(tool), true) = (&tool, current_cost > 0.0) {
+            Self::tool_stats_for_phase(state, tool, current_cost)
         } else {
-            let fallback_cost = if inferred_cost > 0.0 {
-                inferred_cost
-            } else {
-                (self.providers.equipment_cost_lookup)(&tool_key)
-            };
             let accumulator = state.accumulator.as_mut().expect("checked above");
             if !accumulator
                 .tool_stats
@@ -1300,8 +1311,17 @@ impl HuntTracker {
                 .position(|(key, _)| key == &tool_key)
                 .expect("just ensured");
             let entry = &mut accumulator.tool_stats[index].1;
-            if entry.cost_per_shot == 0.0 && fallback_cost > 0.0 {
-                entry.cost_per_shot = fallback_cost;
+            // The fallback cost resolves only for a still-costless
+            // entry, so the provider is not re-read on every shot.
+            if entry.cost_per_shot == 0.0 {
+                let fallback_cost = if inferred_cost > 0.0 {
+                    inferred_cost
+                } else {
+                    (self.providers.equipment_cost_lookup)(&tool_key)
+                };
+                if fallback_cost > 0.0 {
+                    entry.cost_per_shot = fallback_cost;
+                }
             }
             entry
         };
@@ -1319,7 +1339,7 @@ impl HuntTracker {
     /// there is no DB write or publish. Defensive incoming events
     /// stay out of the kills model.
     fn on_combat(&self, data: &Value) {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         if state.accumulator.is_none() {
             return;
         }
@@ -1396,16 +1416,20 @@ impl HuntTracker {
     /// after release.
     fn on_loot(&self, data: &Value) {
         let kill = {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             if state.accumulator.is_none() || state.session.is_none() {
                 return;
             }
 
+            // A missing key reads as the original's `.get` default; a
+            // present non-list raises there (contained, no kill, no
+            // fingerprint stamp), so it drops the group here too.
             let empty_items = Vec::new();
-            let items_raw = data
-                .get("items")
-                .and_then(Value::as_array)
-                .unwrap_or(&empty_items);
+            let items_raw = match data.get("items") {
+                None => &empty_items,
+                Some(Value::Array(items)) => items,
+                Some(_) => return,
+            };
             let total_ped = data.get("total_ped").and_then(Value::as_f64).unwrap_or(0.0);
             let now =
                 parse_bus_timestamp(data.get("timestamp")).unwrap_or_else(|| self.clock.now());
@@ -1510,7 +1534,7 @@ impl HuntTracker {
     /// Handle hotbar-driven weapon tool change: merges any 'Unknown'
     /// tool stats into the real tool when first detected.
     fn on_tool_changed(&self, data: &Value) {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         if (self.providers.weapon_attribution_trifecta)() {
             return;
         }
@@ -1584,7 +1608,7 @@ impl HuntTracker {
             .and_then(Value::as_f64)
             .unwrap_or(2.5);
 
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         state.active_heal_tool_name = name;
         state.heal_cost_per_use_ped = cost;
         state.heal_reload_seconds = reload_seconds;
@@ -1599,7 +1623,7 @@ impl HuntTracker {
     /// DB writes need; the UPDATE/INSERT run after release.
     fn on_global(&self, data: &Value) {
         let (session_id, kill_id, target_is_hof, event_type, mob_or_item, value_ped, ts) = {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             if state.session.is_none() {
                 return;
             }
@@ -1699,7 +1723,7 @@ impl HuntTracker {
     /// Handle an enhancer break event: update enhancer state for
     /// future shots. There is no DB write or publish.
     fn on_enhancer_break(&self, data: &Value) {
-        let mut state = self.state.lock().expect("tracker state");
+        let mut state = self.lock_state();
         if state.accumulator.is_none() {
             return;
         }
@@ -1757,7 +1781,7 @@ impl HuntTracker {
         // release so a subscriber never runs while this tracker holds
         // its lock.
         let session_id = {
-            let mut state = self.state.lock().expect("tracker state");
+            let mut state = self.lock_state();
             let Some(session) = state.session.as_ref() else {
                 return;
             };
@@ -1768,15 +1792,27 @@ impl HuntTracker {
             state.session_dirty = false;
             session_id
         };
+        // The original's three-way stamp: a datetime-equivalent string
+        // takes its instant, anything else present goes through
+        // `float()` (an unparseable value raises there, contained with
+        // the dirty flag already consumed: no event), and an absent
+        // timestamp falls back to the injected clock.
         let raw_ts = data.get("timestamp");
         let occurred_ts = match raw_ts {
+            None | Some(Value::Null) => naive_to_epoch(self.clock.now()),
             Some(value) => match parse_bus_timestamp(Some(value)) {
                 Some(instant) => naive_to_epoch(instant),
-                None => value
-                    .as_f64()
-                    .unwrap_or_else(|| naive_to_epoch(self.clock.now())),
+                None => match value {
+                    Value::String(text) => match text.trim().parse::<f64>() {
+                        Ok(numeric) => numeric,
+                        Err(_) => return,
+                    },
+                    other => match other.as_f64() {
+                        Some(numeric) => numeric,
+                        None => return,
+                    },
+                },
             },
-            None => naive_to_epoch(self.clock.now()),
         };
         self.emit_session_event(
             TrackingReason::Updated,
@@ -2615,6 +2651,15 @@ mod tests {
                     "total_ped": 1.0}),
         );
         assert_eq!(rig.scalar_i64("SELECT COUNT(*) FROM kills", &[]), 3);
+
+        // A present non-list items payload drops the group entirely
+        // (the original raises there, contained: no kill).
+        rig.bus.publish(
+            Topic::LootGroup,
+            &json!({"type": "loot", "timestamp": "2026-01-01T00:00:09",
+                    "items": null, "total_ped": 1.0}),
+        );
+        assert_eq!(rig.scalar_i64("SELECT COUNT(*) FROM kills", &[]), 3);
     }
 
     #[test]
@@ -3408,6 +3453,34 @@ mod tests {
             to_iso_utc(naive_to_epoch(naive("2026-01-01T00:00:00"))),
             "the frozen mock clock stamps the fallback"
         );
+
+        // An unparseable timestamp drops the event (the original's
+        // float() raise, contained) with the dirty flag consumed; a
+        // numeric string passes through float() instead.
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 5.0, "timestamp": "2026-01-01T00:00:06"}),
+        );
+        rig.bus
+            .publish(Topic::TickFlushed, &json!({"timestamp": "garbage"}));
+        assert_eq!(updated_events(&captured).len(), 4);
+        rig.bus.publish(
+            Topic::TickFlushed,
+            &json!({"timestamp": "2026-01-01T00:00:07"}),
+        );
+        assert_eq!(
+            updated_events(&captured).len(),
+            4,
+            "the dropped event consumed the dirty flag"
+        );
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 5.0, "timestamp": "2026-01-01T00:00:08"}),
+        );
+        rig.bus
+            .publish(Topic::TickFlushed, &json!({"timestamp": "1735680000.5"}));
+        let events = updated_events(&captured);
+        assert_eq!(events[4]["occurred_at"], "2024-12-31T21:20:00.500000+00:00");
     }
 
     #[test]

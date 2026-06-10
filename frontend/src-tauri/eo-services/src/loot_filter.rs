@@ -24,23 +24,26 @@ fn key(name: &str) -> String {
         .join(" ")
 }
 
-/// Normalise a configured blacklist: empty or absent falls back to the
-/// default; blank entries drop.
+/// Normalise a configured blacklist: an absent or empty configuration
+/// falls back to the default; blank entries drop. The fallback keys on
+/// the input, not the result, so a non-empty configuration of only
+/// blanks deliberately blacklists nothing, exactly as the original's
+/// falsy check does.
 pub fn normalize_blacklist<'a>(
     names: Option<impl IntoIterator<Item = &'a str>>,
 ) -> BTreeSet<String> {
     let Some(names) = names else {
         return default_blacklist();
     };
-    let normalised: BTreeSet<String> = names
+    let names: Vec<&'a str> = names.into_iter().collect();
+    if names.is_empty() {
+        return default_blacklist();
+    }
+    names
         .into_iter()
         .filter(|name| !name.trim_matches(python_whitespace).is_empty())
         .map(key)
-        .collect();
-    if normalised.is_empty() {
-        return default_blacklist();
-    }
-    normalised
+        .collect()
 }
 
 /// Whether a loot item counts toward tracked returns.
@@ -69,7 +72,8 @@ mod tests {
         );
         assert_eq!(
             normalize_blacklist(Some(vec!["  ", ""])),
-            default_blacklist()
+            BTreeSet::new(),
+            "a non-empty configuration of only blanks blacklists nothing"
         );
         let custom = normalize_blacklist(Some(vec!["Shrapnel", "  Vibrant  Sweat "]));
         assert!(custom.contains("shrapnel"));

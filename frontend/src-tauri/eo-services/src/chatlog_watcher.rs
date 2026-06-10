@@ -83,10 +83,12 @@ fn is_internal_buffer_type(event_type: EventType) -> bool {
     event_type == EventType::MissionComplete
 }
 
-/// `str(datetime)` for a whole-second instant: the payload timestamp
-/// form whose recorder symbol keying matches the backend's.
+/// `datetime.isoformat()` for a whole-second instant: the payload
+/// timestamp form, chosen so the recorder's symbol table keys the same
+/// instant identically whether it arrives from a tick payload here or
+/// from a model-dumped wire string downstream.
 fn timestamp_string(timestamp: NaiveDateTime) -> String {
-    timestamp.format("%Y-%m-%d %H:%M:%S").to_string()
+    timestamp.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
 struct Shared {
@@ -642,12 +644,12 @@ mod tests {
         );
         let loot = &stream[0].1;
         assert_eq!(loot["type"], "loot");
-        assert_eq!(loot["timestamp"], "2026-05-19 10:00:02");
+        assert_eq!(loot["timestamp"], "2026-05-19T10:00:02");
         assert_eq!(loot["total_ped"], 6.5);
         assert_eq!(loot["items"][0]["item_name"], "Shrapnel");
         assert_eq!(loot["items"][0]["is_enhancer_shrapnel"], false);
         assert_eq!(loot["items"][1]["quantity"], 1);
-        assert_eq!(stream[1].1["timestamp"], "2026-05-19 10:00:02");
+        assert_eq!(stream[1].1["timestamp"], "2026-05-19T10:00:02");
     }
 
     #[test]
@@ -740,7 +742,7 @@ mod tests {
         assert_eq!(received.len(), 1);
         assert_eq!(received[0]["type"], "damage_dealt");
         assert_eq!(received[0]["amount"], 12.0);
-        assert_eq!(received[0]["timestamp"], "2026-05-19 10:00:01");
+        assert_eq!(received[0]["timestamp"], "2026-05-19T10:00:01");
     }
 
     #[test]

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.testing.fingerprint import FingerprintRecorder, Normalizer
 
 
 def _run(request: dict) -> list:
@@ -34,6 +35,8 @@ def _run(request: dict) -> list:
     recorded: list[tuple[str, object]] = []
     bus = EventBus()
     bus.add_tap(lambda topic, data: recorded.append((topic, data)))
+    fingerprint_recorder = FingerprintRecorder(Normalizer())
+    fingerprint_recorder.install(bus)
 
     with tempfile.TemporaryDirectory() as tmp:
         chatlog = Path(tmp) / "chat_replay.log"
@@ -48,7 +51,10 @@ def _run(request: dict) -> list:
         finally:
             watcher.stop()
 
-    return [{"topic": topic, "payload": payload} for topic, payload in recorded]
+    return {
+        "stream": [{"topic": topic, "payload": payload} for topic, payload in recorded],
+        "fingerprint": fingerprint_recorder.serialize(),
+    }
 
 
 def main() -> None:
@@ -59,7 +65,13 @@ def main() -> None:
         request = json.loads(line)
         result = _run(request)
         sys.stdout.write(
-            json.dumps(result, sort_keys=True, ensure_ascii=False, default=str) + "\n"
+            json.dumps(
+                result,
+                sort_keys=True,
+                ensure_ascii=False,
+                default=lambda value: value.isoformat(),
+            )
+            + "\n"
         )
         sys.stdout.flush()
 

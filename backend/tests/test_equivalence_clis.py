@@ -273,9 +273,12 @@ def test_chatlog_watcher_cli_streams_ticks(monkeypatch) -> None:
     chatlog_watcher_cli.main()
     lines = out.getvalue().splitlines()
     assert len(lines) == 1
-    stream = json.loads(lines[0])
+    reply = json.loads(lines[0])
+    stream = reply["stream"]
     assert [entry["topic"] for entry in stream] == ["loot_group", "tick_flushed"]
     assert stream[0]["payload"]["total_ped"] == 1.5
+    assert reply["fingerprint"].count("\n") == 2
+    assert '"<TS_1>"' in reply["fingerprint"]
 
 
 def test_hotbar_listener_cli_scripts_sessions(monkeypatch) -> None:

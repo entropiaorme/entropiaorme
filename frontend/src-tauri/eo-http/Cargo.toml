@@ -7,4 +7,22 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Integration tests that boot the real Python backend as the proxy upstream
+# (the proxy-fidelity self-check). Off by default so the hermetic CI legs
+# need no Python toolchain; the nightly equivalence job turns it on.
+cross-language = []
+
 [dependencies]
+axum.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+tokio-stream.workspace = true
+tempfile.workspace = true

@@ -87,6 +87,16 @@ fn stub_upstream() -> Router {
             }),
         )
         .route("/api/native-candidate", get(|| async { "from-upstream" }))
+        .route(
+            "/api/health",
+            get(|| async {
+                Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{\"status\":\"stub\"}"))
+                    .unwrap()
+            }),
+        )
         .fallback(|| async { (http::StatusCode::NOT_FOUND, "stub 404") })
 }
 
@@ -288,7 +298,7 @@ async fn dead_upstream_maps_to_502_with_json_detail() {
 
     let (proxy_addr, _state) = spawn_proxy(dead_addr, ArmOverrides::empty()).await;
     let req = http::Request::builder()
-        .uri(format!("http://{proxy_addr}/api/health"))
+        .uri(format!("http://{proxy_addr}/api/tracking/snapshot"))
         .body(Body::empty())
         .unwrap();
     let response = client().request(req).await.unwrap();
@@ -296,4 +306,44 @@ async fn dead_upstream_maps_to_502_with_json_detail() {
     let body: serde_json::Value =
         serde_json::from_slice(&body_bytes(response).await).expect("502 body is json");
     assert!(body.get("detail").is_some());
+}
+
+#[tokio::test]
+async fn health_serves_natively_with_no_upstream_alive() {
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_addr = dead.local_addr().unwrap();
+    drop(dead);
+
+    let (proxy_addr, _state) = spawn_proxy(dead_addr, ArmOverrides::empty()).await;
+    let req = http::Request::builder()
+        .uri(format!("http://{proxy_addr}/api/health"))
+        .body(Body::empty())
+        .unwrap();
+    let response = client().request(req).await.unwrap();
+    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/json"
+    );
+    assert_eq!(body_bytes(response).await, b"{\"status\":\"ok\"}");
+}
+
+#[tokio::test]
+async fn health_kill_switch_steers_between_arms_at_runtime() {
+    let upstream = spawn_server(stub_upstream()).await;
+    let (proxy_addr, state) = spawn_proxy(upstream, ArmOverrides::empty()).await;
+
+    let fetch = |addr: SocketAddr| async move {
+        let req = http::Request::builder()
+            .uri(format!("http://{addr}/api/health"))
+            .body(Body::empty())
+            .unwrap();
+        body_bytes(client().request(req).await.unwrap()).await
+    };
+
+    assert_eq!(fetch(proxy_addr).await, b"{\"status\":\"ok\"}");
+    state.set_overrides(ArmOverrides::parse_env_value("/api/health=proxy"));
+    assert_eq!(fetch(proxy_addr).await, b"{\"status\":\"stub\"}");
+    state.set_overrides(ArmOverrides::empty());
+    assert_eq!(fetch(proxy_addr).await, b"{\"status\":\"ok\"}");
 }

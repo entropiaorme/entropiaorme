@@ -149,10 +149,41 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Native route registrations, in takeover order. Empty until the first
-/// route flips; each flip adds one `arm_routed` line here.
+/// Native route registrations, in takeover order; each flip adds one
+/// `arm_routed` line here, and deleting a line is the source-level
+/// revert.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
-    router
+    router.route(
+        "/api/health",
+        arm_routed(MethodFilter::GET, "/api/health", routes::health),
+    )
+}
+
+/// The natively-served handlers, one function per taken-over route.
+mod routes {
+    use std::sync::Arc;
+
+    use axum::extract::Request;
+    use axum::response::Response;
+
+    use super::AppState;
+
+    /// The health-check acknowledgement: byte-identical to the backend's
+    /// response (the body is the serialised `HealthStatus` model, which
+    /// the contract gate ties to the committed API document).
+    pub(crate) async fn health(_state: Arc<AppState>, _req: Request) -> Response {
+        let body = eo_wire::models::HealthStatus {
+            status: "ok".into(),
+            extra: serde_json::Map::new(),
+        };
+        Response::builder()
+            .status(http::StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(
+                serde_json::to_string(&body).expect("health body serialises"),
+            ))
+            .expect("static health response builds")
+    }
 }
 
 /// Serve the substrate on an already-bound listener until the process

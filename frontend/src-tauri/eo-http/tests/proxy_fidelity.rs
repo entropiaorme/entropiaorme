@@ -122,14 +122,18 @@ async fn wait_healthy(port: u16) {
     }
 }
 
-async fn spawn_proxy(upstream: String) -> SocketAddr {
+async fn spawn_proxy_with(upstream: String, overrides: ArmOverrides) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = Arc::new(AppState::new(upstream, addr.port(), ArmOverrides::empty()));
+    let state = Arc::new(AppState::new(upstream, addr.port(), overrides));
     tokio::spawn(async move {
         axum::serve(listener, build_router(state)).await.unwrap();
     });
     addr
+}
+
+async fn spawn_proxy(upstream: String) -> SocketAddr {
+    spawn_proxy_with(upstream, ArmOverrides::empty()).await
 }
 
 /// The fidelity-checked routes: the curated hydration set (parameterised
@@ -220,4 +224,33 @@ async fn event_stream_ready_frame_flushes_promptly_through_the_proxy() {
         "unexpected first frame: {:?}",
         String::from_utf8_lossy(&first)
     );
+}
+
+/// The kill-switch leg against the real backend: with the health route
+/// steered back to the sidecar arm, the steered response must match a
+/// direct one on the same axes the native arm is held to.
+#[tokio::test]
+async fn steered_back_health_matches_direct_on_projected_axes() {
+    let sidecar = spawn_sidecar();
+    wait_healthy(sidecar.port).await;
+    let direct_authority = format!("127.0.0.1:{}", sidecar.port);
+    let proxy_addr = spawn_proxy_with(
+        direct_authority.clone(),
+        ArmOverrides::parse_env_value("/api/health=proxy"),
+    )
+    .await;
+
+    let direct = get(&direct_authority, "/api/health").await;
+    let steered = get(&proxy_addr.to_string(), "/api/health").await;
+    assert_eq!(direct.status(), steered.status());
+    for header in PROJECTED_HEADERS {
+        assert_eq!(
+            direct.headers().get(header),
+            steered.headers().get(header),
+            "{header} diverged on the steered arm"
+        );
+    }
+    let direct_body = direct.collect().await.unwrap().to_bytes();
+    let steered_body = steered.collect().await.unwrap().to_bytes();
+    assert_eq!(direct_body, steered_body);
 }

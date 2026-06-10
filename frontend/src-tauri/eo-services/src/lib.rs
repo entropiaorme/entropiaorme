@@ -12,6 +12,7 @@
 pub mod codex_categories;
 pub mod cost_engine;
 pub mod db;
+pub mod trifecta_service;
 pub mod tt_value_curve;
 
 /// Identifies this crate in diagnostics and smoke checks.

@@ -399,4 +399,121 @@ mod tests {
         assert_eq!(heal_reload_seconds(&json!({"uses_per_minute": 30})), 2.0);
         assert_eq!(heal_reload_seconds(&json!({})), 60.0 / 24.0);
     }
+
+    #[test]
+    fn limited_items_are_detected_by_name_marker() {
+        assert!(is_limited(&json!({"name": "Breaker (L)"})));
+        assert!(!is_limited(&json!({"name": "Breaker"})));
+        assert!(!is_limited(&json!({})));
+    }
+
+    #[test]
+    fn damage_range_halves_the_total() {
+        assert_eq!(
+            damage_range_at_max_skill(10.0),
+            json!({"min": 5.0, "max": 10.0})
+        );
+    }
+
+    #[test]
+    fn amp_damage_adds_capped_at_half_the_base() {
+        let weapon = json!({"damage": {"impact": 10.0}});
+        // Below the cap: 10 + 3 = 13.
+        assert_eq!(
+            weapon_total_damage(&weapon, Some(&json!({"damage": {"burn": 3.0}})), 0),
+            Some(13.0)
+        );
+        // Above the cap: 10 + min(5, 8) = 15.
+        assert_eq!(
+            weapon_total_damage(&weapon, Some(&json!({"damage": {"burn": 8.0}})), 0),
+            Some(15.0)
+        );
+    }
+
+    #[test]
+    fn enhancers_scale_decay_and_ammo_with_hand_computed_totals() {
+        let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 200}});
+        let result = cost_per_shot(&weapon, None, None, None, 2, 1.5, 1.0, 1.0, 1.0);
+        // mult 1.2: decay 0.06 at markup 1.5 -> 0.09; ammo 2.4 at 1.0.
+        assert_eq!(result["totalCostPerUse"], 2.49);
+        let breakdown = result["costBreakdown"].as_array().unwrap();
+        assert_eq!(breakdown[0]["costPec"], 0.06);
+        assert_eq!(breakdown[0]["effectiveCostPec"], 0.09);
+        assert_eq!(breakdown[1]["costPec"], 2.4);
+    }
+
+    #[test]
+    fn falsy_scope_shapes_add_no_breakdown_line() {
+        let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 0}});
+        for falsy in [json!(0.0), json!(""), json!([]), json!({}), json!(false)] {
+            let result = cost_per_shot(&weapon, None, Some(&falsy), None, 0, 1.0, 1.0, 1.0, 1.0);
+            let components: Vec<&str> = result["costBreakdown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["component"].as_str().unwrap())
+                .collect();
+            assert_eq!(components, ["Weapon decay"], "scope {falsy}");
+        }
+    }
+
+    #[test]
+    fn zero_absorption_absorber_adds_no_line_and_keeps_weapon_decay() {
+        let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 0}});
+        let absorber = json!({"economy": {"absorption": 0}});
+        let result = cost_per_shot(&weapon, None, None, Some(&absorber), 0, 1.0, 1.0, 1.0, 1.0);
+        let breakdown = result["costBreakdown"].as_array().unwrap();
+        assert_eq!(breakdown.len(), 1);
+        assert_eq!(breakdown[0]["component"], "Weapon decay");
+        assert_eq!(breakdown[0]["costPec"], 0.05);
+    }
+
+    #[test]
+    fn amp_with_zero_ammo_adds_no_amp_ammo_line() {
+        let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 100}});
+        let amp = json!({"economy": {"decay": 0.01, "ammo_burn": 0}});
+        let result = cost_per_shot(&weapon, Some(&amp), None, None, 0, 1.0, 1.0, 1.0, 1.0);
+        let components: Vec<&str> = result["costBreakdown"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(components, ["Weapon decay", "Amp decay", "Ammo (weapon)"]);
+    }
+
+    #[test]
+    fn heal_reload_defaults_when_uses_per_minute_is_zero() {
+        assert_eq!(heal_reload_seconds(&json!({"uses_per_minute": 0})), 2.5);
+    }
+
+    #[test]
+    fn heal_cost_multiplies_by_markup() {
+        let tool = json!({"economy": {"decay": 0.08, "ammo_burn": 0}});
+        assert_eq!(heal_cost_per_use(&tool, 2.0), 0.16);
+    }
+
+    #[test]
+    #[should_panic(expected = "weapon_entity")]
+    fn from_props_rejects_a_null_weapon_entity() {
+        let _ = cost_per_shot_from_props(&json!({"weapon_entity": null}), None);
+    }
+
+    #[test]
+    fn from_props_passes_optional_components_through() {
+        let props = json!({
+            "weapon_entity": {"economy": {"decay": 0.05, "ammo_burn": 0}},
+            "amp_entity": {"economy": {"decay": 0.02, "ammo_burn": 0}},
+        });
+        let result = cost_per_shot_from_props(&props, None);
+        // Weapon decay 0.05 + amp decay 0.02, both at default markup.
+        assert_eq!(result["totalCostPerUse"], 0.07);
+        let components: Vec<&str> = result["costBreakdown"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(components, ["Weapon decay", "Amp decay"]);
+    }
 }

@@ -107,6 +107,48 @@ impl Db {
         snapshot_rows(&self.pool).await
     }
 
+    /// One equipment-library row by id and item type: (id, name,
+    /// properties JSON), or None when absent. The typed accessor the
+    /// trifecta resolution reads through.
+    pub async fn equipment_item(
+        &self,
+        id: i64,
+        item_type: &str,
+    ) -> Result<Option<(i64, String, String)>, DbError> {
+        let row = sqlx::query_as::<_, (i64, String, String)>(
+            "SELECT id, name, properties_json FROM equipment_library \
+             WHERE id = ? AND item_type = ?",
+        )
+        .bind(id)
+        .bind(item_type)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Test seeding for equipment-reading services (compiled into the
+    /// crate's own test builds only).
+    #[cfg(test)]
+    pub(crate) async fn insert_equipment_for_tests(
+        &self,
+        id: i64,
+        name: &str,
+        item_type: &str,
+        properties_json: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO equipment_library (id, name, item_type, properties_json) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(item_type)
+        .bind(properties_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// The schema objects as (type, name, statement) in (type, name)
     /// order, excluding SQLite's own bookkeeping tables: the surface the
     /// schema-conformance acceptance compares across implementations.
@@ -405,5 +447,38 @@ mod tests {
             }
             other => panic!("expected a schema-version refusal, got {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn schema_master_lists_the_real_objects_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        let master = db.schema_master().await.unwrap();
+        // 23 declared tables + the migration ledger + 18 indexes +
+        // 8 triggers (only SQLite's own bookkeeping is excluded; the
+        // conformance comparison filters the ledger externally as its
+        // one deliberate difference).
+        assert_eq!(master.len(), 24 + 18 + 8);
+        let mut sorted = master.clone();
+        sorted.sort();
+        assert_eq!(master, sorted, "ordered by (type, name)");
+        assert!(master.iter().any(|(kind, name, sql)| {
+            kind == "table"
+                && name == "tracking_sessions"
+                && sql.contains("CREATE TABLE tracking_sessions")
+        }));
+        assert!(master.iter().any(|(_, name, _)| name == "_sqlx_migrations"));
+    }
+
+    #[test]
+    fn refusal_error_formats_the_exact_message() {
+        let err = DbError::UnsupportedSchemaVersion {
+            found: 28,
+            supported: 33,
+        };
+        assert_eq!(
+            err.to_string(),
+            "database schema version 28 predates the supported baseline 33"
+        );
     }
 }

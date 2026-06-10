@@ -39,12 +39,20 @@ from pathlib import Path
 
 #: file (workspace-relative, as cargo-mutants reports it) -> floor %.
 FLOORS: dict[str, float] = {
-    # Ratchets to 92.0 (backend.services.cost_engine's inherited floor)
-    # when the cost-engine port completes; the differential fuzz that
-    # guards its numeric behaviour is feature-gated off in the plain
-    # `cargo test` run the campaign uses, so the staging floor reflects
-    # the unit suite alone.
-    "eo-services/src/cost_engine.rs": 70.0,
+    # The inherited floor from backend.services.cost_engine, adopted at
+    # the unit's port completion (measured 97.1 after the hardening
+    # pass). Known equivalent mutants, annotated rather than chased: the
+    # three falsy-guard replacements (economy/num_or_zero/sum_damage),
+    # where the falsy input and the empty default produce identical
+    # downstream values by construction.
+    "eo-services/src/cost_engine.rs": 92.0,
+    # Measured 96.4. The two residual survivors are equivalent on the
+    # shipped curve data only: consecutive integer anchors make the
+    # interpolation divisor exactly 1, so the /, * and % variants
+    # coincide for the in-segment fraction. The bisection's comparison
+    # strictness and top-anchor guard are NOT equivalent and are pinned
+    # by oracle-valued tests instead.
+    "eo-services/src/tt_value_curve.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

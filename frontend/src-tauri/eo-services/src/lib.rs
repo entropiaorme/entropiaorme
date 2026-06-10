@@ -9,8 +9,10 @@
 //! First ported service: [`cost_engine`], the pure-arithmetic leaf the
 //! equivalence runner proves its per-unit `cargo test` loop on.
 
+pub mod codex_categories;
 pub mod cost_engine;
 pub mod db;
+pub mod tt_value_curve;
 
 /// Identifies this crate in diagnostics and smoke checks.
 pub fn crate_name() -> &'static str {

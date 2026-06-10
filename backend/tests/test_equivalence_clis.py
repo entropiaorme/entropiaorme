@@ -1,6 +1,7 @@
 """Unit coverage for the equivalence CLIs and the fixture generators.
 
-The two oracle CLIs (``normalize_cli``, ``cost_engine_cli``) are driven by the
+The oracle CLIs (``normalize_cli``, ``cost_engine_cli``,
+``static_tables_cli``) are driven by the
 Rust differential fuzzes over stdin/stdout; this pins their line protocol
 directly under pytest so the contract is covered without spawning the Rust
 side. The generator entry points (``table.write_fixture``,
@@ -15,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from backend.testing import cost_engine_cli, normalize_cli
+from backend.testing import cost_engine_cli, normalize_cli, static_tables_cli
 from backend.testing.equivalence import table, yml_family
 
 
@@ -74,3 +75,44 @@ def test_yml_family_write_mirrors_round_trips(monkeypatch, tmp_path: Path) -> No
         assert (tmp_path / f"{stem}.json").read_text(
             encoding="utf-8"
         ) == yml_family.mirror_text(yml_family.load_yml(yml_path))
+
+
+def test_static_tables_cli_serves_every_op(monkeypatch) -> None:
+    """One sorted-keys JSON reply per request line, blanks skipped."""
+    out = io.StringIO()
+    requests = [
+        {"op": "tt_value_at", "level": 123.45},
+        {"op": "tt_value_of_gain", "from_level": 10, "to_level": 20},
+        {"op": "levels_for_tt_value", "from_level": 10, "ped_value": 1.5},
+        {"op": "max_tt_curve_level"},
+        {"op": "get_codex_category", "skill_name": "Aim"},
+        {"op": "build_rank_breakdown", "base_cost": 10.0, "codex_type": "MobLooter"},
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    static_tables_cli.main()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == len(requests)
+
+    from backend.data import tt_value_curve
+
+    assert json.loads(lines[0]) == tt_value_curve.tt_value_at(123.45)
+    assert json.loads(lines[1]) == tt_value_curve.tt_value_of_gain(10, 20)
+    assert json.loads(lines[2]) == tt_value_curve.levels_for_tt_value(10, 1.5)
+    assert json.loads(lines[3]) == tt_value_curve.max_tt_curve_level()
+    assert json.loads(lines[4]) == "cat1"
+    breakdown = json.loads(lines[5])
+    assert len(breakdown) == 25
+    assert breakdown[4]["cat4Bonus"] is True
+    # Replies serialise with sorted keys (the cross-language comparison form).
+    assert lines[5].index('"cat4Bonus"') < lines[5].index('"category"')
+
+
+def test_static_tables_cli_rejects_unknown_ops(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"op": "no-such-op"}\n'))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    with pytest.raises(ValueError, match="unknown op"):
+        static_tables_cli.main()

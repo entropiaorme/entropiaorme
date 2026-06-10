@@ -281,3 +281,18 @@ def test_diff_snapshot_dict_surfaces_list_length_mismatch() -> None:
     msg = diff_snapshot_dicts(expected, actual)
     assert msg is not None
     assert "kills[len]" in msg
+
+
+def test_symbol_tables_expose_the_raw_assignments() -> None:
+    """The accessor returns the accumulated raw-to-symbol maps with
+    stringified keys, the shape the cross-implementation dump writes."""
+    norm = Normalizer()
+    norm.normalize(
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "at": 1738220402.5,
+        }
+    )
+    tables = norm.symbol_tables()
+    assert tables["uuids"] == {"123e4567-e89b-12d3-a456-426614174000": "<UUID_1>"}
+    assert tables["timestamps"] == {"1738220402.5": "<TS_1>"}

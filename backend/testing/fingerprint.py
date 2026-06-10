@@ -65,6 +65,17 @@ class Normalizer:
         self._uuids.clear()
         self._timestamps.clear()
 
+    def symbol_tables(self) -> dict[str, dict[str, str]]:
+        """The raw-to-symbol assignments accumulated so far.
+
+        Lets a cross-implementation harness reproduce this normaliser's
+        numbering when it re-normalises the same data elsewhere.
+        """
+        return {
+            "uuids": dict(self._uuids),
+            "timestamps": {str(k): v for k, v in self._timestamps.items()},
+        }
+
     def _walk(self, value: Any) -> Any:
         """Recursive type-dispatched canonicalisation.
 

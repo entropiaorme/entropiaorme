@@ -112,7 +112,13 @@ fn native_round_trip(request: &Value) -> (String, Value) {
             service.update(&map).unwrap();
         }
     }
-    let mut file_text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
+    // The oracle reads through Python's universal-newline translation;
+    // normalise the native read the same way so the Windows leg compares
+    // content rather than line endings (the platform-ending write has
+    // its own unit pin).
+    let mut file_text = std::fs::read_to_string(dir.path().join("settings.json"))
+        .unwrap()
+        .replace("\r\n", "\n");
     let mut state = match serde_json::to_value(service.get()).unwrap() {
         Value::Object(map) => map,
         _ => unreachable!(),
@@ -165,6 +171,20 @@ fn scenarios() -> Vec<Value> {
         json!({
             "stored": null,
             "updates": [{"active_trifecta_preset_id": "ghost"}, {}],
+        }),
+        // Falsy and scalar preset ids: falsy ids skip (with positional
+        // name fallbacks), boolean and numeric scalars stringify as the
+        // backend renders them.
+        json!({
+            "stored": {
+                "trifecta_presets": [
+                    {"id": 0, "name": "skipped: falsy"},
+                    {"id": false, "name": "skipped: falsy too"},
+                    {"id": true, "name": 0},
+                    {"id": "kept", "name": false},
+                ],
+            },
+            "updates": [{}],
         }),
         // Non-ASCII and astral-plane content in stored unknown keys.
         json!({

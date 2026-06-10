@@ -12,10 +12,11 @@
 //!
 //! Update semantics mirror the backend service: unknown update keys are
 //! ignored; the hotbar always re-normalises to its full slot shape; the
-//! trifecta preset list re-validates its active id. Values arrive
-//! through the settings route's validated request models, so per-field
-//! type coercion never sees out-of-domain shapes in practice; a value
-//! that does not fit its field is skipped rather than stored.
+//! trifecta preset list re-validates its active id. Where a stored or
+//! submitted value does not fit its typed field, this implementation
+//! coalesces or skips instead of carrying the raw value; the divergence
+//! register's configuration entry records those cases and their
+//! reachability.
 
 use std::path::{Path, PathBuf};
 
@@ -70,8 +71,9 @@ pub struct AppConfig {
     pub overlay_x: Option<i64>,
     pub overlay_y: Option<i64>,
     /// Unknown keys read from disk: the visible carry-forward contract.
-    /// Excluded from the known-field serialisation; the save path merges
-    /// them (and anything newer on disk) back in by position.
+    /// Excluded from the known-field serialisation; persistence comes
+    /// from the save path re-reading the file and merging by position,
+    /// so even keys written after this load survive.
     #[serde(skip)]
     pub extra: Map<String, Value>,
 }
@@ -149,9 +151,21 @@ impl ConfigService {
 
     fn load(&self) -> std::io::Result<AppConfig> {
         if self.config_path.exists() {
-            if let Ok(raw) = std::fs::read_to_string(&self.config_path) {
-                if let Ok(Value::Object(data)) = serde_json::from_str::<Value>(&raw) {
-                    return Ok(from_stored(&data));
+            // Read failures fail loudly (the backend's would too): a
+            // transient lock must never silently reset user settings.
+            let raw = std::fs::read_to_string(&self.config_path)?;
+            match serde_json::from_str::<Value>(&raw) {
+                Ok(Value::Object(data)) => return Ok(from_stored(&data)),
+                Ok(_) => {
+                    // A parseable file of the wrong shape crashes the
+                    // backend's loader rather than resetting; mirror it.
+                    return Err(std::io::Error::other(
+                        "settings file does not contain an object",
+                    ));
+                }
+                Err(_) => {
+                    // Unparseable JSON: recovered with saved defaults on
+                    // both implementations.
                 }
             }
         }
@@ -364,11 +378,13 @@ fn normalize_trifecta_presets(
             let Some(object) = entry.as_object() else {
                 continue;
             };
-            // `str(raw.get("id") or "")`: null and absent both collapse.
+            // `str(raw.get("id") or "")`: any FALSY id (null, false, 0,
+            // 0.0, "", empty containers) collapses to the empty string
+            // and the entry is skipped.
             let id = object
                 .get("id")
-                .filter(|v| !v.is_null())
-                .map(stringify)
+                .filter(|v| json_truthy(v))
+                .and_then(stringify)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -377,8 +393,8 @@ fn normalize_trifecta_presets(
             }
             let name_raw = object
                 .get("name")
-                .filter(|v| !v.is_null())
-                .map(stringify)
+                .filter(|v| json_truthy(v))
+                .and_then(stringify)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -410,11 +426,23 @@ fn normalize_trifecta_presets(
     (presets, active)
 }
 
-/// Python `str(value)` over the JSON shapes a stored id/name can take.
-fn stringify(value: &Value) -> String {
+/// Python `str(value)` over the scalar JSON shapes a stored id or name
+/// can take (strings pass through; booleans and numbers render as
+/// Python renders them). Container-typed ids and names are skipped
+/// rather than repr-rendered; see the divergence register.
+fn stringify(value: &Value) -> Option<String> {
     match value {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(true) => Some("True".to_string()),
+        Value::Bool(false) => Some("False".to_string()),
+        Value::Number(n) => Some(if let Some(i) = n.as_i64() {
+            i.to_string()
+        } else if let Some(u) = n.as_u64() {
+            u.to_string()
+        } else {
+            eo_wire::normalizer::python_repr_f64(n.as_f64()?)
+        }),
+        _ => None,
     }
 }
 
@@ -507,7 +535,19 @@ fn write_value(out: &mut String, value: &Value, depth: usize) {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
         Value::Bool(false) => out.push_str("false"),
-        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::Number(n) => {
+            // Integers render plainly; floats through the Python repr
+            // rule (exponent thresholds and signs match json.dumps).
+            if let Some(i) = n.as_i64() {
+                out.push_str(&i.to_string());
+            } else if let Some(u) = n.as_u64() {
+                out.push_str(&u.to_string());
+            } else {
+                out.push_str(&eo_wire::normalizer::python_repr_f64(
+                    n.as_f64().expect("numeric JSON value"),
+                ));
+            }
+        }
         Value::String(s) => write_escaped_string(out, s),
         Value::Array(items) => {
             if items.is_empty() {
@@ -561,7 +601,7 @@ fn write_escaped_string(out: &mut String, raw: &str) {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }
             c if c.is_ascii() => out.push(c),
@@ -895,24 +935,26 @@ mod tests {
 
     #[test]
     fn active_preset_resolution_honours_a_valid_stored_id() {
-        let mut config = AppConfig::default();
-        config.trifecta_presets = vec![
-            TrifectaPresetConfig {
-                id: "alpha".into(),
-                name: "A".into(),
-                small_weapon_id: None,
-                big_weapon_id: None,
-                heal_id: None,
-            },
-            TrifectaPresetConfig {
-                id: "beta".into(),
-                name: "B".into(),
-                small_weapon_id: None,
-                big_weapon_id: None,
-                heal_id: None,
-            },
-        ];
-        config.active_trifecta_preset_id = Some("beta".into());
+        let mut config = AppConfig {
+            trifecta_presets: vec![
+                TrifectaPresetConfig {
+                    id: "alpha".into(),
+                    name: "A".into(),
+                    small_weapon_id: None,
+                    big_weapon_id: None,
+                    heal_id: None,
+                },
+                TrifectaPresetConfig {
+                    id: "beta".into(),
+                    name: "B".into(),
+                    small_weapon_id: None,
+                    big_weapon_id: None,
+                    heal_id: None,
+                },
+            ],
+            active_trifecta_preset_id: Some("beta".into()),
+            ..AppConfig::default()
+        };
         assert_eq!(active_trifecta_preset(&config).unwrap().id, "beta");
         config.active_trifecta_preset_id = Some(String::new());
         assert!(active_trifecta_preset(&config).is_none());
@@ -968,5 +1010,67 @@ mod tests {
                 "}"
             )
         );
+    }
+
+    #[test]
+    fn wrong_shape_files_error_instead_of_resetting() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), "[1, 2]").unwrap();
+        assert!(ConfigService::new(dir.path()).is_err());
+        // The user's file is untouched.
+        assert_eq!(read_settings(dir.path()), "[1, 2]");
+    }
+
+    #[test]
+    fn registered_skip_paths_fall_to_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "player_name": 5,
+                "overlay_x": 1.5,
+                "loot_filter_blacklist": ["Universal Ammo", 5, null],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        assert_eq!(svc.get().player_name, "");
+        assert_eq!(svc.get().overlay_x, None);
+        assert_eq!(svc.get().loot_filter_blacklist, ["Universal Ammo"]);
+    }
+
+    #[test]
+    fn falsy_and_scalar_preset_ids_follow_the_python_semantics() {
+        let raw = serde_json::json!([
+            {"id": 0, "name": "skipped"},
+            {"id": 0.0, "name": "skipped"},
+            {"id": false, "name": "skipped"},
+            {"id": true, "name": 1.5},
+            {"id": {"container": 1}, "name": "skipped: container id"},
+        ]);
+        let (presets, _) = normalize_trifecta_presets(Some(&raw), None);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].id, "True");
+        assert_eq!(presets[0].name, "1.5");
+    }
+
+    #[test]
+    fn del_and_small_floats_render_like_the_backend_writer() {
+        let value = serde_json::json!({"k": "a\u{7f}b", "tiny": 1e-5});
+        let body = to_ascii_pretty(&value);
+        assert!(body.contains("a\\u007fb"));
+        assert!(body.contains("1e-05"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn saved_files_carry_platform_line_endings() {
+        let dir = tempfile::tempdir().unwrap();
+        let _svc = service(dir.path());
+        let bytes = std::fs::read(dir.path().join("settings.json")).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\r\n"));
+        assert!(!text.replace("\r\n", "").contains('\n'));
     }
 }

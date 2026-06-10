@@ -35,7 +35,11 @@ tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps JSON object members in insertion order end to end,
+# which the response models' extra-key carry-forward and the body-byte
+# fidelity of ported routes both rely on (the canonicalising emitters sort
+# keys explicitly, so they are unaffected).
+serde_json = { version = "1", features = ["preserve_order"] }
 windows = "0.61"
 # The strangler-fig HTTP substrate: axum owns the public loopback address and
 # reverse-proxies not-yet-ported routes to the relocated Python sidecar.

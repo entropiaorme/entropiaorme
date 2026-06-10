@@ -12,6 +12,7 @@
 
 pub mod arms;
 pub mod proxy;
+pub mod sse;
 
 use std::future::Future;
 use std::sync::{Arc, RwLock};

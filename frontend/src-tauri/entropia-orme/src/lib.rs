@@ -61,6 +61,10 @@ pub fn run() {
             hide_scan_overlay
         ])
         .setup(|app| {
+            // Both uses of `app` compile out on a non-Windows debug build
+            // (icon install is Windows-only, the sidecar spawn is
+            // release-only); keep the binding alive for that combination.
+            let _ = &app;
             #[cfg(windows)]
             install_runtime_window_icons(app.handle());
             // Only the bundled release shell spawns the PyInstaller sidecar.
@@ -68,8 +72,33 @@ pub fn run() {
             // sidecar slot holds a placeholder binary that Windows rejects
             // (os error 193); gating the spawn to release keeps that error
             // out of the dev console.
+            //
+            // Topology: the native HTTP substrate owns the public loopback
+            // port the frontend is wired to; the sidecar relocates to a
+            // private port behind the reverse proxy. Every failure path
+            // degrades to the legacy direct topology (sidecar on the public
+            // port, no proxy) so a substrate fault never takes the app down.
             #[cfg(not(debug_assertions))]
-            spawn_backend_sidecar(app.handle());
+            {
+                let relocation = bind_substrate_listener()
+                    .and_then(|listener| allocate_private_port().map(|port| (listener, port)));
+                match relocation {
+                    Some((listener, sidecar_port)) => {
+                        spawn_backend_sidecar(app.handle(), Some(sidecar_port));
+                        spawn_http_substrate(listener, sidecar_port);
+                    }
+                    None => spawn_backend_sidecar(app.handle(), None),
+                }
+            }
+            // Dev runs the backend from the dev launcher; the substrate
+            // joins in only when that launcher published the backend's
+            // private port, which keeps a plain unproxied dev stack working.
+            #[cfg(debug_assertions)]
+            if let Some(sidecar_port) = dev_sidecar_port() {
+                if let Some(listener) = bind_substrate_listener() {
+                    spawn_http_substrate(listener, sidecar_port);
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -146,17 +175,114 @@ fn kill_sidecar_tree(child: &CommandChild) {
     let _ = cmd.output();
 }
 
+/// The public loopback port the frontend dials (`client.ts` and the CSP
+/// are baked against it; 8421 unless the dev environment overrides).
+fn public_backend_port() -> u16 {
+    std::env::var("ENTROPIAORME_BACKEND_PORT")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(8421)
+}
+
+/// Bind the substrate's public listener up front so relocation only
+/// happens once the public port is actually ours.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn bind_substrate_listener() -> Option<std::net::TcpListener> {
+    let port = public_backend_port();
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => {
+            if let Err(err) = listener.set_nonblocking(true) {
+                eprintln!("[substrate] nonblocking mode failed: {err}");
+                return None;
+            }
+            Some(listener)
+        }
+        Err(err) => {
+            eprintln!("[substrate] public port {port} bind failed: {err}");
+            None
+        }
+    }
+}
+
+/// An OS-allocated free loopback port for the relocated sidecar.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn allocate_private_port() -> Option<u16> {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener.local_addr().ok().map(|addr| addr.port()),
+        Err(err) => {
+            eprintln!("[substrate] private port allocation failed: {err}");
+            None
+        }
+    }
+}
+
+/// Dev launchers publish the externally-started backend's private port
+/// here when the dev stack should run through the substrate.
+#[cfg(debug_assertions)]
+fn dev_sidecar_port() -> Option<u16> {
+    std::env::var("ENTROPIAORME_SIDECAR_PORT")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+}
+
+/// Serve the strangler router on the already-bound public listener,
+/// proxying not-yet-ported routes to the sidecar on `sidecar_port`.
+fn spawn_http_substrate(listener: std::net::TcpListener, sidecar_port: u16) {
+    let overrides = route_arm_overrides();
+    let state = std::sync::Arc::new(eo_http::AppState::new(
+        format!("127.0.0.1:{sidecar_port}"),
+        public_backend_port(),
+        overrides,
+    ));
+    tauri::async_runtime::spawn(async move {
+        let listener = match tokio::net::TcpListener::from_std(listener) {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!("[substrate] listener handoff failed: {err}");
+                return;
+            }
+        };
+        if let Err(err) = eo_http::serve(listener, state).await {
+            eprintln!("[substrate] server exited: {err}");
+        }
+    });
+}
+
+/// Runtime per-route arm overrides: a persisted JSON map (path in
+/// `ENTROPIAORME_ROUTE_ARMS_FILE`) overlaid by the inline
+/// `ENTROPIAORME_ROUTE_ARMS` list. The kill-switch for a misbehaving
+/// native route in a shipped build.
+fn route_arm_overrides() -> eo_http::arms::ArmOverrides {
+    let mut overrides = eo_http::arms::ArmOverrides::empty();
+    if let Ok(path) = std::env::var("ENTROPIAORME_ROUTE_ARMS_FILE") {
+        overrides = overrides.overlaid(eo_http::arms::ArmOverrides::from_json_file(
+            std::path::Path::new(&path),
+        ));
+    }
+    if let Ok(inline) = std::env::var("ENTROPIAORME_ROUTE_ARMS") {
+        overrides = overrides.overlaid(eo_http::arms::ArmOverrides::parse_env_value(&inline));
+    }
+    overrides
+}
+
 // In debug builds the call site above is compiled out (dev uses a separately
 // launched backend), leaving this function without a caller; silence the
 // resulting dead-code lint rather than drop the release-only definition.
 #[cfg_attr(debug_assertions, allow(dead_code))]
-fn spawn_backend_sidecar(app: &tauri::AppHandle) {
+fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
     let sidecar = match app.shell().sidecar("entropiaorme-backend") {
         Ok(cmd) => cmd,
         Err(err) => {
             eprintln!("[backend] sidecar resolve failed: {err}");
             return;
         }
+    };
+    // Relocation: the sidecar reads its bind port (and derives its own
+    // Host-header guard) from this variable; the substrate's proxy arm
+    // rewrites Host to the private authority accordingly.
+    let sidecar = match relocated_port {
+        Some(port) => sidecar.env("ENTROPIAORME_BACKEND_PORT", port.to_string()),
+        None => sidecar,
     };
 
     let (mut rx, child) = match sidecar.spawn() {

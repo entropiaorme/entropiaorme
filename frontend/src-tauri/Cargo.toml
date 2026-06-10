@@ -37,6 +37,22 @@ tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows = "0.61"
+# The strangler-fig HTTP substrate: axum owns the public loopback address and
+# reverse-proxies not-yet-ported routes to the relocated Python sidecar.
+# axum is pinned to the 0.8 minor for the duration of the hybrid, mirroring
+# the Tauri pin above: the proxy seam is the one surface every route crosses.
+axum = { version = "~0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
+http = "1"
+http-body-util = "0.1"
+# Stream plumbing for the proxy-substrate tests' held-open upstream stub.
+bytes = "1"
+tokio-stream = "0.1"
+# Throwaway data directories for the cross-language proxy-fidelity test's
+# real-backend boots (eo-http dev-dependency).
+tempfile = "3"
 criterion = "0.8"
 # Shortest round-trip float digits, parsed and reformatted to match Python's
 # float repr byte-for-byte in the equivalence Normalizer (eo-wire).

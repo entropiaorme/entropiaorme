@@ -448,4 +448,37 @@ mod tests {
             other => panic!("expected a schema-version refusal, got {other}"),
         }
     }
+
+    #[tokio::test]
+    async fn schema_master_lists_the_real_objects_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        let master = db.schema_master().await.unwrap();
+        // 23 declared tables + the migration ledger + 18 indexes +
+        // 8 triggers (only SQLite's own bookkeeping is excluded; the
+        // conformance comparison filters the ledger externally as its
+        // one deliberate difference).
+        assert_eq!(master.len(), 24 + 18 + 8);
+        let mut sorted = master.clone();
+        sorted.sort();
+        assert_eq!(master, sorted, "ordered by (type, name)");
+        assert!(master.iter().any(|(kind, name, sql)| {
+            kind == "table"
+                && name == "tracking_sessions"
+                && sql.contains("CREATE TABLE tracking_sessions")
+        }));
+        assert!(master.iter().any(|(_, name, _)| name == "_sqlx_migrations"));
+    }
+
+    #[test]
+    fn refusal_error_formats_the_exact_message() {
+        let err = DbError::UnsupportedSchemaVersion {
+            found: 28,
+            supported: 33,
+        };
+        assert_eq!(
+            err.to_string(),
+            "database schema version 28 predates the supported baseline 33"
+        );
+    }
 }

@@ -407,4 +407,66 @@ mod tests {
         assert_eq!(heal["heal_min"], Value::Null);
         assert_eq!(heal["heal_max"], Value::Null);
     }
+
+    #[tokio::test]
+    async fn amp_entities_change_the_damage_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut amped = weapon_props(10.0, 0.05);
+        amped["amp_entity"] = json!({"damage": {"burn": 4.0}});
+        let db = seeded_db(
+            dir.path(),
+            &[
+                (1, "Pistol", "weapon", amped),
+                (2, "Cannon", "weapon", weapon_props(40.0, 0.2)),
+                (3, "Healer", "healing", heal_props()),
+            ],
+        )
+        .await;
+        let (data, error) = describe_trifecta(&db, Some(&full_preset())).await.unwrap();
+        assert_eq!(error, None);
+        let small = &data.unwrap()["small_weapon"];
+        // 10 + min(5, 4) = 14: the amp genuinely participates.
+        assert_eq!(small["total_damage"], 14.0);
+        assert_eq!(small["damage_min"], 7.0);
+        assert_eq!(small["damage_max"], 14.0);
+    }
+
+    #[tokio::test]
+    async fn validation_reports_failures_with_their_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = seeded_db(dir.path(), &[]).await;
+        let (ok, error) = validate_trifecta(&db, None).await.unwrap();
+        assert!(!ok);
+        assert_eq!(
+            error.as_deref(),
+            Some("Trifecta attribution requires an active preset")
+        );
+    }
+
+    #[tokio::test]
+    async fn happy_path_heal_figures_match_hand_computed_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = seeded_db(
+            dir.path(),
+            &[
+                (1, "Pistol", "weapon", weapon_props(10.0, 0.05)),
+                (2, "Cannon", "weapon", weapon_props(30.0, 0.2)),
+                (3, "Healer", "healing", heal_props()),
+            ],
+        )
+        .await;
+        let (data, _) = describe_trifecta(&db, Some(&full_preset())).await.unwrap();
+        let data = data.unwrap();
+        // decay 0.08 PEC at markup 1.1 -> 0.088 PEC, divided (unrounded,
+        // exactly as the backend does) into PED.
+        assert_eq!(
+            data["heal_tool"]["cost_per_use_ped"].as_f64().unwrap(),
+            0.088 / 100.0
+        );
+        // weapon decay 0.05 + ammo 1.0 PEC -> 1.05 PEC -> 0.0105 PED.
+        assert_eq!(
+            data["small_weapon"]["cost_per_shot_ped"].as_f64().unwrap(),
+            0.0105
+        );
+    }
 }

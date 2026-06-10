@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use eo_services::chatlog_watcher::{ChatlogWatcher, QuestRewardFilter};
 use eo_services::event_bus::EventBus;
+use eo_services::fingerprint_recorder::FingerprintRecorder;
 use eo_wire::normalizer::to_python_json;
+use eo_wire::normalizer::Normalizer;
 use serde_json::{json, Value};
 
 fn repo_root() -> PathBuf {
@@ -112,6 +114,8 @@ fn native_run(lines: &[String], suppress: Option<&Value>) -> String {
             "payload": data,
         }));
     });
+    let fingerprint_recorder = FingerprintRecorder::new();
+    fingerprint_recorder.install(&bus);
 
     let filter: Option<QuestRewardFilter> = suppress.map(|value| {
         let fixed = value.clone();
@@ -135,7 +139,12 @@ fn native_run(lines: &[String], suppress: Option<&Value>) -> String {
     watcher.stop();
 
     let recorded = recorded.lock().unwrap();
-    to_python_json(&Value::Array(recorded.clone()), None)
+    let mut normalizer = Normalizer::new();
+    let reply = json!({
+        "stream": Value::Array(recorded.clone()),
+        "fingerprint": fingerprint_recorder.serialize(&mut normalizer),
+    });
+    to_python_json(&reply, None)
 }
 
 #[test]

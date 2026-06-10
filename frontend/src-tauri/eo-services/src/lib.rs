@@ -18,6 +18,7 @@ pub mod cost_engine;
 pub mod db;
 pub mod eu_window;
 pub mod event_bus;
+pub mod fingerprint_recorder;
 pub mod game_data_store;
 pub mod hotbar_listener;
 pub mod keystroke_source;

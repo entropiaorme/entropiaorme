@@ -21,6 +21,8 @@
 //! elsewhere).
 #![cfg(feature = "cross-language")]
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -70,12 +72,16 @@ print(json.dumps({
 async fn fresh_native_database_matches_the_backend_fresh_install() {
     // Backend side: the oracle creates its database and reports.
     let oracle_dir = tempfile::tempdir().unwrap();
-    let output = Command::new(oracle_python())
+    let mut oracle_cmd = Command::new(oracle_python());
+    oracle_cmd
         .args(["-c", ORACLE_SCRIPT])
         .arg(oracle_dir.path())
-        .current_dir(repo_root())
-        .output()
-        .expect("oracle spawn");
+        .current_dir(repo_root());
+    // Same flag as the sibling oracle spawns: a GUI-subsystem parent on
+    // Windows would otherwise flash a console for the child.
+    #[cfg(windows)]
+    oracle_cmd.creation_flags(0x0800_0000);
+    let output = oracle_cmd.output().expect("oracle spawn");
     assert!(
         output.status.success(),
         "oracle failed: {}",

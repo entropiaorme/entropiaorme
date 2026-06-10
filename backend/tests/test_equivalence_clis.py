@@ -216,3 +216,25 @@ def test_static_tables_cli_serves_the_character_calc_ops(monkeypatch) -> None:
     assert json.loads(lines[6]) == 80.0
     assert json.loads(lines[7])["currentHp"] == 80.0
     assert json.loads(lines[8]) == 0.25
+
+
+def test_static_tables_cli_serves_the_scan_geometry_ops(monkeypatch) -> None:
+    out = io.StringIO()
+    requests = [
+        {"op": "panel_anchors"},
+        {
+            "op": "summarize_level_drift",
+            "tracked_levels": {"A": 5},
+            "scanned_levels": {"B": 1},
+        },
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    static_tables_cli.main()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == len(requests)
+    anchors = json.loads(lines[0])
+    assert anchors["skill"]["width"] == 635
+    assert anchors["repair"]["cells"] == {}
+    assert json.loads(lines[1]) is None

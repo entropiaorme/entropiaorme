@@ -333,6 +333,85 @@ fn character_calc_over_the_real_snapshot_matches() {
     }
 }
 
+/// The scan-geometry anchors built from the real tracked calibration
+/// file, and drift summaries over curated level maps, byte-compared.
+/// (The capture-region arithmetic is pinned by identical hand-computed
+/// values on both sides rather than an oracle op: serving it would
+/// mean patching the backend's window lookup inside the oracle for six
+/// integer operations, more fragility than assurance.)
+#[test]
+fn scan_geometry_and_drift_match_the_oracle() {
+    use eo_services::scan_presets::{PanelAnchor, ScanPresets};
+
+    let geometry_path = repo_root().join("backend/data/panel_geometry.json");
+    assert!(geometry_path.exists(), "the calibration file is tracked");
+    let presets = ScanPresets::new(&geometry_path);
+    assert!(
+        !presets.skill.cells.is_empty(),
+        "the real calibration populates skill cells"
+    );
+
+    let anchor_json = |anchor: &PanelAnchor| {
+        let mut cells = Map::new();
+        for (name, cell) in &anchor.cells {
+            cells.insert(
+                name.clone(),
+                json!({
+                    "x_left": cell.x_left,
+                    "x_right": cell.x_right,
+                    "first_y_top": cell.first_y_top,
+                    "last_y_top": cell.last_y_top,
+                    "height": cell.height,
+                }),
+            );
+        }
+        json!({
+            "width": anchor.width,
+            "height": anchor.height,
+            "right_offset": anchor.right_offset,
+            "bottom_offset": anchor.bottom_offset,
+            "n_rows": anchor.n_rows,
+            "cells": cells,
+        })
+    };
+    let reply = oracle()
+        .lock()
+        .unwrap()
+        .ask(&json!({"op": "panel_anchors"}));
+    let native = json!({
+        "skill": anchor_json(&presets.skill),
+        "profession": anchor_json(&presets.profession),
+        "repair": anchor_json(&presets.repair),
+    });
+    assert_oracle_eq(&reply, &native, "panel_anchors");
+
+    let drift_cases = [
+        (json!({}), json!({})),
+        (json!({"Rifle": 100.0}), json!({"Anatomy": 50.0})),
+        (
+            json!({"Rifle": 100.0, "Anatomy": 50.0, "Only Tracked": 5.0}),
+            json!({"Rifle": 104.5, "Anatomy": 48.25, "Extra": 9.0}),
+        ),
+        (
+            json!({"Tiny": 0.0, "Zed": 3.0, "Abe": 3.0}),
+            json!({"Tiny": 0.5, "Zed": 5.0, "Abe": 1.0}),
+        ),
+    ];
+    for (index, (tracked, scanned)) in drift_cases.iter().enumerate() {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "summarize_level_drift",
+            "tracked_levels": tracked,
+            "scanned_levels": scanned,
+        }));
+        let native = eo_services::scan_drift::summarize_level_drift(
+            tracked.as_object().unwrap(),
+            scanned.as_object().unwrap(),
+        )
+        .unwrap_or(serde_json::Value::Null);
+        assert_oracle_eq(&reply, &native, &format!("drift case {index}"));
+    }
+}
+
 #[test]
 fn max_level_matches() {
     let reply = oracle()

@@ -130,10 +130,13 @@ def _git_commit() -> str:
 
 
 def host_leg() -> dict[str, Any]:
+    # OS family and architecture only: the kernel build and libc point
+    # versions fingerprint the machine without being load-bearing for a
+    # same-host comparison, so they stay out of the committed record.
     return {
         "captured_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "commit": _git_commit(),
-        "platform": platform.platform(),
+        "platform": f"{platform.system()} {platform.machine()}",
         "cpu": _cpu_model(),
         "python": platform.python_version(),
     }

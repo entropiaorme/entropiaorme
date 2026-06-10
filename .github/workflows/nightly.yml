@@ -279,10 +279,13 @@ jobs:
       # build graph entirely. --in-place because member tests read committed
       # fixtures from the repo outside this cargo workspace (for example
       # backend/testing/equivalence/), which cargo-mutants' default copied
-      # build tree does not contain. Exit code 2 (missed mutants found) is
-      # tolerated at this step: the floors step below is the acceptance bar.
+      # build tree does not contain. Exit codes 2 (missed mutants) and 3
+      # (timed-out mutants) are outcome reports, tolerated here because the
+      # floors step below is the acceptance bar (it counts a timeout as
+      # caught, like the Python gate); anything else (usage error, failing
+      # baseline, internal error) still fails this step.
       - name: Run mutation campaign (backend members)
-        run: cargo mutants --package eo-wire --package eo-http --package eo-services --in-place || test $? -eq 2
+        run: cargo mutants --package eo-wire --package eo-http --package eo-services --in-place || { rc=$?; test "$rc" -eq 2 -o "$rc" -eq 3; }
       - name: Enforce the per-file mutation floors
         run: python3 ../../backend/scripts/rust_mutation_floors.py --outcomes mutants.out/outcomes.json
 

@@ -1,7 +1,7 @@
 {
   "artefacts": {
     "freeze_host": "Linux",
-    "freeze_s": 108.0,
+    "freeze_s": 106.3,
     "sidecar_outputs_mib": {
       "entropiaorme-backend": 219.8
     },
@@ -453,8 +453,8 @@
         "branch_pct": 75.0,
         "branches": 36,
         "module": "backend/testing/external_process.py",
-        "overall_pct": 88.6,
-        "statements": 148
+        "overall_pct": 87.8,
+        "statements": 152
       },
       {
         "branch_pct": 91.7,
@@ -564,8 +564,8 @@
     ]
   },
   "host": {
-    "captured_at": "2026-06-09 23:36 UTC",
-    "commit": "52e34c8",
+    "captured_at": "2026-06-10 00:00 UTC",
+    "commit": "7e16d01",
     "cpu": "12th Gen Intel(R) Core(TM) i7-12800H",
     "platform": "Linux-6.8.0-107-generic-x86_64-with-glibc2.35",
     "python": "3.12.1"
@@ -573,89 +573,89 @@
   "hot-paths": {
     "method": "timeit, best of 5 runs of 10000 calls",
     "per_call_us": {
-      "chatlog_parser.parse_line (damage line)": 10.366,
-      "cost_engine.cost_per_shot_from_props": 3.305,
-      "tt_value_curve.levels_for_tt_value": 59.142,
-      "tt_value_curve.tt_value_at": 0.776
+      "chatlog_parser.parse_line (damage line)": 10.318,
+      "cost_engine.cost_per_shot_from_props": 3.285,
+      "tt_value_curve.levels_for_tt_value": 59.276,
+      "tt_value_curve.tt_value_at": 0.785
     }
   },
   "http": {
     "latency_ms": {
       "GET_codex_meta_attributes": {
-        "max": 2.0085,
-        "median": 1.2774,
-        "min": 0.8687,
-        "p95": 1.7853,
+        "max": 1.2743,
+        "median": 1.0912,
+        "min": 0.995,
+        "p95": 1.1988,
         "samples": 30
       },
       "GET_health": {
-        "max": 5.4373,
-        "median": 1.1584,
-        "min": 0.7808,
-        "p95": 2.4972,
+        "max": 2.8644,
+        "median": 1.0182,
+        "min": 0.9278,
+        "p95": 1.1539,
         "samples": 30
       },
       "GET_quests": {
-        "max": 1.1624,
-        "median": 1.0048,
-        "min": 0.9921,
-        "p95": 1.1526,
+        "max": 1.4392,
+        "median": 1.0907,
+        "min": 1.0019,
+        "p95": 1.2203,
         "samples": 30
       },
       "GET_quests_analytics": {
-        "max": 1.1712,
-        "median": 1.0002,
-        "min": 0.9914,
-        "p95": 1.158,
+        "max": 1.2957,
+        "median": 1.011,
+        "min": 0.9993,
+        "p95": 1.1826,
         "samples": 30
       },
       "GET_quests_mobs": {
-        "max": 1.2694,
-        "median": 1.0031,
-        "min": 0.9946,
-        "p95": 1.1958,
+        "max": 1.4259,
+        "median": 1.02,
+        "min": 0.9993,
+        "p95": 1.2871,
         "samples": 30
       },
       "GET_quests_playlists": {
-        "max": 1.2649,
-        "median": 1.0733,
-        "min": 0.9942,
-        "p95": 1.2636,
+        "max": 1.1784,
+        "median": 1.0091,
+        "min": 0.9972,
+        "p95": 1.1676,
         "samples": 30
       },
       "GET_scan_skills_status": {
-        "max": 1.4769,
-        "median": 0.8848,
-        "min": 0.6899,
-        "p95": 1.0906,
+        "max": 1.8427,
+        "median": 1.125,
+        "min": 0.8134,
+        "p95": 1.777,
         "samples": 30
       },
       "GET_tracking_session_detail": {
-        "max": 1.3792,
-        "median": 1.218,
-        "min": 1.1999,
-        "p95": 1.3774,
+        "max": 1.5413,
+        "median": 1.2282,
+        "min": 1.1981,
+        "p95": 1.5173,
         "samples": 30
       },
       "GET_tracking_session_quest_link_suggestion": {
-        "max": 1.229,
-        "median": 1.0489,
-        "min": 1.0323,
-        "p95": 1.2156,
+        "max": 1.2225,
+        "median": 1.0583,
+        "min": 1.0301,
+        "p95": 1.2082,
         "samples": 30
       },
       "GET_tracking_sessions": {
-        "max": 1.3639,
-        "median": 1.2115,
-        "min": 1.0591,
-        "p95": 1.3609,
+        "max": 2.1301,
+        "median": 1.2792,
+        "min": 1.1102,
+        "p95": 2.0239,
         "samples": 30
       },
       "GET_tracking_snapshot": {
-        "max": 1.384,
-        "median": 1.0741,
-        "min": 0.966,
-        "p95": 1.2206,
+        "max": 1.4191,
+        "median": 1.1188,
+        "min": 1.0796,
+        "p95": 1.3274,
         "samples": 30
       }
     },
@@ -663,38 +663,38 @@
     "scenario": "basic_hunt_10_events"
   },
   "ocr": {
-    "engine_load_s": 0.183,
-    "first_page_s": 2.111,
+    "engine_load_s": 0.2,
+    "first_page_s": 2.105,
     "pages": 12,
-    "process_rss_delta_mib": 105.7,
+    "process_rss_delta_mib": 100.4,
     "warm_page_s": {
-      "max": 2.1874,
-      "median": 2.107,
-      "min": 1.8177,
-      "p95": 2.1874,
+      "max": 2.1846,
+      "median": 2.1739,
+      "min": 1.784,
+      "p95": 2.1846,
       "samples": 11
     }
   },
   "process": {
     "cold_start_s": {
-      "max": 0.8663,
-      "median": 0.836,
-      "min": 0.829,
-      "p95": 0.8663,
+      "max": 0.8645,
+      "median": 0.8377,
+      "min": 0.8314,
+      "p95": 0.8645,
       "samples": 5
     },
     "graceful_shutdown_s": {
-      "max": 0.4167,
-      "median": 0.3657,
-      "min": 0.3158,
-      "p95": 0.4167,
+      "max": 0.4152,
+      "median": 0.3651,
+      "min": 0.3647,
+      "p95": 0.4152,
       "samples": 5
     },
     "idle_rss_mib": {
-      "max": 121.3,
-      "median": 121.3,
-      "min": 121.1,
-      "p95": 121.3,
+      "max": 121.4,
+      "median": 121.4,
+      "min": 121.3,
+      "p95": 121.4,
       "samples": 5
     },
     "scenario": "basic_hunt_10_events",

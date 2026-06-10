@@ -26,8 +26,8 @@ table.
 <!-- BEGIN GENERATED: host -->
 | | |
 | --- | --- |
-| Captured | 2026-06-09 23:36 UTC |
-| Commit | `52e34c8` |
+| Captured | 2026-06-10 00:00 UTC |
+| Commit | `7e16d01` |
 | Platform | Linux-6.8.0-107-generic-x86_64-with-glibc2.35 |
 | CPU | 12th Gen Intel(R) Core(TM) i7-12800H |
 | Python | 3.12.1 |
@@ -45,9 +45,9 @@ uses.
 <!-- BEGIN GENERATED: process -->
 | Measurement | median | p95 | min | max | samples | unit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Cold start to healthy | 0.836 | 0.8663 | 0.829 | 0.8663 | 5 | s (RSS: MiB) |
-| Idle RSS after 2s settle (MiB) | 121.3 | 121.3 | 121.1 | 121.3 | 5 | s (RSS: MiB) |
-| Graceful shutdown | 0.3657 | 0.4167 | 0.3158 | 0.4167 | 5 | s (RSS: MiB) |
+| Cold start to healthy | 0.8377 | 0.8645 | 0.8314 | 0.8645 | 5 | s (RSS: MiB) |
+| Idle RSS after 2s settle (MiB) | 121.4 | 121.4 | 121.3 | 121.4 | 5 | s (RSS: MiB) |
+| Graceful shutdown | 0.3651 | 0.4152 | 0.3647 | 0.4152 | 5 | s (RSS: MiB) |
 <!-- END GENERATED: process -->
 
 ## HTTP hydration latency
@@ -60,17 +60,17 @@ real traffic pattern (one desktop frontend) looks the same.
 <!-- BEGIN GENERATED: http -->
 | Endpoint | p50 ms | p95 ms | min ms |
 | --- | --- | --- | --- |
-| `GET_codex_meta_attributes` | 1.2774 | 1.7853 | 0.8687 |
-| `GET_health` | 1.1584 | 2.4972 | 0.7808 |
-| `GET_quests` | 1.0048 | 1.1526 | 0.9921 |
-| `GET_quests_analytics` | 1.0002 | 1.158 | 0.9914 |
-| `GET_quests_mobs` | 1.0031 | 1.1958 | 0.9946 |
-| `GET_quests_playlists` | 1.0733 | 1.2636 | 0.9942 |
-| `GET_scan_skills_status` | 0.8848 | 1.0906 | 0.6899 |
-| `GET_tracking_session_detail` | 1.218 | 1.3774 | 1.1999 |
-| `GET_tracking_session_quest_link_suggestion` | 1.0489 | 1.2156 | 1.0323 |
-| `GET_tracking_sessions` | 1.2115 | 1.3609 | 1.0591 |
-| `GET_tracking_snapshot` | 1.0741 | 1.2206 | 0.966 |
+| `GET_health` | 1.0182 | 1.1539 | 0.9278 |
+| `GET_tracking_snapshot` | 1.1188 | 1.3274 | 1.0796 |
+| `GET_tracking_sessions` | 1.2792 | 2.0239 | 1.1102 |
+| `GET_tracking_session_detail` | 1.2282 | 1.5173 | 1.1981 |
+| `GET_tracking_session_quest_link_suggestion` | 1.0583 | 1.2082 | 1.0301 |
+| `GET_quests` | 1.0907 | 1.2203 | 1.0019 |
+| `GET_quests_mobs` | 1.02 | 1.2871 | 0.9993 |
+| `GET_quests_analytics` | 1.011 | 1.1826 | 0.9993 |
+| `GET_quests_playlists` | 1.0091 | 1.1676 | 0.9972 |
+| `GET_scan_skills_status` | 1.125 | 1.777 | 0.8134 |
+| `GET_codex_meta_attributes` | 1.0912 | 1.1988 | 0.995 |
 
 30 requests per endpoint after 3 warm-ups, against a freshly replayed `basic_hunt_10_events` state.
 <!-- END GENERATED: http -->
@@ -84,10 +84,10 @@ these same paths; band (i) below compares the two.
 <!-- BEGIN GENERATED: hot-paths -->
 | Hot path | per-call µs |
 | --- | --- |
-| `chatlog_parser.parse_line (damage line)` | 10.366 |
-| `cost_engine.cost_per_shot_from_props` | 3.305 |
-| `tt_value_curve.levels_for_tt_value` | 59.142 |
-| `tt_value_curve.tt_value_at` | 0.776 |
+| `cost_engine.cost_per_shot_from_props` | 3.285 |
+| `chatlog_parser.parse_line (damage line)` | 10.318 |
+| `tt_value_curve.tt_value_at` | 0.785 |
+| `tt_value_curve.levels_for_tt_value` | 59.276 |
 
 Method: timeit, best of 5 runs of 10000 calls.
 <!-- END GENERATED: hot-paths -->
@@ -104,10 +104,10 @@ the steady state.
 | Measurement | value |
 | --- | --- |
 | Pages read | 12 |
-| Engine load (s) | 0.183 |
-| First page (s) | 2.111 |
-| Warm page median (s) | 2.107 (p95 2.1874) |
-| Process RSS delta (MiB) | 105.7 |
+| Engine load (s) | 0.2 |
+| First page (s) | 2.105 |
+| Warm page median (s) | 2.1739 (p95 2.1846) |
+| Process RSS delta (MiB) | 100.4 |
 <!-- END GENERATED: ocr -->
 
 ## Artefact sizes
@@ -123,7 +123,7 @@ the application's Windows target.
 | `entropiaorme-backend` (Linux freeze) | 219.8 |
 | Windows installer / installed footprint | pending capture on the application's Windows target |
 
-Freeze duration on this host: 108s.
+Freeze duration on this host: 106.3s.
 <!-- END GENERATED: artefacts -->
 
 ## Performance bands
@@ -221,7 +221,7 @@ presence map; this table carries the figures.
 | `backend/testing/equivalence/table.py` | 13 | 0 | no branches | 100.0 |
 | `backend/testing/equivalence/yml_family.py` | 18 | 2 | 100.0 | 100.0 |
 | `backend/testing/events_sink.py` | 34 | 6 | 83.3 | 95.0 |
-| `backend/testing/external_process.py` | 148 | 36 | 75.0 | 88.6 |
+| `backend/testing/external_process.py` | 152 | 36 | 75.0 | 87.8 |
 | `backend/testing/fingerprint.py` | 91 | 36 | 91.7 | 94.5 |
 | `backend/testing/golden.py` | 69 | 16 | 56.2 | 83.5 |
 | `backend/testing/http_fingerprint.py` | 108 | 28 | 85.7 | 91.2 |
@@ -260,5 +260,10 @@ from the committed JSON (`port_baseline.json`).
 Expected run-to-run variance on an otherwise idle host: timing medians
 (process, HTTP, hot paths, OCR) within roughly ±25%; RSS within ±10%;
 the coverage table and artefact sizes are exact for the same commit
-and dependency set. A re-run outside those envelopes on the same host
-warrants investigation, not a quiet refresh.
+and dependency set. One sharpening from review: the sub-millisecond
+legs (HTTP medians, hot-path microseconds) are sensitive to execution
+context inside a long full-pipeline run on a hybrid-core CPU, so
+verify them with standalone leg re-runs (the skip flags isolate a
+leg); the ±25% envelope applies to like-for-like runs. A re-run
+outside those envelopes on the same host warrants investigation, not
+a quiet refresh.

@@ -172,8 +172,8 @@ fn native_run(steps: &Value) -> String {
             other => panic!("unknown step kind {other}"),
         }
     }
-    let running = listener.is_running();
     listener.stop();
+    let running = listener.is_running();
 
     let reply = json!({
         "stream": Value::Array(recorded.lock().unwrap().clone()),

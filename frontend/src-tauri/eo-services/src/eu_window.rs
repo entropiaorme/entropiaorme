@@ -107,7 +107,11 @@ mod platform {
         }
         let mut point = POINT { x: 0, y: 0 };
         unsafe {
-            let _ = ClientToScreen(hwnd, &mut point);
+            // A failed conversion (the window vanished between calls)
+            // must not return plausible geometry at the wrong origin.
+            if !ClientToScreen(hwnd, &mut point).as_bool() {
+                return None;
+            }
         }
         Some((i64::from(point.x), i64::from(point.y), width, height))
     }

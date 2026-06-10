@@ -305,7 +305,7 @@ mod windows_hook {
         }
 
         let (ready_sender, ready_receiver) = channel::<Option<u32>>();
-        let pump = std::thread::Builder::new()
+        let pump = match std::thread::Builder::new()
             .name("keystroke-hook".into())
             .spawn(move || unsafe {
                 let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0);
@@ -323,8 +323,15 @@ mod windows_hook {
                 }
                 let _ = UnhookWindowsHookEx(hook);
                 *active().lock().unwrap_or_else(|e| e.into_inner()) = None;
-            })
-            .ok()?;
+            }) {
+            Ok(pump) => pump,
+            Err(_) => {
+                // A failed spawn must release the slot or every later
+                // start would refuse against a hook that never existed.
+                *active().lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return None;
+            }
+        };
 
         let pump_thread_id = match ready_receiver.recv() {
             Ok(Some(thread_id)) => thread_id,
@@ -334,15 +341,26 @@ mod windows_hook {
             }
         };
 
-        let worker = std::thread::Builder::new()
+        let worker = match std::thread::Builder::new()
             .name("keystroke-dispatch".into())
             .spawn(move || {
                 // Ends when the pump drops the active sender.
                 while let Ok((key, kind)) = receiver.recv() {
                     super::HookKeystrokeSource::dispatch(&callbacks, &allowlist, &key, kind);
                 }
-            })
-            .ok()?;
+            }) {
+            Ok(worker) => worker,
+            Err(_) => {
+                // Tear the pump down rather than leaving an unhooked
+                // stop path: post quit, join, and the pump's own exit
+                // clears the slot.
+                unsafe {
+                    let _ = PostThreadMessageW(pump_thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+                }
+                let _ = pump.join();
+                return None;
+            }
+        };
 
         Some(Running {
             pump_thread_id,

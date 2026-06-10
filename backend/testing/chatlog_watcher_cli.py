@@ -53,6 +53,9 @@ def _run(request: dict) -> list:
 
 def main() -> None:
     for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
         request = json.loads(line)
         result = _run(request)
         sys.stdout.write(

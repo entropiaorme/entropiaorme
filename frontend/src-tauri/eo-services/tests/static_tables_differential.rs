@@ -114,7 +114,7 @@ fn native_json(value: &serde_json::Value) -> String {
 #[test]
 fn game_data_over_the_real_snapshot_matches() {
     let snapshot = repo_root().join("backend/data/snapshot");
-    let store = eo_services::game_data_store::GameDataStore::new(&snapshot);
+    let store = eo_services::game_data_store::GameDataStore::new(&snapshot).unwrap();
     let lookup = eo_services::mob_lookup_service::MobLookupService::new(&store);
 
     let counts_reply = oracle().lock().unwrap().ask(&json!({"op": "game_counts"}));
@@ -152,7 +152,13 @@ fn game_data_over_the_real_snapshot_matches() {
         assert_oracle_eq(&reply, &native, &format!("game_find {endpoint}/{id}"));
     }
 
-    for (query, limit) in [("atrox", 10), ("young atrox", 5), ("dai", 10), ("  ", 10)] {
+    for (query, limit) in [
+        ("atrox", 10),
+        ("young atrox", 5),
+        ("atrox young", 5),
+        ("dai", 10),
+        ("  ", 10),
+    ] {
         let reply = oracle().lock().unwrap().ask(&json!({
             "op": "mob_suggest", "query": query, "limit": limit,
         }));

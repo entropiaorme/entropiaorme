@@ -6,9 +6,10 @@
 //! store loads it once at construction and serves queries from memory.
 //! Iteration order is load-bearing: endpoints sit in sorted-filename
 //! order, so cross-endpoint searches walk them exactly as the backend
-//! does, and search rows carry their keys in the backend's order.
-//! (The backend logs unloadable shapes; this port records the same
-//! outcomes silently, which is not wire-observable.)
+//! does, and search rows carry their keys in the backend's order. An
+//! unreadable or unparseable snapshot file fails construction loudly,
+//! exactly as the backend's loader raises at startup; only a parsed
+//! payload of the wrong shape degrades to an empty endpoint.
 
 use std::path::Path;
 
@@ -24,8 +25,9 @@ pub struct GameDataStore {
 impl GameDataStore {
     /// Load every `*.json` under `snapshot_dir` (sorted by filename); a
     /// missing directory yields an empty store, mirroring the backend's
-    /// warn-and-continue.
-    pub fn new(snapshot_dir: &Path) -> Self {
+    /// warn-and-continue, while an unreadable or unparseable file is a
+    /// hard error, mirroring its startup raise.
+    pub fn new(snapshot_dir: &Path) -> std::io::Result<Self> {
         let mut by_endpoint = Map::new();
         let mut paths: Vec<_> = match std::fs::read_dir(snapshot_dir) {
             Ok(entries) => entries
@@ -40,12 +42,10 @@ impl GameDataStore {
             let Some(endpoint) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(data) = serde_json::from_str::<Value>(&raw) else {
-                continue;
-            };
+            let raw = std::fs::read_to_string(&path)?;
+            let data = serde_json::from_str::<Value>(&raw).map_err(|e| {
+                std::io::Error::other(format!("snapshot {} does not parse: {e}", path.display()))
+            })?;
             let entities = if SINGLE_OBJECT_ENDPOINTS.contains(&endpoint) {
                 // Wrap so consumers reading the first entity keep working.
                 Value::Array(vec![data])
@@ -56,7 +56,7 @@ impl GameDataStore {
             };
             by_endpoint.insert(endpoint.to_string(), entities);
         }
-        Self { by_endpoint }
+        Ok(Self { by_endpoint })
     }
 
     /// All entities for an endpoint (empty when unknown).
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn loads_endpoints_in_sorted_order_with_wrapping_and_shape_rules() {
         let dir = snapshot_dir();
-        let store = GameDataStore::new(dir.path());
+        let store = GameDataStore::new(dir.path()).unwrap();
         let counts = store.endpoint_counts();
         let keys: Vec<&String> = counts.keys().collect();
         assert_eq!(keys, ["broken", "mobs", "skill_ranks", "weapons"]);
@@ -200,14 +200,14 @@ mod tests {
 
     #[test]
     fn missing_directory_yields_an_empty_store() {
-        let store = GameDataStore::new(Path::new("/nonexistent/snapshot"));
+        let store = GameDataStore::new(Path::new("/nonexistent/snapshot")).unwrap();
         assert_eq!(store.total_entities(), 0);
     }
 
     #[test]
     fn search_matches_display_names_case_insensitively_in_walk_order() {
         let dir = snapshot_dir();
-        let store = GameDataStore::new(dir.path());
+        let store = GameDataStore::new(dir.path()).unwrap();
         let rows = store.search_entities("o", None, 50);
         // Walk order: mobs (Atrox) then weapons (Opalo, Korss H400).
         let names: Vec<&str> = rows
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn find_entity_compares_stringified_ids() {
         let dir = snapshot_dir();
-        let store = GameDataStore::new(dir.path());
+        let store = GameDataStore::new(dir.path()).unwrap();
         assert_eq!(
             store.find_entity("weapons", &Value::from(1)).unwrap()["name"],
             "Opalo"

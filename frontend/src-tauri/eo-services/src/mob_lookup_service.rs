@@ -20,11 +20,14 @@ impl<'a> MobLookupService<'a> {
     /// deduplicated by (species, maturity), sorted stably by
     /// (starts-with-query, display), and truncated to `limit`.
     pub fn search_mob_names(&self, query: &str, limit: usize) -> Vec<Value> {
-        let q = query.trim().to_lowercase();
+        let q = query.trim_matches(python_whitespace).to_lowercase();
         if q.is_empty() {
             return Vec::new();
         }
-        let q_parts: Vec<&str> = q.split_whitespace().collect();
+        let q_parts: Vec<&str> = q
+            .split(python_whitespace)
+            .filter(|part| !part.is_empty())
+            .collect();
 
         let mut results: Vec<Value> = Vec::new();
         let mut seen: std::collections::BTreeSet<(String, String)> =
@@ -101,8 +104,8 @@ impl<'a> MobLookupService<'a> {
     /// Once a species matches, only its own maturities decide, as the
     /// backend's early return does.
     pub fn has_mob_name(&self, species: &str, maturity: &str) -> bool {
-        let species = species.trim();
-        let maturity = maturity.trim();
+        let species = species.trim_matches(python_whitespace);
+        let maturity = maturity.trim_matches(python_whitespace);
         if species.is_empty() {
             return false;
         }
@@ -134,6 +137,14 @@ impl<'a> MobLookupService<'a> {
     }
 }
 
+/// Python's whitespace class: Unicode White_Space plus the file/group/
+/// record/unit separators (U+001C..U+001F), which `str.split` and
+/// `str.strip` treat as whitespace but Rust's `char::is_whitespace`
+/// does not.
+fn python_whitespace(c: char) -> bool {
+    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
+}
+
 /// `((mob.get("species") or {}).get("name") or mob.get("name") or "").strip()`.
 fn species_name(mob: &Value) -> String {
     mob.get("species")
@@ -163,7 +174,7 @@ mod tests {
             ]"#,
         )
         .unwrap();
-        let store = GameDataStore::new(dir.path());
+        let store = GameDataStore::new(dir.path()).unwrap();
         (dir, store)
     }
 

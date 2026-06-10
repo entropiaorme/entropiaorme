@@ -55,6 +55,11 @@ impl DomainBus {
     /// Publish a typed envelope: taps first (synchronously, in
     /// registration order), then broadcast delivery. Returns the number
     /// of subscribers the envelope reached.
+    ///
+    /// A panicking tap is isolated per invocation: the observer
+    /// affordance must never take the bus down, and the read guard must
+    /// not poison the registry for every later publish (the Python bus
+    /// likewise survives a raising tap to its next publish).
     pub fn publish(&self, event: DomainEvent) -> usize {
         for tap in self
             .taps
@@ -62,7 +67,7 @@ impl DomainBus {
             .expect("tap registry lock never poisoned")
             .iter()
         {
-            tap(&event);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tap(&event)));
         }
         self.sender.send(event).unwrap_or(0)
     }
@@ -94,6 +99,26 @@ mod tests {
         assert_eq!(bus.publish(sample(ScanPhase::Processing)), 1);
         assert_eq!(rx.recv().await.unwrap(), sample(ScanPhase::Capturing));
         assert_eq!(rx.recv().await.unwrap(), sample(ScanPhase::Processing));
+    }
+
+    #[tokio::test]
+    async fn a_panicking_tap_neither_kills_the_bus_nor_blocks_delivery() {
+        let bus = DomainBus::new(16);
+        bus.add_tap(Arc::new(|_| panic!("misbehaving tap")));
+        let seen: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+        let counter = seen.clone();
+        bus.add_tap(Arc::new(move |_| {
+            *counter.lock().unwrap() += 1;
+        }));
+        let mut rx = bus.subscribe();
+
+        // The panicking tap is isolated: later taps still run, the
+        // subscriber still receives, and the NEXT publish still works.
+        assert_eq!(bus.publish(sample(ScanPhase::Idle)), 1);
+        assert_eq!(bus.publish(sample(ScanPhase::Capturing)), 1);
+        assert_eq!(*seen.lock().unwrap(), 2);
+        assert_eq!(rx.recv().await.unwrap(), sample(ScanPhase::Idle));
+        assert_eq!(rx.recv().await.unwrap(), sample(ScanPhase::Capturing));
     }
 
     #[tokio::test]

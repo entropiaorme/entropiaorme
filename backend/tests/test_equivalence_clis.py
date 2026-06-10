@@ -21,6 +21,7 @@ from backend.testing import (
     chatlog_watcher_cli,
     config_service_cli,
     cost_engine_cli,
+    hotbar_listener_cli,
     normalize_cli,
     static_tables_cli,
 )
@@ -275,3 +276,26 @@ def test_chatlog_watcher_cli_streams_ticks(monkeypatch) -> None:
     stream = json.loads(lines[0])
     assert [entry["topic"] for entry in stream] == ["loot_group", "tick_flushed"]
     assert stream[0]["payload"]["total_ped"] == 1.5
+
+
+def test_hotbar_listener_cli_scripts_sessions(monkeypatch) -> None:
+    out = io.StringIO()
+    request = {
+        "steps": [
+            ["toggle", True],
+            ["session", True],
+            ["key", "2", "press"],
+            ["await", 1],
+            ["session", False],
+        ]
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request) + "\n"))
+    monkeypatch.setattr(sys, "stdout", out)
+    hotbar_listener_cli.main()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == 1
+    reply = json.loads(lines[0])
+    topics = [entry["topic"] for entry in reply["stream"]]
+    assert topics == ["session_started", "active_heal_tool_changed", "session_stopped"]
+    assert reply["taps"] == [["2", "press"]]
+    assert reply["running"] is False

@@ -1,0 +1,21 @@
+# Campaign configuration for the native-backend members.
+#
+# The campaign runs on the portable platform (the nightly's Linux
+# runner), which compiles the Windows-only hook and window plumbing
+# out: every mutant in that code would "miss" vacuously, telling us
+# nothing. The platform CI leg compiles the real code and the live
+# capture flows exercise it; the thin portable delegators it hides
+# behind resolve to None here regardless, so their mutants are equally
+# vacuous. Everything else stays in the campaign.
+exclude_re = [
+    # The Windows hook module and the platform window plumbing.
+    "keystroke_source\\.rs.*windows_hook",
+    "eu_window\\.rs.*platform::",
+    # The cfg(windows)/cfg(not(windows)) trait pair: one side is
+    # compiled out, the other is a one-line constant pinned by the
+    # inert-behaviour test.
+    "keystroke_source\\.rs.*HookKeystrokeSource>::(start|stop)",
+    # Thin delegators over the platform lookups: None-on-this-platform
+    # by construction.
+    "eu_window\\.rs.*replace (find_game_window|get_window_geometry|game_window_present|live_region|skill_region|profession_region|repair_region)",
+]

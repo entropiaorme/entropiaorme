@@ -24,6 +24,14 @@
 //! No driver type escapes this module's API: callers see [`Db`],
 //! [`DbError`], and plain data.
 
+//!
+//! Queries here are runtime-prepared (`sqlx::query`), not compile-time
+//! checked macros: the snapshot catalogue composes its SQL from
+//! constants, so an offline statement cache has nothing to hold. If a
+//! compile-time-checked query (`sqlx::query!`) ever lands in this
+//! workspace, wire `cargo sqlx prepare` and the committed `.sqlx`
+//! cache into CI in the same change.
+
 use std::path::Path;
 use std::time::Duration;
 
@@ -437,6 +445,13 @@ mod tests {
         let path = dir.path().join("entropia_orme.db");
         {
             let db = Db::open(&path).await.unwrap();
+            sqlx::query(
+                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES ('keep-me', '2026-01-01', 'markup', 'survives refusal', 1.25, 'manual')",
+            )
+            .execute(&db.pool)
+            .await
+            .unwrap();
             sqlx::query("UPDATE db_metadata SET value = '28' WHERE key = 'version'")
                 .execute(&db.pool)
                 .await
@@ -453,6 +468,31 @@ mod tests {
             }
             other => panic!("expected a schema-version refusal, got {other}"),
         }
+
+        // The refusal is lossless: the user's rows are untouched (the
+        // connect-time pragmas may legitimately convert the journal
+        // mode, so the assertion is content-level, not byte-level).
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let (description, amount): (String, f64) =
+            sqlx::query_as("SELECT description, amount FROM ledger_entries WHERE id = 'keep-me'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(description, "survives refusal");
+        assert_eq!(amount, 1.25);
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM db_metadata WHERE key = 'version'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(version, "28", "the stamp is left for the upgrade owner");
     }
 
     #[tokio::test]

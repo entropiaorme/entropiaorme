@@ -10,8 +10,25 @@ from __future__ import annotations
 
 import json
 import sys
+from functools import lru_cache
+from pathlib import Path
 
 from backend.data import codex_categories, tt_value_curve
+
+
+@lru_cache(maxsize=1)
+def _game_data():
+    from backend.services.game_data_store import GameDataStore
+
+    snapshot_dir = Path(__file__).resolve().parents[1] / "data" / "snapshot"
+    return GameDataStore(snapshot_dir)
+
+
+@lru_cache(maxsize=1)
+def _mob_lookup():
+    from backend.services.mob_lookup_service import MobLookupService
+
+    return MobLookupService(_game_data())
 
 
 def _dispatch(request: dict) -> object:
@@ -30,6 +47,22 @@ def _dispatch(request: dict) -> object:
         return tt_value_curve.max_tt_curve_level()
     if op == "get_codex_category":
         return codex_categories.get_codex_category(request["skill_name"])
+    if op == "game_search":
+        return _game_data().search_entities(
+            request["query"],
+            endpoint=request.get("endpoint"),
+            limit=request.get("limit", 50),
+        )
+    if op == "game_find":
+        return _game_data().find_entity(request["endpoint"], request["item_id"])
+    if op == "game_counts":
+        return _game_data().endpoint_counts()
+    if op == "mob_suggest":
+        return _mob_lookup().search_mob_names(
+            request["query"], limit=request.get("limit", 10)
+        )
+    if op == "mob_has":
+        return _mob_lookup().has_mob_name(request["species"], request["maturity"])
     if op == "build_rank_breakdown":
         return codex_categories.build_rank_breakdown(
             request["base_cost"], request.get("codex_type")

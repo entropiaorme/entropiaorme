@@ -13,6 +13,8 @@ pub mod codex_categories;
 pub mod config_service;
 pub mod cost_engine;
 pub mod db;
+pub mod game_data_store;
+pub mod mob_lookup_service;
 pub mod trifecta_service;
 pub mod tt_value_curve;
 

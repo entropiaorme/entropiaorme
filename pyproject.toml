@@ -69,6 +69,11 @@ omit = [
     # Maintainer utility: run in the nightly mutation workflow, not imported by
     # the suite, so it is exercised in CI rather than under pytest-cov.
     "backend/scripts/mutation_score.py",
+    # Same: the cargo-mutants floor gate runs in the nightly workflow.
+    "backend/scripts/rust_mutation_floors.py",
+    # Maintainer measurement utility: runs whole-process benchmarks at
+    # deliberate baseline milestones, never under pytest.
+    "backend/scripts/capture_port_baseline.py",
     "backend/build_app.py",
     "backend/ocr/capturer.py",
     "backend/services/eu_window.py",

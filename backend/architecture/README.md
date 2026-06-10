@@ -207,6 +207,7 @@ The architecture's properties are tests, not prose promises:
 
 - [`PORT-READINESS.md`](PORT-READINESS.md): how these shapes map onto a contemplated native port, and what does not port mechanically.
 - [`PORTING-RULEBOOK.md`](PORTING-RULEBOOK.md): the application-ready rule set for the port; boundary fidelity, interior latitude, the deliberate-divergence register, and the verification obligations.
+- [`PORT-BASELINE.md`](PORT-BASELINE.md): the Python backend's captured performance and coverage reference, the bands port work is graded against in flight, and the per-module branch-coverage table.
 - [`../../TESTING.md`](../../TESTING.md): the test suite, tiers, and gates that enforce the properties above.
 - [`../testing/CONSISTENCY.md`](../testing/CONSISTENCY.md): the snapshot and event-stream consistency apparatus.
 - [`../testing/CONFORMANCE.md`](../testing/CONFORMANCE.md): the HTTP conformance substrate (ETag, OpenAPI, contract tests).

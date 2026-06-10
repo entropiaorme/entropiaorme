@@ -247,11 +247,12 @@ jobs:
     # The Rust counterpart of the mutmut campaign above, over the native-backend
     # workspace members. The Tauri shell stays out of the campaign: its logic is
     # OS-window plumbing behind cfg(windows), and building it needs the Tauri
-    # system toolchain this Linux runner deliberately lacks. While the members
-    # are small the acceptance bar is cargo-mutants' default (any missed mutant
-    # fails the run); as ported services land, per-module floors take over,
-    # inheriting each module's floor from the mutmut FLOORS map above so a port
-    # cannot regress below the test strength of the code it replaces.
+    # system toolchain this Linux runner deliberately lacks. The acceptance bar
+    # is the per-file floor map in backend/scripts/rust_mutation_floors.py:
+    # files without an adopted floor are held to no-missed-mutants, floors only
+    # ratchet up, and each ported module's floor rises to its Python original's
+    # floor from the mutmut FLOORS map above when that port completes, so a
+    # port cannot regress below the test strength of the code it replaces.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -275,9 +276,18 @@ jobs:
           tool: cargo-mutants
       # Package selection scopes both the mutants and the per-mutant test runs
       # to the backend members, keeping the Tauri-coupled shell out of the
-      # build graph entirely.
+      # build graph entirely. --in-place because member tests read committed
+      # fixtures from the repo outside this cargo workspace (for example
+      # backend/testing/equivalence/), which cargo-mutants' default copied
+      # build tree does not contain. Exit codes 2 (missed mutants) and 3
+      # (timed-out mutants) are outcome reports, tolerated here because the
+      # floors step below is the acceptance bar (it counts a timeout as
+      # caught, like the Python gate); anything else (usage error, failing
+      # baseline, internal error) still fails this step.
       - name: Run mutation campaign (backend members)
-        run: cargo mutants --package eo-wire --package eo-http --package eo-services
+        run: cargo mutants --package eo-wire --package eo-http --package eo-services --in-place || { rc=$?; test "$rc" -eq 2 -o "$rc" -eq 3; }
+      - name: Enforce the per-file mutation floors
+        run: python3 ../../backend/scripts/rust_mutation_floors.py --outcomes mutants.out/outcomes.json
 
   equivalence-differential:
     name: Cross-language equivalence differentials

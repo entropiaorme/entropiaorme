@@ -168,6 +168,7 @@ pub async fn describe_trifecta(
         / 100.0;
     let tool = heal_props
         .get("tool_entity")
+        .filter(|v| !v.is_null())
         .expect("healing rows carry tool_entity");
     let heal_interval = heal_range_at_max_skill(tool);
     let mut heal_entry = Map::new();
@@ -331,6 +332,33 @@ mod tests {
             Some(
                 "Trifecta attribution requires non-overlapping small/big weapon ranges \
                  (Pistol: 5.0-10.0, Rifle: 8.0-16.0)"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn touching_ranges_overlap_and_ties_format_half_even() {
+        let dir = tempfile::tempdir().unwrap();
+        // damage 14.5 -> range 7.25-14.5 (the .25 tie formats half-even
+        // to "7.2"); damage 29 -> range 14.5-29.0: touching ranges count
+        // as overlapping on both implementations.
+        let db = seeded_db(
+            dir.path(),
+            &[
+                (1, "Pistol", "weapon", weapon_props(14.5, 0.05)),
+                (2, "Rifle", "weapon", weapon_props(29.0, 0.2)),
+                (3, "Healer", "healing", heal_props()),
+            ],
+        )
+        .await;
+
+        let (data, error) = describe_trifecta(&db, Some(&full_preset())).await.unwrap();
+        assert!(data.is_none());
+        assert_eq!(
+            error.as_deref(),
+            Some(
+                "Trifecta attribution requires non-overlapping small/big weapon ranges \
+                 (Pistol: 7.2-14.5, Rifle: 14.5-29.0)"
             )
         );
     }

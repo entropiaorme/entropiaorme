@@ -183,6 +183,16 @@ mod tests {
     }
 
     #[test]
+    fn small_spends_buy_oracle_pinned_level_fractions() {
+        // Values from the backend implementation for the same inputs:
+        // the strict comparison and the top-anchor guard direction are
+        // both load-bearing (plateau segments make exact equality hits
+        // ordinary), so the pins hold them.
+        assert_eq!(levels_for_tt_value(10.0, 0.01), 6.995);
+        assert_eq!(levels_for_tt_value(1.0, 0.01), 0.995);
+    }
+
+    #[test]
     fn interpolation_matches_hand_computed_curve_values() {
         // Anchors pinned from the tracked CSV: 1 -> 0.0, 2 -> 0.01,
         // 100 -> 0.12, 101 -> 0.13, 20000 -> 13381.54.

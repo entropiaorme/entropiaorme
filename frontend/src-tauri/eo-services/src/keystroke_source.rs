@@ -207,14 +207,15 @@ mod windows_hook {
         WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
-    /// The hook procedure has no user-data slot, so the active pump's
-    /// queue sender lives here. The slot enforces a hard
-    /// single-instance contract: `start` refuses while another hook
-    /// owns it, so two sources can never clobber each other's
-    /// routing.
-    static ACTIVE: OnceLock<Mutex<Option<Sender<(String, KeystrokeKind)>>>> = OnceLock::new();
+    /// The queue slot the hook procedure reads (it has no user-data
+    /// slot of its own). The slot enforces a hard single-instance
+    /// contract: `start` refuses while another hook owns it, so two
+    /// sources can never clobber each other's routing.
+    type ActiveSender = Mutex<Option<Sender<(String, KeystrokeKind)>>>;
 
-    fn active() -> &'static Mutex<Option<Sender<(String, KeystrokeKind)>>> {
+    static ACTIVE: OnceLock<ActiveSender> = OnceLock::new();
+
+    fn active() -> &'static ActiveSender {
         ACTIVE.get_or_init(|| Mutex::new(None))
     }
 

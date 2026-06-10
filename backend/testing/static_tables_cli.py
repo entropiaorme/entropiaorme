@@ -117,6 +117,37 @@ def _dispatch(request: dict) -> object:
             "profession": asdict(scan_presets.PROFESSION_ANCHOR),
             "repair": asdict(scan_presets.REPAIR_ANCHOR),
         }
+    if op == "match_damage":
+        from backend.tracking.tool_inference import DamageAttributor
+
+        attributor = DamageAttributor()
+        for profile in request["profiles"]:
+            attributor.add_weapon_profile(
+                name=profile["name"],
+                min_damage=profile["min_damage"],
+                max_damage=profile["max_damage"],
+                base_damage=profile.get("base_damage", 0.0),
+                cost_per_shot=profile.get("cost_per_shot", 0.0),
+                role=profile.get("role"),
+            )
+        attribution = attributor.match_damage(
+            request["amount"], critical=request.get("critical", False)
+        )
+        if attribution is None:
+            return None
+        return {
+            "tool_name": attribution.tool_name,
+            "cost_per_shot": attribution.cost_per_shot,
+        }
+    if op == "is_tracked_loot":
+        from backend.tracking.loot_filter import is_tracked_loot, normalize_blacklist
+
+        blacklist = normalize_blacklist(request.get("blacklist"))
+        return is_tracked_loot(request["item_name"], blacklist)
+    if op == "normalize_blacklist":
+        from backend.tracking.loot_filter import normalize_blacklist
+
+        return sorted(normalize_blacklist(request.get("names")))
     if op == "build_rank_breakdown":
         return codex_categories.build_rank_breakdown(
             request["base_cost"], request.get("codex_type")

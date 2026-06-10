@@ -302,3 +302,31 @@ def test_hotbar_listener_cli_scripts_sessions(monkeypatch) -> None:
     assert topics == ["session_started", "active_heal_tool_changed", "session_stopped"]
     assert reply["taps"] == [["2", "press"]]
     assert reply["running"] is False
+
+
+def test_static_tables_cli_serves_the_tracking_ops(monkeypatch) -> None:
+    out = io.StringIO()
+    requests = [
+        {
+            "op": "match_damage",
+            "profiles": [
+                {
+                    "name": "Pistol",
+                    "min_damage": 5,
+                    "max_damage": 10,
+                    "cost_per_shot": 0.05,
+                }
+            ],
+            "amount": 7,
+        },
+        {"op": "is_tracked_loot", "item_name": "Universal Ammo"},
+        {"op": "normalize_blacklist", "names": ["Shrapnel", " "]},
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    static_tables_cli.main()
+    lines = out.getvalue().splitlines()
+    assert json.loads(lines[0]) == {"cost_per_shot": 0.05, "tool_name": "Pistol"}
+    assert json.loads(lines[1]) is False
+    assert json.loads(lines[2]) == ["shrapnel"]

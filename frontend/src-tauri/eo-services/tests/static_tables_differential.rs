@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 use eo_services::{codex_categories, tt_value_curve};
 use eo_wire::normalizer::to_python_json;
 use proptest::prelude::*;
-use serde_json::{json, Map};
+use serde_json::{json, Map, Value};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -410,6 +410,117 @@ fn scan_geometry_and_drift_match_the_oracle() {
         .unwrap_or(serde_json::Value::Null);
         assert_oracle_eq(&reply, &native, &format!("drift case {index}"));
     }
+}
+
+/// Damage attribution and loot filtering over curated profile sets,
+/// sweeps, and key-normalisation cases, byte-compared.
+#[test]
+fn tool_inference_and_loot_filter_match_the_oracle() {
+    use eo_services::tool_inference::DamageAttributor;
+
+    let profile_sets: Vec<Value> = vec![
+        json!([
+            {"name": "Pistol", "min_damage": 5.0, "max_damage": 10.0, "cost_per_shot": 0.05, "role": "small_weapon"},
+            {"name": "Cannon", "min_damage": 20.0, "max_damage": 40.0, "cost_per_shot": 0.2, "role": "big_weapon"},
+        ]),
+        json!([
+            {"name": "Wide", "min_damage": 0.5, "max_damage": 100.0, "cost_per_shot": 0.1},
+            {"name": "Narrow", "min_damage": 5.0, "max_damage": 15.0, "cost_per_shot": 0.2},
+        ]),
+        json!([
+            {"name": "Beta", "min_damage": 5.0, "max_damage": 15.0, "cost_per_shot": 0.1},
+            {"name": "Alpha", "min_damage": 10.0, "max_damage": 20.0, "cost_per_shot": 0.2},
+        ]),
+        json!([]),
+    ];
+    let sweep = [
+        0.0, 0.5, 4.9, 5.0, 7.0, 10.0, 12.0, 15.0, 19.9, 20.0, 25.0, 30.0, 40.0, 55.0, 90.0, 120.0,
+        121.0,
+    ];
+
+    let mut oracle = oracle().lock().unwrap();
+    for (set_index, profiles) in profile_sets.iter().enumerate() {
+        let mut attributor = DamageAttributor::new();
+        for profile in profiles.as_array().unwrap() {
+            attributor.add_weapon_profile(
+                profile["name"].as_str().unwrap(),
+                profile["min_damage"].as_f64().unwrap(),
+                profile["max_damage"].as_f64().unwrap(),
+                profile
+                    .get("base_damage")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                profile
+                    .get("cost_per_shot")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                profile.get("role").and_then(Value::as_str),
+            );
+        }
+        for amount in sweep {
+            for critical in [false, true] {
+                let reply = oracle.ask(&json!({
+                    "op": "match_damage",
+                    "profiles": profiles,
+                    "amount": amount,
+                    "critical": critical,
+                }));
+                let native = match attributor.match_damage(amount, critical) {
+                    None => Value::Null,
+                    Some(hit) => json!({
+                        "tool_name": hit.tool_name,
+                        "cost_per_shot": hit.cost_per_shot,
+                    }),
+                };
+                assert_oracle_eq(
+                    &reply,
+                    &native,
+                    &format!("match_damage set {set_index} amount {amount} crit {critical}"),
+                );
+            }
+        }
+    }
+
+    // Loot filtering: keys, fallbacks, blanks.
+    let cases: Vec<(Value, Value)> = vec![
+        (json!("Universal Ammo"), Value::Null),
+        (json!("  universal\tAMMO "), Value::Null),
+        (json!("Animal Muscle Oil"), Value::Null),
+        (json!("Shrapnel"), json!(["Shrapnel", "  Vibrant  Sweat "])),
+        (
+            json!("vibrant sweat"),
+            json!(["Shrapnel", "  Vibrant  Sweat "]),
+        ),
+        (json!("Universal Ammo"), json!(["Shrapnel"])),
+        (json!("Wool"), json!(["", "  "])),
+    ];
+    for (index, (item, blacklist)) in cases.iter().enumerate() {
+        let reply = oracle.ask(&json!({
+            "op": "is_tracked_loot",
+            "item_name": item,
+            "blacklist": blacklist,
+        }));
+        let names: Option<Vec<&str>> = blacklist
+            .as_array()
+            .map(|list| list.iter().filter_map(Value::as_str).collect());
+        let native_blacklist = eo_services::loot_filter::normalize_blacklist(names);
+        let native =
+            eo_services::loot_filter::is_tracked_loot(item.as_str().unwrap(), &native_blacklist);
+        assert_oracle_eq(&reply, &json!(native), &format!("loot case {index}"));
+    }
+
+    let reply = oracle.ask(&json!({
+        "op": "normalize_blacklist",
+        "names": ["Shrapnel", "  Vibrant  Sweat ", ""],
+    }));
+    let native: Vec<String> = eo_services::loot_filter::normalize_blacklist(Some(vec![
+        "Shrapnel",
+        "  Vibrant  Sweat ",
+        "",
+    ]))
+    .into_iter()
+    .collect();
+    assert_oracle_eq(&reply, &json!(native), "normalize_blacklist");
 }
 
 #[test]

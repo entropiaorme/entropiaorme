@@ -18,6 +18,7 @@ from pathlib import Path
 
 from backend.testing import (
     chatlog_parser_cli,
+    chatlog_watcher_cli,
     config_service_cli,
     cost_engine_cli,
     normalize_cli,
@@ -257,3 +258,20 @@ def test_chatlog_parser_cli_round_trips_lines(monkeypatch) -> None:
     assert first["type"] == "damage_dealt"
     assert first["data"] == {"amount": 10.5}
     assert json.loads(lines[1]) is None
+
+
+def test_chatlog_watcher_cli_streams_ticks(monkeypatch) -> None:
+    out = io.StringIO()
+    request = {
+        "lines": [
+            "2026-05-19 10:00:02 [System] [] You received Wool Value: 1.50 PED",
+        ]
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request) + "\n"))
+    monkeypatch.setattr(sys, "stdout", out)
+    chatlog_watcher_cli.main()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == 1
+    stream = json.loads(lines[0])
+    assert [entry["topic"] for entry in stream] == ["loot_group", "tick_flushed"]
+    assert stream[0]["payload"]["total_ped"] == 1.5

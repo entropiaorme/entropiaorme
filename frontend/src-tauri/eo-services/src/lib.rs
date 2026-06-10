@@ -11,10 +11,12 @@
 
 pub mod character_calc;
 pub mod chatlog_parser;
+pub mod chatlog_watcher;
 pub mod codex_categories;
 pub mod config_service;
 pub mod cost_engine;
 pub mod db;
+pub mod event_bus;
 pub mod game_data_store;
 pub mod mob_lookup_service;
 pub mod scan_drift;

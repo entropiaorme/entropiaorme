@@ -51,7 +51,12 @@ pub struct Kill {
     pub mob_name: String,
     pub mob_species: String,
     pub mob_maturity: String,
-    /// Epoch seconds: when the loot arrived.
+    /// Epoch seconds (UTC, fractional seconds preserved): when the
+    /// loot arrived. The representation deliberately differs from the
+    /// session's calendar fields below because the original carries
+    /// exactly this split: kill timestamps flow straight into the
+    /// database's numeric column, while session instants convert at
+    /// the persistence boundary.
     pub timestamp: f64,
     pub shots_fired: i64,
     pub damage_dealt: f64,

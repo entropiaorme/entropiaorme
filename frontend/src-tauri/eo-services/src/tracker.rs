@@ -47,7 +47,7 @@ use tokio::runtime::Handle;
 
 use crate::clock::Clock;
 use crate::cost_engine::cost_per_shot_from_props;
-use crate::db::DbError;
+use crate::db::{decoded_f64, DbError};
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::loot_filter::{is_tracked_loot, normalize_blacklist};
 use crate::mob_lookup_service::python_whitespace;
@@ -2009,14 +2009,6 @@ fn break_matches_active_weapon(state: &TrackerState, item_name: &str) -> bool {
                 && (observed_norm.contains(&item_norm) || item_norm.contains(&observed_norm))))
 }
 
-/// A REAL aggregate that SQLite may hand back as INTEGER (the
-/// COALESCE zero when no rows match).
-fn decoded_f64(row: &sqlx::sqlite::SqliteRow, index: usize) -> f64 {
-    row.try_get::<f64, _>(index)
-        .or_else(|_| row.try_get::<i64, _>(index).map(|value| value as f64))
-        .unwrap_or(0.0)
-}
-
 /// Python truthiness for the wire values the original's falsy checks
 /// guard (null/false/0/""/[]/{} are falsy).
 fn value_truthy(value: &Value) -> bool {
@@ -3554,5 +3546,417 @@ mod tests {
         assert!(!value_truthy(&json!("")));
         assert!(!value_truthy(&json!([])));
         assert!(!value_truthy(&json!({})));
+    }
+    #[test]
+    fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers::default());
+        tracker.start_session().unwrap();
+
+        let loot = |ts: &str, name: &str, value: f64| {
+            json!({"type": "loot", "timestamp": ts,
+                   "items": [{"item_name": name, "quantity": 1, "value_ped": value,
+                              "is_enhancer_shrapnel": false}],
+                   "total_ped": value})
+        };
+        rig.bus
+            .publish(Topic::LootGroup, &loot("2026-01-01T00:00:02", "Hide", 2.0));
+        let readout = tracker.snapshot().unwrap();
+        let active = readout.active.unwrap();
+        // A costless kill: no rate, no multipliers (a >= admission
+        // would divide by zero into infinities).
+        assert_eq!(active.cost, 0.0);
+        assert_eq!(active.return_rate, 0.0);
+        assert_eq!(active.multiplier_last, None);
+        assert_eq!(active.multiplier_avg, None);
+        assert_eq!(active.multiplier_max, None);
+        assert!(active.multiplier_history.is_empty());
+
+        // Enhancer cost flows from the accumulator into the kill and
+        // the live readout arithmetic.
+        tracker
+            .lock_state()
+            .accumulator
+            .as_mut()
+            .unwrap()
+            .enhancer_cost = 0.25;
+        rig.bus
+            .publish(Topic::LootGroup, &loot("2026-01-01T00:00:05", "Mud", 1.0));
+        tracker
+            .lock_state()
+            .accumulator
+            .as_mut()
+            .unwrap()
+            .enhancer_cost = 0.5;
+        let active = tracker.snapshot().unwrap().active.unwrap();
+        assert_eq!(active.cost, 0.75);
+        assert_eq!(active.returns, 3.0);
+        assert_eq!(active.net, 2.25);
+        assert_eq!(active.return_rate, 4.0);
+        assert_eq!(active.cumulative_net_history, vec![2.0, 2.75]);
+
+        // The unresolved enhancer cost is the dangling remainder.
+        let stopped = tracker.stop_session().unwrap().unwrap();
+        assert_eq!(stopped.dangling_cost, 0.5);
+    }
+
+    #[test]
+    fn inferred_cost_outranks_the_equipment_lookup() {
+        let rig = rig();
+        let trifecta = json!({
+            "small_weapon": {"name": "Pistol", "damage_min": 5.0, "damage_max": 10.0,
+                             "total_damage": 0.0, "cost_per_shot_ped": 0.05,
+                             "role": "small_weapon"},
+            "big_weapon": {"name": "Cannon", "damage_min": 20.0, "damage_max": 40.0,
+                           "total_damage": 0.0, "cost_per_shot_ped": 0.2,
+                           "role": "big_weapon"},
+        });
+        let tracker = rig.tracker(Providers {
+            weapon_attribution_trifecta: Arc::new(|| true),
+            trifecta_resolver: Arc::new(move || Some(trifecta.as_object().unwrap().clone())),
+            equipment_cost_lookup: Arc::new(|_| 0.9),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 7.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "critical_hit", "amount": 25.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        // The countered shot carries no inferred cost, so the static
+        // equipment cost prices it: a new phase of the last tool.
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "target_jam", "timestamp": "2026-01-01T00:00:02"}),
+        );
+        let state = tracker.lock_state();
+        let stats: Vec<(String, f64, i64)> = state
+            .accumulator
+            .as_ref()
+            .unwrap()
+            .tool_stats
+            .iter()
+            .map(|(key, stats)| (key.clone(), stats.cost_per_shot, stats.shots_fired))
+            .collect();
+        assert_eq!(
+            stats,
+            vec![
+                ("Pistol".to_string(), 0.05, 1),
+                ("Cannon".to_string(), 0.2, 1),
+                ("Cannon#2".to_string(), 0.9, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_unknown_entry_backfills_its_cost_once() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            equipment_cost_lookup: Arc::new(|_| 0.7),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 9.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 6.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        rig.bus.publish(
+            Topic::LootGroup,
+            &json!({"type": "loot", "timestamp": "2026-01-01T00:00:02",
+                    "items": [], "total_ped": 0.0}),
+        );
+        let kill_id: String = rig.runtime.block_on(async {
+            sqlx::query("SELECT id FROM kills")
+                .fetch_one(&rig.pool)
+                .await
+                .unwrap()
+                .try_get(0)
+                .unwrap()
+        });
+        assert_eq!(
+            rig.scalar_f64("SELECT cost_ped FROM kills WHERE id = ?", &[&kill_id]),
+            1.4
+        );
+        assert_eq!(
+            rig.scalar_f64(
+                "SELECT cost_per_shot FROM kill_tool_stats WHERE kill_id = ? \
+                 AND tool_name = 'Unknown'",
+                &[&kill_id],
+            ),
+            0.7
+        );
+    }
+
+    #[test]
+    fn a_costless_tool_merges_unknown_into_its_bare_entry() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers::default());
+        tracker.start_session().unwrap();
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 9.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        rig.bus
+            .publish(Topic::ActiveToolChanged, &json!({"tool_name": "Stick"}));
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 6.0, "timestamp": "2026-01-01T00:00:02"}),
+        );
+        rig.bus.publish(
+            Topic::LootGroup,
+            &json!({"type": "loot", "timestamp": "2026-01-01T00:00:03",
+                    "items": [], "total_ped": 0.0}),
+        );
+        let rows: Vec<(String, i64, f64)> = rig.runtime.block_on(async {
+            sqlx::query("SELECT tool_name, shots_fired, damage_dealt FROM kill_tool_stats")
+                .fetch_all(&rig.pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row.try_get(0).unwrap(),
+                        row.try_get(1).unwrap(),
+                        decoded_f64(row, 2),
+                    )
+                })
+                .collect()
+        });
+        assert_eq!(rows, vec![("Stick".to_string(), 2, 15.0)]);
+    }
+
+    #[test]
+    fn break_matching_admits_every_containment_direction() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            equipment_profile_lookup: Arc::new(|name| {
+                (name == "MyGun").then(|| {
+                    json!({"damage_enhancers": 1, "weapon_entity": {"name": "Blast Master"}})
+                        .as_object()
+                        .unwrap()
+                        .clone()
+                })
+            }),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        rig.bus
+            .publish(Topic::ActiveToolChanged, &json!({"tool_name": "MyGun"}));
+
+        let break_event = |item: &str| {
+            json!({"type": "enhancer_break", "enhancer_name": "Damage Enhancer 5",
+                   "item_name": item})
+        };
+        let stacks = |tracker: &HuntTracker| {
+            tracker.lock_state().weapon_enhancer_states["Blast Master"]
+                .stacks
+                .clone()
+        };
+        // The canonical name contains the item; the item contains the
+        // canonical name; the observed hotbar name contains the item;
+        // the item contains the observed name. Each direction matches.
+        rig.bus.publish(Topic::EnhancerBreak, &break_event("Blast"));
+        assert_eq!(stacks(&tracker), vec![99]);
+        rig.bus
+            .publish(Topic::EnhancerBreak, &break_event("Blast Master Deluxe"));
+        assert_eq!(stacks(&tracker), vec![98]);
+        rig.bus.publish(Topic::EnhancerBreak, &break_event("Gun"));
+        assert_eq!(stacks(&tracker), vec![97]);
+        rig.bus
+            .publish(Topic::EnhancerBreak, &break_event("MyGun Deluxe"));
+        assert_eq!(stacks(&tracker), vec![96]);
+        // No containment in any direction: ignored.
+        rig.bus.publish(Topic::EnhancerBreak, &break_event("Sword"));
+        assert_eq!(stacks(&tracker), vec![96]);
+
+        // Stopping the session clears the weapon runtime wholesale.
+        tracker.stop_session().unwrap();
+        let state = tracker.lock_state();
+        assert_eq!(state.active_weapon_state_key, None);
+        assert!(state.weapon_enhancer_states.is_empty());
+        assert_eq!(state.active_weapon_observed_name, None);
+    }
+
+    #[test]
+    fn recovery_zero_timestamp_kills_fall_back_to_the_start() {
+        let rig = rig();
+        rig.execute(
+            "INSERT INTO tracking_sessions (id, started_at, is_active, mob_tracking_mode) \
+             VALUES ('orphan2', 2000.0, 1, 'mob')",
+        );
+        rig.execute(
+            "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+             timestamp, shots_fired, damage_dealt, damage_taken, critical_hits, \
+             cost_ped, enhancer_cost, loot_total_ped, is_global, is_hof) \
+             VALUES ('kz', 'orphan2', 'Atrox', '', '', 0.0, 1, 1.0, 0.0, 0, \
+             0.1, 0.0, 1.0, 0, 0)",
+        );
+        let _tracker = rig.tracker(Providers::default());
+        assert_eq!(
+            rig.scalar_f64(
+                "SELECT ended_at FROM tracking_sessions WHERE id = 'orphan2'",
+                &[],
+            ),
+            2000.0,
+            "a zero kill timestamp is falsy there, not a real maximum"
+        );
+    }
+
+    #[test]
+    fn reload_config_in_tag_mode_never_consults_the_manual_provider() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "tag".to_string()),
+            mob_tracking_tag: Arc::new(|| "Team".to_string()),
+            manual_mob: Arc::new(|| Some(("Atrox".to_string(), "Young".to_string()))),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        tracker.reload_config();
+        let state = tracker.lock_state();
+        assert_eq!(state.confirmed_mob_name, "Team");
+        assert_eq!(state.mob_source, Some("tag"));
+    }
+
+    #[test]
+    fn the_session_tag_stamps_only_in_tag_mode_with_a_real_tag() {
+        let rig = rig();
+        // A configured tag outside tag mode never stamps.
+        let mob_mode = rig.tracker(Providers {
+            mob_tracking_tag: Arc::new(|| "Sneaky".to_string()),
+            manual_mob_entry_enabled: Arc::new(|| false),
+            ..Providers::default()
+        });
+        mob_mode.start_session().unwrap();
+        {
+            let state = mob_mode.lock_state();
+            assert_eq!(state.confirmed_mob_name, "");
+            assert_eq!(state.mob_source, None);
+        }
+        mob_mode.stop_session().unwrap();
+
+        // Tag mode with an all-blank tag has nothing to stamp.
+        let blank = rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "tag".to_string()),
+            mob_tracking_tag: Arc::new(|| "   ".to_string()),
+            ..Providers::default()
+        });
+        blank.start_session().unwrap();
+        let state = blank.lock_state();
+        assert_eq!(state.confirmed_mob_name, "");
+        assert_eq!(state.mob_source, None);
+    }
+
+    #[test]
+    fn the_blacklist_provider_refreshes_at_session_start() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            loot_filter_blacklist_provider: Some(Arc::new(|| vec!["Mud".to_string()])),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        rig.bus.publish(
+            Topic::LootGroup,
+            &json!({"type": "loot", "timestamp": "2026-01-01T00:00:02",
+                    "items": [{"item_name": "Mud", "quantity": 1, "value_ped": 1.0,
+                               "is_enhancer_shrapnel": false},
+                              {"item_name": "Hide", "quantity": 1, "value_ped": 2.0,
+                               "is_enhancer_shrapnel": false}],
+                    "total_ped": 3.0}),
+        );
+        assert_eq!(
+            rig.scalar_f64("SELECT loot_total_ped FROM kills", &[]),
+            2.0,
+            "the provider's blacklist drops Mud"
+        );
+        assert_eq!(
+            rig.scalar_i64("SELECT COUNT(*) FROM kill_loot_items", &[]),
+            1
+        );
+    }
+
+    #[test]
+    fn command_error_messages_match_the_original() {
+        assert_eq!(
+            TrackerCommandError::NoActiveSession.to_string(),
+            "No active session"
+        );
+        assert_eq!(
+            TrackerCommandError::NotTagMode.to_string(),
+            "Active session is not in tag mode"
+        );
+        assert_eq!(
+            TrackerCommandError::EmptyTag.to_string(),
+            "Tag cannot be empty"
+        );
+        assert_eq!(
+            TrackerCommandError::TagModeLocksMob.to_string(),
+            "Tag mode sessions do not allow manual mob locking"
+        );
+        assert_eq!(
+            TrackerCommandError::ManualEntryDisabled.to_string(),
+            "Manual mob entry is not enabled for this session"
+        );
+    }
+
+    #[test]
+    fn enhancer_state_prices_through_the_cost_engine() {
+        let props: Arc<Value> = Arc::new(json!({
+            "weapon_entity": {"economy": {"decay": 0.05, "ammo_burn": 200}},
+            "damage_enhancers": 2,
+        }));
+        let mut state = DamageEnhancerState::from_props("Rifle", props.clone());
+        let priced = |slots: i64| {
+            cost_per_shot_from_props(&props, Some(slots))["totalCostPerUse"]
+                .as_f64()
+                .unwrap()
+                / 100.0
+        };
+        let two_slots = priced(2);
+        assert!(two_slots > 0.0);
+        assert_eq!(state.current_cost_ped(), two_slots);
+        assert_eq!(
+            state.current_cost_ped(),
+            two_slots,
+            "the cached read agrees"
+        );
+        state.set_total(1);
+        assert_eq!(
+            state.current_cost_ped(),
+            priced(1),
+            "a stack change reprices at the new active count"
+        );
+    }
+
+    #[test]
+    fn epoch_helpers_carry_and_keep_fractions() {
+        assert_eq!(epoch_to_parts(5.0), (5, 0));
+        assert_eq!(epoch_to_parts(2.25), (2, 250_000));
+        assert_eq!(
+            epoch_to_parts(1.999_999_9),
+            (2, 0),
+            "microsecond round-up carries into the seconds"
+        );
+        assert_eq!(
+            epoch_to_parts(-0.25),
+            (-1, 750_000),
+            "negative fractions borrow a second"
+        );
+
+        let base = naive("2026-06-15T12:30:45");
+        let fractional =
+            NaiveDateTime::parse_from_str("2026-06-15T12:30:45.250000", "%Y-%m-%dT%H:%M:%S%.f")
+                .unwrap();
+        let delta = naive_to_epoch(fractional) - naive_to_epoch(base);
+        assert!((delta - 0.25).abs() < 1e-9);
+        assert_eq!(epoch_to_naive(naive_to_epoch(fractional)), fractional);
     }
 }

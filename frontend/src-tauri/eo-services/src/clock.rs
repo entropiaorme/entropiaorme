@@ -146,3 +146,25 @@ mod tests {
         assert!(clock.now().and_utc().timestamp() > 1_700_000_000);
     }
 }
+
+#[cfg(test)]
+mod mutation_pins {
+    use super::*;
+
+    #[test]
+    fn the_real_monotonic_stream_advances() {
+        let clock = RealClock::new();
+        let first = clock.monotonic();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let second = clock.monotonic();
+        assert!(second > first, "monotonic reads advance with real time");
+        assert!(first >= 0.0, "the stream starts non-negative");
+    }
+
+    #[test]
+    fn a_zero_advance_is_admitted() {
+        let clock = MockClock::new(None, 0.0);
+        assert!(clock.advance(0.0).is_ok(), "only negative deltas refuse");
+        assert!(clock.advance(-0.001).is_err());
+    }
+}

@@ -81,7 +81,12 @@ impl Oracle {
         writeln!(self.stdin, "{line}").expect("oracle write");
         self.stdin.flush().expect("oracle flush");
         let mut reply = String::new();
-        self.stdout.read_line(&mut reply).expect("oracle read");
+        let bytes = self.stdout.read_line(&mut reply).expect("oracle read");
+        assert!(
+            bytes > 0,
+            "oracle exited early (EOF on stdout); status: {:?}",
+            self.child.try_wait()
+        );
         reply.trim_end().to_string()
     }
 }

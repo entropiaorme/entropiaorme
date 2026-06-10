@@ -1,5 +1,5 @@
 //! TT value curve from the official Entropia Universe wiki chip-in
-//! optimizer, ported from `backend/data/tt_value_curve.py`.
+//! optimiser, ported from `backend/data/tt_value_curve.py`.
 //!
 //! The anchor data is the same CSV the backend loads (embedded at compile
 //! time from the one tracked copy, so the two implementations cannot read

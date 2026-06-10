@@ -1,7 +1,7 @@
 """Unit coverage for the equivalence CLIs and the fixture generators.
 
 The oracle CLIs (``normalize_cli``, ``cost_engine_cli``,
-``static_tables_cli``) are driven by the
+``static_tables_cli``, ``config_service_cli``) are driven by the
 Rust differential fuzzes over stdin/stdout; this pins their line protocol
 directly under pytest so the contract is covered without spawning the Rust
 side. The generator entry points (``table.write_fixture``,
@@ -16,7 +16,12 @@ import json
 import sys
 from pathlib import Path
 
-from backend.testing import cost_engine_cli, normalize_cli, static_tables_cli
+from backend.testing import (
+    config_service_cli,
+    cost_engine_cli,
+    normalize_cli,
+    static_tables_cli,
+)
 from backend.testing.equivalence import table, yml_family
 
 
@@ -116,3 +121,21 @@ def test_static_tables_cli_rejects_unknown_ops(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     with pytest.raises(ValueError, match="unknown op"):
         static_tables_cli.main()
+
+
+def test_config_service_cli_round_trips_with_the_sentinel(monkeypatch) -> None:
+    """The round trip materialises stored files, applies updates, and
+    projects the host-dependent default chat-log path to its sentinel."""
+    out = io.StringIO()
+    request = {
+        "stored": {"extensionKey": 1, "player_name": "Kept"},
+        "updates": [{"mob_tracking_tag": "tagged"}],
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request) + "\n\n"))
+    monkeypatch.setattr(sys, "stdout", out)
+    config_service_cli.main()
+    reply = json.loads(out.getvalue().splitlines()[0])
+    assert reply["state"]["chatlog_path"] == config_service_cli.CHATLOG_SENTINEL
+    assert reply["state"]["mob_tracking_tag"] == "tagged"
+    assert reply["file"].startswith('{\n  "extensionKey": 1')
+    assert "<DEFAULT_CHATLOG>" in reply["file"]

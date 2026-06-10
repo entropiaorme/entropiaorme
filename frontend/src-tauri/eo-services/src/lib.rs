@@ -10,6 +10,7 @@
 //! equivalence runner proves its per-unit `cargo test` loop on.
 
 pub mod codex_categories;
+pub mod config_service;
 pub mod cost_engine;
 pub mod db;
 pub mod trifecta_service;

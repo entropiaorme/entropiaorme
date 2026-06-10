@@ -404,7 +404,9 @@ fn write_string(out: &mut String, s: &str) {
 /// float rendering): shortest round-tripping digits, with Python's
 /// fixed-vs-scientific threshold (`-4 < decpt <= 16`), the trailing `.0` for
 /// integer-valued floats, and signed two-digit-minimum exponents.
-fn python_repr_f64(value: f64) -> String {
+/// Python `repr(float)` rendering: the shared float-to-text rule every
+/// byte-comparable writer uses.
+pub fn python_repr_f64(value: f64) -> String {
     if value == 0.0 {
         return if value.is_sign_negative() {
             "-0.0".to_string()

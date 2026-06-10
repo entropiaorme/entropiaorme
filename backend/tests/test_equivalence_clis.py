@@ -176,6 +176,30 @@ def test_static_tables_cli_serves_the_character_calc_ops(monkeypatch) -> None:
         },
         {"op": "skill_rank", "level": 5, "ranks": []},
         {"op": "codex_next_reward", "skill_name": "No Such Skill", "current_level": 9},
+        {
+            "op": "all_profession_levels",
+            "skill_levels": {"Rifle": 1000},
+            "professions": [
+                {
+                    "name": "Solo",
+                    "skills": [{"skill": {"name": "Rifle"}, "weight": 10}],
+                }
+            ],
+        },
+        {
+            "op": "profession_skill_optimizer",
+            "skill_levels": {"Rifle": 100},
+            "profession": {"skills": [{"skill": {"name": "Rifle"}, "weight": 10}]},
+        },
+        {
+            "op": "profession_path_optimizer",
+            "skill_levels": {"Rifle": 100},
+            "profession": {"skills": [{"skill": {"name": "Rifle"}, "weight": 10}]},
+            "ped_budget": 0.5,
+        },
+        {"op": "calculate_hp", "skill_levels": {}, "skills_data": []},
+        {"op": "hp_skill_optimizer", "skill_levels": {}, "skills_data": []},
+        {"op": "codex_tier_progress", "skill_name": "Rifle", "current_level": 250},
     ]
     stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
     monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
@@ -185,3 +209,9 @@ def test_static_tables_cli_serves_the_character_calc_ops(monkeypatch) -> None:
     assert json.loads(lines[0]) == 0.7
     assert json.loads(lines[1]) == "Unknown"
     assert json.loads(lines[2]) is None
+    assert json.loads(lines[3]) == {"Solo": 1.0}
+    assert json.loads(lines[4])["nextLevel"] == 1
+    assert json.loads(lines[5])["mode"] == "budget"
+    assert json.loads(lines[6]) == 80.0
+    assert json.loads(lines[7])["currentHp"] == 80.0
+    assert json.loads(lines[8]) == 0.25

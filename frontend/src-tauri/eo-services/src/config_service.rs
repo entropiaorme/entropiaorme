@@ -779,4 +779,194 @@ mod tests {
         svc.reset().unwrap();
         assert!(svc.get().chatlog_path.ends_with("chat.log"));
     }
+
+    #[test]
+    fn every_field_updates_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        let updates: Map<String, Value> = match serde_json::json!({
+            "chatlog_path": "/tmp/other.log",
+            "player_name": "Each",
+            "hotbar_hooks_enabled": true,
+            "repair_ocr_enabled": true,
+            "end_of_session_armour_reminder_enabled": true,
+            "developer_mode_enabled": true,
+            "mob_tracking_mode": "tag",
+            "mob_tracking_tag": "boss",
+            "manual_mob_species": "Atrox",
+            "manual_mob_maturity": "Old",
+            "hotbar": {"1": 5},
+            "trifecta_presets": [{"id": "beta", "name": "Beta", "heal_id": 9}],
+            "loot_filter_blacklist": ["Shrapnel"],
+            "overlay_x": 11,
+            "overlay_y": -4,
+        }) {
+            Value::Object(map) => map,
+            _ => unreachable!(),
+        };
+        svc.update(&updates).unwrap();
+        let config = svc.get();
+        assert_eq!(config.chatlog_path, "/tmp/other.log");
+        assert_eq!(config.player_name, "Each");
+        assert!(config.hotbar_hooks_enabled);
+        assert!(config.repair_ocr_enabled);
+        assert!(config.end_of_session_armour_reminder_enabled);
+        assert!(config.developer_mode_enabled);
+        assert_eq!(config.mob_tracking_mode, "tag");
+        assert_eq!(config.mob_tracking_tag, "boss");
+        assert_eq!(config.manual_mob_species, "Atrox");
+        assert_eq!(config.manual_mob_maturity, "Old");
+        assert_eq!(config.hotbar["1"], 5);
+        assert_eq!(config.trifecta_presets[0].id, "beta");
+        assert_eq!(config.trifecta_presets[0].heal_id, Some(9));
+        assert_eq!(config.active_trifecta_preset_id.as_deref(), Some("beta"));
+        assert_eq!(config.loot_filter_blacklist, ["Shrapnel"]);
+        assert_eq!(config.overlay_x, Some(11));
+        assert_eq!(config.overlay_y, Some(-4));
+
+        // Switching the active id by string to another existing preset
+        // takes effect (no fallback involved).
+        let mut two_presets = Map::new();
+        two_presets.insert(
+            "trifecta_presets".into(),
+            serde_json::json!([
+                {"id": "beta", "name": "Beta"},
+                {"id": "gamma", "name": "Gamma"},
+            ]),
+        );
+        svc.update(&two_presets).unwrap();
+        assert_eq!(svc.get().active_trifecta_preset_id.as_deref(), Some("beta"));
+        let mut switch = Map::new();
+        switch.insert("active_trifecta_preset_id".into(), Value::from("gamma"));
+        svc.update(&switch).unwrap();
+        assert_eq!(
+            svc.get().active_trifecta_preset_id.as_deref(),
+            Some("gamma")
+        );
+
+        // A null active id collapses to the default preset.
+        let mut null_id = Map::new();
+        null_id.insert("active_trifecta_preset_id".into(), Value::Null);
+        svc.update(&null_id).unwrap();
+        assert_eq!(
+            svc.get().active_trifecta_preset_id.as_deref(),
+            Some(DEFAULT_TRIFECTA_PRESET_ID)
+        );
+
+        // Reload from disk: the saved state equals the live state.
+        let reloaded = service(dir.path());
+        assert_eq!(reloaded.get(), svc.get());
+    }
+
+    #[test]
+    fn clone_with_updates_leaves_the_live_config_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(dir.path());
+        let mut updates = Map::new();
+        updates.insert("player_name".into(), Value::from("Candidate"));
+        let candidate = svc.clone_with_updates(&updates);
+        assert_eq!(candidate.player_name, "Candidate");
+        assert_eq!(svc.get().player_name, "");
+        assert_eq!(candidate.mob_tracking_mode, svc.get().mob_tracking_mode);
+    }
+
+    #[test]
+    fn reset_restores_the_full_default_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        let mut updates = Map::new();
+        updates.insert("player_name".into(), Value::from("Set"));
+        updates.insert("overlay_x".into(), Value::from(9));
+        svc.update(&updates).unwrap();
+        svc.reset().unwrap();
+        let expected = AppConfig {
+            chatlog_path: AppConfig::default_chatlog_path(),
+            ..AppConfig::default()
+        };
+        assert_eq!(svc.get(), &expected);
+    }
+
+    #[test]
+    fn validate_chatlog_is_false_until_the_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(dir.path());
+        assert!(!svc.validate_chatlog());
+    }
+
+    #[test]
+    fn active_preset_resolution_honours_a_valid_stored_id() {
+        let mut config = AppConfig::default();
+        config.trifecta_presets = vec![
+            TrifectaPresetConfig {
+                id: "alpha".into(),
+                name: "A".into(),
+                small_weapon_id: None,
+                big_weapon_id: None,
+                heal_id: None,
+            },
+            TrifectaPresetConfig {
+                id: "beta".into(),
+                name: "B".into(),
+                small_weapon_id: None,
+                big_weapon_id: None,
+                heal_id: None,
+            },
+        ];
+        config.active_trifecta_preset_id = Some("beta".into());
+        assert_eq!(active_trifecta_preset(&config).unwrap().id, "beta");
+        config.active_trifecta_preset_id = Some(String::new());
+        assert!(active_trifecta_preset(&config).is_none());
+        config.active_trifecta_preset_id = None;
+        assert!(active_trifecta_preset(&config).is_none());
+
+        // A valid stored active id survives normalisation untouched.
+        let raw = serde_json::json!([{"id": "alpha", "name": "A"}, {"id": "beta", "name": "B"}]);
+        let (_, active) = normalize_trifecta_presets(Some(&raw), Some("beta"));
+        assert_eq!(active, "beta");
+    }
+
+    #[test]
+    fn falsy_string_and_collection_toggles_stay_off() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "hotbar_hooks_enabled": "",
+                "repair_ocr_enabled": [],
+                "developer_mode_enabled": {},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        assert!(!svc.get().hotbar_hooks_enabled);
+        assert!(!svc.get().repair_ocr_enabled);
+        assert!(!svc.get().developer_mode_enabled);
+    }
+
+    #[test]
+    fn the_writer_nests_indentation_commas_and_control_escapes_exactly() {
+        let value = serde_json::json!({
+            "a": [{"x": 1, "y": [true, null]}, 2],
+            "b": "ctl\u{0001} end",
+        });
+        assert_eq!(
+            to_ascii_pretty(&value),
+            concat!(
+                "{\n",
+                "  \"a\": [\n",
+                "    {\n",
+                "      \"x\": 1,\n",
+                "      \"y\": [\n",
+                "        true,\n",
+                "        null\n",
+                "      ]\n",
+                "    },\n",
+                "    2\n",
+                "  ],\n",
+                "  \"b\": \"ctl\\u0001 end\"\n",
+                "}"
+            )
+        );
+    }
 }

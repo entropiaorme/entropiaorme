@@ -21,8 +21,12 @@ hyper-util.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
+eo-wire.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
-tokio-stream.workspace = true
 tempfile.workspace = true
+# test-util powers the paused-clock keep-alive cadence test; dev-only so
+# the feature never reaches a shipped build.
+tokio = { workspace = true, features = ["test-util"] }

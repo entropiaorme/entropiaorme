@@ -68,7 +68,7 @@ fn python_float_or(value: Option<&Value>, on_error: Option<f64>) -> Option<f64> 
 /// Bare `float(value)`: no falsy coalescing, so empty strings and
 /// containers fail (the caller skips), exactly as the backend's
 /// try/except around a plain conversion does.
-fn python_float_bare(value: &Value) -> Option<f64> {
+pub(crate) fn python_float_bare(value: &Value) -> Option<f64> {
     match value {
         Value::Bool(true) => Some(1.0),
         Value::Bool(false) => Some(0.0),

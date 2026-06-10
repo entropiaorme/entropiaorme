@@ -101,6 +101,22 @@ def _dispatch(request: dict) -> object:
         return character_calc.codex_tier_progress(
             request["skill_name"], request["current_level"]
         )
+    if op == "summarize_level_drift":
+        from backend.services.scan_drift import summarize_level_drift
+
+        return summarize_level_drift(
+            request["tracked_levels"], request["scanned_levels"]
+        )
+    if op == "panel_anchors":
+        from dataclasses import asdict
+
+        from backend.services import scan_presets
+
+        return {
+            "skill": asdict(scan_presets.SKILL_ANCHOR),
+            "profession": asdict(scan_presets.PROFESSION_ANCHOR),
+            "repair": asdict(scan_presets.REPAIR_ANCHOR),
+        }
     if op == "build_rank_breakdown":
         return codex_categories.build_rank_breakdown(
             request["base_cost"], request.get("codex_type")

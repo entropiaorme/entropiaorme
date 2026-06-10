@@ -16,6 +16,8 @@ pub mod cost_engine;
 pub mod db;
 pub mod game_data_store;
 pub mod mob_lookup_service;
+pub mod scan_drift;
+pub mod scan_presets;
 pub mod trifecta_service;
 pub mod tt_value_curve;
 

@@ -65,6 +65,10 @@ FLOORS: dict[str, float] = {
     # differential drives the same loops against the backend over the
     # real snapshots.
     "eo-services/src/character_calc.rs": 92.0,
+    # Measured 97.1. The one residual survivor replaces a no-data
+    # extractor's body (an empty map) with the default value, which is
+    # the same empty map: equivalent by construction.
+    "eo-services/src/chatlog_parser.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

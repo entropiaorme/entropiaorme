@@ -69,6 +69,14 @@ FLOORS: dict[str, float] = {
     # extractor's body (an empty map) with the default value, which is
     # the same empty map: equivalent by construction.
     "eo-services/src/chatlog_parser.rs": 92.0,
+    # Measured 95.9. The residual survivors are equivalent in
+    # behaviour: the unmapped-event filter is defensive parity with the
+    # original's identically-dead check (every parsed type is mapped or
+    # internally buffered), the pending-tick accessor cannot diverge a
+    # drain because the stop path flushes either way, and the refund
+    # tolerance's exact-equality flip needs a difference of exactly one
+    # billionth, which the value grammar cannot produce.
+    "eo-services/src/chatlog_watcher.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

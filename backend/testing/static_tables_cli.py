@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from backend.data import codex_categories, tt_value_curve
+from backend.services import character_calc
 
 
 @lru_cache(maxsize=1)
@@ -63,6 +64,43 @@ def _dispatch(request: dict) -> object:
         )
     if op == "mob_has":
         return _mob_lookup().has_mob_name(request["species"], request["maturity"])
+    if op == "profession_level":
+        return character_calc.profession_level(
+            request["skill_levels"], request["profession"]
+        )
+    if op == "all_profession_levels":
+        return character_calc.all_profession_levels(
+            request["skill_levels"], request["professions"]
+        )
+    if op == "skill_rank":
+        return character_calc.skill_rank(request["level"], request["ranks"])
+    if op == "profession_skill_optimizer":
+        return character_calc.profession_skill_optimizer(
+            request["skill_levels"], request["profession"]
+        )
+    if op == "profession_path_optimizer":
+        return character_calc.profession_path_optimizer(
+            request["skill_levels"],
+            request["profession"],
+            target_level=request.get("target_level"),
+            ped_budget=request.get("ped_budget"),
+        )
+    if op == "calculate_hp":
+        return character_calc.calculate_hp(
+            request["skill_levels"], request["skills_data"]
+        )
+    if op == "hp_skill_optimizer":
+        return character_calc.hp_skill_optimizer(
+            request["skill_levels"], request["skills_data"]
+        )
+    if op == "codex_next_reward":
+        return character_calc.codex_next_reward(
+            request["skill_name"], request["current_level"]
+        )
+    if op == "codex_tier_progress":
+        return character_calc.codex_tier_progress(
+            request["skill_name"], request["current_level"]
+        )
     if op == "build_rank_breakdown":
         return codex_categories.build_rank_breakdown(
             request["base_cost"], request.get("codex_type")

@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 use eo_services::{codex_categories, tt_value_curve};
 use eo_wire::normalizer::to_python_json;
 use proptest::prelude::*;
-use serde_json::json;
+use serde_json::{json, Map};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -187,6 +187,150 @@ fn game_data_over_the_real_snapshot_matches() {
 
 fn assert_oracle_eq(reply: &str, native: &serde_json::Value, context: &str) {
     assert_eq!(reply, native_json(native), "{context} diverged");
+}
+
+/// The character calculations over the real professions and skills
+/// snapshots with deterministic synthetic level maps, byte-compared
+/// against the backend implementation.
+#[test]
+fn character_calc_over_the_real_snapshot_matches() {
+    use eo_services::character_calc;
+
+    let snapshot = repo_root().join("backend/data/snapshot");
+    let store = eo_services::game_data_store::GameDataStore::new(&snapshot).unwrap();
+    let professions = store.get_entities("professions");
+    let skills_data = store.get_entities("skills");
+    let ranks = store.get_entities("skill_ranks")[0]["table"]["rows"]
+        .as_array()
+        .cloned()
+        .expect("the skill_ranks snapshot carries table.rows");
+    assert!(!ranks.is_empty(), "the rank sweep must drive real rows");
+
+    // Deterministic level maps over the real skill names: a sparse map,
+    // a dense mid-range map, and a high-level map with fractional
+    // levels (attribute skills included via their real names).
+    let mut level_maps: Vec<Map<String, serde_json::Value>> = vec![Map::new(); 3];
+    for (i, skill) in skills_data.iter().enumerate() {
+        let Some(name) = skill.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if i % 3 == 0 {
+            level_maps[0].insert(name.to_string(), json!(((i * 137) % 4000) as f64 * 0.5));
+        }
+        level_maps[1].insert(name.to_string(), json!(((i * 61) % 2500) as f64 + 0.25));
+        level_maps[2].insert(name.to_string(), json!(((i * 211) % 12000) as f64 * 1.01));
+    }
+
+    for (mi, levels) in level_maps.iter().enumerate() {
+        let levels_value = serde_json::Value::Object(levels.clone());
+
+        // Every profession's level, in one shot.
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "all_profession_levels",
+            "skill_levels": levels_value,
+            "professions": professions,
+        }));
+        let native = character_calc::all_profession_levels(levels, professions);
+        assert_oracle_eq(
+            &reply,
+            &serde_json::Value::Object(native),
+            &format!("all_profession_levels map {mi}"),
+        );
+
+        // Optimizers on a spread of professions.
+        for pi in [0usize, 7, 23, 61] {
+            let Some(profession) = professions.get(pi) else {
+                continue;
+            };
+            let reply = oracle().lock().unwrap().ask(&json!({
+                "op": "profession_skill_optimizer",
+                "skill_levels": levels_value,
+                "profession": profession,
+            }));
+            let native = character_calc::profession_skill_optimizer(levels, profession);
+            assert_oracle_eq(
+                &reply,
+                &native,
+                &format!("skill_optimizer map {mi} prof {pi}"),
+            );
+
+            // A current-relative target keeps the greedy loop live on
+            // every map rather than early-returning on high levels.
+            let target = character_calc::profession_level(levels, profession) + 0.75;
+            let reply = oracle().lock().unwrap().ask(&json!({
+                "op": "profession_path_optimizer",
+                "skill_levels": levels_value,
+                "profession": profession,
+                "target_level": target,
+            }));
+            let native =
+                character_calc::profession_path_optimizer(levels, profession, Some(target), None)
+                    .unwrap();
+            assert_oracle_eq(&reply, &native, &format!("path target map {mi} prof {pi}"));
+
+            let reply = oracle().lock().unwrap().ask(&json!({
+                "op": "profession_path_optimizer",
+                "skill_levels": levels_value,
+                "profession": profession,
+                "ped_budget": 250.0,
+            }));
+            let native =
+                character_calc::profession_path_optimizer(levels, profession, None, Some(250.0))
+                    .unwrap();
+            assert_oracle_eq(&reply, &native, &format!("path budget map {mi} prof {pi}"));
+        }
+
+        // HP figures over the real skills data.
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "calculate_hp",
+            "skill_levels": levels_value,
+            "skills_data": skills_data,
+        }));
+        let native = character_calc::calculate_hp(levels, skills_data);
+        assert_oracle_eq(&reply, &json!(native), &format!("calculate_hp map {mi}"));
+
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "hp_skill_optimizer",
+            "skill_levels": levels_value,
+            "skills_data": skills_data,
+        }));
+        let native = character_calc::hp_skill_optimizer(levels, skills_data);
+        assert_oracle_eq(&reply, &native, &format!("hp_skill_optimizer map {mi}"));
+    }
+
+    // Skill ranks across the real threshold table.
+    for level in [0.0, 0.5, 1.0, 24.99, 25.0, 100.0, 6000.0, 100000.0] {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "skill_rank", "level": level, "ranks": ranks,
+        }));
+        let native = character_calc::skill_rank(level, &ranks);
+        assert_oracle_eq(&reply, &json!(native), &format!("skill_rank {level}"));
+    }
+
+    // Codex helpers across real skill names (with and without category).
+    for name in ["Rifle", "Anatomy", "Agility", "No Such Skill"] {
+        for level in [0.0, 199.5, 1234.5] {
+            let reply = oracle().lock().unwrap().ask(&json!({
+                "op": "codex_next_reward", "skill_name": name, "current_level": level,
+            }));
+            let native = character_calc::codex_next_reward(name, level);
+            assert_oracle_eq(
+                &reply,
+                &json!(native),
+                &format!("next_reward {name} {level}"),
+            );
+
+            let reply = oracle().lock().unwrap().ask(&json!({
+                "op": "codex_tier_progress", "skill_name": name, "current_level": level,
+            }));
+            let native = character_calc::codex_tier_progress(name, level);
+            assert_oracle_eq(
+                &reply,
+                &json!(native),
+                &format!("tier_progress {name} {level}"),
+            );
+        }
+    }
 }
 
 #[test]

@@ -119,10 +119,13 @@ class GoldenSet:
         # The snapshot's symbol numbers continue from wherever the
         # event stream left the shared normaliser, so the consuming
         # harness needs the raw-to-symbol tables to reproduce them.
+        # newline="\n" so a Windows run writes LF, matching the repo's
+        # `*.json eol=lf` policy like the snapshot writer above.
         (target_dir / f"{self.scenario_dir.name}.symbols.json").write_text(
             json.dumps(self.normalizer.symbol_tables(), sort_keys=True, indent=2)
             + "\n",
             encoding="utf-8",
+            newline="\n",
         )
 
     def assert_matches(self, db: sqlite3.Connection) -> None:

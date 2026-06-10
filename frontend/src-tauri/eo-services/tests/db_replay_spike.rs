@@ -93,12 +93,18 @@ fn ensure_dumps(scenarios: &[(String, PathBuf)]) {
         return;
     }
     std::fs::create_dir_all(&dir).expect("dump dir");
-    let status = Command::new(oracle_python())
+    let mut command = Command::new(oracle_python());
+    command
         .args(["-m", "pytest", "backend/tests/e2e", "-q", "--no-header"])
         .env("EO_DB_DUMP_DIR", &dir)
-        .current_dir(repo_root())
-        .status()
-        .expect("replay suite spawn");
+        .current_dir(repo_root());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let status = command.status().expect("replay suite spawn");
     assert!(status.success(), "the backend replay suite must pass");
 }
 

@@ -48,9 +48,7 @@ def _run(request: dict) -> list:
         finally:
             watcher.stop()
 
-    return [
-        {"topic": topic, "payload": payload} for topic, payload in recorded
-    ]
+    return [{"topic": topic, "payload": payload} for topic, payload in recorded]
 
 
 def main() -> None:

@@ -18,6 +18,7 @@ ratification is deliberate rather than mechanical.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -96,6 +97,34 @@ class GoldenSet:
         """True when ``--update-fingerprints`` was passed to pytest."""
         return self._update
 
+    def _dump_db_if_requested(self, db: sqlite3.Connection) -> None:
+        """Materialise the scenario's final database when asked.
+
+        When ``EO_DB_DUMP_DIR`` is set, back the live connection up to
+        ``<dir>/<scenario>.db`` at the moment the snapshot is captured.
+        A cross-implementation diff harness consumes the files to run
+        the same catalogue snapshot through the other implementation
+        and byte-compare against the committed golden.
+        """
+        dump_dir = os.environ.get("EO_DB_DUMP_DIR")
+        if not dump_dir:
+            return
+        target_dir = Path(dump_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(target_dir / f"{self.scenario_dir.name}.db")
+        try:
+            db.backup(target)
+        finally:
+            target.close()
+        # The snapshot's symbol numbers continue from wherever the
+        # event stream left the shared normaliser, so the consuming
+        # harness needs the raw-to-symbol tables to reproduce them.
+        (target_dir / f"{self.scenario_dir.name}.symbols.json").write_text(
+            json.dumps(self.normalizer.symbol_tables(), sort_keys=True, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+
     def assert_matches(self, db: sqlite3.Connection) -> None:
         """Compare the recorded fingerprint + DB snapshot to goldens.
 
@@ -106,6 +135,7 @@ class GoldenSet:
         """
         actual_fingerprint = self.recorder.serialize()
         actual_snapshot = capture_snapshot(db, normalizer=self.normalizer)
+        self._dump_db_if_requested(db)
 
         if self._update:
             self._update_goldens(actual_fingerprint, actual_snapshot)

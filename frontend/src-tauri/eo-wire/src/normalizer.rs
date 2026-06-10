@@ -89,6 +89,30 @@ impl Normalizer {
         self.timestamps.clear();
     }
 
+    /// Pre-load raw-to-symbol assignments captured from another
+    /// normaliser (the backend dumps its tables so a cross-language
+    /// harness reproduces the same numbering when the event stream has
+    /// already consumed early symbols). Timestamp keys arrive as the
+    /// backend's string form of the raw value: a parseable number seeds
+    /// the epoch-keyed entry, anything else the string-keyed one.
+    pub fn seed_symbols(&mut self, uuids: &Map<String, Value>, timestamps: &Map<String, Value>) {
+        for (raw, symbol) in uuids {
+            if let Some(symbol) = symbol.as_str() {
+                self.uuids.insert(raw.clone(), symbol.to_string());
+            }
+        }
+        for (raw, symbol) in timestamps {
+            let Some(symbol) = symbol.as_str() else {
+                continue;
+            };
+            let key = match raw.parse::<f64>() {
+                Ok(epoch) => TimestampKey::Epoch(epoch.to_bits()),
+                Err(_) => TimestampKey::Iso(raw.clone()),
+            };
+            self.timestamps.insert(key, symbol.to_string());
+        }
+    }
+
     /// Return the canonical form of `value` (recursive walk).
     pub fn normalize(&mut self, value: &Value) -> Value {
         self.walk(value)

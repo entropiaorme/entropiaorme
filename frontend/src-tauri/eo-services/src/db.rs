@@ -81,6 +81,12 @@ pub struct Db {
 }
 
 impl Db {
+    /// The underlying pool, for harnesses that drive raw statements
+    /// (the catalogue snapshot and the replay spike).
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     /// Open (creating if missing), adopt or refuse an existing schema,
     /// and bring the migration chain up to date.
     pub async fn open(path: &Path) -> Result<Db, DbError> {

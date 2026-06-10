@@ -56,7 +56,7 @@ http-body-util = "0.1"
 # client's timestamp format via chrono, and the HTML5 named-entity set
 # matching the original's unescaping.
 regex = "1"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 html-escape = "0.2"
 # The persistence stack: sqlx is pinned to the 0.9 minor for the duration
 # of the hybrid, mirroring the Tauri and axum pins above; the database

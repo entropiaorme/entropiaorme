@@ -21,7 +21,13 @@ use hyper_util::rt::TokioExecutor;
 pub type ProxyClient = Client<HttpConnector, Body>;
 
 pub fn build_client() -> ProxyClient {
-    Client::builder(TokioExecutor::new()).build_http()
+    let mut connector = HttpConnector::new();
+    // Loopback connects resolve immediately or not at all; the bound turns
+    // a wedged upstream into a prompt 502 instead of a request hung on the
+    // OS connect default. Deliberately no response timeout: the event
+    // stream is an unbounded body by design.
+    connector.set_connect_timeout(Some(std::time::Duration::from_secs(5)));
+    Client::builder(TokioExecutor::new()).build(connector)
 }
 
 const HOP_BY_HOP: [HeaderName; 8] = [

@@ -22,9 +22,12 @@ pub mod fingerprint_recorder;
 pub mod game_data_store;
 pub mod hotbar_listener;
 pub mod keystroke_source;
+pub mod loot_filter;
 pub mod mob_lookup_service;
 pub mod scan_drift;
 pub mod scan_presets;
+pub mod tool_inference;
+pub mod tracking_models;
 pub mod trifecta_service;
 pub mod tt_value_curve;
 

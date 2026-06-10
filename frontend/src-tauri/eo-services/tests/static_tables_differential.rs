@@ -200,11 +200,11 @@ fn character_calc_over_the_real_snapshot_matches() {
     let store = eo_services::game_data_store::GameDataStore::new(&snapshot).unwrap();
     let professions = store.get_entities("professions");
     let skills_data = store.get_entities("skills");
-    let ranks = store.get_entities("skill_ranks")[0]
-        .get("ranks")
-        .and_then(serde_json::Value::as_array)
+    let ranks = store.get_entities("skill_ranks")[0]["table"]["rows"]
+        .as_array()
         .cloned()
-        .unwrap_or_default();
+        .expect("the skill_ranks snapshot carries table.rows");
+    assert!(!ranks.is_empty(), "the rank sweep must drive real rows");
 
     // Deterministic level maps over the real skill names: a sparse map,
     // a dense mid-range map, and a high-level map with fractional
@@ -254,14 +254,17 @@ fn character_calc_over_the_real_snapshot_matches() {
                 &format!("skill_optimizer map {mi} prof {pi}"),
             );
 
+            // A current-relative target keeps the greedy loop live on
+            // every map rather than early-returning on high levels.
+            let target = character_calc::profession_level(levels, profession) + 0.75;
             let reply = oracle().lock().unwrap().ask(&json!({
                 "op": "profession_path_optimizer",
                 "skill_levels": levels_value,
                 "profession": profession,
-                "target_level": 12.0,
+                "target_level": target,
             }));
             let native =
-                character_calc::profession_path_optimizer(levels, profession, Some(12.0), None)
+                character_calc::profession_path_optimizer(levels, profession, Some(target), None)
                     .unwrap();
             assert_oracle_eq(&reply, &native, &format!("path target map {mi} prof {pi}"));
 

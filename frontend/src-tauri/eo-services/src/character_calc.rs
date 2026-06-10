@@ -65,6 +65,19 @@ fn python_float_or(value: Option<&Value>, on_error: Option<f64>) -> Option<f64> 
     }
 }
 
+/// Bare `float(value)`: no falsy coalescing, so empty strings and
+/// containers fail (the caller skips), exactly as the backend's
+/// try/except around a plain conversion does.
+fn python_float_bare(value: &Value) -> Option<f64> {
+    match value {
+        Value::Bool(true) => Some(1.0),
+        Value::Bool(false) => Some(0.0),
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
 /// `(skill_name, weight)` for each usable skill entry on a profession;
 /// entries with no usable name are skipped and a missing weight
 /// surfaces as 0, exactly as the backend's iterator documents.
@@ -167,7 +180,7 @@ pub fn skill_rank(level: f64, ranks: &[Value]) -> String {
         };
         let threshold = match rank.get("skill") {
             None | Some(Value::Null) => continue,
-            Some(value) => match python_float_or(Some(value), None) {
+            Some(value) => match python_float_bare(value) {
                 Some(t) => t,
                 None => continue,
             },
@@ -895,5 +908,39 @@ mod tests {
         let expected = round_half_even(tt_value_at(19001.5) - tt_value_at(19000.0), 2);
         assert_eq!(allocation["pedCost"].as_f64().unwrap(), expected);
         assert!(expected > 1.5, "the curve is steep here");
+    }
+
+    #[test]
+    fn rank_thresholds_parse_bare_so_falsy_shapes_skip() {
+        let ranks = vec![
+            json!({"name": "Empty", "skill": ""}),
+            json!({"name": "Container", "skill": []}),
+            json!({"name": "Real", "skill": 50}),
+        ];
+        assert_eq!(skill_rank(10.0, &ranks), "Real", "falsy thresholds skip");
+        assert_eq!(python_float_bare(&json!("")), None);
+        assert_eq!(python_float_bare(&json!([])), None);
+        assert_eq!(python_float_bare(&json!(" 12 ")), Some(12.0));
+        assert_eq!(python_float_bare(&json!(true)), Some(1.0));
+        assert_eq!(python_float_bare(&json!(false)), Some(0.0));
+    }
+
+    #[test]
+    fn skills_at_the_curve_ceiling_cannot_allocate() {
+        let level_map = levels(&[("Capped", 20000.0)]);
+        let profession = json!({
+            "name": "Ceiling",
+            "skills": [{"skill": {"name": "Capped"}, "weight": 10000}],
+        });
+        let result = profession_path_optimizer(&level_map, &profession, None, Some(50.0)).unwrap();
+        assert_eq!(result["totalPed"], 0.0, "all skills at ceiling: break");
+        assert_eq!(result["allocations"][0]["levelsToGain"], 0.0);
+        let result =
+            profession_path_optimizer(&level_map, &profession, Some(20001.0), None).unwrap();
+        assert_eq!(result["totalPed"], 0.0);
+        assert_eq!(
+            result["endLevel"], 20000.0,
+            "the target stays unreached when nothing can level"
+        );
     }
 }

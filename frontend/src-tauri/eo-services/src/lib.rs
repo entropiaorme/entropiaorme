@@ -29,6 +29,7 @@ pub mod scan_drift;
 pub mod scan_presets;
 pub mod session_summary;
 pub mod tool_inference;
+pub mod tracker;
 pub mod tracking_models;
 pub mod trifecta_service;
 pub mod tt_value_curve;

@@ -5,7 +5,6 @@
 //! detached values, never references into live tracker state.
 
 use chrono::NaiveDateTime;
-use serde_json::Map;
 
 /// A single item received from a loot drop.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,8 +67,10 @@ pub struct Kill {
     pub enhancer_cost: f64,
     pub loot_total_ped: f64,
     pub loot_items: Vec<LootItem>,
-    /// Per-tool tracking, keyed by tool name in first-seen order.
-    pub tool_stats: Map<String, serde_json::Value>,
+    /// Per-tool tracking in first-seen order, keyed by the phase key
+    /// (the bare tool name, then `name#2`... when a cost change opens
+    /// a new phase of the same tool).
+    pub tool_stats: Vec<(String, ToolStats)>,
     pub is_global: bool,
     pub is_hof: bool,
 }
@@ -116,7 +117,7 @@ pub struct ActiveSessionView {
     pub current_mob: Option<String>,
     pub mob_source: Option<String>,
     pub mob_entry_mode: String,
-    /// Raw rows (event_type, mob_or_item, value_ped, kill_loot): the
+    /// Raw rows (event_type, mob_or_item, value_ped, timestamp): the
     /// presentation mapping lives in the HTTP layer.
     pub notable_event_rows: Vec<(String, String, f64, Option<f64>)>,
     pub warnings: Vec<String>,

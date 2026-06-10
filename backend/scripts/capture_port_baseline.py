@@ -588,6 +588,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"[baseline] wrote {JSON_OUT.relative_to(REPO_ROOT)}")
 
+    # Always render from the serialised JSON, never the in-memory capture
+    # dict: the document must be a pure function of the committed JSON, so a
+    # later --render-only or partial re-run reproduces it byte-for-byte
+    # (dict insertion order would otherwise leak into table row order).
+    data = json.loads(JSON_OUT.read_text(encoding="utf-8"))
     missing = [block for block in _RENDERERS if block not in data]
     if missing:
         raise SystemExit(f"baseline JSON is missing blocks: {', '.join(missing)}")

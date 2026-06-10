@@ -26,8 +26,8 @@ table.
 <!-- BEGIN GENERATED: host -->
 | | |
 | --- | --- |
-| Captured | 2026-06-10 00:00 UTC |
-| Commit | `7e16d01` |
+| Captured | 2026-06-10 00:20 UTC |
+| Commit | `b4982a9` |
 | Platform | Linux-6.8.0-107-generic-x86_64-with-glibc2.35 |
 | CPU | 12th Gen Intel(R) Core(TM) i7-12800H |
 | Python | 3.12.1 |
@@ -60,17 +60,17 @@ real traffic pattern (one desktop frontend) looks the same.
 <!-- BEGIN GENERATED: http -->
 | Endpoint | p50 ms | p95 ms | min ms |
 | --- | --- | --- | --- |
+| `GET_codex_meta_attributes` | 1.0912 | 1.1988 | 0.995 |
 | `GET_health` | 1.0182 | 1.1539 | 0.9278 |
-| `GET_tracking_snapshot` | 1.1188 | 1.3274 | 1.0796 |
-| `GET_tracking_sessions` | 1.2792 | 2.0239 | 1.1102 |
-| `GET_tracking_session_detail` | 1.2282 | 1.5173 | 1.1981 |
-| `GET_tracking_session_quest_link_suggestion` | 1.0583 | 1.2082 | 1.0301 |
 | `GET_quests` | 1.0907 | 1.2203 | 1.0019 |
-| `GET_quests_mobs` | 1.02 | 1.2871 | 0.9993 |
 | `GET_quests_analytics` | 1.011 | 1.1826 | 0.9993 |
+| `GET_quests_mobs` | 1.02 | 1.2871 | 0.9993 |
 | `GET_quests_playlists` | 1.0091 | 1.1676 | 0.9972 |
 | `GET_scan_skills_status` | 1.125 | 1.777 | 0.8134 |
-| `GET_codex_meta_attributes` | 1.0912 | 1.1988 | 0.995 |
+| `GET_tracking_session_detail` | 1.2282 | 1.5173 | 1.1981 |
+| `GET_tracking_session_quest_link_suggestion` | 1.0583 | 1.2082 | 1.0301 |
+| `GET_tracking_sessions` | 1.2792 | 2.0239 | 1.1102 |
+| `GET_tracking_snapshot` | 1.1188 | 1.3274 | 1.0796 |
 
 30 requests per endpoint after 3 warm-ups, against a freshly replayed `basic_hunt_10_events` state.
 <!-- END GENERATED: http -->
@@ -84,10 +84,10 @@ these same paths; band (i) below compares the two.
 <!-- BEGIN GENERATED: hot-paths -->
 | Hot path | per-call µs |
 | --- | --- |
-| `cost_engine.cost_per_shot_from_props` | 3.285 |
 | `chatlog_parser.parse_line (damage line)` | 10.318 |
-| `tt_value_curve.tt_value_at` | 0.785 |
+| `cost_engine.cost_per_shot_from_props` | 3.285 |
 | `tt_value_curve.levels_for_tt_value` | 59.276 |
+| `tt_value_curve.tt_value_at` | 0.785 |
 
 Method: timeit, best of 5 runs of 10000 calls.
 <!-- END GENERATED: hot-paths -->
@@ -156,6 +156,15 @@ Python figure is not done, and a thin figure here flags a module that
 needs coverage work before its behaviour can be locked by tests. The
 generated coverage matrix (`backend/testing/COVERAGE.md`) is a
 presence map; this table carries the figures.
+
+One known measurement wrinkle, found by review: the
+`backend/routers/analytics.py` row is date-coupled. The overview
+trend block compares real-clock 30/60-day windows, and the suite
+drives that route with the real clock, so which trend branches
+execute (and therefore the row's figure, by roughly a branch) shifts
+across UTC date boundaries relative to the test data. Treat that row
+at whole-percent granularity; the underlying test-side clock
+injection is tracked as its own follow-up.
 
 <!-- BEGIN GENERATED: coverage -->
 | Module | statements | branches | branch % | overall % |
@@ -259,11 +268,14 @@ from the committed JSON (`port_baseline.json`).
 
 Expected run-to-run variance on an otherwise idle host: timing medians
 (process, HTTP, hot paths, OCR) within roughly ±25%; RSS within ±10%;
-the coverage table and artefact sizes are exact for the same commit
-and dependency set. One sharpening from review: the sub-millisecond
-legs (HTTP medians, hot-path microseconds) are sensitive to execution
-context inside a long full-pipeline run on a hybrid-core CPU, so
-verify them with standalone leg re-runs (the skip flags isolate a
-leg); the ±25% envelope applies to like-for-like runs. A re-run
-outside those envelopes on the same host warrants investigation, not
-a quiet refresh.
+artefact sizes exact at the table's rounding; the coverage table exact
+for the same commit, dependency set, and capture date, except the one
+date-coupled row noted above. Two sharpenings from review: the
+sub-millisecond legs (HTTP medians, hot-path microseconds) are
+sensitive to execution context inside a long full-pipeline run on a
+hybrid-core CPU, so verify them with standalone leg re-runs (the skip
+flags isolate a leg) where the ±25% envelope applies like-for-like;
+and the document is a pure function of `port_baseline.json` (the
+renderer always re-reads the serialised JSON), so `--render-only` is
+byte-stable. A re-run outside those envelopes on the same host
+warrants investigation, not a quiet refresh.

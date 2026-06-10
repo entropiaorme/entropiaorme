@@ -27,6 +27,7 @@ pub mod loot_filter;
 pub mod mob_lookup_service;
 pub mod scan_drift;
 pub mod scan_presets;
+pub mod session_summary;
 pub mod tool_inference;
 pub mod tracking_models;
 pub mod trifecta_service;

@@ -11,7 +11,7 @@ use crate::tt_value_curve::{levels_for_tt_value, max_tt_curve_level, tt_value_at
 use eo_wire::normalizer::round_half_even;
 
 /// Attribute skills receive a x20 multiplier in profession calculations.
-const ATTRIBUTE_SKILLS: [&str; 6] = [
+pub(crate) const ATTRIBUTE_SKILLS: [&str; 6] = [
     "Agility",
     "Health",
     "Intelligence",

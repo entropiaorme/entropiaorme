@@ -34,6 +34,8 @@ def test_unstarted_leg_refuses_lifecycle_calls(tmp_path):
         leg.replay()
     with pytest.raises(RuntimeError, match="not running"):
         leg.capture_http()
+    with pytest.raises(RuntimeError, match="not running"):
+        _ = leg.pid
 
 
 def test_shutdown_is_idempotent_on_an_unstarted_leg(tmp_path):
@@ -57,6 +59,7 @@ def test_child_exiting_during_boot_surfaces_its_exit_code(tmp_path):
     )
     leg.start()
     try:
+        assert leg.pid > 0
         with pytest.raises(RuntimeError, match=r"exited during boot \(rc=3\)"):
             leg.wait_ready()
     finally:

@@ -257,7 +257,7 @@ Excluded from measurement (device / IO glue that cannot run headless; see the `o
 
 From the repo root, with the development virtualenv:
 
-```
+```bash
 python -m pytest -m "fast or standard" -p no:randomly --cov=backend \
     --cov-branch --cov-report= -n auto --dist=loadfile
 python -m coverage json

@@ -109,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"{file}: {counts['missed']} missed mutant(s) and no adopted floor"
             )
 
+    # A floor whose file produced no scored mutants is a silently vacuous
+    # gate (a rename or deletion would otherwise pass unnoticed).
+    for file, floor in sorted(FLOORS.items()):
+        if file not in per_file:
+            failures.append(
+                f"{file}: adopted floor {floor:.1f} but no scored mutants "
+                "(renamed or removed? update the floor map)"
+            )
+
     if failures:
         print("\nmutation floors violated:", file=sys.stderr)
         for failure in failures:

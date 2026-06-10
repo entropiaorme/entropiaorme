@@ -413,7 +413,7 @@ cargo test --workspace                   # unit tests, all members
 cargo nextest run -p eo-wire -p eo-http -p eo-services  # backend members alone, no Tauri toolchain needed
 cargo llvm-cov nextest --branch -p eo-wire -p eo-http -p eo-services  # branch coverage (nightly toolchain)
 cargo mutants -p eo-wire -p eo-http -p eo-services --in-place  # mutation testing (nightly CI cadence)
-python3 backend/scripts/rust_mutation_floors.py --outcomes frontend/src-tauri/mutants.out/outcomes.json  # the floor gate (from the repo root)
+python3 ../../backend/scripts/rust_mutation_floors.py --outcomes mutants.out/outcomes.json  # the floor gate over the campaign output
 cargo bench -p eo-services               # criterion micro-benchmarks (hot-path figures)
 cargo audit -D warnings                  # RustSec advisories against Cargo.lock
 cargo deny check                         # licences, bans, sources, advisories

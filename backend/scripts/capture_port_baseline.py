@@ -556,6 +556,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-freeze", action="store_true")
     parser.add_argument("--render-only", action="store_true")
     args = parser.parse_args(argv)
+    for name in ("boots", "latency_requests", "ocr_pages"):
+        if getattr(args, name) <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be positive")
 
     data: dict[str, Any] = {}
     if JSON_OUT.exists():
@@ -595,6 +598,11 @@ def main(argv: list[str] | None = None) -> int:
     # dict: the document must be a pure function of the committed JSON, so a
     # later --render-only or partial re-run reproduces it byte-for-byte
     # (dict insertion order would otherwise leak into table row order).
+    if not JSON_OUT.exists():
+        raise SystemExit(
+            f"{JSON_OUT.relative_to(REPO_ROOT)} is missing; run a capture "
+            "(without --render-only) to generate it first"
+        )
     data = json.loads(JSON_OUT.read_text(encoding="utf-8"))
     missing = [block for block in _RENDERERS if block not in data]
     if missing:

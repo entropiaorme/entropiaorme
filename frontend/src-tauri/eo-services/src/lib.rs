@@ -12,6 +12,7 @@
 pub mod character_calc;
 pub mod chatlog_parser;
 pub mod chatlog_watcher;
+pub mod clock;
 pub mod codex_categories;
 pub mod config_service;
 pub mod cost_engine;

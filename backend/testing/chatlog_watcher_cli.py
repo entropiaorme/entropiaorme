@@ -22,7 +22,7 @@ from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.fingerprint import FingerprintRecorder, Normalizer
 
 
-def _run(request: dict) -> list:
+def _run(request: dict) -> dict:
     lines = request["lines"]
     suppress = request.get("suppress")
 

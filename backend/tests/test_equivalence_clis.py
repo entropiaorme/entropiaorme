@@ -206,6 +206,7 @@ def test_static_tables_cli_serves_the_character_calc_ops(monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdout", out)
     static_tables_cli.main()
     lines = out.getvalue().splitlines()
+    assert len(lines) == len(requests)
     assert json.loads(lines[0]) == 0.7
     assert json.loads(lines[1]) == "Unknown"
     assert json.loads(lines[2]) is None

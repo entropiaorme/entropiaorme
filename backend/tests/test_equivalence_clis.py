@@ -139,3 +139,23 @@ def test_config_service_cli_round_trips_with_the_sentinel(monkeypatch) -> None:
     assert reply["state"]["mob_tracking_tag"] == "tagged"
     assert reply["file"].startswith('{\n  "extensionKey": 1')
     assert "<DEFAULT_CHATLOG>" in reply["file"]
+
+
+def test_static_tables_cli_serves_the_game_data_ops(monkeypatch) -> None:
+    out = io.StringIO()
+    requests = [
+        {"op": "game_counts"},
+        {"op": "game_find", "endpoint": "mobs", "item_id": "no-such"},
+        {"op": "mob_has", "species": "", "maturity": ""},
+        {"op": "mob_suggest", "query": " ", "limit": 5},
+    ]
+    stdin = "\n".join(json.dumps(r) for r in requests) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys, "stdout", out)
+    static_tables_cli.main()
+    lines = out.getvalue().splitlines()
+    counts = json.loads(lines[0])
+    assert counts.get("mobs", 0) > 0, "the real snapshot catalogue loads"
+    assert json.loads(lines[1]) is None
+    assert json.loads(lines[2]) is False
+    assert json.loads(lines[3]) == []

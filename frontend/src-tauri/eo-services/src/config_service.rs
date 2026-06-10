@@ -1073,4 +1073,15 @@ mod tests {
         assert!(text.contains("\r\n"));
         assert!(!text.replace("\r\n", "").contains('\n'));
     }
+
+    #[test]
+    fn stringify_renders_scalars_as_python_does() {
+        assert_eq!(stringify(&Value::Bool(true)).as_deref(), Some("True"));
+        assert_eq!(stringify(&Value::Bool(false)).as_deref(), Some("False"));
+        assert_eq!(stringify(&Value::from(42)).as_deref(), Some("42"));
+        assert_eq!(stringify(&Value::from(1.5)).as_deref(), Some("1.5"));
+        assert_eq!(stringify(&Value::from("s")).as_deref(), Some("s"));
+        assert_eq!(stringify(&serde_json::json!({"a": 1})), None);
+        assert_eq!(stringify(&serde_json::json!([1])), None);
+    }
 }

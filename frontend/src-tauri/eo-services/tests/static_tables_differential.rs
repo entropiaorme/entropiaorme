@@ -109,6 +109,80 @@ fn native_json(value: &serde_json::Value) -> String {
     to_python_json(value, None)
 }
 
+/// The real snapshot catalogue through both stores: counts, searches,
+/// id lookups, and the mob-suggestion pipeline, byte-compared.
+#[test]
+fn game_data_over_the_real_snapshot_matches() {
+    let snapshot = repo_root().join("backend/data/snapshot");
+    let store = eo_services::game_data_store::GameDataStore::new(&snapshot);
+    let lookup = eo_services::mob_lookup_service::MobLookupService::new(&store);
+
+    let counts_reply = oracle().lock().unwrap().ask(&json!({"op": "game_counts"}));
+    assert_eq!(
+        counts_reply,
+        native_json(&serde_json::Value::Object(store.endpoint_counts()))
+    );
+
+    for (query, endpoint, limit) in [
+        ("opalo", None, 50),
+        ("atrox", Some("mobs"), 50),
+        ("a", None, 25),
+        ("herb box", None, 50),
+        ("ZZZ-NO-MATCH", None, 50),
+    ] {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "game_search", "query": query, "endpoint": endpoint, "limit": limit,
+        }));
+        let native = store.search_entities(query, endpoint, limit);
+        assert_oracle_eq(&reply, &json!(native), &format!("game_search {query:?}"));
+    }
+
+    for (endpoint, id) in [
+        ("weapons", json!(1)),
+        ("mobs", json!("7")),
+        ("skills", json!(99999)),
+    ] {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "game_find", "endpoint": endpoint, "item_id": id,
+        }));
+        let native = store
+            .find_entity(endpoint, &id)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        assert_oracle_eq(&reply, &native, &format!("game_find {endpoint}/{id}"));
+    }
+
+    for (query, limit) in [("atrox", 10), ("young atrox", 5), ("dai", 10), ("  ", 10)] {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "mob_suggest", "query": query, "limit": limit,
+        }));
+        let native = lookup.search_mob_names(query, limit);
+        assert_oracle_eq(&reply, &json!(native), &format!("mob_suggest {query:?}"));
+    }
+
+    for (species, maturity) in [
+        ("Atrox", "Young"),
+        ("Atrox", "Old"),
+        ("Atrox", ""),
+        ("Daikiba", "Young"),
+        ("No Such Species", ""),
+    ] {
+        let reply = oracle().lock().unwrap().ask(&json!({
+            "op": "mob_has", "species": species, "maturity": maturity,
+        }));
+        let native = lookup.has_mob_name(species, maturity);
+        assert_oracle_eq(
+            &reply,
+            &json!(native),
+            &format!("mob_has {species}/{maturity}"),
+        );
+    }
+}
+
+fn assert_oracle_eq(reply: &str, native: &serde_json::Value, context: &str) {
+    assert_eq!(reply, native_json(native), "{context} diverged");
+}
+
 #[test]
 fn max_level_matches() {
     let reply = oracle()

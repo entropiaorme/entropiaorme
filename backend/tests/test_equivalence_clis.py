@@ -19,9 +19,9 @@ from pathlib import Path
 from backend.testing import (
     chatlog_parser_cli,
     chatlog_watcher_cli,
-    hotbar_listener_cli,
     config_service_cli,
     cost_engine_cli,
+    hotbar_listener_cli,
     normalize_cli,
     static_tables_cli,
 )

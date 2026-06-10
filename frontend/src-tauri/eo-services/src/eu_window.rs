@@ -61,7 +61,8 @@ pub fn repair_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
 mod platform {
     use super::{WindowHandle, GAME_TITLE_PREFIX};
 
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Gdi::ClientToScreen;
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClientRect, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,

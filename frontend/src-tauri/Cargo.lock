@@ -1101,6 +1101,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "uuid",
  "windows",
 ]
 

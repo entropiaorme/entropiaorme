@@ -56,6 +56,10 @@ http-body-util = "0.1"
 # client's timestamp format via chrono, and the HTML5 named-entity set
 # matching the original's unescaping.
 regex = "1"
+# Session and kill identities: random v4, exactly the original's
+# uuid4() (the equivalence normaliser maps ids to symbols by encounter
+# order, so randomness never reaches a golden).
+uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 html-escape = "0.2"
 # The persistence stack: sqlx is pinned to the 0.9 minor for the duration

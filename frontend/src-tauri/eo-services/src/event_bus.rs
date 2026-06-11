@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 /// The bus topics, mirroring the string constants in
-/// `backend/core/events.py`.
+/// `backend/core/events.py` plus the frontend-facing domain-event
+/// topic the tracker publishes (`backend/core/domain_events.py`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Combat,
@@ -36,6 +37,7 @@ pub enum Topic {
     SessionStopped,
     MissionReceived,
     TickFlushed,
+    TrackingSessionUpdated,
 }
 
 impl Topic {
@@ -53,6 +55,7 @@ impl Topic {
             Topic::SessionStopped => "session_stopped",
             Topic::MissionReceived => "mission_received",
             Topic::TickFlushed => "tick_flushed",
+            Topic::TrackingSessionUpdated => eo_wire::domain_events::TOPIC_TRACKING_SESSION_UPDATED,
         }
     }
 }
@@ -227,6 +230,7 @@ mod tests {
             (Topic::SessionStopped, "session_stopped"),
             (Topic::MissionReceived, "mission_received"),
             (Topic::TickFlushed, "tick_flushed"),
+            (Topic::TrackingSessionUpdated, "tracking.session.updated"),
         ];
         for (topic, wire) in expected {
             assert_eq!(topic.as_str(), wire);

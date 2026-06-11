@@ -437,3 +437,279 @@ impl HydrationState {
 pub fn quest_error_response(_error: QuestError) -> Response<Body> {
     internal_error()
 }
+
+// Expected values in these tests are the backend's own outputs: the
+// ETag form and conditional semantics from its middleware, the
+// formatter shapes from its routers, and the error envelopes from its
+// HTTP layer (all held byte-for-byte by the A/B fidelity test; these
+// hermetic pins keep the same surface guarded without a live backend).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eo_services::clock::MockClock;
+    use eo_services::db::Db;
+    use http_body_util::BodyExt;
+
+    #[test]
+    fn the_etag_is_the_quoted_body_hash() {
+        assert_eq!(
+            compute_strong_etag(b"hello"),
+            "\"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\""
+        );
+    }
+
+    #[test]
+    fn if_none_match_parses_the_backend_way() {
+        let current = "\"abc\"";
+        assert!(!if_none_match_matches(None, current));
+        assert!(if_none_match_matches(Some("*"), current));
+        assert!(if_none_match_matches(Some("\"abc\""), current));
+        assert!(if_none_match_matches(Some("\"x\", \"abc\""), current));
+        assert!(if_none_match_matches(Some("W/\"abc\""), current));
+        assert!(!if_none_match_matches(Some("\"nope\""), current));
+    }
+
+    #[test]
+    fn scalar_helpers_match_the_router_layer() {
+        assert_eq!(or_empty(&json!(null)), json!(""));
+        assert_eq!(or_empty(&json!("")), json!(""));
+        assert_eq!(or_empty(&json!("x")), json!("x"));
+        assert_eq!(rounded(&json!(5), 2), json!(5));
+        assert_eq!(rounded(&json!(1.2345), 2), json!(1.23));
+        assert_eq!(rounded(&json!(2.675), 2), json!(2.67));
+        assert_eq!(float_field(json!(0)), json!(0.0));
+        assert_eq!(float_field(json!(1.5)), json!(1.5));
+        assert_eq!(float_field(json!(null)), json!(null));
+        assert_eq!(python_str_of(&json!("s")), "s");
+        assert_eq!(python_str_of(&json!(42)), "42");
+        assert_eq!(detail("gone"), json!({"detail": "gone"}));
+    }
+
+    async fn parts(response: Response<Body>) -> (StatusCode, http::HeaderMap, Vec<u8>) {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        (status, headers, bytes)
+    }
+
+    #[tokio::test]
+    async fn responses_carry_the_conditional_get_contract() {
+        let payload = json!({"a": 1});
+        let (status, headers, body) = parts(json_response(&payload, None)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b"{\"a\":1}");
+        let etag = headers.get("etag").unwrap().to_str().unwrap().to_string();
+        assert_eq!(etag, compute_strong_etag(b"{\"a\":1}"));
+        assert_eq!(headers.get("cache-control").unwrap(), "no-cache");
+        assert_eq!(headers.get("content-type").unwrap(), "application/json");
+
+        let (status, headers, body) = parts(json_response(&payload, Some(&etag))).await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        assert!(body.is_empty());
+        assert_eq!(headers.get("etag").unwrap().to_str().unwrap(), etag);
+        assert_eq!(headers.get("cache-control").unwrap(), "no-cache");
+        assert!(headers.get("content-type").is_none());
+
+        let (status, _, body) = parts(error_response(
+            StatusCode::NOT_FOUND,
+            &detail("Species 'X' not found"),
+        ))
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, b"{\"detail\":\"Species 'X' not found\"}");
+
+        let (status, headers, body) = parts(internal_error()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            headers.get("content-type").unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(body, b"Internal Server Error");
+
+        // The quest router catches no service error, so its mapping is
+        // the same unhandled-exception envelope.
+        let (status, _, body) =
+            parts(quest_error_response(QuestError::Invalid("any".to_string()))).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body, b"Internal Server Error");
+    }
+
+    #[test]
+    fn the_formatters_shape_the_router_wire() {
+        let quest = json!({
+            "id": 7, "name": "Iron", "category": null, "mobs": ["Atrox"],
+            "planet": "Foma", "waypoint": null, "cooldown_hours": 24.0,
+            "cooldown_expires_at": null, "reward_ped": 2.5, "reward_is_skill": 1,
+            "expected_reward_markup_percent": null, "reward_description": null,
+            "notes": "", "chain_name": null, "chain_position": null,
+            "chain_total": null, "playlist_ids": [3], "started_at": null,
+        });
+        assert_eq!(
+            format_quest(&quest),
+            json!({
+                "id": "7", "name": "Iron", "category": null, "targetMobs": ["Atrox"],
+                "planet": "Foma", "waypoint": null, "cooldownDurationHours": 24.0,
+                "cooldownExpiresAt": null, "reward": 2.5, "rewardIsSkill": true,
+                "expectedRewardMarkupPercent": null, "rewardDescription": "",
+                "notes": "", "chainName": null, "chainPosition": null,
+                "chainTotal": null, "playlistIds": ["3"], "startedAt": null,
+            })
+        );
+
+        let playlist = json!({
+            "id": 3, "name": "Run", "planet": "Calypso", "estimated_minutes": 30,
+            "quest_ids": [7], "immediate_quest_ids": [7], "long_horizon_quest_ids": [],
+            "items": [{"quest_id": 7, "description": null, "group_type": "immediate"}],
+        });
+        assert_eq!(
+            format_playlist(&playlist),
+            json!({
+                "id": "3", "name": "Run", "planet": "Calypso", "estimatedMinutes": 30,
+                "questIds": ["7"], "immediateQuestIds": ["7"], "longHorizonQuestIds": [],
+                "items": [{"questId": "7", "description": null, "groupType": "immediate"}],
+            })
+        );
+
+        let row = json!({
+            "quest_id": 7, "quest_name": "Iron", "planet": "Foma", "category": null,
+            "reward_ped": 2.5, "reward_is_skill": false,
+            "expected_reward_markup_percent": 150.0,
+            "total_expected_reward_ped": 3.75, "linked_sessions": 1,
+            "total_duration": 30.5, "weapon_cost": 0, "heal_cost": 0,
+            "enhancer_cost": 0.1, "armour_cost": 0.0, "loot_tt": 0, "skill_tt": 0.2,
+        });
+        assert_eq!(
+            format_quest_analytics(&row),
+            json!({
+                "questId": "7", "questName": "Iron", "planet": "Foma", "category": null,
+                "rewardPed": 2.5, "rewardIsSkill": false,
+                "expectedRewardMarkupPercent": 150.0, "totalExpectedRewardPed": 3.75,
+                "linkedSessions": 1, "totalDurationSec": 30.5, "totalWeaponCost": 0.0,
+                "totalHealCost": 0.0, "totalEnhancerCost": 0.1, "totalArmourCost": 0.0,
+                "totalLootTt": 0.0, "totalPes": 0.2,
+            })
+        );
+
+        let row = json!({
+            "playlist_id": 3, "playlist_name": "Run", "quest_count": 1,
+            "long_horizon_quest_count": 0, "matched_sessions": 0,
+            "total_reward_ped": 0, "total_immediate_reward_ped": 0,
+            "total_bonus_reward_ped": 0, "total_skill_reward_ped": 0,
+            "total_immediate_skill_reward_ped": 0, "total_bonus_skill_reward_ped": 0,
+            "total_expected_reward_ped": 0, "total_expected_immediate_reward_ped": 0,
+            "total_expected_bonus_reward_ped": 0, "total_duration": 0,
+            "weapon_cost": 0, "heal_cost": 0, "enhancer_cost": 0, "armour_cost": 0,
+            "loot_tt": 0, "skill_tt": 0,
+        });
+        assert_eq!(
+            format_playlist_analytics(&row),
+            json!({
+                "playlistId": "3", "playlistName": "Run", "questCount": 1,
+                "longHorizonQuestCount": 0, "matchedSessions": 0,
+                "totalRewardPed": 0.0, "totalImmediateRewardPed": 0.0,
+                "totalBonusRewardPed": 0.0, "totalPesReward": 0.0,
+                "totalImmediatePesReward": 0.0, "totalBonusPesReward": 0.0,
+                "totalExpectedRewardPed": 0.0, "totalExpectedImmediateRewardPed": 0.0,
+                "totalExpectedBonusRewardPed": 0.0, "totalDurationSec": 0.0,
+                "totalWeaponCost": 0.0, "totalHealCost": 0.0, "totalEnhancerCost": 0.0,
+                "totalArmourCost": 0.0, "totalLootTt": 0.0, "totalPes": 0.0,
+            })
+        );
+    }
+
+    async fn state(dir: &std::path::Path) -> HydrationState {
+        let snapshot = dir.join("snapshot");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(
+            snapshot.join("mobs.json"),
+            serde_json::to_string(&json!([
+                {"name": "M", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(snapshot.join("professions.json"), "[]").unwrap();
+        std::fs::write(snapshot.join("skills.json"), "[]").unwrap();
+        let db = Db::open(&dir.join("entropia_orme.db")).await.unwrap();
+        HydrationState::new(
+            db.pool().clone(),
+            Arc::new(GameDataStore::new(&snapshot).unwrap()),
+            Arc::new(MockClock::new(None, 0.0)),
+        )
+    }
+
+    #[tokio::test]
+    async fn each_handler_answers_its_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path()).await;
+        state
+            .quests
+            .create_quest(&json!({"name": "Iron", "mobs": ["Atrox"]}))
+            .await
+            .unwrap();
+        state
+            .quests
+            .create_playlist(&json!({"name": "Run", "quest_ids": [1]}))
+            .await
+            .unwrap();
+
+        for (label, response, marker) in [
+            ("quests", state.list_quests(None).await, "\"Iron\""),
+            ("mobs", state.list_mob_names(None).await, "\"Atrox\""),
+            ("quest analytics", state.quest_analytics(None).await, "[]"),
+            ("playlists", state.list_playlists(None).await, "\"Run\""),
+            (
+                "playlist analytics",
+                state.playlist_analytics(None).await,
+                "\"Run\"",
+            ),
+            ("species", state.codex_species(None).await, "\"Boar\""),
+            (
+                "ranks",
+                state.codex_species_ranks("Boar", None).await,
+                "\"speciesName\"",
+            ),
+            (
+                "recommend",
+                state
+                    .codex_recommend("Boar", 4, None, "profession", None)
+                    .await,
+                "[",
+            ),
+            (
+                "meta attributes",
+                state.codex_meta_attributes(None).await,
+                "\"Agility\"",
+            ),
+        ] {
+            let (status, headers, body) = parts(response).await;
+            assert_eq!(status, StatusCode::OK, "{label}");
+            assert!(headers.contains_key("etag"), "{label}: etag present");
+            assert!(
+                String::from_utf8_lossy(&body).contains(marker),
+                "{label}: body carries {marker}"
+            );
+        }
+
+        let (status, _, body) = parts(state.codex_species_ranks("Nessie", None).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, b"{\"detail\":\"Species 'Nessie' not found\"}");
+
+        for (rank, fragment) in [(0i64, "greater_than_equal"), (26, "less_than_equal")] {
+            let (status, _, body) = parts(
+                state
+                    .codex_recommend("Boar", rank, None, "profession", None)
+                    .await,
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(String::from_utf8_lossy(&body).contains(fragment));
+        }
+    }
+}

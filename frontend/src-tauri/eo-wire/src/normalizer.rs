@@ -818,4 +818,22 @@ mod tests {
         assert!(!is_uuid("11111111x1111-1111-1111-111111111111")); // wrong sep
         assert!(!is_uuid("g1111111-1111-1111-1111-111111111111")); // non-hex
     }
+
+    #[test]
+    fn the_wire_form_matches_the_http_layer_serialisation() {
+        // json.dumps(..., ensure_ascii=False, separators=(",", ":"))
+        // over insertion order: no spaces, keys unsorted.
+        let value = serde_json::json!({
+            "zeta": [1, 2.5, null],
+            "alpha": {"b": true, "a": ""},
+            "text": "G\u{e9}o \"q\"",
+        });
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"zeta\":[1,2.5,null],\"alpha\":{\"b\":true,\"a\":\"\"},\"text\":\"G\u{e9}o \\\"q\\\"\"}"
+        );
+        assert_eq!(to_wire_json(&serde_json::json!([])), "[]");
+        assert_eq!(to_wire_json(&serde_json::json!({})), "{}");
+        assert_eq!(to_wire_json(&serde_json::json!(false)), "false");
+    }
 }

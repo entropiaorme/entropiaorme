@@ -30,8 +30,9 @@ pub struct TableSpec {
     pub order_by: &'static [&'static str],
 }
 
-/// The six tracking-domain tables the snapshot captures, in the order that
-/// drives shared-symbol assignment (mirrors `db_snapshot.CATALOGUE`).
+/// The tracking-domain and quest/codex tables the snapshot captures,
+/// in the order that drives shared-symbol assignment (mirrors
+/// `db_snapshot.CATALOGUE`).
 pub const CATALOGUE: &[TableSpec] = &[
     TableSpec {
         name: "tracking_sessions",
@@ -77,6 +78,66 @@ pub const CATALOGUE: &[TableSpec] = &[
                 value_ped, timestamp \
                 FROM notable_events",
         order_by: &["timestamp", "rowid"],
+    },
+    TableSpec {
+        name: "quests",
+        query: "SELECT id, name, planet, waypoint, cooldown_hours, reward_ped, \
+                reward_is_skill, expected_reward_markup_percent, notes, \
+                chain_name, chain_position, chain_total, started_at, is_active, \
+                category, reward_description \
+                FROM quests",
+        order_by: &["rowid"],
+    },
+    TableSpec {
+        name: "quest_mobs",
+        query: "SELECT quest_id, mob_name FROM quest_mobs",
+        order_by: &["quest_id", "mob_name"],
+    },
+    TableSpec {
+        name: "quest_playlists",
+        query: "SELECT id, name, planet, estimated_minutes, is_active \
+                FROM quest_playlists",
+        order_by: &["rowid"],
+    },
+    TableSpec {
+        name: "quest_playlist_items",
+        query: "SELECT playlist_id, quest_id, sort_order, description, group_type \
+                FROM quest_playlist_items",
+        order_by: &["playlist_id", "sort_order", "rowid"],
+    },
+    TableSpec {
+        name: "session_quest_completions",
+        query: "SELECT session_id, quest_id, completed_at \
+                FROM session_quest_completions",
+        order_by: &["completed_at", "rowid"],
+    },
+    TableSpec {
+        name: "codex_progress",
+        query: "SELECT species_name, current_rank FROM codex_progress",
+        order_by: &["species_name"],
+    },
+    TableSpec {
+        name: "codex_claims",
+        query: "SELECT species_name, rank, skill_name, ped_value, claimed_at, \
+                kind, attribute_name \
+                FROM codex_claims",
+        order_by: &["claimed_at", "rowid"],
+    },
+    TableSpec {
+        name: "quest_claims",
+        query: "SELECT quest_id, quest_name, ped_value, claimed_at FROM quest_claims",
+        order_by: &["claimed_at", "rowid"],
+    },
+    TableSpec {
+        name: "session_quest_analytics_links",
+        query: "SELECT session_id, link_type, quest_id, playlist_id, linked_at \
+                FROM session_quest_analytics_links",
+        order_by: &["linked_at", "rowid"],
+    },
+    TableSpec {
+        name: "skill_calibrations",
+        query: "SELECT skill_name, level, source, scanned_at FROM skill_calibrations",
+        order_by: &["scanned_at", "rowid"],
     },
 ];
 

@@ -381,11 +381,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_database_snapshot_yields_the_six_empty_tables() {
+    async fn empty_database_snapshot_yields_every_catalogue_table_empty() {
         let dir = tempfile::tempdir().unwrap();
         let db = fresh_db(dir.path()).await;
         let rows = db.snapshot_rows().await.unwrap();
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), eo_wire::db_snapshot::CATALOGUE.len());
         for (table, value) in &rows {
             assert_eq!(
                 value.as_array().map(Vec::len),

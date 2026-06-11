@@ -433,6 +433,134 @@ impl HydrationState {
     }
 }
 
+/// The write surface: each method mirrors its router handler (the
+/// service call, the 404 mapping, the formatter), replying without
+/// conditional-GET headers (the backend's middleware covers 2xx GETs
+/// only).
+impl HydrationState {
+    /// GET /api/quests/{quest_id} (a read: the conditional-GET
+    /// contract applies).
+    pub async fn get_quest_route(
+        &self,
+        quest_id: i64,
+        if_none_match: Option<&str>,
+    ) -> Response<Body> {
+        match self.quests.get_quest(quest_id).await {
+            Ok(Some(quest)) => json_response(&format_quest(&quest), if_none_match),
+            Ok(None) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/quests
+    pub async fn create_quest(&self, data: &Value) -> Response<Body> {
+        match self.quests.create_quest(data).await {
+            Ok(created) => plain_json_response(&format_quest(&created)),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// PUT /api/quests/{quest_id}
+    pub async fn update_quest(&self, quest_id: i64, data: &Value) -> Response<Body> {
+        match self.quests.update_quest(quest_id, data).await {
+            Ok(Some(updated)) => plain_json_response(&format_quest(&updated)),
+            Ok(None) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// DELETE /api/quests/{quest_id}
+    pub async fn delete_quest(&self, quest_id: i64) -> Response<Body> {
+        match self.quests.delete_quest(quest_id).await {
+            Ok(true) => plain_json_response(&json!({"ok": true})),
+            Ok(false) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/quests/{quest_id}/start
+    pub async fn start_quest(&self, quest_id: i64) -> Response<Body> {
+        match self.quests.start_quest(quest_id).await {
+            Ok(Some(quest)) => plain_json_response(&format_quest(&quest)),
+            Ok(None) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/quests/{quest_id}/complete
+    pub async fn complete_quest(&self, quest_id: i64) -> Response<Body> {
+        match self.quests.complete_quest(quest_id).await {
+            Ok(Some(quest)) => plain_json_response(&format_quest(&quest)),
+            Ok(None) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/quests/{quest_id}/cancel
+    pub async fn cancel_quest(&self, quest_id: i64, undo_reward: bool) -> Response<Body> {
+        match self.quests.cancel_quest(quest_id, undo_reward).await {
+            Ok(Some(quest)) => plain_json_response(&format_quest(&quest)),
+            Ok(None) => quest_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/quests/playlists
+    pub async fn create_playlist(&self, data: &Value) -> Response<Body> {
+        match self.quests.create_playlist(data).await {
+            Ok(created) => plain_json_response(&format_playlist(&created)),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// PUT /api/quests/playlists/{playlist_id}
+    pub async fn update_playlist(&self, playlist_id: i64, data: &Value) -> Response<Body> {
+        match self.quests.update_playlist(playlist_id, data).await {
+            Ok(Some(updated)) => plain_json_response(&format_playlist(&updated)),
+            Ok(None) => playlist_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// DELETE /api/quests/playlists/{playlist_id}
+    pub async fn delete_playlist(&self, playlist_id: i64) -> Response<Body> {
+        match self.quests.delete_playlist(playlist_id).await {
+            Ok(true) => plain_json_response(&json!({"ok": true})),
+            Ok(false) => playlist_not_found(),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/codex/calibrate (the codex router maps its service's
+    /// invalid-input errors to a 400 with the message as the detail).
+    pub async fn codex_calibrate(&self, species_name: &str, rank: i64) -> Response<Body> {
+        match self.codex.calibrate(species_name, rank).await {
+            Ok(result) => plain_json_response(&result),
+            Err(CodexError::Invalid(message)) => {
+                error_response(StatusCode::BAD_REQUEST, &detail(&message))
+            }
+            Err(CodexError::Db(_)) => internal_error(),
+        }
+    }
+}
+
+/// A write-route JSON reply: status 200, no conditional-GET headers.
+fn plain_json_response(payload: &Value) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(to_wire_json(payload)))
+        .expect("write response builds")
+}
+
+fn quest_not_found() -> Response<Body> {
+    error_response(StatusCode::NOT_FOUND, &detail("Quest not found"))
+}
+
+fn playlist_not_found() -> Response<Body> {
+    error_response(StatusCode::NOT_FOUND, &detail("Playlist not found"))
+}
+
 /// The quest router's error mapping: the quests router catches no
 /// service error, so every failure surfaces as the backend's
 /// unhandled-exception envelope.

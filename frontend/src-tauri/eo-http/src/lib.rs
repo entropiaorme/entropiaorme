@@ -206,10 +206,63 @@ async fn cors_layer(
     response
 }
 
-/// A method router that consults the arm override for `route` on every
-/// request: `Native` runs the given handler, `Proxy` forwards to the
-/// sidecar. Native route registrations go through this so the runtime
-/// kill-switch covers them by construction.
+/// A per-path registration whose every native method consults the arm
+/// override for `route` at request time (`Native` runs the handler,
+/// `Proxy` forwards to the sidecar), so the runtime kill-switch covers
+/// each registration by construction. Methods the registration does
+/// not carry still belong to the sidecar (an unported method on a
+/// natively-served path, the bare OPTIONS the backend answers itself):
+/// they fall back to the proxy rather than axum's empty 405. HEAD has
+/// its own explicit proxy leg because axum otherwise dispatches it
+/// into a GET handler with the body stripped, while the backend
+/// hard-405s HEAD on its GET routes.
+pub struct ArmRoutes {
+    route: &'static str,
+    method_router: MethodRouter<Arc<AppState>>,
+}
+
+impl ArmRoutes {
+    pub fn at(route: &'static str) -> Self {
+        Self {
+            route,
+            method_router: MethodRouter::new()
+                .on(
+                    MethodFilter::HEAD,
+                    |State(state): State<Arc<AppState>>, req: Request| async move {
+                        state.proxy(req).await
+                    },
+                )
+                .fallback(proxy_fallback),
+        }
+    }
+
+    pub fn on<F, Fut>(mut self, filter: MethodFilter, native: F) -> Self
+    where
+        F: Fn(Arc<AppState>, Request) -> Fut + Clone + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        let route = self.route;
+        self.method_router = self.method_router.on(
+            filter,
+            move |State(state): State<Arc<AppState>>, req: Request| {
+                let native = native.clone();
+                async move {
+                    match state.arm_for(route) {
+                        Arm::Native => native(state, req).await,
+                        Arm::Proxy => state.proxy(req).await,
+                    }
+                }
+            },
+        );
+        self
+    }
+
+    pub fn into_method_router(self) -> MethodRouter<Arc<AppState>> {
+        self.method_router
+    }
+}
+
+/// The single-method convenience over [`ArmRoutes`].
 pub fn arm_routed<F, Fut>(
     filter: MethodFilter,
     route: &'static str,
@@ -219,30 +272,7 @@ where
     F: Fn(Arc<AppState>, Request) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Response> + Send + 'static,
 {
-    on(
-        filter,
-        move |State(state): State<Arc<AppState>>, req: Request| {
-            let native = native.clone();
-            async move {
-                match state.arm_for(route) {
-                    Arm::Native => native(state, req).await,
-                    Arm::Proxy => state.proxy(req).await,
-                }
-            }
-        },
-    )
-    // Methods this registration does not carry still belong to the
-    // sidecar (an unported POST on a natively-read path, the bare
-    // OPTIONS the backend answers itself): fall back to the proxy
-    // rather than axum's empty 405. HEAD needs its own explicit leg
-    // because axum otherwise dispatches it into the GET handler with
-    // the body stripped, while the backend hard-405s HEAD on its GET
-    // routes; pinning HEAD to the proxy keeps that 405 the sidecar's.
-    .on(
-        MethodFilter::HEAD,
-        |State(state): State<Arc<AppState>>, req: Request| async move { state.proxy(req).await },
-    )
-    .fallback(proxy_fallback)
+    ArmRoutes::at(route).on(filter, native).into_method_router()
 }
 
 /// The substrate router: natively-registered routes take precedence, the

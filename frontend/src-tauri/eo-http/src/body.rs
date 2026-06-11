@@ -87,6 +87,10 @@ impl BodyObject {
             .map(|(_, value)| value)
     }
 
+    pub fn pairs(&self) -> &[(String, PyValue)] {
+        &self.pairs
+    }
+
     pub fn echo(&self) -> &str {
         &self.echo
     }

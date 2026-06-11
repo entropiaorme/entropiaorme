@@ -928,9 +928,21 @@ mod tests {
 
     #[test]
     fn validate_chatlog_is_false_until_the_file_exists() {
+        // Point the config at a path under the temp dir rather than relying
+        // on the default chatlog path: on a machine with the game installed
+        // the default path genuinely exists.
         let dir = tempfile::tempdir().unwrap();
-        let svc = service(dir.path());
+        let mut svc = service(dir.path());
+        let log_path = dir.path().join("chat.log");
+        let mut updates = Map::new();
+        updates.insert(
+            "chatlog_path".into(),
+            Value::from(log_path.to_string_lossy().as_ref()),
+        );
+        svc.update(&updates).unwrap();
         assert!(!svc.validate_chatlog());
+        std::fs::write(&log_path, "").unwrap();
+        assert!(svc.validate_chatlog());
     }
 
     #[test]

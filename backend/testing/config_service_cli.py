@@ -18,6 +18,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from backend.services.config_service import AppConfig, ConfigService
+from backend.testing.stdio import pin_utf8_line_protocol
 
 CHATLOG_SENTINEL = "<DEFAULT_CHATLOG>"
 
@@ -44,6 +45,7 @@ def _round_trip(request: dict) -> dict:
 
 
 def main() -> None:
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         line = line.strip()
         if not line:

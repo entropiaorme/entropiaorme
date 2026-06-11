@@ -20,6 +20,7 @@ from pathlib import Path
 from backend.core.event_bus import EventBus
 from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.testing.fingerprint import FingerprintRecorder, Normalizer
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 def _run(request: dict) -> dict:
@@ -58,6 +59,7 @@ def _run(request: dict) -> dict:
 
 
 def main() -> None:
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         line = line.strip()
         if not line:

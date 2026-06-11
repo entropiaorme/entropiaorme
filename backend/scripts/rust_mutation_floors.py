@@ -132,10 +132,21 @@ FLOORS: dict[str, float] = {
     # negative weight takes the same else path under both comparisons,
     # so the variants coincide over the whole weight domain.
     "eo-services/src/codex.rs": 92.0,
-    # Measured 100.0 after the hardening pass (the autocomplete
-    # reader, the strict positive-cooldown gate, and the truthiness
-    # table all pinned).
+    # The CRUD surface measured 100.0 after its hardening pass; the
+    # lifecycle surface's residual survivor is the cancel-undo
+    # strictness flip (`> 0` to `>= 0`), which attempts a reward undo
+    # for a zero-value reward, and no zero-amount quest-reward row can
+    # exist for it to delete (completion writes only positive
+    # rewards), so the delete is a no-op either way.
     "eo-services/src/quests.rs": 92.0,
+    # Measured 93.5. The residual survivors are equivalent: the
+    # recursion queue's window guards (flipping them admits degenerate
+    # windows whose longest match is empty, contributing nothing to
+    # the match total), and the backward walk's size accumulation
+    # (with no junk predicate the walk covers only contiguously
+    # matching elements, so the forward pass closes the same run to
+    # the same right edge wherever the size accrues).
+    "eo-services/src/difflib.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

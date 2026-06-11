@@ -1,9 +1,11 @@
-//! Quest service, ported from `backend/services/quest_service.py`: this
-//! first slice carries the quest and playlist CRUD surface and the
-//! shared helper layer (row shaping, cooldown derivation, reward-markup
-//! normalisation, mob and playlist-item management). The lifecycle
-//! actions (start/complete/cancel, session links, mission detection)
-//! and the analytics readers follow in their own slices.
+//! Quest service, ported from `backend/services/quest_service.py`:
+//! the quest and playlist CRUD surface with its shared helper layer
+//! (row shaping, cooldown derivation, reward-markup normalisation,
+//! mob and playlist-item management), plus the lifecycle actions
+//! (start/complete/cancel with ledger and claim integration), the
+//! curated session-link suggestions, and the chat-log mission
+//! detection (auto-start, auto-complete, and reward suppression).
+//! The analytics readers follow as the final slice.
 //!
 //! Payload semantics mirror the original's `dict.get` rules exactly: a
 //! key that is ABSENT takes the documented default, while a key that is
@@ -17,13 +19,39 @@
 //! original's `dict(row)` does; the camelCase wire shaping lives in the
 //! router layer, not here.
 
+use std::collections::HashSet;
 use std::fmt;
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
+use regex::Regex;
 use serde_json::{json, Map, Value};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::{Row, SqlitePool};
+use tokio::runtime::Handle;
+use unicode_normalization::UnicodeNormalization;
 
-use crate::tracker::to_iso_utc;
+use crate::clock::Clock;
+use crate::difflib::sequence_ratio;
+use crate::event_bus::{EventBus, Registration, Topic};
+use crate::tracker::{naive_to_epoch, to_iso_utc};
+
+/// Stripped from chat.log mission names before matching.
+static REPEATABLE_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s*\(repeatable\)\s*$").expect("the suffix pattern compiles")
+});
+
+/// The fuzzy-match floor for mission-name matching.
+pub const FUZZY_THRESHOLD: f64 = 0.8;
+
+/// Normalise a quest name for comparison: NFKD decomposition, ASCII
+/// only, trimmed, lowercased.
+pub fn normalize_quest_name(name: &str) -> String {
+    name.nfkd()
+        .filter(char::is_ascii)
+        .collect::<String>()
+        .trim()
+        .to_lowercase()
+}
 
 pub const PLAYLIST_GROUP_IMMEDIATE: &str = "immediate";
 pub const PLAYLIST_GROUP_LONG_HORIZON: &str = "long_horizon";
@@ -71,15 +99,127 @@ const QUEST_SELECT: &str = "\
             WHERE quest_id = q.id) AS last_completed_at \
     FROM quests q";
 
-/// Quest operations: CRUD and playlists (the lifecycle actions and
-/// analytics readers arrive with their own slices).
+/// Quest operations: CRUD, playlists, the completion lifecycle, and
+/// chat-log mission detection (the analytics readers arrive with the
+/// final slice).
 pub struct QuestService {
     pool: SqlitePool,
+    clock: Arc<dyn Clock>,
+    /// The active tracking session, fed by the bus handlers.
+    current_session_id: Mutex<Option<String>>,
+    /// The identifier source for ledger rows and session-less
+    /// completion keys (random by default; injected by the tests and
+    /// the cross-language differential so both sides stamp the same
+    /// identifiers).
+    id_source: Mutex<Arc<dyn Fn() -> String + Send + Sync>>,
+    /// The runtime the bus handlers bridge their database work onto,
+    /// set when the service subscribes.
+    runtime: Mutex<Option<Handle>>,
+    /// Held for the service's lifetime: the original subscribes once
+    /// in its constructor and never unsubscribes.
+    _subscriptions: Mutex<Vec<(Topic, Registration)>>,
 }
 
 impl QuestService {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            pool,
+            clock,
+            current_session_id: Mutex::new(None),
+            id_source: Mutex::new(Arc::new(|| uuid::Uuid::new_v4().to_string())),
+            runtime: Mutex::new(None),
+            _subscriptions: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Replace the identifier source (tests and the differential).
+    pub fn set_id_source(&self, source: Arc<dyn Fn() -> String + Send + Sync>) {
+        *self
+            .id_source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = source;
+    }
+
+    fn next_id(&self) -> String {
+        let source = self
+            .id_source
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        source()
+    }
+
+    /// The session guard, tolerating poison: a contained panic must
+    /// not brick the service.
+    fn lock_session(&self) -> MutexGuard<'_, Option<String>> {
+        self.current_session_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Subscribe to the bus (the original's constructor-time
+    /// subscriptions): session start/stop track the active session,
+    /// and a received mission auto-starts its matching quest.
+    pub fn subscribe(self: &Arc<Self>, bus: &Arc<EventBus>, runtime: Handle) {
+        *self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
+        type Handler = fn(&QuestService, &Value);
+        let pairs: [(Topic, Handler); 3] = [
+            (Topic::SessionStarted, Self::on_session_start),
+            (Topic::SessionStopped, Self::on_session_stop),
+            (Topic::MissionReceived, Self::on_mission_received),
+        ];
+        let mut subscriptions = Vec::new();
+        for (topic, handler) in pairs {
+            let subscriber = self.clone();
+            let registration = bus.subscribe(topic, move |data| handler(&subscriber, data));
+            subscriptions.push((topic, registration));
+        }
+        *self
+            ._subscriptions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = subscriptions;
+    }
+
+    /// Bridge a database future from either calling context (the
+    /// tracker's dual shape).
+    fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        let handle = self
+            .runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("a subscribed service carries its runtime");
+        if Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        } else {
+            handle.block_on(future)
+        }
+    }
+
+    fn on_session_start(&self, data: &Value) {
+        *self.lock_session() = data
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(String::from);
+    }
+
+    fn on_session_stop(&self, _data: &Value) {
+        *self.lock_session() = None;
+    }
+
+    fn on_mission_received(&self, data: &Value) {
+        let mission_name = data
+            .get("mission_name")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !mission_name.is_empty() {
+            // A failure surfaces nowhere, exactly as the original's
+            // bus contains a handler exception.
+            let _ = self.block_on(self.start_quest_from_mission(mission_name));
+        }
     }
 
     // ── Quest CRUD ──────────────────────────────────────────────────
@@ -293,6 +433,593 @@ impl QuestService {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    // ── Quest actions ───────────────────────────────────────────────
+
+    /// Mark a quest as in-progress; `None` when absent or inactive.
+    pub async fn start_quest(&self, quest_id: i64) -> Result<Option<Value>, QuestError> {
+        let now = naive_to_epoch(self.clock.now());
+        let affected =
+            sqlx::query("UPDATE quests SET started_at = ? WHERE id = ? AND is_active = 1")
+                .bind(now)
+                .bind(quest_id)
+                .execute(&self.pool)
+                .await?
+                .rows_affected();
+        if affected > 0 {
+            self.get_quest(quest_id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Complete a quest: clear the in-progress state, record the
+    /// reward (liquid rewards into the ledger, skill rewards into
+    /// quest claims), and link the completion to the active session
+    /// (or a synthetic key when none is active). Each step commits
+    /// separately, exactly as the original's commit points fall.
+    pub async fn complete_quest(&self, quest_id: i64) -> Result<Option<Value>, QuestError> {
+        let Some(quest) = self.get_quest(quest_id).await? else {
+            return Ok(None);
+        };
+        let now = naive_to_epoch(self.clock.now());
+        sqlx::query("UPDATE quests SET started_at = NULL WHERE id = ?")
+            .bind(quest_id)
+            .execute(&self.pool)
+            .await?;
+
+        let reward_ped = quest.get("reward_ped").and_then(Value::as_f64);
+        if let Some(reward) = reward_ped.filter(|&reward| reward > 0.0) {
+            let name = quest["name"].as_str().expect("quest name");
+            if json_truthy(quest.get("reward_is_skill")) {
+                // Skill rewards are PES, not PED: a claim row, not a
+                // ledger entry.
+                sqlx::query(
+                    "INSERT INTO quest_claims (quest_id, quest_name, ped_value, claimed_at) \
+                     VALUES (?, ?, ?, ?)",
+                )
+                .bind(quest_id)
+                .bind(name)
+                .bind(reward)
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
+            } else {
+                let ledger_id = self.next_id();
+                let date = to_iso_utc(now);
+                sqlx::query(
+                    "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&ledger_id)
+                .bind(&date)
+                .bind("markup")
+                .bind(format!("Quest: {name}"))
+                .bind(reward)
+                .bind("quest_reward")
+                .execute(&self.pool)
+                .await?;
+            }
+        }
+
+        let session_id = self.lock_session().clone();
+        self.record_session_completion(session_id.as_deref(), quest_id, Some(now))
+            .await?;
+        self.get_quest(quest_id).await
+    }
+
+    /// Undo an in-progress quest, or reset an active cooldown back to
+    /// ready by deleting the most recent completion (optionally
+    /// undoing the recorded reward). A quest that is neither started
+    /// nor cooling returns as-is.
+    pub async fn cancel_quest(
+        &self,
+        quest_id: i64,
+        undo_reward: bool,
+    ) -> Result<Option<Value>, QuestError> {
+        let Some(quest) = self.get_quest(quest_id).await? else {
+            return Ok(None);
+        };
+
+        if !quest["started_at"].is_null() {
+            sqlx::query("UPDATE quests SET started_at = NULL WHERE id = ? AND is_active = 1")
+                .bind(quest_id)
+                .execute(&self.pool)
+                .await?;
+            return self.get_quest(quest_id).await;
+        }
+
+        if !self.is_quest_cooling(&quest) {
+            return Ok(Some(quest));
+        }
+
+        // The original groups the completion delete and the optional
+        // reward undo under one commit.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "DELETE FROM session_quest_completions \
+             WHERE id = ( \
+                 SELECT id FROM session_quest_completions \
+                 WHERE quest_id = ? \
+                 ORDER BY completed_at DESC, id DESC \
+                 LIMIT 1 \
+             )",
+        )
+        .bind(quest_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if undo_reward {
+            let reward_ped = quest.get("reward_ped").and_then(Value::as_f64);
+            if let Some(reward) = reward_ped.filter(|&reward| reward > 0.0) {
+                if json_truthy(quest.get("reward_is_skill")) {
+                    delete_latest_quest_claim(&mut tx, quest_id).await?;
+                } else {
+                    delete_latest_quest_reward_entry(
+                        &mut tx,
+                        quest["name"].as_str().expect("quest name"),
+                        reward,
+                    )
+                    .await?;
+                }
+            }
+        }
+        tx.commit().await?;
+        self.get_quest(quest_id).await
+    }
+
+    // ── Session link suggestions ────────────────────────────────────
+
+    /// Suggest a curated analytics link for a completed session.
+    pub async fn get_session_link_suggestion(&self, session_id: &str) -> Result<Value, QuestError> {
+        if let Some((link_type, quest_id, playlist_id)) =
+            self.session_analytics_link(session_id).await?
+        {
+            let reason = if link_type == "declined" {
+                "declined"
+            } else {
+                "already_linked"
+            };
+            return Ok(json!({
+                "suggestion_type": "none",
+                "reason": reason,
+                "quest_id": quest_id,
+                "quest_name": self.quest_name(quest_id).await?,
+                "playlist_id": playlist_id,
+                "playlist_name": self.playlist_name(playlist_id).await?,
+            }));
+        }
+
+        let quest_ids = self.session_completed_quest_ids(session_id).await?;
+        if quest_ids.is_empty() {
+            return Ok(json!({
+                "suggestion_type": "none",
+                "reason": "no_completions",
+                "quest_id": null,
+                "quest_name": null,
+                "playlist_id": null,
+                "playlist_name": null,
+            }));
+        }
+
+        if quest_ids.len() == 1 {
+            let quest_id = quest_ids[0];
+            return Ok(json!({
+                "suggestion_type": "quest",
+                "reason": "single_quest",
+                "quest_id": quest_id,
+                "quest_name": self.quest_name(Some(quest_id)).await?,
+                "playlist_id": null,
+                "playlist_name": null,
+            }));
+        }
+
+        let playlist_ids = self.find_matching_playlists(&quest_ids).await?;
+        if playlist_ids.len() == 1 {
+            let playlist_id = playlist_ids[0];
+            return Ok(json!({
+                "suggestion_type": "playlist",
+                "reason": "exact_playlist",
+                "quest_id": null,
+                "quest_name": null,
+                "playlist_id": playlist_id,
+                "playlist_name": self.playlist_name(Some(playlist_id)).await?,
+            }));
+        }
+
+        let reason = if playlist_ids.is_empty() {
+            "unclean"
+        } else {
+            "ambiguous_playlist"
+        };
+        Ok(json!({
+            "suggestion_type": "none",
+            "reason": reason,
+            "quest_id": null,
+            "quest_name": null,
+            "playlist_id": null,
+            "playlist_name": null,
+        }))
+    }
+
+    /// Persist the current curated analytics suggestion for a session.
+    pub async fn accept_session_link_suggestion(
+        &self,
+        session_id: &str,
+    ) -> Result<Value, QuestError> {
+        let suggestion = self.get_session_link_suggestion(session_id).await?;
+        match suggestion["suggestion_type"].as_str() {
+            Some("quest") => {
+                self.set_session_analytics_link(
+                    session_id,
+                    "quest",
+                    suggestion["quest_id"].as_i64(),
+                    None,
+                )
+                .await?;
+            }
+            Some("playlist") => {
+                self.set_session_analytics_link(
+                    session_id,
+                    "playlist",
+                    None,
+                    suggestion["playlist_id"].as_i64(),
+                )
+                .await?;
+            }
+            _ => {
+                return Err(QuestError::Invalid(format!(
+                    "No linkable suggestion for session {session_id}: {}",
+                    suggestion["reason"].as_str().unwrap_or("")
+                )));
+            }
+        }
+        Ok(suggestion)
+    }
+
+    /// Persist that the user declined curated analytics linkage.
+    pub async fn decline_session_link(&self, session_id: &str) -> Result<(), QuestError> {
+        self.set_session_analytics_link(session_id, "declined", None, None)
+            .await
+    }
+
+    // ── Chat.log mission detection ──────────────────────────────────
+
+    /// Find a quest whose name matches a chat.log mission name: the
+    /// "(repeatable)" suffix strips, then a normalised exact match, a
+    /// normalised containment (five characters minimum), and finally
+    /// the highest fuzzy score at or above the threshold.
+    pub async fn match_quest_by_mission_name(
+        &self,
+        mission_name: &str,
+    ) -> Result<Option<Value>, QuestError> {
+        let stripped = REPEATABLE_SUFFIX.replace(mission_name, "");
+        let mission_norm = normalize_quest_name(stripped.trim());
+        let quests = self.get_quests(true).await?;
+
+        for quest in &quests {
+            if normalize_quest_name(quest["name"].as_str().expect("quest name")) == mission_norm {
+                return Ok(Some(quest.clone()));
+            }
+        }
+
+        for quest in &quests {
+            let quest_norm = normalize_quest_name(quest["name"].as_str().expect("quest name"));
+            if quest_norm.len() >= 5 && mission_norm.contains(&quest_norm) {
+                return Ok(Some(quest.clone()));
+            }
+        }
+
+        let mission_chars: Vec<char> = mission_norm.chars().collect();
+        let mut best_score = 0.0f64;
+        let mut best_quest: Option<&Value> = None;
+        for quest in &quests {
+            let quest_norm = normalize_quest_name(quest["name"].as_str().expect("quest name"));
+            let quest_chars: Vec<char> = quest_norm.chars().collect();
+            let score = sequence_ratio(&quest_chars, &mission_chars);
+            if score > best_score {
+                best_score = score;
+                best_quest = Some(quest);
+            }
+        }
+        Ok(if best_score >= FUZZY_THRESHOLD {
+            best_quest.cloned()
+        } else {
+            None
+        })
+    }
+
+    /// A "New Mission received" chat.log event: match the mission to a
+    /// known quest and start tracking it as if the user clicked Start.
+    pub async fn start_quest_from_mission(&self, mission_name: &str) -> Result<(), QuestError> {
+        let Some(quest) = self.match_quest_by_mission_name(mission_name).await? else {
+            return Ok(());
+        };
+        if json_truthy(quest.get("started_at")) {
+            return Ok(());
+        }
+        self.start_quest(quest["id"].as_i64().expect("quest id"))
+            .await?;
+        self.record_notable_event(
+            "quest_started",
+            quest["name"].as_str().expect("quest name"),
+            0.0,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// A MISSION_COMPLETE tick: match the mission, auto-complete the
+    /// quest, and name which loot item or skill gain to suppress so
+    /// the reward is not double-counted by tracking.
+    pub async fn quest_reward_filter(
+        &self,
+        mission_name: &str,
+        loot_items: &[Value],
+        skill_gains: &[Value],
+    ) -> Result<Option<Value>, QuestError> {
+        let Some(quest) = self.match_quest_by_mission_name(mission_name).await? else {
+            return Ok(None);
+        };
+
+        self.complete_quest(quest["id"].as_i64().expect("quest id"))
+            .await?;
+
+        let reward_ped = quest.get("reward_ped").and_then(Value::as_f64);
+        let is_skill = json_truthy(quest.get("reward_is_skill"));
+        let mut result = None;
+        let mut suppressed_desc: Option<String> = None;
+
+        if is_skill {
+            // The in-game skill pop-up is the same PES reward just
+            // recorded as a claim; suppress it from tracking.
+            if !skill_gains.is_empty() {
+                result = Some(json!({
+                    "suppress_loot_index": null,
+                    "suppress_skill_index": 0,
+                }));
+                suppressed_desc = Some("skill reward suppressed".to_string());
+            }
+        } else if let Some(reward) = reward_ped {
+            if !loot_items.is_empty() {
+                if reward > 0.0 {
+                    let mut best_idx: Option<usize> = None;
+                    let mut best_diff = f64::INFINITY;
+                    for (index, item) in loot_items.iter().enumerate() {
+                        let value = item.get("value").and_then(Value::as_f64).unwrap_or(0.0);
+                        let diff = (value - reward).abs();
+                        if diff < best_diff && diff <= 0.02 {
+                            best_diff = diff;
+                            best_idx = Some(index);
+                        }
+                    }
+                    if let Some(best_idx) = best_idx {
+                        result = Some(json!({
+                            "suppress_loot_index": best_idx,
+                            "suppress_skill_index": null,
+                        }));
+                        let item_name = loot_items[best_idx]
+                            .get("item_name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?");
+                        suppressed_desc = Some(format!("{item_name} ({reward:.2} PED) suppressed"));
+                    }
+                } else {
+                    // A non-positive reward still suppresses the
+                    // cheapest item of the tick.
+                    let mut min_idx = 0usize;
+                    let mut min_value = f64::INFINITY;
+                    for (index, item) in loot_items.iter().enumerate() {
+                        let value = item.get("value").and_then(Value::as_f64).unwrap_or(0.0);
+                        if value < min_value {
+                            min_value = value;
+                            min_idx = index;
+                        }
+                    }
+                    result = Some(json!({
+                        "suppress_loot_index": min_idx,
+                        "suppress_skill_index": null,
+                    }));
+                    let item_name = loot_items[min_idx]
+                        .get("item_name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?");
+                    suppressed_desc = Some(format!("{item_name} suppressed"));
+                }
+            }
+        }
+
+        let mut description = quest["name"].as_str().expect("quest name").to_string();
+        if let Some(suppressed) = suppressed_desc {
+            description.push_str(": ");
+            description.push_str(&suppressed);
+        }
+        let event_type = if is_skill {
+            "quest_completed_pes"
+        } else {
+            "quest_completed"
+        };
+        self.record_notable_event(event_type, &description, reward_ped.unwrap_or(0.0))
+            .await;
+
+        Ok(result)
+    }
+
+    // ── Completion and link records ─────────────────────────────────
+
+    /// Insert an overlay event when a tracking session is active; any
+    /// failure is swallowed, exactly as the original's bare except.
+    async fn record_notable_event(&self, event_type: &str, description: &str, value_ped: f64) {
+        // The original gates on truthiness, so an empty session id
+        // skips the write exactly like an absent one.
+        let Some(session_id) = self.lock_session().clone().filter(|id| !id.is_empty()) else {
+            return;
+        };
+        let now = naive_to_epoch(self.clock.now());
+        let _ = sqlx::query(
+            "INSERT INTO notable_events \
+             (session_id, kill_id, event_type, mob_or_item, value_ped, timestamp) \
+             VALUES (?, NULL, ?, ?, ?, ?)",
+        )
+        .bind(&session_id)
+        .bind(event_type)
+        .bind(description)
+        .bind(value_ped)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+    }
+
+    /// Record a completion for cooldown and analytics: keyed by the
+    /// active session, or a synthetic `manual-` key so a session-less
+    /// completion still feeds the derived cooldown.
+    async fn record_session_completion(
+        &self,
+        session_id: Option<&str>,
+        quest_id: i64,
+        completed_at: Option<f64>,
+    ) -> Result<(), QuestError> {
+        let key = match session_id {
+            Some(session_id) => session_id.to_string(),
+            None => format!("manual-{}", self.next_id()),
+        };
+        let ts = match completed_at {
+            Some(ts) => ts,
+            None => naive_to_epoch(self.clock.now()),
+        };
+        sqlx::query(
+            "INSERT OR IGNORE INTO session_quest_completions \
+             (session_id, quest_id, completed_at) VALUES (?, ?, ?)",
+        )
+        .bind(&key)
+        .bind(quest_id)
+        .bind(ts)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn session_completed_quest_ids(&self, session_id: &str) -> Result<Vec<i64>, QuestError> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT quest_id \
+             FROM session_quest_completions \
+             WHERE session_id = ? \
+             ORDER BY quest_id",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
+
+    async fn session_analytics_link(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, Option<i64>, Option<i64>)>, QuestError> {
+        Ok(sqlx::query(
+            "SELECT session_id, link_type, quest_id, playlist_id \
+             FROM session_quest_analytics_links \
+             WHERE session_id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(|row| (row.get(1), row.get(2), row.get(3))))
+    }
+
+    async fn set_session_analytics_link(
+        &self,
+        session_id: &str,
+        link_type: &str,
+        quest_id: Option<i64>,
+        playlist_id: Option<i64>,
+    ) -> Result<(), QuestError> {
+        sqlx::query(
+            "INSERT INTO session_quest_analytics_links \
+             (session_id, link_type, quest_id, playlist_id, linked_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(session_id) DO UPDATE SET \
+                 link_type = excluded.link_type, \
+                 quest_id = excluded.quest_id, \
+                 playlist_id = excluded.playlist_id, \
+                 linked_at = excluded.linked_at",
+        )
+        .bind(session_id)
+        .bind(link_type)
+        .bind(quest_id)
+        .bind(playlist_id)
+        .bind(naive_to_epoch(self.clock.now()))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Playlists whose immediate set is fully completed while every
+    /// completion stays within the playlist's scope.
+    async fn find_matching_playlists(
+        &self,
+        completed_quest_ids: &[i64],
+    ) -> Result<Vec<i64>, QuestError> {
+        let completed: HashSet<i64> = completed_quest_ids.iter().copied().collect();
+        let mut matches = Vec::new();
+        for playlist in self.get_playlists(true).await? {
+            let ids = |key: &str| -> HashSet<i64> {
+                playlist[key]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter_map(Value::as_i64)
+                    .collect()
+            };
+            let immediate = ids("immediate_quest_ids");
+            if immediate.is_empty() {
+                continue;
+            }
+            let mut scope = immediate.clone();
+            scope.extend(ids("long_horizon_quest_ids"));
+            if immediate.is_subset(&completed) && completed.is_subset(&scope) {
+                matches.push(playlist["id"].as_i64().expect("playlist id"));
+            }
+        }
+        Ok(matches)
+    }
+
+    async fn quest_name(&self, quest_id: Option<i64>) -> Result<Option<String>, QuestError> {
+        let Some(quest_id) = quest_id else {
+            return Ok(None);
+        };
+        Ok(sqlx::query("SELECT name FROM quests WHERE id = ?")
+            .bind(quest_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| row.get(0)))
+    }
+
+    async fn playlist_name(&self, playlist_id: Option<i64>) -> Result<Option<String>, QuestError> {
+        let Some(playlist_id) = playlist_id else {
+            return Ok(None);
+        };
+        Ok(sqlx::query("SELECT name FROM quest_playlists WHERE id = ?")
+            .bind(playlist_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| row.get(0)))
+    }
+
+    /// Whether the quest's cooldown window is still open against the
+    /// injected clock.
+    fn is_quest_cooling(&self, quest: &Value) -> bool {
+        let last = quest.get("last_completed_at").and_then(Value::as_f64);
+        let cooldown_hours = quest.get("cooldown_hours").and_then(Value::as_f64);
+        let (Some(last), Some(cooldown_hours)) = (last, cooldown_hours) else {
+            return false;
+        };
+        if cooldown_hours <= 0.0 {
+            return false;
+        }
+        (last + cooldown_hours * 3600.0) > naive_to_epoch(self.clock.now())
     }
 
     // ── Playlist CRUD ───────────────────────────────────────────────
@@ -624,6 +1351,60 @@ fn normalize_expected_reward_markup(
     Some(expected_markup.as_f64().expect("numeric expected markup"))
 }
 
+/// Delete the newest claim for a quest (the cancel flow's undo).
+async fn delete_latest_quest_claim(
+    conn: &mut SqliteConnection,
+    quest_id: i64,
+) -> Result<bool, QuestError> {
+    let Some(row) = sqlx::query(
+        "SELECT id FROM quest_claims \
+         WHERE quest_id = ? \
+         ORDER BY claimed_at DESC, id DESC \
+         LIMIT 1",
+    )
+    .bind(quest_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM quest_claims WHERE id = ?")
+        .bind(row.get::<i64, _>(0))
+        .execute(&mut *conn)
+        .await?;
+    Ok(true)
+}
+
+/// Delete the newest matching quest-reward ledger entry (the cancel
+/// flow's undo for liquid rewards).
+async fn delete_latest_quest_reward_entry(
+    conn: &mut SqliteConnection,
+    quest_name: &str,
+    reward_ped: f64,
+) -> Result<bool, QuestError> {
+    let Some(row) = sqlx::query(
+        "SELECT id FROM ledger_entries \
+         WHERE type = 'markup' \
+           AND tag = 'quest_reward' \
+           AND description = ? \
+           AND amount = ? \
+         ORDER BY date DESC, id DESC \
+         LIMIT 1",
+    )
+    .bind(format!("Quest: {quest_name}"))
+    .bind(reward_ped)
+    .fetch_optional(&mut *conn)
+    .await?
+    else {
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM ledger_entries WHERE id = ?")
+        .bind(row.get::<String, _>(0))
+        .execute(&mut *conn)
+        .await?;
+    Ok(true)
+}
+
 async fn set_quest_mobs(
     conn: &mut SqliteConnection,
     quest_id: i64,
@@ -821,10 +1602,30 @@ mod tests {
     use super::*;
     use crate::db::Db;
 
-    async fn service(dir: &std::path::Path) -> (QuestService, SqlitePool) {
+    async fn service_with_clock(
+        dir: &std::path::Path,
+    ) -> (Arc<QuestService>, SqlitePool, Arc<crate::clock::MockClock>) {
         let db = Db::open(&dir.join("entropia_orme.db")).await.unwrap();
         let pool = db.pool().clone();
-        (QuestService::new(pool.clone()), pool)
+        let clock = Arc::new(crate::clock::MockClock::new(
+            Some(
+                chrono::NaiveDateTime::parse_from_str("2026-03-01 12:00:00", "%Y-%m-%d %H:%M:%S")
+                    .unwrap(),
+            ),
+            0.0,
+        ));
+        let svc = Arc::new(QuestService::new(pool.clone(), clock.clone()));
+        let counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        svc.set_id_source(Arc::new(move || {
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            format!("fixed-{n:04}")
+        }));
+        (svc, pool, clock)
+    }
+
+    async fn service(dir: &std::path::Path) -> (Arc<QuestService>, SqlitePool) {
+        let (svc, pool, _clock) = service_with_clock(dir).await;
+        (svc, pool)
     }
 
     async fn pin_ts(pool: &SqlitePool, table: &str, id: i64, ts: f64) {
@@ -1280,6 +2081,696 @@ mod tests {
             .unwrap();
         assert_eq!(updated["quest_ids"], json!([]));
         assert_eq!(updated["items"], json!([]));
+    }
+
+    /// One walk through the lifecycle, mirroring the original's run
+    /// over identical payloads, clock advances, and identifier
+    /// streams; every expected value below is the original's output.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_lifecycle_walkthrough_matches_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool, clock) = service_with_clock(dir.path()).await;
+        let bus = Arc::new(crate::event_bus::EventBus::new());
+        svc.subscribe(&bus, Handle::current());
+
+        let qa = quest_id(
+            &svc.create_quest(
+                &json!({"name": "Iron Challenge", "reward_ped": 2.5, "cooldown_hours": 24}),
+            )
+            .await
+            .unwrap(),
+        );
+        pin_ts(&pool, "quests", qa, 1000.0).await;
+        let qb = quest_id(
+            &svc.create_quest(&json!({"name": "Daily Hunt: Atrox", "reward_ped": 5.0,
+                                       "reward_is_skill": true, "cooldown_hours": 1}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qb, 1001.0).await;
+        let qc = quest_id(
+            &svc.create_quest(&json!({"name": "G\u{e9}ologist Survey"}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qc, 1002.0).await;
+        let qe = quest_id(
+            &svc.create_quest(&json!({"name": "Zero Bounty", "reward_ped": 0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qe, 1003.0).await;
+
+        // Start legs.
+        assert_eq!(svc.start_quest(9999).await.unwrap(), None);
+        let started = svc.start_quest(qa).await.unwrap().unwrap();
+        assert_eq!(started["started_at"], json!(1772366400.0));
+
+        // A session-less completion: a ledger row (liquid reward) and
+        // a synthetic manual completion key.
+        clock.advance(60.0).unwrap();
+        let done = svc.complete_quest(qa).await.unwrap().unwrap();
+        assert_eq!(done["started_at"], Value::Null);
+        assert_eq!(done["last_completed_at"], json!(1772366460.0));
+        assert_eq!(
+            done["cooldown_expires_at"],
+            json!("2026-03-02T12:01:00+00:00")
+        );
+        let ledger = |sql: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(sql)
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|row| {
+                        json!([
+                            row.get::<String, _>(0),
+                            row.get::<String, _>(1),
+                            row.get::<String, _>(2),
+                            row.get::<f64, _>(3),
+                            row.get::<String, _>(4),
+                        ])
+                    })
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(
+            ledger("SELECT id, date, description, amount, tag FROM ledger_entries ORDER BY id")
+                .await,
+            vec![json!([
+                "fixed-0001",
+                "2026-03-01T12:01:00+00:00",
+                "Quest: Iron Challenge",
+                2.5,
+                "quest_reward"
+            ])]
+        );
+        let completions = |pool: SqlitePool| async move {
+            sqlx::query(
+                "SELECT session_id, quest_id, completed_at FROM session_quest_completions ORDER BY id",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| {
+                json!([
+                    row.get::<String, _>(0),
+                    row.get::<i64, _>(1),
+                    row.get::<f64, _>(2)
+                ])
+            })
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            completions(pool.clone()).await,
+            vec![json!(["manual-fixed-0002", qa, 1772366460.0])]
+        );
+
+        // The bus feeds the active session; a session-scoped skill
+        // completion writes a claim, and a repeat in the same session
+        // dedupes the completion while duplicating the claim.
+        bus.publish(Topic::SessionStarted, &json!({"session_id": "sess-abc"}));
+        clock.advance(60.0).unwrap();
+        svc.complete_quest(qb).await.unwrap().unwrap();
+        clock.advance(60.0).unwrap();
+        svc.complete_quest(qb).await.unwrap().unwrap();
+        let claims = sqlx::query(
+            "SELECT quest_id, quest_name, ped_value, claimed_at FROM quest_claims ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| {
+            json!([
+                row.get::<i64, _>(0),
+                row.get::<String, _>(1),
+                row.get::<f64, _>(2),
+                row.get::<f64, _>(3)
+            ])
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            claims,
+            vec![
+                json!([qb, "Daily Hunt: Atrox", 5.0, 1772366520.0]),
+                json!([qb, "Daily Hunt: Atrox", 5.0, 1772366580.0]),
+            ]
+        );
+        assert_eq!(
+            completions(pool.clone()).await,
+            vec![
+                json!(["manual-fixed-0002", qa, 1772366460.0]),
+                json!(["sess-abc", qb, 1772366520.0]),
+            ]
+        );
+
+        // Cancel legs: a started quest clears; a quest neither started
+        // nor cooling passes through; a cooling quest resets its
+        // cooldown and (optionally) undoes the reward.
+        svc.start_quest(qc).await.unwrap().unwrap();
+        let cancelled = svc.cancel_quest(qc, false).await.unwrap().unwrap();
+        assert_eq!(cancelled["started_at"], Value::Null);
+        let passthrough = svc.cancel_quest(qc, false).await.unwrap().unwrap();
+        assert_eq!(passthrough["id"], json!(qc));
+        clock.advance(60.0).unwrap();
+        svc.cancel_quest(qb, true).await.unwrap().unwrap();
+        let claim_count: i64 = sqlx::query("SELECT COUNT(*) FROM quest_claims")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(claim_count, 1, "the newest claim is undone");
+        svc.cancel_quest(qa, true).await.unwrap().unwrap();
+        let ledger_count: i64 = sqlx::query("SELECT COUNT(*) FROM ledger_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(ledger_count, 0, "the reward ledger entry is undone");
+
+        // The suggestion tree, reason by reason.
+        let sugg = |s: Value, t: &str, r: &str| {
+            assert_eq!(s["suggestion_type"], t, "type for {r}");
+            assert_eq!(s["reason"], r);
+            s
+        };
+        sugg(
+            svc.get_session_link_suggestion("sess-none").await.unwrap(),
+            "none",
+            "no_completions",
+        );
+        for (session, quest, at) in [
+            ("sess-one", qa, 5000.0),
+            ("sess-two", qa, 5001.0),
+            ("sess-two", qb, 5002.0),
+        ] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(session)
+            .bind(quest)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let single = sugg(
+            svc.get_session_link_suggestion("sess-one").await.unwrap(),
+            "quest",
+            "single_quest",
+        );
+        assert_eq!(single["quest_name"], "Iron Challenge");
+        svc.create_playlist(&json!({"name": "Pair Run", "quest_ids": [qa, qb]}))
+            .await
+            .unwrap();
+        let pl = sugg(
+            svc.get_session_link_suggestion("sess-two").await.unwrap(),
+            "playlist",
+            "exact_playlist",
+        );
+        assert_eq!(pl["playlist_name"], "Pair Run");
+        clock.advance(60.0).unwrap();
+        svc.accept_session_link_suggestion("sess-two")
+            .await
+            .unwrap();
+        sugg(
+            svc.get_session_link_suggestion("sess-two").await.unwrap(),
+            "none",
+            "already_linked",
+        );
+        svc.decline_session_link("sess-decl").await.unwrap();
+        sugg(
+            svc.get_session_link_suggestion("sess-decl").await.unwrap(),
+            "none",
+            "declined",
+        );
+        let error = svc
+            .accept_session_link_suggestion("sess-none")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "No linkable suggestion for session sess-none: no_completions"
+        );
+        svc.accept_session_link_suggestion("sess-one")
+            .await
+            .unwrap();
+        for (session, quest, at) in [("sess-three", qa, 5003.0), ("sess-three", qc, 5004.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(session)
+            .bind(quest)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sugg(
+            svc.get_session_link_suggestion("sess-three").await.unwrap(),
+            "none",
+            "unclean",
+        );
+        svc.create_playlist(&json!({"name": "Pair Run B", "quest_ids": [qa, qb]}))
+            .await
+            .unwrap();
+        for (session, quest, at) in [("sess-five", qa, 5005.0), ("sess-five", qb, 5006.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(session)
+            .bind(quest)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sugg(
+            svc.get_session_link_suggestion("sess-five").await.unwrap(),
+            "none",
+            "ambiguous_playlist",
+        );
+        let links = sqlx::query(
+            "SELECT session_id, link_type, quest_id, playlist_id, linked_at \
+             FROM session_quest_analytics_links ORDER BY session_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| {
+            json!([
+                row.get::<String, _>(0),
+                row.get::<String, _>(1),
+                row.get::<Option<i64>, _>(2),
+                row.get::<Option<i64>, _>(3),
+                row.get::<f64, _>(4)
+            ])
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            links,
+            vec![
+                json!(["sess-decl", "declined", null, null, 1772366700.0]),
+                json!(["sess-one", "quest", qa, null, 1772366700.0]),
+                json!(["sess-two", "playlist", null, 1, 1772366700.0]),
+            ]
+        );
+
+        // Mission matching: exact (case/space), accent folding,
+        // repeatable suffix, containment, fuzzy at the threshold, and
+        // a miss below it.
+        let match_id = |name: &'static str| {
+            let svc = svc.clone();
+            async move {
+                svc.match_quest_by_mission_name(name)
+                    .await
+                    .unwrap()
+                    .map(|quest| quest["id"].as_i64().unwrap())
+            }
+        };
+        assert_eq!(match_id("  IRON CHALLENGE ").await, Some(qa));
+        assert_eq!(match_id("Geologist Survey").await, Some(qc));
+        assert_eq!(match_id("Iron Challenge (Repeatable)").await, Some(qa));
+        assert_eq!(match_id("Mission: Iron Challenge Part II").await, Some(qa));
+        assert_eq!(match_id("Iron Chalenge").await, Some(qa));
+        assert_eq!(match_id("Totally Different").await, None);
+
+        // Mission auto-start: unknown ignores, a fuzzy match starts
+        // once, and an already-started quest skips.
+        clock.advance(60.0).unwrap();
+        svc.start_quest_from_mission("Unknown Mission")
+            .await
+            .unwrap();
+        svc.start_quest_from_mission("Iron Chalenge").await.unwrap();
+        assert!(json_truthy(
+            svc.get_quest(qa).await.unwrap().unwrap().get("started_at")
+        ));
+        svc.start_quest_from_mission("Iron Challenge")
+            .await
+            .unwrap();
+
+        // The reward filter's five legs.
+        clock.advance(60.0).unwrap();
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Daily Hunt: Atrox",
+                &[],
+                &[json!({"skill_name": "Rifle", "amount": 1.0})]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": null, "suppress_skill_index": 0}))
+        );
+        clock.advance(60.0).unwrap();
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Iron Challenge",
+                &[
+                    json!({"item_name": "Shrapnel", "quantity": 100, "value": 0.1}),
+                    json!({"item_name": "Universal Ammo", "quantity": 1, "value": 2.51}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 1, "suppress_skill_index": null}))
+        );
+        clock.advance(60.0).unwrap();
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Iron Challenge",
+                &[json!({"item_name": "Shrapnel", "quantity": 100, "value": 0.1})],
+                &[]
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        clock.advance(60.0).unwrap();
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Zero Bounty",
+                &[
+                    json!({"item_name": "A", "value": 0.5}),
+                    json!({"item_name": "B", "value": 0.2}),
+                    json!({"item_name": "C", "value": 0.9}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 1, "suppress_skill_index": null}))
+        );
+        clock.advance(60.0).unwrap();
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Geologist Survey",
+                &[json!({"item_name": "A", "value": 0.5})],
+                &[]
+            )
+            .await
+            .unwrap(),
+            None
+        );
+
+        // The overlay trail, exactly as the original recorded it.
+        let events = sqlx::query(
+            "SELECT session_id, kill_id, event_type, mob_or_item, value_ped, timestamp \
+             FROM notable_events ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|row| {
+            json!([
+                row.get::<String, _>(0),
+                row.get::<Option<String>, _>(1),
+                row.get::<String, _>(2),
+                row.get::<String, _>(3),
+                row.get::<f64, _>(4),
+                row.get::<f64, _>(5)
+            ])
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            vec![
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_started",
+                    "Iron Challenge",
+                    0.0,
+                    1772366760.0
+                ]),
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_completed_pes",
+                    "Daily Hunt: Atrox: skill reward suppressed",
+                    5.0,
+                    1772366820.0
+                ]),
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_completed",
+                    "Iron Challenge: Universal Ammo (2.50 PED) suppressed",
+                    2.5,
+                    1772366880.0
+                ]),
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_completed",
+                    "Iron Challenge",
+                    2.5,
+                    1772366940.0
+                ]),
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_completed",
+                    "Zero Bounty: B suppressed",
+                    0.0,
+                    1772367000.0
+                ]),
+                json!([
+                    "sess-abc",
+                    null,
+                    "quest_completed",
+                    "G\u{e9}ologist Survey",
+                    0.0,
+                    1772367060.0
+                ]),
+            ]
+        );
+
+        // The final ledger carries exactly the two liquid completions
+        // the filter recorded; the zero-reward completion wrote none.
+        let final_ledger: Vec<String> = sqlx::query("SELECT id FROM ledger_entries ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(final_ledger, ["fixed-0003", "fixed-0004"]);
+
+        // A session stop clears the tracked session: notable events
+        // stop recording.
+        bus.publish(Topic::SessionStopped, &json!({}));
+        svc.start_quest_from_mission("Geologist Survey")
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM notable_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 6, "no session, no overlay event");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_received_mission_event_starts_its_quest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool, _clock) = service_with_clock(dir.path()).await;
+        let bus = Arc::new(crate::event_bus::EventBus::new());
+        svc.subscribe(&bus, Handle::current());
+        let q = quest_id(
+            &svc.create_quest(&json!({"name": "Iron Challenge"}))
+                .await
+                .unwrap(),
+        );
+
+        bus.publish(
+            Topic::MissionReceived,
+            &json!({"mission_name": "Iron Challenge"}),
+        );
+        assert!(json_truthy(
+            svc.get_quest(q).await.unwrap().unwrap().get("started_at")
+        ));
+        // A nameless event is ignored.
+        bus.publish(Topic::MissionReceived, &json!({}));
+    }
+
+    #[tokio::test]
+    async fn starting_an_inactive_quest_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        let q = quest_id(&svc.create_quest(&json!({"name": "Dead"})).await.unwrap());
+        svc.delete_quest(q).await.unwrap();
+        assert_eq!(svc.start_quest(q).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn equal_fuzzy_scores_keep_the_first_quest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let first = quest_id(
+            &svc.create_quest(&json!({"name": "iron chal a"}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", first, 1000.0).await;
+        let second = quest_id(
+            &svc.create_quest(&json!({"name": "iron chal b"}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", second, 1001.0).await;
+
+        // Both names score 0.9090909090909091 against the mission (the
+        // reference's figure); the strictly-greater comparison keeps
+        // the earlier quest.
+        let matched = svc
+            .match_quest_by_mission_name("iron chal c")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched["id"], json!(first));
+    }
+
+    #[tokio::test]
+    async fn filter_ties_keep_the_first_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        svc.create_quest(&json!({"name": "Tie Quest", "reward_ped": 2.5}))
+            .await
+            .unwrap();
+        svc.create_quest(&json!({"name": "Zed Bounty", "reward_ped": 0}))
+            .await
+            .unwrap();
+
+        // Equal absolute differences (2.49 and 2.51 against 2.5) keep
+        // the first item, as the original's strictly-less tracking does.
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Tie Quest",
+                &[
+                    json!({"item_name": "A", "value": 2.49}),
+                    json!({"item_name": "B", "value": 2.51}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 0, "suppress_skill_index": null}))
+        );
+        // Equal minimum values likewise keep the first item.
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Zed Bounty",
+                &[
+                    json!({"item_name": "A", "value": 0.3}),
+                    json!({"item_name": "B", "value": 0.3}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 0, "suppress_skill_index": null}))
+        );
+    }
+
+    #[tokio::test]
+    async fn playlist_matching_requires_completions_within_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let qa = quest_id(&svc.create_quest(&json!({"name": "Alpha"})).await.unwrap());
+        let qc = quest_id(&svc.create_quest(&json!({"name": "Gamma"})).await.unwrap());
+        svc.create_playlist(&json!({"name": "Solo Run", "quest_ids": [qc]}))
+            .await
+            .unwrap();
+        for (quest, at) in [(qa, 5003.0), (qc, 5004.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES ('s3', ?, ?)",
+            )
+            .bind(quest)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // The playlist's immediate set is complete, but the session
+        // also completed a quest outside its scope: both subset tests
+        // must hold, so the suggestion stays unclean.
+        let suggestion = svc.get_session_link_suggestion("s3").await.unwrap();
+        assert_eq!(suggestion["reason"], "unclean");
+    }
+
+    #[tokio::test]
+    async fn cancelling_outside_the_cooldown_window_keeps_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let qa = quest_id(&svc.create_quest(&json!({"name": "Alpha"})).await.unwrap());
+        sqlx::query(
+            "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+             VALUES ('s4', ?, 1000.0)",
+        )
+        .bind(qa)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // No cooldown configured: never cooling, the completion stays.
+        let result = svc.cancel_quest(qa, false).await.unwrap().unwrap();
+        assert_eq!(result["last_completed_at"], json!(1000.0));
+
+        // A cooldown that expires exactly at the current instant is no
+        // longer cooling (the strict comparison), so the completion
+        // stays here too.
+        let qe = quest_id(
+            &svc.create_quest(&json!({"name": "Edge", "cooldown_hours": 1}))
+                .await
+                .unwrap(),
+        );
+        sqlx::query(
+            "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+             VALUES ('s5', ?, ?)",
+        )
+        .bind(qe)
+        .bind(1772366400.0 - 3600.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let result = svc.cancel_quest(qe, false).await.unwrap().unwrap();
+        assert_eq!(result["last_completed_at"], json!(1772362800.0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_empty_session_id_skips_overlay_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool, _clock) = service_with_clock(dir.path()).await;
+        let bus = Arc::new(crate::event_bus::EventBus::new());
+        svc.subscribe(&bus, Handle::current());
+        svc.create_quest(&json!({"name": "Iron Challenge"}))
+            .await
+            .unwrap();
+
+        // The original's truthiness gate treats an empty session id as
+        // no session: the quest starts but no overlay event records.
+        bus.publish(Topic::SessionStarted, &json!({"session_id": ""}));
+        svc.start_quest_from_mission("Iron Challenge")
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM notable_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0);
     }
 
     #[test]

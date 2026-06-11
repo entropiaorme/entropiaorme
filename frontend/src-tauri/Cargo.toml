@@ -38,8 +38,11 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order keeps JSON object members in insertion order end to end,
 # which the response models' extra-key carry-forward and the body-byte
 # fidelity of ported routes both rely on (the canonicalising emitters sort
-# keys explicitly, so they are unaffected).
-serde_json = { version = "1", features = ["preserve_order"] }
+# keys explicitly, so they are unaffected). float_roundtrip makes float
+# parsing correctly rounded (the default fast path can land one ULP off),
+# which the cross-language differentials' parsed-value comparisons and any
+# golden re-parse rely on for exactness.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # The OCR recogniser runtime. `load-dynamic` binds the ONNX Runtime
 # shared library at process start rather than link time, so builds and
 # tests need no native toolkit; hosts without the runtime skip the
@@ -67,6 +70,10 @@ http-body-util = "0.1"
 # client's timestamp format via chrono, and the HTML5 named-entity set
 # matching the original's unescaping.
 regex = "1"
+# NFKD decomposition for the quest-name normaliser: the mission-name
+# matcher folds accented characters to their ASCII base before
+# comparison, exactly as the backend's normalise step does.
+unicode-normalization = "0.1"
 # Session and kill identities: random v4, exactly the original's
 # uuid4() (the equivalence normaliser maps ids to symbols by encounter
 # order, so randomness never reaches a golden).

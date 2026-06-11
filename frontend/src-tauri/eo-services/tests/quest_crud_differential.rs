@@ -28,6 +28,10 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+use std::sync::Arc;
+
+use chrono::NaiveDateTime;
+use eo_services::clock::MockClock;
 use eo_services::db::Db;
 use eo_services::quests::{QuestError, QuestService};
 use serde_json::{json, Map, Value};
@@ -200,7 +204,11 @@ async fn the_native_quest_crud_matches_the_python_oracle() {
         .await
         .unwrap();
     let pool = db.pool().clone();
-    let svc = QuestService::new(pool.clone());
+    let clock = Arc::new(MockClock::new(
+        Some(NaiveDateTime::parse_from_str("2026-03-01 12:00:00", "%Y-%m-%d %H:%M:%S").unwrap()),
+        0.0,
+    ));
+    let svc = QuestService::new(pool.clone(), clock);
 
     let mut native = Map::new();
     let q1 = svc

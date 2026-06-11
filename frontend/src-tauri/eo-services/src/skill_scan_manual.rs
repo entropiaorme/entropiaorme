@@ -437,7 +437,13 @@ impl SkillScanManual {
         let handle = std::thread::Builder::new()
             .name("skill-scan-process".into())
             .spawn(move || {
-                let result = worker_self.extract_levels(&captures);
+                // The original's worker catches everything: a crash
+                // surfaces as the status error and the processing
+                // flag always settles.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    worker_self.extract_levels(&captures)
+                }))
+                .unwrap_or_else(|_| Err("scan processing crashed".to_string()));
                 {
                     let mut state = worker_self.lock_state();
                     match result {
@@ -651,6 +657,11 @@ mod tests {
             ])
         );
         assert_eq!(scan.get_status()["phase"], "awaiting_review");
+        assert_eq!(
+            scan.get_status()["processing_progress"],
+            json!({"done": 2, "total": 2}),
+            "the per-page progress advanced to completion"
+        );
 
         let accepted = scan.accept();
         assert_eq!(accepted, json!({"ok": true, "skills_persisted": 3}));
@@ -767,6 +778,20 @@ mod tests {
         );
         scan.reject();
         assert_eq!(scan.get_status()["phase"], "idle");
+
+        // Cancel returns the settled status, and shutdown resets the
+        // owned state wholesale.
+        scan.start(Some(1));
+        scan.capture_current_page();
+        let cancelled = scan.cancel();
+        assert_eq!(cancelled["phase"], "idle");
+        assert_eq!(cancelled["captured_pages"], 0);
+        scan.start(Some(1));
+        scan.capture_current_page();
+        scan.shutdown();
+        let status = scan.get_status();
+        assert_eq!(status["phase"], "idle");
+        assert_eq!(status["captured_pages"], 0);
     }
 
     #[test]

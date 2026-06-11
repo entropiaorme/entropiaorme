@@ -169,7 +169,7 @@ mod tests {
     use super::*;
     use crate::db::Db;
 
-    async fn pool() -> (tempfile::TempDir, SqlitePool) {
+    async fn pool_fixture() -> (tempfile::TempDir, SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("entropia_orme.db"))
             .await
@@ -194,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn latest_levels_pick_newest_with_id_tiebreak() {
-        let (_dir, pool) = pool().await;
+        let (_dir, pool) = pool_fixture().await;
         seed(&pool, "Rifle", 100.0, "scan", 50.0).await;
         seed(&pool, "Rifle", 101.0, "chatlog", 60.0).await;
         // Two rows share the newest instant: the higher id wins.
@@ -210,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn drift_summary_requires_an_anchor_and_movement() {
-        let (_dir, pool) = pool().await;
+        let (_dir, pool) = pool_fixture().await;
         let scanned = vec![("Rifle".to_string(), 102.0)];
         // No prior scan anchor: no drift.
         assert!(scan_drift_summary(&pool, &scanned).await.unwrap().is_none());
@@ -222,11 +222,21 @@ mod tests {
         let drift = scan_drift_summary(&pool, &scanned).await.unwrap().unwrap();
         assert_eq!(drift["compared_count"], 1);
         assert_eq!(drift["worst_name"], "Rifle");
+
+        // Movement BEFORE the anchor never counts: the gate keys on
+        // the real anchor instant, not any earlier epoch.
+        let (_dir, fresh) = pool_fixture().await;
+        seed(&fresh, "Rifle", 99.0, "chatlog", 40.0).await;
+        seed(&fresh, "Rifle", 100.0, "scan", 50.0).await;
+        assert!(scan_drift_summary(&fresh, &scanned)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn completion_archives_anchors_and_writes_new_ones() {
-        let (_dir, pool) = pool().await;
+        let (_dir, pool) = pool_fixture().await;
         seed(&pool, "Rifle", 100.0, "scan", 50.0).await;
         seed(&pool, "Rifle", 100.5, "chatlog", 55.0).await;
         seed(&pool, "Sweat", 10.0, "scan", 50.0).await;
@@ -276,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn hydration_on_an_empty_table_reads_idle() {
-        let (_dir, pool) = pool().await;
+        let (_dir, pool) = pool_fixture().await;
         let (last, count) = hydrate_skill_scan_state(&pool).await.unwrap();
         assert_eq!(last, None);
         assert_eq!(count, 0);

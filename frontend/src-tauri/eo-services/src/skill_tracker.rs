@@ -215,8 +215,11 @@ impl SkillTracker {
                 .execute(&self.pool)
                 .await
             });
-            // Contained like the original's handler exception.
-            let _ = result;
+            // The original's raise aborts the rest of the handler
+            // (contained by the bus): no gain row, no totals.
+            if result.is_err() {
+                return;
+            }
         }
 
         let result = self.block_on(async {
@@ -232,7 +235,9 @@ impl SkillTracker {
             .execute(&self.pool)
             .await
         });
-        let _ = result;
+        if result.is_err() {
+            return;
+        }
 
         let mut state = self.lock_state();
         *state
@@ -453,24 +458,31 @@ mod tests {
         rig.gain("Rifle", 1.0, "2026-01-01T00:00:03");
         assert_eq!(rig.gains_count(), 2);
 
+        // The expiry compare is strict: a gain at exactly the
+        // expiry instant processes.
+        rig.tracker.suppress_next("Wounding", 5.0);
+        rig.clock.advance(5.0).unwrap();
+        rig.gain("Wounding", 1.0, "2026-01-01T00:00:03");
+        assert_eq!(rig.gains_count(), 3, "the boundary instant is expired");
+
         // An expired suppression is consumed AND the gain processes.
-        rig.clock.advance(31.0).unwrap();
+        rig.clock.advance(26.0).unwrap();
         rig.gain("Anatomy", 1.0, "2026-01-01T00:00:04");
-        assert_eq!(rig.gains_count(), 3, "expired suppression falls through");
+        assert_eq!(rig.gains_count(), 4, "expired suppression falls through");
 
         // Session boundaries clear armed suppressions both ways.
         rig.tracker
             .suppress_next("Anatomy", SUPPRESS_TIMEOUT_SECONDS);
         rig.start_session();
         rig.gain("Anatomy", 1.0, "2026-01-01T00:00:05");
-        assert_eq!(rig.gains_count(), 4, "a restart drops prior suppressions");
+        assert_eq!(rig.gains_count(), 5, "a restart drops prior suppressions");
         rig.tracker
             .suppress_next("Anatomy", SUPPRESS_TIMEOUT_SECONDS);
         rig.bus
             .publish(Topic::SessionStopped, &json!({"session_id": "s1"}));
         rig.start_session();
         rig.gain("Anatomy", 1.0, "2026-01-01T00:00:06");
-        assert_eq!(rig.gains_count(), 5, "a stop drops armed suppressions");
+        assert_eq!(rig.gains_count(), 6, "a stop drops armed suppressions");
     }
 
     #[test]

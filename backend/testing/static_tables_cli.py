@@ -15,6 +15,7 @@ from pathlib import Path
 
 from backend.data import codex_categories, tt_value_curve
 from backend.services import character_calc
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 @lru_cache(maxsize=1)
@@ -156,6 +157,7 @@ def _dispatch(request: dict) -> object:
 
 
 def main() -> None:
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         line = line.strip()
         if not line:

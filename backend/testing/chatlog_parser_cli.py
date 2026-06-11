@@ -14,6 +14,7 @@ import json
 import sys
 
 from backend.services.chatlog_parser import parse_line
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 def _reply(raw_line: str) -> dict | None:
@@ -29,6 +30,7 @@ def _reply(raw_line: str) -> dict | None:
 
 
 def main() -> None:
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         request = json.loads(line)
         result = _reply(request["line"])

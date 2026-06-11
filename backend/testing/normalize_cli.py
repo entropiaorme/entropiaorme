@@ -24,6 +24,7 @@ import sys
 from typing import Any
 
 from backend.testing.fingerprint import Normalizer
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 def normalize_compact(value: Any) -> str:
@@ -32,11 +33,7 @@ def normalize_compact(value: Any) -> str:
 
 
 def main(argv: list[str]) -> int:
-    # Force LF on stdout so the line protocol is byte-identical across
-    # platforms (Windows text mode would otherwise translate "\n" to "\r\n"
-    # and corrupt the per-line normalised output the Rust fuzz reads back).
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(newline="\n")
+    pin_utf8_line_protocol()
 
     if "--once" in argv:
         value = json.loads(sys.stdin.read())

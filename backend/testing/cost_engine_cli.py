@@ -14,11 +14,11 @@ import sys
 
 from backend.services.cost_engine import cost_per_shot_from_props
 from backend.testing.normalize_cli import normalize_compact
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(newline="\n")
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         stripped = line.rstrip("\n")
         if not stripped:

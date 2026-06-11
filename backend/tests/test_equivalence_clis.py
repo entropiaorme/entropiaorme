@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -142,6 +144,31 @@ def test_config_service_cli_round_trips_with_the_sentinel(monkeypatch) -> None:
     assert reply["state"]["mob_tracking_tag"] == "tagged"
     assert reply["file"].startswith('{\n  "extensionKey": 1')
     assert "<DEFAULT_CHATLOG>" in reply["file"]
+
+
+def test_config_service_cli_protocol_is_utf8_regardless_of_host_locale() -> None:
+    """Non-ASCII content round-trips unmangled through the line protocol.
+
+    Forces a non-UTF-8 stdio encoding on the child (the default for piped
+    stdio on a Windows host, where pipes inherit the ANSI code page) and
+    asserts the CLI still reads and writes the protocol as UTF-8. Without
+    the explicit pin, "ä" arrives as the mojibake pair "Ã¤" and persists
+    into the saved file.
+    """
+    request = {"stored": {"player_name": "Frussjäger"}, "updates": []}
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "backend.testing.config_service_cli"],
+        input=(json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"),
+        capture_output=True,
+        env=env,
+        cwd=Path(__file__).resolve().parents[2],
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    reply = json.loads(proc.stdout.decode("utf-8").splitlines()[0])
+    assert reply["state"]["player_name"] == "Frussjäger"
+    assert "Frussj\\u00e4ger" in reply["file"]
 
 
 def test_static_tables_cli_serves_the_game_data_ops(monkeypatch) -> None:

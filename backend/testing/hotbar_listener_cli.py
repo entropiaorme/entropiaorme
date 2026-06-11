@@ -24,6 +24,7 @@ from backend.core.event_bus import EventBus
 from backend.core.events import EVENT_SESSION_STARTED, EVENT_SESSION_STOPPED
 from backend.services.hotbar_listener import HotbarListener
 from backend.testing.keystroke_source import MockKeystrokeSource
+from backend.testing.stdio import pin_utf8_line_protocol
 
 
 def _resolver(slot: str):
@@ -81,6 +82,7 @@ def _run(request: dict) -> dict:
 
 
 def main() -> None:
+    pin_utf8_line_protocol()
     for line in sys.stdin:
         line = line.strip()
         if not line:

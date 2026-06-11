@@ -29,8 +29,10 @@ pub const PLAYLIST_GROUP_IMMEDIATE: &str = "immediate";
 pub const PLAYLIST_GROUP_LONG_HORIZON: &str = "long_horizon";
 
 /// The service's error surface: `Invalid` carries the original's
-/// `ValueError` messages verbatim (HTTP 400 at the router); `Db` is a
-/// database failure (HTTP 500).
+/// raised-exception messages (its `ValueError` texts verbatim). The
+/// quest router leaves these unhandled, so they surface as 500s, not
+/// 400s; the future router slice must preserve that. `Db` is a
+/// database failure (also 500).
 #[derive(Debug)]
 pub enum QuestError {
     Invalid(String),
@@ -260,7 +262,14 @@ impl QuestService {
         }
 
         if let Some(mobs) = data.get("mobs") {
-            set_quest_mobs(&mut tx, quest_id, mobs.as_array().expect("mobs is a list")).await?;
+            // A present-but-null mobs payload refuses: the original
+            // crashes after its mob delete, and the next commit on the
+            // shared connection silently ratifies the wipe; the typed
+            // refusal plus rollback is the sanctioned repair shape.
+            let mobs = mobs.as_array().ok_or_else(|| {
+                QuestError::Invalid("'mobs' must be a list of mob names".to_string())
+            })?;
+            set_quest_mobs(&mut tx, quest_id, mobs).await?;
         }
         tx.commit().await?;
 
@@ -346,7 +355,7 @@ impl QuestService {
 
     /// Create a playlist with classified items.
     pub async fn create_playlist(&self, data: &Value) -> Result<Value, QuestError> {
-        let items = normalize_playlist_items(data);
+        let items = normalize_playlist_items(data)?;
         let mut tx = self.pool.begin().await?;
         let query = sqlx::query(
             "INSERT INTO quest_playlists (name, planet, estimated_minutes) VALUES (?, ?, ?)",
@@ -394,7 +403,7 @@ impl QuestService {
 
         let replace_items = data.get("items").is_some() || data.get("quest_ids").is_some();
         let items = if replace_items {
-            Some(normalize_playlist_items(data))
+            Some(normalize_playlist_items(data)?)
         } else {
             None
         };
@@ -690,10 +699,13 @@ async fn set_playlist_items(
 
 /// Normalise playlist payloads to classified items: an `items` list
 /// passes through with group defaults; otherwise `quest_ids` builds
-/// immediate items.
-fn normalize_playlist_items(data: &Value) -> Vec<Value> {
+/// immediate items. A present-but-null (or non-list) `quest_ids`
+/// refuses: the original crashes iterating it (an unhandled error on
+/// the wire, with no surviving write), and the update path is
+/// reachable with an explicit null through the route model.
+fn normalize_playlist_items(data: &Value) -> Result<Vec<Value>, QuestError> {
     if let Some(items) = data.get("items").filter(|value| !value.is_null()) {
-        return items
+        return Ok(items
             .as_array()
             .expect("items is a list")
             .iter()
@@ -707,12 +719,18 @@ fn normalize_playlist_items(data: &Value) -> Vec<Value> {
                         .unwrap_or_else(|| json!(PLAYLIST_GROUP_IMMEDIATE)),
                 })
             })
-            .collect();
+            .collect());
     }
-    data.get("quest_ids")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
+    let quest_ids = match data.get("quest_ids") {
+        None => &[] as &[Value],
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| {
+                QuestError::Invalid("'quest_ids' must be a list of quest ids".to_string())
+            })?
+            .as_slice(),
+    };
+    Ok(quest_ids
         .iter()
         .map(|quest_id| {
             json!({
@@ -721,7 +739,7 @@ fn normalize_playlist_items(data: &Value) -> Vec<Value> {
                 "group_type": PLAYLIST_GROUP_IMMEDIATE,
             })
         })
-        .collect()
+        .collect())
 }
 
 /// Partition item quest ids by group: everything not long-horizon is
@@ -1128,5 +1146,68 @@ mod tests {
         assert_eq!(playlists.len(), 1);
         assert_eq!(playlists[0]["name"], "Morning Run");
         assert_eq!(playlists[0]["quest_ids"], json!([q1]));
+    }
+
+    #[tokio::test]
+    async fn present_null_lists_refuse_and_leave_state_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        let q1 = quest_id(
+            &svc.create_quest(&json!({"name": "Iron Challenge", "mobs": ["Atrox"]}))
+                .await
+                .unwrap(),
+        );
+        let p1 = quest_id(
+            &svc.create_playlist(&json!({"name": "Morning Run", "quest_ids": [q1]}))
+                .await
+                .unwrap(),
+        );
+
+        // An explicit-null quest_ids update refuses (the original
+        // crashes iterating it, with no surviving write) instead of
+        // clearing the playlist.
+        let error = svc
+            .update_playlist(p1, &json!({"quest_ids": null}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "'quest_ids' must be a list of quest ids");
+        let playlist = svc.get_playlist(p1).await.unwrap().unwrap();
+        assert_eq!(playlist["quest_ids"], json!([q1]));
+
+        // An explicit-null mobs update refuses likewise; the mob rows
+        // survive (the original's crash leaves its mob delete pending
+        // for the next commit to ratify silently; the typed refusal
+        // plus rollback is the sanctioned repair shape).
+        let error = svc
+            .update_quest(q1, &json!({"mobs": null}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "'mobs' must be a list of mob names");
+        let quest = svc.get_quest(q1).await.unwrap().unwrap();
+        assert_eq!(quest["mobs"], json!(["Atrox"]));
+    }
+
+    #[tokio::test]
+    async fn soft_deleting_a_quest_keeps_its_mob_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let q1 = quest_id(
+            &svc.create_quest(&json!({"name": "Iron Challenge", "mobs": ["Atrox"]}))
+                .await
+                .unwrap(),
+        );
+
+        assert!(svc.delete_quest(q1).await.unwrap());
+        // The soft delete detaches playlist items only; the mob rows
+        // stay (the autocomplete reader filters by active quests, so
+        // they vanish from that surface without being destroyed).
+        let mobs: i64 = sqlx::query("SELECT COUNT(*) FROM quest_mobs WHERE quest_id = ?")
+            .bind(q1)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(mobs, 1);
+        assert_eq!(svc.get_all_mob_names().await.unwrap(), Vec::<String>::new());
     }
 }

@@ -889,12 +889,7 @@ impl QuestService {
             entry.insert("expected_reward_markup_percent".into(), json!(markup));
             entry.insert(
                 "total_expected_reward_ped".into(),
-                expected_reward_total(
-                    reward_value.as_f64().unwrap_or(0.0),
-                    reward_is_skill,
-                    markup,
-                    linked_sessions,
-                ),
+                expected_reward_total(&reward_value, reward_is_skill, markup, linked_sessions),
             );
             for (key, value) in stats.as_object().expect("stats object") {
                 entry.insert(key.clone(), value.clone());
@@ -1633,11 +1628,12 @@ impl QuestService {
 }
 
 /// The expected total reward over a completion count: skill rewards
-/// and unmarked rewards multiply plainly; marked liquid rewards apply
-/// the markup percentage. A non-positive count is the integer zero,
-/// as the original returns.
+/// and unmarked rewards multiply plainly; marked positive liquid
+/// rewards apply the markup percentage. A non-positive count is the
+/// integer zero, and the collapsed integer-zero reward multiplies in
+/// integers, both exactly as the original returns them.
 fn expected_reward_total(
-    reward_ped: f64,
+    reward: &Value,
     reward_is_skill: bool,
     expected_markup: Option<f64>,
     completions: i64,
@@ -1645,6 +1641,9 @@ fn expected_reward_total(
     if completions <= 0 {
         return json!(0);
     }
+    let Some(reward_ped) = reward.as_f64().filter(|_| reward.is_f64()) else {
+        return json!(reward.as_i64().unwrap_or(0) * completions);
+    };
     match expected_markup {
         Some(markup) if !reward_is_skill && reward_ped > 0.0 => {
             json!(reward_ped * (markup / 100.0) * completions as f64)
@@ -3343,10 +3342,67 @@ mod tests {
             .await
             .unwrap();
         }
+        let qn = quest_id(&svc.create_quest(&json!({"name": "Nul"})).await.unwrap());
+        pin_ts(&pool, "quests", qn, 1004.0).await;
+        let qz = quest_id(
+            &svc.create_quest(&json!({"name": "Zed", "reward_ped": 0,
+                                       "expected_reward_markup_percent": 120.0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qz, 1005.0).await;
+        let qe2 = quest_id(
+            &svc.create_quest(&json!({"name": "Echo", "reward_ped": 3.0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qe2, 1006.0).await;
+        for (sid, st, en, active, heal) in [
+            ("sess-n", 7000.0, Some(7050.0), 0i64, Some(0.0)),
+            ("sess-z", 7100.0, Some(7160.0), 0, Some(0.0)),
+            ("sess-act", 8000.0, None, 1, None),
+            ("sess-solo", 8100.0, Some(8200.0), 0, Some(0.5)),
+        ] {
+            sqlx::query(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, armour_cost) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(st)
+            .bind(en)
+            .bind(active)
+            .bind(heal)
+            .bind(heal.map(|_| 0.0))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (sid, qid, at) in [("sess-n", qn, 7040.0), ("sess-z", qz, 7150.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(qid)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let p3 = quest_id(
+            &svc.create_playlist(&json!({"name": "Solo Immediate", "quest_ids": [qa]}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quest_playlists", p3, 2002.0).await;
         for (sid, lt, qid, plid) in [
             ("sess-1", "playlist", None::<i64>, Some(p1)),
             ("sess-2", "quest", Some(qa), None),
             ("sess-3", "quest", Some(qa), None),
+            ("sess-n", "quest", Some(qn), None),
+            ("sess-z", "quest", Some(qz), None),
+            ("sess-act", "quest", Some(qe2), None),
+            ("sess-solo", "playlist", None, Some(p3)),
         ] {
             sqlx::query(
                 "INSERT INTO session_quest_analytics_links \
@@ -3362,21 +3418,68 @@ mod tests {
             .unwrap();
         }
 
-        // Per-quest: only Alpha carries a curated quest link; the
-        // still-active linked session is excluded from the completed
-        // count but rides in the id set (contributing nothing here).
+        // Per-quest, name-ordered: Alpha (the still-active linked
+        // session is excluded from the completed count but rides in
+        // the id set), then the NULL-reward and zero-reward quests
+        // whose collapsed rewards and expected totals stay INTEGER
+        // zeros on the wire; Echo (linked only by an active session)
+        // is excluded entirely.
         assert_eq!(
             svc.get_quest_analytics().await.unwrap(),
-            vec![json!({
-                "quest_id": qa, "quest_name": "Alpha", "planet": "Calypso",
-                "category": null, "reward_ped": 2.5, "reward_is_skill": false,
-                "expected_reward_markup_percent": 150.0,
-                "total_expected_reward_ped": 3.75,
-                "linked_sessions": 1, "total_duration": 30.5,
-                "weapon_cost": 0.6000000000000001, "heal_cost": 0,
-                "enhancer_cost": 0.1, "armour_cost": 0.0, "loot_tt": 0.0,
-                "skill_tt": 0.2,
-            })]
+            vec![
+                json!({
+                    "quest_id": qa, "quest_name": "Alpha", "planet": "Calypso",
+                    "category": null, "reward_ped": 2.5, "reward_is_skill": false,
+                    "expected_reward_markup_percent": 150.0,
+                    "total_expected_reward_ped": 3.75,
+                    "linked_sessions": 1, "total_duration": 30.5,
+                    "weapon_cost": 0.6000000000000001, "heal_cost": 0,
+                    "enhancer_cost": 0.1, "armour_cost": 0.0, "loot_tt": 0.0,
+                    "skill_tt": 0.2,
+                }),
+                json!({
+                    "quest_id": qn, "quest_name": "Nul", "planet": "Calypso",
+                    "category": null, "reward_ped": 0, "reward_is_skill": false,
+                    "expected_reward_markup_percent": null,
+                    "total_expected_reward_ped": 0,
+                    "linked_sessions": 1, "total_duration": 50.0,
+                    "weapon_cost": 0, "heal_cost": 0.0,
+                    "enhancer_cost": 0, "armour_cost": 0.0, "loot_tt": 0,
+                    "skill_tt": 0,
+                }),
+                json!({
+                    "quest_id": qz, "quest_name": "Zed", "planet": "Calypso",
+                    "category": null, "reward_ped": 0, "reward_is_skill": false,
+                    // The zero reward normalised its markup away at
+                    // creation, exactly as the original stores it.
+                    "expected_reward_markup_percent": null,
+                    "total_expected_reward_ped": 0,
+                    "linked_sessions": 1, "total_duration": 60.0,
+                    "weapon_cost": 0, "heal_cost": 0.0,
+                    "enhancer_cost": 0, "armour_cost": 0.0, "loot_tt": 0,
+                    "skill_tt": 0,
+                }),
+            ]
+        );
+
+        // An immediate-only playlist with a linked session that
+        // completed nothing in scope: real session stats beside
+        // integer-zero reward sums (the empty long-horizon set
+        // short-circuits without touching SQL).
+        assert_eq!(
+            svc.get_playlist_analytics(p3).await.unwrap().unwrap(),
+            json!({
+                "playlist_id": p3, "playlist_name": "Solo Immediate", "quest_count": 1,
+                "long_horizon_quest_count": 0,
+                "total_reward_ped": 0, "total_immediate_reward_ped": 0,
+                "total_bonus_reward_ped": 0, "total_skill_reward_ped": 0,
+                "total_immediate_skill_reward_ped": 0, "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 0, "total_expected_immediate_reward_ped": 0,
+                "total_expected_bonus_reward_ped": 0,
+                "matched_sessions": 1, "linked_sessions": 1, "total_duration": 100.0,
+                "weapon_cost": 0, "heal_cost": 0.5, "enhancer_cost": 0,
+                "armour_cost": 0.0, "loot_tt": 0, "skill_tt": 0,
+            })
         );
 
         let p1_stats = svc.get_playlist_analytics(p1).await.unwrap().unwrap();
@@ -3415,9 +3518,10 @@ mod tests {
             })
         );
 
+        let p3_stats = svc.get_playlist_analytics(p3).await.unwrap().unwrap();
         assert_eq!(
             svc.get_all_playlist_analytics().await.unwrap(),
-            vec![p1_stats, p2_stats]
+            vec![p1_stats, p2_stats, p3_stats]
         );
         assert_eq!(svc.get_playlist_analytics(9999).await.unwrap(), None);
     }

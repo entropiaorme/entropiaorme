@@ -11,6 +11,7 @@
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod arms;
+pub mod hydration;
 pub mod proxy;
 pub mod sse;
 

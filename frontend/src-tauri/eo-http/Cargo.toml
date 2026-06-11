@@ -22,11 +22,17 @@ http.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
 eo-wire.workspace = true
+# The natively-served hydration handlers read through the ported
+# services (quests, codex) and their database handle.
+eo-services.workspace = true
+sqlx.workspace = true
+sha2.workspace = true
 tokio-stream.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
 tempfile.workspace = true
+chrono.workspace = true
 # test-util powers the paused-clock keep-alive cadence test; dev-only so
 # the feature never reaches a shipped build.
 tokio = { workspace = true, features = ["test-util"] }

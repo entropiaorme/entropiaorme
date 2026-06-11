@@ -587,7 +587,8 @@ async fn the_registered_surface_conforms_through_the_public_port() {
     }
 
     // Non-preflight methods on a natively-registered path flow to the
-    // sidecar (the bare OPTIONS 405, an unported PATCH 405).
+    // sidecar (the bare OPTIONS 405, an unported PATCH 405, and HEAD,
+    // which the backend hard-405s on its GET routes).
     assert_parity(
         substrate_port,
         sidecar.port,
@@ -595,6 +596,24 @@ async fn the_registered_surface_conforms_through_the_public_port() {
         "/api/quests",
         None,
         &[],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "HEAD",
+        "/api/quests",
+        None,
+        &[],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "HEAD",
+        "/api/codex/species",
+        None,
+        &[allowed],
     )
     .await;
     assert_parity(

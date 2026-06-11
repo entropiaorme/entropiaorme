@@ -141,12 +141,14 @@ async fn api_guard(
         return next.run(req).await;
     }
     if let Some(host) = req.headers().get(http::header::HOST) {
-        // The backend lowercases the inbound Host before its check.
+        // The backend lowercases the inbound Host before its check and
+        // skips an empty value (its falsy test), as well as an absent
+        // header.
         let allowed = host
             .to_str()
             .map(|host| {
                 let host = host.to_ascii_lowercase();
-                state.allowed_hosts.iter().any(|entry| *entry == host)
+                host.is_empty() || state.allowed_hosts.contains(&host)
             })
             .unwrap_or(false);
         if !allowed {
@@ -230,7 +232,14 @@ where
     // Methods this registration does not carry still belong to the
     // sidecar (an unported POST on a natively-read path, the bare
     // OPTIONS the backend answers itself): fall back to the proxy
-    // rather than axum's empty 405.
+    // rather than axum's empty 405. HEAD needs its own explicit leg
+    // because axum otherwise dispatches it into the GET handler with
+    // the body stripped, while the backend hard-405s HEAD on its GET
+    // routes; pinning HEAD to the proxy keeps that 405 the sidecar's.
+    .on(
+        MethodFilter::HEAD,
+        |State(state): State<Arc<AppState>>, req: Request| async move { state.proxy(req).await },
+    )
     .fallback(proxy_fallback)
 }
 

@@ -289,6 +289,15 @@ async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
     // one raw segment here, so it reaches the fallback too.
     let (status, _, _) = get(port, "/api/quests%2Fmobs").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    // HEAD belongs to the sidecar (the backend hard-405s HEAD on its
+    // GET routes); the explicit proxy leg keeps it off the native GET
+    // handler, proven by the dead upstream.
+    let (status, _, _) = request(port, "HEAD", "/api/quests", &[]).await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    // A present-but-empty Host passes the guard, as the backend's
+    // falsy check skips it (served natively: 200, not 403).
+    let (status, _, _) = request(port, "GET", "/api/quests", &[("host", "")]).await;
+    assert_eq!(status, http::StatusCode::OK);
     // The runtime arm override steers a registered route to the proxy
     // and back without a rebuild.
     let (status, _, _) = get(port, "/api/quests").await;

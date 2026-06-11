@@ -309,6 +309,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn state_reports_its_upstream_authority_verbatim() {
+        let state = AppState::new("127.0.0.1:9421".into(), 8421, ArmOverrides::empty());
+        assert_eq!(state.upstream(), "127.0.0.1:9421");
+    }
+
+    #[test]
     fn state_arm_lookup_defaults_native_and_hot_swaps() {
         let state = AppState::new("127.0.0.1:1".into(), 8421, ArmOverrides::empty());
         assert_eq!(state.arm_for("/api/health"), Arm::Native);

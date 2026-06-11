@@ -75,8 +75,12 @@ async fn request(
     let authority = format!("127.0.0.1:{port}");
     let mut builder = http::Request::builder()
         .method(method)
-        .uri(format!("http://{authority}{path}"))
-        .header("host", &authority);
+        .uri(format!("http://{authority}{path}"));
+    // An explicit host in the probe replaces the default, so bad-Host
+    // probes carry exactly one Host header.
+    if !extra_headers.iter().any(|(name, _)| *name == "host") {
+        builder = builder.header("host", &authority);
+    }
     for (name, value) in extra_headers {
         builder = builder.header(*name, *value);
     }
@@ -298,6 +302,13 @@ async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
     // falsy check skips it (served natively: 200, not 403).
     let (status, _, _) = request(port, "GET", "/api/quests", &[("host", "")]).await;
     assert_eq!(status, http::StatusCode::OK);
+    // The guard scopes to API paths and skips OPTIONS outright, as the
+    // backend's middleware does: a bad Host on a non-API path, or on a
+    // bare OPTIONS, reaches the proxy (502 here) instead of a 403.
+    let (status, _, _) = request(port, "GET", "/health", &[("host", "evil:1")]).await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    let (status, _, _) = request(port, "OPTIONS", "/api/quests", &[("host", "evil:1")]).await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
     // The runtime arm override steers a registered route to the proxy
     // and back without a rebuild.
     let (status, _, _) = get(port, "/api/quests").await;

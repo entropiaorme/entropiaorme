@@ -18,6 +18,7 @@ pub mod codex_categories;
 pub mod config_service;
 pub mod cost_engine;
 pub mod db;
+pub mod difflib;
 pub mod eu_window;
 pub mod event_bus;
 pub mod fingerprint_recorder;

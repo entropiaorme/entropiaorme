@@ -15,6 +15,7 @@ bench = false
 [dependencies]
 eo-wire = { workspace = true }
 regex = { workspace = true }
+unicode-normalization = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 html-escape = { workspace = true }

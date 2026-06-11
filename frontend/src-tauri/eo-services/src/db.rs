@@ -120,6 +120,13 @@ impl Db {
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5))
+            // The backend never enables foreign-key enforcement (the
+            // sqlite3 default), so the schema's REFERENCES clauses are
+            // declarative there; the driver here enables it by default,
+            // which would refuse writes the backend accepts (an overlay
+            // event for a session id with no surviving session row).
+            // Match the backend's effective pragma surface.
+            .foreign_keys(false)
             // 8 MB page cache, matching the backend's configuration.
             .pragma("cache_size", "-8000");
         let pool = SqlitePoolOptions::new()

@@ -83,9 +83,9 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf) -> Option<Arc<Hydrat
     let db = match Db::open_adopted(&db_path).await {
         Ok(db) => db,
         Err(err @ AdoptError::Quarantined { .. }) => {
-            // The S4 outcome: an existing database we cannot adopt is
-            // surfaced loudly and left untouched; the sidecar (whose
-            // own migration logic governs it as before) keeps serving.
+            // An existing database we cannot adopt is surfaced loudly
+            // and left untouched; the sidecar (whose own migration
+            // logic governs it as before) keeps serving.
             eprintln!("[composition] {err}");
             return None;
         }

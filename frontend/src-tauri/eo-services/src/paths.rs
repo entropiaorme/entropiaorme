@@ -8,8 +8,8 @@
 //! root); otherwise the project-root `data/` directory. The shell calls
 //! the pure function here with its own notion of those inputs, and the
 //! composition root only ever opens the database at the resolved
-//! location (the S4 obligation: the path comes from this resolution,
-//! never from a caller-supplied string).
+//! location: the path comes from this resolution, never from a
+//! caller-supplied string.
 
 use std::path::{Path, PathBuf};
 

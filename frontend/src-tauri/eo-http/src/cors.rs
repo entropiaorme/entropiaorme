@@ -229,14 +229,14 @@ mod tests {
 
     #[test]
     fn the_origin_set_mirrors_the_backend() {
-        let cors = CorsConfig::new(5173, Some("entropiaorme-lane.localhost"));
+        let cors = CorsConfig::new(5173, Some("entropiaorme-dev.localhost"));
         for origin in [
             "tauri://localhost",
             "http://tauri.localhost",
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "https://entropiaorme.localhost",
-            "https://entropiaorme-lane.localhost",
+            "https://entropiaorme-dev.localhost",
         ] {
             assert!(cors.origin_allowed(origin), "{origin}");
         }

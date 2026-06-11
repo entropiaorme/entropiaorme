@@ -11,6 +11,7 @@
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod arms;
+pub mod cors;
 pub mod extract;
 pub mod hydration;
 pub mod native;
@@ -37,6 +38,7 @@ pub struct AppState {
     allowed_hosts: [String; 2],
     overrides: RwLock<ArmOverrides>,
     hydration: Option<Arc<crate::hydration::HydrationState>>,
+    cors: Option<cors::CorsConfig>,
 }
 
 impl AppState {
@@ -54,7 +56,19 @@ impl AppState {
             ],
             overrides: RwLock::new(overrides),
             hydration: None,
+            cors: None,
         }
+    }
+
+    /// Attach the backend-mirroring CORS contract: preflights answered
+    /// at the substrate, native responses decorated for allowed
+    /// origins, and the origin guard enforced ahead of routing. Without
+    /// it (substrates predating composition, and tests that do not
+    /// exercise the browser surface) preflights and origin rules flow
+    /// to the sidecar as before.
+    pub fn with_cors(mut self, cors: cors::CorsConfig) -> Self {
+        self.cors = Some(cors);
+        self
     }
 
     /// Attach the composed native services. Without this (a substrate
@@ -100,31 +114,88 @@ async fn proxy_fallback(State(state): State<Arc<AppState>>, req: Request) -> Res
     state.proxy(req).await
 }
 
-/// Public-boundary Host guard, mirroring the backend's own check (which
-/// the proxy's Host rewrite would otherwise make a no-op for proxied
-/// requests): a present Host header must name this router's loopback
-/// authority. An absent Host passes, exactly as the backend's guard
-/// treats it; the response shape matches the backend's 403 verbatim.
-async fn host_guard(
+/// A 403 in the backend's `{"detail": ...}` rendering.
+fn forbidden(detail: &str) -> Response {
+    let body = serde_json::json!({ "detail": detail }).to_string();
+    Response::builder()
+        .status(http::StatusCode::FORBIDDEN)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 403 response builds")
+}
+
+/// The public-boundary guard, mirroring the backend's own API-origin
+/// middleware clause for clause: OPTIONS and non-API paths pass
+/// untouched; a present Host header must name this router's loopback
+/// authority (the proxy's Host rewrite makes the sidecar's own check a
+/// no-op for proxied requests); and, when the CORS contract is
+/// configured, mutating methods require an allowed Origin while reads
+/// reject a present-but-disallowed one. Each 403 body matches the
+/// backend's verbatim.
+async fn api_guard(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
+    if req.method() == http::Method::OPTIONS || !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
+    }
     if let Some(host) = req.headers().get(http::header::HOST) {
         let allowed = host
             .to_str()
             .map(|host| state.allowed_hosts.iter().any(|entry| entry == host))
             .unwrap_or(false);
         if !allowed {
-            let body = serde_json::json!({ "detail": "Invalid Host header" }).to_string();
-            return Response::builder()
-                .status(http::StatusCode::FORBIDDEN)
-                .header(http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .expect("static 403 response builds");
+            return forbidden("Invalid Host header");
+        }
+    }
+    if let Some(cors) = &state.cors {
+        let origin = req
+            .headers()
+            .get(http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok());
+        let mutating = !matches!(
+            *req.method(),
+            http::Method::GET | http::Method::HEAD | http::Method::OPTIONS
+        );
+        if mutating {
+            if !origin.is_some_and(|o| cors.origin_allowed(o)) {
+                return forbidden("Origin header required");
+            }
+        } else if origin.is_some_and(|o| !cors.origin_allowed(o)) {
+            return forbidden("Invalid Origin header");
         }
     }
     next.run(req).await
+}
+
+/// The outermost CORS layer, where the backend's stack also puts it: a
+/// preflight short-circuits everything (routing, the Host and origin
+/// guards) when the contract is configured, and every other response
+/// for an allowed Origin is decorated unless the sidecar already did.
+async fn cors_layer(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some(cors_config) = &state.cors else {
+        return next.run(req).await;
+    };
+    if cors::is_preflight(req.method(), req.headers()) {
+        return cors_config.preflight_response(req.headers());
+    }
+    let origin = req.headers().get(http::header::ORIGIN).cloned();
+    let mut response = next.run(req).await;
+    if let Some(origin) = origin {
+        let allowed = origin
+            .to_str()
+            .map(|o| cors_config.origin_allowed(o))
+            .unwrap_or(false);
+        if allowed {
+            cors::decorate(&mut response, &origin);
+        }
+    }
+    response
 }
 
 /// A method router that consults the arm override for `route` on every
@@ -152,17 +223,27 @@ where
             }
         },
     )
+    // Methods this registration does not carry still belong to the
+    // sidecar (an unported POST on a natively-read path, the bare
+    // OPTIONS the backend answers itself): fall back to the proxy
+    // rather than axum's empty 405.
+    .fallback(proxy_fallback)
 }
 
 /// The substrate router: natively-registered routes take precedence, the
 /// proxy fallback carries every other method and path to the sidecar, and
-/// the Host guard fronts both arms.
+/// the guard stack fronts both arms in the backend's own order (CORS
+/// outermost, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
         .fallback(any(proxy_fallback))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            host_guard,
+            api_guard,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            cors_layer,
         ))
         .with_state(state)
 }

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use eo_http::arms::ArmOverrides;
+use eo_http::cors::CorsConfig;
 use eo_http::hydration::HydrationState;
 use eo_http::AppState;
 use eo_services::clock::RealClock;
@@ -104,12 +105,28 @@ async fn get(
     path: &str,
     if_none_match: Option<&str>,
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    request(port, "GET", path, if_none_match, &[]).await
+}
+
+/// An arbitrary-method request carrying extra headers (the CORS
+/// probes' Origin and preflight markers).
+async fn request(
+    port: u16,
+    method: &str,
+    path: &str,
+    if_none_match: Option<&str>,
+    extra_headers: &[(&str, &str)],
+) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     let authority = format!("127.0.0.1:{port}");
     let mut builder = http::Request::builder()
+        .method(method)
         .uri(format!("http://{authority}{path}"))
         .header("host", &authority);
     if let Some(tag) = if_none_match {
         builder = builder.header("if-none-match", tag);
+    }
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
     }
     let response = client()
         .request(builder.body(Body::empty()).unwrap())
@@ -174,19 +191,26 @@ async fn wait_healthy(port: u16) {
     }
 }
 
-/// The compared contract axes; the proxy arm additionally carries the
-/// sidecar's server/date headers, which are not part of the contract.
-fn contract_axes(headers: &http::HeaderMap) -> (Option<String>, Option<String>, Option<String>) {
+/// The compared contract axes (response headers the frontend's
+/// behaviour rides on, the browser-surface CORS set included); the
+/// proxy arm additionally carries the sidecar's server/date headers,
+/// which are not part of the contract.
+fn contract_axes(headers: &http::HeaderMap) -> Vec<Option<String>> {
     let value = |name: http::header::HeaderName| {
         headers
             .get(name)
             .map(|v| v.to_str().unwrap_or("<non-utf8>").to_string())
     };
-    (
+    vec![
         value(http::header::CONTENT_TYPE),
         value(http::header::CACHE_CONTROL),
         value(http::header::ETAG),
-    )
+        value(http::header::VARY),
+        value(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        value(http::header::ACCESS_CONTROL_ALLOW_METHODS),
+        value(http::header::ACCESS_CONTROL_ALLOW_HEADERS),
+        value(http::header::ACCESS_CONTROL_MAX_AGE),
+    ]
 }
 
 async fn assert_substrate_matches_backend(
@@ -195,25 +219,44 @@ async fn assert_substrate_matches_backend(
     path: &str,
     if_none_match: Option<&str>,
 ) {
+    assert_parity(
+        substrate_port,
+        backend_port,
+        "GET",
+        path,
+        if_none_match,
+        &[],
+    )
+    .await;
+}
+
+async fn assert_parity(
+    substrate_port: u16,
+    backend_port: u16,
+    method: &str,
+    path: &str,
+    if_none_match: Option<&str>,
+    extra_headers: &[(&str, &str)],
+) {
     let (native_status, native_headers, native_body) =
-        get(substrate_port, path, if_none_match).await;
+        request(substrate_port, method, path, if_none_match, extra_headers).await;
     let (backend_status, backend_headers, backend_body) =
-        get(backend_port, path, if_none_match).await;
+        request(backend_port, method, path, if_none_match, extra_headers).await;
     assert_eq!(
         native_status, backend_status,
-        "status diverged on {path} (if-none-match: {if_none_match:?})\n  substrate body: {}\n  backend body:   {}",
+        "status diverged on {method} {path} (headers: {extra_headers:?})\n  substrate body: {}\n  backend body:   {}",
         String::from_utf8_lossy(&native_body),
         String::from_utf8_lossy(&backend_body),
     );
     assert_eq!(
         contract_axes(&native_headers),
         contract_axes(&backend_headers),
-        "contract headers diverged on {path}"
+        "contract headers diverged on {method} {path} (headers: {extra_headers:?})"
     );
     assert_eq!(
         native_body,
         backend_body,
-        "body diverged on {path} (if-none-match: {if_none_match:?})\n  substrate: {}\n  backend:   {}",
+        "body diverged on {method} {path} (headers: {extra_headers:?})\n  substrate: {}\n  backend:   {}",
         String::from_utf8_lossy(&native_body),
         String::from_utf8_lossy(&backend_body),
     );
@@ -276,7 +319,10 @@ async fn the_registered_surface_conforms_through_the_public_port() {
             substrate_port,
             ArmOverrides::empty(),
         )
-        .with_hydration(hydration),
+        .with_hydration(hydration)
+        // Match the backend's own configuration in this boot: default
+        // frontend port, no per-checkout dev hostname.
+        .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
     tokio::spawn(async move {
@@ -386,6 +432,162 @@ async fn the_registered_surface_conforms_through_the_public_port() {
     for path in &probes {
         assert_substrate_matches_backend(substrate_port, sidecar.port, path, None).await;
     }
+
+    // ── The browser surface: preflights, origin rules, decoration ──
+    let allowed = ("origin", "tauri://localhost");
+    let disallowed = ("origin", "http://evil.example");
+    // Decoration on natively-served success, error, and conditional
+    // responses.
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "GET",
+        "/api/quests",
+        None,
+        &[allowed],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "GET",
+        "/api/quests",
+        Some(etag.as_str()),
+        &[allowed],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "GET",
+        "/api/codex/recommend?rank=abc",
+        None,
+        &[allowed],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "GET",
+        "/api/codex/species/No%20Such/ranks",
+        None,
+        &[allowed],
+    )
+    .await;
+    // Origin rules ahead of routing.
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "GET",
+        "/api/quests",
+        None,
+        &[disallowed],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "POST",
+        "/api/quests",
+        None,
+        &[],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "POST",
+        "/api/quests",
+        None,
+        &[disallowed],
+    )
+    .await;
+    // Preflights: pass, each failure class, and an unknown path (the
+    // backend answers preflights before routing; so does the
+    // substrate).
+    let acrm = ("access-control-request-method", "GET");
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[allowed, acrm],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[
+            allowed,
+            acrm,
+            ("access-control-request-headers", "content-type"),
+        ],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[
+            allowed,
+            acrm,
+            ("access-control-request-headers", "if-none-match"),
+        ],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[disallowed, acrm],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[allowed, ("access-control-request-method", "TRACE")],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/nonexistent",
+        None,
+        &[allowed, acrm],
+    )
+    .await;
+    // Non-preflight methods on a natively-registered path flow to the
+    // sidecar (the bare OPTIONS 405, an unported PATCH 405).
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "OPTIONS",
+        "/api/quests",
+        None,
+        &[],
+    )
+    .await;
+    assert_parity(
+        substrate_port,
+        sidecar.port,
+        "PATCH",
+        "/api/quests",
+        None,
+        &[allowed],
+    )
+    .await;
 
     // ── The runtime arm override on a registered route ──
     // Native arm first: the substrate answers itself (no sidecar

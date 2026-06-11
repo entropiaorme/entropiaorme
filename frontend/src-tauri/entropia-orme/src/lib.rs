@@ -246,7 +246,11 @@ fn spawn_http_substrate(
             format!("127.0.0.1:{sidecar_port}"),
             public_backend_port(),
             overrides,
-        );
+        )
+        // The substrate answers the browser surface (preflights, origin
+        // rules, response decoration) exactly as the sidecar's own
+        // middleware would, from the same environment inputs.
+        .with_cors(eo_http::cors::CorsConfig::from_env());
         if let Some(hydration) = composition::compose_native(resource_dir).await {
             app_state = app_state.with_hydration(hydration);
         }

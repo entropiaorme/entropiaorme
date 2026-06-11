@@ -64,6 +64,9 @@ _EXEMPT_PATTERNS = (
     re.compile(r"(^|/)package-lock\.json$"),
     re.compile(r"(^|/)Cargo\.lock$"),
     re.compile(r"\.db$", re.IGNORECASE),
+    # Byte-verbatim third-party model assets (the OCR decode alphabet
+    # legitimately contains em dashes as recognisable characters).
+    re.compile(r"(^|/)backend/assets/models/"),
     # Generated, not hand-authored: the OpenAPI snapshot, the coverage matrix,
     # and the frontend API types generated from that snapshot (their doc
     # comments mirror the spec's description strings verbatim by design).

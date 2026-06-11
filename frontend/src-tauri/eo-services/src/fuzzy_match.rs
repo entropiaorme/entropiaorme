@@ -33,7 +33,7 @@ fn partial_ratio_impl(needle: &[char], haystack: &[char]) -> f64 {
     let needle_set: std::collections::HashSet<char> = needle.iter().copied().collect();
     let mut best = 0.0f64;
 
-    let mut consider = |window: &[char], best: &mut f64| {
+    let consider = |window: &[char], best: &mut f64| {
         let score = indel::normalized_similarity(needle.iter().copied(), window.iter().copied());
         if score > *best {
             *best = score;

@@ -77,6 +77,27 @@ FLOORS: dict[str, float] = {
     # tolerance's exact-equality flip needs a difference of exactly one
     # billionth, which the value grammar cannot produce.
     "eo-services/src/chatlog_watcher.rs": 92.0,
+    # Measured 96.9. The residual survivors are equivalent or
+    # environment-bound: the zero-or-positive guards on accumulator
+    # adds flip to admitting an exact zero, which adds nothing either
+    # way (shot damage, per-tool damage, the zero heal cost, the
+    # zero fallback cost); the loot handler's session/accumulator
+    # null-checks are invariant-coupled (the fields are set and
+    # cleared together under the same guard); the enhancer break's
+    # redistribute-on-empty arm equals the decrement loop's no-op on
+    # empty stacks; the costless tool merge resolves the same bare
+    # entry whichever comparison arm runs, because the Unknown bucket
+    # cannot coexist with named entries; and the naive-local epoch
+    # helper's DST-gap resolution arm is reachable only when the test
+    # host's zone puts the instant inside a spring-forward gap, which
+    # no deterministic test can arrange across CI hosts.
+    "eo-services/src/tracker.rs": 92.0,
+    # Measured 95.6. The two residual survivors are equivalent: a
+    # zero known-kill total implies the mob rows were empty, which the
+    # enclosing guard already excludes, and a zero shot total makes
+    # the dominance share NaN, which fails the threshold exactly as
+    # the guard's skip does.
+    "eo-services/src/session_summary.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

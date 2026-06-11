@@ -301,6 +301,51 @@ pub fn to_python_json(value: &Value, indent: Option<usize>) -> String {
     out
 }
 
+/// Render `value` exactly as the backend's HTTP layer serialises a
+/// response body: `json.dumps(content, ensure_ascii=False,
+/// allow_nan=False, separators=(",", ":"))` over the model's own key
+/// order. Differs from [`to_python_json`] in both separators (no
+/// spaces) and key order (insertion order, not sorted): the goldens'
+/// canonical form sorts for diff stability, while the wire carries
+/// the models' declared order.
+pub fn to_wire_json(value: &Value) -> String {
+    let mut out = String::new();
+    write_wire_value(&mut out, value);
+    out
+}
+
+fn write_wire_value(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(n) => write_number(out, n),
+        Value::String(s) => write_string(out, s),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_wire_value(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (i, (key, entry)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_string(out, key);
+                out.push(':');
+                write_wire_value(out, entry);
+            }
+            out.push('}');
+        }
+    }
+}
+
 fn write_value(out: &mut String, value: &Value, indent: Option<usize>, depth: usize) {
     match value {
         Value::Null => out.push_str("null"),
@@ -772,5 +817,23 @@ mod tests {
         assert!(!is_uuid("11111111-1111-1111-1111-11111111111")); // 35 chars
         assert!(!is_uuid("11111111x1111-1111-1111-111111111111")); // wrong sep
         assert!(!is_uuid("g1111111-1111-1111-1111-111111111111")); // non-hex
+    }
+
+    #[test]
+    fn the_wire_form_matches_the_http_layer_serialisation() {
+        // json.dumps(..., ensure_ascii=False, separators=(",", ":"))
+        // over insertion order: no spaces, keys unsorted.
+        let value = serde_json::json!({
+            "zeta": [1, 2.5, null],
+            "alpha": {"b": true, "a": ""},
+            "text": "G\u{e9}o \"q\"",
+        });
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"zeta\":[1,2.5,null],\"alpha\":{\"b\":true,\"a\":\"\"},\"text\":\"G\u{e9}o \\\"q\\\"\"}"
+        );
+        assert_eq!(to_wire_json(&serde_json::json!([])), "[]");
+        assert_eq!(to_wire_json(&serde_json::json!({})), "{}");
+        assert_eq!(to_wire_json(&serde_json::json!(false)), "false");
     }
 }

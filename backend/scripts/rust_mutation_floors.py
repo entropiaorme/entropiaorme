@@ -156,6 +156,14 @@ FLOORS: dict[str, float] = {
     # matching elements, so the forward pass closes the same run to
     # the same right edge wherever the size accrues).
     "eo-services/src/difflib.rs": 92.0,
+    # Measured 92.3 hermetically (the A/B fidelity test additionally
+    # holds the whole surface byte-for-byte against the running
+    # backend). The residual survivors are equivalent: the or-empty
+    # guard's flip keeps the original empty string, the same value the
+    # default arm builds; and the 422 boundary selector's strictness
+    # flip differs only at a rank the range guard already admits, so
+    # the selector never sees it.
+    "eo-http/src/hydration.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

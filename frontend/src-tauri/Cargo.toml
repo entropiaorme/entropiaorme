@@ -70,6 +70,9 @@ http-body-util = "0.1"
 # client's timestamp format via chrono, and the HTML5 named-entity set
 # matching the original's unescaping.
 regex = "1"
+# Strong-ETag computation for natively-served hydration responses
+# (the backend's middleware hashes the response body with SHA-256).
+sha2 = "0.10"
 # NFKD decomposition for the quest-name normaliser: the mission-name
 # matcher folds accented characters to their ASCII base before
 # comparison, exactly as the backend's normalise step does.

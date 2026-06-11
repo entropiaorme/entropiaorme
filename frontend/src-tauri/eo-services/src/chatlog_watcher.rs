@@ -267,20 +267,37 @@ fn tail_loop(shared: &Shared) {
 
         let mut buffer = Vec::new();
         while shared.running.load(Ordering::SeqCst) {
-            buffer.clear();
             let bytes = reader.read_until(b'\n', &mut buffer)?;
-            if bytes > 0 {
-                // The original reads text with errors="replace".
-                let line = String::from_utf8_lossy(&buffer).into_owned();
-                if let Some(tap) = shared.line_tap.lock().expect("line tap").clone() {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tap(&line)));
-                }
-                process_line(shared, &mut tick, &line);
-            } else {
+            if bytes == 0 {
                 flush_tick(shared, &mut tick);
                 signal_idle(shared);
                 std::thread::sleep(TAIL_INTERVAL);
+                continue;
             }
+            // A read can surface the head of an in-flight append (the
+            // writer's flush is not atomic with respect to a tailing
+            // reader). Hold the partial and resume reading: the next
+            // pass appends the remainder, so the line processes whole
+            // instead of as two unparseable fragments.
+            if buffer.last() != Some(&b'\n') {
+                continue;
+            }
+            // The original reads text with errors="replace".
+            let line = String::from_utf8_lossy(&buffer).into_owned();
+            buffer.clear();
+            if let Some(tap) = shared.line_tap.lock().expect("line tap").clone() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tap(&line)));
+            }
+            process_line(shared, &mut tick, &line);
+        }
+        // The shutdown pass processes a final unterminated line the
+        // way the original's readline-at-EOF does.
+        if !buffer.is_empty() {
+            let line = String::from_utf8_lossy(&buffer).into_owned();
+            if let Some(tap) = shared.line_tap.lock().expect("line tap").clone() {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tap(&line)));
+            }
+            process_line(shared, &mut tick, &line);
         }
         flush_tick(shared, &mut tick);
         Ok(())
@@ -614,6 +631,54 @@ mod tests {
             .watcher
             .wait_until_drained(min_lines, Duration::from_secs(10))
             .unwrap();
+    }
+
+    fn append_raw(pipeline: &Pipeline, text: &str) {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&pipeline.log_path)
+            .unwrap();
+        write!(file, "{text}").unwrap();
+        file.flush().unwrap();
+    }
+
+    #[test]
+    fn partial_appends_process_as_whole_lines() {
+        let pipeline = pipeline(None);
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let sink = received.clone();
+        pipeline.bus.subscribe(Topic::Combat, move |data| {
+            sink.lock().unwrap().push(data.clone());
+        });
+
+        // The head of an in-flight append: the tail must hold it
+        // rather than parse the fragment. The pause spans several
+        // tail intervals so the partial is observably available.
+        append_raw(
+            &pipeline,
+            "2026-05-19 10:00:01 [System] [] You inflicted 12.0 points of dam",
+        );
+        std::thread::sleep(TAIL_INTERVAL * 3);
+        assert_eq!(pipeline.watcher.lines_seen(), 0, "no whole line yet");
+        append_raw(&pipeline, "age\n");
+        drain(&pipeline, 1);
+        {
+            let received = received.lock().unwrap();
+            assert_eq!(received.len(), 1, "the joined line parses once");
+            assert_eq!(received[0]["amount"], 12.0);
+        }
+
+        // A final unterminated line still processes at shutdown, the
+        // way the original's readline-at-EOF surfaces it.
+        append_raw(
+            &pipeline,
+            "2026-05-19 10:00:02 [System] [] You inflicted 7.5 points of damage",
+        );
+        std::thread::sleep(TAIL_INTERVAL * 3);
+        pipeline.watcher.stop();
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 2, "the shutdown pass takes the tail line");
+        assert_eq!(received[1]["amount"], 7.5);
     }
 
     #[test]

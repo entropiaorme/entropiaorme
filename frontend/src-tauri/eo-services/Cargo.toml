@@ -24,6 +24,7 @@ ort = { workspace = true }
 image = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
+rapidfuzz = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

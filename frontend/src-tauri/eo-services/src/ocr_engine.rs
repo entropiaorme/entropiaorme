@@ -232,6 +232,13 @@ impl OcrEngine {
             // crop; refuse before the arithmetic does anything wild.
             return Err(format!("degenerate cell: {h}x{w}"));
         }
+        if img.len() != h * w * 3 {
+            return Err(format!(
+                "cell buffer is {} bytes for {h}x{w} (expected {})",
+                img.len(),
+                h * w * 3
+            ));
+        }
         let (tensor_data, img_w) = preprocess(img, h, w);
         let tensor = Tensor::from_array(([1usize, 3, TARGET_H, img_w], tensor_data))
             .map_err(|error| format!("input tensor: {error}"))?;
@@ -246,7 +253,7 @@ impl OcrEngine {
             .try_extract_tensor::<f32>()
             .map_err(|error| format!("output tensor: {error}"))?;
         let dims: Vec<i64> = shape.iter().copied().collect();
-        if dims.len() != 3 {
+        if dims.len() != 3 || dims[0] != 1 {
             return Err(format!("expected a (1, T, C) output, got {dims:?}"));
         }
         let t_len = dims[1] as usize;

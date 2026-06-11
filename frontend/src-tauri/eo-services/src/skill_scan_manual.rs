@@ -39,7 +39,7 @@ pub const PAGE_COUNT: i64 = 12;
 pub const MAX_PAGE_COUNT: i64 = 30;
 
 /// One scan region: the panel's top-left and bottom-right corners.
-pub type ScanRegion = ([i32; 2], [i32; 2]);
+pub type ScanRegion = ([i64; 2], [i64; 2]);
 
 /// The capture observer (the recording controller's seam): called as
 /// `tap(panel, region, png)` after each successful page grab.

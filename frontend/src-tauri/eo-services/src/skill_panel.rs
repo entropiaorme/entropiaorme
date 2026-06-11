@@ -18,7 +18,7 @@
 
 use serde_json::Value;
 
-use crate::fuzzy_match::{extract_top, wratio};
+use crate::fuzzy_match::extract_top;
 use crate::mob_lookup_service::python_whitespace;
 
 /// One BGR HWC image buffer.
@@ -100,13 +100,13 @@ pub fn parse_bar_fill(crop: &BgrImage) -> f64 {
         ((b as u32 * 1868 + g as u32 * 9617 + r as u32 * 4899 + (1 << 13)) >> 14) as u8
     };
     let mut col_mean = vec![0.0f64; crop.w];
-    for x in 0..crop.w {
+    for (x, mean) in col_mean.iter_mut().enumerate() {
         let mut sum = 0u64;
         for y in 0..crop.h {
             let i = (y * crop.w + x) * 3;
             sum += grey(crop.data[i], crop.data[i + 1], crop.data[i + 2]) as u64;
         }
-        col_mean[x] = sum as f64 / crop.h as f64;
+        *mean = sum as f64 / crop.h as f64;
     }
     let lo = col_mean.iter().copied().fold(f64::INFINITY, f64::min);
     let hi = col_mean.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -177,25 +177,27 @@ pub fn fuzzy_resolve(
 
 /// Slice a captured panel into per-cell BGR crops via the calibrated
 /// grid: rows top to bottom, then cells in geometry order, so callers
-/// can group per row downstream. (Missing geometry fields read as
-/// zero, degrading to empty crops where the original raises on a
-/// corrupt geometry file; the committed geometry carries every
-/// field.)
+/// can group per row downstream. A missing geometry field panics the
+/// way the original's lookup raises (the scan worker contains it and
+/// surfaces the error); the committed geometry carries every field.
 pub fn slice_panel_cells(panel: &BgrImage, geom: &Value) -> Vec<CellCrop> {
     let n_rows = geom
         .get("n_rows")
         .and_then(Value::as_i64)
-        .unwrap_or(0)
+        .expect("panel geometry: n_rows")
         .max(0) as usize;
-    let empty = serde_json::Map::new();
     let cells = geom
         .get("cells")
         .and_then(Value::as_object)
-        .unwrap_or(&empty);
+        .expect("panel geometry: cells");
     let mut out = Vec::new();
     for r in 0..n_rows {
         for (cell_name, cell) in cells {
-            let field = |key: &str| cell.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+            let field = |key: &str| {
+                cell.get(key)
+                    .and_then(Value::as_f64)
+                    .unwrap_or_else(|| panic!("panel geometry: {cell_name}.{key}"))
+            };
             let first = field("first_y_top");
             let last = field("last_y_top");
             let y_top = if n_rows > 1 {
@@ -269,12 +271,6 @@ pub fn read_skill_panel(
             level: row.int_level.map(|int| int as f64 + row.bar_fill),
         })
         .collect()
-}
-
-/// The score the resolver would give a single pairing (exposed for
-/// the comparison harnesses).
-pub fn resolve_score(query: &str, entry: &str) -> f64 {
-    wratio(query, entry)
 }
 
 #[cfg(test)]
@@ -369,13 +365,6 @@ mod tests {
         columns.push([10u8, 10, 10]);
         let fill = parse_bar_fill(&colour_bar(&columns, 2));
         assert!((fill - 0.9).abs() < 1e-9, "near-full fill: {fill}");
-    }
-
-    #[test]
-    fn resolve_score_is_the_weighted_scorer() {
-        assert_eq!(resolve_score("Anatomy", "Anatomy"), 100.0);
-        assert_eq!(resolve_score("abcdefgh", "xyz"), 0.0);
-        assert!((resolve_score("a", "abcdefghijklmnopqrstuvwxyz") - 60.0).abs() < 1e-9);
     }
 
     #[test]

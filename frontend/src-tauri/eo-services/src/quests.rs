@@ -29,7 +29,8 @@ pub const PLAYLIST_GROUP_IMMEDIATE: &str = "immediate";
 pub const PLAYLIST_GROUP_LONG_HORIZON: &str = "long_horizon";
 
 /// The service's error surface: `Invalid` carries the original's
-/// raised-exception messages (its `ValueError` texts verbatim). The
+/// raised-exception messages (its `ValueError` texts verbatim; the
+/// null-list refusals name crashes the original leaves unworded). The
 /// quest router leaves these unhandled, so they surface as 500s, not
 /// 400s; the future router slice must preserve that. `Db` is a
 /// database failure (also 500).
@@ -1209,5 +1210,62 @@ mod tests {
             .get(0);
         assert_eq!(mobs, 1);
         assert_eq!(svc.get_all_mob_names().await.unwrap(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn mob_autocomplete_lists_active_quest_mobs_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        svc.create_quest(&full_quest_payload()).await.unwrap();
+        svc.create_quest(&json!({"name": "Side Hunt", "mobs": ["Snablesnot"]}))
+            .await
+            .unwrap();
+        assert_eq!(
+            svc.get_all_mob_names().await.unwrap(),
+            ["Atrax", "Atrox", "Snablesnot"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_hour_cooldown_never_produces_an_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let mut payload = full_quest_payload();
+        payload["cooldown_hours"] = json!(0);
+        let q = quest_id(&svc.create_quest(&payload).await.unwrap());
+        sqlx::query(
+            "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+             VALUES ('sess-1', ?, 1772366400.0)",
+        )
+        .bind(q)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let quest = svc.get_quest(q).await.unwrap().unwrap();
+        assert_eq!(quest["last_completed_at"], json!(1772366400.0));
+        assert_eq!(
+            quest["cooldown_expires_at"],
+            Value::Null,
+            "the expiry derives only from a strictly positive cooldown"
+        );
+    }
+
+    #[test]
+    fn truthiness_matches_python_bool() {
+        // The expectation table is Python's bool() over each shape.
+        assert!(!json_truthy(None));
+        assert!(!json_truthy(Some(&json!(null))));
+        assert!(!json_truthy(Some(&json!(false))));
+        assert!(json_truthy(Some(&json!(true))));
+        assert!(!json_truthy(Some(&json!(0))));
+        assert!(!json_truthy(Some(&json!(0.0))));
+        assert!(json_truthy(Some(&json!(2))));
+        assert!(!json_truthy(Some(&json!(""))));
+        assert!(json_truthy(Some(&json!("no"))));
+        assert!(!json_truthy(Some(&json!([]))));
+        assert!(json_truthy(Some(&json!(["x"]))));
+        assert!(!json_truthy(Some(&json!({}))));
+        assert!(json_truthy(Some(&json!({"k": 1}))));
     }
 }

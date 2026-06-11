@@ -21,7 +21,13 @@ tauri-plugin-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 eo-http = { workspace = true }
+# The composition root constructs the ported services the substrate's
+# native routes read through.
+eo-services = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

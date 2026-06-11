@@ -1,3 +1,5 @@
+mod composition;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command as StdCommand;
@@ -85,7 +87,11 @@ pub fn run() {
                 match relocation {
                     Some((listener, sidecar_port)) => {
                         spawn_backend_sidecar(app.handle(), Some(sidecar_port));
-                        spawn_http_substrate(listener, sidecar_port);
+                        spawn_http_substrate(
+                            listener,
+                            sidecar_port,
+                            app.path().resource_dir().ok(),
+                        );
                     }
                     None => spawn_backend_sidecar(app.handle(), None),
                 }
@@ -96,7 +102,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             if let Some(sidecar_port) = dev_sidecar_port() {
                 if let Some(listener) = bind_substrate_listener() {
-                    spawn_http_substrate(listener, sidecar_port);
+                    spawn_http_substrate(listener, sidecar_port, None);
                 }
             }
             Ok(())
@@ -227,14 +233,28 @@ fn dev_sidecar_port() -> Option<u16> {
 
 /// Serve the strangler router on the already-bound public listener,
 /// proxying not-yet-ported routes to the sidecar on `sidecar_port`.
-fn spawn_http_substrate(listener: std::net::TcpListener, sidecar_port: u16) {
+/// Native services compose first (inside the task, before the first
+/// request); a declined composition serves proxy-only.
+fn spawn_http_substrate(
+    listener: std::net::TcpListener,
+    sidecar_port: u16,
+    resource_dir: Option<std::path::PathBuf>,
+) {
     let overrides = route_arm_overrides();
-    let state = std::sync::Arc::new(eo_http::AppState::new(
-        format!("127.0.0.1:{sidecar_port}"),
-        public_backend_port(),
-        overrides,
-    ));
     tauri::async_runtime::spawn(async move {
+        let mut app_state = eo_http::AppState::new(
+            format!("127.0.0.1:{sidecar_port}"),
+            public_backend_port(),
+            overrides,
+        )
+        // The substrate answers the browser surface (preflights, origin
+        // rules, response decoration) exactly as the sidecar's own
+        // middleware would, from the same environment inputs.
+        .with_cors(eo_http::cors::CorsConfig::from_env());
+        if let Some(hydration) = composition::compose_native(resource_dir).await {
+            app_state = app_state.with_hydration(hydration);
+        }
+        let state = std::sync::Arc::new(app_state);
         let listener = match tokio::net::TcpListener::from_std(listener) {
             Ok(listener) => listener,
             Err(err) => {

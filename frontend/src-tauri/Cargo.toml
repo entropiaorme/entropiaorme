@@ -65,6 +65,9 @@ hyper = { version = "1", default-features = false }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
 http = "1"
 http-body-util = "0.1"
+# Path/query percent-decoding for the native extraction layer; already
+# vendored transitively (2.3.x), promoted to a direct pin.
+percent-encoding = "2.3"
 # The chatlog parser's line grammar: plain regular expressions (the one
 # Python lookahead is reproduced as an explicit post-match check), the
 # client's timestamp format via chrono, and the HTML5 named-entity set

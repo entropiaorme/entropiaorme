@@ -29,6 +29,7 @@ pub mod keystroke_source;
 pub mod loot_filter;
 pub mod mob_lookup_service;
 pub mod ocr_engine;
+pub mod paths;
 pub mod quests;
 pub mod repair_ocr;
 pub mod scan_completion;

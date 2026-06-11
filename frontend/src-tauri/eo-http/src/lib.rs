@@ -11,7 +11,10 @@
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod arms;
+pub mod cors;
+pub mod extract;
 pub mod hydration;
+pub mod native;
 pub mod proxy;
 pub mod sse;
 
@@ -34,6 +37,8 @@ pub struct AppState {
     upstream: String,
     allowed_hosts: [String; 2],
     overrides: RwLock<ArmOverrides>,
+    hydration: Option<Arc<crate::hydration::HydrationState>>,
+    cors: Option<cors::CorsConfig>,
 }
 
 impl AppState {
@@ -50,7 +55,33 @@ impl AppState {
                 format!("localhost:{public_port}"),
             ],
             overrides: RwLock::new(overrides),
+            hydration: None,
+            cors: None,
         }
+    }
+
+    /// Attach the backend-mirroring CORS contract: preflights answered
+    /// at the substrate, native responses decorated for allowed
+    /// origins, and the origin guard enforced ahead of routing. Without
+    /// it (substrates predating composition, and tests that do not
+    /// exercise the browser surface) preflights and origin rules flow
+    /// to the sidecar as before.
+    pub fn with_cors(mut self, cors: cors::CorsConfig) -> Self {
+        self.cors = Some(cors);
+        self
+    }
+
+    /// Attach the composed native services. Without this (a substrate
+    /// built before composition, or composition declined at startup)
+    /// every natively-registered route falls back to the proxy arm.
+    pub fn with_hydration(mut self, hydration: Arc<crate::hydration::HydrationState>) -> Self {
+        self.hydration = Some(hydration);
+        self
+    }
+
+    /// The composed native services, when present.
+    pub(crate) fn hydration(&self) -> Option<Arc<crate::hydration::HydrationState>> {
+        self.hydration.clone()
     }
 
     pub fn upstream(&self) -> &str {
@@ -74,7 +105,7 @@ impl AppState {
             .expect("arm override lock never poisoned") = overrides;
     }
 
-    async fn proxy(&self, req: Request) -> Response {
+    pub(crate) async fn proxy(&self, req: Request) -> Response {
         proxy::forward(&self.client, &self.upstream, req).await
     }
 }
@@ -83,31 +114,94 @@ async fn proxy_fallback(State(state): State<Arc<AppState>>, req: Request) -> Res
     state.proxy(req).await
 }
 
-/// Public-boundary Host guard, mirroring the backend's own check (which
-/// the proxy's Host rewrite would otherwise make a no-op for proxied
-/// requests): a present Host header must name this router's loopback
-/// authority. An absent Host passes, exactly as the backend's guard
-/// treats it; the response shape matches the backend's 403 verbatim.
-async fn host_guard(
+/// A 403 in the backend's `{"detail": ...}` rendering.
+fn forbidden(detail: &str) -> Response {
+    let body = serde_json::json!({ "detail": detail }).to_string();
+    Response::builder()
+        .status(http::StatusCode::FORBIDDEN)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 403 response builds")
+}
+
+/// The public-boundary guard, mirroring the backend's own API-origin
+/// middleware clause for clause: OPTIONS and non-API paths pass
+/// untouched; a present Host header must name this router's loopback
+/// authority (the proxy's Host rewrite makes the sidecar's own check a
+/// no-op for proxied requests); and, when the CORS contract is
+/// configured, mutating methods require an allowed Origin while reads
+/// reject a present-but-disallowed one. Each 403 body matches the
+/// backend's verbatim.
+async fn api_guard(
     State(state): State<Arc<AppState>>,
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
+    if req.method() == http::Method::OPTIONS || !req.uri().path().starts_with("/api/") {
+        return next.run(req).await;
+    }
     if let Some(host) = req.headers().get(http::header::HOST) {
+        // The backend lowercases the inbound Host before its check and
+        // skips an empty value (its falsy test), as well as an absent
+        // header.
         let allowed = host
             .to_str()
-            .map(|host| state.allowed_hosts.iter().any(|entry| entry == host))
+            .map(|host| {
+                let host = host.to_ascii_lowercase();
+                host.is_empty() || state.allowed_hosts.contains(&host)
+            })
             .unwrap_or(false);
         if !allowed {
-            let body = serde_json::json!({ "detail": "Invalid Host header" }).to_string();
-            return Response::builder()
-                .status(http::StatusCode::FORBIDDEN)
-                .header(http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .expect("static 403 response builds");
+            return forbidden("Invalid Host header");
+        }
+    }
+    if let Some(cors) = &state.cors {
+        let origin = req
+            .headers()
+            .get(http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok());
+        let mutating = !matches!(
+            *req.method(),
+            http::Method::GET | http::Method::HEAD | http::Method::OPTIONS
+        );
+        if mutating {
+            if !origin.is_some_and(|o| cors.origin_allowed(o)) {
+                return forbidden("Origin header required");
+            }
+        } else if origin.is_some_and(|o| !cors.origin_allowed(o)) {
+            return forbidden("Invalid Origin header");
         }
     }
     next.run(req).await
+}
+
+/// The outermost CORS layer, where the backend's stack also puts it: a
+/// preflight short-circuits everything (routing, the Host and origin
+/// guards) when the contract is configured, and every other response
+/// for an allowed Origin is decorated unless the sidecar already did.
+async fn cors_layer(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some(cors_config) = &state.cors else {
+        return next.run(req).await;
+    };
+    if cors::is_preflight(req.method(), req.headers()) {
+        return cors_config.preflight_response(req.headers());
+    }
+    let origin = req.headers().get(http::header::ORIGIN).cloned();
+    let mut response = next.run(req).await;
+    if let Some(origin) = origin {
+        let allowed = origin
+            .to_str()
+            .map(|o| cors_config.origin_allowed(o))
+            .unwrap_or(false);
+        if allowed {
+            cors::decorate(&mut response, &origin);
+        }
+    }
+    response
 }
 
 /// A method router that consults the arm override for `route` on every
@@ -135,29 +229,46 @@ where
             }
         },
     )
+    // Methods this registration does not carry still belong to the
+    // sidecar (an unported POST on a natively-read path, the bare
+    // OPTIONS the backend answers itself): fall back to the proxy
+    // rather than axum's empty 405. HEAD needs its own explicit leg
+    // because axum otherwise dispatches it into the GET handler with
+    // the body stripped, while the backend hard-405s HEAD on its GET
+    // routes; pinning HEAD to the proxy keeps that 405 the sidecar's.
+    .on(
+        MethodFilter::HEAD,
+        |State(state): State<Arc<AppState>>, req: Request| async move { state.proxy(req).await },
+    )
+    .fallback(proxy_fallback)
 }
 
 /// The substrate router: natively-registered routes take precedence, the
 /// proxy fallback carries every other method and path to the sidecar, and
-/// the Host guard fronts both arms.
+/// the guard stack fronts both arms in the backend's own order (CORS
+/// outermost, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
         .fallback(any(proxy_fallback))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            host_guard,
+            api_guard,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            cors_layer,
         ))
         .with_state(state)
 }
 
 /// Native route registrations, in takeover order; each flip adds one
-/// `arm_routed` line here, and deleting a line is the source-level
-/// revert.
+/// `arm_routed` line (here or in [`native`]), and deleting a line is
+/// the source-level revert.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
-    router.route(
+    native::register(router.route(
         "/api/health",
         arm_routed(MethodFilter::GET, "/api/health", routes::health),
-    )
+    ))
 }
 
 /// The natively-served handlers, one function per taken-over route.
@@ -196,6 +307,12 @@ pub async fn serve(listener: tokio::net::TcpListener, state: Arc<AppState>) -> s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_reports_its_upstream_authority_verbatim() {
+        let state = AppState::new("127.0.0.1:9421".into(), 8421, ArmOverrides::empty());
+        assert_eq!(state.upstream(), "127.0.0.1:9421");
+    }
 
     #[test]
     fn state_arm_lookup_defaults_native_and_hot_swaps() {

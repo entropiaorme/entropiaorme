@@ -50,6 +50,9 @@ pub type CaptureTap = Arc<dyn Fn(&str, &Value, &[u8]) + Send + Sync>;
 /// exception does.
 pub type CompletionCallback = Arc<dyn Fn(&[(String, f64)]) -> Result<(), String> + Send + Sync>;
 
+/// One extracted page: `{canonical_name: level}` rows in panel order.
+pub type PageLevels = Vec<(String, f64)>;
+
 /// The capture and extraction seams the composition root wires in.
 pub struct ScanProviders {
     /// Whether the extraction engine can be loaded right now.
@@ -59,7 +62,7 @@ pub struct ScanProviders {
     /// Capture the region as PNG bytes; None on any capture failure.
     pub capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync>,
     /// Extract `{canonical_name: level}` rows from one page.
-    pub extract_page_levels: Arc<dyn Fn(&[u8]) -> Vec<(String, f64)> + Send + Sync>,
+    pub extract_page_levels: Arc<dyn Fn(&[u8]) -> PageLevels + Send + Sync>,
 }
 
 impl Default for ScanProviders {

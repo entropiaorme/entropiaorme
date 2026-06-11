@@ -29,6 +29,7 @@ pub mod scan_completion;
 pub mod scan_drift;
 pub mod scan_presets;
 pub mod session_summary;
+pub mod skill_scan_manual;
 pub mod skill_tracker;
 pub mod tool_inference;
 pub mod tracker;

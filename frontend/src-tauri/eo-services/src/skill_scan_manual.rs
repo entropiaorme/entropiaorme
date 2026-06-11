@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(second["captured_pages"], 2);
 
         let status = scan.process();
-        assert_eq!(status["phase"], "processing");
+        assert_eq!(status["error"], Value::Null, "process kicks off: {status}");
         scan.join_worker();
         // Page order merges with later pages overwriting duplicates,
         // first-seen positions kept.
@@ -678,18 +678,18 @@ mod tests {
             .iter()
             .map(|(phase, _)| phase.clone())
             .collect();
-        assert_eq!(
-            observed,
-            vec![
-                "capturing",       // start
-                "capturing",       // page 1 (captured count moved)
-                "capturing",       // page 2
-                "processing",      // process kickoff
-                "processing",      // page 1 extracted
-                "processing",      // page 2 extracted
-                "awaiting_review", // worker settled
-                "idle",            // accept
-            ]
+        // The three capture-side frames and the two settled tail
+        // frames are deterministic; the worker's progress frames
+        // between them coalesce differently depending on how fast it
+        // runs relative to the kickoff publish (the original shares
+        // the race), so the middle asserts shape, not count.
+        assert_eq!(observed[..3], ["capturing", "capturing", "capturing"]);
+        assert_eq!(observed[observed.len() - 2..], ["awaiting_review", "idle"]);
+        assert!(
+            observed[3..observed.len() - 2]
+                .iter()
+                .all(|phase| phase == "processing"),
+            "only processing frames sit between capture and review: {observed:?}"
         );
         // The envelope is the typed wire shape.
         let (_, first_frame) = &phases.lock().unwrap()[0];

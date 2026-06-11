@@ -186,20 +186,23 @@ mod tests {
             "Entropia Universe window not found: start the game first"
         );
 
-        let mut providers = RepairProviders::default();
-        providers.repair_region = Arc::new(|| Some(([10, 10], [10, 30])));
-        let service = RepairOcrService::new(providers);
+        let service = RepairOcrService::new(RepairProviders {
+            repair_region: Arc::new(|| Some(([10, 10], [10, 30]))),
+            ..Default::default()
+        });
         assert_eq!(service.scan_repair_cost()["error"], "Invalid region");
 
-        let mut providers = RepairProviders::default();
-        providers.repair_region = Arc::new(|| Some(([10, 10], [40, 30])));
-        let service = RepairOcrService::new(providers);
+        let service = RepairOcrService::new(RepairProviders {
+            repair_region: Arc::new(|| Some(([10, 10], [40, 30]))),
+            ..Default::default()
+        });
         assert_eq!(service.scan_repair_cost()["error"], "Capture failed");
 
-        let mut providers = RepairProviders::default();
-        providers.repair_region = Arc::new(|| Some(([10, 10], [40, 30])));
-        providers.capture_region = Arc::new(|_, _, _, _| Some(frame()));
-        let service = RepairOcrService::new(providers);
+        let service = RepairOcrService::new(RepairProviders {
+            repair_region: Arc::new(|| Some(([10, 10], [40, 30]))),
+            capture_region: Arc::new(|_, _, _, _| Some(frame())),
+            ..Default::default()
+        });
         assert_eq!(
             service.scan_repair_cost()["error"],
             "Local OCR engine unavailable"
@@ -208,14 +211,14 @@ mod tests {
 
     #[test]
     fn a_successful_scan_parses_and_taps() {
-        let mut providers = RepairProviders::default();
-        providers.repair_region = Arc::new(|| Some(([10, 20], [110, 60])));
-        providers.capture_region = Arc::new(|x, y, w, h| {
-            assert_eq!((x, y, w, h), (10, 20, 100, 40));
-            Some(frame())
+        let service = RepairOcrService::new(RepairProviders {
+            repair_region: Arc::new(|| Some(([10, 20], [110, 60]))),
+            capture_region: Arc::new(|x, y, w, h| {
+                assert_eq!((x, y, w, h), (10, 20, 100, 40));
+                Some(frame())
+            }),
+            read_text: Arc::new(|_| Some(("2,20 PED".to_string(), 0.97))),
         });
-        providers.read_text = Arc::new(|_| Some(("2,20 PED".to_string(), 0.97)));
-        let service = RepairOcrService::new(providers);
 
         let taps = Arc::new(Mutex::new(Vec::new()));
         let sink = taps.clone();

@@ -426,7 +426,7 @@ mod tests {
             .unwrap();
         let (data, h, w) = load_bgr_png(&png_bytes).unwrap();
         assert_eq!((h, w), (1, 2));
-        assert_eq!(data.len(), 1 * 2 * 3);
+        assert_eq!(data.len(), 6, "one row, two pixels, three channels");
         // Red pixel in BGR order: B=0, G=0, R=255.
         assert_eq!(&data[0..3], &[0, 0, 255]);
         // Blue pixel in BGR order: B=255, G=0, R=0.

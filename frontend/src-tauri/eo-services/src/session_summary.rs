@@ -6,7 +6,7 @@
 //! (The summary table sits outside the snapshot catalogue, so parity
 //! here surfaces through the prospect reads rather than the goldens.)
 
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -272,6 +272,79 @@ pub async fn write_session_summary(pool: &SqlitePool, session_id: &str) -> Resul
 }
 
 /// Remove a session's summary row; idempotent.
+/// One stored summary row to its camelCase prospect shape (the
+/// original's column order and coercions: or-zero floats, an integer
+/// kill count, JSON columns parsed when non-empty, and the dominant
+/// fields passed through raw).
+fn row_to_prospect_dict(row: &sqlx::sqlite::SqliteRow) -> Value {
+    use sqlx::Row as _;
+    let float_or_zero = |index: usize| -> f64 {
+        row.try_get::<Option<f64>, _>(index)
+            .ok()
+            .flatten()
+            .unwrap_or(0.0)
+    };
+    let json_or_empty = |index: usize| -> Value {
+        row.get::<Option<String>, _>(index)
+            .filter(|text| !text.is_empty())
+            .map(|text| serde_json::from_str(&text).expect("stored summary JSON parses"))
+            .unwrap_or_else(|| json!({}))
+    };
+    json!({
+        "id": row.get::<String, _>(0),
+        "startedAt": float_or_zero(1),
+        "endedAt": float_or_zero(2),
+        "durationHours": float_or_zero(3),
+        "kills": row.try_get::<Option<i64>, _>(4).ok().flatten().unwrap_or(0),
+        "lootTt": float_or_zero(5),
+        "weaponCost": float_or_zero(6),
+        "enhancerCost": float_or_zero(7),
+        "armourCost": float_or_zero(8),
+        "healCost": float_or_zero(9),
+        "danglingCost": float_or_zero(10),
+        "cycledPed": float_or_zero(11),
+        "regularSkillPed": json_or_empty(12),
+        "attributeLevels": json_or_empty(13),
+        "regularSkillTt": float_or_zero(14),
+        "attributeLevelsTotal": float_or_zero(15),
+        "dominantMob": row.get::<Option<String>, _>(16),
+        "dominantTag": row.get::<Option<String>, _>(17),
+        "dominantWeapon": row.get::<Option<String>, _>(18),
+    })
+}
+
+/// All qualifying completed-session summaries, lazily rebuilding any
+/// missing or stale-version rows first so new installs converge on
+/// first read without a migration.
+pub async fn load_prospect_sessions(pool: &SqlitePool) -> Result<Vec<Value>, DbError> {
+    let missing = sqlx::query(
+        "SELECT s.id FROM tracking_sessions s \
+         LEFT JOIN session_summaries ss ON ss.session_id = s.id \
+         WHERE s.ended_at IS NOT NULL \
+         AND EXISTS (SELECT 1 FROM skill_gains sg WHERE sg.session_id = s.id) \
+         AND (ss.session_id IS NULL OR ss.summary_version < ?)",
+    )
+    .bind(SUMMARY_VERSION)
+    .fetch_all(pool)
+    .await?;
+    for row in &missing {
+        use sqlx::Row as _;
+        write_session_summary(pool, row.get(0)).await?;
+    }
+
+    let rows = sqlx::query(
+        "SELECT session_id, started_at, ended_at, duration_hours, kills, loot_tt, \
+         weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost, \
+         cycled_ped, regular_skill_ped_json, attribute_levels_json, \
+         regular_skill_tt, attribute_levels_total, dominant_mob, dominant_tag, \
+         dominant_weapon \
+         FROM session_summaries",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.iter().map(row_to_prospect_dict).collect())
+}
+
 pub async fn delete_session_summary(pool: &SqlitePool, session_id: &str) -> Result<(), DbError> {
     sqlx::query("DELETE FROM session_summaries WHERE session_id = ?")
         .bind(session_id)
@@ -613,5 +686,144 @@ mod tests {
             .try_get(0)
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// The prospect reader over a seeded summary table, mirroring the
+    /// original's run: a missing summary rebuilds lazily, a
+    /// stale-version row for a session that no longer qualifies (zero
+    /// cycled PED) clears instead of rebuilding, sessions without
+    /// gains or still active never enter, and a minimal current
+    /// version row passes through with the falsy-JSON and null
+    /// dominant legs intact. Every expected object is the original
+    /// implementation's output over byte-identical seeds.
+    #[tokio::test]
+    async fn the_prospect_reader_matches_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(&dir.path().join("entropia_orme.db"))
+            .await
+            .unwrap();
+        let pool = db.pool().clone();
+
+        sqlx::query(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, dangling_cost) \
+             VALUES ('sess-full', 1000.0, 4600.0, 0, 1.5, 0.25)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, damage_dealt, \
+             damage_taken, critical_hits, cost_ped, enhancer_cost, loot_total_ped) \
+             VALUES ('pk1', 'sess-full', 'Atrox Young', 1100.0, 10, 100.0, 5.0, 1, 0.3, 0.5, 12.75)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, \
+             critical_hits, cost_per_shot) VALUES ('pk1', 'LR-32', 40, 50.0, 0, 0.05)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (sid, ts, skill, amount, ped) in [
+            ("sess-full", 1100.0, "Rifle", 1.2, Some(0.8)),
+            ("sess-full", 1200.0, "Agility", 1.0, None),
+            ("sess-stale", 5050.0, "Anatomy", 0.5, Some(0.1)),
+            ("sess-open", 7050.0, "Rifle", 0.1, Some(0.05)),
+        ] {
+            sqlx::query(
+                "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(ts)
+            .bind(skill)
+            .bind(amount)
+            .bind(ped)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (sid, st, en, active) in [
+            ("sess-stale", 5000.0, Some(5100.0), 0i64),
+            ("sess-nogains", 6000.0, Some(6100.0), 0),
+            ("sess-open", 7000.0, None, 1),
+        ] {
+            sqlx::query(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(st)
+            .bind(en)
+            .bind(active)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO session_summaries (session_id, summary_version, started_at, ended_at, \
+             duration_hours, kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, heal_cost, \
+             dangling_cost, cycled_ped, regular_skill_ped_json, attribute_levels_json, \
+             regular_skill_tt, attribute_levels_total, dominant_mob, dominant_tag, dominant_weapon) \
+             VALUES ('sess-stale', 0, 1.0, 2.0, 0.1, 99, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, \
+             '{}', '{}', 1.0, 1.0, 'OLD', 'OLD', 'OLD')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO session_summaries (session_id, summary_version, started_at, ended_at, \
+             duration_hours, kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, heal_cost, \
+             dangling_cost, cycled_ped, regular_skill_ped_json, attribute_levels_json, \
+             regular_skill_tt, attribute_levels_total, dominant_mob, dominant_tag, dominant_weapon) \
+             VALUES ('sess-manual', ?, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, \
+             '', '', 0.0, 0.0, NULL, NULL, NULL)",
+        )
+        .bind(SUMMARY_VERSION)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let prospects = load_prospect_sessions(&pool).await.unwrap();
+        assert_eq!(
+            prospects,
+            vec![
+                json!({
+                    "id": "sess-manual", "startedAt": 0.0, "endedAt": 0.0,
+                    "durationHours": 0.0, "kills": 0, "lootTt": 0.0, "weaponCost": 0.0,
+                    "enhancerCost": 0.0, "armourCost": 0.0, "healCost": 0.0,
+                    "danglingCost": 0.0, "cycledPed": 0.0, "regularSkillPed": {},
+                    "attributeLevels": {}, "regularSkillTt": 0.0,
+                    "attributeLevelsTotal": 0.0, "dominantMob": null,
+                    "dominantTag": null, "dominantWeapon": null,
+                }),
+                json!({
+                    "id": "sess-full", "startedAt": 1000.0, "endedAt": 4600.0,
+                    "durationHours": 1.0, "kills": 1, "lootTt": 12.75, "weaponCost": 2.0,
+                    "enhancerCost": 0.5, "armourCost": 0.0, "healCost": 1.5,
+                    "danglingCost": 0.25, "cycledPed": 4.25,
+                    "regularSkillPed": {"Rifle": 0.8},
+                    "attributeLevels": {"Agility": 1.0}, "regularSkillTt": 0.8,
+                    "attributeLevelsTotal": 1.0, "dominantMob": null,
+                    "dominantTag": "Atrox Young", "dominantWeapon": "LR-32",
+                }),
+            ]
+        );
+
+        // The disqualified stale row cleared rather than rebuilding.
+        let rows: Vec<String> =
+            sqlx::query("SELECT session_id FROM session_summaries ORDER BY session_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    use sqlx::Row as _;
+                    row.get(0)
+                })
+                .collect();
+        assert_eq!(rows, ["sess-full", "sess-manual"]);
     }
 }

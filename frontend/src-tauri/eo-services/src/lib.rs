@@ -25,6 +25,7 @@ pub mod hotbar_listener;
 pub mod keystroke_source;
 pub mod loot_filter;
 pub mod mob_lookup_service;
+pub mod scan_completion;
 pub mod scan_drift;
 pub mod scan_presets;
 pub mod session_summary;

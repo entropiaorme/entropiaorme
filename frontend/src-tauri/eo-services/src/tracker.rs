@@ -2096,7 +2096,7 @@ fn naive_isoformat(instant: NaiveDateTime) -> String {
 /// `backend/core/domain_events.to_iso_utc`: render an epoch float as
 /// `datetime.fromtimestamp(ts, tz=UTC).isoformat()` does (the `T`
 /// separator, microseconds only when non-zero, `+00:00` suffix).
-fn to_iso_utc(ts: f64) -> String {
+pub(crate) fn to_iso_utc(ts: f64) -> String {
     let (secs, micros) = epoch_to_parts(ts);
     let instant = chrono::DateTime::from_timestamp(secs, micros * 1_000).unwrap_or_default();
     if micros == 0 {

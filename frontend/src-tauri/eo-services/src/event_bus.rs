@@ -38,6 +38,7 @@ pub enum Topic {
     MissionReceived,
     TickFlushed,
     TrackingSessionUpdated,
+    ScanStatusChanged,
 }
 
 impl Topic {
@@ -56,6 +57,7 @@ impl Topic {
             Topic::MissionReceived => "mission_received",
             Topic::TickFlushed => "tick_flushed",
             Topic::TrackingSessionUpdated => eo_wire::domain_events::TOPIC_TRACKING_SESSION_UPDATED,
+            Topic::ScanStatusChanged => eo_wire::domain_events::TOPIC_SCAN_STATUS_CHANGED,
         }
     }
 }
@@ -231,6 +233,7 @@ mod tests {
             (Topic::MissionReceived, "mission_received"),
             (Topic::TickFlushed, "tick_flushed"),
             (Topic::TrackingSessionUpdated, "tracking.session.updated"),
+            (Topic::ScanStatusChanged, "scan.status.changed"),
         ];
         for (topic, wire) in expected {
             assert_eq!(topic.as_str(), wire);

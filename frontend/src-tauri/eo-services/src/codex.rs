@@ -1067,6 +1067,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_final_rank_claims_at_the_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+
+        // Rank 25 itself is claimable; the max-rank guard rejects only
+        // beyond the table. Hand-computed reward: multiplier 100 x
+        // base 37.5 = 3750 kill cost, cat3 divisor 640 -> 5.859375 ->
+        // 5.8594 at four places.
+        svc.calibrate("Boar", 24).await.unwrap();
+        let result = svc.claim_rank("Boar", 25, "Evade").await.unwrap();
+        assert_eq!(
+            result,
+            json!({"speciesName": "Boar", "rank": 25, "skillName": "Evade", "pedValue": 5.8594})
+        );
+    }
+
+    #[test]
+    fn errors_display_their_messages() {
+        assert_eq!(
+            CodexError::Invalid("Maximum rank is 25".to_string()).to_string(),
+            "Maximum rank is 25"
+        );
+        assert_eq!(
+            CodexError::Db(sqlx::Error::RowNotFound).to_string(),
+            sqlx::Error::RowNotFound.to_string()
+        );
+    }
+
+    #[tokio::test]
     async fn profession_options_rank_by_contribution() {
         let dir = tempfile::tempdir().unwrap();
         let (svc, pool) = service(dir.path()).await;

@@ -125,6 +125,13 @@ FLOORS: dict[str, float] = {
     # image library deviate by one least-significant bit on rounding
     # ties, so finer pins would overfit) and its guard couplings.
     "eo-services/src/skill_panel.rs": 92.0,
+    # Measured 98.7. The one residual survivor is the profession-weight
+    # strictness flip (`> 0` to `>= 0`) in the recommendation builder:
+    # a zero weight multiplies the contribution to exactly 0.0 on the
+    # flipped branch, the same value the guarded branch returns, and a
+    # negative weight takes the same else path under both comparisons,
+    # so the variants coincide over the whole weight domain.
+    "eo-services/src/codex.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

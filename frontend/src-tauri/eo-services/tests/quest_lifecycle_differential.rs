@@ -182,6 +182,39 @@ out["events"] = [list(r) for r in db.conn.execute(
     "SELECT session_id, event_type, mob_or_item, value_ped, timestamp FROM notable_events ORDER BY id")]
 out["started"] = [list(r) for r in db.conn.execute(
     "SELECT id, started_at FROM quests WHERE started_at IS NOT NULL ORDER BY id")]
+
+# The analytics readers over a seeded economy.
+for sid, st, en, active, heal, armour in [
+    ("an-1", 1000.0, 4600.0, 0, 1.5, 0.25),
+    ("an-2", 5000.0, 5030.5, 0, None, 0.0),
+]:
+    db.conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, armour_cost) VALUES (?, ?, ?, ?, ?, ?)",
+        (sid, st, en, active, heal, armour))
+db.conn.execute(
+    "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, damage_dealt, damage_taken, critical_hits, cost_ped, enhancer_cost, loot_total_ped) VALUES ('an-k1', 'an-1', 'Atrox', 1100.0, 10, 100.0, 5.0, 1, 0.3, 0.5, 12.75)")
+db.conn.execute(
+    "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, critical_hits, cost_per_shot) VALUES ('an-k1', 'LR-32', 40, 50.0, 0, 0.05)")
+db.conn.execute(
+    "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) VALUES ('an-1', 1100.0, 'Rifle', 1.0, 0.8)")
+iron = ids["Iron Challenge"]
+db.conn.execute(
+    "INSERT OR IGNORE INTO session_quest_completions (session_id, quest_id, completed_at) VALUES ('an-1', ?, 1500.0)", (iron,))
+db.conn.execute(
+    "INSERT INTO session_quest_analytics_links (session_id, link_type, quest_id, playlist_id, linked_at) VALUES ('an-1', 'quest', ?, NULL, 9000.0)", (iron,))
+db.conn.commit()
+pl = svc.create_playlist({"name": "Analytics Run", "items": [
+    {"quest_id": iron, "group_type": "immediate"},
+    {"quest_id": ids["Zero Bounty"], "group_type": "long_horizon"},
+]})["id"]
+db.conn.execute("UPDATE quest_playlists SET created_at=3000.0, updated_at=3000.0 WHERE id=?", (pl,))
+db.conn.execute(
+    "INSERT INTO session_quest_analytics_links (session_id, link_type, quest_id, playlist_id, linked_at) VALUES ('an-2', 'playlist', NULL, ?, 9001.0)", (pl,))
+db.conn.execute(
+    "INSERT OR IGNORE INTO session_quest_completions (session_id, quest_id, completed_at) VALUES ('an-2', ?, 5020.0)", (iron,))
+db.conn.commit()
+out["quest_analytics"] = svc.get_quest_analytics()
+out["playlist_analytics"] = svc.get_all_playlist_analytics()
 print(json.dumps(out, sort_keys=True))
 "#;
 
@@ -464,6 +497,119 @@ async fn the_native_lifecycle_matches_the_python_oracle() {
         .iter()
         .map(|row| json!([row.get::<i64, _>(0), row.get::<f64, _>(1)]))
         .collect::<Vec<_>>()),
+    );
+
+    // The analytics readers over the same seeded economy.
+    for (sid, st, en, active, heal, armour) in [
+        (
+            "an-1",
+            1000.0,
+            Some(4600.0),
+            0i64,
+            Some(1.5),
+            Some(0.0_f64 + 0.25),
+        ),
+        ("an-2", 5000.0, Some(5030.5), 0, None, Some(0.0)),
+    ] {
+        sqlx::query(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, armour_cost) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(sid)
+        .bind(st)
+        .bind(en)
+        .bind(active)
+        .bind(heal)
+        .bind(armour)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, damage_dealt, \
+         damage_taken, critical_hits, cost_ped, enhancer_cost, loot_total_ped) \
+         VALUES ('an-k1', 'an-1', 'Atrox', 1100.0, 10, 100.0, 5.0, 1, 0.3, 0.5, 12.75)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, \
+         critical_hits, cost_per_shot) VALUES ('an-k1', 'LR-32', 40, 50.0, 0, 0.05)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \
+         VALUES ('an-1', 1100.0, 'Rifle', 1.0, 0.8)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let iron = ids["Iron Challenge"].as_i64().unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO session_quest_completions (session_id, quest_id, completed_at) \
+         VALUES ('an-1', ?, 1500.0)",
+    )
+    .bind(iron)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO session_quest_analytics_links \
+         (session_id, link_type, quest_id, playlist_id, linked_at) \
+         VALUES ('an-1', 'quest', ?, NULL, 9000.0)",
+    )
+    .bind(iron)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let zero = svc
+        .match_quest_by_mission_name("Zero Bounty")
+        .await
+        .unwrap()
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let playlist = svc
+        .create_playlist(&json!({"name": "Analytics Run", "items": [
+            {"quest_id": iron, "group_type": "immediate"},
+            {"quest_id": zero, "group_type": "long_horizon"},
+        ]}))
+        .await
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    sqlx::query("UPDATE quest_playlists SET created_at=3000.0, updated_at=3000.0 WHERE id=?")
+        .bind(playlist)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO session_quest_analytics_links \
+         (session_id, link_type, quest_id, playlist_id, linked_at) \
+         VALUES ('an-2', 'playlist', NULL, ?, 9001.0)",
+    )
+    .bind(playlist)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO session_quest_completions (session_id, quest_id, completed_at) \
+         VALUES ('an-2', ?, 5020.0)",
+    )
+    .bind(iron)
+    .execute(&pool)
+    .await
+    .unwrap();
+    native.insert(
+        "quest_analytics".into(),
+        json!(svc.get_quest_analytics().await.unwrap()),
+    );
+    native.insert(
+        "playlist_analytics".into(),
+        json!(svc.get_all_playlist_analytics().await.unwrap()),
     );
 
     // ── The comparison, key by key for a readable failure ───────────

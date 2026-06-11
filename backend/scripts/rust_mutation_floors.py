@@ -132,12 +132,17 @@ FLOORS: dict[str, float] = {
     # negative weight takes the same else path under both comparisons,
     # so the variants coincide over the whole weight domain.
     "eo-services/src/codex.rs": 92.0,
-    # The CRUD surface measured 100.0 after its hardening pass; the
-    # lifecycle surface's residual survivor is the cancel-undo
-    # strictness flip (`> 0` to `>= 0`), which attempts a reward undo
-    # for a zero-value reward, and no zero-amount quest-reward row can
-    # exist for it to delete (completion writes only positive
-    # rewards), so the delete is a no-op either way.
+    # Measured 98.0 across the full unit. The residual survivors are
+    # equivalent over reachable state: the cancel-undo strictness flip
+    # (`> 0` to `>= 0`) attempts a reward undo for a zero-value reward
+    # and no zero-amount quest-reward row can exist for it to delete;
+    # the reward-sum short-circuit's connector flip runs the query
+    # with an empty IN list, which the engine accepts and resolves to
+    # the same zero sum; and the expected-total markup-arm guard's
+    # conjuncts are redundant over service-written rows, because
+    # creation and update both normalise the stored markup away for
+    # skill and non-positive rewards, so a stored markup implies a
+    # positive liquid reward.
     "eo-services/src/quests.rs": 92.0,
     # Measured 93.5. The residual survivors are equivalent: the
     # recursion queue's window guards (flipping them admits degenerate

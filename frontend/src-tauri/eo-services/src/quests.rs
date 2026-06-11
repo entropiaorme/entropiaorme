@@ -4,8 +4,9 @@
 //! mob and playlist-item management), plus the lifecycle actions
 //! (start/complete/cancel with ledger and claim integration), the
 //! curated session-link suggestions, and the chat-log mission
-//! detection (auto-start, auto-complete, and reward suppression).
-//! The analytics readers follow as the final slice.
+//! detection (auto-start, auto-complete, and reward suppression),
+//! and the analytics readers (per-quest and per-playlist
+//! sustainability metrics over curated session links).
 //!
 //! Payload semantics mirror the original's `dict.get` rules exactly: a
 //! key that is ABSENT takes the documented default, while a key that is
@@ -99,9 +100,8 @@ const QUEST_SELECT: &str = "\
             WHERE quest_id = q.id) AS last_completed_at \
     FROM quests q";
 
-/// Quest operations: CRUD, playlists, the completion lifecycle, and
-/// chat-log mission detection (the analytics readers arrive with the
-/// final slice).
+/// Quest operations: CRUD, playlists, the completion lifecycle,
+/// chat-log mission detection, and the analytics readers.
 pub struct QuestService {
     pool: SqlitePool,
     clock: Arc<dyn Clock>,
@@ -846,6 +846,389 @@ impl QuestService {
         Ok(result)
     }
 
+    // ── Analytics ───────────────────────────────────────────────────
+
+    /// Per-quest sustainability metrics across all linked sessions:
+    /// raw totals (the frontend derives averages), only for quests
+    /// with at least one curated linked session.
+    pub async fn get_quest_analytics(&self) -> Result<Vec<Value>, QuestError> {
+        let quest_rows = sqlx::query(
+            "SELECT q.id, q.name, q.planet, q.category, q.reward_ped, \
+                    q.reward_is_skill, q.expected_reward_markup_percent \
+             FROM quests q \
+             WHERE q.is_active = 1 \
+             ORDER BY q.name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut results = Vec::new();
+        for row in quest_rows {
+            let quest_id = row.get::<i64, _>(0);
+            let stats = self.compute_quest_session_stats(quest_id).await?;
+            if stats["linked_sessions"] == json!(0) {
+                continue;
+            }
+            let reward_ped = row.get::<Option<f64>, _>(4);
+            let reward_is_skill = row.get::<i64, _>(5) != 0;
+            let markup = row.get::<Option<f64>, _>(6);
+            // The original's `or 0` collapses an absent or zero reward
+            // to the integer zero.
+            let reward_value = match reward_ped {
+                Some(reward) if reward != 0.0 => json!(reward),
+                _ => json!(0),
+            };
+            let linked_sessions = stats["linked_sessions"].as_i64().expect("session count");
+            let mut entry = Map::new();
+            entry.insert("quest_id".into(), json!(quest_id));
+            entry.insert("quest_name".into(), json!(row.get::<String, _>(1)));
+            entry.insert("planet".into(), json!(row.get::<String, _>(2)));
+            entry.insert("category".into(), json!(row.get::<Option<String>, _>(3)));
+            entry.insert("reward_ped".into(), reward_value.clone());
+            entry.insert("reward_is_skill".into(), json!(reward_is_skill));
+            entry.insert("expected_reward_markup_percent".into(), json!(markup));
+            entry.insert(
+                "total_expected_reward_ped".into(),
+                expected_reward_total(&reward_value, reward_is_skill, markup, linked_sessions),
+            );
+            for (key, value) in stats.as_object().expect("stats object") {
+                entry.insert(key.clone(), value.clone());
+            }
+            results.push(Value::Object(entry));
+        }
+        Ok(results)
+    }
+
+    /// Aggregate economics for all sessions where this quest was
+    /// completed, via the curated analytics link table.
+    async fn compute_quest_session_stats(&self, quest_id: i64) -> Result<Value, QuestError> {
+        let rows = sqlx::query(
+            "SELECT session_id FROM session_quest_analytics_links \
+             WHERE quest_id = ? AND link_type = 'quest'",
+        )
+        .bind(quest_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let session_ids: Vec<String> = rows.into_iter().map(|row| row.get(0)).collect();
+        self.compute_session_set_stats(&session_ids).await
+    }
+
+    /// Per-playlist sustainability metrics from curated linked
+    /// sessions, for every active playlist.
+    pub async fn get_all_playlist_analytics(&self) -> Result<Vec<Value>, QuestError> {
+        let playlists = self.get_playlists(true).await?;
+        let mut results = Vec::new();
+        for playlist in playlists {
+            let playlist_id = playlist["id"].as_i64().expect("playlist id");
+            if let Some(stats) = self.get_playlist_analytics(playlist_id).await? {
+                results.push(stats);
+            }
+        }
+        Ok(results)
+    }
+
+    /// Analytics for a single playlist from curated linked sessions;
+    /// `None` when the playlist is absent.
+    pub async fn get_playlist_analytics(
+        &self,
+        playlist_id: i64,
+    ) -> Result<Option<Value>, QuestError> {
+        let Some(playlist) = self.get_playlist(playlist_id).await? else {
+            return Ok(None);
+        };
+
+        let immediate_ids = self
+            .playlist_quest_ids(playlist_id, Some(PLAYLIST_GROUP_IMMEDIATE))
+            .await?;
+        let long_horizon_ids = self
+            .playlist_quest_ids(playlist_id, Some(PLAYLIST_GROUP_LONG_HORIZON))
+            .await?;
+        if immediate_ids.is_empty() {
+            return Ok(Some(json!({
+                "playlist_id": playlist_id,
+                "playlist_name": playlist["name"],
+                "quest_count": 0,
+                "long_horizon_quest_count": long_horizon_ids.len(),
+                "matched_sessions": 0,
+                "total_reward_ped": 0,
+                "total_immediate_reward_ped": 0,
+                "total_bonus_reward_ped": 0,
+                "total_skill_reward_ped": 0,
+                "total_immediate_skill_reward_ped": 0,
+                "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 0,
+                "total_expected_immediate_reward_ped": 0,
+                "total_expected_bonus_reward_ped": 0,
+                "total_duration": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
+            })));
+        }
+
+        let session_ids = self.curated_playlist_session_ids(playlist_id).await?;
+        let stats = if session_ids.is_empty() {
+            json!({
+                "linked_sessions": 0,
+                "total_duration": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
+            })
+        } else {
+            self.compute_session_set_stats(&session_ids).await?
+        };
+        let reward_stats = self
+            .compute_playlist_reward_stats(&session_ids, &immediate_ids, &long_horizon_ids)
+            .await?;
+
+        let mut entry = Map::new();
+        entry.insert("playlist_id".into(), json!(playlist_id));
+        entry.insert("playlist_name".into(), playlist["name"].clone());
+        entry.insert("quest_count".into(), json!(immediate_ids.len()));
+        entry.insert(
+            "long_horizon_quest_count".into(),
+            json!(long_horizon_ids.len()),
+        );
+        for (key, value) in reward_stats.as_object().expect("reward stats") {
+            entry.insert(key.clone(), value.clone());
+        }
+        entry.insert("matched_sessions".into(), stats["linked_sessions"].clone());
+        for (key, value) in stats.as_object().expect("stats object") {
+            entry.insert(key.clone(), value.clone());
+        }
+        Ok(Some(Value::Object(entry)))
+    }
+
+    async fn curated_playlist_session_ids(
+        &self,
+        playlist_id: i64,
+    ) -> Result<Vec<String>, QuestError> {
+        let rows = sqlx::query(
+            "SELECT session_id FROM session_quest_analytics_links \
+             WHERE playlist_id = ? AND link_type = 'playlist'",
+        )
+        .bind(playlist_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
+
+    /// Aggregate economics for a set of sessions: completed-session
+    /// durations and costs, weapon costs through the per-tool stats,
+    /// and loot and skill totals.
+    async fn compute_session_set_stats(&self, session_ids: &[String]) -> Result<Value, QuestError> {
+        if session_ids.is_empty() {
+            return Ok(json!({
+                "linked_sessions": 0,
+                "total_duration": 0,
+                "weapon_cost": 0,
+                "heal_cost": 0,
+                "enhancer_cost": 0,
+                "armour_cost": 0,
+                "loot_tt": 0,
+                "skill_tt": 0,
+            }));
+        }
+
+        let placeholders = vec!["?"; session_ids.len()].join(",");
+        let bind_all = |sql: String| {
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+            for session_id in session_ids {
+                query = query.bind(session_id.as_str());
+            }
+            query
+        };
+
+        let sess_row = bind_all(format!(
+            "SELECT COUNT(*), \
+                    COALESCE(SUM(s.ended_at - s.started_at), 0), \
+                    COALESCE(SUM(s.heal_cost), 0), \
+                    COALESCE(SUM(s.armour_cost), 0) \
+             FROM tracking_sessions s \
+             WHERE s.id IN ({placeholders}) AND s.is_active = 0"
+        ))
+        .fetch_one(&self.pool)
+        .await?;
+
+        let weapon_cost = bind_all(format!(
+            "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
+             FROM kill_tool_stats ts \
+             JOIN kills k ON k.id = ts.kill_id \
+             WHERE k.session_id IN ({placeholders})"
+        ))
+        .fetch_one(&self.pool)
+        .await?;
+
+        let enhancer_cost = bind_all(format!(
+            "SELECT COALESCE(SUM(k.enhancer_cost), 0) \
+             FROM kills k \
+             WHERE k.session_id IN ({placeholders})"
+        ))
+        .fetch_one(&self.pool)
+        .await?;
+
+        let loot_tt = bind_all(format!(
+            "SELECT COALESCE(SUM(k.loot_total_ped), 0) \
+             FROM kills k \
+             WHERE k.session_id IN ({placeholders})"
+        ))
+        .fetch_one(&self.pool)
+        .await?;
+
+        let skill_tt = bind_all(format!(
+            "SELECT COALESCE(SUM(sg.ped_value), 0) \
+             FROM skill_gains sg \
+             WHERE sg.session_id IN ({placeholders})"
+        ))
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(json!({
+            "linked_sessions": row_i64(&sess_row, 0),
+            "total_duration": sql_number(&sess_row, 1),
+            "weapon_cost": sql_number(&weapon_cost, 0),
+            "heal_cost": sql_number(&sess_row, 2),
+            "enhancer_cost": sql_number(&enhancer_cost, 0),
+            "armour_cost": sql_number(&sess_row, 3),
+            "loot_tt": sql_number(&loot_tt, 0),
+            "skill_tt": sql_number(&skill_tt, 0),
+        }))
+    }
+
+    async fn compute_playlist_reward_stats(
+        &self,
+        session_ids: &[String],
+        immediate_ids: &[i64],
+        long_horizon_ids: &[i64],
+    ) -> Result<Value, QuestError> {
+        if session_ids.is_empty() {
+            return Ok(json!({
+                "total_reward_ped": 0,
+                "total_immediate_reward_ped": 0,
+                "total_bonus_reward_ped": 0,
+                "total_skill_reward_ped": 0,
+                "total_immediate_skill_reward_ped": 0,
+                "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 0,
+                "total_expected_immediate_reward_ped": 0,
+                "total_expected_bonus_reward_ped": 0,
+            }));
+        }
+
+        let immediate = self
+            .sum_session_quest_rewards(session_ids, immediate_ids, false, None)
+            .await?;
+        let bonus = self
+            .sum_session_quest_rewards(session_ids, long_horizon_ids, false, None)
+            .await?;
+        let immediate_skill = self
+            .sum_session_quest_rewards(session_ids, immediate_ids, false, Some(true))
+            .await?;
+        let bonus_skill = self
+            .sum_session_quest_rewards(session_ids, long_horizon_ids, false, Some(true))
+            .await?;
+        let expected_immediate = self
+            .sum_session_quest_rewards(session_ids, immediate_ids, true, None)
+            .await?;
+        let expected_bonus = self
+            .sum_session_quest_rewards(session_ids, long_horizon_ids, true, None)
+            .await?;
+        Ok(json!({
+            "total_reward_ped": number_sum(&immediate, &bonus),
+            "total_immediate_reward_ped": immediate,
+            "total_bonus_reward_ped": bonus,
+            "total_skill_reward_ped": number_sum(&immediate_skill, &bonus_skill),
+            "total_immediate_skill_reward_ped": immediate_skill,
+            "total_bonus_skill_reward_ped": bonus_skill,
+            "total_expected_reward_ped": number_sum(&expected_immediate, &expected_bonus),
+            "total_expected_immediate_reward_ped": expected_immediate,
+            "total_expected_bonus_reward_ped": expected_bonus,
+        }))
+    }
+
+    /// The summed rewards of a session set's completions over a quest
+    /// set, optionally as the markup-expected value or filtered to
+    /// skill rewards. NULL rewards contribute nothing to the sum; an
+    /// empty id set short-circuits to the integer zero, and a falsy
+    /// sum collapses to it, both as the original returns.
+    async fn sum_session_quest_rewards(
+        &self,
+        session_ids: &[String],
+        quest_ids: &[i64],
+        expected: bool,
+        skill_only: Option<bool>,
+    ) -> Result<Value, QuestError> {
+        if session_ids.is_empty() || quest_ids.is_empty() {
+            return Ok(json!(0));
+        }
+        let session_placeholders = vec!["?"; session_ids.len()].join(",");
+        let quest_placeholders = vec!["?"; quest_ids.len()].join(",");
+        let reward_expr = if expected {
+            "CASE \
+                WHEN q.reward_is_skill = 1 OR q.reward_ped IS NULL THEN q.reward_ped \
+                WHEN q.expected_reward_markup_percent IS NULL THEN q.reward_ped \
+                ELSE q.reward_ped * q.expected_reward_markup_percent / 100.0 \
+            END"
+        } else {
+            "q.reward_ped"
+        };
+        let skill_filter = match skill_only {
+            Some(true) => " AND q.reward_is_skill = 1",
+            Some(false) => " AND q.reward_is_skill = 0",
+            None => "",
+        };
+        let sql = format!(
+            "SELECT COALESCE(SUM({reward_expr}), 0) \
+             FROM session_quest_completions sqc \
+             JOIN quests q ON q.id = sqc.quest_id \
+             WHERE sqc.session_id IN ({session_placeholders}) \
+               AND sqc.quest_id IN ({quest_placeholders}) \
+               {skill_filter}"
+        );
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for session_id in session_ids {
+            query = query.bind(session_id.as_str());
+        }
+        for quest_id in quest_ids {
+            query = query.bind(quest_id);
+        }
+        let row = query.fetch_one(&self.pool).await?;
+        let value = sql_number(&row, 0);
+        Ok(if json_truthy(Some(&value)) {
+            value
+        } else {
+            json!(0)
+        })
+    }
+
+    /// Playlist quest ids in item order, optionally filtered to one
+    /// group.
+    async fn playlist_quest_ids(
+        &self,
+        playlist_id: i64,
+        group_type: Option<&str>,
+    ) -> Result<Vec<i64>, QuestError> {
+        let mut sql =
+            String::from("SELECT quest_id FROM quest_playlist_items WHERE playlist_id = ?");
+        if group_type.is_some() {
+            sql.push_str(" AND group_type = ?");
+        }
+        sql.push_str(" ORDER BY sort_order");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(playlist_id);
+        if let Some(group_type) = group_type {
+            query = query.bind(group_type);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
+
     // ── Completion and link records ─────────────────────────────────
 
     /// Insert an overlay event when a tracking session is active; any
@@ -1241,6 +1624,55 @@ impl QuestService {
                 })
             })
             .collect())
+    }
+}
+
+/// The expected total reward over a completion count: skill rewards
+/// and unmarked rewards multiply plainly; marked positive liquid
+/// rewards apply the markup percentage. A non-positive count is the
+/// integer zero, and the collapsed integer-zero reward multiplies in
+/// integers, both exactly as the original returns them.
+fn expected_reward_total(
+    reward: &Value,
+    reward_is_skill: bool,
+    expected_markup: Option<f64>,
+    completions: i64,
+) -> Value {
+    if completions <= 0 {
+        return json!(0);
+    }
+    let Some(reward_ped) = reward.as_f64().filter(|_| reward.is_f64()) else {
+        return json!(reward.as_i64().unwrap_or(0) * completions);
+    };
+    match expected_markup {
+        Some(markup) if !reward_is_skill && reward_ped > 0.0 => {
+            json!(reward_ped * (markup / 100.0) * completions as f64)
+        }
+        _ => json!(reward_ped * completions as f64),
+    }
+}
+
+/// A COUNT column: always an integer.
+fn row_i64(row: &sqlx::sqlite::SqliteRow, index: usize) -> i64 {
+    row.get::<i64, _>(index)
+}
+
+/// An aggregate column with the engine's own numeric type: SQLite
+/// returns INTEGER for empty-set COALESCE fallbacks and integer sums,
+/// REAL otherwise, and the original emits whichever arrives.
+fn sql_number(row: &sqlx::sqlite::SqliteRow, index: usize) -> Value {
+    match row.try_get::<f64, _>(index) {
+        Ok(value) => json!(value),
+        Err(_) => json!(row.get::<i64, _>(index)),
+    }
+}
+
+/// The sum of two engine-typed numbers, integer when both are (the
+/// original's Python addition).
+fn number_sum(a: &Value, b: &Value) -> Value {
+    match (a.as_i64(), b.as_i64()) {
+        (Some(left), Some(right)) => json!(left + right),
+        _ => json!(a.as_f64().unwrap_or(0.0) + b.as_f64().unwrap_or(0.0)),
     }
 }
 
@@ -2771,6 +3203,327 @@ mod tests {
             .unwrap()
             .get(0);
         assert_eq!(count, 0);
+    }
+
+    /// The analytics readers over a seeded economy, with every
+    /// expected object computed by the original implementation over
+    /// byte-identical seeds (engine numeric types preserved: integer
+    /// zeros from NULL sums, REAL zeros from real columns, and the
+    /// raw float artefacts of the engine's arithmetic).
+    #[tokio::test]
+    async fn analytics_match_the_original_over_a_seeded_economy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+
+        let qa = quest_id(
+            &svc.create_quest(&json!({"name": "Alpha", "reward_ped": 2.5,
+                                       "expected_reward_markup_percent": 150.0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qa, 1000.0).await;
+        let qb = quest_id(
+            &svc.create_quest(&json!({"name": "Beta", "reward_ped": 5.0,
+                                       "reward_is_skill": true}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qb, 1001.0).await;
+        let qc = quest_id(&svc.create_quest(&json!({"name": "Gamma"})).await.unwrap());
+        pin_ts(&pool, "quests", qc, 1002.0).await;
+        let qd = quest_id(
+            &svc.create_quest(&json!({"name": "Delta", "reward_ped": 1.25}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qd, 1003.0).await;
+
+        let p1 = quest_id(
+            &svc.create_playlist(&json!({"name": "Mixed Run", "items": [
+                {"quest_id": qa, "group_type": "immediate"},
+                {"quest_id": qb, "group_type": "immediate"},
+                {"quest_id": qd, "group_type": "long_horizon"},
+            ]}))
+            .await
+            .unwrap(),
+        );
+        pin_ts(&pool, "quest_playlists", p1, 2000.0).await;
+        let p2 = quest_id(
+            &svc.create_playlist(&json!({"name": "Bonus Only", "items": [
+                {"quest_id": qc, "group_type": "long_horizon"},
+            ]}))
+            .await
+            .unwrap(),
+        );
+        pin_ts(&pool, "quest_playlists", p2, 2001.0).await;
+
+        for (sid, st, en, active, heal, armour) in [
+            ("sess-1", 1000.0, Some(4600.0), 0i64, Some(1.5), Some(0.25)),
+            ("sess-2", 5000.0, Some(5030.5), 0, None, Some(0.0)),
+            ("sess-3", 6000.0, None, 1, Some(2.0), None),
+        ] {
+            sqlx::query(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, armour_cost) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(st)
+            .bind(en)
+            .bind(active)
+            .bind(heal)
+            .bind(armour)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (kid, sid, mob, ts, enh, loot) in [
+            ("k1", "sess-1", "Atrox", 1100.0, 0.5, 12.75),
+            ("k2", "sess-1", "Atrox", 1200.0, 0.0, 3.0),
+            ("k3", "sess-2", "Snable", 5010.0, 0.1, 0.0),
+        ] {
+            sqlx::query(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, damage_dealt, \
+                 damage_taken, critical_hits, cost_ped, enhancer_cost, loot_total_ped) \
+                 VALUES (?, ?, ?, ?, 10, 100.0, 5.0, 1, 0.3, ?, ?)",
+            )
+            .bind(kid)
+            .bind(sid)
+            .bind(mob)
+            .bind(ts)
+            .bind(enh)
+            .bind(loot)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (kid, tool, shots, cps) in [
+            ("k1", "LR-32", 40i64, 0.05),
+            ("k1", "Fap-90", 5, 0.02),
+            ("k3", "LR-32", 12, 0.05),
+        ] {
+            sqlx::query(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, \
+                 critical_hits, cost_per_shot) VALUES (?, ?, ?, 50.0, 0, ?)",
+            )
+            .bind(kid)
+            .bind(tool)
+            .bind(shots)
+            .bind(cps)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (sid, skill, ped) in [("sess-1", "Rifle", 0.8), ("sess-2", "Anatomy", 0.2)] {
+            sqlx::query(
+                "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \
+                 VALUES (?, 1100.0, ?, 1.0, ?)",
+            )
+            .bind(sid)
+            .bind(skill)
+            .bind(ped)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (sid, qid, at) in [
+            ("sess-1", qa, 1500.0),
+            ("sess-1", qb, 1600.0),
+            ("sess-1", qd, 1700.0),
+            ("sess-2", qa, 5020.0),
+        ] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(qid)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let qn = quest_id(&svc.create_quest(&json!({"name": "Nul"})).await.unwrap());
+        pin_ts(&pool, "quests", qn, 1004.0).await;
+        let qz = quest_id(
+            &svc.create_quest(&json!({"name": "Zed", "reward_ped": 0,
+                                       "expected_reward_markup_percent": 120.0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qz, 1005.0).await;
+        let qe2 = quest_id(
+            &svc.create_quest(&json!({"name": "Echo", "reward_ped": 3.0}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", qe2, 1006.0).await;
+        for (sid, st, en, active, heal) in [
+            ("sess-n", 7000.0, Some(7050.0), 0i64, Some(0.0)),
+            ("sess-z", 7100.0, Some(7160.0), 0, Some(0.0)),
+            ("sess-act", 8000.0, None, 1, None),
+            ("sess-solo", 8100.0, Some(8200.0), 0, Some(0.5)),
+        ] {
+            sqlx::query(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost, armour_cost) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(st)
+            .bind(en)
+            .bind(active)
+            .bind(heal)
+            .bind(heal.map(|_| 0.0))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (sid, qid, at) in [("sess-n", qn, 7040.0), ("sess-z", qz, 7150.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(sid)
+            .bind(qid)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let p3 = quest_id(
+            &svc.create_playlist(&json!({"name": "Solo Immediate", "quest_ids": [qa]}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quest_playlists", p3, 2002.0).await;
+        for (sid, lt, qid, plid) in [
+            ("sess-1", "playlist", None::<i64>, Some(p1)),
+            ("sess-2", "quest", Some(qa), None),
+            ("sess-3", "quest", Some(qa), None),
+            ("sess-n", "quest", Some(qn), None),
+            ("sess-z", "quest", Some(qz), None),
+            ("sess-act", "quest", Some(qe2), None),
+            ("sess-solo", "playlist", None, Some(p3)),
+        ] {
+            sqlx::query(
+                "INSERT INTO session_quest_analytics_links \
+                 (session_id, link_type, quest_id, playlist_id, linked_at) \
+                 VALUES (?, ?, ?, ?, 9000.0)",
+            )
+            .bind(sid)
+            .bind(lt)
+            .bind(qid)
+            .bind(plid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Per-quest, name-ordered: Alpha (the still-active linked
+        // session is excluded from the completed count but rides in
+        // the id set), then the NULL-reward and zero-reward quests
+        // whose collapsed rewards and expected totals stay INTEGER
+        // zeros on the wire; Echo (linked only by an active session)
+        // is excluded entirely.
+        assert_eq!(
+            svc.get_quest_analytics().await.unwrap(),
+            vec![
+                json!({
+                    "quest_id": qa, "quest_name": "Alpha", "planet": "Calypso",
+                    "category": null, "reward_ped": 2.5, "reward_is_skill": false,
+                    "expected_reward_markup_percent": 150.0,
+                    "total_expected_reward_ped": 3.75,
+                    "linked_sessions": 1, "total_duration": 30.5,
+                    "weapon_cost": 0.6000000000000001, "heal_cost": 0,
+                    "enhancer_cost": 0.1, "armour_cost": 0.0, "loot_tt": 0.0,
+                    "skill_tt": 0.2,
+                }),
+                json!({
+                    "quest_id": qn, "quest_name": "Nul", "planet": "Calypso",
+                    "category": null, "reward_ped": 0, "reward_is_skill": false,
+                    "expected_reward_markup_percent": null,
+                    "total_expected_reward_ped": 0,
+                    "linked_sessions": 1, "total_duration": 50.0,
+                    "weapon_cost": 0, "heal_cost": 0.0,
+                    "enhancer_cost": 0, "armour_cost": 0.0, "loot_tt": 0,
+                    "skill_tt": 0,
+                }),
+                json!({
+                    "quest_id": qz, "quest_name": "Zed", "planet": "Calypso",
+                    "category": null, "reward_ped": 0, "reward_is_skill": false,
+                    // The zero reward normalised its markup away at
+                    // creation, exactly as the original stores it.
+                    "expected_reward_markup_percent": null,
+                    "total_expected_reward_ped": 0,
+                    "linked_sessions": 1, "total_duration": 60.0,
+                    "weapon_cost": 0, "heal_cost": 0.0,
+                    "enhancer_cost": 0, "armour_cost": 0.0, "loot_tt": 0,
+                    "skill_tt": 0,
+                }),
+            ]
+        );
+
+        // An immediate-only playlist with a linked session that
+        // completed nothing in scope: real session stats beside
+        // integer-zero reward sums (the empty long-horizon set
+        // short-circuits without touching SQL).
+        assert_eq!(
+            svc.get_playlist_analytics(p3).await.unwrap().unwrap(),
+            json!({
+                "playlist_id": p3, "playlist_name": "Solo Immediate", "quest_count": 1,
+                "long_horizon_quest_count": 0,
+                "total_reward_ped": 0, "total_immediate_reward_ped": 0,
+                "total_bonus_reward_ped": 0, "total_skill_reward_ped": 0,
+                "total_immediate_skill_reward_ped": 0, "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 0, "total_expected_immediate_reward_ped": 0,
+                "total_expected_bonus_reward_ped": 0,
+                "matched_sessions": 1, "linked_sessions": 1, "total_duration": 100.0,
+                "weapon_cost": 0, "heal_cost": 0.5, "enhancer_cost": 0,
+                "armour_cost": 0.0, "loot_tt": 0, "skill_tt": 0,
+            })
+        );
+
+        let p1_stats = svc.get_playlist_analytics(p1).await.unwrap().unwrap();
+        assert_eq!(
+            p1_stats,
+            json!({
+                "playlist_id": p1, "playlist_name": "Mixed Run", "quest_count": 2,
+                "long_horizon_quest_count": 1,
+                "total_reward_ped": 8.75, "total_immediate_reward_ped": 7.5,
+                "total_bonus_reward_ped": 1.25, "total_skill_reward_ped": 5.0,
+                "total_immediate_skill_reward_ped": 5.0, "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 10.0,
+                "total_expected_immediate_reward_ped": 8.75,
+                "total_expected_bonus_reward_ped": 1.25,
+                "matched_sessions": 1, "linked_sessions": 1, "total_duration": 3600.0,
+                "weapon_cost": 2.1, "heal_cost": 1.5, "enhancer_cost": 0.5,
+                "armour_cost": 0.25, "loot_tt": 15.75, "skill_tt": 0.8,
+            })
+        );
+
+        // An empty immediate set is the zeroed early-return shape
+        // (which carries matched_sessions but no linked_sessions).
+        let p2_stats = svc.get_playlist_analytics(p2).await.unwrap().unwrap();
+        assert_eq!(
+            p2_stats,
+            json!({
+                "playlist_id": p2, "playlist_name": "Bonus Only", "quest_count": 0,
+                "long_horizon_quest_count": 1, "matched_sessions": 0,
+                "total_reward_ped": 0, "total_immediate_reward_ped": 0,
+                "total_bonus_reward_ped": 0, "total_skill_reward_ped": 0,
+                "total_immediate_skill_reward_ped": 0, "total_bonus_skill_reward_ped": 0,
+                "total_expected_reward_ped": 0, "total_expected_immediate_reward_ped": 0,
+                "total_expected_bonus_reward_ped": 0, "total_duration": 0,
+                "weapon_cost": 0, "heal_cost": 0, "enhancer_cost": 0,
+                "armour_cost": 0, "loot_tt": 0, "skill_tt": 0,
+            })
+        );
+
+        let p3_stats = svc.get_playlist_analytics(p3).await.unwrap().unwrap();
+        assert_eq!(
+            svc.get_all_playlist_analytics().await.unwrap(),
+            vec![p1_stats, p2_stats, p3_stats]
+        );
+        assert_eq!(svc.get_playlist_analytics(9999).await.unwrap(), None);
     }
 
     #[test]

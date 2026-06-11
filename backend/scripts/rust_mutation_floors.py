@@ -98,6 +98,33 @@ FLOORS: dict[str, float] = {
     # the dominance share NaN, which fails the threshold exactly as
     # the guard's skip does.
     "eo-services/src/session_summary.rs": 92.0,
+    # Measured 93.6. The residual survivors are equivalence-grade:
+    # the score-update strictness and the equal-length second pass
+    # admit no pinnable distinguishing pair (the alignment detail is
+    # not exposed), the empty-side token guard reaches the same zero
+    # through the set arithmetic, and the weighted scorer's
+    # empty-input and equal-length guards coincide with the layered
+    # guards beneath them. Every weighted score is pinned against the
+    # original library (twelve curated cases plus direct sub-scorer
+    # edges); a 300-case randomised sweep ran at zero divergences.
+    "eo-services/src/fuzzy_match.rs": 92.0,
+    # Measured 82.5 hermetically. Twenty-five of the thirty-seven
+    # survivors are engine-instance mutants (the recognise entry
+    # points and their input/output guards), killable only with a
+    # live ONNX Runtime session: the ground-truth differential kills
+    # them on hosts carrying the runtime and the locally-held bench,
+    # which the campaign host and CI deliberately are not. Counting
+    # those out, the hermetic surface scores 93.5; the resize is
+    # additionally pinned byte-for-byte against the original image
+    # library and the whole pipeline is held to the recorded
+    # ground-truth rate by the differential.
+    "eo-services/src/ocr_engine.rs": 82.0,
+    # Measured 93.6. The residuals are the bar-fill estimate's
+    # remaining tie arithmetic (the grey conversion is pinned through
+    # colour-differentiated columns; vendor builds of the original's
+    # image library deviate by one least-significant bit on rounding
+    # ties, so finer pins would overfit) and its guard couplings.
+    "eo-services/src/skill_panel.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

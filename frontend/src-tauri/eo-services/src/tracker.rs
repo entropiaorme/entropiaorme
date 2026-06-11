@@ -2855,6 +2855,10 @@ mod tests {
         // A third: `Rifle#3`; a different tool keeps its bare key.
         HuntTracker::tool_stats_for_phase(&mut state, "Rifle", 0.03).shots_fired += 1;
         HuntTracker::tool_stats_for_phase(&mut state, "Pistol", 0.02).shots_fired += 1;
+        // A cost difference of exactly the tolerance opens a phase:
+        // the comparison is strict (2e-9 - 1e-9 is exactly 1e-9).
+        HuntTracker::tool_stats_for_phase(&mut state, "Laser", 1e-9).shots_fired += 1;
+        HuntTracker::tool_stats_for_phase(&mut state, "Laser", 2e-9).shots_fired += 1;
 
         let keys: Vec<(String, String, i64)> = state
             .accumulator
@@ -2871,6 +2875,8 @@ mod tests {
                 ("Rifle#2".to_string(), "Rifle".to_string(), 1),
                 ("Rifle#3".to_string(), "Rifle".to_string(), 1),
                 ("Pistol".to_string(), "Pistol".to_string(), 1),
+                ("Laser".to_string(), "Laser".to_string(), 1),
+                ("Laser#2".to_string(), "Laser".to_string(), 1),
             ]
         );
     }
@@ -3958,5 +3964,92 @@ mod tests {
         let delta = naive_to_epoch(fractional) - naive_to_epoch(base);
         assert!((delta - 0.25).abs() < 1e-9);
         assert_eq!(epoch_to_naive(naive_to_epoch(fractional)), fractional);
+    }
+    #[test]
+    fn a_zero_priced_weapon_state_still_prefers_the_inferred_cost() {
+        let rig = rig();
+        let trifecta = json!({
+            "small_weapon": {"name": "Pistol", "damage_min": 5.0, "damage_max": 10.0,
+                             "total_damage": 0.0, "cost_per_shot_ped": 0.05,
+                             "role": "small_weapon",
+                             "weapon_props": {"weapon_entity": {"economy": {
+                                 "decay": 0, "ammo_burn": 0}}}},
+        });
+        let tracker = rig.tracker(Providers {
+            weapon_attribution_trifecta: Arc::new(|| true),
+            trifecta_resolver: Arc::new(move || Some(trifecta.as_object().unwrap().clone())),
+            equipment_cost_lookup: Arc::new(|_| 0.3),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        rig.bus.publish(
+            Topic::Combat,
+            &json!({"type": "damage_dealt", "amount": 7.0, "timestamp": "2026-01-01T00:00:01"}),
+        );
+        let state = tracker.lock_state();
+        let (key, stats) = &state.accumulator.as_ref().unwrap().tool_stats[0];
+        assert_eq!(key, "Pistol");
+        assert_eq!(
+            stats.cost_per_shot, 0.05,
+            "the attribution's cost backfills ahead of the equipment lookup"
+        );
+    }
+
+    #[test]
+    fn a_global_at_the_exact_window_bound_is_not_correlated() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            player_name: "Hero".to_string(),
+            ..Providers::default()
+        });
+        let session = tracker.start_session().unwrap();
+        rig.bus.publish(
+            Topic::LootGroup,
+            &json!({"type": "loot", "timestamp": "2026-01-01T00:00:20",
+                    "items": [{"item_name": "Hide", "quantity": 1, "value_ped": 1.0,
+                               "is_enhancer_shrapnel": false}],
+                    "total_ped": 1.0}),
+        );
+        rig.bus.publish(
+            Topic::Global,
+            &json!({"type": "global_kill", "player": "Hero", "creature": "Atrox",
+                    "value": 9.0, "timestamp": "2026-01-01T00:00:25"}),
+        );
+        assert_eq!(
+            rig.scalar_i64(
+                "SELECT COUNT(*) FROM kills WHERE session_id = ? AND is_global = 1",
+                &[&session.id],
+            ),
+            0,
+            "the five-second window is strict"
+        );
+        assert_eq!(
+            rig.scalar_i64(
+                "SELECT COUNT(*) FROM notable_events WHERE session_id = ? \
+                 AND kill_id IS NULL",
+                &[&session.id],
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn reload_clears_a_manual_stamp_once_entry_disables() {
+        let rig = rig();
+        let enabled = Arc::new(StdMutex::new(true));
+        let provider_view = enabled.clone();
+        let tracker = rig.tracker(Providers {
+            manual_mob_entry_enabled: Arc::new(move || *provider_view.lock().unwrap()),
+            manual_mob: Arc::new(|| Some(("Atrox".to_string(), "Young".to_string()))),
+            ..Providers::default()
+        });
+        tracker.start_session().unwrap();
+        assert_eq!(tracker.lock_state().confirmed_mob_name, "Young Atrox");
+
+        *enabled.lock().unwrap() = false;
+        tracker.reload_config();
+        let state = tracker.lock_state();
+        assert_eq!(state.confirmed_mob_name, "");
+        assert_eq!(state.mob_source, None);
     }
 }

@@ -335,7 +335,8 @@ mod tests {
             "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \
              VALUES ('s1', 1100.0, 'Rifle', 1.0, 0.5), ('s1', 1200.0, 'Rifle', 1.0, 0.25), \
              ('s1', 1300.0, 'Anatomy', 1.0, 0.0), \
-             ('s1', 1400.0, 'Agility', 0.25, NULL), ('s1', 1500.0, 'Agility', 0.5, NULL)",
+             ('s1', 1400.0, 'Agility', 0.25, NULL), ('s1', 1500.0, 'Agility', 0.5, NULL), \
+             ('s1', 1600.0, 'Health', 0.0, NULL)",
         )
         .await;
     }
@@ -373,7 +374,8 @@ mod tests {
             serde_json::json!({"Rifle": 0.75})
         );
         assert_eq!(summary["regularSkillTt"], Value::from(0.75));
-        // Attribute rows key on SUM(amount).
+        // Attribute rows key on SUM(amount); the zero-sum Health rows
+        // stay out, like the zero regular.
         assert_eq!(
             summary["attributeLevels"],
             serde_json::json!({"Agility": 0.75})

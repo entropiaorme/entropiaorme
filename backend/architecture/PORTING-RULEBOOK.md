@@ -235,6 +235,13 @@ Each entry: the change (or, in one marked case, a conscious keep recorded so it 
 
 - **D-7 (conscious keep) Gap recovery stays push-to-pull.** Not a change but a conscious keep, recorded so it is not "fixed" in passing: the SSE sequence id stays advisory, `Last-Event-ID` replay stays unimplemented, and reconnect recovery stays re-hydration plus the relay's nudge (`PORT-READINESS.md`, "Known hazards"). Equivalence: the seam tests and the stream contract (E-6, E-7).
 
+## Contract dispositions
+
+Surfaces the native contract consciously drops or keeps, resolved at the phase that owns them. A disposition is not a divergence: nothing behaves differently while both implementations serve; it fixes which paths the native side will ever own, and names where the contract re-ratifies.
+
+- **`/api/recording/*` is dropped from the native contract.** The recording surface is the development harness's capture controller (gated on `developer_mode_enabled`): it exists to author replay bundles for the testing oracle, and the oracle deliberately remains on the reference implementation, so reimplementing the harness natively would duplicate test scaffolding with no product consumer. The committed OpenAPI snapshot keeps these paths for as long as the reference implementation serves them; when document emission moves to the native side, the snapshot regenerates without them, and that regeneration is a golden re-ratification by design.
+- **`/api/demo/*` is kept.** The demo seeding surface is product-facing (the demo experience reuses the tracking implementation through a parallel router) and ports with the router takeover.
+
 ## Verification obligations
 
 Empirical checks the port owes before relying on the adjacent rules blind. Each discharges into either a port-side test or a recorded probe result; an obligation left open is a known blind spot, not a permission.

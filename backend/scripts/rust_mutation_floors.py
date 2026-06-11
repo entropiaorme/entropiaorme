@@ -92,11 +92,15 @@ FLOORS: dict[str, float] = {
     # host's zone puts the instant inside a spring-forward gap, which
     # no deterministic test can arrange across CI hosts.
     "eo-services/src/tracker.rs": 92.0,
-    # Measured 95.6. The two residual survivors are equivalent: a
-    # zero known-kill total implies the mob rows were empty, which the
-    # enclosing guard already excludes, and a zero shot total makes
-    # the dominance share NaN, which fails the threshold exactly as
-    # the guard's skip does.
+    # Measured 94.1 with the prospect reader in. The residual
+    # survivors are equivalent or fault-bound: a zero known-kill total
+    # implies the mob rows were empty, which the enclosing guard
+    # already excludes; a zero shot total makes the dominance share
+    # NaN, which fails the threshold exactly as the guard's skip does;
+    # and the missing-table error-classification guard's flip degrades
+    # every database failure to the absent-summary grace, divergent
+    # only under a mid-read engine fault no deterministic test can
+    # inject through the single-connection pool.
     "eo-services/src/session_summary.rs": 92.0,
     # Measured 93.6. The residual survivors are equivalence-grade:
     # the score-update strictness and the equal-length second pass

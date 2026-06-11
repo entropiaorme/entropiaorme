@@ -494,4 +494,36 @@ mod tests {
         );
         assert!(v.is_ok());
     }
+
+    #[test]
+    fn bounds_accept_their_exact_edges_and_reject_one_past() {
+        for (raw, expected) in [("1", Some(1)), ("25", Some(25))] {
+            let q = QueryString::parse(Some(&format!("rank={raw}")));
+            let mut v = Validation::new();
+            assert_eq!(require_bounded_int(&mut v, &q, "rank", 1, 25), expected);
+            assert!(v.is_ok(), "{raw} is within bounds");
+        }
+        for (raw, kind) in [("0", "greater_than_equal"), ("26", "less_than_equal")] {
+            let q = QueryString::parse(Some(&format!("rank={raw}")));
+            let mut v = Validation::new();
+            assert_eq!(require_bounded_int(&mut v, &q, "rank", 1, 25), None);
+            let (_, _, body) = body_of(v.into_response());
+            let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(parsed["detail"][0]["type"], *kind, "{raw}");
+            assert_eq!(parsed["detail"][0]["input"], *raw);
+        }
+    }
+
+    #[test]
+    fn literal_accepts_each_member_of_its_set() {
+        for value in ["profession", "hp"] {
+            let q = QueryString::parse(Some(&format!("target={value}")));
+            let mut v = Validation::new();
+            assert_eq!(
+                literal_or_default(&mut v, &q, "target", &["profession", "hp"], "profession"),
+                Some(value)
+            );
+            assert!(v.is_ok(), "{value} is in the set");
+        }
+    }
 }

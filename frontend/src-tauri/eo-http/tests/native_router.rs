@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use eo_http::arms::ArmOverrides;
+use eo_http::cors::CorsConfig;
 use eo_http::hydration::HydrationState;
 use eo_http::AppState;
 use eo_services::clock::RealClock;
@@ -37,7 +38,9 @@ async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
     // Port 9 (discard) on loopback: nothing listens; the proxy arm
     // fails fast and visibly.
     let state = Arc::new(
-        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty()).with_hydration(hydration),
+        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
+            .with_hydration(hydration)
+            .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
     tokio::spawn(async move {
@@ -60,12 +63,24 @@ async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
 }
 
 async fn get(port: u16, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    request(port, "GET", path, &[]).await
+}
+
+async fn request(
+    port: u16,
+    method: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     let authority = format!("127.0.0.1:{port}");
-    let request = http::Request::builder()
+    let mut builder = http::Request::builder()
+        .method(method)
         .uri(format!("http://{authority}{path}"))
-        .header("host", &authority)
-        .body(Body::empty())
-        .unwrap();
+        .header("host", &authority);
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder.body(Body::empty()).unwrap();
     let response = eo_http::proxy::build_client()
         .request(request)
         .await
@@ -135,6 +150,106 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Species 'No Such' not found\"}");
     assert!(!headers.contains_key(http::header::ETAG));
+
+    // The conditional-GET leg: the current validator earns a 304 with
+    // an empty body; a stale one re-serves the representation.
+    let (_, headers, _) = get(port, "/api/quests").await;
+    let etag = headers
+        .get(http::header::ETAG)
+        .expect("etag present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let (status, headers, body) = request(
+        port,
+        "GET",
+        "/api/quests",
+        &[("if-none-match", etag.as_str())],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+    assert_eq!(
+        headers.get(http::header::ETAG).unwrap().to_str().unwrap(),
+        etag
+    );
+    let (status, _, _) = request(
+        port,
+        "GET",
+        "/api/quests",
+        &[("if-none-match", "\"stale\"")],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_browser_surface_is_answered_at_the_substrate() {
+    let (port, _state, _dir) = serve_substrate().await;
+    // A passing preflight short-circuits ahead of routing (the proxy
+    // arm is dead, so a forwarded preflight would 502).
+    let (status, headers, body) = request(
+        port,
+        "OPTIONS",
+        "/api/quests",
+        &[
+            ("origin", "tauri://localhost"),
+            ("access-control-request-method", "GET"),
+        ],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"OK");
+    assert_eq!(
+        headers
+            .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "tauri://localhost"
+    );
+    // A failing preflight names its failure.
+    let (status, _, body) = request(
+        port,
+        "OPTIONS",
+        "/api/quests",
+        &[
+            ("origin", "http://evil.example"),
+            ("access-control-request-method", "GET"),
+        ],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"Disallowed CORS origin");
+    // Natively-served responses decorate for an allowed origin.
+    let (status, headers, _) = request(
+        port,
+        "GET",
+        "/api/quests",
+        &[("origin", "tauri://localhost")],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .unwrap(),
+        "tauri://localhost"
+    );
+    assert_eq!(headers.get(http::header::VARY).unwrap(), "Origin");
+    // Reads reject a present-but-disallowed origin ahead of routing.
+    let (status, _, body) = request(
+        port,
+        "GET",
+        "/api/quests",
+        &[("origin", "http://evil.example")],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::FORBIDDEN);
+    assert_eq!(body, b"{\"detail\":\"Invalid Origin header\"}");
+    // Mutating methods require an allowed origin, enforced before the
+    // proxy arm (a forwarded request would 502, not 403).
+    let (status, _, body) = request(port, "POST", "/api/quests", &[]).await;
+    assert_eq!(status, http::StatusCode::FORBIDDEN);
+    assert_eq!(body, b"{\"detail\":\"Origin header required\"}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

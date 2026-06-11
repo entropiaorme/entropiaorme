@@ -635,6 +635,23 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 
+    #[test]
+    fn adopt_error_display_carries_the_path_and_the_stand_down() {
+        let quarantined = AdoptError::Quarantined {
+            path: std::path::PathBuf::from("somewhere/entropia_orme.db"),
+            source: DbError::Driver("file is not a database".into()),
+        };
+        let rendered = quarantined.to_string();
+        assert!(rendered.contains("somewhere"), "{rendered}");
+        assert!(rendered.contains("cannot be adopted"), "{rendered}");
+        assert!(rendered.contains("file is not a database"), "{rendered}");
+        assert!(rendered.contains("left untouched"), "{rendered}");
+        assert_eq!(
+            AdoptError::Fresh(DbError::Driver("boom".into())).to_string(),
+            "boom"
+        );
+    }
+
     #[tokio::test]
     async fn open_adopted_reports_fresh_path_failures_plainly() {
         let dir = tempfile::tempdir().unwrap();

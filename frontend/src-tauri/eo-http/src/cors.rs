@@ -191,6 +191,26 @@ mod tests {
         headers
     }
 
+    #[test]
+    fn preflight_detection_requires_options_and_both_markers() {
+        let full = preflight_headers("tauri://localhost", "GET", None);
+        assert!(is_preflight(&http::Method::OPTIONS, &full));
+        // The right markers on the wrong method are not a preflight.
+        assert!(!is_preflight(&http::Method::GET, &full));
+        // OPTIONS with only one marker is not a preflight; the backend
+        // routes it (a bare OPTIONS reaches its 405).
+        let mut origin_only = HeaderMap::new();
+        origin_only.insert(header::ORIGIN, "tauri://localhost".parse().unwrap());
+        assert!(!is_preflight(&http::Method::OPTIONS, &origin_only));
+        let mut method_only = HeaderMap::new();
+        method_only.insert(
+            header::ACCESS_CONTROL_REQUEST_METHOD,
+            "GET".parse().unwrap(),
+        );
+        assert!(!is_preflight(&http::Method::OPTIONS, &method_only));
+        assert!(!is_preflight(&http::Method::OPTIONS, &HeaderMap::new()));
+    }
+
     fn body_text(response: Response<Body>) -> (StatusCode, HeaderMap, String) {
         let (parts, body) = response.into_parts();
         let bytes = tokio::runtime::Builder::new_current_thread()

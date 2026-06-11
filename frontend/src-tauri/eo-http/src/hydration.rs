@@ -50,8 +50,10 @@ pub fn compute_strong_etag(body: &[u8]) -> String {
 
 /// Whether `If-None-Match` indicates the client already holds the
 /// representation: the wildcard, or any listed tag equal to the
-/// current one (a weak `W/` prefix on a listed tag is ignored for the
-/// comparison, mirroring the backend's parser).
+/// current one. A weak `W/` prefix on a listed tag is removed before
+/// the comparison, and whitespace after the prefix is tolerated, both
+/// exactly as the backend's parser behaves (it strips around the
+/// prefix removal).
 fn if_none_match_matches(header_value: Option<&str>, current_etag: &str) -> bool {
     let Some(header_value) = header_value else {
         return false;
@@ -61,7 +63,7 @@ fn if_none_match_matches(header_value: Option<&str>, current_etag: &str) -> bool
     }
     header_value.split(',').any(|candidate| {
         let candidate = candidate.trim();
-        let candidate = candidate.strip_prefix("W/").unwrap_or(candidate);
+        let candidate = candidate.strip_prefix("W/").unwrap_or(candidate).trim();
         candidate == current_etag
     })
 }
@@ -466,6 +468,11 @@ mod tests {
         assert!(if_none_match_matches(Some("\"abc\""), current));
         assert!(if_none_match_matches(Some("\"x\", \"abc\""), current));
         assert!(if_none_match_matches(Some("W/\"abc\""), current));
+        // Whitespace after the weak prefix is tolerated, as the
+        // backend strips around its prefix removal.
+        assert!(if_none_match_matches(Some("W/ \"abc\""), current));
+        assert!(if_none_match_matches(Some("W/\t\"abc\""), current));
+        assert!(if_none_match_matches(Some("\"x\", W/ \"abc\""), current));
         assert!(!if_none_match_matches(Some("\"nope\""), current));
     }
 

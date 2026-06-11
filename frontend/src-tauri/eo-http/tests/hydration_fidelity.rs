@@ -374,14 +374,21 @@ async fn the_native_hydration_handlers_match_the_backend() {
 
     // ── The conditional-GET legs: a matching If-None-Match is a 304
     // with an empty body and the same validator headers ─────────────
-    for (path, etag) in etags.iter().take(3) {
+    for (index, (path, etag)) in etags.iter().take(3).enumerate() {
+        // The third leg sends the weak form with whitespace after the
+        // prefix, which both parsers tolerate.
+        let header_value = if index == 2 {
+            format!("W/ {etag}")
+        } else {
+            etag.clone()
+        };
         let native_response = match path.as_str() {
-            "/api/quests" => native.list_quests(Some(etag)).await,
-            "/api/quests/mobs" => native.list_mob_names(Some(etag)).await,
-            _ => native.quest_analytics(Some(etag)).await,
+            "/api/quests" => native.list_quests(Some(&header_value)).await,
+            "/api/quests/mobs" => native.list_mob_names(Some(&header_value)).await,
+            _ => native.quest_analytics(Some(&header_value)).await,
         };
         let native_parts = native_parts(native_response).await;
-        let backend_parts = backend_request(port, "GET", path, None, Some(etag)).await;
+        let backend_parts = backend_request(port, "GET", path, None, Some(&header_value)).await;
         assert_eq!(
             native_parts.0,
             http::StatusCode::NOT_MODIFIED,

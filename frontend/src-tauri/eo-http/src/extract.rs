@@ -92,10 +92,15 @@ pub fn decode_path_segment(raw: &str) -> String {
 }
 
 /// An accumulating validation report; issues land in route-signature
-/// declaration order because callers validate parameters in that order.
+/// declaration order because callers validate parameters in that
+/// order. Each issue renders to its wire form at push time (the
+/// envelope serialisation is deterministic), which lets body issues
+/// echo inputs the strict JSON value model cannot represent (the
+/// reference body parser admits non-finite floats and
+/// arbitrary-precision integers).
 #[derive(Debug, Default)]
 pub struct Validation {
-    issues: Vec<Value>,
+    issues: Vec<String>,
 }
 
 impl Validation {
@@ -107,9 +112,19 @@ impl Validation {
         self.issues.is_empty()
     }
 
+    fn push_value(&mut self, issue: Value) {
+        self.issues.push(to_wire_json(&issue));
+    }
+
+    /// A pre-rendered issue: the body extractors' path, whose `input`
+    /// echoes may carry forms outside the strict JSON value model.
+    pub(crate) fn push_rendered(&mut self, issue: String) {
+        self.issues.push(issue);
+    }
+
     /// A required parameter that was absent.
     pub fn missing(&mut self, loc: &str, name: &str) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "missing",
             "loc": [loc, name],
             "msg": "Field required",
@@ -120,7 +135,7 @@ impl Validation {
     /// A parameter that failed integer parsing; `raw` re-renders the
     /// request text exactly as received.
     pub fn int_parsing(&mut self, loc: &str, name: &str, raw: &str) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "int_parsing",
             "loc": [loc, name],
             "msg": "Input should be a valid integer, unable to parse string as an integer",
@@ -133,7 +148,7 @@ impl Validation {
     /// (single-quoted, "or"-joined).
     pub fn literal(&mut self, loc: &str, name: &str, raw: &str, allowed: &[&str]) {
         let expected = render_expected(allowed);
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "literal_error",
             "loc": [loc, name],
             "msg": format!("Input should be {expected}"),
@@ -145,7 +160,7 @@ impl Validation {
     /// A bound violation on an integer parameter; `raw` re-renders the
     /// request text (`"-0"` stays `"-0"`).
     pub fn greater_than_equal(&mut self, loc: &str, name: &str, raw: &str, bound: i64) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "greater_than_equal",
             "loc": [loc, name],
             "msg": format!("Input should be greater than or equal to {bound}"),
@@ -155,7 +170,7 @@ impl Validation {
     }
 
     pub fn less_than_equal(&mut self, loc: &str, name: &str, raw: &str, bound: i64) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "less_than_equal",
             "loc": [loc, name],
             "msg": format!("Input should be less than or equal to {bound}"),
@@ -168,7 +183,7 @@ impl Validation {
     /// no Cache-Control: validation replies bypass the conditional-GET
     /// middleware.
     pub fn into_response(self) -> Response<Body> {
-        let body = to_wire_json(&json!({"detail": self.issues}));
+        let body = format!("{{\"detail\":[{}]}}", self.issues.join(","));
         Response::builder()
             .status(StatusCode::UNPROCESSABLE_ENTITY)
             .header(header::CONTENT_TYPE, "application/json")

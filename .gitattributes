@@ -7,6 +7,9 @@
 *.json text eol=lf
 *.jsonl text eol=lf
 *.md text eol=lf
+# SQLite stores migration statement text verbatim in sqlite_master, so the
+# schema-identity checks need the .sql sources byte-stable across platforms.
+*.sql text eol=lf
 # Generated OpenAPI client types: keep LF on every platform so the
 # freshness check (`npm run gen:api:check`) compares byte-identical output.
 frontend/src/lib/api/schema.d.ts text eol=lf

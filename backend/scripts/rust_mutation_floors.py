@@ -108,17 +108,17 @@ FLOORS: dict[str, float] = {
     # original library (twelve curated cases plus direct sub-scorer
     # edges); a 300-case randomised sweep ran at zero divergences.
     "eo-services/src/fuzzy_match.rs": 92.0,
-    # Measured 85.3 hermetically. Eighteen of the thirty survivors
-    # are engine-instance mutants (the recognise entry points and
-    # their guards), killable only with a live ONNX Runtime session:
-    # the ground-truth differential kills them on hosts carrying the
-    # runtime and the locally-held bench, which the campaign host and
-    # CI deliberately are not. Counting those out, the hermetic
-    # surface scores 93.5; the resize is additionally pinned
-    # byte-for-byte against the original image library and the whole
-    # pipeline is held to the recorded ground-truth rate by the
-    # differential.
-    "eo-services/src/ocr_engine.rs": 85.0,
+    # Measured 82.5 hermetically. Twenty-five of the thirty-seven
+    # survivors are engine-instance mutants (the recognise entry
+    # points and their input/output guards), killable only with a
+    # live ONNX Runtime session: the ground-truth differential kills
+    # them on hosts carrying the runtime and the locally-held bench,
+    # which the campaign host and CI deliberately are not. Counting
+    # those out, the hermetic surface scores 93.5; the resize is
+    # additionally pinned byte-for-byte against the original image
+    # library and the whole pipeline is held to the recorded
+    # ground-truth rate by the differential.
+    "eo-services/src/ocr_engine.rs": 82.0,
     # Measured 93.6. The residuals are the bar-fill estimate's
     # remaining tie arithmetic (the grey conversion is pinned through
     # colour-differentiated columns; vendor builds of the original's

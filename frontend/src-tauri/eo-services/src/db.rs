@@ -70,6 +70,35 @@ impl std::fmt::Display for DbError {
 
 impl std::error::Error for DbError {}
 
+/// The composition-root open outcome over an application database (see
+/// [`Db::open_adopted`]): a pre-existing database that cannot be
+/// adopted quarantines (native arm stands down, file untouched), while
+/// a failure with no prior file is an ordinary environment error.
+#[derive(Debug)]
+pub enum AdoptError {
+    Quarantined {
+        path: std::path::PathBuf,
+        source: DbError,
+    },
+    Fresh(DbError),
+}
+
+impl std::fmt::Display for AdoptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdoptError::Quarantined { path, source } => write!(
+                f,
+                "existing database at {} cannot be adopted ({source}); native services stand \
+                 down and the file is left untouched for diagnosis",
+                path.display()
+            ),
+            AdoptError::Fresh(source) => write!(f, "{source}"),
+        }
+    }
+}
+
+impl std::error::Error for AdoptError {}
+
 impl From<sqlx::Error> for DbError {
     fn from(err: sqlx::Error) -> Self {
         DbError::Driver(err.to_string())
@@ -136,6 +165,26 @@ impl Db {
         adopt_or_refuse(&pool).await?;
         MIGRATOR.run(&pool).await?;
         Ok(Db { pool })
+    }
+
+    /// Open the application's own database at the composition root.
+    ///
+    /// Distinguishes failure on a PRE-EXISTING database from failure on
+    /// a fresh path: an existing file that cannot be adopted or
+    /// migrated is a quarantine signal, not a bare error. The file is
+    /// left exactly as found (it is the user's data, and the sidecar
+    /// may still serve it); the caller stands the native arm down and
+    /// surfaces the condition loudly.
+    pub async fn open_adopted(path: &Path) -> Result<Db, AdoptError> {
+        let pre_existing = path.exists();
+        match Db::open(path).await {
+            Ok(db) => Ok(db),
+            Err(source) if pre_existing => Err(AdoptError::Quarantined {
+                path: path.to_path_buf(),
+                source,
+            }),
+            Err(source) => Err(AdoptError::Fresh(source)),
+        }
     }
 
     /// The catalogue rows for the DB-state snapshot, each table in its
@@ -557,5 +606,45 @@ mod tests {
             err.to_string(),
             "database schema version 28 predates the supported baseline 33"
         );
+    }
+
+    #[tokio::test]
+    async fn open_adopted_succeeds_on_fresh_and_healthy_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entropia_orme.db");
+        // Fresh path: created and migrated.
+        let db = Db::open_adopted(&path).await.unwrap();
+        drop(db);
+        // Healthy pre-existing database: adopted.
+        Db::open_adopted(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_adopted_quarantines_an_unadoptable_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entropia_orme.db");
+        std::fs::write(&path, b"this is not a sqlite database").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        match Db::open_adopted(&path).await {
+            Err(AdoptError::Quarantined { path: reported, .. }) => {
+                assert_eq!(reported, path);
+            }
+            other => panic!("expected quarantine, got {other:?}"),
+        }
+        // The quarantine left the user's file byte-identical.
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn open_adopted_reports_fresh_path_failures_plainly() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory in the file's place defeats creation without any
+        // pre-existing database file at the path... but exists() is
+        // true for directories, so use a missing parent instead.
+        let path = dir.path().join("missing-parent").join("entropia_orme.db");
+        match Db::open_adopted(&path).await {
+            Err(AdoptError::Fresh(_)) => {}
+            other => panic!("expected a fresh-path error, got {other:?}"),
+        }
     }
 }

@@ -1065,12 +1065,14 @@ name = "entropia-orme"
 version = "0.1.0"
 dependencies = [
  "eo-http",
+ "eo-services",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
  "tauri-plugin-store",
+ "tempfile",
  "tokio",
  "windows",
 ]
@@ -1088,6 +1090,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "percent-encoding",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",

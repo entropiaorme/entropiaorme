@@ -11,7 +11,9 @@
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod arms;
+pub mod extract;
 pub mod hydration;
+pub mod native;
 pub mod proxy;
 pub mod sse;
 
@@ -34,6 +36,7 @@ pub struct AppState {
     upstream: String,
     allowed_hosts: [String; 2],
     overrides: RwLock<ArmOverrides>,
+    hydration: Option<Arc<crate::hydration::HydrationState>>,
 }
 
 impl AppState {
@@ -50,7 +53,21 @@ impl AppState {
                 format!("localhost:{public_port}"),
             ],
             overrides: RwLock::new(overrides),
+            hydration: None,
         }
+    }
+
+    /// Attach the composed native services. Without this (a substrate
+    /// built before composition, or composition declined at startup)
+    /// every natively-registered route falls back to the proxy arm.
+    pub fn with_hydration(mut self, hydration: Arc<crate::hydration::HydrationState>) -> Self {
+        self.hydration = Some(hydration);
+        self
+    }
+
+    /// The composed native services, when present.
+    pub(crate) fn hydration(&self) -> Option<Arc<crate::hydration::HydrationState>> {
+        self.hydration.clone()
     }
 
     pub fn upstream(&self) -> &str {
@@ -74,7 +91,7 @@ impl AppState {
             .expect("arm override lock never poisoned") = overrides;
     }
 
-    async fn proxy(&self, req: Request) -> Response {
+    pub(crate) async fn proxy(&self, req: Request) -> Response {
         proxy::forward(&self.client, &self.upstream, req).await
     }
 }
@@ -151,13 +168,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 
 /// Native route registrations, in takeover order; each flip adds one
-/// `arm_routed` line here, and deleting a line is the source-level
-/// revert.
+/// `arm_routed` line (here or in [`native`]), and deleting a line is
+/// the source-level revert.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
-    router.route(
+    native::register(router.route(
         "/api/health",
         arm_routed(MethodFilter::GET, "/api/health", routes::health),
-    )
+    ))
 }
 
 /// The natively-served handlers, one function per taken-over route.

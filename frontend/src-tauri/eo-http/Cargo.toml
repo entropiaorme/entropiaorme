@@ -28,6 +28,7 @@ eo-services.workspace = true
 sqlx.workspace = true
 sha2.workspace = true
 tokio-stream.workspace = true
+percent-encoding.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

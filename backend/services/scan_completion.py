@@ -8,10 +8,10 @@ canonical source, so there is no separate profession-scan persistence.
 """
 
 import logging
-import time
 from collections.abc import Callable
 
 from backend.services.scan_drift import summarize_level_drift
+from backend.testing.clock import Clock, RealClock
 
 log = logging.getLogger(__name__)
 
@@ -122,13 +122,21 @@ def _archive_prior_skill_anchors(conn, skill_names: list[str]) -> None:
     )
 
 
-def make_skill_scan_completion(app_db) -> Callable[[dict[str, float]], None]:
-    """Build the skill-scan completion callback."""
+def make_skill_scan_completion(
+    app_db, clock: Clock | None = None
+) -> Callable[[dict[str, float]], None]:
+    """Build the skill-scan completion callback.
+
+    ``clock`` is the time source for the calibration rows' ``scanned_at``
+    stamp; injected so replay scenarios stamp deterministic instants.
+    Defaults to the real clock.
+    """
+    clock = clock or RealClock()
 
     def _on_complete(levels: dict[str, float]) -> None:
         with app_db.lock:
             _log_skill_scan_drift(app_db.conn, levels)
-            scan_time = time.time()
+            scan_time = clock.now().timestamp()
             _archive_prior_skill_anchors(app_db.conn, list(levels.keys()))
             for skill_name, level in levels.items():
                 app_db.conn.execute(

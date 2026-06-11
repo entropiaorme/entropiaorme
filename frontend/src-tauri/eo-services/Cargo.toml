@@ -1,0 +1,50 @@
+[package]
+name = "eo-services"
+version.workspace = true
+description = "Domain services for the EntropiaOrme backend: the service layer behind the HTTP surface, ported service by service from the Python implementation."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# Criterion benches carry their own harness; disable libtest's bench
+# harness on the library target so `cargo bench` runs criterion only.
+bench = false
+
+[dependencies]
+eo-wire = { workspace = true }
+regex = { workspace = true }
+unicode-normalization = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+html-escape = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ort = { workspace = true }
+image = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+rapidfuzz = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_Graphics_Gdi",
+] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+# Tests that shell out to the Python oracle at runtime (the cost-engine
+# differential). Off by default so the hermetic Rust CI jobs need no Python.
+cross-language = []
+
+[[bench]]
+name = "smoke"
+harness = false

@@ -1,0 +1,38 @@
+[package]
+name = "eo-http"
+version.workspace = true
+description = "HTTP substrate for the EntropiaOrme backend: the in-process router and middleware that progressively take over routes from the Python sidecar."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Integration tests that boot the real Python backend as the proxy upstream
+# (the proxy-fidelity self-check). Off by default so the hermetic CI legs
+# need no Python toolchain; the nightly equivalence job turns it on.
+cross-language = []
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+serde_json.workspace = true
+eo-wire.workspace = true
+# The natively-served hydration handlers read through the ported
+# services (quests, codex) and their database handle.
+eo-services.workspace = true
+sqlx.workspace = true
+sha2.workspace = true
+tokio-stream.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+tempfile.workspace = true
+chrono.workspace = true
+# test-util powers the paused-clock keep-alive cadence test; dev-only so
+# the feature never reaches a shipped build.
+tokio = { workspace = true, features = ["test-util"] }

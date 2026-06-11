@@ -12,6 +12,14 @@ EntropiaOrme bundles the following third-party assets and libraries. The Softwar
 - **License:** Apache License 2.0
 - **Notice:** OpenOCR is Copyright (c) Topdu and contributors, distributed under Apache License 2.0. The bundled model artefact is governed by the same upstream license. The model file ships inside the installer; the application performs no network access for OCR.
 
+### PaddleOCR character dictionary
+
+- **File:** `backend/assets/models/ppocr_keys_v1.txt`
+- **Source:** the PaddleOCR `ppocr_keys_v1` key set, redistributed verbatim inside [`openocr-python`](https://github.com/Topdu/OpenOCR) (SHA256 `28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7`)
+- **Used by:** the OCR engines as the recognition model's decode alphabet (`backend/services/local_ocr.py` via its bundled package copy; `frontend/src-tauri/eo-services/src/ocr_engine.rs` via this file)
+- **License:** Apache License 2.0
+- **Notice:** PaddleOCR is Copyright (c) PaddlePaddle authors, distributed under Apache License 2.0. The dictionary ships inside the installer beside the model it decodes.
+
 ### Entropia Universe game-data snapshot
 
 - **Files:** `backend/data/snapshot/*.json` (weapons, weapon_amplifiers, medical_tools, mobs, professions, skills, skill_ranks, stimulants, absorbers, enhancers, weapon_vision_attachments).
@@ -34,7 +42,7 @@ The Python sidecar's runtime dependencies (`backend/requirements.txt`) and dev d
 
 ## Frontend dependencies
 
-The Tauri shell's npm dependencies (`frontend/package.json`) and Rust dependencies (`frontend/src-tauri/Cargo.toml`) are pulled from npm and crates.io under their published licenses. The Tauri framework itself is dual-licensed Apache 2.0 / MIT.
+The Tauri shell's npm dependencies (`frontend/package.json`) and Rust dependencies (the `frontend/src-tauri/` cargo workspace) are pulled from npm and crates.io under their published licenses. The Tauri framework itself is dual-licensed Apache 2.0 / MIT.
 
 ## Game references
 

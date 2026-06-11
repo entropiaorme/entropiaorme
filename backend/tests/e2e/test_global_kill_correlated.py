@@ -20,19 +20,23 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 
 def test_global_kill_correlates_to_recent_kill(
     make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, watcher, chatlog = make_e2e_pipeline(player_name="TestPlayer")
-
     scenario = corpus_root / "scripted" / "global_kill_correlated"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(
+        player_name="TestPlayer", clock=clock
+    )
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Single kill: 40.0 + 35.0 = 75.0 dmg across two shots, loot 15.0.

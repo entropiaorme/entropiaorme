@@ -18,7 +18,7 @@
 			"!coverage",
 			"!static",
 			"!src-tauri/target",
-			"!src-tauri/gen",
+			"!src-tauri/entropia-orme/gen",
 			"!src/lib/api/schema.d.ts"
 		]
 	},

@@ -1,0 +1,282 @@
+[
+  {
+    "topic": "session_started",
+    "payload": {
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "started"
+      }
+    }
+  },
+  {
+    "topic": "combat",
+    "payload": {
+      "type": "damage_dealt",
+      "timestamp": "2026-05-19T10:00:00",
+      "amount": 10.5
+    }
+  },
+  {
+    "topic": "combat",
+    "payload": {
+      "type": "damage_dealt",
+      "timestamp": "2026-05-19T10:00:00",
+      "amount": 15.0
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:00"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:00+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "combat",
+    "payload": {
+      "type": "damage_dealt",
+      "timestamp": "2026-05-19T10:00:01",
+      "amount": 30.0
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:01"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:01+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "loot_group",
+    "payload": {
+      "type": "loot",
+      "timestamp": "2026-05-19T10:00:02",
+      "items": [
+        {
+          "item_name": "Shrapnel",
+          "quantity": 500,
+          "value_ped": 5.0,
+          "is_enhancer_shrapnel": false
+        },
+        {
+          "item_name": "Animal Muscle Oil",
+          "quantity": 1,
+          "value_ped": 0.12,
+          "is_enhancer_shrapnel": false
+        }
+      ],
+      "total_ped": 5.12
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:02"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:02+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "combat",
+    "payload": {
+      "type": "damage_dealt",
+      "timestamp": "2026-05-19T10:00:05",
+      "amount": 20.0
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:05"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:05+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "loot_group",
+    "payload": {
+      "type": "loot",
+      "timestamp": "2026-05-19T10:00:06",
+      "items": [
+        {
+          "item_name": "Shrapnel",
+          "quantity": 200,
+          "value_ped": 2.0,
+          "is_enhancer_shrapnel": false
+        }
+      ],
+      "total_ped": 2.0
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:06"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:06+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "combat",
+    "payload": {
+      "type": "damage_dealt",
+      "timestamp": "2026-05-19T10:00:08",
+      "amount": 25.0
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:08"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:08+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "skill_gain",
+    "payload": {
+      "type": "skill_gain",
+      "timestamp": "2026-05-19T10:00:09",
+      "amount": 0.05,
+      "skill_name": "Bioregenesis"
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:09"
+    }
+  },
+  {
+    "topic": "loot_group",
+    "payload": {
+      "type": "loot",
+      "timestamp": "2026-05-19T10:00:10",
+      "items": [
+        {
+          "item_name": "Wool",
+          "quantity": 3,
+          "value_ped": 1.5,
+          "is_enhancer_shrapnel": false
+        }
+      ],
+      "total_ped": 1.5
+    }
+  },
+  {
+    "topic": "tick_flushed",
+    "payload": {
+      "timestamp": "2026-05-19T10:00:10"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-05-19T09:00:10+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "active",
+        "reason": "updated"
+      }
+    }
+  },
+  {
+    "topic": "session_stopped",
+    "payload": {
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a"
+    }
+  },
+  {
+    "topic": "tracking.session.updated",
+    "payload": {
+      "type": "tracking.session.updated",
+      "event_version": 1,
+      "occurred_at": "2026-01-01T00:00:01+00:00",
+      "payload": {
+        "sessionId": "d6ab5855-27a7-47fc-be37-767711d1047a",
+        "status": "idle",
+        "reason": "stopped"
+      }
+    }
+  }
+]

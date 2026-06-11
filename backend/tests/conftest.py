@@ -42,10 +42,17 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 _MODULE_TIERS = {
     "test_capturer": "fast",  # mss session is stubbed; no real device touched
     "test_clock": "fast",
+    "test_clock_plan": "fast",  # loader over a temp metadata.yaml; no app
     "test_testing_config": "fast",  # env-loader logic; no real env touched
+    "test_event_bus": "fast",  # in-memory pub/sub + tap contracts; no app
+    "test_events_sink": "fast",  # tap-to-file sink over a temp path; no app
     "test_game_data_store": "fast",  # loads temp JSON snapshots; no real device
     "test_diff_renderer": "fast",
     "test_http_fingerprint": "fast",  # pure projection helpers
+    "test_normalizer_conformance": "fast",  # oracle over a committed fixture; no app
+    "test_equivalence_emitters": "fast",  # oracle over committed raw fixtures; no app
+    "test_equivalence_yml_family": "fast",  # mirrors over committed .yml pins; no app
+    "test_equivalence_clis": "fast",  # CLI stdin/stdout + generator entry points; no app
     "test_character_calc": "fast",
     "test_character_calc_properties": "fast",
     "test_chatlog_parser": "fast",
@@ -74,6 +81,7 @@ _MODULE_TIERS = {
     "test_loot_filter_properties": "fast",
     "test_golden_ratification_guard": "fast",  # pure stdlib + git, no app
     "test_authoring_lint": "fast",  # pure stdlib + git, no app
+    "test_ambient_time_guard": "fast",  # pure stdlib + git, no app
     "test_classify_change_scope": "fast",  # pure stdlib + git, no app
     "test_version_stamps": "fast",  # pure stdlib, reads tracked manifests
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
@@ -116,6 +124,13 @@ _MODULE_TIERS = {
     "test_event_stream": "fast",  # hub fan-out driven via asyncio.run; no lifespan
     "test_coverage_matrix_drift": "fast",  # renders the matrix from source files
     "test_http_fingerprint_scenarios": "standard",  # per-test FastAPI lifespan
+    "test_test_mode_wiring": "standard",  # boots fresh app lifespans via TestClient
+    "test_external_process_equivalence": "standard",  # one real backend subprocess
+    # Two real backend subprocesses per scenario with overlapped boots; sits
+    # with the single-process control above so the per-push gate exercises
+    # the whole external-drive surface on both platforms.
+    "test_dual_process_equivalence": "standard",
+    "test_external_process_harness": "fast",  # harness edges; one tiny exec, no backend boot
     "test_api_surface_walk": "standard",  # boots the app lifespan via TestClient
     "test_api_surface_mutations": "standard",  # boots the app lifespan via TestClient
     "test_event_stream_seam": "standard",  # boots the app lifespan; streams SSE

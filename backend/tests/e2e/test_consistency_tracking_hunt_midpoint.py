@@ -20,6 +20,7 @@ projection surfaces as a golden diff for review before ratification.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.event_bus import EventBus
@@ -32,16 +33,20 @@ from backend.testing.store_reducers import (
 )
 from backend.tracking.tracker import HuntTracker
 
+_Pipeline = Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
+
 
 def test_tracking_snapshot_event_stream_consistency(
-    e2e_pipeline: tuple[EventBus, HuntTracker, ChatlogWatcher, Path],
+    make_e2e_pipeline: _Pipeline,
+    scenario_clock,
     corpus_root: Path,
     data_regression,
 ) -> None:
     """Hydrate from T0 + apply post-midpoint events == fresh T1 snapshot."""
 
-    bus, tracker, watcher, chatlog = e2e_pipeline
     scenario_dir = corpus_root / "scripted" / "consistency_tracking_hunt_midpoint"
+    clock, _plan = scenario_clock(scenario_dir)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
 
     tracker.start_session()
     try:

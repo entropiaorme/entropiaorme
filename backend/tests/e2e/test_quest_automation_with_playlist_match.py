@@ -32,6 +32,8 @@ from backend.core.event_bus import EventBus
 from backend.db.app_database import AppDatabase
 from backend.services.chatlog_watcher import ChatlogWatcher
 from backend.services.quest_service import QuestService
+from backend.testing.clock import MockClock
+from backend.testing.clock_plan import ClockPlan, load_clock_plan
 from backend.testing.replay import replay_scenario, wait_for_drain
 from backend.tracking.tracker import HuntTracker
 
@@ -47,6 +49,8 @@ def quest_automation_pipeline(
         ChatlogWatcher,
         Path,
         AppDatabase,
+        MockClock,
+        ClockPlan,
     ]
 ]:
     """Boot the quest-automation pipeline.
@@ -59,10 +63,18 @@ def quest_automation_pipeline(
 
     chatlog_path = tmp_path / "chat_testing.log"
     chatlog_path.touch()
+    # The scenario's committed clock plan drives every quest/session
+    # timestamp this pipeline stamps; the watcher stays on its real default
+    # clock per the drain-timeout caveat.
+    scenario = Path(__file__).parent.joinpath(
+        "corpus", "scripted", "quest_automation_with_playlist_match"
+    )
+    plan = load_clock_plan(scenario)
+    clock = plan.build_clock()
     app_db = AppDatabase(tmp_path / "test.db")
     bus = EventBus()
-    quest_service = QuestService(app_db, event_bus=bus)
-    tracker = HuntTracker(bus, app_db.conn)
+    quest_service = QuestService(app_db, event_bus=bus, clock=clock)
+    tracker = HuntTracker(bus, app_db.conn, clock=clock)
     watcher = ChatlogWatcher(
         bus,
         chatlog_path,
@@ -70,7 +82,7 @@ def quest_automation_pipeline(
     )
     watcher.start()
     try:
-        yield bus, tracker, quest_service, watcher, chatlog_path, app_db
+        yield bus, tracker, quest_service, watcher, chatlog_path, app_db, clock, plan
     finally:
         watcher.stop()
         app_db.close()
@@ -83,7 +95,9 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
 ) -> None:
     """Two missions, same playlist, single session → ``exact_playlist``."""
 
-    bus, tracker, quest_service, watcher, chatlog, app_db = quest_automation_pipeline
+    bus, tracker, quest_service, watcher, chatlog, app_db, clock, plan = (
+        quest_automation_pipeline
+    )
 
     # Pre-populate two quests, each carrying a small liquid reward so
     # completion writes a deterministic ledger row, and bundle them
@@ -104,6 +118,7 @@ def test_quest_automation_resolves_session_to_playlist_exact_match(
     scenario = corpus_root / "scripted" / "quest_automation_with_playlist_match"
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Chat-side sanity: one kill per mission.

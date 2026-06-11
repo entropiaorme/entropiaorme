@@ -70,7 +70,10 @@ class TrackingSession:
     """A tracking session — started/stopped by the user."""
 
     id: str
-    start_time: datetime = field(default_factory=datetime.now)
+    # No wall-clock default: the owner stamps the start instant explicitly
+    # through its injected clock, so constructing a session can never read
+    # ambient time.
+    start_time: datetime
     end_time: datetime | None = None
     kills: list[Kill] = field(default_factory=list)
     dangling_cost: float = 0.0  # unresolved shots at session end

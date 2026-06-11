@@ -27,9 +27,9 @@
       "sessionId": "<UUID_1>",
       "skillGains": [
         {
-          "level": 0,
+          "level": 0.0,
           "skillName": "Bioregenesis",
-          "ttValueGained": 0
+          "ttValueGained": 0.0
         }
       ],
       "summary": {

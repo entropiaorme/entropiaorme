@@ -3,7 +3,6 @@
 Returns shapes matching the frontend TrackingSession and SessionDetail types.
 """
 
-import time
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
@@ -31,6 +30,7 @@ from backend.routers.response_models import (
 from backend.services.character_calc import ATTRIBUTE_SKILLS
 from backend.services.config_service import active_trifecta_preset
 from backend.services.trifecta_service import validate_trifecta
+from backend.testing.clock import Clock, RealClock
 
 
 def _validate_hotbar(config) -> tuple[bool, str | None]:
@@ -494,10 +494,12 @@ def list_sessions():
 
     Returns shapes matching the frontend TrackingSession type.
     """
-    return list_sessions_impl(get_services().app_db.conn)
+    svc = get_services()
+    return list_sessions_impl(svc.app_db.conn, clock=svc.clock)
 
 
-def list_sessions_impl(conn):
+def list_sessions_impl(conn, clock: Clock | None = None):
+    clock = clock or RealClock()
     rows = conn.execute(
         """SELECT id, started_at, ended_at, is_active
            FROM tracking_sessions ORDER BY started_at DESC LIMIT 20""",
@@ -511,7 +513,7 @@ def list_sessions_impl(conn):
         if ended_at and started_at:
             duration = int(ended_at - started_at)
         elif is_active and started_at:
-            duration = int(time.time() - started_at)
+            duration = int(clock.now().timestamp() - started_at)
         else:
             duration = 0
 
@@ -653,7 +655,8 @@ def get_session(session_id: str):
 
     Returns shape matching the frontend SessionDetail type.
     """
-    return get_session_impl(get_services().app_db.conn, session_id)
+    svc = get_services()
+    return get_session_impl(svc.app_db.conn, session_id, clock=svc.clock)
 
 
 class RenameMobRequest(BaseModel):
@@ -1112,7 +1115,8 @@ def _bulk_activate_loot_item_impl(conn, session_id: str, item_name: str):
     return _bulk_flip_loot_item(conn, session_id, item_name, "active")
 
 
-def get_session_impl(conn, session_id: str):
+def get_session_impl(conn, session_id: str, clock: Clock | None = None):
+    clock = clock or RealClock()
     session_row = conn.execute(
         "SELECT id, started_at, ended_at, is_active, mob_tracking_mode "
         "FROM tracking_sessions WHERE id = ?",
@@ -1132,7 +1136,7 @@ def get_session_impl(conn, session_id: str):
     if ended_at and started_at:
         duration = int(ended_at - started_at)
     elif is_active and started_at:
-        duration = int(time.time() - started_at)
+        duration = int(clock.now().timestamp() - started_at)
     else:
         duration = 0
 

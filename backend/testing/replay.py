@@ -12,8 +12,10 @@ scenario tests stay short.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
+from backend.services.chatlog_parser import LINE_RE
 from backend.services.chatlog_watcher import ChatlogWatcher
 
 # Ceiling on a drain wait. The condition wait returns the instant the watcher
@@ -23,24 +25,80 @@ from backend.services.chatlog_watcher import ChatlogWatcher
 DRAIN_TIMEOUT_S = 10.0
 
 
+def _tick_key(line: str) -> str | None:
+    """The watcher's tick-grouping key for ``line``: its parsed timestamp.
+
+    The watcher buckets events into one app tick per chat.log timestamp
+    (second resolution), so two lines share a tick iff their leading
+    timestamp tokens are equal. Reusing the parser's own ``LINE_RE`` here
+    guarantees the harness groups by exactly the key the watcher splits on.
+    Lines with no recognised timestamp never start or extend a tick, so they
+    key to ``None`` and stream on their own.
+    """
+    matched = LINE_RE.match(line.strip())
+    return matched.group(1) if matched else None
+
+
+def _stream_ticks(lines: list[str], chatlog_path: Path) -> None:
+    """Append ``lines`` to ``chatlog_path``, flushing once per timestamp tick.
+
+    The watcher closes the current tick whenever its tail loop reaches
+    end-of-file, so if it caught up to a writer mid-tick (between two lines
+    sharing one timestamp), it would flush a partial tick and the trailing
+    same-second line would land in a fresh (wrong) tick, splitting one app
+    tick into two. Under parallel load that interleaving is exactly what made
+    the metamorphic combat-reorder property flake. Writing each timestamp
+    group in a single flush makes a tick the atomic streaming unit, so the
+    watcher can never observe end-of-file in the middle of one; ticks still
+    stream incrementally (one flush each), so the real tail-read path is
+    exercised as before, and the result is now independent of reader/writer
+    interleaving as the tick-boundary contract always intended.
+    """
+    with chatlog_path.open("a", encoding="utf-8") as sink:
+        for group in _group_by_tick(lines):
+            sink.write("".join(group))
+            sink.flush()
+
+
+def _group_by_tick(lines: list[str]) -> Iterator[list[str]]:
+    """Yield runs of consecutive lines sharing one tick key.
+
+    A timestamped line opens a group that absorbs any following untimestamped
+    lines (tick-neutral: an untimestamped line neither opens nor closes a tick,
+    so it rides with the line before it) and every further line carrying the
+    same timestamp; a new timestamp starts a new group. Leading untimestamped
+    lines, having no tick to join, stream on their own. Chat.log timestamps are
+    monotonic non-decreasing, so same-tick lines are always consecutive and a
+    group never has to reach back across an intervening different second.
+    """
+    group: list[str] = []
+    current: str | None = None
+    for line in lines:
+        key = _tick_key(line)
+        if group and key is not None and key != current:
+            yield group
+            group = []
+        group.append(line)
+        if key is not None:
+            current = key
+    if group:
+        yield group
+
+
 def replay_scenario(scenario_dir: Path, chatlog_path: Path) -> None:
     """Stream the scenario's chat replay into ``chatlog_path``.
 
-    Lines are written + flushed one at a time so the watcher's tail
-    loop reads them through its normal ``readline()`` path. The
-    scenario's timestamps drive tracker behaviour; wall-clock spacing
-    between writes is unimportant for tick-boundary correctness
-    because the tick boundary is derived from the parsed timestamp,
-    not from when the line landed on disk.
+    Lines stream through the watcher's normal ``readline()`` tail path, one
+    flush per timestamp tick (see :func:`_stream_ticks`). The scenario's
+    timestamps drive tracker behaviour; wall-clock spacing between ticks is
+    unimportant for tick-boundary correctness because the tick boundary is
+    derived from the parsed timestamp, not from when a line landed on disk,
+    an invariant the per-tick flush is what actually upholds.
     """
 
     source = scenario_dir / "chat_replay.log"
     lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
-
-    with chatlog_path.open("a", encoding="utf-8") as sink:
-        for line in lines:
-            sink.write(line)
-            sink.flush()
+    _stream_ticks(lines, chatlog_path)
 
 
 def wait_for_drain(

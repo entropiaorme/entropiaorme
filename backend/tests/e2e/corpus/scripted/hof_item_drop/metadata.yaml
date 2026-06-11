@@ -26,3 +26,11 @@ notes: >
   announcement's player field for correlation to fire; hof=True
   on s.globals.item appends the Hall-of-Fame suffix that promotes
   the parse to HOF_ITEM and the correlation to is_hof.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (see backend/testing/clock_plan.py). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

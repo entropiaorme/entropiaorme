@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import { type NewsCache, type NewsEntry, type NewsFeed, newsOptIn, persistNewsCache } from './news';
 
 // This file is the sole site of outbound non-loopback HTTP in the app.
-// The CSP `connect-src` entry in frontend/src-tauri/tauri.conf.json gates
+// The CSP `connect-src` entry in frontend/src-tauri/entropia-orme/tauri.conf.json gates
 // the host allowlist at the webview boundary; this constant declares it.
 const NEWS_SOURCE_BASE = 'https://entropiaorme.com';
 const FEED_URL = `${NEWS_SOURCE_BASE}/news.json`;

@@ -1,29 +1,109 @@
-[package]
-name = "entropia-orme"
+# Cargo workspace for the desktop application's Rust side.
+#
+# Members:
+#   - entropia-orme: the Tauri shell (window chrome, sidecar lifecycle). The
+#     only member coupled to the Tauri toolchain.
+#   - eo-http:     HTTP substrate for the native backend (router, middleware).
+#   - eo-services: domain services behind that HTTP surface.
+#   - eo-wire:     wire-format contracts (response/event types, serialisation).
+#
+# The eo-* members are the landing zone for the native backend port (see
+# backend/architecture/PORT-READINESS.md and PORTING-RULEBOOK.md). They are
+# deliberately Tauri-free: CI builds and tests them on a runner without the
+# Tauri toolchain's system stack, which structurally prevents a GUI dependency
+# from creeping into backend code.
+
+[workspace]
+resolver = "2"
+members = ["entropia-orme", "eo-http", "eo-services", "eo-wire"]
+
+[workspace.package]
 version = "0.1.0"
-description = "EntropiaOrme: an analytical desktop tool for Entropia Universe."
 authors = ["Mikel Williams-Lekuona <MikelWL@protonmail.com>"]
 edition = "2021"
 license = "MIT"
 
-[lib]
-name = "entropia_orme_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
-
-[dependencies]
-tauri = { version = "2", features = [] }
+[workspace.dependencies]
+# Tauri is pinned to the 2.11 minor (the known-good release line when this
+# workspace was laid down). The backend port runs a long-lived hybrid inside
+# the shell process, and a mid-flight Tauri minor bump is a moving-target risk
+# the pin removes; re-evaluate only on a major release with material benefit.
+# tauri-build rides its matching minor for the same reason. Review the
+# .cargo/audit.toml and deny.toml ignore lists together with any bump.
+tauri = { version = "~2.11", features = [] }
+tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps JSON object members in insertion order end to end,
+# which the response models' extra-key carry-forward and the body-byte
+# fidelity of ported routes both rely on (the canonicalising emitters sort
+# keys explicitly, so they are unaffected). float_roundtrip makes float
+# parsing correctly rounded (the default fast path can land one ULP off),
+# which the cross-language differentials' parsed-value comparisons and any
+# golden re-parse rely on for exactness.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# The OCR recogniser runtime. `load-dynamic` binds the ONNX Runtime
+# shared library at process start rather than link time, so builds and
+# tests need no native toolkit; hosts without the runtime skip the
+# engine-running tests honestly. (Execution providers are a
+# composition-root concern; the recogniser itself is EP-agnostic.)
+# The release-candidate pin is deliberate: the 2.0 line is the only
+# maintained binding for the current ONNX Runtime API, rc versions are
+# immutable and checksum-locked, and the audit cadence bumps this to
+# 2.0.0 final when it lands.
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+windows = "0.61"
+# The strangler-fig HTTP substrate: axum owns the public loopback address and
+# reverse-proxies not-yet-ported routes to the relocated Python sidecar.
+# axum is pinned to the 0.8 minor for the duration of the hybrid, mirroring
+# the Tauri pin above: the proxy seam is the one surface every route crosses.
+axum = { version = "~0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
+http = "1"
+http-body-util = "0.1"
+# The chatlog parser's line grammar: plain regular expressions (the one
+# Python lookahead is reproduced as an explicit post-match check), the
+# client's timestamp format via chrono, and the HTML5 named-entity set
+# matching the original's unescaping.
+regex = "1"
+# Strong-ETag computation for natively-served hydration responses
+# (the backend's middleware hashes the response body with SHA-256).
+sha2 = "0.10"
+# NFKD decomposition for the quest-name normaliser: the mission-name
+# matcher folds accented characters to their ASCII base before
+# comparison, exactly as the backend's normalise step does.
+unicode-normalization = "0.1"
+# Session and kill identities: random v4, exactly the original's
+# uuid4() (the equivalence normaliser maps ids to symbols by encounter
+# order, so randomness never reaches a golden).
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+html-escape = "0.2"
+# The persistence stack: sqlx is pinned to the 0.9 minor for the duration
+# of the hybrid, mirroring the Tauri and axum pins above; the database
+# layer sits behind a narrow handle so the driver stays swappable.
+sqlx = { version = "~0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+# Stream plumbing for the proxy-substrate tests' held-open upstream stub.
+bytes = "1"
+tokio-stream = "0.1"
+# Throwaway data directories for the cross-language proxy-fidelity test's
+# real-backend boots (eo-http dev-dependency).
+tempfile = "3"
+criterion = "0.8"
+# Shortest round-trip float digits, parsed and reformatted to match Python's
+# float repr byte-for-byte in the equivalence Normalizer (eo-wire).
+ryu = "1"
+# Property-based differential fuzzing of the Normalizer against the Python
+# oracle (eo-wire dev-dependency).
+proptest = "1"
+# Decode the raw-capture HTTP bodies in the equivalence emitter proof
+# (eo-wire dev-dependency).
+base64 = "0.22"
 
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = [
-  "Win32_Foundation",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_HiDpi",
-  "Win32_UI_WindowsAndMessaging"
-] }
+eo-http = { path = "eo-http" }
+eo-services = { path = "eo-services" }
+eo-wire = { path = "eo-wire" }

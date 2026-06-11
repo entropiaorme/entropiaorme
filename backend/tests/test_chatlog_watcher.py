@@ -6,6 +6,7 @@ Verifies that:
   • Mission completion triggers quest reward suppression when a filter is installed.
 """
 
+import logging
 from datetime import datetime
 
 import pytest
@@ -18,7 +19,8 @@ from backend.core.events import (
     EVENT_MISSION_RECEIVED,
     EVENT_SKILL_GAIN,
 )
-from backend.services.chatlog_watcher import ChatlogWatcher
+from backend.services.chatlog_watcher import PERF_LOG_INTERVAL_S, ChatlogWatcher
+from backend.testing.clock import MockClock
 
 
 def _make_loot_line(ts: str, item: str, value: str) -> str:
@@ -584,6 +586,30 @@ class TestDrainSeams:
         finally:
             watcher.stop()
 
+    def test_wait_until_drained_times_out_with_a_frozen_injected_clock(self, tmp_path):
+        """A frozen injected clock cannot turn a failed drain into a hang.
+
+        The drain deadline runs on the watcher's own real, advancing clock,
+        not the injected one, so a deterministic-replay harness that injects a
+        frozen clock still gets a TimeoutError rather than an infinite wait
+        (a frozen monotonic stream would otherwise hold ``remaining`` above
+        zero forever).
+        """
+        chatlog = tmp_path / "chat.log"
+        chatlog.touch()
+        # MockClock().monotonic() never advances: routed through the deadline
+        # arithmetic it would freeze the timeout. The dedicated timeout clock
+        # must ignore it and still expire.
+        watcher = ChatlogWatcher(EventBus(), chatlog, clock=MockClock())
+        watcher.start()
+        try:
+            with pytest.raises(
+                TimeoutError, match=r"did not drain to 1 line.*within 0\.3s"
+            ):
+                watcher.wait_until_drained(1, timeout=0.3)
+        finally:
+            watcher.stop()
+
     def test_start_does_not_hang_when_readiness_times_out(self, tmp_path):
         """If the readiness signal never fires, start() warns and returns.
 
@@ -625,3 +651,28 @@ class TestDrainSeams:
         assert watcher.has_pending_tick
         watcher._flush_tick()
         assert not watcher.has_pending_tick
+
+    def test_drain_counter_survives_debug_perf_window_reset(self, caplog):
+        """``lines_seen`` keeps counting across a DEBUG perf-window reset.
+
+        The perf summary zeroes its window counters every interval when DEBUG
+        logging is enabled; the cumulative counter the drain helpers compare
+        against must be immune to that reset, or ``wait_until_drained`` would
+        silently stop converging the moment verbose logging is switched on.
+        """
+        clock = MockClock()
+        watcher = ChatlogWatcher(EventBus(), "dummy.log", clock=clock)
+        caplog.set_level(logging.DEBUG, logger="backend.services.chatlog_watcher")
+
+        watcher._process_line("not a chat line\n")
+        assert watcher.lines_seen == 1
+
+        # Step the injected clock past the perf interval so the next processed
+        # line triggers the window reset, then keep feeding lines.
+        clock.advance(PERF_LOG_INTERVAL_S + 1.0)
+        watcher._process_line("not a chat line\n")
+        watcher._process_line("not a chat line\n")
+
+        # The reset must actually have fired for this test to mean anything.
+        assert any("Chatlog watcher perf" in rec.message for rec in caplog.records)
+        assert watcher.lines_seen == 3

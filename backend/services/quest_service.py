@@ -2,7 +2,6 @@
 
 import logging
 import re
-import time
 import unicodedata
 import uuid
 from datetime import UTC, datetime
@@ -15,6 +14,7 @@ from backend.core.events import (
     EVENT_SESSION_STOPPED,
 )
 from backend.db.app_database import AppDatabase
+from backend.testing.clock import Clock, RealClock
 
 log = logging.getLogger(__name__)
 
@@ -41,10 +41,18 @@ def _normalize_quest_name(name: str) -> str:
 class QuestService:
     """Quest operations: CRUD, cooldown tracking, playlists, completion flow."""
 
-    def __init__(self, app_db: AppDatabase, event_bus: EventBus | None = None):
+    def __init__(
+        self,
+        app_db: AppDatabase,
+        event_bus: EventBus | None = None,
+        clock: Clock | None = None,
+    ):
         self._db = app_db
         self._conn = app_db.conn
         self._current_session_id: str | None = None
+        # Time source for quest/cooldown/link timestamps; injected so replay
+        # scenarios stamp deterministic instants. Defaults to the real clock.
+        self._clock = clock or RealClock()
 
         if event_bus:
             event_bus.subscribe(EVENT_SESSION_STARTED, self._on_session_start)
@@ -236,7 +244,7 @@ class QuestService:
         """Mark a quest as in-progress."""
         cur = self._conn.execute(
             "UPDATE quests SET started_at = ? WHERE id = ? AND is_active = 1",
-            (time.time(), quest_id),
+            (self._clock.now().timestamp(), quest_id),
         )
         self._conn.commit()
         return self.get_quest(quest_id) if cur.rowcount > 0 else None
@@ -259,7 +267,7 @@ class QuestService:
         if not quest:
             return None
 
-        now = time.time()
+        now = self._clock.now().timestamp()
         self._conn.execute(
             "UPDATE quests SET started_at = NULL WHERE id = ?",
             (quest_id,),
@@ -1031,7 +1039,7 @@ class QuestService:
                     event_type,
                     description,
                     value_ped,
-                    time.time(),
+                    self._clock.now().timestamp(),
                 ),
             )
             self._conn.commit()
@@ -1053,7 +1061,7 @@ class QuestService:
         colliding with subsequent manual completions of the same quest.
         """
         key = session_id if session_id is not None else f"manual-{uuid.uuid4()}"
-        ts = completed_at if completed_at is not None else time.time()
+        ts = completed_at if completed_at is not None else self._clock.now().timestamp()
         self._conn.execute(
             "INSERT OR IGNORE INTO session_quest_completions (session_id, quest_id, completed_at) VALUES (?, ?, ?)",
             (key, quest_id, ts),
@@ -1100,7 +1108,13 @@ class QuestService:
                    quest_id = excluded.quest_id,
                    playlist_id = excluded.playlist_id,
                    linked_at = excluded.linked_at""",
-            (session_id, link_type, quest_id, playlist_id, time.time()),
+            (
+                session_id,
+                link_type,
+                quest_id,
+                playlist_id,
+                self._clock.now().timestamp(),
+            ),
         )
         self._conn.commit()
 
@@ -1223,7 +1237,7 @@ class QuestService:
         cd_hours = quest.get("cooldown_hours")
         if last is None or cd_hours is None or cd_hours <= 0:
             return False
-        return (last + cd_hours * 3600) > time.time()
+        return (last + cd_hours * 3600) > self._clock.now().timestamp()
 
     def _row_to_playlist(self, row) -> dict:
         d = dict(row)

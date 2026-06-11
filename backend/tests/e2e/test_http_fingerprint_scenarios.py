@@ -29,7 +29,9 @@ import pytest
 
 from backend.dependencies import get_services
 from backend.services.chatlog_watcher import ChatlogWatcher
-from backend.testing.http_fingerprint import HttpFingerprinter
+from backend.testing.clock import MockClock
+from backend.testing.clock_plan import load_clock_plan
+from backend.testing.http_fingerprint import HYDRATION_ENDPOINTS, HttpFingerprinter
 from backend.testing.replay import wait_for_drain
 
 # Scenarios in scope for the HTTP-fingerprint contract. Player_name-
@@ -87,33 +89,12 @@ def _capture_hydration_set(
 ) -> None:
     """Capture the curated hydration GET surface for the scenario.
 
-    Endpoint order is fixed so the shared Normalizer's symbol table
-    grows in a deterministic sequence across runs of the same scenario.
+    Endpoint order is fixed (the shared ``HYDRATION_ENDPOINTS`` contract) so
+    the shared Normalizer's symbol table grows in a deterministic sequence
+    across runs of the same scenario and across every capture leg.
     """
-    captures: tuple[tuple[str, str, str, dict | None], ...] = (
-        ("GET_tracking_snapshot", "GET", "/api/tracking/snapshot", None),
-        ("GET_tracking_sessions", "GET", "/api/tracking/sessions", None),
-        (
-            "GET_tracking_session_detail",
-            "GET",
-            f"/api/tracking/session/{session_id}",
-            None,
-        ),
-        (
-            "GET_tracking_session_quest_link_suggestion",
-            "GET",
-            f"/api/tracking/session/{session_id}/quest-link-suggestion",
-            None,
-        ),
-        ("GET_quests", "GET", "/api/quests", None),
-        ("GET_quests_mobs", "GET", "/api/quests/mobs", None),
-        ("GET_quests_analytics", "GET", "/api/quests/analytics", None),
-        ("GET_quests_playlists", "GET", "/api/quests/playlists", None),
-        ("GET_scan_skills_status", "GET", "/api/scan/skills/status", None),
-        ("GET_codex_meta_attributes", "GET", "/api/codex/meta/attributes", None),
-    )
-
-    for endpoint_id, method, path, query in captures:
+    for endpoint_id, method, path_template in HYDRATION_ENDPOINTS:
+        path = path_template.format(session_id=session_id)
         response = client.get(path)
         assert response.status_code == 200, (
             f"{endpoint_id} ({method} {path}) returned "
@@ -124,13 +105,13 @@ def _capture_hydration_set(
             endpoint_id=endpoint_id,
             request_method=method,
             request_path=path,
-            request_query=query,
+            request_query=None,
         )
 
 
 @pytest.mark.parametrize("scenario_name", HTTP_FINGERPRINT_SCENARIOS)
 def test_http_fingerprint(
-    e2e_http_pipeline,
+    make_e2e_http_pipeline,
     corpus_root: Path,
     http_fingerprinter,
     scenario_name: str,
@@ -143,21 +124,34 @@ def test_http_fingerprint(
     endpoint's start-time attribution gate. The HTTP contract under
     test is on the read surface, which the tracker shape exercises
     identically.
+
+    The lifespan app runs on the scenario's committed clock plan (the
+    whole-process frozen-clock seam), so every timestamp the app stamps
+    into these goldens is plan-derived rather than wall-clock. The test
+    is the replay driver, so it advances the app clock once after the
+    replay drains (the canonical driver point) to keep the session
+    boundaries distinct deterministic instants.
     """
-    client, chatlog, watcher = e2e_http_pipeline
     scenario = corpus_root / "scripted" / scenario_name
-
-    tracker = get_services().tracker
-    session = tracker.start_session()
-    try:
-        _replay_full_scenario(scenario, chatlog, watcher)
-        tracker.stop_session()
-    finally:
-        if tracker.is_tracking:
+    plan = load_clock_plan(scenario)
+    with make_e2e_http_pipeline(scenario) as (client, chatlog, watcher):
+        services = get_services()
+        app_clock = services.clock
+        assert isinstance(app_clock, MockClock), (
+            "the scenario pipeline must run on the plan-driven frozen clock"
+        )
+        tracker = services.tracker
+        session = tracker.start_session()
+        try:
+            _replay_full_scenario(scenario, chatlog, watcher)
+            app_clock.advance(plan.step_seconds)
             tracker.stop_session()
+        finally:
+            if tracker.is_tracking:
+                tracker.stop_session()
 
-    fp = http_fingerprinter(scenario)
-    _capture_hydration_set(fp, client, session.id)
+        fp = http_fingerprinter(scenario)
+        _capture_hydration_set(fp, client, session.id)
 
     # Pin the captured-set cardinality so a future test refactor that
     # silently drops endpoints from _capture_hydration_set surfaces here

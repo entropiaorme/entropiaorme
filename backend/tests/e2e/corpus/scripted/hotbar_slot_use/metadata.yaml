@@ -29,3 +29,11 @@ notes: >
   with a MockKeystrokeSource onto the harness pipeline and a tiny
   hotbar_resolver, then injects each keystroke and pins the bus
   event stream via pytest-regressions.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (see backend/testing/clock_plan.py). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

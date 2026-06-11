@@ -62,7 +62,7 @@ Produces (at `frontend/src-tauri/target/release/`):
 - `entropiaorme-<version>-x64-portable.zip`: portable bundle (Tauri shell + sidecar + README.txt).
 - Matching `.sha256` sidecar files for both artefacts (single-line `<hash>  <filename>`, `sha256sum -c` compatible).
 
-Installer chrome assets (header / sidebar BMPs + plain-text MIT license) live under `frontend/src-tauri/installer/` and are wired through `bundle.windows.nsis` in `frontend/src-tauri/tauri.conf.json`.
+Installer chrome assets (header / sidebar BMPs + plain-text MIT licence) live under `frontend/src-tauri/entropia-orme/installer/` and are wired through `bundle.windows.nsis` in `frontend/src-tauri/entropia-orme/tauri.conf.json`.
 
 ## Optional dev environment
 

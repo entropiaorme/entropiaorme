@@ -69,6 +69,46 @@ jobs:
       - name: Run the complete backend suite, all tiers
         run: python -m pytest
 
+  determinism:
+    name: Multi-seed determinism (seed slot ${{ matrix.seed-slot }})
+    # The order-determinism guard: three concurrently seeded runs of the
+    # per-PR suite shape (fast + standard, xdist loadfile) under explicitly
+    # set, logged pytest-randomly seeds. Every golden-asserting test runs in
+    # each leg, so a red leg means some output depended on test order or on
+    # residual wall-clock state; the printed seed reproduces it exactly
+    # (locally: pytest -m "fast or standard" -n auto --dist=loadfile
+    # --randomly-seed=<seed>). Seeds derive from the run number, so the
+    # explored seed space rotates nightly while any failure stays
+    # deterministic to replay. This lives here rather than on the per-PR
+    # gate so the wall-clock cost of multiplied runs never lands on a pull
+    # request; the per-PR 3.11 leg keeps its fresh-seed randomised order as
+    # the always-on early warning.
+    runs-on: windows-latest
+    env:
+      HYPOTHESIS_PROFILE: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        seed-slot: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Run the suite under the slot's seed
+        run: |
+          $seed = ${{ github.run_number }} * 10 + ${{ matrix.seed-slot }}
+          Write-Output "Determinism seed: $seed"
+          python -m pytest backend/tests/ -m "fast or standard" -n auto --dist=loadfile --randomly-seed=$seed
+
   mutation:
     name: Mutation testing (mutmut)
     # The mutation engine has no native Windows support, so the campaign runs on
@@ -122,7 +162,9 @@ jobs:
       # from mutants/<path>.meta (same accounting as backend.scripts.mutation_score
       # and analysis/permodule) and fails if any targeted module regresses below
       # its own floor. Inline here rather than a committed script so the gate lives
-      # with the workflow it guards.
+      # with the workflow it guards. The rust-mutation job below inherits these
+      # floors as services port: a ported module's Rust mutation score is held to
+      # at least the floor its Python original carries here.
       - name: Enforce the per-module mutation floors
         run: |
           python - <<'PY'
@@ -199,3 +241,96 @@ jobs:
               print("Per-module mutation-score floor regression.", file=sys.stderr)
           sys.exit(1 if fail else 0)
           PY
+
+  rust-mutation:
+    name: Mutation testing (cargo-mutants)
+    # The Rust counterpart of the mutmut campaign above, over the native-backend
+    # workspace members. The Tauri shell stays out of the campaign: its logic is
+    # OS-window plumbing behind cfg(windows), and building it needs the Tauri
+    # system toolchain this Linux runner deliberately lacks. The acceptance bar
+    # is the per-file floor map in backend/scripts/rust_mutation_floors.py:
+    # files without an adopted floor are held to no-missed-mutants, floors only
+    # ratchet up, and each ported module's floor rises to its Python original's
+    # floor from the mutmut FLOORS map above when that port completes, so a
+    # port cannot regress below the test strength of the code it replaces.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/src-tauri
+    env:
+      # Compile-time-checked SQL resolves against the committed .sqlx offline
+      # cache; empty until persistence code lands.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      # Prebuilt binary rather than cargo install, which would compile the
+      # tool from source on every run.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # Package selection scopes both the mutants and the per-mutant test runs
+      # to the backend members, keeping the Tauri-coupled shell out of the
+      # build graph entirely. --in-place because member tests read committed
+      # fixtures from the repo outside this cargo workspace (for example
+      # backend/testing/equivalence/), which cargo-mutants' default copied
+      # build tree does not contain. Exit codes 2 (missed mutants) and 3
+      # (timed-out mutants) are outcome reports, tolerated here because the
+      # floors step below is the acceptance bar (it counts a timeout as
+      # caught, like the Python gate); anything else (usage error, failing
+      # baseline, internal error) still fails this step.
+      - name: Run mutation campaign (backend members)
+        run: cargo mutants --package eo-wire --package eo-http --package eo-services --in-place || { rc=$?; test "$rc" -eq 2 -o "$rc" -eq 3; }
+      - name: Enforce the per-file mutation floors
+        run: python3 ../../backend/scripts/rust_mutation_floors.py --outcomes mutants.out/outcomes.json
+
+  equivalence-differential:
+    name: Cross-language equivalence differentials
+    # The live differential fuzzes that compare the native backend members
+    # against the Python oracle at runtime (the `cross-language` feature): the
+    # Normalizer fuzz and the cost-engine fuzz. They need both toolchains, so
+    # they run here nightly rather than on the per-PR gate; the per-push Rust
+    # jobs already pin the same cross-language surface against committed
+    # fixtures (the Normalizer conformance table and the emitter byte-equality
+    # proof), which were generated by the Python oracle, so every push still
+    # carries a frozen cross-language check. This job adds the live random-input
+    # coverage on the daily cadence. Windows, the application's platform.
+    runs-on: windows-latest
+    env:
+      # Compile-time-checked SQL resolves against the committed .sqlx offline
+      # cache; empty until persistence code lands.
+      SQLX_OFFLINE: "true"
+      # The oracle interpreter the differentials spawn: the setup-python
+      # interpreter on PATH (there is no local virtualenv on CI).
+      EO_ORACLE_PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      # The oracle CLIs import the backend services + testing package; install
+      # the runtime + dev requirements as the other Python jobs do.
+      - name: Install dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      # The full member test surface with the cross-language feature on: the
+      # hermetic tests plus the live differential fuzzes against the oracle,
+      # and the proxy-fidelity self-check that boots the real backend behind
+      # the substrate's reverse proxy and diffs the two arms.
+      - name: Run the cross-language equivalence differentials
+        working-directory: frontend/src-tauri
+        run: cargo test -p eo-wire -p eo-services -p eo-http --features cross-language

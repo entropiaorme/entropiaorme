@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import os
 import sys
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 # Load .env.local at startup so direct invocations (python -m backend.main,
@@ -126,6 +128,7 @@ from backend.routers import (
     recording,
     scan_manual,
     settings,
+    testing,
     tracking,
 )
 from backend.services.chatlog_watcher import ChatlogWatcher
@@ -150,9 +153,74 @@ from backend.services.skill_scan_manual import SkillScanManual
 from backend.services.skill_tracker import SkillTracker
 from backend.services.spacebar_capture_listener import SpacebarCaptureListener
 from backend.services.trifecta_service import describe_trifecta
-from backend.testing.keystroke_source import PynputKeystrokeSource
+from backend.testing.capturer import SequencedFixtureCapturer
+from backend.testing.clock import Clock, MockClock, RealClock
+from backend.testing.config import TestModeConfig
+from backend.testing.events_sink import EventsJsonlSink
+from backend.testing.keystroke_source import (
+    KeystrokeSource,
+    MockKeystrokeSource,
+    PynputKeystrokeSource,
+)
 from backend.testing.recording_controller import RecordingController
 from backend.tracking.tracker import HuntTracker
+
+
+def _build_test_mode() -> TestModeConfig:
+    """Resolve the test-mode overlay for this process.
+
+    Frozen builds refuse test mode outright, whatever their environment
+    says: the replay-harness surface (redirected chatlog, mock input
+    sources, fixture capturers, the test-only API routes) must never be
+    reachable in a packaged install. Same defence-in-depth posture as the
+    data-dir override below.
+    """
+    if getattr(sys, "frozen", False):
+        return TestModeConfig()
+    return TestModeConfig.from_env()
+
+
+def _constant_factory(instance: object) -> Callable[[], object]:
+    """A capturer factory returning one shared pre-built instance.
+
+    Consumers that re-resolve their factory per scan still walk a single
+    recorded fixture sequence.
+    """
+
+    def factory() -> object:
+        return instance
+
+    return factory
+
+
+def _build_clock() -> Clock:
+    """Construct the process-wide time source.
+
+    Production runs on the real clock. A replay harness driving this backend
+    as a whole process freezes it instead by setting
+    ``ENTROPIA_TEST_CLOCK_START`` to the scenario clock plan's naive
+    ISO-8601 start instant (see ``backend/testing/clock_plan.py``); every
+    injected read then returns that frozen instant, keeping each stamped
+    timestamp deterministic and independent of how many times the
+    implementation reads time.
+    """
+    raw = os.environ.get("ENTROPIA_TEST_CLOCK_START", "").strip()
+    if not raw:
+        return RealClock()
+    try:
+        start = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            "ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant"
+        ) from exc
+    if start.tzinfo is not None:
+        # An aware instant would be reinterpreted by MockClock's later
+        # ``.timestamp()`` conversion (UTC vs host-local), silently shifting
+        # replay semantics away from the naive plan. Reject it, matching the
+        # same guard in backend/testing/clock_plan.py.
+        raise RuntimeError("ENTROPIA_TEST_CLOCK_START must be a naive ISO-8601 instant")
+    log.info("Deterministic clock active: frozen at %s", start.isoformat())
+    return MockClock(start=start)
 
 
 @asynccontextmanager
@@ -185,6 +253,23 @@ async def lifespan(app: FastAPI):
     mob_lookup_service = MobLookupService(game_data)
     config_service = ConfigService(data_dir)
     event_bus = EventBus()
+
+    # Test-mode overlay (inert unless ENTROPIA_TEST_MODE=1; never active in
+    # frozen builds). Resolved once here; every seam selection below is a
+    # one-shot wiring decision, never a hot-path branch.
+    test_mode = _build_test_mode()
+    events_sink: EventsJsonlSink | None = None
+    if test_mode.enabled:
+        log.info(
+            "Test mode active: scenario=%s chatlog=%s fixtures=%s",
+            test_mode.scenario_dir,
+            test_mode.chatlog_path,
+            test_mode.fixture_dir,
+        )
+        # Full publish-order event sink, installed before any producer starts
+        # so it provably observes every publish of the process's lifetime.
+        events_sink = EventsJsonlSink(data_dir / "events.jsonl")
+        events_sink.install(event_bus)
 
     # SSE fan-out hub: subscribes to the coarse domain topics on the bus and
     # forwards their frames to GET /api/events streams. Bind it to the running
@@ -314,6 +399,15 @@ async def lifespan(app: FastAPI):
         )
         return trifecta
 
+    # The process-wide time source. One instance is constructed here at the
+    # composition root and injected into every service that reads the clock,
+    # so a deterministic clock can be swapped in at exactly one place.
+    # RealClock preserves the stdlib semantics each call site had before
+    # injection. The watcher takes this clock too, but guards its own drain
+    # timeout against a frozen clock internally (see ChatlogWatcher), so the
+    # composition root injects it uniformly with every other service.
+    clock = _build_clock()
+
     tracker = HuntTracker(
         event_bus,
         app_db.conn,
@@ -331,23 +425,54 @@ async def lifespan(app: FastAPI):
         manual_mob_entry_enabled_provider=_is_manual_mob_entry_enabled,
         manual_mob_provider=_get_manual_mob,
         trifecta_resolver=_resolve_trifecta,
+        clock=clock,
     )
 
-    quest_service = QuestService(app_db, event_bus)
+    quest_service = QuestService(app_db, event_bus, clock=clock)
+
+    # Chatlog seam: production tails the user-configured chat.log; test mode
+    # redirects to the harness-designated file (never the user's real log)
+    # and guarantees it exists, because the watcher's tail loop silently
+    # declines to start on a missing file and a never-draining replay is far
+    # harder to diagnose than a loud startup failure here.
+    if test_mode.enabled:
+        watched_chatlog = test_mode.chatlog_path or (data_dir / "chat_replay.log")
+        if not watched_chatlog.exists():
+            # Create-only-if-missing: an existing file (e.g. a committed
+            # scenario source) must not even have its mtime disturbed.
+            watched_chatlog.parent.mkdir(parents=True, exist_ok=True)
+            watched_chatlog.touch()
+    else:
+        watched_chatlog = Path(config.chatlog_path)
     chatlog_watcher = ChatlogWatcher(
         event_bus,
-        config.chatlog_path,
+        watched_chatlog,
         quest_reward_filter=quest_service.quest_reward_filter,
+        clock=clock,
     )
 
     # Skill tracking: records chat.log skill gains during sessions
-    skill_tracker = SkillTracker(event_bus, app_db)
+    skill_tracker = SkillTracker(event_bus, app_db, clock=clock)
 
     # Hydrate last scan stats from DB so status survives backend restart
     _skill_scan_time, _skill_scan_count = hydrate_skill_scan_state(app_db)
 
     # Skill-scan completion callback — persists scanned levels and emits drift logs
-    on_skill_scan_complete = make_skill_scan_completion(app_db)
+    on_skill_scan_complete = make_skill_scan_completion(app_db, clock=clock)
+
+    # Capture seam: test mode serves the scenario's recorded panel series
+    # instead of grabbing the screen (one shared sequence per panel type, so
+    # per-scan factory resolution still walks the recorded order); production
+    # keeps the lazy screen capturer the consumers default to.
+    skill_capturer_factory: Callable[[], object] | None = None
+    repair_capturer_factory: Callable[[], object] | None = None
+    if test_mode.enabled:
+        skill_capturer_factory = _constant_factory(
+            SequencedFixtureCapturer(test_mode.fixture_dir, "skill")
+        )
+        repair_capturer_factory = _constant_factory(
+            SequencedFixtureCapturer(test_mode.fixture_dir, "repair")
+        )
 
     # Manual skill scan service
     skill_scan_manual = SkillScanManual(
@@ -356,18 +481,28 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus,
         initial_scan_time=_skill_scan_time,
         initial_skills_count=_skill_scan_count,
+        clock=clock,
+        capturer_factory=skill_capturer_factory,
     )
     skill_scan_manual.set_completion_callback(on_skill_scan_complete)
 
-    codex_service = CodexService(app_db, game_data)
+    codex_service = CodexService(app_db, game_data, clock=clock)
 
     # Hotbar key listener. Consumes a PynputKeystrokeSource filtered to the
     # number-row hotbar keys at the OS-hook boundary (input minimisation made
     # structural); subscribes to session lifecycle events on the bus; only
     # runs while a tracking session is active AND the user-facing toggle is on.
-    hotbar_keystroke_source = PynputKeystrokeSource(
-        key_allowlist=HOTBAR_SLOT_KEYS, thread_name="hotbar-key-listener"
-    )
+    # Test mode swaps in an injectable mock source (one per listener,
+    # preserving the production shape) so a replay process never installs a
+    # real OS keyboard hook.
+    hotbar_keystroke_source: KeystrokeSource
+    spacebar_keystroke_source: KeystrokeSource
+    if test_mode.enabled:
+        hotbar_keystroke_source = MockKeystrokeSource()
+    else:
+        hotbar_keystroke_source = PynputKeystrokeSource(
+            key_allowlist=HOTBAR_SLOT_KEYS, thread_name="hotbar-key-listener"
+        )
     hotbar_listener = HotbarListener(
         event_bus,
         keystroke_source=hotbar_keystroke_source,
@@ -375,15 +510,20 @@ async def lifespan(app: FastAPI):
     )
     hotbar_listener.apply_config(hotbar_hooks_enabled=config.hotbar_hooks_enabled)
 
-    repair_ocr = RepairOcrService(config_service)
+    repair_ocr = RepairOcrService(
+        config_service, capturer_factory=repair_capturer_factory
+    )
 
     # Spacebar capture listener. Consumes a PynputKeystrokeSource filtered to
     # the space key only; fires capture on the active skill scan when the user
     # opts in via the scan-overlay toggle. Off until the frontend explicitly
     # enables it.
-    spacebar_keystroke_source = PynputKeystrokeSource(
-        key_allowlist={"space"}, thread_name="spacebar-key-listener"
-    )
+    if test_mode.enabled:
+        spacebar_keystroke_source = MockKeystrokeSource()
+    else:
+        spacebar_keystroke_source = PynputKeystrokeSource(
+            key_allowlist={"space"}, thread_name="spacebar-key-listener"
+        )
     spacebar_capture_listener = SpacebarCaptureListener(
         skill_scan_manual=skill_scan_manual,
         keystroke_source=spacebar_keystroke_source,
@@ -417,6 +557,10 @@ async def lifespan(app: FastAPI):
         repair_ocr=repair_ocr,
         spacebar_capture_listener=spacebar_capture_listener,
         recording_controller=recording_controller,
+        clock=clock,
+        test_mode=test_mode,
+        hotbar_keystroke_source=hotbar_keystroke_source,
+        spacebar_keystroke_source=spacebar_keystroke_source,
     )
     set_services(services)
 
@@ -439,6 +583,10 @@ async def lifespan(app: FastAPI):
         tracker.stop_session()
     skill_scan_manual.shutdown()
     chatlog_watcher.stop()
+    # Close the sink after every producer above has stopped, so the file
+    # carries the complete publish stream including shutdown-path events.
+    if events_sink is not None:
+        events_sink.close()
     app_db.close()
 
 
@@ -493,6 +641,14 @@ def create_app() -> FastAPI:
     app.include_router(demo.router, prefix="/api")
     app.include_router(recording.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
+
+    # Test-only surface, registered only when the test-mode overlay is active
+    # (never in frozen builds): absent registration means a hard 404 in
+    # production, and the schema surface (OpenAPI snapshot, contract suites,
+    # the generated frontend client) is untouched because those derive from
+    # an app built without test mode. Each handler re-checks the gate too.
+    if _build_test_mode().enabled:
+        app.include_router(testing.router, prefix="/api")
 
     return app
 

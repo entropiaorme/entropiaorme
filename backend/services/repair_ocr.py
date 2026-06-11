@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from typing import Any
 
 from backend.services.scan_presets import repair_region
 
@@ -23,8 +24,17 @@ log = logging.getLogger(__name__)
 class RepairOcrService:
     """One-shot OCR for the repair terminal cost number."""
 
-    def __init__(self, config_service):
+    def __init__(
+        self,
+        config_service,
+        *,
+        capturer_factory: Callable[[], Any] | None = None,
+    ):
         self._config = config_service
+        # Capture seam: the composition root injects a factory yielding a
+        # fixture-backed capturer under test mode; None means the production
+        # screen capturer, resolved per scan.
+        self._capturer_factory = capturer_factory
         # Optional capture observer. None in normal operation; set by the
         # recording controller to copy the captured frame into a bundle.
         # Called as tap(panel: str, region: dict, frame: np.ndarray).
@@ -51,7 +61,6 @@ class RepairOcrService:
         tl, br = region
 
         try:
-            from backend.ocr.capturer import ScreenCapturer
             from backend.services import local_ocr
 
             x, y, w, h = tl[0], tl[1], br[0] - tl[0], br[1] - tl[1]
@@ -63,7 +72,14 @@ class RepairOcrService:
                     "confidence": 0.0,
                 }
 
-            capturer = ScreenCapturer()
+            if self._capturer_factory is not None:
+                capturer = self._capturer_factory()
+            else:
+                # Import at call time so the established test seam (patching
+                # ``backend.ocr.capturer.ScreenCapturer``) keeps working.
+                from backend.ocr.capturer import ScreenCapturer
+
+                capturer = ScreenCapturer()
             frame = capturer.capture_region(x, y, w, h)
             if frame is None:
                 return {

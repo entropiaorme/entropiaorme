@@ -162,3 +162,29 @@ def test_capture_tap_failure_does_not_block_the_read(region):
     assert "error" not in result
     assert result["cost_ped"] == pytest.approx(0.05)
     assert math.isfinite(result["confidence"])
+
+
+def test_injected_capturer_factory_wins_over_module_symbol():
+    """A constructor-injected capturer factory supplies the frame source.
+
+    The composition root wires a fixture-backed factory under test mode; the
+    module ``ScreenCapturer`` symbol (patched here to the spy) must never be
+    resolved, and the read proceeds off the injected capturer's frame.
+    """
+    spy_calls: list[tuple[int, int, int, int]] = []
+    factory_served: list[tuple[int, int, int, int]] = []
+
+    class _Injected:
+        def capture_region(self, x, y, width, height):
+            factory_served.append((x, y, width, height))
+            return object()
+
+    with pytest.MonkeyPatch.context() as mp:
+        _install_seams(mp, ([0, 0], [10, 10]), spy_calls)
+        service = RepairOcrService(config_service=None, capturer_factory=_Injected)
+        result = service.scan_repair_cost()
+
+    assert "error" not in result
+    assert result["cost_ped"] == pytest.approx(0.05)
+    assert factory_served == [(0, 0, 10, 10)]
+    assert spy_calls == []  # the module-symbol spy was never used

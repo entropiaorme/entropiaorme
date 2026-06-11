@@ -10,6 +10,7 @@ canonical vocab entry, not raw OCR text.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,21 @@ PAGE_COUNT = 12
 class SkillScanCore:
     """Screenshot + local OCR scan primitives for skill pages."""
 
-    def __init__(self, config_service: Any, data_dir: Path):
+    def __init__(
+        self,
+        config_service: Any,
+        data_dir: Path,
+        *,
+        capturer_factory: Callable[[], Any] | None = None,
+    ):
         from backend.services.config_service import ConfigService
 
         self._config: ConfigService = config_service
         self._data_dir = data_dir
+        # Capture seam: the composition root injects a factory yielding a
+        # fixture-backed capturer under test mode; None means the production
+        # screen capturer, resolved lazily at first capture.
+        self._capturer_factory = capturer_factory
         self._capturer: ScreenCapturer | None = None
 
     @property
@@ -58,7 +69,12 @@ class SkillScanCore:
             return None
         try:
             if self._capturer is None:
-                self._capturer = ScreenCapturer()
+                factory = self._capturer_factory
+                # The default resolves the module symbol at call time, so the
+                # established test seam (patching this module's
+                # ``ScreenCapturer``) keeps working regardless of when the
+                # core was constructed.
+                self._capturer = factory() if factory is not None else ScreenCapturer()
             return self._capturer.capture_region_png(left, top, width, height)
         except Exception:
             log.exception(

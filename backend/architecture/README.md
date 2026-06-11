@@ -9,10 +9,14 @@ Code is the source of truth; every section names the modules it describes so cla
 The desktop app is three cooperating pieces:
 
 - the SvelteKit frontend, rendered in Tauri webviews: one main window plus pre-spawned, initially hidden overlay windows;
-- the Tauri shell (`frontend/src-tauri/`): window chrome and sidecar launch, no business logic;
+- the Tauri shell (the `entropia-orme` member of the `frontend/src-tauri/` cargo workspace): window chrome and sidecar launch, no business logic;
 - this Python backend: a FastAPI process on the loopback interface, shipped as a sidecar binary.
 
 All domain logic lives in the backend. The frontend reaches it two ways: request/response HTTP for state reads and mutations, and a one-way server-sent-events stream for change notifications. The combination is deliberately **push-to-pull**: an event frame is a minimal invalidation signal (which surface changed and why), and the window that receives one re-reads the full state from a hydration GET. Rendered state always comes from a snapshot read; it is never folded together from event payloads.
+
+### The native takeover substrate
+
+During the native backend port, the shell additionally runs the strangler-fig seam (`eo-http`): an axum router that owns the public loopback address the frontend is wired to, while the Python backend relocates to a private port chosen at launch (the launcher passes it via `ENTROPIAORME_BACKEND_PORT`, which the backend already treats as its bind port; its Host-header guard follows automatically, and the proxy rewrites `Host` to the private authority it dials). Natively-ported routes are served in-process; every other method and path, including the event stream, is reverse-proxied to the relocated backend byte-stably on the golden-projected axes (status, content-type, cache-control, etag, body) with response frames streamed as they arrive, so the `: ready` prompt flush and keep-alive comments pass through unbuffered. Each flipped route keeps both arms live: a per-route override map (`ENTROPIAORME_ROUTE_ARMS`, plus a persisted JSON file named by `ENTROPIAORME_ROUTE_ARMS_FILE`) is consulted at request time, so a misbehaving native route can be steered back to the Python implementation in a shipped build without a rebuild. Every substrate failure path degrades to the legacy direct topology (backend on the public port, no proxy). The frontend is unaware of any of this; see `PORT-READINESS.md` for the route-by-route plan.
 
 The payoff is a network-quiet steady state: an idle dashboard performs its mount-time hydration reads, opens one event stream, and then issues no further requests until the backend announces a change. `backend/tests/test_network_quiet_seam.py` pins this by recording every request the app serves while driving real state changes through the production producers.
 
@@ -42,7 +46,7 @@ Events exist at two deliberately separate levels, both carried by the same in-pr
 {
   "type": "tracking.session.updated",
   "event_version": 1,
-  "occurred_at": "2026-01-01T00:00:00Z",
+  "occurred_at": "2026-01-01T00:00:00+00:00",
   "payload": { "sessionId": "...", "status": "active", "reason": "updated" }
 }
 ```
@@ -57,7 +61,7 @@ Two events exist today:
 The envelope discipline:
 
 - The `type` literal doubles as the bus topic and the frontend topic; the mapping is identity by construction.
-- Every envelope carries `event_version` (per-event schema version, currently 1) and `occurred_at` (an ISO-8601 UTC string stamped from the domain timestamp, not a fresh clock read, so events are deterministic under replay).
+- Every envelope carries `event_version` (per-event schema version, currently 1) and `occurred_at` (a required, never-null ISO-8601 UTC string stamped from the domain timestamp, with the injected clock supplying the instant when the domain carries none, so events are deterministic under replay).
 - Envelope and payload models set `extra="forbid"`: the wire contract is closed, and an undeclared key is a bug. Payload field names are spelled camelCase literally, with no alias generator. This is the deliberate opposite of the read surface's `_Loose` response models (below).
 - The JSON schema of every envelope is pinned by a golden (`backend/tests/test_event_schema_drift.py` against `backend/tests/expected/event_schemas.snapshot.json`), so a payload change is a reviewed, ratified event rather than an accident.
 
@@ -206,6 +210,8 @@ The architecture's properties are tests, not prose promises:
 ## Related documents
 
 - [`PORT-READINESS.md`](PORT-READINESS.md): how these shapes map onto a contemplated native port, and what does not port mechanically.
+- [`PORTING-RULEBOOK.md`](PORTING-RULEBOOK.md): the application-ready rule set for the port; boundary fidelity, interior latitude, the deliberate-divergence register, and the verification obligations.
+- [`PORT-BASELINE.md`](PORT-BASELINE.md): the Python backend's captured performance and coverage reference, the bands port work is graded against in flight, and the per-module branch-coverage table.
 - [`../../TESTING.md`](../../TESTING.md): the test suite, tiers, and gates that enforce the properties above.
 - [`../testing/CONSISTENCY.md`](../testing/CONSISTENCY.md): the snapshot and event-stream consistency apparatus.
 - [`../testing/CONFORMANCE.md`](../testing/CONFORMANCE.md): the HTTP conformance substrate (ETag, OpenAPI, contract tests).

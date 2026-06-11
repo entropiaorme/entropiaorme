@@ -11,6 +11,20 @@ $pythonExe = Join-Path $repoRoot ".venv\Scripts\python.exe"
 # This script inherits them from its parent (just -> powershell ->
 # Start-Process wt.exe -> cmd /k child).
 
+# Strangler topology (dev): the shell binds the public backend port and
+# reverse-proxies not-yet-ported routes to the Python backend, which is
+# relocated onto a private port. The private port defaults to public+1000,
+# well clear of the ports neighbouring dev setups typically claim;
+# override with ENTROPIAORME_SIDECAR_PORT in .env.local. The backend tab
+# gets the private port as its bind port; the Tauri tab gets
+# ENTROPIAORME_SIDECAR_PORT so the shell knows where to proxy. Vite keeps
+# the public port, so the webview keeps dialling the address the shell
+# now owns.
+$publicPort = 8421
+if ($env:ENTROPIAORME_BACKEND_PORT) { $publicPort = [int]$env:ENTROPIAORME_BACKEND_PORT }
+$sidecarPort = $publicPort + 1000
+if ($env:ENTROPIAORME_SIDECAR_PORT) { $sidecarPort = [int]$env:ENTROPIAORME_SIDECAR_PORT }
+
 # Defensive CoreDNS start: the hostname-based devUrl resolves via OS DNS,
 # which means CoreDNS must be running before the Tauri shell's tauri-cli
 # resolves the devUrl during the tab launches below. The lifecycle
@@ -72,7 +86,7 @@ if (-not (Test-Path $frontendDir)) {
 # real PyInstaller-frozen exe at the same path. The guard is strictly
 # "create if missing" so a frozen sidecar from a prior release build
 # survives launch re-invocations untouched.
-$sidecarDir = Join-Path $frontendDir "src-tauri\binaries"
+$sidecarDir = Join-Path $frontendDir "src-tauri\entropia-orme\binaries"
 $sidecarStub = Join-Path $sidecarDir "entropiaorme-backend-x86_64-pc-windows-msvc.exe"
 if (-not (Test-Path $sidecarStub)) {
     New-Item -ItemType Directory -Force -Path $sidecarDir | Out-Null
@@ -80,11 +94,15 @@ if (-not (Test-Path $sidecarStub)) {
     Write-Host "Staged dev sidecar placeholder at $sidecarStub"
 }
 
-$backendCmd = "`"$pythonExe`" -X utf8 -m backend.main"
+# The backend binds the private port (its own env view drives its bind
+# address and Host-header guard); the shell learns the same port through
+# ENTROPIAORME_SIDECAR_PORT and proxies to it. `set X=...&&` carries the
+# per-tab value through cmd without a trailing space in the value.
+$backendCmd = "set ENTROPIAORME_BACKEND_PORT=$sidecarPort&& `"$pythonExe`" -X utf8 -m backend.main"
 # Use the tauri:dev npm script so the dev-mode CSP overlay (broader
 # connect-src allowing alternate localhost backend ports) is applied
 # automatically.
-$tauriCmd = "npm run tauri:dev"
+$tauriCmd = "set ENTROPIAORME_SIDECAR_PORT=$sidecarPort&& npm run tauri:dev"
 
 Start-Process wt.exe -ArgumentList @(
     "-w", "0",

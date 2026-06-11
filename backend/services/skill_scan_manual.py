@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +28,7 @@ from backend.core.domain_events import (
 from backend.core.event_bus import EventBus
 from backend.services.scan_presets import skill_region
 from backend.services.skill_scan_core import PAGE_COUNT, SkillScanCore
+from backend.testing.clock import Clock, RealClock
 
 log = logging.getLogger(__name__)
 
@@ -46,9 +46,17 @@ class SkillScanManual:
         event_bus: EventBus | None = None,
         initial_scan_time: float | None = None,
         initial_skills_count: int = 0,
+        clock: Clock | None = None,
+        capturer_factory: Callable[[], Any] | None = None,
     ):
-        self._core = SkillScanCore(config_service, data_dir)
+        self._core = SkillScanCore(
+            config_service, data_dir, capturer_factory=capturer_factory
+        )
         self._lock = threading.RLock()
+        # Time source for the scan status event's publish-time stamp and the
+        # last-scan instant; injected so replay scenarios stamp deterministic
+        # instants. Defaults to the real clock.
+        self._clock = clock or RealClock()
         # Typed outbox: a ``scan.status.changed`` envelope is published on the
         # in-process bus (and forwarded over the SSE bridge) whenever the status
         # settles to a new value. None in pure-OCR unit tests, where status
@@ -182,7 +190,7 @@ class SkillScanManual:
         self._event_bus.publish(
             TOPIC_SCAN_STATUS_CHANGED,
             ScanStatusChanged(
-                occurred_at=to_iso_utc(time.time()),
+                occurred_at=to_iso_utc(self._clock.now().timestamp()),
                 payload=ScanStatusChangedPayload(phase=phase),
             ),
         )
@@ -363,7 +371,7 @@ class SkillScanManual:
                 return {"error": f"Persist failed: {exc}"}
 
         with self._lock:
-            self._last_scan_time = time.time()
+            self._last_scan_time = self._clock.now().timestamp()
             self._last_skills_count = len(skills)
             self._reset()
         log.info("Manual skill scan accepted — %d skills persisted", len(skills))

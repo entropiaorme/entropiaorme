@@ -31,8 +31,13 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
+        # The OCR decode alphabet is a byte-verbatim third-party
+        # asset (SHA-pinned in THIRD-PARTY-NOTICES.md); fixers must
+        # not rewrite it.
+        exclude: ^backend/assets/models/
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
+        exclude: ^backend/assets/models/
       - id: check-yaml
       - id: check-toml
       - id: check-merge-conflict

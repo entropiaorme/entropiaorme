@@ -29,3 +29,11 @@ notes: >
   loot tick + skill-gain-shaped chat line. The scan view's
   skill_calibrations table is untouched by chat events, so the
   projection stays constant across the interval.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (see backend/testing/clock_plan.py). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

@@ -3,7 +3,6 @@
 Returns shapes matching the frontend analytics types.
 """
 
-import time
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -22,6 +21,7 @@ from backend.routers.response_models import (
     LedgerItem,
     LedgerPresetItem,
 )
+from backend.testing.clock import Clock, RealClock
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 ACTIVITY_DOMINANCE_THRESHOLD = 0.6
@@ -34,16 +34,26 @@ INVENTORY_SALE_TAG = "inventory_sale"
 # ------------------------------------------------------------------
 
 
-def _period_epoch(period: str | None) -> float | None:
+def _period_epoch(period: str | None, clock: Clock) -> float | None:
     """Return epoch start for a named period, or None for all-time."""
     if not period or period == "all":
         return None
     days = {"30d": 30, "90d": 90, "1y": 365}.get(period)
-    return (time.time() - days * 86400) if days else None
+    return (clock.now().timestamp() - days * 86400) if days else None
 
 
 def _epoch_to_iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%d")
+
+
+def _utc_date_str(clock: Clock) -> str:
+    """Render the clock's current instant as a UTC ``YYYY-MM-DD`` date.
+
+    Equivalent to ``datetime.now(UTC).strftime("%Y-%m-%d")`` under the real
+    clock; routed through the injected clock so replayed scenarios stamp
+    deterministic dates.
+    """
+    return datetime.fromtimestamp(clock.now().timestamp(), tz=UTC).strftime("%Y-%m-%d")
 
 
 def _where(col: str, epoch_start: float | None, epoch_end: float | None):
@@ -182,13 +192,15 @@ def analytics_overview(period: str = "all"):
     Total Return = (Loot TT + Skill TT + Ledger markup) / (Tracking cost + Ledger expenses).
     ?period= all | 30d | 90d | 1y
     """
-    return overview_impl(get_services().app_db.conn, period)
+    svc = get_services()
+    return overview_impl(svc.app_db.conn, period, clock=svc.clock)
 
 
-def overview_impl(conn, period: str = "all"):
-    now = time.time()
+def overview_impl(conn, period: str = "all", clock: Clock | None = None):
+    clock = clock or RealClock()
+    now = clock.now().timestamp()
 
-    epoch_start = _period_epoch(period)
+    epoch_start = _period_epoch(period, clock)
 
     # --- Main metrics for selected period ---
     m = _compute_metrics(conn, epoch_start, None)
@@ -991,7 +1003,7 @@ def create_inventory_item(item: InventoryItemCreate):
     """Create a new inventory item."""
     svc = get_services()
     item_id = str(uuid.uuid4())
-    acquired_at = item.acquired_at or datetime.now(UTC).strftime("%Y-%m-%d")
+    acquired_at = item.acquired_at or _utc_date_str(svc.clock)
     svc.app_db.conn.execute(
         "INSERT INTO inventory_items (id, name, tt_value, markup_paid, notes, acquired_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
@@ -1082,7 +1094,7 @@ def sell_inventory_item(item_id: str, payload: InventoryItemSell):
 
     cost_basis = row["tt_value"] + row["markup_paid"]
     delta = payload.sale_price - cost_basis
-    sold_at = payload.sold_at or datetime.now(UTC).strftime("%Y-%m-%d")
+    sold_at = payload.sold_at or _utc_date_str(svc.clock)
     sold_item = _inventory_row_to_dict(row)
 
     ledger_entry: dict | None = None

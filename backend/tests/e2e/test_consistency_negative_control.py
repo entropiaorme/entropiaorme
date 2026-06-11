@@ -18,7 +18,7 @@ longer surfaces a real divergence, this control fires.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,8 @@ from backend.testing.store_reducers import (
     tracking_view_state,
 )
 from backend.tracking.tracker import HuntTracker
+
+_Pipeline = Callable[..., tuple[EventBus, HuntTracker, ChatlogWatcher, Path]]
 
 
 class _DropLootReducer(Reducer):
@@ -75,13 +77,15 @@ class _DropLootReducer(Reducer):
 
 
 def test_consistency_property_catches_a_broken_reducer(
-    e2e_pipeline: tuple[EventBus, HuntTracker, ChatlogWatcher, Path],
+    make_e2e_pipeline: _Pipeline,
+    scenario_clock,
     corpus_root: Path,
 ) -> None:
     """A reducer that drops loot events fails the consistency property."""
 
-    bus, tracker, watcher, chatlog = e2e_pipeline
     scenario_dir = corpus_root / "scripted" / "consistency_tracking_hunt_midpoint"
+    clock, _plan = scenario_clock(scenario_dir)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
 
     tracker.start_session()
     try:

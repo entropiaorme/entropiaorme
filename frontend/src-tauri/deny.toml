@@ -1,4 +1,5 @@
-# cargo-deny configuration: supply-chain policy for the Tauri shell crate.
+# cargo-deny configuration: supply-chain policy for the Rust workspace
+# (the Tauri shell and the native-backend members).
 #
 # Four check classes run in CI (`cargo deny check`):
 #   - advisories: RUSTSEC advisories against the Windows-target dependency
@@ -63,6 +64,12 @@ confidence-threshold = 0.8
 # keep duplicates advisory and reserve hard failure for explicit bans.
 multiple-versions = "warn"
 wildcards = "deny"
+# Intra-workspace path dependencies (a backend member depending on a sibling,
+# e.g. eo-services -> eo-wire) are version-less by construction: they are
+# publish = false and resolve locally, never from a registry. Exempt path deps
+# from the wildcard ban so it still bites a real registry crate pinned to "*"
+# while the normal workspace shape is allowed.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

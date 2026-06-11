@@ -12,17 +12,19 @@ branch of the method is exercised deterministically:
   * the per-tool ToolStats counters and the phase-key routing;
   * the fallback cost selection (inferred vs equipment lookup);
   * the DEBUG-gated perf instrumentation (_record_shot_perf), which is reached
-    only when the module logger is at DEBUG. perf_counter is monkeypatched to a
-    deterministic clock so the accumulated perf seconds are assertable.
+    only when the module logger is at DEBUG. A deterministic stepping Clock is
+    injected at construction so the accumulated perf seconds are assertable.
 
 These all import the real backend.tracking.tracker module under test.
 """
 
 import sqlite3
+from datetime import datetime
 
 import pytest
 
 from backend.core.event_bus import EventBus
+from backend.testing.clock import Clock
 from backend.tracking import tracker as tracker_mod
 from backend.tracking.tracker import HuntTracker
 
@@ -49,7 +51,12 @@ _ENH_WEAPON_COST_PED = 0.015
 
 
 def _make_tracker(
-    *, trifecta=False, equipment_cost=0.0, cost_lookup=None, profile_lookup=None
+    *,
+    trifecta=False,
+    equipment_cost=0.0,
+    cost_lookup=None,
+    profile_lookup=None,
+    clock=None,
 ):
     db = sqlite3.connect(":memory:", check_same_thread=False)
     bus = EventBus()
@@ -59,6 +66,7 @@ def _make_tracker(
         equipment_cost_lookup=(cost_lookup or (lambda _: equipment_cost)),
         equipment_profile_lookup=(profile_lookup or (lambda _: None)),
         weapon_attribution_trifecta_provider=lambda: trifecta,
+        clock=clock,
     )
     tracker.start_session()
     return tracker
@@ -430,32 +438,46 @@ class TestPhaseVsElseRouting:
 # --------------------------------------------------------------------------
 
 
+class _SteppingClock(Clock):
+    """Monotonic stream that advances by exactly 1.0 on every read.
+
+    Mirrors the old stepping ``perf_counter`` fake: each in-call delta
+    (one read around the lookup, the shot bracket) is a small exact number.
+    The window check also reads this stream, so the 15s flush threshold is
+    never reached within the two-shot tests here (a handful of reads per
+    shot, far short of 15.0).
+    """
+
+    def __init__(self):
+        self._now = datetime(2026, 1, 1)
+        self._monotonic = 0.0
+
+    def now(self) -> datetime:
+        return self._now
+
+    def monotonic(self) -> float:
+        self._monotonic += 1.0
+        return self._monotonic
+
+
 @pytest.fixture
 def debug_perf(monkeypatch):
-    """Enable DEBUG on the tracker logger and install a deterministic clock.
+    """Enable DEBUG on the tracker logger and provide a deterministic clock.
 
-    perf_counter advances by exactly 1.0 each call; monotonic is frozen so the
-    15s perf-window flush never fires. This makes _perf_shot_seconds and
-    _perf_cost_lookup_seconds exactly predictable.
+    The returned ``_SteppingClock`` advances monotonic by exactly 1.0 each
+    read; tests pass it into ``_make_tracker(clock=...)`` so
+    ``_perf_shot_seconds`` and ``_perf_cost_lookup_seconds`` are exactly
+    predictable.
     """
     monkeypatch.setattr(tracker_mod.log, "isEnabledFor", lambda level: True)
-
-    counter = {"t": 0.0}
-
-    def fake_perf_counter():
-        counter["t"] += 1.0
-        return counter["t"]
-
-    monkeypatch.setattr(tracker_mod._time, "perf_counter", fake_perf_counter)
-    monkeypatch.setattr(tracker_mod._time, "monotonic", lambda: 0.0)
-    return counter
+    return _SteppingClock()
 
 
 class TestDebugPerfInstrumentation:
     def test_perf_shot_count_advances_when_debug(self, debug_perf):
         # mutmut_2: debug_perf = None -> perf branch skipped -> count never
         # advances. With DEBUG on the real code must record the shot.
-        t = _make_tracker(trifecta=False, equipment_cost=0.10)
+        t = _make_tracker(trifecta=False, equipment_cost=0.10, clock=debug_perf)
         t._active_hotbar_tool_name = "Gun"
         _shot(t, amount=5.0)
         assert t._perf_shot_count == 1
@@ -470,7 +492,7 @@ class TestDebugPerfInstrumentation:
         # deterministic clock each shot's cost-lookup delta is exactly 1.0 (one
         # perf_counter tick around the lookup). Two shots -> +=: 2.0; =: 1.0;
         # -=: negative; +: large (two absolute timestamps summed).
-        t = _make_tracker(trifecta=False, equipment_cost=0.10)
+        t = _make_tracker(trifecta=False, equipment_cost=0.10, clock=debug_perf)
         t._active_hotbar_tool_name = "Gun"
         _shot(t, amount=5.0)
         _shot(t, amount=5.0)
@@ -480,7 +502,7 @@ class TestDebugPerfInstrumentation:
     def test_perf_unknown_tool_counted_for_none_tool(self, debug_perf):
         # mutmut_92 (first arg None), 98 (tool is not None), 95 (arg dropped ->
         # TypeError). A None-tool shot must increment the unknown-tool counter.
-        t = _make_tracker(trifecta=False, equipment_cost=0.0)
+        t = _make_tracker(trifecta=False, equipment_cost=0.0, clock=debug_perf)
         t._active_hotbar_tool_name = None
         _shot(t, amount=5.0)
         assert t._perf_unknown_tool_shots == 1
@@ -489,7 +511,7 @@ class TestDebugPerfInstrumentation:
     def test_perf_unknown_tool_not_counted_for_known_tool(self, debug_perf):
         # mutmut_98: `tool is None` -> `tool is not None` would count a known
         # tool as unknown.
-        t = _make_tracker(trifecta=False, equipment_cost=0.10)
+        t = _make_tracker(trifecta=False, equipment_cost=0.10, clock=debug_perf)
         t._active_hotbar_tool_name = "Gun"
         _shot(t, amount=5.0)
         assert t._perf_unknown_tool_shots == 0
@@ -498,7 +520,7 @@ class TestDebugPerfInstrumentation:
         # mutmut_93 (2nd arg None), 96 (2nd arg dropped -> TypeError), 99/100/101
         # (boolean restructure of the inference-miss expression). An unmatched
         # trifecta inference shot (tool ends up None) is an inference miss.
-        t = _make_tracker(trifecta=True, equipment_cost=0.0)
+        t = _make_tracker(trifecta=True, equipment_cost=0.0, clock=debug_perf)
         _arm_trifecta(t, name="Laser", lo=8.0, hi=12.0, cost=0.40)
         _shot(t, amount=100.0, allow_damage_inference=True)  # unmatched
         assert t._perf_inference_misses == 1
@@ -510,7 +532,7 @@ class TestDebugPerfInstrumentation:
         # (allow_damage_inference=False) with no prior tool is unknown but NOT an
         # inference miss. mutmut_100 (or allow_inference) / 99 (or tool is None)
         # / 101 (and tool is not None) all change this.
-        t = _make_tracker(trifecta=True, equipment_cost=0.0)
+        t = _make_tracker(trifecta=True, equipment_cost=0.0, clock=debug_perf)
         _arm_trifecta(t, name="Laser", lo=8.0, hi=12.0, cost=0.40)
         _shot(t, amount=0.0, allow_damage_inference=False)
         assert t._perf_unknown_tool_shots == 1
@@ -519,7 +541,7 @@ class TestDebugPerfInstrumentation:
     def test_perf_inference_miss_not_counted_when_matched(self, debug_perf):
         # mutmut_101: `and tool is None` -> `and tool is not None` would flag a
         # *matched* shot as an inference miss.
-        t = _make_tracker(trifecta=True, equipment_cost=0.0)
+        t = _make_tracker(trifecta=True, equipment_cost=0.0, clock=debug_perf)
         _arm_trifecta(t, name="Laser", lo=8.0, hi=12.0, cost=0.40)
         _shot(t, amount=10.0, allow_damage_inference=True)  # matched
         assert t._perf_inference_misses == 0
@@ -528,7 +550,7 @@ class TestDebugPerfInstrumentation:
     def test_perf_no_inference_miss_when_not_trifecta(self, debug_perf):
         # mutmut_100: `trifecta OR allow_inference` would flag a non-trifecta
         # unknown shot (allow_inference True) as an inference miss.
-        t = _make_tracker(trifecta=False, equipment_cost=0.0)
+        t = _make_tracker(trifecta=False, equipment_cost=0.0, clock=debug_perf)
         t._active_hotbar_tool_name = None
         _shot(t, amount=5.0, allow_damage_inference=True)
         assert t._perf_unknown_tool_shots == 1

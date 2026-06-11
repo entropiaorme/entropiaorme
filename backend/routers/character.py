@@ -1,6 +1,5 @@
 """Character stats endpoints — computed from calibrated skill levels + the bundled game-data catalogue."""
 
-import time
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
@@ -496,7 +495,7 @@ def get_calibration():
     if last_ts is None:
         return {"calibrated": False, "lastCalibration": None, "stale": True}
 
-    age_days = (time.time() - last_ts) / 86400
+    age_days = (svc.clock.now().timestamp() - last_ts) / 86400
     stale = age_days > STALE_DAYS
 
     return {

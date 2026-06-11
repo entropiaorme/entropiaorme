@@ -16,20 +16,22 @@ from backend.testing.replay import replay_scenario, wait_for_drain
 
 
 def test_enhancer_break_does_not_disrupt_kill(
-    e2e_pipeline,
+    make_e2e_pipeline,
+    scenario_clock,
     corpus_root: Path,
     golden_set,
     in_memory_db,
 ) -> None:
-    bus, tracker, watcher, chatlog = e2e_pipeline
-
     scenario = corpus_root / "scripted" / "enhancer_break_during_hunt"
+    clock, plan = scenario_clock(scenario)
+    bus, tracker, watcher, chatlog = make_e2e_pipeline(clock=clock)
     goldens = golden_set(scenario)
     goldens.recorder.install(bus)
 
     tracker.start_session()
     replay_scenario(scenario, chatlog)
     wait_for_drain(watcher, chatlog)
+    clock.advance(plan.step_seconds)
     result = tracker.stop_session()
 
     # Single kill: 13.0 + 17.0 + 21.0 = 51.0 dmg across three shots,

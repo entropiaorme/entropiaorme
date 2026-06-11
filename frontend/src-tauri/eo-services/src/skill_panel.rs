@@ -337,6 +337,47 @@ mod tests {
         );
     }
 
+    fn colour_bar(columns: &[[u8; 3]], h: usize) -> BgrImage {
+        let w = columns.len();
+        let mut data = Vec::with_capacity(w * h * 3);
+        for _ in 0..h {
+            for c in columns {
+                data.extend_from_slice(c);
+            }
+        }
+        BgrImage { data, h, w }
+    }
+
+    #[test]
+    fn bar_fill_reads_through_the_colour_conversion() {
+        // Pure red columns convert to grey 76, pure blue to 29: the
+        // fixed-point coefficients decide which side is bright.
+        let mut columns = vec![[0u8, 0, 255]; 6];
+        columns.extend(vec![[255u8, 0, 0]; 4]);
+        let fill = parse_bar_fill(&colour_bar(&columns, 3));
+        assert!((fill - 0.6).abs() < 1e-9, "red-bright fill: {fill}");
+
+        // Green (150) against red (76): green is the bright side.
+        let mut columns = vec![[0u8, 255, 0]; 3];
+        columns.extend(vec![[0u8, 0, 255]; 7]);
+        let fill = parse_bar_fill(&colour_bar(&columns, 3));
+        assert!((fill - 0.3).abs() < 1e-9, "green-bright fill: {fill}");
+
+        // A near-full bar reads its true ratio (only exactly-full
+        // flips to empty).
+        let mut columns = vec![[200u8, 200, 200]; 9];
+        columns.push([10u8, 10, 10]);
+        let fill = parse_bar_fill(&colour_bar(&columns, 2));
+        assert!((fill - 0.9).abs() < 1e-9, "near-full fill: {fill}");
+    }
+
+    #[test]
+    fn resolve_score_is_the_weighted_scorer() {
+        assert_eq!(resolve_score("Anatomy", "Anatomy"), 100.0);
+        assert_eq!(resolve_score("abcdefgh", "xyz"), 0.0);
+        assert!((resolve_score("a", "abcdefghijklmnopqrstuvwxyz") - 60.0).abs() < 1e-9);
+    }
+
     #[test]
     fn names_resolve_exact_collapsed_then_fuzzy_without_a_floor() {
         let vocab: Vec<String> = ["Whip", "Food Technology", "Combat Reflexes"]
@@ -384,12 +425,21 @@ mod tests {
     }
 
     fn panel() -> BgrImage {
-        // A 40x20 panel with distinct values per pixel row.
+        // A 40x20 panel with distinct values per pixel row; the bar
+        // band (x 15..19) carries a half-bright fill pattern instead.
         let (h, w) = (40usize, 20usize);
         let mut data = Vec::with_capacity(h * w * 3);
         for y in 0..h {
-            for _ in 0..w {
-                let v = (y * 6) as u8;
+            for x in 0..w {
+                let v = if x >= 15 {
+                    if x < 17 {
+                        220
+                    } else {
+                        10
+                    }
+                } else {
+                    (y * 6) as u8
+                };
                 data.extend_from_slice(&[v, v, v]);
             }
         }
@@ -466,9 +516,9 @@ mod tests {
         let rows = read_skill_panel(&reader, &panel(), &geom, &vocab);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name.as_deref(), Some("Anatomy"));
-        // The bar crop is uniform (low contrast): fill 0.0, so the
-        // level is the bare integer.
-        assert_eq!(rows[0].level, Some(12.0));
+        // The half-bright bar contributes its fill as the fractional
+        // part on top of the OCR'd integer.
+        assert_eq!(rows[0].level, Some(12.5));
         // The second row's name fuzzy-resolves; its level cell parses
         // nothing, so the level is None even with a bar present.
         assert_eq!(rows[1].name.as_deref(), Some("Rifle"));

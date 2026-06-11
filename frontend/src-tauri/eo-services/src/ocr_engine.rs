@@ -345,6 +345,49 @@ mod tests {
         assert!((tensor[0] + 1.0).abs() < 1e-6);
     }
 
+    /// The resize pinned byte-for-byte against the original image
+    /// library's output for a deterministic non-uniform 5x7 source
+    /// at two destination shapes (values computed by cv2).
+    #[test]
+    fn resize_matches_the_original_library_bytes() {
+        const SRC: [u8; 105] = [
+            175, 240, 136, 19, 196, 228, 50, 58, 25, 194, 168, 199, 246, 41, 168, 81, 67, 150, 59,
+            112, 211, 208, 108, 250, 151, 3, 53, 185, 103, 54, 161, 116, 92, 133, 93, 250, 185,
+            236, 217, 78, 142, 221, 218, 137, 23, 10, 141, 67, 72, 110, 73, 128, 89, 209, 52, 22,
+            110, 241, 113, 18, 42, 250, 91, 107, 218, 106, 184, 68, 136, 179, 18, 4, 167, 76, 248,
+            127, 230, 151, 27, 135, 68, 4, 226, 173, 176, 197, 105, 222, 127, 215, 193, 205, 135,
+            225, 177, 84, 172, 91, 133, 97, 0, 222, 151, 100, 75,
+        ];
+        const OUT_A: [u8; 117] = [
+            186, 196, 174, 148, 176, 173, 82, 141, 170, 75, 109, 118, 92, 77, 45, 136, 109, 94,
+            183, 150, 163, 196, 101, 181, 201, 63, 194, 151, 98, 181, 108, 123, 179, 81, 122, 201,
+            65, 122, 214, 218, 137, 23, 154, 138, 37, 42, 140, 60, 34, 129, 69, 67, 112, 73, 98,
+            100, 136, 128, 89, 209, 87, 53, 156, 67, 29, 103, 168, 78, 53, 210, 134, 29, 103, 208,
+            69, 42, 250, 91, 153, 204, 105, 170, 174, 131, 200, 122, 176, 201, 121, 151, 190, 140,
+            99, 196, 143, 113, 205, 143, 138, 179, 140, 139, 151, 130, 141, 106, 80, 158, 78, 60,
+            161, 93, 112, 127, 102, 142, 107,
+        ];
+        const OUT_B: [u8; 108] = [
+            116, 223, 170, 68, 72, 47, 239, 57, 172, 67, 95, 188, 140, 172, 172, 106, 83, 51, 205,
+            70, 191, 84, 122, 198, 179, 86, 175, 169, 101, 57, 148, 91, 224, 112, 168, 216, 166,
+            100, 115, 136, 106, 72, 103, 67, 182, 117, 187, 150, 140, 139, 40, 79, 107, 90, 62, 30,
+            122, 117, 199, 64, 138, 151, 83, 134, 62, 59, 101, 130, 145, 59, 195, 103, 142, 163,
+            120, 179, 45, 45, 137, 199, 159, 26, 177, 133, 174, 168, 136, 190, 143, 97, 163, 138,
+            139, 91, 105, 131, 193, 171, 146, 197, 201, 129, 178, 102, 127, 131, 62, 130,
+        ];
+        assert_eq!(resize_bilinear(&SRC, 5, 7, 3, 13), OUT_A.to_vec());
+        assert_eq!(resize_bilinear(&SRC, 5, 7, 9, 4), OUT_B.to_vec());
+
+        // The preprocess tensor over the same source: the resized
+        // content normalises and the padding floor holds; spot-pin a
+        // resized byte through the normalisation.
+        let (tensor, img_w) = preprocess(&SRC, 5, 7);
+        assert_eq!(img_w, 320);
+        let resized = resize_bilinear(&SRC, 5, 7, TARGET_H, 68);
+        let expected = (resized[0] as f32 / 255.0 - 0.5) / 0.5;
+        assert!((tensor[0] - expected).abs() < 1e-7);
+    }
+
     #[test]
     fn resize_identity_and_border_taps() {
         // Identity resize returns the source bytes.
@@ -376,6 +419,7 @@ mod tests {
             .unwrap();
         let (data, h, w) = load_bgr_png(&png_bytes).unwrap();
         assert_eq!((h, w), (1, 2));
+        assert_eq!(data.len(), 1 * 2 * 3);
         // Red pixel in BGR order: B=0, G=0, R=255.
         assert_eq!(&data[0..3], &[0, 0, 255]);
         // Blue pixel in BGR order: B=255, G=0, R=0.

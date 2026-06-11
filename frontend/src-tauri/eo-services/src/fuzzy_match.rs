@@ -424,6 +424,53 @@ mod tests {
         assert_close(wratio("x", "   "), 0.0);
         assert_close(wratio("", "abc"), 0.0);
         assert_close(partial_ratio(&[], &['a', 'b']), 0.0);
+        // The exact 1.5 length-ratio boundary takes the partial path.
+        assert_close(wratio("abcd", "abcdef"), 90.0);
+        assert_close(wratio("ab cd", "ab cdxy"), 83.33333333333334);
+        // The long path through the token machinery, with and
+        // without duplicate tokens.
+        assert_close(wratio("ab ab", "axqqqqqq"), 57.0);
+        assert_close(wratio("ab cd", "axqqqqqq"), 30.000000000000004);
+    }
+
+    /// Direct sub-scorer pins against the original library's values,
+    /// covering paths the resolver cases cannot reach.
+    #[test]
+    fn the_sub_scorer_edges_match_the_original_library() {
+        let c = chars;
+        // token_set's full arithmetic: non-empty intersection with
+        // disagreement on both sides (the separator accounting).
+        assert_close(
+            token_set_ratio(
+                &c("fuzzy was a bear but not a dog"),
+                &c("fuzzy was a bear but not a cat"),
+            ),
+            92.3076923076923,
+        );
+        assert_close(
+            token_set_ratio(&c("aa bb cc"), &c("aa dd")),
+            57.142857142857146,
+        );
+        // Empty-side inputs are zero at the guard.
+        assert_close(token_set_ratio(&c(""), &c("abc")), 0.0);
+        assert_close(token_set_ratio(&c("abc"), &c("")), 0.0);
+
+        // partial_token's duplicate-token widening versus the
+        // same-diff skip.
+        assert_close(
+            partial_token_ratio(&c("ab ab"), &c("ax")),
+            66.66666666666667,
+        );
+        assert_close(
+            partial_token_ratio(&c("ab cd"), &c("ax")),
+            66.66666666666667,
+        );
+        assert_close(partial_token_ratio(&c("abcd"), &c("xyzw qrst")), 0.0);
+
+        // Equal-length partials run both alignment directions.
+        assert_close(partial_ratio(&c("abcd"), &c("dcba")), 40.0);
+        assert_close(partial_ratio(&c("aabb"), &c("bbaa")), 66.66666666666667);
+        assert_close(partial_ratio(&c("abxcd"), &c("abycd")), 80.0);
     }
 
     #[test]

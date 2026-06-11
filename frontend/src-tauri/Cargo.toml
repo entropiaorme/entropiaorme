@@ -45,6 +45,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # tests need no native toolkit; hosts without the runtime skip the
 # engine-running tests honestly. (Execution providers are a
 # composition-root concern; the recogniser itself is EP-agnostic.)
+# The release-candidate pin is deliberate: the 2.0 line is the only
+# maintained binding for the current ONNX Runtime API, rc versions are
+# immutable and checksum-locked, and the audit cadence bumps this to
+# 2.0.0 final when it lands.
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows = "0.61"

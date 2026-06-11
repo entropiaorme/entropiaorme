@@ -80,15 +80,22 @@ fn free_port() -> u16 {
 fn spawn_sidecar() -> Sidecar {
     let data_dir = tempfile::TempDir::new().expect("temp data dir");
     let port = free_port();
-    let child = Command::new(oracle_python())
+    let mut command = Command::new(oracle_python());
+    command
         .args(["-m", "backend.main"])
         .current_dir(repo_root())
         .env("ENTROPIAORME_BACKEND_PORT", port.to_string())
         .env("ENTROPIAORME_DATA_DIR", data_dir.path())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn backend sidecar");
+        .stderr(Stdio::null());
+    // Keep the spawned interpreter off a flashing console window.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = command.spawn().expect("spawn backend sidecar");
     Sidecar {
         child,
         port,

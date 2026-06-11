@@ -700,10 +700,13 @@ async fn set_playlist_items(
 
 /// Normalise playlist payloads to classified items: an `items` list
 /// passes through with group defaults; otherwise `quest_ids` builds
-/// immediate items. A present-but-null (or non-list) `quest_ids`
-/// refuses: the original crashes iterating it (an unhandled error on
-/// the wire, with no surviving write), and the update path is
-/// reachable with an explicit null through the route model.
+/// immediate items. A present-but-null `items` falls through to the
+/// `quest_ids` leg exactly as the original's is-not-None test does,
+/// so `{"items": null}` alone clears the playlist (the original's
+/// semantics, pinned). A present-but-null (or non-list) `quest_ids`
+/// refuses instead: the original crashes iterating it (an unhandled
+/// error on the wire, with no surviving write), and the update path
+/// is reachable with an explicit null through the route model.
 fn normalize_playlist_items(data: &Value) -> Result<Vec<Value>, QuestError> {
     if let Some(items) = data.get("items").filter(|value| !value.is_null()) {
         return Ok(items
@@ -1249,6 +1252,34 @@ mod tests {
             Value::Null,
             "the expiry derives only from a strictly positive cooldown"
         );
+    }
+
+    #[tokio::test]
+    async fn a_null_items_payload_clears_the_playlist() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        let q1 = quest_id(
+            &svc.create_quest(&json!({"name": "Iron Challenge"}))
+                .await
+                .unwrap(),
+        );
+        let p1 = quest_id(
+            &svc.create_playlist(&json!({"name": "Morning Run", "quest_ids": [q1]}))
+                .await
+                .unwrap(),
+        );
+
+        // The original's is-not-None test routes a present-null items
+        // payload to the quest_ids leg, which is absent, so the
+        // rewrite clears every item; null items is the documented
+        // clear-all shape, unlike null quest_ids which refuses.
+        let updated = svc
+            .update_playlist(p1, &json!({"items": null}))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated["quest_ids"], json!([]));
+        assert_eq!(updated["items"], json!([]));
     }
 
     #[test]

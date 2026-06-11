@@ -568,6 +568,24 @@ async fn the_registered_surface_conforms_through_the_public_port() {
         &[allowed, acrm],
     )
     .await;
+    // Host-header case-insensitivity, as the backend lowercases before
+    // its allowlist check (probed natively: the route is registered).
+    {
+        let authority = format!("127.0.0.1:{substrate_port}");
+        let upper = authority.to_uppercase();
+        let request = http::Request::builder()
+            .uri(format!("http://{authority}/api/quests"))
+            .header("host", &upper)
+            .body(Body::empty())
+            .unwrap();
+        let response = client().request(request).await.expect("request succeeds");
+        assert_eq!(
+            response.status(),
+            http::StatusCode::OK,
+            "a mixed-case Host naming the public authority passes, as the backend's guard"
+        );
+    }
+
     // Non-preflight methods on a natively-registered path flow to the
     // sidecar (the bare OPTIONS 405, an unported PATCH 405).
     assert_parity(

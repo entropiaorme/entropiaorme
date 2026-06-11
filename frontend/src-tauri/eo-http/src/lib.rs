@@ -141,9 +141,13 @@ async fn api_guard(
         return next.run(req).await;
     }
     if let Some(host) = req.headers().get(http::header::HOST) {
+        // The backend lowercases the inbound Host before its check.
         let allowed = host
             .to_str()
-            .map(|host| state.allowed_hosts.iter().any(|entry| entry == host))
+            .map(|host| {
+                let host = host.to_ascii_lowercase();
+                state.allowed_hosts.iter().any(|entry| *entry == host)
+            })
             .unwrap_or(false);
         if !allowed {
             return forbidden("Invalid Host header");

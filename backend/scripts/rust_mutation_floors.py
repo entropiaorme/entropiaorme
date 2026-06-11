@@ -132,6 +132,10 @@ FLOORS: dict[str, float] = {
     # negative weight takes the same else path under both comparisons,
     # so the variants coincide over the whole weight domain.
     "eo-services/src/codex.rs": 92.0,
+    # Measured 100.0 after the hardening pass (the autocomplete
+    # reader, the strict positive-cooldown gate, and the truthiness
+    # table all pinned).
+    "eo-services/src/quests.rs": 92.0,
     # Oracle-side comparison plumbing (not a ported service): staged at
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,

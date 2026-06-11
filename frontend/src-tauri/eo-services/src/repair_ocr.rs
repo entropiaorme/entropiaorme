@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use crate::skill_panel::BgrImage;
+use crate::skill_panel::{digit_value, BgrImage};
 
 /// The capture observer (the recording controller's seam): called as
 /// `tap(panel, region, frame)` after a successful grab.
@@ -110,27 +110,21 @@ impl RepairOcrService {
 
 /// Extract a PED cost number from OCR text: commas read as decimal
 /// points, spaces drop, and the first digit run (with an optional
-/// fraction) parses. The original's digit class is Unicode-wide but
-/// every non-ASCII match fails its float conversion to the same 0.0
-/// this scan returns.
+/// fraction) parses. The original's digit class and float conversion
+/// are Unicode-wide, converting fullwidth digits by value; the
+/// recogniser's alphabet carries exactly the ASCII and fullwidth
+/// forms, which `digit_value` covers.
 pub fn parse_cost(text: &str) -> f64 {
     let cleaned: String = text.replace(',', ".").replace(' ', "");
     let chars: Vec<char> = cleaned.chars().collect();
-    let mut start = None;
-    for (index, ch) in chars.iter().enumerate() {
-        if ch.is_ascii_digit() {
-            start = Some(index);
-            break;
-        }
-    }
-    let Some(start) = start else {
+    let Some(start) = chars.iter().position(|ch| digit_value(*ch).is_some()) else {
         return 0.0;
     };
     let mut number = String::new();
     let mut seen_dot = false;
     for &ch in &chars[start..] {
-        if ch.is_ascii_digit() {
-            number.push(ch);
+        if let Some(value) = digit_value(ch) {
+            number.push(char::from_digit(value, 10).expect("decimal digit"));
         } else if ch == '.' && !seen_dot {
             // The optional fraction: one dot, then digits only.
             seen_dot = true;
@@ -157,6 +151,14 @@ mod tests {
         assert_eq!(parse_cost("1.2.3"), 1.2);
         assert_eq!(parse_cost("no digits"), 0.0);
         assert_eq!(parse_cost(""), 0.0);
+        assert_eq!(parse_cost(".5"), 5.0);
+        assert_eq!(parse_cost("0,0,7"), 0.0);
+        // Fullwidth digits convert by value (the original's float()
+        // accepts them); a fullwidth decimal point is not a fraction
+        // dot, so the run ends there, both exactly as the original.
+        assert_eq!(parse_cost("\u{ff11}\u{ff12}.50"), 12.5);
+        assert_eq!(parse_cost("1\u{ff12}3"), 123.0);
+        assert_eq!(parse_cost("\u{ff11}\u{ff12}\u{ff0e}50"), 12.0);
     }
 
     fn frame() -> BgrImage {

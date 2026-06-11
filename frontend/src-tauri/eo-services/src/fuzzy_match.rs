@@ -26,6 +26,10 @@ pub fn ratio(a: &[char], b: &[char]) -> f64 {
 fn partial_ratio_impl(needle: &[char], haystack: &[char]) -> f64 {
     let len1 = needle.len();
     let len2 = haystack.len();
+    if len1 == 0 {
+        // The reference scores an empty needle as zero outright.
+        return 0.0;
+    }
     let needle_set: std::collections::HashSet<char> = needle.iter().copied().collect();
     let mut best = 0.0f64;
 
@@ -415,6 +419,11 @@ mod tests {
         for (a, b, want) in cases {
             assert_close(wratio(a, b), want);
         }
+        // Whitespace-only inputs score zero through every leg (the
+        // reference's empty-needle handling), never panicking.
+        assert_close(wratio("x", "   "), 0.0);
+        assert_close(wratio("", "abc"), 0.0);
+        assert_close(partial_ratio(&[], &['a', 'b']), 0.0);
     }
 
     #[test]

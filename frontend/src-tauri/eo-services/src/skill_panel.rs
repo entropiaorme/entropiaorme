@@ -31,7 +31,10 @@ pub struct BgrImage {
 
 impl BgrImage {
     /// The rectangle `[y0, y1) x [x0, x1)`, clamped into bounds the
-    /// way the original's array slicing is.
+    /// way the original's array slicing is for overruns. (A negative
+    /// coordinate clamps to zero here where the original's slicing
+    /// would wrap from the end; the calibrated geometry is all
+    /// positive.)
     pub fn crop(&self, y0: i64, y1: i64, x0: i64, x1: i64) -> BgrImage {
         let y0 = y0.clamp(0, self.h as i64) as usize;
         let y1 = y1.clamp(y0 as i64, self.h as i64) as usize;
@@ -55,12 +58,25 @@ pub struct CellCrop {
     pub image: BgrImage,
 }
 
+/// The decimal value of a digit character the recogniser can emit:
+/// the original's digit class is Unicode-wide and its number parsing
+/// converts such digits by value, and the decode alphabet carries
+/// exactly the ASCII and fullwidth forms.
+pub(crate) fn digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some(ch as u32 - '0' as u32),
+        '\u{ff10}'..='\u{ff19}' => Some(ch as u32 - 0xff10),
+        _ => None,
+    }
+}
+
 /// Read the first integer run from a level cell's OCR text.
 pub fn parse_level(text: &str) -> Option<i64> {
     let digits: String = text
         .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
+        .skip_while(|c| digit_value(*c).is_none())
+        .map_while(digit_value)
+        .map(|value| char::from_digit(value, 10).expect("decimal digit"))
         .collect();
     digits.parse().ok()
 }
@@ -75,7 +91,11 @@ pub fn parse_bar_fill(crop: &BgrImage) -> f64 {
     if crop.data.is_empty() || crop.w == 0 || crop.h == 0 {
         return 0.0;
     }
-    // cv2's fixed-point BGR -> grey conversion.
+    // The canonical fixed-point BGR -> grey conversion. Vendor
+    // builds of the original's image library deviate from this by
+    // one least-significant bit on a fraction of rounding-tie pixels;
+    // sub-resolution for the fill estimate and accepted as the pinned
+    // tolerance.
     let grey = |b: u8, g: u8, r: u8| -> u8 {
         ((b as u32 * 1868 + g as u32 * 9617 + r as u32 * 4899 + (1 << 13)) >> 14) as u8
     };
@@ -157,7 +177,10 @@ pub fn fuzzy_resolve(
 
 /// Slice a captured panel into per-cell BGR crops via the calibrated
 /// grid: rows top to bottom, then cells in geometry order, so callers
-/// can group per row downstream.
+/// can group per row downstream. (Missing geometry fields read as
+/// zero, degrading to empty crops where the original raises on a
+/// corrupt geometry file; the committed geometry carries every
+/// field.)
 pub fn slice_panel_cells(panel: &BgrImage, geom: &Value) -> Vec<CellCrop> {
     let n_rows = geom
         .get("n_rows")
@@ -266,6 +289,10 @@ mod tests {
         assert_eq!(parse_level("no digits"), None);
         assert_eq!(parse_level(""), None);
         assert_eq!(parse_level("7a9"), Some(7));
+        // The recogniser's fullwidth digits convert by value, mixed
+        // runs included, exactly as the original's parsing does.
+        assert_eq!(parse_level("\u{ff11}\u{ff12}"), Some(12));
+        assert_eq!(parse_level("lvl \u{ff12}3"), Some(23));
     }
 
     fn bar(columns: &[u8], h: usize) -> BgrImage {

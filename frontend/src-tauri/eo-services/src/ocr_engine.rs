@@ -227,6 +227,11 @@ impl OcrEngine {
 
     /// Recognise one BGR HWC cell; `(text, score)`.
     pub fn recognize_bgr(&self, img: &[u8], h: usize, w: usize) -> Result<(String, f64), String> {
+        if h == 0 || w == 0 {
+            // The original's resize raises catchably on a degenerate
+            // crop; refuse before the arithmetic does anything wild.
+            return Err(format!("degenerate cell: {h}x{w}"));
+        }
         let (tensor_data, img_w) = preprocess(img, h, w);
         let tensor = Tensor::from_array(([1usize, 3, TARGET_H, img_w], tensor_data))
             .map_err(|error| format!("input tensor: {error}"))?;

@@ -348,6 +348,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cache, -8000);
+        let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            foreign_keys, 0,
+            "referential enforcement stays off, matching the backend's pragma surface"
+        );
         let busy: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
             .fetch_one(&db.pool)
             .await

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 /// The similarity ratio of two character sequences: twice the matched
 /// element count over the total length (1.0 when both are empty).
 pub fn sequence_ratio(a: &[char], b: &[char]) -> f64 {
-    let matches: usize = matching_blocks(a, b).iter().map(|&(_, _, size)| size).sum();
+    let matches = total_matches(a, b);
     let length = a.len() + b.len();
     if length == 0 {
         return 1.0;
@@ -99,16 +99,19 @@ fn find_longest_match(
     (besti, bestj, bestsize)
 }
 
-/// Every maximal matching block, recursively split around the longest
-/// match, merged when adjacent, in the reference's order.
-fn matching_blocks(a: &[char], b: &[char]) -> Vec<(usize, usize, usize)> {
+/// The total matched element count: every maximal matching block,
+/// recursively split around the longest match, summed. The reference
+/// also sorts and merges adjacent blocks for its block-list API, but
+/// merging never changes the size sum, so the ratio surface ported
+/// here omits that machinery rather than carrying it dead.
+fn total_matches(a: &[char], b: &[char]) -> usize {
     let index = BIndex::new(b);
     let mut queue = vec![(0usize, a.len(), 0usize, b.len())];
-    let mut blocks: Vec<(usize, usize, usize)> = Vec::new();
+    let mut total = 0usize;
     while let Some((alo, ahi, blo, bhi)) = queue.pop() {
         let (i, j, k) = find_longest_match(a, b, &index, alo, ahi, blo, bhi);
         if k > 0 {
-            blocks.push((i, j, k));
+            total += k;
             if alo < i && blo < j {
                 queue.push((alo, i, blo, j));
             }
@@ -117,24 +120,7 @@ fn matching_blocks(a: &[char], b: &[char]) -> Vec<(usize, usize, usize)> {
             }
         }
     }
-    blocks.sort_unstable();
-
-    let mut merged: Vec<(usize, usize, usize)> = Vec::new();
-    let (mut i1, mut j1, mut k1) = (0usize, 0usize, 0usize);
-    for (i2, j2, k2) in blocks {
-        if i1 + k1 == i2 && j1 + k1 == j2 {
-            k1 += k2;
-        } else {
-            if k1 > 0 {
-                merged.push((i1, j1, k1));
-            }
-            (i1, j1, k1) = (i2, j2, k2);
-        }
-    }
-    if k1 > 0 {
-        merged.push((i1, j1, k1));
-    }
-    merged
+    total
 }
 
 #[cfg(test)]
@@ -168,6 +154,81 @@ mod tests {
         );
         assert_eq!(ratio("qwxyz", "zyxwq"), 0.2);
         assert_eq!(ratio("aaaaab", "baaaaa"), 0.8333333333333334);
+    }
+
+    #[test]
+    fn multi_block_matches_recurse_on_both_sides() {
+        assert_eq!(ratio("abcXXdefYY", "abcZZdefWW"), 0.6);
+        assert_eq!(
+            ratio("prefix mid suffix", "prefix XXX suffix"),
+            0.8235294117647058
+        );
+        assert_eq!(ratio("abQcd", "abRcd"), 0.8);
+    }
+
+    #[test]
+    fn popular_neighbours_extend_seeded_matches() {
+        // Long b strings whose popular elements cannot seed matches
+        // but still extend them through the adjacency passes; every
+        // score is the reference library's output.
+        let cases: [(String, String, f64); 4] = [
+            (
+                "xxhelloxx".into(),
+                "x".repeat(120) + "hello" + &"x".repeat(120),
+                0.07086614173228346,
+            ),
+            (
+                "aahellozz".into(),
+                "a".repeat(100) + "hello" + &"z".repeat(100),
+                0.08411214953271028,
+            ),
+            (
+                "hello".into(),
+                "x".repeat(100) + "hello" + &"x".repeat(100),
+                0.047619047619047616,
+            ),
+            (
+                "xhellox world".into(),
+                "x".repeat(150) + "hello world" + &"x".repeat(60),
+                0.10256410256410256,
+            ),
+        ];
+        for (a, b, expected) in cases {
+            assert_eq!(ratio(&a, &b), expected, "{a:?}");
+        }
+    }
+
+    #[test]
+    fn seeds_at_the_window_edge_and_offset_blocks_count() {
+        // A single-element seed at the very start of b.
+        assert_eq!(ratio("z", "za"), 0.6666666666666666);
+        // The longest match sits at an offset, so the recursion's
+        // right window opens from mid-sequence on both sides.
+        assert_eq!(ratio("xxabcdeXfg", "yyabcdeYfg"), 0.7);
+        assert_eq!(ratio("Xfg hij", "Yfg hij"), 0.8571428571428571);
+    }
+
+    #[test]
+    fn patterned_popular_padding_extends_direction_sensitively() {
+        // Alternating popular padding around the seed: the adjacency
+        // passes must walk the right direction and indexes, or the
+        // pattern breaks the walk; both scores are the reference
+        // library's output.
+        let b1 = "ab".repeat(110) + "hello" + &"ab".repeat(10);
+        assert_eq!(ratio("ababhelloabab", &b1), 0.10077519379844961);
+        let b2 = "ba".repeat(105) + "hello" + &"ab".repeat(8);
+        assert_eq!(ratio("abab hello baba", &b2), 0.04065040650406504);
+    }
+
+    #[test]
+    fn blocked_origins_expose_the_adjacency_walk() {
+        // The reference's extension passes also grow zero-seed matches
+        // from a window's origin, so losses there can mask a broken
+        // backward walk; these pairs put a mismatching prefix at the
+        // origin so the walk's direction and indexes carry the score.
+        assert_eq!(ratio("bz", "za"), 0.5);
+        let b = "ab".repeat(110) + "hello" + &"ab".repeat(5);
+        assert_eq!(ratio("qqabhelloab", &b), 0.07317073170731707);
     }
 
     #[test]

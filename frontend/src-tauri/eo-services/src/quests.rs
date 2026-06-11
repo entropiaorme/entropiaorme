@@ -851,7 +851,9 @@ impl QuestService {
     /// Insert an overlay event when a tracking session is active; any
     /// failure is swallowed, exactly as the original's bare except.
     async fn record_notable_event(&self, event_type: &str, description: &str, value_ped: f64) {
-        let Some(session_id) = self.lock_session().clone() else {
+        // The original gates on truthiness, so an empty session id
+        // skips the write exactly like an absent one.
+        let Some(session_id) = self.lock_session().clone().filter(|id| !id.is_empty()) else {
             return;
         };
         let now = naive_to_epoch(self.clock.now());
@@ -2553,6 +2555,17 @@ mod tests {
             ]
         );
 
+        // The final ledger carries exactly the two liquid completions
+        // the filter recorded; the zero-reward completion wrote none.
+        let final_ledger: Vec<String> = sqlx::query("SELECT id FROM ledger_entries ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get(0))
+            .collect();
+        assert_eq!(final_ledger, ["fixed-0003", "fixed-0004"]);
+
         // A session stop clears the tracked session: notable events
         // stop recording.
         bus.publish(Topic::SessionStopped, &json!({}));
@@ -2588,6 +2601,176 @@ mod tests {
         ));
         // A nameless event is ignored.
         bus.publish(Topic::MissionReceived, &json!({}));
+    }
+
+    #[tokio::test]
+    async fn starting_an_inactive_quest_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        let q = quest_id(&svc.create_quest(&json!({"name": "Dead"})).await.unwrap());
+        svc.delete_quest(q).await.unwrap();
+        assert_eq!(svc.start_quest(q).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn equal_fuzzy_scores_keep_the_first_quest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let first = quest_id(
+            &svc.create_quest(&json!({"name": "iron chal a"}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", first, 1000.0).await;
+        let second = quest_id(
+            &svc.create_quest(&json!({"name": "iron chal b"}))
+                .await
+                .unwrap(),
+        );
+        pin_ts(&pool, "quests", second, 1001.0).await;
+
+        // Both names score 0.9090909090909091 against the mission (the
+        // reference's figure); the strictly-greater comparison keeps
+        // the earlier quest.
+        let matched = svc
+            .match_quest_by_mission_name("iron chal c")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched["id"], json!(first));
+    }
+
+    #[tokio::test]
+    async fn filter_ties_keep_the_first_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+        svc.create_quest(&json!({"name": "Tie Quest", "reward_ped": 2.5}))
+            .await
+            .unwrap();
+        svc.create_quest(&json!({"name": "Zed Bounty", "reward_ped": 0}))
+            .await
+            .unwrap();
+
+        // Equal absolute differences (2.49 and 2.51 against 2.5) keep
+        // the first item, as the original's strictly-less tracking does.
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Tie Quest",
+                &[
+                    json!({"item_name": "A", "value": 2.49}),
+                    json!({"item_name": "B", "value": 2.51}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 0, "suppress_skill_index": null}))
+        );
+        // Equal minimum values likewise keep the first item.
+        assert_eq!(
+            svc.quest_reward_filter(
+                "Zed Bounty",
+                &[
+                    json!({"item_name": "A", "value": 0.3}),
+                    json!({"item_name": "B", "value": 0.3}),
+                ],
+                &[]
+            )
+            .await
+            .unwrap(),
+            Some(json!({"suppress_loot_index": 0, "suppress_skill_index": null}))
+        );
+    }
+
+    #[tokio::test]
+    async fn playlist_matching_requires_completions_within_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let qa = quest_id(&svc.create_quest(&json!({"name": "Alpha"})).await.unwrap());
+        let qc = quest_id(&svc.create_quest(&json!({"name": "Gamma"})).await.unwrap());
+        svc.create_playlist(&json!({"name": "Solo Run", "quest_ids": [qc]}))
+            .await
+            .unwrap();
+        for (quest, at) in [(qa, 5003.0), (qc, 5004.0)] {
+            sqlx::query(
+                "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+                 VALUES ('s3', ?, ?)",
+            )
+            .bind(quest)
+            .bind(at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // The playlist's immediate set is complete, but the session
+        // also completed a quest outside its scope: both subset tests
+        // must hold, so the suggestion stays unclean.
+        let suggestion = svc.get_session_link_suggestion("s3").await.unwrap();
+        assert_eq!(suggestion["reason"], "unclean");
+    }
+
+    #[tokio::test]
+    async fn cancelling_outside_the_cooldown_window_keeps_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        let qa = quest_id(&svc.create_quest(&json!({"name": "Alpha"})).await.unwrap());
+        sqlx::query(
+            "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+             VALUES ('s4', ?, 1000.0)",
+        )
+        .bind(qa)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // No cooldown configured: never cooling, the completion stays.
+        let result = svc.cancel_quest(qa, false).await.unwrap().unwrap();
+        assert_eq!(result["last_completed_at"], json!(1000.0));
+
+        // A cooldown that expires exactly at the current instant is no
+        // longer cooling (the strict comparison), so the completion
+        // stays here too.
+        let qe = quest_id(
+            &svc.create_quest(&json!({"name": "Edge", "cooldown_hours": 1}))
+                .await
+                .unwrap(),
+        );
+        sqlx::query(
+            "INSERT INTO session_quest_completions (session_id, quest_id, completed_at) \
+             VALUES ('s5', ?, ?)",
+        )
+        .bind(qe)
+        .bind(1772366400.0 - 3600.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let result = svc.cancel_quest(qe, false).await.unwrap().unwrap();
+        assert_eq!(result["last_completed_at"], json!(1772362800.0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_empty_session_id_skips_overlay_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool, _clock) = service_with_clock(dir.path()).await;
+        let bus = Arc::new(crate::event_bus::EventBus::new());
+        svc.subscribe(&bus, Handle::current());
+        svc.create_quest(&json!({"name": "Iron Challenge"}))
+            .await
+            .unwrap();
+
+        // The original's truthiness gate treats an empty session id as
+        // no session: the quest starts but no overlay event records.
+        bus.publish(Topic::SessionStarted, &json!({"session_id": ""}));
+        svc.start_quest_from_mission("Iron Challenge")
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query("SELECT COUNT(*) FROM notable_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //!   a fresh normaliser per arm (encounter-order symbolisation makes
 //!   per-arm wall-clock stamps comparable when the write sequences
 //!   match).
+//!
 //! Error legs (validation envelopes, not-found, the calibrate bound,
 //! the deliberate storage-range 500s) mutate nothing and compare
 //! response-only.

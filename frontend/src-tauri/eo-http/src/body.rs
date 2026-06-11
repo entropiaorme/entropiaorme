@@ -124,20 +124,17 @@ pub fn read_object(
 }
 
 /// The optional-body variant (a route whose body model defaults to
-/// None): an absent body is `Ok(None)`, anything present validates as
-/// usual.
+/// None): an absent body is `Some(None)`, a present body validates as
+/// usual (`Some(Some(..))`), and `None` means issues were recorded.
 pub fn read_optional_object(
     content_type: Option<&str>,
     bytes: &[u8],
     validation: &mut Validation,
-) -> Result<Option<BodyObject>, ()> {
+) -> Option<Option<BodyObject>> {
     if bytes.is_empty() {
-        return Ok(None);
+        return Some(None);
     }
-    match read_object(content_type, bytes, validation) {
-        Some(object) => Ok(Some(object)),
-        None => Err(()),
-    }
+    read_object(content_type, bytes, validation).map(Some)
 }
 
 fn read_value(
@@ -786,12 +783,15 @@ mod tests {
     #[test]
     fn optional_bodies_tolerate_absence() {
         let mut v = Validation::new();
-        assert!(matches!(read_optional_object(None, b"", &mut v), Ok(None)));
+        assert!(matches!(
+            read_optional_object(None, b"", &mut v),
+            Some(None)
+        ));
         assert!(v.is_ok());
         let mut v = Validation::new();
         assert!(matches!(
             read_optional_object(Some("application/json"), b"{\"undo_reward\": true}", &mut v),
-            Ok(Some(_))
+            Some(Some(_))
         ));
     }
 }

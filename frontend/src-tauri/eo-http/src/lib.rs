@@ -25,7 +25,7 @@ use std::sync::{Arc, RwLock};
 
 use axum::extract::{Request, State};
 use axum::response::Response;
-use axum::routing::{any, on, MethodFilter, MethodRouter};
+use axum::routing::{any, MethodFilter, MethodRouter};
 use axum::Router;
 
 use crate::arms::{Arm, ArmOverrides};

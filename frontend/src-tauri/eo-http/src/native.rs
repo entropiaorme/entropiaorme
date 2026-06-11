@@ -194,10 +194,13 @@ fn str_value(value: Option<String>) -> Value {
 /// Extract a full QuestCreate model dump (every field present,
 /// defaults applied) in declaration order. `Err` carries the reply
 /// (422 or the deliberate overflow 500).
-fn quest_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, Response<Body>> {
+fn quest_create_dump(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<Value, Box<Response<Body>>> {
     let mut v = Validation::new();
     let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     };
     let name = body::required_str(&mut v, &object, "name");
     let planet = str_or_default(&mut v, &object, "planet", "Calypso");
@@ -214,7 +217,7 @@ fn quest_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, 
     let chain_total = opt_int(&mut v, &object, "chain_total");
     let mobs = list_of_str_or_default(&mut v, &object, "mobs");
     if !v.is_ok() {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     }
     let chain_position = int_value(chain_position.expect("validated"))?;
     let chain_total = int_value(chain_total.expect("validated"))?;
@@ -237,21 +240,24 @@ fn quest_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, 
 }
 
 /// An optional int that may carry the deliberate overflow reply.
-fn int_value(value: Option<BodyInt>) -> Result<Value, Response<Body>> {
+fn int_value(value: Option<BodyInt>) -> Result<Value, Box<Response<Body>>> {
     match value {
         None => Ok(Value::Null),
         Some(BodyInt::Value(v)) => Ok(json!(v)),
-        Some(BodyInt::Overflow) => Err(internal_server_error()),
+        Some(BodyInt::Overflow) => Err(Box::new(internal_server_error())),
     }
 }
 
 /// Extract a QuestUpdate set-fields dump: only fields present in the
 /// body land in the dict (present-null included), mirroring the
 /// backend's exclude-unset model dump.
-fn quest_update_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, Response<Body>> {
+fn quest_update_dump(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<Value, Box<Response<Body>>> {
     let mut v = Validation::new();
     let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     };
     let mut dump = Map::new();
     let mut overflow = false;
@@ -310,10 +316,10 @@ fn quest_update_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, 
         }
     }
     if !v.is_ok() {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     }
     if overflow {
-        return Err(internal_server_error());
+        return Err(Box::new(internal_server_error()));
     }
     Ok(Value::Object(dump))
 }
@@ -340,10 +346,13 @@ fn leak_field(field: &str) -> &'static str {
 
 /// PlaylistCreate: name, planet and estimated-minutes defaults,
 /// quest_ids, and the optional nested items.
-fn playlist_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, Response<Body>> {
+fn playlist_create_dump(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<Value, Box<Response<Body>>> {
     let mut v = Validation::new();
     let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     };
     let name = body::required_str(&mut v, &object, "name");
     let planet = str_or_default(&mut v, &object, "planet", "Calypso");
@@ -351,7 +360,7 @@ fn playlist_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Valu
     let quest_ids = list_of_int_or_default(&mut v, &object, "quest_ids");
     let items = playlist_items(&mut v, &object);
     if !v.is_ok() {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     }
     let estimated = int_value(estimated.map(Some).expect("validated"))?;
     let quest_ids = int_list_value(quest_ids.expect("validated"))?;
@@ -364,12 +373,12 @@ fn playlist_create_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Valu
     }))
 }
 
-fn int_list_value(values: Vec<BodyInt>) -> Result<Value, Response<Body>> {
+fn int_list_value(values: Vec<BodyInt>) -> Result<Value, Box<Response<Body>>> {
     let mut out = Vec::with_capacity(values.len());
     for value in values {
         match value {
             BodyInt::Value(v) => out.push(json!(v)),
-            BodyInt::Overflow => return Err(internal_server_error()),
+            BodyInt::Overflow => return Err(Box::new(internal_server_error())),
         }
     }
     Ok(Value::Array(out))
@@ -493,10 +502,13 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
 }
 
 /// PlaylistUpdate: only-present fields, exclude-unset shaped.
-fn playlist_update_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Value, Response<Body>> {
+fn playlist_update_dump(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<Value, Box<Response<Body>>> {
     let mut v = Validation::new();
     let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     };
     let mut dump = Map::new();
     let mut overflow = false;
@@ -540,10 +552,10 @@ fn playlist_update_dump(content_type: Option<&str>, bytes: &[u8]) -> Result<Valu
         }
     }
     if !v.is_ok() {
-        return Err(v.into_response());
+        return Err(Box::new(v.into_response()));
     }
     if overflow || dump_has_overflow(&dump) {
-        return Err(internal_server_error());
+        return Err(Box::new(internal_server_error()));
     }
     Ok(Value::Object(dump))
 }
@@ -570,7 +582,7 @@ async fn quests_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (content_type, bytes) = body_parts(req).await;
     match quest_create_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.create_quest(&dump).await,
-        Err(reply) => reply,
+        Err(reply) => *reply,
     }
 }
 
@@ -599,7 +611,7 @@ async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (content_type, bytes) = body_parts(req).await;
     match quest_update_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.update_quest(id, &dump).await,
-        Err(reply) => reply,
+        Err(reply) => *reply,
     }
 }
 
@@ -646,12 +658,12 @@ async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (content_type, bytes) = body_parts(req).await;
     let mut v = Validation::new();
     let undo_reward = match body::read_optional_object(content_type.as_deref(), &bytes, &mut v) {
-        Ok(None) => false,
-        Ok(Some(object)) => match bool_or_default(&mut v, &object, "undo_reward", false) {
+        Some(None) => false,
+        Some(Some(object)) => match bool_or_default(&mut v, &object, "undo_reward", false) {
             Some(value) => value,
             None => return v.into_response(),
         },
-        Err(()) => return v.into_response(),
+        None => return v.into_response(),
     };
     hydration.cancel_quest(id, undo_reward).await
 }
@@ -673,7 +685,7 @@ async fn playlists_create(state: Arc<AppState>, req: Request) -> Response<Body> 
             }
             hydration.create_playlist(&dump).await
         }
-        Err(reply) => reply,
+        Err(reply) => *reply,
     }
 }
 
@@ -689,7 +701,7 @@ async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (content_type, bytes) = body_parts(req).await;
     match playlist_update_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.update_playlist(id, &dump).await,
-        Err(reply) => reply,
+        Err(reply) => *reply,
     }
 }
 

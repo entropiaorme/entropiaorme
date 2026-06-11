@@ -1,4 +1,6 @@
 {
+  "codex_claims": [],
+  "codex_progress": [],
   "kill_loot_items": [
     {
       "is_enhancer_shrapnel": 0,
@@ -48,6 +50,14 @@
     }
   ],
   "notable_events": [],
+  "quest_claims": [],
+  "quest_mobs": [],
+  "quest_playlist_items": [],
+  "quest_playlists": [],
+  "quests": [],
+  "session_quest_analytics_links": [],
+  "session_quest_completions": [],
+  "skill_calibrations": [],
   "tracking_sessions": [
     {
       "dangling_cost": 0.0,

@@ -46,10 +46,18 @@ pub async fn compute_session_summary(
         .bind(session_id)
         .fetch_optional(pool)
         .await;
-    // The original tolerates the gains table being absent entirely.
-    let Ok(Some(_)) = has_gains else {
-        return Ok(None);
-    };
+    // The original tolerates the gains table being absent entirely
+    // (its operational-error catch). Any other failure propagates:
+    // a transient driver error must not read as "no gains" and let
+    // the write path clear a valid summary.
+    match has_gains {
+        Ok(Some(_)) => {}
+        Ok(None) => return Ok(None),
+        Err(sqlx::Error::Database(db_error)) if db_error.message().contains("no such table") => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    }
 
     let kill_totals = sqlx::query(
         "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
@@ -511,12 +519,27 @@ mod tests {
             .unwrap()
             .is_some());
 
-        // No skill-gain rows at all refuses.
+        // No skill-gain rows at all refuses; so does the table
+        // being absent entirely (the original's tolerated case).
         run(&pool, "DELETE FROM skill_gains").await;
         assert!(compute_session_summary(&pool, "s1")
             .await
             .unwrap()
             .is_none());
+        run(
+            &pool,
+            "ALTER TABLE skill_gains RENAME TO skill_gains_parked",
+        )
+        .await;
+        assert!(compute_session_summary(&pool, "s1")
+            .await
+            .unwrap()
+            .is_none());
+        run(
+            &pool,
+            "ALTER TABLE skill_gains_parked RENAME TO skill_gains",
+        )
+        .await;
         run(
             &pool,
             "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \

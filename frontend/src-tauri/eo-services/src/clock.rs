@@ -79,10 +79,10 @@ impl MockClock {
     /// Advance both streams together; negative deltas are refused to
     /// preserve the monotonic invariant.
     pub fn advance(&self, seconds: f64) -> Result<(), String> {
-        if seconds < 0.0 {
+        if !seconds.is_finite() || seconds < 0.0 {
             return Err(format!(
-                "advance rejects negative deltas (got {seconds}); freeze the \
-                 wall clock instead of moving the monotonic stream backwards"
+                "advance rejects negative and non-finite deltas (got {seconds}); \
+                 freeze the wall clock instead of corrupting the monotonic stream"
             ));
         }
         let mut state = self.state.lock().expect("mock clock state");
@@ -162,9 +162,13 @@ mod mutation_pins {
     }
 
     #[test]
-    fn a_zero_advance_is_admitted() {
+    fn a_zero_advance_is_admitted_and_non_finite_refuse() {
         let clock = MockClock::new(None, 0.0);
-        assert!(clock.advance(0.0).is_ok(), "only negative deltas refuse");
+        assert!(clock.advance(0.0).is_ok());
         assert!(clock.advance(-0.001).is_err());
+        assert!(clock.advance(f64::NAN).is_err());
+        assert!(clock.advance(f64::INFINITY).is_err());
+        assert!(clock.advance(f64::NEG_INFINITY).is_err());
+        assert_eq!(clock.monotonic(), 0.0, "refused deltas never land");
     }
 }

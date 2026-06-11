@@ -84,13 +84,18 @@ impl From<sqlx::migrate::MigrateError> for DbError {
 
 /// Decode a numeric aggregate that SQLite may hand back as INTEGER
 /// (a `SUM`/`COALESCE` expression result keeps the integer type even
-/// over REAL-affinity columns), falling back to zero only when the
-/// value is no number at all.
+/// over REAL-affinity columns). Only a value that decodes as no
+/// number at all (NULL, text) falls back to zero; a structural
+/// failure (a missing column) is a programming error and panics
+/// rather than silently zeroing an analytic.
 pub(crate) fn decoded_f64(row: &sqlx::sqlite::SqliteRow, index: usize) -> f64 {
     use sqlx::Row as _;
     row.try_get::<f64, _>(index)
         .or_else(|_| row.try_get::<i64, _>(index).map(|value| value as f64))
-        .unwrap_or(0.0)
+        .unwrap_or_else(|error| match error {
+            sqlx::Error::ColumnDecode { .. } => 0.0,
+            other => panic!("decoded_f64 column {index}: {other}"),
+        })
 }
 
 /// The application database handle.

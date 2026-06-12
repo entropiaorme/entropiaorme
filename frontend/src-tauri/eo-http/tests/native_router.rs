@@ -723,3 +723,37 @@ async fn body_failures_answer_the_backend_reply_classes() {
         b"{\"detail\":\"There was an error parsing the body\"}"
     );
 }
+
+/// A transport-level body read failure (the peer half-closes inside an
+/// over-declared Content-Length) answers the unhandled-error 500 and
+/// mutates nothing: the reference never reaches its handler on a failed
+/// read, so a started quest must not cancel off a truncated payload.
+#[tokio::test]
+async fn failed_body_read_answers_500_and_writes_nothing() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (port, _state, _dir) = serve_substrate().await;
+    let (status, _, _) = send_json(port, "POST", "/api/quests", r#"{"name": "Probe"}"#).await;
+    assert_eq!(status, http::StatusCode::OK);
+    let (status, _, _) = send_json(port, "POST", "/api/quests/1/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let (_, _, before) = get(port, "/api/quests/1").await;
+
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let head = format!(
+        "POST /api/quests/1/cancel HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\norigin: tauri://localhost\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{{\"undo_rew"
+    );
+    stream.write_all(head.as_bytes()).await.expect("write head");
+    stream.shutdown().await.expect("half-close");
+    let mut reply = Vec::new();
+    stream.read_to_end(&mut reply).await.expect("read reply");
+    let reply = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with("HTTP/1.1 500 "), "got: {reply}");
+    assert!(reply.ends_with("Internal Server Error"), "got: {reply}");
+
+    let (status, _, after) = get(port, "/api/quests/1").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(after, before, "the failed read must not cancel the quest");
+}

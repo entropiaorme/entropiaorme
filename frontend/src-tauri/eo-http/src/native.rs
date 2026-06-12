@@ -124,17 +124,21 @@ async fn codex_recommend(state: Arc<AppState>, req: Request) -> Response<Body> {
 }
 
 /// Split a request into its content type and collected body bytes.
-async fn body_parts(req: Request) -> (Option<String>, Vec<u8>) {
+///
+/// A transport-level read failure answers the backend's unhandled-error
+/// 500: the reference never reaches the handler when the body cannot be
+/// read, so nothing may be written from a partial payload (an empty
+/// fallback would make optional-body routes proceed with defaults).
+async fn body_parts(req: Request) -> Result<(Option<String>, Vec<u8>), Box<Response<Body>>> {
     let content_type = req
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
-        .await
-        .map(|b| b.to_vec())
-        .unwrap_or_default();
-    (content_type, bytes)
+    match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        Ok(bytes) => Ok((content_type, bytes.to_vec())),
+        Err(_) => Err(Box::new(internal_server_error())),
+    }
 }
 
 /// The outcome of reading an integer path parameter the backend's way:
@@ -622,7 +626,10 @@ async fn quests_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     match quest_create_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.create_quest(&dump).await,
         Err(reply) => *reply,
@@ -651,7 +658,10 @@ async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
         PathId::Value(id) => id,
         PathId::Reply(reply) => return reply,
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     match quest_update_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.update_quest(id, &dump).await,
         Err(reply) => *reply,
@@ -698,7 +708,10 @@ async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
         PathId::Value(id) => id,
         PathId::Reply(reply) => return reply,
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     let mut v = Validation::new();
     let undo_reward = match body::read_optional_object(content_type.as_deref(), &bytes, &mut v) {
         Some(None) => false,
@@ -716,7 +729,10 @@ async fn playlists_create(state: Arc<AppState>, req: Request) -> Response<Body> 
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     match playlist_create_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => {
             if dump
@@ -741,7 +757,10 @@ async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
         PathId::Value(id) => id,
         PathId::Reply(reply) => return reply,
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     match playlist_update_dump(content_type.as_deref(), &bytes) {
         Ok(dump) => hydration.update_playlist(id, &dump).await,
         Err(reply) => *reply,
@@ -764,7 +783,10 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let (content_type, bytes) = body_parts(req).await;
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
     let mut v = Validation::new();
     let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
         return v.into_response();

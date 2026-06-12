@@ -795,11 +795,13 @@ async fn the_write_surface_conforms_through_the_public_port() {
     arms.compare_db_state("adversarial grid").await;
 
     // The multi-statement surrogate residual: both arms answer the
-    // binding 500, but the reference commits the parent quest row
-    // before the mob insert crashes while the native arm writes
-    // nothing (the register's recorded state divergence), so this
-    // probe is response-only and runs after the last state
-    // comparison.
+    // binding 500, but the reference leaves the parent quest row
+    // PENDING in its connection's open transaction (its API shows the
+    // row at once; the next commit on that connection ratifies it
+    // durably) while the native arm writes nothing (the register's
+    // recorded state divergence). The probe is response-only and runs
+    // after the last state comparison because any later commit on the
+    // reference arm materialises the row.
     arms.compare(
         "POST",
         "/api/quests",

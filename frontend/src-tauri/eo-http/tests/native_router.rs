@@ -72,6 +72,37 @@ async fn request(
     path: &str,
     extra_headers: &[(&str, &str)],
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    send(port, method, path, extra_headers, None).await
+}
+
+/// A mutating request: a JSON body plus the allowed origin the guard
+/// demands of mutating methods.
+async fn send_json(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    send(
+        port,
+        method,
+        path,
+        &[
+            ("origin", "tauri://localhost"),
+            ("content-type", "application/json"),
+        ],
+        Some(body.as_bytes().to_vec()),
+    )
+    .await
+}
+
+async fn send(
+    port: u16,
+    method: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     let authority = format!("127.0.0.1:{port}");
     let mut builder = http::Request::builder()
         .method(method)
@@ -84,7 +115,9 @@ async fn request(
     for (name, value) in extra_headers {
         builder = builder.header(*name, *value);
     }
-    let request = builder.body(Body::empty()).unwrap();
+    let request = builder
+        .body(body.map(Body::from).unwrap_or_else(Body::empty))
+        .unwrap();
     let response = eo_http::proxy::build_client()
         .request(request)
         .await
@@ -351,4 +384,342 @@ async fn without_composed_services_registered_routes_fall_back() {
     }
     let (status, _, _) = get(port, "/api/quests").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_write_surface_serves_natively_over_the_composed_state() {
+    let (port, _state, _dir) = serve_substrate().await;
+
+    // Create: minimal, then lax-coerced fields; ids are deterministic
+    // over the fresh database.
+    let (status, headers, body) =
+        send_json(port, "POST", "/api/quests", r#"{"name": "Alpha"}"#).await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        !headers.contains_key(http::header::ETAG),
+        "write replies carry no conditional-GET headers"
+    );
+    let created: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["id"], "1");
+    assert_eq!(created["planet"], "Calypso");
+    assert_eq!(created["rewardIsSkill"], false);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/quests",
+        r#"{"name": "Beta", "reward_ped": "1_0.5", "reward_is_skill": "yes", "chain_position": 2.0, "mobs": ["Atrox"]}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let created: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(created["reward"], 10.5);
+    assert_eq!(created["rewardIsSkill"], true);
+    assert_eq!(created["chainPosition"], 2);
+    assert_eq!(created["targetMobs"], serde_json::json!(["Atrox"]));
+
+    // The single-quest read serves with the conditional-GET contract.
+    let (status, headers, _) = get(port, "/api/quests/1").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(headers.contains_key(http::header::ETAG));
+
+    // Update: exclude-unset (only sent fields move), declaration-order
+    // multi-error, and present-null clears.
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/quests/1",
+        r#"{"notes": "updated", "reward_ped": null}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let updated: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(updated["notes"], "updated");
+    assert_eq!(updated["reward"], Value::Null);
+    assert_eq!(updated["name"], "Alpha", "unsent fields keep their values");
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/quests/1",
+        r#"{"reward_description": 5, "cooldown_hours": "x"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    let kinds = detail_types(&body);
+    assert_eq!(
+        kinds,
+        ["float_parsing", "string_type"],
+        "issues list in model declaration order (cooldown_hours before reward_description)"
+    );
+
+    // Lifecycle on a zero-cooldown quest.
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/quests",
+        r#"{"name": "Cycle", "cooldown_hours": 0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let (status, _, body) = send_json(port, "POST", "/api/quests/3/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let started: Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(started["startedAt"], Value::Null);
+    let (status, _, body) = send_json(port, "POST", "/api/quests/3/complete", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let completed: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(completed["cooldownExpiresAt"], Value::Null);
+    let (status, _, _) = send_json(port, "POST", "/api/quests/3/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/quests/3/cancel",
+        r#"{"undo_reward": false}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let cancelled: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(cancelled["startedAt"], Value::Null);
+    // Cancel tolerates a top-level null body (no-body semantics).
+    let (status, _, _) = send_json(port, "POST", "/api/quests/3/cancel", "null").await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // Playlists: create with nested items, update, delete.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/quests/playlists",
+        r#"{"name": "Run", "estimated_minutes": "45", "quest_ids": [1, "2"], "items": [{"quest_id": 3, "group_type": "long_horizon"}]}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let playlist: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(playlist["estimatedMinutes"], 45);
+    // Provided items supersede the plain id list: the playlist's quest
+    // set derives from them (the cross-language battery pins the same
+    // shape on both arms).
+    assert_eq!(playlist["questIds"], serde_json::json!(["3"]));
+    assert_eq!(playlist["items"][0]["groupType"], "long_horizon");
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/quests/playlists/1",
+        r#"{"name": "Run 2"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let renamed: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(renamed["name"], "Run 2");
+    let (status, _, body) = send_json(port, "DELETE", "/api/quests/playlists/1", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"{\"ok\":true}");
+
+    // Calibrate: the write, the bound, and the beyond-range rank.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/codex/calibrate",
+        r#"{"species_name": "Sp", "rank": 7}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"{\"speciesName\":\"Sp\",\"rank\":7}");
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/codex/calibrate",
+        r#"{"species_name": "Sp", "rank": 26}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"{\"detail\":\"Rank must be 0-25\"}");
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/codex/calibrate",
+        r#"{"species_name": "Sp", "rank": 999999999999999999999999}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+
+    // Not-found legs and the delete reply.
+    for (method, path, body) in [
+        ("PUT", "/api/quests/424242", r#"{"name": "Z"}"#),
+        ("DELETE", "/api/quests/424242", ""),
+        ("POST", "/api/quests/424242/start", ""),
+        ("PUT", "/api/quests/playlists/424242", r#"{"name": "Z"}"#),
+        ("DELETE", "/api/quests/playlists/424242", ""),
+    ] {
+        let (status, _, reply) = send_json(port, method, path, body).await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
+        assert!(
+            reply == b"{\"detail\":\"Quest not found\"}"
+                || reply == b"{\"detail\":\"Playlist not found\"}",
+            "{method} {path}"
+        );
+    }
+    let (status, _, body) = send_json(port, "DELETE", "/api/quests/2", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"{\"ok\":true}");
+
+    // Path-parameter legs on the write routes.
+    let (status, _, body) = send_json(port, "PUT", "/api/quests/abc", r#"{"name": "Z"}"#).await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["int_parsing"]);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/quests/999999999999999999999999/start",
+        "",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, b"Internal Server Error");
+    let (status, _, body) = send_json(port, "POST", "/api/quests/A%2FB/start", "").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Not Found\"}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn body_failures_answer_the_backend_reply_classes() {
+    let (port, _state, _dir) = serve_substrate().await;
+
+    // Missing and null bodies on a required-body route.
+    for body in ["", "null"] {
+        let (status, _, reply) = send_json(port, "POST", "/api/quests", body).await;
+        assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
+        let parsed: Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(parsed["detail"][0]["type"], "missing");
+        assert_eq!(parsed["detail"][0]["loc"], serde_json::json!(["body"]));
+    }
+
+    // Malformed JSON carries the scanner's message and position.
+    let (status, _, reply) = send_json(port, "POST", "/api/quests", r#"{"name": "Q", }"#).await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    let parsed: Value = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(parsed["detail"][0]["type"], "json_invalid");
+    assert_eq!(parsed["detail"][0]["loc"], serde_json::json!(["body", 12]));
+
+    // The bool taxonomy split.
+    for (value, kind) in [
+        ("null", "bool_type"),
+        ("1.5", "bool_type"),
+        ("[1]", "bool_type"),
+        ("999999999999999999999999", "bool_type"),
+        ("2.0", "bool_parsing"),
+        ("2", "bool_parsing"),
+        ("\"zz\"", "bool_parsing"),
+    ] {
+        let body = format!(r#"{{"name": "B", "reward_is_skill": {value}}}"#);
+        let (status, _, reply) = send_json(port, "POST", "/api/quests", &body).await;
+        assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{value}");
+        let parsed: Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(parsed["detail"][0]["type"], kind, "{value}");
+    }
+
+    // Beyond-range floats into int fields answer the size 422 with
+    // both exact bounds excluded; digit strings stay the storage 500.
+    for value in ["1e30", "9223372036854775808.0", "-9223372036854775808.0"] {
+        let body = format!(r#"{{"name": "I", "chain_position": {value}}}"#);
+        let (status, _, reply) = send_json(port, "POST", "/api/quests", &body).await;
+        assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{value}");
+        let parsed: Value = serde_json::from_slice(&reply).unwrap();
+        assert_eq!(parsed["detail"][0]["type"], "int_parsing_size", "{value}");
+    }
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/quests",
+        r#"{"name": "I", "chain_position": 999999999999999999999999}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, b"Internal Server Error");
+
+    // Unrenderable echoes answer the plain-text 500: non-finite
+    // values, lone surrogates, and over-deep echoed bodies.
+    for body in [r#"{"name": Infinity}"#, "{\"planet\": \"\\ud800\"}"] {
+        let (status, _, reply) = send_json(port, "POST", "/api/quests", body).await;
+        assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(reply, b"Internal Server Error");
+    }
+    let deep = format!(r#"{{"name": {}{}}}"#, "[".repeat(990), "]".repeat(990));
+    let (status, _, _) = send_json(port, "POST", "/api/quests", &deep).await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    let shallow = format!(r#"{{"name": {}{}}}"#, "[".repeat(100), "]".repeat(100));
+    let (status, _, reply) = send_json(port, "POST", "/api/quests", &shallow).await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&reply), ["string_type"]);
+
+    // Beyond the parse cap: the generic body-parse 400.
+    let too_deep = "[".repeat(50_000) + &"]".repeat(50_000);
+    let (status, _, reply) = send_json(port, "POST", "/api/quests", &too_deep).await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        reply,
+        b"{\"detail\":\"There was an error parsing the body\"}"
+    );
+
+    // The content-type gate: a foreign maintype with a +json suffix is
+    // not JSON (raw-string echo), application subtypes match
+    // case-insensitively.
+    let (status, _, reply) = send(
+        port,
+        "POST",
+        "/api/quests",
+        &[
+            ("origin", "tauri://localhost"),
+            ("content-type", "text/whatever+json"),
+        ],
+        Some(br#"{"name": "TW"}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    let parsed: Value = serde_json::from_slice(&reply).unwrap();
+    assert_eq!(parsed["detail"][0]["type"], "model_attributes_type");
+    let (status, _, _) = send(
+        port,
+        "POST",
+        "/api/quests",
+        &[
+            ("origin", "tauri://localhost"),
+            ("content-type", "Application/JSON"),
+        ],
+        Some(br#"{"name": "CASEY"}"#.to_vec()),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // Encoding detection: UTF-16 bodies parse; invalid UTF-8 answers
+    // the generic 400.
+    let utf16: Vec<u8> = r#"{"name": "U16"}"#.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let (status, _, _) = send(
+        port,
+        "POST",
+        "/api/quests",
+        &[
+            ("origin", "tauri://localhost"),
+            ("content-type", "application/json"),
+        ],
+        Some(utf16),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let bad = [br#"{"name": ""#.to_vec(), vec![0xFF], br#""}"#.to_vec()].concat();
+    let (status, _, reply) = send(
+        port,
+        "POST",
+        "/api/quests",
+        &[
+            ("origin", "tauri://localhost"),
+            ("content-type", "application/json"),
+        ],
+        Some(bad),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        reply,
+        b"{\"detail\":\"There was an error parsing the body\"}"
+    );
 }

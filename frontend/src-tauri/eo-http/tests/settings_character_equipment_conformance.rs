@@ -15,7 +15,7 @@
 //!
 //! Gated behind the `cross-language` feature because it needs the
 //! Python interpreter and the backend package at runtime. Run it with:
-//!   cargo test -p eo-http --features cross-language --test r3_conformance
+//!   cargo test -p eo-http --features cross-language \n//!     --test settings_character_equipment_conformance
 #![cfg(feature = "cross-language")]
 
 use std::path::PathBuf;
@@ -388,7 +388,7 @@ async fn seed_character_state(pool: &SqlitePool, base_ts: f64) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_r3_surface_conforms_through_the_public_port() {
+async fn the_settings_character_and_equipment_surface_conforms() {
     let upstream = spawn_sidecar();
     let comparison = spawn_sidecar();
     wait_healthy(upstream.port).await;
@@ -853,7 +853,7 @@ async fn the_r3_surface_conforms_through_the_public_port() {
     .await;
     arms.compare_db_state("taint grid").await;
 
-    // ── The R3 reads sit OUTSIDE the ETag middleware's prefixes:
+    // ── These reads sit OUTSIDE the ETag middleware's prefixes:
     //    plain 200s, conditional validators ignored ──
     let (status, headers, _) = request(arms.substrate_port, "GET", "/api/settings", None).await;
     assert_eq!(status, http::StatusCode::OK);

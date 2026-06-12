@@ -764,10 +764,11 @@ async fn failed_body_read_answers_500_and_writes_nothing() {
     assert_eq!(after, before, "the failed read must not cancel the quest");
 }
 
-/// The R3 surface serves natively over the composed state: settings
-/// reads, the character family over an empty calibration table, and
-/// the equipment routes (a consumable write needs no catalogue, so the
-/// full write path proves itself against the temp database).
+/// The settings/character/equipment surface serves natively over the
+/// composed state: the settings reads, the character family over an
+/// empty calibration table, and the equipment routes (a consumable
+/// write needs no catalogue, so the full write path proves itself
+/// against the temp database).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_settings_character_and_equipment_surface_serves_natively() {
     let (port, _state, _dir) = serve_substrate().await;

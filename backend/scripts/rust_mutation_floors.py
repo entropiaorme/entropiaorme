@@ -168,6 +168,20 @@ FLOORS: dict[str, float] = {
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,
     "eo-wire/src/http_fingerprint.rs": 97.0,
+    # The body-extraction stack's strongest killers are the
+    # cross-language conformance batteries (feature-gated off in the
+    # hermetic campaign this gate runs), which hold every validation
+    # envelope, coercion rule, scanner message/position, and encoding
+    # branch byte-for-byte against the running backend: the same
+    # staged-floor posture cost_engine took while its differential fuzz
+    # was feature-gated. Hermetic measurements 79.8 / 79.1 / 89.0;
+    # floors a shade under, ratchet-up-only as hermetic pins grow. The
+    # residual hermetic survivors cluster in the scanner's
+    # position/escape arithmetic, the lax-coercion edge branches, and
+    # the adapter dump plumbing, all live-pinned by the batteries.
+    "eo-http/src/pyjson.rs": 79.0,
+    "eo-http/src/body.rs": 78.0,
+    "eo-http/src/native.rs": 88.0,
 }
 
 

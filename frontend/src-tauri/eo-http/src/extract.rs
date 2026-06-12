@@ -92,10 +92,18 @@ pub fn decode_path_segment(raw: &str) -> String {
 }
 
 /// An accumulating validation report; issues land in route-signature
-/// declaration order because callers validate parameters in that order.
+/// declaration order because callers validate parameters in that
+/// order. Each issue renders to its wire form at push time (the
+/// envelope serialisation is deterministic), which lets body issues
+/// echo inputs the strict JSON value model cannot represent (the
+/// reference body parser admits non-finite floats and
+/// arbitrary-precision integers).
 #[derive(Debug, Default)]
 pub struct Validation {
-    issues: Vec<Value>,
+    issues: Vec<String>,
+    unparsable_body: bool,
+    unrenderable: bool,
+    binding_taint: bool,
 }
 
 impl Validation {
@@ -104,12 +112,51 @@ impl Validation {
     }
 
     pub fn is_ok(&self) -> bool {
-        self.issues.is_empty()
+        self.issues.is_empty() && !self.unparsable_body && !self.unrenderable
+    }
+
+    /// The body failed to parse in the way the backend answers with
+    /// its generic 400 rather than a validation envelope (its parser's
+    /// recursion limit); [`Validation::into_response`] then renders
+    /// that reply.
+    pub fn mark_unparsable_body(&mut self) {
+        self.unparsable_body = true;
+    }
+
+    /// The reply would carry a value the backend's response serialiser
+    /// cannot render (a non-finite float echo, an over-deep echo, a
+    /// lone surrogate): the backend crashes with its plain-text 500,
+    /// and [`Validation::into_response`] answers the same.
+    pub fn mark_unrenderable(&mut self) {
+        self.unrenderable = true;
+    }
+
+    /// A surrogate-tainted string PASSED validation (the backend's
+    /// strings do) and will crash at storage binding if the request
+    /// reaches it: validation issues still answer their 422 first,
+    /// exactly as the backend orders it, and the caller consults this
+    /// only on an otherwise-clean request.
+    pub fn note_binding_taint(&mut self) {
+        self.binding_taint = true;
+    }
+
+    pub fn binding_taint(&self) -> bool {
+        self.binding_taint
+    }
+
+    fn push_value(&mut self, issue: Value) {
+        self.issues.push(to_wire_json(&issue));
+    }
+
+    /// A pre-rendered issue: the body extractors' path, whose `input`
+    /// echoes may carry forms outside the strict JSON value model.
+    pub(crate) fn push_rendered(&mut self, issue: String) {
+        self.issues.push(issue);
     }
 
     /// A required parameter that was absent.
     pub fn missing(&mut self, loc: &str, name: &str) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "missing",
             "loc": [loc, name],
             "msg": "Field required",
@@ -120,7 +167,7 @@ impl Validation {
     /// A parameter that failed integer parsing; `raw` re-renders the
     /// request text exactly as received.
     pub fn int_parsing(&mut self, loc: &str, name: &str, raw: &str) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "int_parsing",
             "loc": [loc, name],
             "msg": "Input should be a valid integer, unable to parse string as an integer",
@@ -133,7 +180,7 @@ impl Validation {
     /// (single-quoted, "or"-joined).
     pub fn literal(&mut self, loc: &str, name: &str, raw: &str, allowed: &[&str]) {
         let expected = render_expected(allowed);
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "literal_error",
             "loc": [loc, name],
             "msg": format!("Input should be {expected}"),
@@ -145,7 +192,7 @@ impl Validation {
     /// A bound violation on an integer parameter; `raw` re-renders the
     /// request text (`"-0"` stays `"-0"`).
     pub fn greater_than_equal(&mut self, loc: &str, name: &str, raw: &str, bound: i64) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "greater_than_equal",
             "loc": [loc, name],
             "msg": format!("Input should be greater than or equal to {bound}"),
@@ -155,7 +202,7 @@ impl Validation {
     }
 
     pub fn less_than_equal(&mut self, loc: &str, name: &str, raw: &str, bound: i64) {
-        self.issues.push(json!({
+        self.push_value(json!({
             "type": "less_than_equal",
             "loc": [loc, name],
             "msg": format!("Input should be less than or equal to {bound}"),
@@ -164,11 +211,29 @@ impl Validation {
         }));
     }
 
-    /// The 422 envelope carrying every accumulated issue. No ETag and
-    /// no Cache-Control: validation replies bypass the conditional-GET
-    /// middleware.
+    /// The 422 envelope carrying every accumulated issue (or the
+    /// backend's generic body-parse 400 when the body never parsed,
+    /// or its plain-text 500 when the reply itself cannot render).
+    /// No ETag and no Cache-Control: validation replies bypass the
+    /// conditional-GET middleware.
     pub fn into_response(self) -> Response<Body> {
-        let body = to_wire_json(&json!({"detail": self.issues}));
+        if self.unrenderable {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("Internal Server Error"))
+                .expect("static 500 builds");
+        }
+        if self.unparsable_body {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    "{\"detail\":\"There was an error parsing the body\"}",
+                ))
+                .expect("static 400 builds");
+        }
+        let body = format!("{{\"detail\":[{}]}}", self.issues.join(","));
         Response::builder()
             .status(StatusCode::UNPROCESSABLE_ENTITY)
             .header(header::CONTENT_TYPE, "application/json")
@@ -458,6 +523,17 @@ mod tests {
              {\"type\":\"literal_error\",\"loc\":[\"query\",\"target\"],\"msg\":\"Input should be 'profession' or 'hp'\",\"input\":\"xx\",\"ctx\":{\"expected\":\"'profession' or 'hp'\"}}\
              ]}"
         );
+    }
+
+    #[test]
+    fn binding_taint_notes_without_failing_validation() {
+        let mut v = Validation::new();
+        assert!(!v.binding_taint());
+        v.note_binding_taint();
+        assert!(v.binding_taint());
+        // The taint alone leaves validation passing: issues answer
+        // first, the caller consults the taint afterwards.
+        assert!(v.is_ok());
     }
 
     #[test]

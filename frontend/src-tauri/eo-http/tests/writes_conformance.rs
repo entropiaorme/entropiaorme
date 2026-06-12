@@ -497,4 +497,10 @@ async fn the_write_surface_conforms_through_the_public_port() {
     }
     arms.compare_db_state("error legs + non-finite create")
         .await;
+
+    // Nesting beyond both parsers' limits answers the backend's
+    // generic body-parse 400 on both arms.
+    let deep = "[".repeat(50_000) + &"]".repeat(50_000);
+    arms.compare("POST", "/api/quests", Some(&deep), false)
+        .await;
 }

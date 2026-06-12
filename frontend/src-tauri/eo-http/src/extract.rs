@@ -101,6 +101,7 @@ pub fn decode_path_segment(raw: &str) -> String {
 #[derive(Debug, Default)]
 pub struct Validation {
     issues: Vec<String>,
+    unparsable_body: bool,
 }
 
 impl Validation {
@@ -109,7 +110,15 @@ impl Validation {
     }
 
     pub fn is_ok(&self) -> bool {
-        self.issues.is_empty()
+        self.issues.is_empty() && !self.unparsable_body
+    }
+
+    /// The body failed to parse in the way the backend answers with
+    /// its generic 400 rather than a validation envelope (its parser's
+    /// recursion limit); [`Validation::into_response`] then renders
+    /// that reply.
+    pub fn mark_unparsable_body(&mut self) {
+        self.unparsable_body = true;
     }
 
     fn push_value(&mut self, issue: Value) {
@@ -179,10 +188,20 @@ impl Validation {
         }));
     }
 
-    /// The 422 envelope carrying every accumulated issue. No ETag and
-    /// no Cache-Control: validation replies bypass the conditional-GET
-    /// middleware.
+    /// The 422 envelope carrying every accumulated issue (or the
+    /// backend's generic body-parse 400 when the body never parsed).
+    /// No ETag and no Cache-Control: validation replies bypass the
+    /// conditional-GET middleware.
     pub fn into_response(self) -> Response<Body> {
+        if self.unparsable_body {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    "{\"detail\":\"There was an error parsing the body\"}",
+                ))
+                .expect("static 400 builds");
+        }
         let body = format!("{{\"detail\":[{}]}}", self.issues.join(","));
         Response::builder()
             .status(StatusCode::UNPROCESSABLE_ENTITY)

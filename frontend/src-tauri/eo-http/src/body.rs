@@ -25,7 +25,7 @@ use axum::body::Body;
 use axum::http::{header, Response, StatusCode};
 
 use crate::extract::Validation;
-use crate::pyjson::{loads, PyValue};
+use crate::pyjson::{loads, PyJsonFailure, PyValue};
 
 /// One step in an issue's location path under `"body"`.
 #[derive(Debug, Clone)]
@@ -161,7 +161,7 @@ fn read_value(
     }
     match loads(&text) {
         Ok(value) => Some(value),
-        Err(error) => {
+        Err(PyJsonFailure::Malformed(error)) => {
             body_issue(
                 validation,
                 "json_invalid",
@@ -170,6 +170,10 @@ fn read_value(
                 "{}",
                 Some(("error", escape_json_str(&error.msg))),
             );
+            None
+        }
+        Err(PyJsonFailure::TooDeep) => {
+            validation.mark_unparsable_body();
             None
         }
     }

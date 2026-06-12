@@ -92,24 +92,60 @@ impl PyJsonError {
     }
 }
 
+/// How a parse fails: malformed input (the reference's message and
+/// position, echoed in the validation envelope) or nesting beyond the
+/// depth cap (the reference's parser hits its own recursion limit on
+/// such input and the HTTP layer answers a generic body-parse 400).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PyJsonFailure {
+    Malformed(PyJsonError),
+    TooDeep,
+}
+
+/// Container nesting beyond this answers as the reference's HTTP layer
+/// does for its parser's recursion limit. The reference's own limit
+/// sits above this cap (probed: 10000 parses, 50000 fails), so inputs
+/// between the two thresholds answer the body-parse 400 here while
+/// that reference build still parses them: a tolerance confined to
+/// adversarial nesting depth no legitimate client reaches. The scanner
+/// runs on an explicit stack, so parsing never grows the native call
+/// stack; the cap bounds the remaining recursive walks over a PARSED
+/// value (the destructor, the issue-echo renderer) well inside a
+/// worker thread's stack.
+const MAX_DEPTH: usize = 2_000;
+
 /// Parse a body as the reference does: decode positions are CHARACTER
 /// indices into the decoded text.
-pub fn loads(text: &str) -> Result<PyValue, PyJsonError> {
+pub fn loads(text: &str) -> Result<PyValue, PyJsonFailure> {
     let chars: Vec<char> = text.chars().collect();
-    let mut scanner = Scanner { chars: &chars };
-    let mut idx = scanner.skip_ws(0);
-    let (value, mut end) = scanner.scan_once(idx)?;
-    end = scanner.skip_ws(end);
+    let scanner = Scanner { chars: &chars };
+    let idx = scanner.skip_ws(0);
+    let (value, end) = scanner.scan_value(idx)?;
+    let end = scanner.skip_ws(end);
     if end != chars.len() {
-        return Err(PyJsonError::new("Extra data", end));
+        return Err(malformed("Extra data", end));
     }
-    idx = end;
-    let _ = idx;
     Ok(value)
+}
+
+fn malformed(msg: &str, pos: usize) -> PyJsonFailure {
+    PyJsonFailure::Malformed(PyJsonError::new(msg, pos))
 }
 
 struct Scanner<'a> {
     chars: &'a [char],
+}
+
+/// One open container on the explicit parse stack.
+enum Frame {
+    Array {
+        items: Vec<PyValue>,
+    },
+    Object {
+        pairs: Vec<(String, PyValue)>,
+        positions: BTreeMap<String, usize>,
+        key: Option<String>,
+    },
 }
 
 impl Scanner<'_> {
@@ -129,7 +165,175 @@ impl Scanner<'_> {
         self.chars.len() >= idx + lit.len() && self.chars[idx..idx + lit.len()] == lit[..]
     }
 
-    fn scan_once(&mut self, idx: usize) -> Result<(PyValue, usize), PyJsonError> {
+    /// The iterative value scanner: scalars resolve inline, containers
+    /// run on the explicit [`Frame`] stack so nesting depth can never
+    /// exhaust the native call stack. Every error message and position
+    /// reproduces the reference scanner's emission points.
+    fn scan_value(&self, start: usize) -> Result<(PyValue, usize), PyJsonFailure> {
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut idx = start;
+        'expect_value: loop {
+            // ── Expecting a value at `idx` ──
+            let (mut value, mut end) = match self.at(idx) {
+                Some('{') => {
+                    // The reference's object-entry checks, verbatim
+                    // ordering: a literal quote first, then whitespace,
+                    // then the empty-object and property-name legs.
+                    let mut at_key = idx + 1;
+                    if self.at(at_key) != Some('"') {
+                        at_key = self.skip_ws(at_key);
+                        match self.at(at_key) {
+                            Some('}') => (PyValue::Object(Vec::new()), at_key + 1),
+                            Some('"') => {
+                                idx = self.push_object_frame(&mut stack, at_key)?;
+                                continue 'expect_value;
+                            }
+                            _ => {
+                                return Err(malformed(
+                                    "Expecting property name enclosed in double quotes",
+                                    at_key,
+                                ));
+                            }
+                        }
+                    } else {
+                        idx = self.push_object_frame(&mut stack, at_key)?;
+                        continue 'expect_value;
+                    }
+                }
+                Some('[') => {
+                    let after = self.skip_ws(idx + 1);
+                    if self.at(after) == Some(']') {
+                        (PyValue::List(Vec::new()), after + 1)
+                    } else {
+                        if stack.len() >= MAX_DEPTH {
+                            return Err(PyJsonFailure::TooDeep);
+                        }
+                        stack.push(Frame::Array { items: Vec::new() });
+                        idx = after;
+                        continue 'expect_value;
+                    }
+                }
+                _ => self.scan_scalar(idx).map_err(PyJsonFailure::Malformed)?,
+            };
+            // ── A value completed; feed the enclosing frames ──
+            loop {
+                match stack.last_mut() {
+                    None => return Ok((value, end)),
+                    Some(Frame::Array { items }) => {
+                        items.push(value);
+                        let after = self.skip_ws(end);
+                        match self.at(after) {
+                            Some(']') => {
+                                let Some(Frame::Array { items }) = stack.pop() else {
+                                    unreachable!("array frame just observed");
+                                };
+                                value = PyValue::List(items);
+                                end = after + 1;
+                            }
+                            Some(',') => {
+                                let next = self.skip_ws(after + 1);
+                                if self.at(next) == Some(']') {
+                                    return Err(malformed(
+                                        "Illegal trailing comma before end of array",
+                                        after,
+                                    ));
+                                }
+                                idx = next;
+                                continue 'expect_value;
+                            }
+                            _ => return Err(malformed("Expecting ',' delimiter", after)),
+                        }
+                    }
+                    Some(Frame::Object {
+                        pairs,
+                        positions,
+                        key,
+                    }) => {
+                        let key = key.take().expect("a value always follows a key");
+                        match positions.get(&key) {
+                            Some(&existing) => pairs[existing].1 = value,
+                            None => {
+                                positions.insert(key.clone(), pairs.len());
+                                pairs.push((key, value));
+                            }
+                        }
+                        let after = self.skip_ws(end);
+                        match self.at(after) {
+                            Some('}') => {
+                                let Some(Frame::Object { pairs, .. }) = stack.pop() else {
+                                    unreachable!("object frame just observed");
+                                };
+                                value = PyValue::Object(pairs);
+                                end = after + 1;
+                            }
+                            Some(',') => {
+                                let at_key = self.skip_ws(after + 1);
+                                match self.at(at_key) {
+                                    Some('"') => {
+                                        idx = self.read_key_into(&mut stack, at_key)?;
+                                        continue 'expect_value;
+                                    }
+                                    Some('}') => {
+                                        return Err(malformed(
+                                            "Illegal trailing comma before end of object",
+                                            after,
+                                        ));
+                                    }
+                                    _ => {
+                                        return Err(malformed(
+                                            "Expecting property name enclosed in double quotes",
+                                            at_key,
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => return Err(malformed("Expecting ',' delimiter", after)),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Open an object frame at its first key (`at_key` sits on the
+    /// quote) and return the first value's start index.
+    fn push_object_frame(
+        &self,
+        stack: &mut Vec<Frame>,
+        at_key: usize,
+    ) -> Result<usize, PyJsonFailure> {
+        if stack.len() >= MAX_DEPTH {
+            return Err(PyJsonFailure::TooDeep);
+        }
+        stack.push(Frame::Object {
+            pairs: Vec::new(),
+            positions: BTreeMap::new(),
+            key: None,
+        });
+        self.read_key_into(stack, at_key)
+    }
+
+    /// Read a `"key":` sequence into the topmost object frame and
+    /// return the value's start index. `at_key` sits on the quote.
+    fn read_key_into(&self, stack: &mut [Frame], at_key: usize) -> Result<usize, PyJsonFailure> {
+        let (parsed_key, mut idx) = self
+            .scan_string(at_key + 1)
+            .map_err(PyJsonFailure::Malformed)?;
+        if self.at(idx) != Some(':') {
+            idx = self.skip_ws(idx);
+            if self.at(idx) != Some(':') {
+                return Err(malformed("Expecting ':' delimiter", idx));
+            }
+        }
+        let Some(Frame::Object { key, .. }) = stack.last_mut() else {
+            unreachable!("keys are read only into object frames");
+        };
+        *key = Some(parsed_key);
+        Ok(self.skip_ws(idx + 1))
+    }
+
+    /// A scalar at `idx`: string, number, or literal.
+    fn scan_scalar(&self, idx: usize) -> Result<(PyValue, usize), PyJsonError> {
         let Some(ch) = self.at(idx) else {
             return Err(PyJsonError::new("Expecting value", idx));
         };
@@ -138,8 +342,6 @@ impl Scanner<'_> {
                 let (text, end) = self.scan_string(idx + 1)?;
                 Ok((PyValue::Str(text), end))
             }
-            '{' => self.scan_object(idx + 1),
-            '[' => self.scan_array(idx + 1),
             'n' if self.starts_with(idx, "null") => Ok((PyValue::Null, idx + 4)),
             't' if self.starts_with(idx, "true") => Ok((PyValue::Bool(true), idx + 4)),
             'f' if self.starts_with(idx, "false") => Ok((PyValue::Bool(false), idx + 5)),
@@ -298,95 +500,6 @@ impl Scanner<'_> {
         let ch = char::from_u32(first).unwrap_or('\u{FFFD}');
         Ok((ch, idx + 5))
     }
-
-    fn scan_object(&mut self, mut idx: usize) -> Result<(PyValue, usize), PyJsonError> {
-        let mut pairs: Vec<(String, PyValue)> = Vec::new();
-        let mut positions: BTreeMap<String, usize> = BTreeMap::new();
-        let mut nextchar = self.at(idx);
-        if nextchar != Some('"') {
-            idx = self.skip_ws(idx);
-            nextchar = self.at(idx);
-            if nextchar == Some('}') {
-                return Ok((PyValue::Object(pairs), idx + 1));
-            }
-            if nextchar != Some('"') {
-                return Err(PyJsonError::new(
-                    "Expecting property name enclosed in double quotes",
-                    idx,
-                ));
-            }
-        }
-        loop {
-            let (key, after_key) = self.scan_string(idx + 1)?;
-            idx = after_key;
-            if self.at(idx) != Some(':') {
-                idx = self.skip_ws(idx);
-                if self.at(idx) != Some(':') {
-                    return Err(PyJsonError::new("Expecting ':' delimiter", idx));
-                }
-            }
-            idx = self.skip_ws(idx + 1);
-            let (value, after_value) = self.scan_once(idx)?;
-            // A duplicate key keeps its first position with the last
-            // value, as a dict insert behaves.
-            match positions.get(&key) {
-                Some(&existing) => pairs[existing].1 = value,
-                None => {
-                    positions.insert(key.clone(), pairs.len());
-                    pairs.push((key, value));
-                }
-            }
-            idx = self.skip_ws(after_value);
-            match self.at(idx) {
-                Some('}') => return Ok((PyValue::Object(pairs), idx + 1)),
-                Some(',') => {}
-                _ => return Err(PyJsonError::new("Expecting ',' delimiter", idx)),
-            }
-            let comma = idx;
-            idx = self.skip_ws(idx + 1);
-            match self.at(idx) {
-                Some('"') => {}
-                Some('}') => {
-                    return Err(PyJsonError::new(
-                        "Illegal trailing comma before end of object",
-                        comma,
-                    ));
-                }
-                _ => {
-                    return Err(PyJsonError::new(
-                        "Expecting property name enclosed in double quotes",
-                        idx,
-                    ));
-                }
-            }
-        }
-    }
-
-    fn scan_array(&mut self, mut idx: usize) -> Result<(PyValue, usize), PyJsonError> {
-        let mut items = Vec::new();
-        idx = self.skip_ws(idx);
-        if self.at(idx) == Some(']') {
-            return Ok((PyValue::List(items), idx + 1));
-        }
-        loop {
-            let (value, after_value) = self.scan_once(idx)?;
-            items.push(value);
-            idx = self.skip_ws(after_value);
-            match self.at(idx) {
-                Some(']') => return Ok((PyValue::List(items), idx + 1)),
-                Some(',') => {}
-                _ => return Err(PyJsonError::new("Expecting ',' delimiter", idx)),
-            }
-            let comma = idx;
-            idx = self.skip_ws(idx + 1);
-            if self.at(idx) == Some(']') {
-                return Err(PyJsonError::new(
-                    "Illegal trailing comma before end of array",
-                    comma,
-                ));
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -394,7 +507,22 @@ mod tests {
     use super::*;
 
     fn err(text: &str) -> PyJsonError {
-        loads(text).expect_err("expected a parse failure")
+        match loads(text).expect_err("expected a parse failure") {
+            PyJsonFailure::Malformed(error) => error,
+            PyJsonFailure::TooDeep => panic!("expected a malformed failure, got TooDeep"),
+        }
+    }
+
+    #[test]
+    fn nesting_beyond_the_cap_fails_too_deep_without_stack_growth() {
+        let deep = "[".repeat(50_000) + &"]".repeat(50_000);
+        assert_eq!(loads(&deep).unwrap_err(), PyJsonFailure::TooDeep);
+        let nested_objects = "{\"k\":".repeat(50_000) + "1" + &"}".repeat(50_000);
+        assert_eq!(loads(&nested_objects).unwrap_err(), PyJsonFailure::TooDeep);
+        // Inside the cap, depth is just data (parse and drop both run
+        // without native-stack growth).
+        let fine = "[".repeat(1_900) + &"]".repeat(1_900);
+        assert!(loads(&fine).is_ok());
     }
 
     #[test]

@@ -714,6 +714,125 @@ async fn the_r3_surface_conforms_through_the_public_port() {
             .await;
     }
 
+    // ── Path + body envelope aggregation (the backend validates the
+    //    two together: one envelope, path issue first; a JSON DECODE
+    //    failure stands alone, dropping the path issue) ──
+    for (method, path, body) in [
+        (
+            "PUT",
+            "/api/equipment/library/abc",
+            Some("{\"type\": \"banana\"}"),
+        ),
+        ("PUT", "/api/equipment/library/abc", None),
+        ("PUT", "/api/equipment/library/abc", Some("{bad")),
+        ("PUT", "/api/equipment/library/abc", Some("null")),
+        ("PUT", "/api/equipment/library/abc", Some("[5]")),
+        (
+            "PUT",
+            "/api/equipment/library/99999999999999999999999999",
+            Some("{\"type\": \"banana\"}"),
+        ),
+        (
+            "PUT",
+            "/api/equipment/library/99999999999999999999999999",
+            Some("{\"type\": \"consumable\", \"name\": \"X\"}"),
+        ),
+        (
+            "PUT",
+            "/api/quests/abc",
+            Some("{\"cooldown_hours\": \"x\", \"chain_position\": 1.5}"),
+        ),
+        ("PUT", "/api/quests/abc", Some("{bad")),
+        ("POST", "/api/quests/abc/cancel", Some("5")),
+        (
+            "POST",
+            "/api/quests/abc/cancel",
+            Some("{\"undo_reward\": \"zz\"}"),
+        ),
+        (
+            "PUT",
+            "/api/quests/playlists/abc",
+            Some("{\"estimated_minutes\": \"x\"}"),
+        ),
+    ] {
+        arms.compare_write(method, path, body).await;
+    }
+    arms.compare_db_state("aggregation grid leaves no writes")
+        .await;
+
+    // ── Per-field surrogate taints resolve at their consumption
+    //    points: handler-ordered 400/404s fire first, an UNUSED
+    //    tainted field flows freely, and a consumed one answers the
+    //    backend's render/binding 500 ──
+    let tainted = "ta\\ud800int";
+    for (method, path, body) in [
+        // Unused tainted name on a catalogue branch: the write lands.
+        (
+            "POST",
+            "/api/equipment/library",
+            format!(
+                "{{\"type\": \"weapon\", \"catalog_id\": \"{WEAPON}\", \"name\": \"{tainted}\"}}"
+            ),
+        ),
+        // Consumed tainted catalogue ids: the unrenderable-404 500.
+        (
+            "POST",
+            "/api/equipment/library",
+            format!("{{\"type\": \"weapon\", \"catalog_id\": \"{tainted}\"}}"),
+        ),
+        (
+            "POST",
+            "/api/equipment/library",
+            format!(
+                "{{\"type\": \"weapon\", \"catalog_id\": \"{WEAPON}\", \"amp_catalog_id\": \"{tainted}\"}}"
+            ),
+        ),
+        // The weapon 404 outranks a tainted secondary id (fetch order).
+        (
+            "POST",
+            "/api/equipment/library",
+            format!(
+                "{{\"type\": \"weapon\", \"catalog_id\": \"ghost\", \"amp_catalog_id\": \"{tainted}\"}}"
+            ),
+        ),
+        // The missing-catalogue 400 outranks a tainted secondary id.
+        (
+            "POST",
+            "/api/equipment/library",
+            format!("{{\"type\": \"weapon\", \"amp_catalog_id\": \"{tainted}\"}}"),
+        ),
+        // A consumed tainted custom name: the binding 500.
+        (
+            "POST",
+            "/api/equipment/library",
+            format!("{{\"type\": \"consumable\", \"name\": \"{tainted}\"}}"),
+        ),
+        // Cost: tainted required id under both branch types.
+        (
+            "POST",
+            "/api/equipment/cost/calculate",
+            format!("{{\"catalog_id\": \"{tainted}\"}}"),
+        ),
+        (
+            "POST",
+            "/api/equipment/cost/calculate",
+            format!("{{\"catalog_id\": \"{tainted}\", \"type\": \"healing\"}}"),
+        ),
+    ] {
+        arms.compare_write(method, path, Some(&body)).await;
+    }
+    // The handler-ordered legs on update: the missing row's 404 and
+    // the type gate fire before any tainted field is consumed.
+    arms.compare_write(
+        "PUT",
+        "/api/equipment/library/77",
+        Some(&format!(
+            "{{\"type\": \"weapon\", \"catalog_id\": \"{tainted}\"}}"
+        )),
+    )
+    .await;
+    arms.compare_db_state("taint grid").await;
+
     // ── The R3 reads sit OUTSIDE the ETag middleware's prefixes:
     //    plain 200s, conditional validators ignored ──
     let (status, headers, _) = request(arms.substrate_port, "GET", "/api/settings", None).await;

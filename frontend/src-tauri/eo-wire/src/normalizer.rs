@@ -391,8 +391,8 @@ fn write_dumps_value(out: &mut String, value: &Value) {
 
 /// Escape a string as Python's `json` encoder does with its DEFAULT
 /// `ensure_ascii=True`: the short escapes, other C0 controls as
-/// `\uXXXX`, every non-ASCII character as `\uXXXX` (astral characters
-/// as a surrogate pair). `/` and `DEL` stay verbatim, matching Python.
+/// `\uXXXX`, and every character past `~` as `\uXXXX` (DEL included;
+/// astral characters as a surrogate pair). `/` stays verbatim.
 fn write_ascii_string(out: &mut String, s: &str) {
     out.push('"');
     for ch in s.chars() {
@@ -404,7 +404,7 @@ fn write_ascii_string(out: &mut String, s: &str) {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0C}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }
             c if c.is_ascii() => out.push(c),
@@ -759,6 +759,11 @@ mod tests {
         );
         assert_eq!(to_python_json_dumps(&serde_json::json!({})), "{}");
         assert_eq!(to_python_json_dumps(&serde_json::json!([])), "[]");
+        assert_eq!(
+            to_python_json_dumps(&serde_json::json!("a\u{7f}b")),
+            "\"a\\u007fb\"",
+            "DEL escapes under default ensure_ascii"
+        );
     }
 
     #[test]

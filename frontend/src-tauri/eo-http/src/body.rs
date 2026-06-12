@@ -98,26 +98,51 @@ impl BodyObject {
     }
 }
 
-/// Read and shape a request body as the backend does. `None` means a
-/// reply was recorded on the validation report. A body of top-level
-/// JSON `null` means ABSENT to the backend's model binding: a
-/// required-body route answers the missing-["body"] envelope.
-pub fn read_object(
+/// A request body at the VALUE level: absent (no bytes arrived) or a
+/// parsed value. The split matters for envelope aggregation: the
+/// backend validates path and body parameters together, so MODEL-level
+/// issues (a missing body, a non-object body, field issues) join any
+/// path issues in one envelope, while VALUE-level failures (the JSON
+/// scanner, encodings, depth, the render classes) answer ALONE,
+/// dropping path issues recorded beside them.
+pub enum BodyValue {
+    Absent,
+    Value(PyValue),
+}
+
+/// Value-level read. A failure records its standalone reply form into
+/// `validation` and returns None; an empty body is `Absent` (a
+/// model-level concern, never a failure here).
+pub fn read_body_value(
     content_type: Option<&str>,
     bytes: &[u8],
     validation: &mut Validation,
-) -> Option<BodyObject> {
-    match read_value(content_type, bytes, validation)? {
-        PyValue::Object(pairs) => {
+) -> Option<BodyValue> {
+    if bytes.is_empty() {
+        return Some(BodyValue::Absent);
+    }
+    Some(BodyValue::Value(read_value(
+        content_type,
+        bytes,
+        validation,
+    )?))
+}
+
+/// Model-level required-object binding: JSON `null` (and an absent
+/// body) mean ABSENT to the backend's model binding, the
+/// missing-["body"] envelope.
+pub fn object_from_body(value: BodyValue, validation: &mut Validation) -> Option<BodyObject> {
+    match value {
+        BodyValue::Value(PyValue::Object(pairs)) => {
             let whole = PyValue::Object(pairs.clone());
             let echo = echo_renders(&whole, 0).then(|| whole.to_echo_json());
             Some(BodyObject { pairs, echo })
         }
-        PyValue::Null => {
+        BodyValue::Absent | BodyValue::Value(PyValue::Null) => {
             body_issue(validation, "missing", &[], "Field required", "null", None);
             None
         }
-        other => {
+        BodyValue::Value(other) => {
             let echo = echo_or_unrenderable(validation, &other)?;
             body_issue(
                 validation,
@@ -134,24 +159,20 @@ pub fn read_object(
 
 /// The optional-body variant (a route whose body model defaults to
 /// None): an absent body OR a top-level JSON `null` is `Some(None)`, a
-/// present body validates as usual (`Some(Some(..))`), and `None`
-/// means a reply was recorded.
-pub fn read_optional_object(
-    content_type: Option<&str>,
-    bytes: &[u8],
+/// present object validates as usual (`Some(Some(..))`), and `None`
+/// means an issue was recorded.
+pub fn optional_object_from_body(
+    value: BodyValue,
     validation: &mut Validation,
 ) -> Option<Option<BodyObject>> {
-    if bytes.is_empty() {
-        return Some(None);
-    }
-    match read_value(content_type, bytes, validation)? {
-        PyValue::Null => Some(None),
-        PyValue::Object(pairs) => {
+    match value {
+        BodyValue::Absent | BodyValue::Value(PyValue::Null) => Some(None),
+        BodyValue::Value(PyValue::Object(pairs)) => {
             let whole = PyValue::Object(pairs.clone());
             let echo = echo_renders(&whole, 0).then(|| whole.to_echo_json());
             Some(Some(BodyObject { pairs, echo }))
         }
-        other => {
+        BodyValue::Value(other) => {
             let echo = echo_or_unrenderable(validation, &other)?;
             body_issue(
                 validation,
@@ -164,6 +185,27 @@ pub fn read_optional_object(
             None
         }
     }
+}
+
+/// One-validation convenience over the two levels (routes without
+/// path parameters, where nothing aggregates).
+pub fn read_object(
+    content_type: Option<&str>,
+    bytes: &[u8],
+    validation: &mut Validation,
+) -> Option<BodyObject> {
+    let value = read_body_value(content_type, bytes, validation)?;
+    object_from_body(value, validation)
+}
+
+/// The one-validation optional-body convenience.
+pub fn read_optional_object(
+    content_type: Option<&str>,
+    bytes: &[u8],
+    validation: &mut Validation,
+) -> Option<Option<BodyObject>> {
+    let value = read_body_value(content_type, bytes, validation)?;
+    optional_object_from_body(value, validation)
 }
 
 /// Whether the backend's body reader treats `content_type` as JSON:
@@ -189,10 +231,6 @@ fn read_value(
     bytes: &[u8],
     validation: &mut Validation,
 ) -> Option<PyValue> {
-    if bytes.is_empty() {
-        body_issue(validation, "missing", &[], "Field required", "null", None);
-        return None;
-    }
     if !is_json_content_type(content_type) {
         // Without a JSON content type the backend treats the raw text
         // as the submitted value (a string), which then fails the

@@ -33,6 +33,21 @@ fn type_endpoint(item_type: &str) -> Option<&'static str> {
     }
 }
 
+/// Per-field surrogate-taint flags for an equipment request. The
+/// backend only crashes where a tainted value is CONSUMED (a catalogue
+/// lookup whose miss echoes the surrogate into an unrenderable 404
+/// detail, or a storage binding), so an unused tainted field must keep
+/// flowing; the gates fire at exactly those consumption points, in the
+/// backend's own evaluation order.
+#[derive(Default)]
+pub struct EquipmentTaint {
+    pub catalog_id: bool,
+    pub name: bool,
+    pub amp_catalog_id: bool,
+    pub scope_catalog_id: bool,
+    pub absorber_catalog_id: bool,
+}
+
 /// The validated `AddWeaponRequest` / `CalculateCostRequest` payload
 /// (the adapter layer reproduces the validation envelopes; handlers
 /// receive the typed fields).
@@ -48,6 +63,14 @@ pub struct EquipmentRequest {
     pub scope_markup: i64,
     pub absorber_markup: i64,
     pub damage_enhancers: i64,
+    pub taint: EquipmentTaint,
+}
+
+/// Python `str.strip()`: `char::is_whitespace` plus the four
+/// information-separator controls (FS/GS/RS/US) Python's `isspace`
+/// includes and Rust's does not.
+fn py_strip(text: &str) -> &str {
+    text.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
 }
 
 /// `entity.get(key) or 0.0` over a catalogue economy number.
@@ -552,34 +575,54 @@ impl HydrationState {
     /// POST /api/equipment/cost/calculate.
     pub async fn equipment_cost(&self, req: &EquipmentRequest) -> Response<Body> {
         if req.item_type == "healing" {
-            let tool_e = match self.fetch_entity("medical_tools", req.catalog_id.as_deref()) {
+            let tool_e = match self.fetch_entity_gated(
+                req.taint.catalog_id,
+                "medical_tools",
+                req.catalog_id.as_deref(),
+            ) {
                 Ok(entity) => entity,
                 Err(reply) => return *reply,
             };
             let cost = heal_cost_per_use(&tool_e, req.weapon_markup as f64 / 100.0);
             return plain_ok(&json!({"costBreakdown": [], "totalCostPerUse": cost}));
         }
-        let weapon_e = match self.fetch_entity("weapons", req.catalog_id.as_deref()) {
+        let weapon_e = match self.fetch_entity_gated(
+            req.taint.catalog_id,
+            "weapons",
+            req.catalog_id.as_deref(),
+        ) {
             Ok(entity) => entity,
             Err(reply) => return *reply,
         };
         let mut amp_e = None;
         if req.amp_catalog_id.is_some() {
-            match self.fetch_entity("weapon_amplifiers", req.amp_catalog_id.as_deref()) {
+            match self.fetch_entity_gated(
+                req.taint.amp_catalog_id,
+                "weapon_amplifiers",
+                req.amp_catalog_id.as_deref(),
+            ) {
                 Ok(entity) => amp_e = Some(entity),
                 Err(reply) => return *reply,
             }
         }
         let mut scope_e = None;
         if req.scope_catalog_id.is_some() {
-            match self.fetch_entity("weapon_vision_attachments", req.scope_catalog_id.as_deref()) {
+            match self.fetch_entity_gated(
+                req.taint.scope_catalog_id,
+                "weapon_vision_attachments",
+                req.scope_catalog_id.as_deref(),
+            ) {
                 Ok(entity) => scope_e = Some(entity),
                 Err(reply) => return *reply,
             }
         }
         let mut absorber_e = None;
         if req.absorber_catalog_id.is_some() {
-            match self.fetch_entity("absorbers", req.absorber_catalog_id.as_deref()) {
+            match self.fetch_entity_gated(
+                req.taint.absorber_catalog_id,
+                "absorbers",
+                req.absorber_catalog_id.as_deref(),
+            ) {
                 Ok(entity) => absorber_e = Some(entity),
                 Err(reply) => return *reply,
             }
@@ -616,9 +659,26 @@ impl HydrationState {
         }
     }
 
+    /// `_fetch_entity` at a taint-aware consumption point: a tainted
+    /// id always misses the lookup, and the backend's 404 detail would
+    /// echo the surrogate it cannot render, so the gate answers its
+    /// 500 exactly where the fetch would run.
+    fn fetch_entity_gated(
+        &self,
+        tainted: bool,
+        endpoint: &str,
+        item_id: Option<&str>,
+    ) -> Result<Value, Box<Response<Body>>> {
+        if tainted {
+            return Err(Box::new(internal_error()));
+        }
+        self.fetch_entity(endpoint, item_id)
+    }
+
     /// Build the stored props for an add/update request, reproducing
     /// the route-order validation (missing catalogue id 400s, entity
-    /// 404s, the consumable identity rule).
+    /// 404s, the consumable identity rule) with the surrogate-taint
+    /// gates at each consumption point.
     fn build_props(&self, req: &EquipmentRequest) -> BuiltProps {
         if req.item_type == "weapon" {
             let Some(catalog_id) = req.catalog_id.as_deref().filter(|id| !id.is_empty()) else {
@@ -627,27 +687,41 @@ impl HydrationState {
                     &detail("catalog_id required for weapon"),
                 ));
             };
-            let weapon_e = match self.fetch_entity("weapons", Some(catalog_id)) {
-                Ok(entity) => entity,
-                Err(reply) => return BuiltProps::Reply(*reply),
-            };
-            let optional =
-                |endpoint: &str, id: Option<&str>| -> Result<Value, Box<Response<Body>>> {
-                    match id.filter(|v| !v.is_empty()) {
-                        Some(id) => self.fetch_entity(endpoint, Some(id)),
-                        None => Ok(Value::Null),
-                    }
+            let weapon_e =
+                match self.fetch_entity_gated(req.taint.catalog_id, "weapons", Some(catalog_id)) {
+                    Ok(entity) => entity,
+                    Err(reply) => return BuiltProps::Reply(*reply),
                 };
-            let amp_e = match optional("weapon_amplifiers", req.amp_catalog_id.as_deref()) {
+            let optional = |tainted: bool,
+                            endpoint: &str,
+                            id: Option<&str>|
+             -> Result<Value, Box<Response<Body>>> {
+                match id.filter(|v| !v.is_empty()) {
+                    Some(id) => self.fetch_entity_gated(tainted, endpoint, Some(id)),
+                    None => Ok(Value::Null),
+                }
+            };
+            let amp_e = match optional(
+                req.taint.amp_catalog_id,
+                "weapon_amplifiers",
+                req.amp_catalog_id.as_deref(),
+            ) {
                 Ok(value) => value,
                 Err(reply) => return BuiltProps::Reply(*reply),
             };
-            let scope_e =
-                match optional("weapon_vision_attachments", req.scope_catalog_id.as_deref()) {
-                    Ok(value) => value,
-                    Err(reply) => return BuiltProps::Reply(*reply),
-                };
-            let absorber_e = match optional("absorbers", req.absorber_catalog_id.as_deref()) {
+            let scope_e = match optional(
+                req.taint.scope_catalog_id,
+                "weapon_vision_attachments",
+                req.scope_catalog_id.as_deref(),
+            ) {
+                Ok(value) => value,
+                Err(reply) => return BuiltProps::Reply(*reply),
+            };
+            let absorber_e = match optional(
+                req.taint.absorber_catalog_id,
+                "absorbers",
+                req.absorber_catalog_id.as_deref(),
+            ) {
                 Ok(value) => value,
                 Err(reply) => return BuiltProps::Reply(*reply),
             };
@@ -683,7 +757,11 @@ impl HydrationState {
                     &detail("catalog_id required for healing"),
                 ));
             };
-            let tool_e = match self.fetch_entity("medical_tools", Some(catalog_id)) {
+            let tool_e = match self.fetch_entity_gated(
+                req.taint.catalog_id,
+                "medical_tools",
+                Some(catalog_id),
+            ) {
                 Ok(entity) => entity,
                 Err(reply) => return BuiltProps::Reply(*reply),
             };
@@ -701,10 +779,12 @@ impl HydrationState {
 
         // Consumable: catalogue pick or free-text name.
         if let Some(catalog_id) = req.catalog_id.as_deref().filter(|id| !id.is_empty()) {
-            let entity = match self.fetch_entity("stimulants", Some(catalog_id)) {
-                Ok(entity) => entity,
-                Err(reply) => return BuiltProps::Reply(*reply),
-            };
+            let entity =
+                match self.fetch_entity_gated(req.taint.catalog_id, "stimulants", Some(catalog_id))
+                {
+                    Ok(entity) => entity,
+                    Err(reply) => return BuiltProps::Reply(*reply),
+                };
             let name = entity["name"].as_str().unwrap_or_default().to_string();
             let mut props = Map::new();
             props.insert("catalog_id".into(), json!(catalog_id));
@@ -718,9 +798,14 @@ impl HydrationState {
         if let Some(name) = req
             .name
             .as_deref()
-            .map(str::trim)
+            .map(py_strip)
             .filter(|name| !name.is_empty())
         {
+            if req.taint.name {
+                // The custom name reaches the storage binding, where
+                // the backend crashes on the surrogate.
+                return BuiltProps::Reply(internal_error());
+            }
             let mut props = Map::new();
             props.insert("catalog_id".into(), Value::Null);
             props.insert("entity".into(), Value::Null);

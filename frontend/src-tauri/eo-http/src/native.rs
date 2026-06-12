@@ -1048,30 +1048,31 @@ fn equipment_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
         .unwrap_or_default()
 }
 
+/// Whether a string field arrived surrogate-tainted: read from the
+/// value itself, so EVERY tainted field flags independently (the
+/// validation's own marker is a single sticky bool).
+fn field_tainted(object: &BodyObject, name: &str) -> bool {
+    matches!(object.get(name), Some(PyValue::TaintedStr { .. }))
+}
+
 /// Extract an AddWeaponRequest in model declaration order, capturing
 /// per-field surrogate taints (the handler resolves each at its
 /// consumption point; an unused tainted field keeps flowing, exactly
 /// as the backend lets it).
 fn add_weapon_request(v: &mut Validation, object: &BodyObject) -> Built<EquipmentRequest> {
-    let mut taint = EquipmentTaint::default();
-    let tainted = |v: &Validation, before: bool| v.binding_taint() && !before;
-
+    let taint = EquipmentTaint {
+        catalog_id: field_tainted(object, "catalog_id"),
+        name: field_tainted(object, "name"),
+        amp_catalog_id: field_tainted(object, "amp_catalog_id"),
+        scope_catalog_id: field_tainted(object, "scope_catalog_id"),
+        absorber_catalog_id: field_tainted(object, "absorber_catalog_id"),
+    };
     let item_type = body::literal_required(v, object, "type", &["weapon", "healing", "consumable"]);
-    let before = v.binding_taint();
     let catalog_id = opt_str(v, object, "catalog_id");
-    taint.catalog_id = tainted(v, before);
-    let before = v.binding_taint();
     let name = opt_str(v, object, "name");
-    taint.name = tainted(v, before);
-    let before = v.binding_taint();
     let amp_catalog_id = opt_str(v, object, "amp_catalog_id");
-    taint.amp_catalog_id = tainted(v, before);
-    let before = v.binding_taint();
     let scope_catalog_id = opt_str(v, object, "scope_catalog_id");
-    taint.scope_catalog_id = tainted(v, before);
-    let before = v.binding_taint();
     let absorber_catalog_id = opt_str(v, object, "absorber_catalog_id");
-    taint.absorber_catalog_id = tainted(v, before);
     let weapon_markup = int_or_default(v, object, "weapon_markup", 100);
     let amp_markup = int_or_default(v, object, "amp_markup", 100);
     let scope_markup = int_or_default(v, object, "scope_markup", 100);
@@ -1112,22 +1113,18 @@ fn add_weapon_request(v: &mut Validation, object: &BodyObject) -> Built<Equipmen
 /// Extract a CalculateCostRequest in model declaration order
 /// (catalog_id first, then the two-value type literal).
 fn calculate_cost_request(v: &mut Validation, object: &BodyObject) -> Built<EquipmentRequest> {
-    let mut taint = EquipmentTaint::default();
-    let tainted = |v: &Validation, before: bool| v.binding_taint() && !before;
-
-    let before = v.binding_taint();
+    let taint = EquipmentTaint {
+        catalog_id: field_tainted(object, "catalog_id"),
+        name: false,
+        amp_catalog_id: field_tainted(object, "amp_catalog_id"),
+        scope_catalog_id: field_tainted(object, "scope_catalog_id"),
+        absorber_catalog_id: field_tainted(object, "absorber_catalog_id"),
+    };
     let catalog_id = body::required_str(v, object, "catalog_id");
-    taint.catalog_id = tainted(v, before);
     let item_type = body::literal_with_default(v, object, "type", &["weapon", "healing"], "weapon");
-    let before = v.binding_taint();
     let amp_catalog_id = opt_str(v, object, "amp_catalog_id");
-    taint.amp_catalog_id = tainted(v, before);
-    let before = v.binding_taint();
     let scope_catalog_id = opt_str(v, object, "scope_catalog_id");
-    taint.scope_catalog_id = tainted(v, before);
-    let before = v.binding_taint();
     let absorber_catalog_id = opt_str(v, object, "absorber_catalog_id");
-    taint.absorber_catalog_id = tainted(v, before);
     let weapon_markup = int_or_default(v, object, "weapon_markup", 100);
     let amp_markup = int_or_default(v, object, "amp_markup", 100);
     let scope_markup = int_or_default(v, object, "scope_markup", 100);

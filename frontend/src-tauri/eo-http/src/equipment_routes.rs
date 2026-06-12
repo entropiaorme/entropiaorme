@@ -594,8 +594,11 @@ impl HydrationState {
             Ok(entity) => entity,
             Err(reply) => return *reply,
         };
+        // The original gates each component on truthiness: an empty
+        // string skips it exactly as absence does.
+        let truthy = |id: &Option<String>| id.as_deref().is_some_and(|v| !v.is_empty());
         let mut amp_e = None;
-        if req.amp_catalog_id.is_some() {
+        if truthy(&req.amp_catalog_id) {
             match self.fetch_entity_gated(
                 req.taint.amp_catalog_id,
                 "weapon_amplifiers",
@@ -606,7 +609,7 @@ impl HydrationState {
             }
         }
         let mut scope_e = None;
-        if req.scope_catalog_id.is_some() {
+        if truthy(&req.scope_catalog_id) {
             match self.fetch_entity_gated(
                 req.taint.scope_catalog_id,
                 "weapon_vision_attachments",
@@ -617,7 +620,7 @@ impl HydrationState {
             }
         }
         let mut absorber_e = None;
-        if req.absorber_catalog_id.is_some() {
+        if truthy(&req.absorber_catalog_id) {
             match self.fetch_entity_gated(
                 req.taint.absorber_catalog_id,
                 "absorbers",

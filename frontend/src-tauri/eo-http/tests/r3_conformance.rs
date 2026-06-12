@@ -821,6 +821,26 @@ async fn the_r3_surface_conforms_through_the_public_port() {
     ] {
         arms.compare_write(method, path, Some(&body)).await;
     }
+    // MULTI-taint: an unused tainted name beside a consumed tainted
+    // amp; both flags must survive (the consumed one answers the 500).
+    arms.compare_write(
+        "POST",
+        "/api/equipment/library",
+        Some(&format!(
+            "{{\"type\": \"weapon\", \"catalog_id\": \"{WEAPON}\", \"name\": \"{tainted}\", \"amp_catalog_id\": \"{tainted}\"}}"
+        )),
+    )
+    .await;
+    // Cost: empty-string secondary ids are FALSY (the component is
+    // skipped, never fetched).
+    arms.compare_write(
+        "POST",
+        "/api/equipment/cost/calculate",
+        Some(&format!(
+            "{{\"catalog_id\": \"{WEAPON}\", \"amp_catalog_id\": \"\", \"scope_catalog_id\": \"\", \"absorber_catalog_id\": \"\"}}"
+        )),
+    )
+    .await;
     // The handler-ordered legs on update: the missing row's 404 and
     // the type gate fire before any tainted field is consumed.
     arms.compare_write(

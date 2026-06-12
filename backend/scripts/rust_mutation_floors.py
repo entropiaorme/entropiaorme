@@ -181,7 +181,21 @@ FLOORS: dict[str, float] = {
     # the adapter dump plumbing, all live-pinned by the batteries.
     "eo-http/src/pyjson.rs": 79.0,
     "eo-http/src/body.rs": 78.0,
-    "eo-http/src/native.rs": 88.0,
+    # Ratcheted from its 88.0 adoption once the envelope-aggregation
+    # and deferred-500 ladders gained hermetic pins (measured 98.3).
+    "eo-http/src/native.rs": 98.0,
+    # The same staged posture for the settings/character/equipment
+    # route stacks: their strongest killers are the same-state and
+    # two-arm conformance batteries (feature-gated off hermetically),
+    # which hold every response byte and stored row against the
+    # running backend. Hermetic measurements 85.2 / 90.3 after the
+    # pure-helper and seeded-handler pins; floors a shade under,
+    # ratchet-up-only. The residual hermetic survivors sit in the
+    # prospect forecast's doubling-and-bisection arithmetic, the
+    # handler glue the batteries answer per route, and the cost/detail
+    # component edges.
+    "eo-http/src/character_routes.rs": 85.0,
+    "eo-http/src/equipment_routes.rs": 90.0,
 }
 
 

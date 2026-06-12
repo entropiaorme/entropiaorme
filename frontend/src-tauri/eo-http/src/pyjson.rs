@@ -29,6 +29,19 @@ pub enum PyValue {
     BigInt(String),
     Float(f64),
     Str(String),
+    /// A string whose source carried a lone surrogate escape. The
+    /// reference's strings hold the surrogate code point and crash at
+    /// consumption (binding or response rendering); this variant
+    /// carries the lossy text plus the first surrogate's code and
+    /// character position so each consumption site can reproduce the
+    /// reference's reply (the storage-crash 500, or calibrate's
+    /// ValueError 400) without the crash. An IGNORED tainted value is
+    /// harmless on both arms.
+    TaintedStr {
+        lossy: String,
+        code: u32,
+        position: usize,
+    },
     List(Vec<PyValue>),
     /// Insertion-ordered members; a duplicate key keeps the first
     /// position with the last value, as a Python dict does.
@@ -48,6 +61,9 @@ impl PyValue {
             PyValue::BigInt(text) => text.clone(),
             PyValue::Float(value) => render_float(*value),
             PyValue::Str(value) => render_str(value),
+            // Only reachable when a render check was bypassed; the
+            // lossy text stands in.
+            PyValue::TaintedStr { lossy, .. } => render_str(lossy),
             PyValue::List(items) => {
                 let inner: Vec<String> = items.iter().map(PyValue::to_echo_json).collect();
                 format!("[{}]", inner.join(","))
@@ -97,11 +113,10 @@ impl PyJsonError {
 /// depth cap (the reference's HTTP layer answers its generic
 /// body-parse 400 once ITS parser gives up), undecodable bytes (the
 /// same 400: the reference's decode step fails before its scanner), or
-/// input the reference's response serialiser cannot render (a lone
-/// surrogate escape: the reference parses it and then crashes with a
-/// plain-text 500 wherever the value reaches a response; the native
-/// reply is the same 500 without the mutation, recorded in the
-/// divergence register).
+/// a lone surrogate escape in an object KEY (tainted VALUES parse into
+/// [`PyValue::TaintedStr`] and resolve at consumption; a tainted key
+/// cannot, so it answers the serialiser-crash 500 outright, a
+/// divergence-register residual for keys in ignored fields).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PyJsonFailure {
     Malformed(PyJsonError),
@@ -137,17 +152,20 @@ pub fn loads_bytes(bytes: &[u8]) -> Result<PyValue, PyJsonFailure> {
     loads(&text)
 }
 
-/// The reference's body-encoding detection: a BOM wins; otherwise the
-/// NUL pattern of the first bytes distinguishes UTF-16/32 variants,
-/// defaulting to UTF-8. Decodes strictly (None on any invalid
-/// sequence).
+/// The reference's body-encoding detection, ported branch for branch:
+/// the UTF-32 BOMs win first (the 32-LE BOM begins with the 16-LE
+/// one), then the UTF-16 and UTF-8 BOMs; BOM-less input is judged by
+/// the first byte pair alone (a leading NUL means big-endian UTF-16
+/// unless the second byte is NUL too, then UTF-32; a NUL second byte
+/// means little-endian, 32-bit only when bytes three and four are
+/// both NUL), defaulting to UTF-8. Decodes strictly (None on any
+/// invalid sequence).
 fn decode_reference_encodings(bytes: &[u8]) -> Option<String> {
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
-        return String::from_utf8(rest.to_vec()).ok();
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return decode_utf32(rest, true);
     }
-    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
-    {
-        return decode_utf32(&bytes[4..], bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]));
+    if let Some(rest) = bytes.strip_prefix(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return decode_utf32(rest, false);
     }
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
         return decode_utf16(rest, true);
@@ -155,21 +173,30 @@ fn decode_reference_encodings(bytes: &[u8]) -> Option<String> {
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         return decode_utf16(rest, false);
     }
-    // BOM-less detection by the NUL pattern of the first two
-    // characters, as the reference performs it.
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8(rest.to_vec()).ok();
+    }
     if bytes.len() >= 4 {
-        match (bytes[0] == 0, bytes[1] == 0, bytes[2] == 0, bytes[3] == 0) {
-            (false, true, true, true) => return decode_utf32(bytes, true),
-            (true, true, true, false) => return decode_utf32(bytes, false),
-            (false, true, false, true) => return decode_utf16(bytes, true),
-            (true, false, true, false) => return decode_utf16(bytes, false),
-            _ => {}
+        if bytes[0] == 0 {
+            return if bytes[1] != 0 {
+                decode_utf16(bytes, false)
+            } else {
+                decode_utf32(bytes, false)
+            };
+        }
+        if bytes[1] == 0 {
+            return if bytes[2] != 0 || bytes[3] != 0 {
+                decode_utf16(bytes, true)
+            } else {
+                decode_utf32(bytes, true)
+            };
         }
     } else if bytes.len() == 2 {
-        match (bytes[0] == 0, bytes[1] == 0) {
-            (false, true) => return decode_utf16(bytes, true),
-            (true, false) => return decode_utf16(bytes, false),
-            _ => {}
+        if bytes[0] == 0 {
+            return decode_utf16(bytes, false);
+        }
+        if bytes[1] == 0 {
+            return decode_utf16(bytes, true);
         }
     }
     String::from_utf8(bytes.to_vec()).ok()
@@ -409,9 +436,16 @@ impl Scanner<'_> {
     }
 
     /// Read a `"key":` sequence into the topmost object frame and
-    /// return the value's start index. `at_key` sits on the quote.
+    /// return the value's start index. `at_key` sits on the quote. A
+    /// tainted KEY cannot resolve at consumption the way a value can
+    /// (keys are compared, not bound), so it keeps the outright
+    /// serialiser-crash reply (the register's recorded residual).
     fn read_key_into(&self, stack: &mut [Frame], at_key: usize) -> Result<usize, PyJsonFailure> {
-        let (parsed_key, mut idx) = self.scan_string(at_key + 1)?;
+        let (scanned, mut idx) = self.scan_string(at_key + 1)?;
+        if scanned.taint.is_some() {
+            return Err(PyJsonFailure::Unrenderable);
+        }
+        let parsed_key = scanned.text;
         if self.at(idx) != Some(':') {
             idx = self.skip_ws(idx);
             if self.at(idx) != Some(':') {
@@ -432,8 +466,8 @@ impl Scanner<'_> {
         };
         match ch {
             '"' => {
-                let (text, end) = self.scan_string(idx + 1)?;
-                Ok((PyValue::Str(text), end))
+                let (scanned, end) = self.scan_string(idx + 1)?;
+                Ok((scanned.into_value(), end))
             }
             'n' if self.starts_with(idx, "null") => Ok((PyValue::Null, idx + 4)),
             't' if self.starts_with(idx, "true") => Ok((PyValue::Bool(true), idx + 4)),
@@ -508,17 +542,23 @@ impl Scanner<'_> {
     }
 
     /// The reference's string scanner, positions included: an
-    /// unterminated string reports the OPENING quote's position.
-    fn scan_string(&self, start: usize) -> Result<(String, usize), PyJsonFailure> {
+    /// unterminated string reports the OPENING quote's position. A
+    /// lone surrogate escape taints the string (the first occurrence's
+    /// code and character position) rather than failing: the
+    /// reference's strings carry the code point and only fail at
+    /// consumption.
+    fn scan_string(&self, start: usize) -> Result<(ScannedString, usize), PyJsonFailure> {
         let begin = start - 1;
         let mut out = String::new();
+        let mut taint: Option<(u32, usize)> = None;
+        let mut chars_out = 0usize;
         let mut idx = start;
         loop {
             let Some(ch) = self.at(idx) else {
                 return Err(malformed("Unterminated string starting at", begin));
             };
             match ch {
-                '"' => return Ok((out, idx + 1)),
+                '"' => return Ok((ScannedString { text: out, taint }, idx + 1)),
                 '\\' => {
                     idx += 1;
                     let Some(esc) = self.at(idx) else {
@@ -534,15 +574,28 @@ impl Scanner<'_> {
                         'r' => out.push('\r'),
                         't' => out.push('\t'),
                         'u' => {
-                            let (ch, next) = self.scan_unicode_escape(idx)?;
-                            out.push(ch);
-                            idx = next;
+                            match self.scan_unicode_escape(idx)? {
+                                UnicodeEscape::Char(ch, next) => {
+                                    out.push(ch);
+                                    chars_out += 1;
+                                    idx = next;
+                                }
+                                UnicodeEscape::LoneSurrogate(code, next) => {
+                                    out.push('\u{FFFD}');
+                                    if taint.is_none() {
+                                        taint = Some((code, chars_out));
+                                    }
+                                    chars_out += 1;
+                                    idx = next;
+                                }
+                            }
                             continue;
                         }
                         _ => {
                             return Err(malformed("Invalid \\escape", idx - 1));
                         }
                     }
+                    chars_out += 1;
                     idx += 1;
                 }
                 ch if (ch as u32) < 0x20 => {
@@ -550,6 +603,7 @@ impl Scanner<'_> {
                 }
                 ch => {
                     out.push(ch);
+                    chars_out += 1;
                     idx += 1;
                 }
             }
@@ -559,7 +613,7 @@ impl Scanner<'_> {
     /// `\uXXXX`, with surrogate pairing as the reference performs it;
     /// `idx` sits on the `u`. Returns the decoded char and the index
     /// just past the escape.
-    fn scan_unicode_escape(&self, idx: usize) -> Result<(char, usize), PyJsonFailure> {
+    fn scan_unicode_escape(&self, idx: usize) -> Result<UnicodeEscape, PyJsonFailure> {
         // The reference reports the escape's `u` position on a short
         // or non-hex group.
         let hex = |at: usize| -> Result<u32, PyJsonFailure> {
@@ -582,23 +636,43 @@ impl Scanner<'_> {
                     let combined = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
                     let ch = char::from_u32(combined)
                         .ok_or_else(|| malformed("Invalid \\uXXXX escape", idx + 7))?;
-                    return Ok((ch, idx + 11));
+                    return Ok(UnicodeEscape::Char(ch, idx + 11));
                 }
             }
         }
         if (0xD800..0xE000).contains(&first) {
-            // A lone surrogate parses in the reference (its strings
-            // carry surrogate code points) and then crashes its
-            // response serialiser with a plain-text 500 wherever the
-            // value reaches a reply, mutating first on accepted-write
-            // paths. Rust strings cannot carry the value at all; the
-            // native arm answers the same 500 WITHOUT the mutation
-            // (divergence-register entry, adversarial-input-only).
-            return Err(PyJsonFailure::Unrenderable);
+            return Ok(UnicodeEscape::LoneSurrogate(first, idx + 5));
         }
         let ch =
             char::from_u32(first).ok_or_else(|| malformed("Invalid \\uXXXX escape", idx + 1))?;
-        Ok((ch, idx + 5))
+        Ok(UnicodeEscape::Char(ch, idx + 5))
+    }
+}
+
+/// One decoded `\uXXXX` step: a real character, or a lone surrogate
+/// the caller taints the surrounding string with.
+enum UnicodeEscape {
+    Char(char, usize),
+    LoneSurrogate(u32, usize),
+}
+
+/// A scanned string plus its surrogate taint (the first lone
+/// surrogate's code point and character position), when any.
+struct ScannedString {
+    text: String,
+    taint: Option<(u32, usize)>,
+}
+
+impl ScannedString {
+    fn into_value(self) -> PyValue {
+        match self.taint {
+            None => PyValue::Str(self.text),
+            Some((code, position)) => PyValue::TaintedStr {
+                lossy: self.text,
+                code,
+                position,
+            },
+        }
     }
 }
 

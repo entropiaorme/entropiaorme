@@ -531,6 +531,13 @@ impl HydrationState {
         }
     }
 
+    /// The codex routers' ValueError mapping: a 400 with the message
+    /// as the detail (adapters reproduce service-adjacent failures the
+    /// reference raises as ValueError through this).
+    pub fn codex_value_error(&self, message: &str) -> Response<Body> {
+        error_response(StatusCode::BAD_REQUEST, &detail(message))
+    }
+
     /// POST /api/codex/calibrate (the codex router maps its service's
     /// invalid-input errors to a 400 with the message as the detail).
     pub async fn codex_calibrate(&self, species_name: &str, rank: i64) -> Response<Body> {

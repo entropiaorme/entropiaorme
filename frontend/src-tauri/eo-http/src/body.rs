@@ -244,6 +244,9 @@ const ECHO_DEPTH_LIMIT: usize = 984;
 fn echo_renders(value: &PyValue, depth: usize) -> bool {
     match value {
         PyValue::Float(v) => v.is_finite(),
+        // The reference's serialiser crashes on the surrogate the
+        // tainted string stands in for.
+        PyValue::TaintedStr { .. } => false,
         PyValue::List(items) => {
             depth < ECHO_DEPTH_LIMIT && items.iter().all(|item| echo_renders(item, depth + 1))
         }
@@ -282,6 +285,13 @@ pub fn required_str(
             None
         }
         Some(PyValue::Str(value)) => Some(value.clone()),
+        Some(PyValue::TaintedStr { .. }) => {
+            // The reference accepts the string and crashes at storage
+            // binding, before any commit: the same plain-text 500,
+            // with the same nothing-written state.
+            validation.mark_unrenderable();
+            None
+        }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
             None
@@ -311,6 +321,10 @@ pub fn opt_str(
     match object.get(name) {
         None | Some(PyValue::Null) => Some(None),
         Some(PyValue::Str(value)) => Some(Some(value.clone())),
+        Some(PyValue::TaintedStr { .. }) => {
+            validation.mark_unrenderable();
+            None
+        }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
             None
@@ -328,6 +342,10 @@ pub fn str_or_default(
     match object.get(name) {
         None => Some(default.to_string()),
         Some(PyValue::Str(value)) => Some(value.clone()),
+        Some(PyValue::TaintedStr { .. }) => {
+            validation.mark_unrenderable();
+            None
+        }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
             None
@@ -446,8 +464,14 @@ pub fn bool_or_default(
     if let Some(b) = parsed {
         return Some(b);
     }
+    // Integral floats are coercion-class only inside the same
+    // exclusive +/-2^63 window the int gate uses; beyond it the
+    // backend answers the type error, not the parsing one.
     let coercion_class = matches!(value, PyValue::Int(_) | PyValue::Str(_))
-        || matches!(value, PyValue::Float(v) if v.is_finite() && v.fract() == 0.0);
+        || matches!(value, PyValue::Float(v) if v.is_finite()
+            && v.fract() == 0.0
+            && *v > -9_223_372_036_854_775_808.0
+            && *v < 9_223_372_036_854_775_808.0);
     let (kind, msg) = if coercion_class {
         (
             "bool_parsing",
@@ -626,6 +650,10 @@ pub fn list_of_str_or_default(
     for (index, item) in items.iter().enumerate() {
         match item {
             PyValue::Str(text) => out.push(text.clone()),
+            PyValue::TaintedStr { .. } => {
+                validation.mark_unrenderable();
+                ok = false;
+            }
             other => {
                 string_type_issue(validation, &[Loc::Field(name), Loc::Index(index)], other);
                 ok = false;

@@ -387,28 +387,32 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
         Some(value) => value,
     };
     let PyValue::List(items) = value else {
-        body::body_issue(
-            v,
-            "list_type",
-            &[Loc::Field("items")],
-            "Input should be a valid list",
-            &value.to_echo_json(),
-            None,
-        );
+        if let Some(echo) = body::echo_or_unrenderable(v, value) {
+            body::body_issue(
+                v,
+                "list_type",
+                &[Loc::Field("items")],
+                "Input should be a valid list",
+                &echo,
+                None,
+            );
+        }
         return None;
     };
     let mut out = Vec::with_capacity(items.len());
     let mut ok = true;
     for (index, item) in items.iter().enumerate() {
         let PyValue::Object(pairs) = item else {
-            body::body_issue(
-                v,
-                "model_attributes_type",
-                &[Loc::Field("items"), Loc::Index(index)],
-                "Input should be a valid dictionary or object to extract fields from",
-                &item.to_echo_json(),
-                None,
-            );
+            if let Some(echo) = body::echo_or_unrenderable(v, item) {
+                body::body_issue(
+                    v,
+                    "model_attributes_type",
+                    &[Loc::Field("items"), Loc::Index(index)],
+                    "Input should be a valid dictionary or object to extract fields from",
+                    &echo,
+                    None,
+                );
+            }
             ok = false;
             continue;
         };
@@ -453,18 +457,20 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
             PyValue::Null => Value::Null,
             PyValue::Str(text) => Value::String(text),
             other => {
-                body::body_issue(
-                    v,
-                    "string_type",
-                    &[
-                        Loc::Field("items"),
-                        Loc::Index(index),
-                        Loc::Field("description"),
-                    ],
-                    "Input should be a valid string",
-                    &other.to_echo_json(),
-                    None,
-                );
+                if let Some(echo) = body::echo_or_unrenderable(v, &other) {
+                    body::body_issue(
+                        v,
+                        "string_type",
+                        &[
+                            Loc::Field("items"),
+                            Loc::Index(index),
+                            Loc::Field("description"),
+                        ],
+                        "Input should be a valid string",
+                        &echo,
+                        None,
+                    );
+                }
                 ok = false;
                 Value::Null
             }
@@ -477,18 +483,20 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
         let group_type = match group_type {
             PyValue::Str(text) => Value::String(text),
             other => {
-                body::body_issue(
-                    v,
-                    "string_type",
-                    &[
-                        Loc::Field("items"),
-                        Loc::Index(index),
-                        Loc::Field("group_type"),
-                    ],
-                    "Input should be a valid string",
-                    &other.to_echo_json(),
-                    None,
-                );
+                if let Some(echo) = body::echo_or_unrenderable(v, &other) {
+                    body::body_issue(
+                        v,
+                        "string_type",
+                        &[
+                            Loc::Field("items"),
+                            Loc::Index(index),
+                            Loc::Field("group_type"),
+                        ],
+                        "Input should be a valid string",
+                        &echo,
+                        None,
+                    );
+                }
                 ok = false;
                 Value::Null
             }
@@ -733,6 +741,17 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
         return v.into_response();
     };
+    // A surrogate-tainted species reaches the backend's service call,
+    // whose encode failure is a ValueError its router maps to a 400
+    // with the codec message; the taint carries what the message
+    // needs.
+    if let Some(PyValue::TaintedStr { code, position, .. }) = object.get("species_name") {
+        let detail = format!(
+            "'utf-8' codec can't encode character '\\u{code:04x}' in position {position}: \
+             surrogates not allowed"
+        );
+        return hydration.codex_value_error(&detail);
+    }
     let species = body::required_str(&mut v, &object, "species_name");
     let rank = body::required_int_at(
         &mut v,

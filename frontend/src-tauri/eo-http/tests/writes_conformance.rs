@@ -694,6 +694,65 @@ async fn the_write_surface_conforms_through_the_public_port() {
         arms.compare("POST", "/api/quests", Some(&body), false)
             .await;
     }
+
+    // The bool float-coercion window: integral floats beyond +/-2^63
+    // answer the type error, not the parsing one.
+    for value in ["1e30", "9223372036854775808.0"] {
+        let body = format!(r#"{{"name": "B", "reward_is_skill": {value}}}"#);
+        arms.compare("POST", "/api/quests", Some(&body), false)
+            .await;
+    }
+
+    // Lone surrogates resolve at consumption on both arms: ignored
+    // fields write through (200), validated fields answer the binding
+    // 500 with nothing written, and the codex ValueError mapping
+    // carries the codec message.
+    arms.compare(
+        "POST",
+        "/api/quests",
+        Some("{\"name\": \"SurOk\", \"bogus\": \"\\ud800\"}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/quests",
+        Some("{\"name\": \"a\\ud800b\"}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/calibrate",
+        Some("{\"species_name\": \"\\ud800\", \"rank\": 7}"),
+        false,
+    )
+    .await;
+
+    // BOM-less UTF-16 with a non-ASCII character: the byte-pair
+    // detection must still pick the encoding.
+    let unicode_utf16: Vec<u8> = "{\"name\": \"U16\u{3042}\"}"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let (ns, _, nb) = request_raw(
+        arms.substrate_port,
+        "POST",
+        "/api/quests",
+        Some(unicode_utf16.clone()),
+        Some("application/json"),
+    )
+    .await;
+    let (cs, _, cb) = request_raw(
+        arms.comparison_port,
+        "POST",
+        "/api/quests",
+        Some(unicode_utf16),
+        Some("application/json"),
+    )
+    .await;
+    assert_eq!(ns, cs, "bom-less unicode utf-16 status");
+    assert_eq!(nb, cb, "bom-less unicode utf-16 body");
     arms.compare_db_state("adversarial grid").await;
 
     // The deferral: codex claim and meta-claim stay proxied (the

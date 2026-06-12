@@ -28,9 +28,10 @@ async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
         .expect("temp db opens");
     let game_data = Arc::new(GameDataStore::new(&dir.path().join("empty")).expect("empty store"));
     let hydration = Arc::new(HydrationState::new(
-        db.pool().clone(),
+        db,
         game_data,
         Arc::new(RealClock::new()),
+        dir.path().to_path_buf(),
     ));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     listener.set_nonblocking(true).expect("nonblocking");
@@ -320,7 +321,12 @@ async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
     let (port, state, _dir) = serve_substrate().await;
     // An unregistered route falls back to the proxy: 502 against the
     // dead upstream proves which arm answered.
-    let (status, _, _) = get(port, "/api/settings").await;
+    let (status, _, _) = get(port, "/api/analytics/overview").await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    // A registered path's unported method falls back too: the
+    // settings PATCH stays with the sidecar until the producer
+    // cutover, while its GET serves natively.
+    let (status, _, _) = send_json(port, "PATCH", "/api/settings", "{}").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
     // An encoded slash that would decode into a registered path stays
     // one raw segment here, so it reaches the fallback too.
@@ -756,4 +762,288 @@ async fn failed_body_read_answers_500_and_writes_nothing() {
     let (status, _, after) = get(port, "/api/quests/1").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(after, before, "the failed read must not cancel the quest");
+}
+
+/// The R3 surface serves natively over the composed state: settings
+/// reads, the character family over an empty calibration table, and
+/// the equipment routes (a consumable write needs no catalogue, so the
+/// full write path proves itself against the temp database).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_settings_character_and_equipment_surface_serves_natively() {
+    let (port, _state, _dir) = serve_substrate().await;
+
+    // Settings assembly over the fresh data dir: defaults, the live
+    // db path, and the workspace version stamp.
+    let (status, headers, body) = get(port, "/api/settings").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        !headers.contains_key(http::header::ETAG),
+        "the ETag middleware scopes to other prefixes; settings reads are plain"
+    );
+    let settings: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(settings["mobTrackingMode"], "mob");
+    assert_eq!(
+        settings["lootFilterBlacklist"],
+        serde_json::json!(["Universal Ammo"])
+    );
+    assert_eq!(settings["trifecta"]["activePresetId"], "default");
+    assert_eq!(settings["trifecta"]["presets"][0]["ready"], false);
+    assert_eq!(
+        settings["trifecta"]["message"],
+        "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
+    );
+    assert_eq!(settings["appVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(settings["dbPath"]
+        .as_str()
+        .unwrap()
+        .ends_with("entropia_orme.db"));
+    let hotbar_keys: Vec<&str> = settings["hotbar"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        hotbar_keys,
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    );
+
+    let (status, _, body) = get(port, "/api/settings/overlay-position").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"{\"x\":null,\"y\":null}");
+
+    // Character family over an empty calibration table (the skills
+    // catalogue is empty in this harness, so HP sits at its base).
+    for (path, expected) in [
+        (
+            "/api/character/calibration",
+            "{\"calibrated\":false,\"lastCalibration\":null,\"stale\":true}",
+        ),
+        ("/api/character/stats", "{\"hp\":0,\"topProfessions\":[]}"),
+        ("/api/character/skills", "[]"),
+        ("/api/character/professions", "[]"),
+        (
+            "/api/character/prospect-options",
+            "{\"tags\":[],\"mobs\":[],\"weapons\":[]}",
+        ),
+        ("/api/character/codex", "[]"),
+        (
+            "/api/character/hp-optimizer",
+            "{\"currentHp\":80.0,\"skills\":[],\"attributes\":[]}",
+        ),
+    ] {
+        let (status, _, body) = get(port, path).await;
+        assert_eq!(status, http::StatusCode::OK, "{path}");
+        assert_eq!(body, expected.as_bytes(), "{path}");
+    }
+
+    // The prospect family's validation ladder: the envelope first (in
+    // signature order), then the handler's own 422 details.
+    let (status, _, body) = get(port, "/api/character/prospect").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing", "missing"]);
+    let (status, _, body) = get(port, "/api/character/prospect?profession=X&target_level=0").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body, b"{\"detail\":\"target_level must be positive\"}");
+    let (status, _, body) = get(
+        port,
+        "/api/character/prospect?profession=X&target_level=5&slice_type=banana",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"slice_type must be global, tag, mob, or weapon\"}"
+    );
+    let (status, _, body) = get(
+        port,
+        "/api/character/prospect?profession=X&target_level=5&slice_type=mob",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"slice_value is required for non-global slices\"}"
+    );
+    // An unknown profession answers the error SHAPE (model order puts
+    // error/rows/warnings first), not a 404.
+    let (status, _, body) = get(port, "/api/character/prospect?profession=X&target_level=5").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        body,
+        b"{\"error\":\"Profession 'X' not found\",\"rows\":[],\"warnings\":[]}"
+    );
+    let (status, _, body) = get(port, "/api/character/profession-optimizer?profession=X").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        body,
+        b"{\"skills\":[],\"attributes\":[],\"error\":\"Profession 'X' not found\"}"
+    );
+    let (status, _, body) = get(port, "/api/character/profession-optimizer").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing"]);
+    let (status, _, body) = get(
+        port,
+        "/api/character/profession-path-optimizer?profession=X&target_level=5&ped_budget=1",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"Exactly one of target_level or ped_budget must be provided\"}"
+    );
+    let (status, _, body) = get(
+        port,
+        "/api/character/profession-path-optimizer?profession=X&target_level=abc",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["float_parsing"]);
+
+    // Equipment: the search type gate, the empty library, and the
+    // catalogue-less validation ladder.
+    let (status, _, body) = get(port, "/api/equipment/search?q=op&type=banana").await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"{\"detail\":\"Unknown type 'banana'\"}");
+    let (status, _, body) = get(port, "/api/equipment/search?q=o").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"[]", "short queries return empty before any lookup");
+    let (status, _, body) = get(port, "/api/equipment/library").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"[]");
+
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\":\"banana\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["literal_error"]);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\":\"weapon\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"{\"detail\":\"catalog_id required for weapon\"}");
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\":\"weapon\",\"catalog_id\":\"nope\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"Entity 'nope' not found in catalogue endpoint 'weapons'.\"}"
+    );
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\":\"consumable\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"Consumable requires either catalog_id (catalogue pick) or name (custom)\"}"
+    );
+
+    // A custom consumable needs no catalogue: the full write path over
+    // the temp database, then the list, update-type gate, and delete.
+    let (status, headers, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\":\"consumable\",\"name\":\"  Nutrio Bar  \"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        !headers.contains_key(http::header::ETAG),
+        "write replies carry no conditional-GET headers"
+    );
+    assert_eq!(
+        body,
+        b"{\"id\":\"1\",\"name\":\"Nutrio Bar\",\"type\":\"consumable\",\"amplifierName\":null,\
+          \"costPerUse\":0.0,\"damageMin\":null,\"damageMax\":null,\"reloadSeconds\":null,\
+          \"isLimited\":false,\"enrichmentLevel\":1}"
+    );
+    let (status, _, body) = get(port, "/api/equipment/library").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let listed: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(listed[0]["id"], "1");
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/equipment/library/1",
+        "{\"type\":\"weapon\",\"catalog_id\":\"x\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"{\"detail\":\"Cannot change equipment type\"}");
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/equipment/library/9",
+        "{\"type\":\"consumable\",\"name\":\"X\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Equipment item 9 not found\"}");
+    let (status, _, body) = get(port, "/api/equipment/library/1/detail").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let detail_shape: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(detail_shape["weapon"]["name"], "Nutrio Bar");
+    assert_eq!(detail_shape["totalCostPerUse"], 0.0);
+    let (status, _, body) = get(port, "/api/equipment/library/9/detail").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Equipment item 9 not found\"}");
+    // Deletes are idempotent acknowledgements, present row or not.
+    for item in ["1", "9"] {
+        let (status, _, body) = send(
+            port,
+            "DELETE",
+            &format!("/api/equipment/library/{item}"),
+            &[("origin", "tauri://localhost")],
+            None,
+        )
+        .await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(body, b"{\"status\":\"deleted\"}");
+    }
+    let (status, _, body) = get(port, "/api/equipment/library").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"[]");
+
+    // Cost calculation validates in model order (catalog_id first).
+    let (status, _, body) = send_json(port, "POST", "/api/equipment/cost/calculate", "{}").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing"]);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/cost/calculate",
+        "{\"catalog_id\":\"x\",\"type\":\"consumable\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["literal_error"]);
+
+    // The unported settings write stays with the sidecar: the PUT
+    // falls to the path's proxy fallback (dead upstream → 502).
+    let (status, _, _) = send_json(
+        port,
+        "PUT",
+        "/api/settings/overlay-position",
+        "{\"x\":1,\"y\":2}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
 }

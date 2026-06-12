@@ -12,12 +12,15 @@
 
 pub mod arms;
 pub mod body;
+pub mod character_routes;
 pub mod cors;
+pub mod equipment_routes;
 pub mod extract;
 pub mod hydration;
 pub mod native;
 pub mod proxy;
 pub mod pyjson;
+pub mod settings_routes;
 pub mod sse;
 
 use std::future::Future;

@@ -22,10 +22,13 @@ use crate::body::{
     list_of_str_or_default, opt_f64, opt_int, opt_list_of_str, opt_str, str_or_default, BodyInt,
     BodyObject, Loc,
 };
+use crate::character_routes::ProspectQuery;
+use crate::equipment_routes::EquipmentRequest;
 use crate::extract::{
-    decode_path_segment, literal_or_default, parse_int_lax, require_bounded_int, require_str,
-    LaxInt, QueryString, Validation,
+    decode_path_segment, float_or_default, literal_or_default, opt_float, parse_int_lax,
+    require_bounded_int, require_float, require_str, LaxInt, QueryString, Validation,
 };
+use crate::hydration::{detail, error_response};
 use crate::pyjson::PyValue;
 use crate::{arm_routed, AppState, ArmRoutes};
 
@@ -846,6 +849,419 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     hydration.codex_calibrate(&species, rank).await
 }
 
+// ── Settings adapters (reads only; the writes stay proxied until the
+//    producer cutover, falling to each path's proxy fallback) ────────
+
+simple_get!(settings_get, settings);
+simple_get!(overlay_position_get, overlay_position);
+
+// ── Character adapters ──────────────────────────────────────────────
+
+simple_get!(character_calibration, character_calibration);
+simple_get!(character_stats, character_stats);
+simple_get!(character_skills, character_skills);
+simple_get!(character_professions, character_professions);
+simple_get!(character_prospect_options, character_prospect_options);
+simple_get!(character_hp_optimizer, character_hp_optimizer);
+simple_get!(character_codex, character_codex);
+
+/// GET /api/character/prospect: the query family validates in
+/// signature order (the envelope), then the handler's own 422 details
+/// in code order.
+async fn character_prospect(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    let target_level = require_float(&mut validation, &query, "target_level");
+    let slice_type = query.last("slice_type").unwrap_or("global");
+    let slice_value = query.last("slice_value");
+    let markup_uplift = float_or_default(&mut validation, &query, "markup_uplift", 0.0);
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let (profession, target_level, markup_uplift) = (
+        profession.expect("validated"),
+        target_level.expect("validated"),
+        markup_uplift.expect("validated"),
+    );
+    if target_level <= 0.0 {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("target_level must be positive"),
+        );
+    }
+    if markup_uplift < 0.0 {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("markup_uplift must be zero or positive"),
+        );
+    }
+    if !["global", "tag", "mob", "weapon"].contains(&slice_type) {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("slice_type must be global, tag, mob, or weapon"),
+        );
+    }
+    if slice_type != "global" && slice_value.is_none_or(|v| v.is_empty()) {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("slice_value is required for non-global slices"),
+        );
+    }
+    let prospect_query = ProspectQuery {
+        profession: profession.to_string(),
+        target_level,
+        slice_type: slice_type.to_string(),
+        slice_value: slice_value.map(str::to_string),
+        markup_uplift,
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .character_prospect(&prospect_query, inm.as_deref())
+        .await
+}
+
+/// GET /api/character/profession-optimizer.
+async fn character_profession_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .character_profession_optimizer(profession.expect("validated"), inm.as_deref())
+        .await
+}
+
+/// GET /api/character/profession-path-optimizer: exactly one of
+/// target_level / ped_budget after the envelope validation.
+async fn character_path_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    let target_level = opt_float(&mut validation, &query, "target_level");
+    let ped_budget = opt_float(&mut validation, &query, "ped_budget");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let (profession, target_level, ped_budget) = (
+        profession.expect("validated"),
+        target_level.expect("validated"),
+        ped_budget.expect("validated"),
+    );
+    if target_level.is_none() == ped_budget.is_none() {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("Exactly one of target_level or ped_budget must be provided"),
+        );
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .character_path_optimizer(profession, target_level, ped_budget, inm.as_deref())
+        .await
+}
+
+// ── Equipment adapters ──────────────────────────────────────────────
+
+simple_get!(equipment_library, equipment_library);
+
+/// GET /api/equipment/search.
+async fn equipment_search(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let q = query.last("q").unwrap_or("").to_string();
+    let item_type = query.last("type").unwrap_or("weapon").to_string();
+    let inm = if_none_match(&req);
+    hydration
+        .equipment_search(&q, &item_type, inm.as_deref())
+        .await
+}
+
+/// The `{item_id}` segment of `/api/equipment/library/{item_id}[/suffix]`.
+fn equipment_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
+    path.strip_prefix("/api/equipment/library/")
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .unwrap_or_default()
+}
+
+/// Per-field surrogate-taint flags for an equipment request: the
+/// backend only crashes when a tainted value actually reaches a
+/// catalogue lookup's 404 detail or a storage binding, so an unused
+/// tainted field must keep flowing (quests bind every field;
+/// equipment does not).
+#[derive(Default)]
+struct EquipmentTaint {
+    catalog_id: bool,
+    name: bool,
+    amp_catalog_id: bool,
+    scope_catalog_id: bool,
+    absorber_catalog_id: bool,
+}
+
+/// Extract an AddWeaponRequest in model declaration order.
+fn add_weapon_request(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<(EquipmentRequest, EquipmentTaint), Box<Response<Body>>> {
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
+        return Err(Box::new(v.into_response()));
+    };
+    let mut taint = EquipmentTaint::default();
+    let tainted = |v: &Validation, before: bool| v.binding_taint() && !before;
+
+    let item_type = body::literal_required(
+        &mut v,
+        &object,
+        "type",
+        &["weapon", "healing", "consumable"],
+    );
+    let before = v.binding_taint();
+    let catalog_id = opt_str(&mut v, &object, "catalog_id");
+    taint.catalog_id = tainted(&v, before);
+    let before = v.binding_taint();
+    let name = opt_str(&mut v, &object, "name");
+    taint.name = tainted(&v, before);
+    let before = v.binding_taint();
+    let amp_catalog_id = opt_str(&mut v, &object, "amp_catalog_id");
+    taint.amp_catalog_id = tainted(&v, before);
+    let before = v.binding_taint();
+    let scope_catalog_id = opt_str(&mut v, &object, "scope_catalog_id");
+    taint.scope_catalog_id = tainted(&v, before);
+    let before = v.binding_taint();
+    let absorber_catalog_id = opt_str(&mut v, &object, "absorber_catalog_id");
+    taint.absorber_catalog_id = tainted(&v, before);
+    let weapon_markup = int_or_default(&mut v, &object, "weapon_markup", 100);
+    let amp_markup = int_or_default(&mut v, &object, "amp_markup", 100);
+    let scope_markup = int_or_default(&mut v, &object, "scope_markup", 100);
+    let absorber_markup = int_or_default(&mut v, &object, "absorber_markup", 100);
+    let damage_enhancers = int_or_default(&mut v, &object, "damage_enhancers", 0);
+    if !v.is_ok() {
+        return Err(Box::new(v.into_response()));
+    }
+    Ok((
+        EquipmentRequest {
+            item_type: item_type.expect("validated"),
+            catalog_id: catalog_id.expect("validated"),
+            name: name.expect("validated"),
+            amp_catalog_id: amp_catalog_id.expect("validated"),
+            scope_catalog_id: scope_catalog_id.expect("validated"),
+            absorber_catalog_id: absorber_catalog_id.expect("validated"),
+            weapon_markup: equipment_int(weapon_markup.expect("validated"))?,
+            amp_markup: equipment_int(amp_markup.expect("validated"))?,
+            scope_markup: equipment_int(scope_markup.expect("validated"))?,
+            absorber_markup: equipment_int(absorber_markup.expect("validated"))?,
+            damage_enhancers: equipment_int(damage_enhancers.expect("validated"))?,
+        },
+        taint,
+    ))
+}
+
+/// Extract a CalculateCostRequest in model declaration order
+/// (catalog_id first, then the two-value type literal).
+fn calculate_cost_request(
+    content_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<(EquipmentRequest, EquipmentTaint), Box<Response<Body>>> {
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
+        return Err(Box::new(v.into_response()));
+    };
+    let mut taint = EquipmentTaint::default();
+    let tainted = |v: &Validation, before: bool| v.binding_taint() && !before;
+
+    let before = v.binding_taint();
+    let catalog_id = body::required_str(&mut v, &object, "catalog_id");
+    taint.catalog_id = tainted(&v, before);
+    let item_type =
+        body::literal_with_default(&mut v, &object, "type", &["weapon", "healing"], "weapon");
+    let before = v.binding_taint();
+    let amp_catalog_id = opt_str(&mut v, &object, "amp_catalog_id");
+    taint.amp_catalog_id = tainted(&v, before);
+    let before = v.binding_taint();
+    let scope_catalog_id = opt_str(&mut v, &object, "scope_catalog_id");
+    taint.scope_catalog_id = tainted(&v, before);
+    let before = v.binding_taint();
+    let absorber_catalog_id = opt_str(&mut v, &object, "absorber_catalog_id");
+    taint.absorber_catalog_id = tainted(&v, before);
+    let weapon_markup = int_or_default(&mut v, &object, "weapon_markup", 100);
+    let amp_markup = int_or_default(&mut v, &object, "amp_markup", 100);
+    let scope_markup = int_or_default(&mut v, &object, "scope_markup", 100);
+    let absorber_markup = int_or_default(&mut v, &object, "absorber_markup", 100);
+    let damage_enhancers = int_or_default(&mut v, &object, "damage_enhancers", 0);
+    if !v.is_ok() {
+        return Err(Box::new(v.into_response()));
+    }
+    Ok((
+        EquipmentRequest {
+            item_type: item_type.expect("validated"),
+            catalog_id: Some(catalog_id.expect("validated")),
+            name: None,
+            amp_catalog_id: amp_catalog_id.expect("validated"),
+            scope_catalog_id: scope_catalog_id.expect("validated"),
+            absorber_catalog_id: absorber_catalog_id.expect("validated"),
+            weapon_markup: equipment_int(weapon_markup.expect("validated"))?,
+            amp_markup: equipment_int(amp_markup.expect("validated"))?,
+            scope_markup: equipment_int(scope_markup.expect("validated"))?,
+            absorber_markup: equipment_int(absorber_markup.expect("validated"))?,
+            damage_enhancers: equipment_int(damage_enhancers.expect("validated"))?,
+        },
+        taint,
+    ))
+}
+
+/// An equipment int field. The backend carries arbitrary-precision
+/// integers through these (they flow into a JSON text column, never a
+/// direct parameter binding); the native side answers the deliberate
+/// 500 beyond i64 instead. See the divergence register.
+fn equipment_int(value: BodyInt) -> Result<i64, Box<Response<Body>>> {
+    match value {
+        BodyInt::Value(v) => Ok(v),
+        BodyInt::Overflow => Err(Box::new(internal_server_error())),
+    }
+}
+
+/// POST /api/equipment/library.
+async fn equipment_add(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    match add_weapon_request(content_type.as_deref(), &bytes) {
+        Ok((request, taint)) => match equipment_taint_reply(&request, &taint) {
+            Some(reply) => reply,
+            None => hydration.equipment_add(&request).await,
+        },
+        Err(reply) => *reply,
+    }
+}
+
+/// PUT /api/equipment/library/{item_id}.
+async fn equipment_update(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let id = match path_id(equipment_id_segment(req.uri().path(), ""), "item_id") {
+        PathId::Value(id) => id,
+        PathId::Reply(reply) => return reply,
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    match add_weapon_request(content_type.as_deref(), &bytes) {
+        Ok((request, taint)) => match equipment_taint_reply(&request, &taint) {
+            Some(reply) => reply,
+            None => hydration.equipment_update(id, &request).await,
+        },
+        Err(reply) => *reply,
+    }
+}
+
+/// DELETE /api/equipment/library/{item_id}.
+async fn equipment_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let id = match path_id(equipment_id_segment(req.uri().path(), ""), "item_id") {
+        PathId::Value(id) => id,
+        PathId::Reply(reply) => return reply,
+    };
+    hydration.equipment_delete(id).await
+}
+
+/// GET /api/equipment/library/{item_id}/detail.
+async fn equipment_detail(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let id = match path_id(equipment_id_segment(req.uri().path(), "/detail"), "item_id") {
+        PathId::Value(id) => id,
+        PathId::Reply(reply) => return reply,
+    };
+    let inm = if_none_match(&req);
+    hydration.equipment_detail(id, inm.as_deref()).await
+}
+
+/// POST /api/equipment/cost/calculate.
+async fn equipment_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    match calculate_cost_request(content_type.as_deref(), &bytes) {
+        Ok((request, taint)) => match equipment_taint_reply(&request, &taint) {
+            Some(reply) => reply,
+            None => hydration.equipment_cost(&request).await,
+        },
+        Err(reply) => *reply,
+    }
+}
+
+/// Where a tainted field reaches the backend's failure surface for the
+/// REQUESTED branch, answer its 500; unused tainted fields keep
+/// flowing exactly as the backend lets them. A tainted catalogue id
+/// always misses the lookup and the resulting 404 detail echoes the
+/// surrogate, which the backend cannot render; a tainted custom name
+/// reaches the storage binding.
+fn equipment_taint_reply(
+    request: &EquipmentRequest,
+    taint: &EquipmentTaint,
+) -> Option<Response<Body>> {
+    let used_catalog = request
+        .catalog_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty());
+    match request.item_type.as_str() {
+        "weapon" => {
+            if used_catalog && taint.catalog_id {
+                return Some(internal_server_error());
+            }
+            for (id, flag) in [
+                (&request.amp_catalog_id, taint.amp_catalog_id),
+                (&request.scope_catalog_id, taint.scope_catalog_id),
+                (&request.absorber_catalog_id, taint.absorber_catalog_id),
+            ] {
+                if id.as_deref().is_some_and(|v| !v.is_empty()) && flag {
+                    return Some(internal_server_error());
+                }
+            }
+            None
+        }
+        "healing" => (used_catalog && taint.catalog_id).then(internal_server_error),
+        _ => {
+            if used_catalog {
+                return (taint.catalog_id).then(internal_server_error);
+            }
+            let used_name = request
+                .name
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|name| !name.is_empty());
+            (used_name && taint.name).then(internal_server_error)
+        }
+    }
+}
+
 /// Register the natively-served quests/codex hydration GETs; one
 /// `arm_routed` line per route, the registration order mirroring the
 /// takeover record. Each line is individually revertable, and the arm
@@ -947,6 +1363,120 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/codex/meta/attributes",
                 codex_meta_attributes,
+            ),
+        )
+        .route(
+            "/api/settings",
+            arm_routed(MethodFilter::GET, "/api/settings", settings_get),
+        )
+        .route(
+            "/api/settings/overlay-position",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/settings/overlay-position",
+                overlay_position_get,
+            ),
+        )
+        .route(
+            "/api/character/calibration",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/calibration",
+                character_calibration,
+            ),
+        )
+        .route(
+            "/api/character/stats",
+            arm_routed(MethodFilter::GET, "/api/character/stats", character_stats),
+        )
+        .route(
+            "/api/character/skills",
+            arm_routed(MethodFilter::GET, "/api/character/skills", character_skills),
+        )
+        .route(
+            "/api/character/professions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/professions",
+                character_professions,
+            ),
+        )
+        .route(
+            "/api/character/prospect-options",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/prospect-options",
+                character_prospect_options,
+            ),
+        )
+        .route(
+            "/api/character/prospect",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/prospect",
+                character_prospect,
+            ),
+        )
+        .route(
+            "/api/character/profession-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/profession-optimizer",
+                character_profession_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/profession-path-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/profession-path-optimizer",
+                character_path_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/hp-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/hp-optimizer",
+                character_hp_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/codex",
+            arm_routed(MethodFilter::GET, "/api/character/codex", character_codex),
+        )
+        .route(
+            "/api/equipment/search",
+            arm_routed(MethodFilter::GET, "/api/equipment/search", equipment_search),
+        )
+        .route(
+            "/api/equipment/library",
+            ArmRoutes::at("/api/equipment/library")
+                .on(MethodFilter::GET, equipment_library)
+                .on(MethodFilter::POST, equipment_add)
+                .into_method_router(),
+        )
+        .route(
+            "/api/equipment/library/{item_id}",
+            ArmRoutes::at("/api/equipment/library/{item_id}")
+                .on(MethodFilter::PUT, equipment_update)
+                .on(MethodFilter::DELETE, equipment_delete)
+                .into_method_router(),
+        )
+        .route(
+            "/api/equipment/library/{item_id}/detail",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/equipment/library/{item_id}/detail",
+                equipment_detail,
+            ),
+        )
+        .route(
+            "/api/equipment/cost/calculate",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/equipment/cost/calculate",
+                equipment_cost,
             ),
         )
 }

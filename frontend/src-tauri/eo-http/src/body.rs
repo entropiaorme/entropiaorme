@@ -354,13 +354,82 @@ pub fn str_or_default(
     }
 }
 
+/// A required `Literal[...]` string field: pydantic accepts exactly
+/// the allowed strings and answers everything else (other strings,
+/// nulls, non-strings) with the literal_error envelope.
+pub fn literal_required(
+    validation: &mut Validation,
+    object: &BodyObject,
+    name: &'static str,
+    allowed: &[&str],
+) -> Option<String> {
+    match object.get(name) {
+        None => {
+            match object.echo() {
+                Some(echo) => {
+                    body_issue(
+                        validation,
+                        "missing",
+                        &[Loc::Field(name)],
+                        "Field required",
+                        echo,
+                        None,
+                    );
+                }
+                None => validation.mark_unrenderable(),
+            }
+            None
+        }
+        Some(value) => literal_of(validation, name, value, allowed),
+    }
+}
+
+/// A `Literal[...]` field with a default (absent takes the default;
+/// a present value, null included, validates against the set).
+pub fn literal_with_default(
+    validation: &mut Validation,
+    object: &BodyObject,
+    name: &'static str,
+    allowed: &[&str],
+    default: &str,
+) -> Option<String> {
+    match object.get(name) {
+        None => Some(default.to_string()),
+        Some(value) => literal_of(validation, name, value, allowed),
+    }
+}
+
+fn literal_of(
+    validation: &mut Validation,
+    name: &'static str,
+    value: &PyValue,
+    allowed: &[&str],
+) -> Option<String> {
+    if let PyValue::Str(text) = value {
+        if allowed.contains(&text.as_str()) {
+            return Some(text.clone());
+        }
+    }
+    let echo = echo_or_unrenderable(validation, value)?;
+    let expected = crate::extract::render_expected(allowed);
+    body_issue(
+        validation,
+        "literal_error",
+        &[Loc::Field(name)],
+        &format!("Input should be {expected}"),
+        &echo,
+        Some(("expected", escape_json_str(&expected))),
+    );
+    None
+}
+
 /// The backend's lax string-to-float: whitespace trim, the
 /// `inf`/`infinity`/`nan` names, and its underscore gate (probed:
 /// whole-string, not between-digits: no leading, trailing, or doubled
 /// underscore, then every underscore strips before parsing, so
 /// `"1_.5"`, `"1e_5"`, and `"+_1"` all parse while `"_1.5"`, `"1.5_"`,
 /// and `"1__0.5"` do not).
-fn lax_float_from_str(raw: &str) -> Option<f64> {
+pub(crate) fn lax_float_from_str(raw: &str) -> Option<f64> {
     let trimmed = raw.trim();
     if trimmed.is_empty()
         || trimmed.starts_with('_')

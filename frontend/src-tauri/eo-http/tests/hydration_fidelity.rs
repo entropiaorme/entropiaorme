@@ -326,7 +326,7 @@ async fn the_native_hydration_handlers_match_the_backend() {
 
     // ── The native side over the same database ──────────────────────
     let native = HydrationState::new(
-        seed_pool.clone(),
+        eo_services::db::Db::from_pool(seed_pool.clone()),
         Arc::new(GameDataStore::new(&repo_root().join("backend/data/snapshot")).unwrap()),
         Arc::new(MockClock::new(
             Some(
@@ -334,6 +334,7 @@ async fn the_native_hydration_handlers_match_the_backend() {
             ),
             0.0,
         )),
+        sidecar.data_dir.path().to_path_buf(),
     );
 
     // ── The nine 200 legs, byte for byte ───────────────────────────

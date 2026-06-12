@@ -189,6 +189,16 @@ impl Validation {
         }));
     }
 
+    /// An unparsable float parameter.
+    pub fn float_parsing(&mut self, loc: &str, name: &str, raw: &str) {
+        self.push_value(json!({
+            "type": "float_parsing",
+            "loc": [loc, name],
+            "msg": "Input should be a valid number, unable to parse string as a number",
+            "input": raw,
+        }));
+    }
+
     /// A bound violation on an integer parameter; `raw` re-renders the
     /// request text (`"-0"` stays `"-0"`).
     pub fn greater_than_equal(&mut self, loc: &str, name: &str, raw: &str, bound: i64) {
@@ -242,7 +252,7 @@ impl Validation {
     }
 }
 
-fn render_expected(allowed: &[&str]) -> String {
+pub(crate) fn render_expected(allowed: &[&str]) -> String {
     let quoted: Vec<String> = allowed.iter().map(|v| format!("'{v}'")).collect();
     match quoted.as_slice() {
         [] => String::new(),
@@ -394,6 +404,62 @@ pub fn literal_or_default<'q>(
             validation.literal("query", name, value, allowed);
             None
         }
+    }
+}
+
+/// A required float query parameter, under the backend's lax
+/// string-to-float coercion (trim, the `inf`/`nan` names, the
+/// whole-string underscore gate).
+pub fn require_float(validation: &mut Validation, query: &QueryString, name: &str) -> Option<f64> {
+    match query.last(name) {
+        None => {
+            validation.missing("query", name);
+            None
+        }
+        Some(raw) => match crate::body::lax_float_from_str(raw) {
+            Some(value) => Some(value),
+            None => {
+                validation.float_parsing("query", name, raw);
+                None
+            }
+        },
+    }
+}
+
+/// A float query parameter with a default (`markup_uplift: float = 0.0`).
+pub fn float_or_default(
+    validation: &mut Validation,
+    query: &QueryString,
+    name: &str,
+    default: f64,
+) -> Option<f64> {
+    match query.last(name) {
+        None => Some(default),
+        Some(raw) => match crate::body::lax_float_from_str(raw) {
+            Some(value) => Some(value),
+            None => {
+                validation.float_parsing("query", name, raw);
+                None
+            }
+        },
+    }
+}
+
+/// `float | None` over a query parameter.
+pub fn opt_float(
+    validation: &mut Validation,
+    query: &QueryString,
+    name: &str,
+) -> Option<Option<f64>> {
+    match query.last(name) {
+        None => Some(None),
+        Some(raw) => match crate::body::lax_float_from_str(raw) {
+            Some(value) => Some(Some(value)),
+            None => {
+                validation.float_parsing("query", name, raw);
+                None
+            }
+        },
     }
 }
 

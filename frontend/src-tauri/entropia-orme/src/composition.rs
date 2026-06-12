@@ -120,9 +120,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf) -> Option<Arc<Hydrat
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
     Some(Arc::new(HydrationState::new(
-        db.pool().clone(),
-        game_data,
-        clock,
+        db, game_data, clock, data_dir,
     )))
 }
 

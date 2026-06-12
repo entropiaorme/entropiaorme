@@ -133,6 +133,31 @@ pub fn active_trifecta_preset(config: &AppConfig) -> Option<&TrifectaPresetConfi
         .find(|preset| preset.id == active_id)
 }
 
+/// Load the stored config without writing anything: the read-through
+/// for a process that serves `settings.json` reads while another
+/// process owns its writes. A missing or unparseable file reads as the
+/// defaults (with the home chat-log path) WITHOUT persisting them; a
+/// parseable non-object errors exactly as [`ConfigService::new`] does.
+pub fn load_config_readonly(data_dir: &Path) -> std::io::Result<AppConfig> {
+    let config_path = data_dir.join("settings.json");
+    if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)?;
+        match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(data)) => return Ok(from_stored(&data)),
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "settings file does not contain an object",
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(AppConfig {
+        chatlog_path: AppConfig::default_chatlog_path(),
+        ..AppConfig::default()
+    })
+}
+
 pub struct ConfigService {
     config_path: PathBuf,
     config: AppConfig,
@@ -1084,6 +1109,36 @@ mod tests {
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("\r\n"));
         assert!(!text.replace("\r\n", "").contains('\n'));
+    }
+
+    #[test]
+    fn readonly_load_matches_the_service_without_touching_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let loaded = load_config_readonly(dir.path()).unwrap();
+        assert!(loaded.chatlog_path.ends_with("chat.log"));
+        assert!(
+            !dir.path().join("settings.json").exists(),
+            "a missing file must stay missing"
+        );
+
+        let mut svc = service(dir.path());
+        let mut updates = Map::new();
+        updates.insert("player_name".into(), Value::from("Owner"));
+        updates.insert("overlay_x".into(), Value::from(3));
+        svc.update(&updates).unwrap();
+        let through = load_config_readonly(dir.path()).unwrap();
+        assert_eq!(&through, svc.get(), "read-through sees the owner's saves");
+
+        std::fs::write(dir.path().join("settings.json"), "[1]").unwrap();
+        assert!(load_config_readonly(dir.path()).is_err());
+        std::fs::write(dir.path().join("settings.json"), "{broken").unwrap();
+        let recovered = load_config_readonly(dir.path()).unwrap();
+        assert_eq!(recovered.player_name, "");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json")).unwrap(),
+            "{broken",
+            "an unparseable file is read past, never rewritten"
+        );
     }
 
     #[test]

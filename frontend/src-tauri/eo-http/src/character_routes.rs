@@ -1094,3 +1094,837 @@ fn path_projection(data: Value) -> Value {
         data,
     )
 }
+
+// The prospect helpers are pure functions over the summary shapes;
+// these pins hold their arithmetic, ordering, and early returns
+// hermetically (the cross-language battery holds the same surface
+// byte-for-byte against the running backend).
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use eo_services::clock::MockClock;
+    use eo_services::db::Db;
+    use eo_services::game_data_store::GameDataStore;
+    use http_body_util::BodyExt;
+    use serde_json::json;
+
+    use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    fn session(
+        hours: f64,
+        cycled: f64,
+        loot: f64,
+        kills: i64,
+        mob: &str,
+        tag: &str,
+        weapon: &str,
+        skill_ped: Value,
+        attrs: Value,
+        skill_tt: f64,
+        attr_total: f64,
+    ) -> Value {
+        json!({
+            "id": "s", "startedAt": 0.0, "endedAt": hours * 3600.0,
+            "durationHours": hours, "kills": kills, "lootTt": loot,
+            "weaponCost": 0.0, "enhancerCost": 0.0, "armourCost": 0.0,
+            "healCost": 0.0, "danglingCost": 0.0, "cycledPed": cycled,
+            "regularSkillPed": skill_ped, "attributeLevels": attrs,
+            "regularSkillTt": skill_tt, "attributeLevelsTotal": attr_total,
+            "dominantMob": mob, "dominantTag": tag, "dominantWeapon": weapon,
+        })
+    }
+
+    fn marksman() -> Value {
+        json!({
+            "name": "Marksman", "category": "Combat",
+            "skills": [
+                {"weight": 40, "skill": {"name": "Rifle"}},
+                {"weight": 10, "skill": {"name": "Anatomy"}},
+                {"weight": 3, "skill": {"name": "Agility"}},
+                {"weight": 0, "skill": {"name": "Zeroed"}},
+            ],
+        })
+    }
+
+    #[test]
+    fn the_sample_aggregates_shares_and_rates_in_first_seen_order() {
+        let one = session(
+            1.0,
+            100.0,
+            90.0,
+            50,
+            "Atrox",
+            "",
+            "Opalo",
+            json!({"Rifle": 2.0}),
+            json!({"Agility": 0.05}),
+            2.0,
+            0.05,
+        );
+        let two = session(
+            1.0,
+            100.0,
+            90.0,
+            50,
+            "Snable",
+            "team",
+            "Opalo",
+            json!({"Rifle": 1.0, "Anatomy": 1.0}),
+            json!({}),
+            2.0,
+            0.0,
+        );
+        let sample = prospect_sample(&[&one, &two]);
+        assert_eq!(
+            serde_json::to_string(&Value::Object(sample)).unwrap(),
+            serde_json::to_string(&json!({
+                "sessions": 2, "kills": 100, "hours": 2.0, "cycledPed": 200.0,
+                "lootTt": 180.0, "pes": 4.0, "attributeLevels": 0.05,
+                "cycledPerHour": 100.0, "lootPerHour": 90.0, "returnRate": 0.9,
+                "pesPerPed": 0.02, "lootTtPerPed": 0.9,
+                "skillShares": {"Rifle": 0.75, "Anatomy": 0.25},
+                "attributeRates": {"Agility": 0.00025},
+            }))
+            .unwrap()
+        );
+
+        // The empty sample keeps Python's INTEGER zero sums.
+        let empty = prospect_sample(&[]);
+        assert_eq!(
+            serde_json::to_string(&Value::Object(empty)).unwrap(),
+            serde_json::to_string(&json!({
+                "sessions": 0, "kills": 0, "hours": 0, "cycledPed": 0,
+                "lootTt": 0, "pes": 0, "attributeLevels": 0,
+                "cycledPerHour": 0.0, "lootPerHour": 0.0, "returnRate": 0.0,
+                "pesPerPed": 0.0, "lootTtPerPed": 0.0,
+                "skillShares": {}, "attributeRates": {},
+            }))
+            .unwrap()
+        );
+
+        // Zero-valued shares and rates are filtered (strictly positive).
+        let zeroed = session(
+            1.0,
+            100.0,
+            0.0,
+            0,
+            "",
+            "",
+            "",
+            json!({"Rifle": 0.0}),
+            json!({"Agility": 0.0}),
+            0.0,
+            0.0,
+        );
+        let sample = prospect_sample(&[&zeroed]);
+        assert_eq!(sample["skillShares"], json!({}));
+        assert_eq!(sample["attributeRates"], json!({}));
+    }
+
+    #[test]
+    fn slices_filter_sessions_and_options_group_and_sort() {
+        let a1 = session(
+            1.0,
+            60.0,
+            50.0,
+            10,
+            "Atrox",
+            "",
+            "Opalo",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        let a2 = session(
+            1.0,
+            40.0,
+            30.0,
+            5,
+            "Atrox",
+            "team",
+            "Imk2",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        let b = session(
+            2.0,
+            200.0,
+            150.0,
+            70,
+            "Snable",
+            "team",
+            "Opalo",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        let sessions = vec![a1, a2, b];
+
+        assert_eq!(match_prospect_sessions(&sessions, "global", &None).len(), 3);
+        assert_eq!(
+            match_prospect_sessions(&sessions, "mob", &Some("Atrox".into())).len(),
+            2
+        );
+        assert_eq!(
+            match_prospect_sessions(&sessions, "tag", &Some("team".into())).len(),
+            2
+        );
+        assert_eq!(
+            match_prospect_sessions(&sessions, "weapon", &Some("Opalo".into())).len(),
+            2
+        );
+        assert!(match_prospect_sessions(&sessions, "mob", &None).is_empty());
+        assert!(match_prospect_sessions(&sessions, "mob", &Some(String::new())).is_empty());
+        assert!(match_prospect_sessions(&sessions, "other", &Some("x".into())).is_empty());
+
+        // Options sort by sessions desc, then cycled desc, then label.
+        let options = prospect_option_list(&sessions, "dominantMob");
+        assert_eq!(
+            serde_json::to_string(&options[0]).unwrap(),
+            serde_json::to_string(&json!({
+                "value": "Atrox", "label": "Atrox", "sessions": 2, "kills": 15,
+                "hours": 2.0, "cycledPed": 100.0,
+            }))
+            .unwrap()
+        );
+        assert_eq!(options[1]["value"], "Snable");
+        // A cycled tie within equal session counts falls to the label.
+        let t1 = session(
+            1.0,
+            50.0,
+            0.0,
+            0,
+            "Beta",
+            "",
+            "",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        let t2 = session(
+            1.0,
+            50.0,
+            0.0,
+            0,
+            "Alpha",
+            "",
+            "",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        let tied = prospect_option_list(&[t1, t2], "dominantMob");
+        assert_eq!(tied[0]["label"], "Alpha");
+        assert_eq!(tied[1]["label"], "Beta");
+        // Sessions without the key are skipped entirely.
+        let untagged = session(
+            1.0,
+            10.0,
+            0.0,
+            0,
+            "X",
+            "",
+            "",
+            json!({}),
+            json!({}),
+            0.0,
+            0.0,
+        );
+        assert!(prospect_option_list(&[untagged], "dominantTag").is_empty());
+    }
+
+    #[test]
+    fn warnings_fire_strictly_below_their_thresholds() {
+        let mut sample = Map::new();
+        sample.insert("sessions".into(), json!(3));
+        sample.insert("hours".into(), json!(2.0));
+        sample.insert("cycledPed".into(), json!(50.0));
+        assert!(build_prospect_warnings(&sample, 1000.0).is_empty());
+
+        sample.insert("sessions".into(), json!(2));
+        sample.insert("hours".into(), json!(1.99));
+        sample.insert("cycledPed".into(), json!(49.99));
+        let warnings = build_prospect_warnings(&sample, 1000.0);
+        assert_eq!(
+            warnings,
+            vec![
+                json!("Thin sample: fewer than 3 matching sessions."),
+                json!("Thin sample: less than 2 hours of matching play."),
+                json!("Thin sample: less than 50 PED of matching cycling."),
+                json!("Long extrapolation: forecast extends far beyond the observed sample."),
+            ]
+        );
+        // The extrapolation warning needs MORE than 20x the observed.
+        sample.insert("sessions".into(), json!(3));
+        sample.insert("hours".into(), json!(2.0));
+        sample.insert("cycledPed".into(), json!(50.0));
+        assert!(build_prospect_warnings(&sample, 1000.0).is_empty());
+        assert_eq!(build_prospect_warnings(&sample, 1000.01).len(), 1);
+    }
+
+    #[test]
+    fn projection_applies_shares_then_attribute_rates() {
+        let mut sample = Map::new();
+        sample.insert("pesPerPed".into(), json!(0.02));
+        sample.insert("skillShares".into(), json!({"Rifle": 1.0}));
+        sample.insert("attributeRates".into(), json!({"Agility": 0.001}));
+        let mut levels = Map::new();
+        levels.insert("Rifle".into(), json!(100.0));
+
+        let (projected, gains) = project_prospect_levels(&levels, &sample, 50.0);
+        // The attribute leg is exact: 50 PED * 0.001 levels/PED.
+        assert_eq!(projected["Agility"], json!(0.05));
+        assert_eq!(gains["Agility"], json!(0.05));
+        // The skill leg runs the real curve over a 1.0 PED TT budget.
+        let expected_gain = eo_services::tt_value_curve::levels_for_tt_value(100.0, 1.0);
+        assert_eq!(
+            gains["Rifle"],
+            json!(eo_wire::normalizer::round_half_even(expected_gain, 4))
+        );
+        // Zero cycling projects nothing.
+        let (unchanged, gains) = project_prospect_levels(&levels, &sample, 0.0);
+        assert_eq!(unchanged["Rifle"], json!(100.0));
+        assert_eq!(gains["Rifle"], json!(0.0));
+    }
+
+    #[test]
+    fn relevance_requires_a_weighted_skill_in_the_observed_sample() {
+        let profession = marksman();
+        let mut sample = Map::new();
+        sample.insert("skillShares".into(), json!({"Rifle": 1.0}));
+        sample.insert("attributeRates".into(), json!({}));
+        assert!(relevant_prospect_progress(&sample, &profession));
+        sample.insert("skillShares".into(), json!({"Unrelated": 1.0}));
+        assert!(!relevant_prospect_progress(&sample, &profession));
+        // A zero-weight match does not count.
+        sample.insert("skillShares".into(), json!({"Zeroed": 1.0}));
+        assert!(!relevant_prospect_progress(&sample, &profession));
+        // An attribute-rate match does.
+        sample.insert("attributeRates".into(), json!({"Agility": 0.1}));
+        assert!(relevant_prospect_progress(&sample, &profession));
+    }
+
+    #[test]
+    fn the_forecast_walks_its_ladder_of_early_returns_into_a_full_result() {
+        let profession = marksman();
+        let mut levels = Map::new();
+        levels.insert("Rifle".into(), json!(1000.0));
+
+        // target <= current: a zero forecast with no error key.
+        let current = profession_level(&levels, &profession);
+        let result = build_prospect_result(
+            "Marksman",
+            &profession,
+            &levels,
+            current,
+            prospect_sample(&[]),
+            "global",
+            &None,
+            0.0,
+        );
+        assert!(result.get("error").is_none());
+        assert_eq!(result["projectedCycledPed"], json!(0.0));
+        assert_eq!(result["rows"], json!([]));
+        assert_eq!(
+            result["warnings"],
+            json!([
+                "Thin sample: fewer than 3 matching sessions.",
+                "Thin sample: less than 2 hours of matching play.",
+                "Thin sample: less than 50 PED of matching cycling.",
+            ])
+        );
+
+        // No observed cycling: the insufficient-data error.
+        let result = build_prospect_result(
+            "Marksman",
+            &profession,
+            &levels,
+            current + 1.0,
+            prospect_sample(&[]),
+            "global",
+            &None,
+            0.0,
+        );
+        assert_eq!(
+            result["error"],
+            json!("Insufficient matching data for a forecast.")
+        );
+
+        // Observed cycling that cannot move the profession.
+        let unrelated = session(
+            1.0,
+            100.0,
+            90.0,
+            10,
+            "",
+            "",
+            "",
+            json!({"Unrelated": 2.0}),
+            json!({}),
+            2.0,
+            0.0,
+        );
+        let result = build_prospect_result(
+            "Marksman",
+            &profession,
+            &levels,
+            current + 1.0,
+            prospect_sample(&[&unrelated]),
+            "global",
+            &None,
+            0.0,
+        );
+        assert_eq!(
+            result["error"],
+            json!("The observed sample does not contain gains that move this profession.")
+        );
+
+        // A reachable target: the full forecast shape.
+        let rich = session(
+            2.0,
+            200.0,
+            150.0,
+            80,
+            "Atrox",
+            "",
+            "Opalo",
+            json!({"Rifle": 4.0, "Unrelated": 1.0}),
+            json!({"Agility": 0.06}),
+            5.0,
+            0.06,
+        );
+        let sample = prospect_sample(&[&rich]);
+        let result = build_prospect_result(
+            "Marksman",
+            &profession,
+            &levels,
+            current + 0.05,
+            sample.clone(),
+            "mob",
+            &Some("Atrox".into()),
+            0.1,
+        );
+        assert!(result.get("error").is_none());
+        let keys: Vec<&str> = result
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "profession",
+                "sliceType",
+                "sliceValue",
+                "markupUplift",
+                "currentLevel",
+                "targetLevel",
+                "projectedCycledPed",
+                "projectedHours",
+                "expectedLootTt",
+                "expectedNetTtBurn",
+                "speculativeLootTt",
+                "speculativeNetTtBurn",
+                "sample",
+                "rows",
+                "warnings",
+            ]
+        );
+        let projected = result["projectedCycledPed"].as_f64().unwrap();
+        assert!(projected > 0.0);
+        // The hours/loot expectations scale off the observed ratios.
+        assert_eq!(
+            result["projectedHours"],
+            json!(eo_wire::normalizer::round_half_even(
+                projected * (2.0 / 200.0),
+                2
+            ))
+        );
+        let expected_loot = eo_wire::normalizer::round_half_even(projected * 0.75, 2);
+        assert_eq!(result["expectedLootTt"], json!(expected_loot));
+        assert_eq!(
+            result["expectedNetTtBurn"],
+            json!(eo_wire::normalizer::round_half_even(
+                projected - expected_loot,
+                2
+            ))
+        );
+        // The speculative branch applies the uplift to the loot side.
+        let speculative = eo_wire::normalizer::round_half_even(expected_loot * 1.1, 2);
+        assert_eq!(result["speculativeLootTt"], json!(speculative));
+        assert_eq!(
+            result["speculativeNetTtBurn"],
+            json!(eo_wire::normalizer::round_half_even(
+                projected - speculative,
+                2
+            ))
+        );
+        // Rows: relevant first by contribution, attributes flagged, the
+        // unrelated zero-weight skill last with relevant=false.
+        let rows = result["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        let row = |name: &str| {
+            rows.iter()
+                .find(|r| r["name"] == name)
+                .unwrap_or_else(|| panic!("row {name}"))
+        };
+        assert_eq!(row("Rifle")["relevant"], json!(true));
+        assert_eq!(row("Rifle")["isAttribute"], json!(false));
+        assert_eq!(row("Rifle")["observedShare"], json!(0.8));
+        assert_eq!(row("Agility")["isAttribute"], json!(true));
+        assert_eq!(row("Agility")["observedRate"], json!(0.0003));
+        // The attribute's rounded contribution ties at zero with the
+        // unrelated skill; the tie breaks non-attribute first, then
+        // both sit below the contributing skill.
+        assert_eq!(rows[0]["name"], "Rifle");
+        assert_eq!(rows[1]["name"], "Unrelated");
+        assert_eq!(rows[1]["relevant"], json!(false));
+        assert_eq!(rows[1]["professionContribution"], json!(0.0));
+        assert_eq!(rows[2]["name"], "Agility");
+        let contributions: Vec<f64> = rows
+            .iter()
+            .map(|r| r["professionContribution"].as_f64().unwrap())
+            .collect();
+        assert!(contributions[0] >= contributions[1]);
+
+        // An unreachable target reports the range error.
+        let result = build_prospect_result(
+            "Marksman",
+            &profession,
+            &levels,
+            1.0e9,
+            sample,
+            "global",
+            &None,
+            0.0,
+        );
+        assert_eq!(
+            result["error"],
+            json!("Target is outside the reachable forecast range for this sample.")
+        );
+    }
+
+    #[test]
+    fn the_projections_order_declared_fields_then_extras() {
+        let shaped = prospect_projection(json!({
+            "zeta": 1, "warnings": [], "rows": [], "error": "e", "alpha": 2,
+        }));
+        let keys: Vec<&str> = shaped
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["error", "rows", "warnings", "zeta", "alpha"]);
+        let shaped = path_projection(json!({
+            "excluded": [], "allocations": [], "mode": "target", "attributes": [],
+        }));
+        let keys: Vec<&str> = shaped
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["allocations", "attributes", "mode", "excluded"]);
+        let shaped = optimizer_projection(json!({
+            "error": "e", "skills": [], "attributes": [],
+        }));
+        let keys: Vec<&str> = shaped
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["skills", "attributes", "error"]);
+        // Non-objects pass through untouched.
+        assert_eq!(prospect_projection(json!([1])), json!([1]));
+    }
+
+    #[test]
+    fn float_coercions_and_the_stable_sort_behave_like_the_models() {
+        let mut value = json!({"nextLevel": 6, "other": 7});
+        float_field(&mut value, "nextLevel");
+        float_field(&mut value, "missing");
+        assert_eq!(value["nextLevel"], json!(6.0));
+        assert_eq!(value["other"], json!(7));
+
+        let mut rows = json!([
+            {"codexDivisor": 320}, {"codexDivisor": null}, {"name": "x"},
+        ]);
+        float_divisors(&mut rows);
+        assert_eq!(rows[0]["codexDivisor"], json!(320.0));
+        assert_eq!(rows[1]["codexDivisor"], json!(null));
+        float_divisors(&mut json!({}));
+
+        let mut items = vec![
+            json!({"level": 1.0, "name": "a"}),
+            json!({"level": 3.0, "name": "b"}),
+            json!({"level": 1.0, "name": "c"}),
+        ];
+        sort_desc_by_f64(&mut items, "level");
+        let names: Vec<&str> = items.iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["b", "a", "c"], "descending and stable on ties");
+
+        for (value, expected) in [
+            (json!(null), false),
+            (json!(false), false),
+            (json!(true), true),
+            (json!(0), false),
+            (json!(0.0), false),
+            (json!(2), true),
+            (json!(""), false),
+            (json!("x"), true),
+            (json!([]), false),
+            (json!([1]), true),
+            (json!({}), false),
+            (json!({"a": 1}), true),
+        ] {
+            assert_eq!(json_truthy(&value), expected, "{value}");
+        }
+    }
+
+    fn write_fixture(dir: &std::path::Path, name: &str, value: &Value) {
+        std::fs::write(dir.join(name), serde_json::to_string(value).unwrap()).unwrap();
+    }
+
+    async fn seeded_state(dir: &std::path::Path) -> HydrationState {
+        let snapshot = dir.join("snapshot");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        write_fixture(
+            &snapshot,
+            "professions.json",
+            &json!([
+                {"name": "Marksman", "category": "Combat", "skills": [
+                    {"weight": 40, "skill": {"name": "Rifle"}},
+                    {"weight": 10, "skill": {"name": "Anatomy"}},
+                ]},
+                {"name": "Healer", "skills": [
+                    {"weight": 50, "skill": {"name": "Anatomy"}},
+                ]},
+            ]),
+        );
+        write_fixture(
+            &snapshot,
+            "skills.json",
+            &json!([
+                {"name": "Rifle", "category": {"name": "Combat"}},
+                {"name": "Anatomy", "category": {"name": "Medical"}},
+                {"name": "Health"},
+            ]),
+        );
+        write_fixture(
+            &snapshot,
+            "skill_ranks.json",
+            &json!({"table": {"rows": [
+                {"name": "Adept", "skill": 1000},
+                {"name": "Novice", "skill": 0},
+                {"name": "Broken", "skill": null},
+                {"name": null, "skill": 5},
+            ]}}),
+        );
+        let db = Db::open(&dir.join("entropia_orme.db")).await.unwrap();
+        for (name, level, source, ts) in [
+            ("Rifle", 1200.0, "scan", 1700000000.5),
+            ("Rifle", 1250.0, "chatlog", 1700003600.0),
+            ("Anatomy", 800.0, "scan", 1700000000.5),
+            ("Health", 142.7, "scan", 1700000000.5),
+        ] {
+            sqlx::query(
+                "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(name)
+            .bind(level)
+            .bind(source)
+            .bind(ts)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+        HydrationState::new(
+            db,
+            Arc::new(GameDataStore::new(&snapshot).unwrap()),
+            Arc::new(MockClock::new(
+                Some(
+                    chrono::NaiveDateTime::parse_from_str(
+                        "2023-11-20 12:00:00",
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                    .unwrap(),
+                ),
+                0.0,
+            )),
+            dir.to_path_buf(),
+        )
+    }
+
+    async fn body_of(response: Response<Body>) -> Vec<u8> {
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn the_handlers_shape_the_seeded_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seeded_state(dir.path()).await;
+
+        // Calibration: the believed-latest timestamp in the UTC ISO
+        // form; the frozen clock sits days past it, inside the
+        // 30-day staleness window.
+        let body = body_of(state.character_calibration(None).await).await;
+        assert_eq!(
+            body,
+            b"{\"calibrated\":true,\"lastCalibration\":\"2023-11-14T23:13:20+00:00\",\"stale\":false}"
+        );
+
+        // Stats: Python int() truncation of Health, professions ranked.
+        let body = body_of(state.character_stats(None).await).await;
+        let stats: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(stats["hp"], json!(142));
+        let top = stats["topProfessions"].as_array().unwrap();
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0]["name"], "Marksman");
+        assert_eq!(top[0]["category"], "Combat");
+        assert_eq!(top[1]["name"], "Healer");
+        assert_eq!(top[1]["category"], "General");
+
+        // Skills: believed-current levels, anchors, gains, ranks, TT.
+        let body = body_of(state.character_skills(None).await).await;
+        let skills: Value = serde_json::from_slice(&body).unwrap();
+        let rifle = &skills[0];
+        assert_eq!(rifle["name"], "Rifle");
+        assert_eq!(rifle["category"], "Combat");
+        assert_eq!(rifle["level"], json!(1250.0));
+        assert_eq!(rifle["anchorLevel"], json!(1200.0));
+        assert_eq!(rifle["gainSinceAnchor"], json!(50.0));
+        assert_eq!(rifle["rankName"], "Adept");
+        assert_eq!(
+            rifle["ttValue"],
+            json!(eo_wire::normalizer::round_half_even(
+                eo_services::tt_value_curve::tt_value_at(1250.0),
+                2
+            ))
+        );
+        assert_eq!(rifle["isAttribute"], json!(false));
+        let health = &skills[2];
+        assert_eq!(health["name"], "Health");
+        assert_eq!(health["category"], "General");
+        assert_eq!(health["isAttribute"], json!(true));
+
+        // Professions: anchor levels computed over the scan snapshot.
+        let body = body_of(state.character_professions(None).await).await;
+        let professions: Value = serde_json::from_slice(&body).unwrap();
+        let marksman = &professions[0];
+        assert_eq!(marksman["name"], "Marksman");
+        let level = marksman["level"].as_f64().unwrap();
+        let anchor = marksman["anchorLevel"].as_f64().unwrap();
+        assert!(level > anchor, "the chatlog gain moves believed-current");
+        assert_eq!(
+            marksman["gainSinceAnchor"],
+            json!(eo_wire::normalizer::round_half_even(level - anchor, 4))
+        );
+
+        // The codex list serves only codex-category skills.
+        let body = body_of(state.character_codex(None).await).await;
+        let codex: Value = serde_json::from_slice(&body).unwrap();
+        let names: Vec<&str> = codex
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["skillName"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["Rifle", "Anatomy"],
+            "Health carries no codex category"
+        );
+        assert_eq!(codex[0]["currentLevel"], json!(1250.0));
+        assert_eq!(codex[0]["nextRewardValue"], json!(6.25));
+        assert_eq!(codex[0]["progress"], json!(0.25));
+
+        // The optimizer composes the calc service with the projections.
+        let body = body_of(state.character_profession_optimizer("Marksman", None).await).await;
+        let optimizer: Value = serde_json::from_slice(&body).unwrap();
+        let keys: Vec<&str> = optimizer
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "skills",
+                "attributes",
+                "profession",
+                "currentLevel",
+                "nextLevel",
+                "gap"
+            ]
+        );
+        assert_eq!(optimizer["profession"], "Marksman");
+        assert!(optimizer["nextLevel"].is_f64(), "the model renders floats");
+
+        // Both path-optimizer modes carry their mode inputs.
+        let body = body_of(
+            state
+                .character_path_optimizer("Marksman", Some(7.0), None, None)
+                .await,
+        )
+        .await;
+        let path: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(path["mode"], "target");
+        assert_eq!(path["inputTargetLevel"], json!(7.0));
+        assert_eq!(path["inputPedBudget"], json!(null));
+        let body = body_of(
+            state
+                .character_path_optimizer("Marksman", None, Some(25.0), None)
+                .await,
+        )
+        .await;
+        let path: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(path["mode"], "budget");
+        assert_eq!(path["inputPedBudget"], json!(25.0));
+    }
+
+    #[test]
+    fn ranks_parse_and_sort_from_the_catalogue_table() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(
+            dir.path(),
+            "skill_ranks.json",
+            &json!({"table": {"rows": [
+                {"name": "B", "skill": 200},
+                {"name": "A", "skill": 100.5},
+                {"name": null, "skill": 5},
+                {"name": "NoThreshold"},
+                {"name": "Bad", "skill": "x"},
+            ]}}),
+        );
+        let store = GameDataStore::new(dir.path()).unwrap();
+        let ranks = get_ranks(&store);
+        assert_eq!(
+            ranks,
+            vec![
+                json!({"name": "A", "skill": 100.5}),
+                json!({"name": "B", "skill": 200.0}),
+            ]
+        );
+        let empty = GameDataStore::new(&dir.path().join("missing")).unwrap();
+        assert!(get_ranks(&empty).is_empty());
+    }
+}

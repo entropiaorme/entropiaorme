@@ -1047,3 +1047,217 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     .await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
 }
+
+/// Path and body validation aggregate into one envelope (path issue
+/// first); decode failures stand alone; deferred 500s (beyond-i64
+/// integers, consumed surrogate taints) fire only on otherwise-clean
+/// requests, each at its consumption point.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
+    let (port, _state, _dir) = serve_substrate().await;
+
+    // Path + body field issues, one envelope, path first.
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/equipment/library/abc",
+        "{\"type\": \"banana\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["int_parsing", "literal_error"]);
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/quests/abc",
+        "{\"cooldown_hours\": \"x\", \"chain_position\": 1.5}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        detail_types(&body),
+        ["int_parsing", "float_parsing", "int_from_float"]
+    );
+    // A non-object cancel body aggregates with the path issue.
+    let (status, _, body) = send_json(port, "POST", "/api/quests/abc/cancel", "5").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        detail_types(&body),
+        ["int_parsing", "model_attributes_type"]
+    );
+    // A decode failure stands alone, dropping the path issue.
+    let (status, _, body) = send_json(port, "PUT", "/api/quests/abc", "{bad").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["json_invalid"]);
+    // A missing body aggregates as the missing-["body"] issue.
+    let (status, _, body) = send(
+        port,
+        "PUT",
+        "/api/quests/playlists/abc",
+        &[("origin", "tauri://localhost")],
+        None,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["int_parsing", "missing"]);
+
+    // Beyond-i64 path ids validate (Python's int is unbounded) and
+    // crash at the handler's first binding AFTER the envelope.
+    let (status, _, body) = send_json(
+        port,
+        "PUT",
+        "/api/quests/99999999999999999999999999",
+        "{\"cooldown_hours\": \"x\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["float_parsing"]);
+    let (status, _, _) = send_json(
+        port,
+        "PUT",
+        "/api/quests/99999999999999999999999999",
+        "{\"name\": \"X\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Beyond-i64 BODY integers answer the deferred 500 across the
+    // dump builders (quest update field, playlist quest_ids, playlist
+    // item ids, equipment ints), only after validation passes.
+    let (status, _, _) = send_json(port, "POST", "/api/quests", "{\"name\": \"Q\"}").await;
+    assert_eq!(status, http::StatusCode::OK);
+    for (method, path, body) in [
+        (
+            "PUT",
+            "/api/quests/1",
+            "{\"chain_position\": 99999999999999999999999999}",
+        ),
+        (
+            "POST",
+            "/api/quests/playlists",
+            "{\"name\": \"P\", \"quest_ids\": [99999999999999999999999999]}",
+        ),
+        (
+            "POST",
+            "/api/quests/playlists",
+            "{\"name\": \"P\", \"items\": [{\"quest_id\": 99999999999999999999999999}]}",
+        ),
+        (
+            "POST",
+            "/api/equipment/library",
+            "{\"type\": \"consumable\", \"name\": \"X\", \"weapon_markup\": 99999999999999999999999999}",
+        ),
+        (
+            "POST",
+            "/api/equipment/library",
+            "{\"type\": \"consumable\", \"name\": \"X\", \"damage_enhancers\": 99999999999999999999999999}",
+        ),
+        (
+            "POST",
+            "/api/equipment/cost/calculate",
+            "{\"catalog_id\": \"x\", \"amp_markup\": 99999999999999999999999999}",
+        ),
+    ] {
+        let (status, _, reply) = send_json(port, method, path, body).await;
+        assert_eq!(
+            status,
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            "{method} {path}: {}",
+            String::from_utf8_lossy(&reply)
+        );
+    }
+    // A playlist update whose only set field overflows must not slip
+    // through as a no-op update.
+    let (status, _, _) =
+        send_json(port, "POST", "/api/quests/playlists", "{\"name\": \"Pl\"}").await;
+    assert_eq!(status, http::StatusCode::OK);
+    for body in [
+        "{\"estimated_minutes\": 99999999999999999999999999}",
+        "{\"quest_ids\": [99999999999999999999999999]}",
+        "{\"items\": [{\"quest_id\": 99999999999999999999999999}]}",
+    ] {
+        let (status, _, _) = send_json(port, "PUT", "/api/quests/playlists/1", body).await;
+        assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    }
+
+    // A CONSUMED surrogate-tainted field answers the 500 at its
+    // consumption point; an UNUSED one flows (the lookup miss answers
+    // its renderable 404 on the empty store).
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\": \"weapon\", \"catalog_id\": \"ta\\ud800int\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\": \"weapon\", \"catalog_id\": \"clean\", \"name\": \"ta\\ud800int\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND, "unused taint flows");
+    assert_eq!(
+        body,
+        b"{\"detail\":\"Entity 'clean' not found in catalogue endpoint 'weapons'.\"}"
+    );
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/equipment/cost/calculate",
+        "{\"catalog_id\": \"ta\\ud800int\", \"type\": \"healing\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/equipment/library",
+        "{\"type\": \"consumable\", \"name\": \"ta\\ud800int\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+
+    // The calibrate codec message splits singular/plural on the
+    // surrogate RUN length, with the exact position arithmetic.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/codex/calibrate",
+        "{\"species_name\": \"ab\\ud800cd\", \"rank\": 3}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"'utf-8' codec can't encode character '\\\\ud800' in position 2: surrogates not allowed\"}"
+    );
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/codex/calibrate",
+        "{\"species_name\": \"ab\\ud800\\ud801cd\", \"rank\": 3}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        b"{\"detail\":\"'utf-8' codec can't encode characters in position 2-3: surrogates not allowed\"}"
+    );
+
+    // The prospect markup gate sits strictly below zero.
+    let (status, _, _) = get(
+        port,
+        "/api/character/prospect?profession=X&target_level=5&markup_uplift=-0.1",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _, _) = get(
+        port,
+        "/api/character/prospect?profession=X&target_level=5&markup_uplift=0",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+}

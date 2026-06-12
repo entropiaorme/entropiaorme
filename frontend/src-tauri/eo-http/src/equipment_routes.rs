@@ -840,3 +840,543 @@ fn shape_library_row(row: &sqlx::sqlite::SqliteRow) -> Option<Value> {
 fn plain_ok(payload: &Value) -> Response<Body> {
     plain_json_response(payload)
 }
+
+// The shaping helpers are pure functions over stored rows and the
+// catalogue; these pins hold their arithmetic and fallbacks
+// hermetically (the cross-language battery holds the same surface
+// against the running backend).
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use eo_services::clock::MockClock;
+    use eo_services::db::Db;
+    use eo_services::game_data_store::GameDataStore;
+    use http_body_util::BodyExt;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn the_type_map_and_truthiness_helpers_match_the_backend() {
+        assert_eq!(type_endpoint("weapon"), Some("weapons"));
+        assert_eq!(type_endpoint("amp"), Some("weapon_amplifiers"));
+        assert_eq!(type_endpoint("healer"), Some("medical_tools"));
+        assert_eq!(type_endpoint("scope"), Some("weapon_vision_attachments"));
+        assert_eq!(type_endpoint("absorber"), Some("absorbers"));
+        assert_eq!(type_endpoint("consumable"), Some("stimulants"));
+        assert_eq!(type_endpoint("banana"), None);
+
+        for (value, expected) in [
+            (json!(null), false),
+            (json!(false), false),
+            (json!(0), false),
+            (json!(0.0), false),
+            (json!(""), false),
+            (json!([]), false),
+            (json!({}), false),
+            (json!(true), true),
+            (json!(1), true),
+            (json!("x"), true),
+            (json!([0]), true),
+            (json!({"k": 0}), true),
+        ] {
+            assert_eq!(json_truthy(&value), expected, "{value}");
+        }
+
+        let props = json!({"amp_entity": {"name": "A"}, "empty": {}, "null": null});
+        assert!(entity_truthy(&props, "amp_entity"));
+        assert!(!entity_truthy(&props, "empty"));
+        assert!(!entity_truthy(&props, "null"));
+        assert!(!entity_truthy(&props, "missing"));
+
+        assert_eq!(
+            py_or(&props, "amp_entity", &json!("fb")),
+            json!({"name": "A"})
+        );
+        assert_eq!(py_or(&props, "empty", &json!("fb")), json!("fb"));
+        assert_eq!(py_or(&props, "missing", &json!("fb")), json!("fb"));
+
+        assert_eq!(py_strip("  x  "), "x");
+        assert_eq!(py_strip("\u{1c}\u{1d}x\u{1e}\u{1f}"), "x");
+        assert_eq!(py_strip("\u{a0}x\u{85}"), "x");
+
+        let entity = json!({"economy": {"decay": 0.5, "ammo_burn": 200}});
+        assert_eq!(eco_or_zero(&entity, "decay"), 0.5);
+        assert_eq!(eco_or_zero(&entity, "ammo_burn"), 200.0);
+        assert_eq!(eco_or_zero(&entity, "missing"), 0.0);
+        assert_eq!(eco_or_zero(&json!({}), "decay"), 0.0);
+
+        assert_eq!(stored_enhancers(&json!({"damage_enhancers": 3})), 3);
+        assert_eq!(stored_enhancers(&json!({"damage_enhancers": 2.9})), 2);
+        assert_eq!(stored_enhancers(&json!({"damage_enhancers": null})), 0);
+        assert_eq!(stored_enhancers(&json!({})), 0);
+
+        assert_eq!(compute_enrichment(&json!({})), 1);
+        assert_eq!(compute_enrichment(&json!({"amp_entity": {"a": 1}})), 2);
+        assert_eq!(
+            compute_enrichment(&json!({"amp_entity": {"a": 1}, "scope_entity": {"s": 1}})),
+            3
+        );
+        assert_eq!(
+            compute_enrichment(&json!({"amp_entity": {"a": 1}, "absorber_entity": {"b": 1}})),
+            3
+        );
+        assert_eq!(compute_enrichment(&json!({"scope_entity": {"s": 1}})), 1);
+    }
+
+    #[test]
+    fn search_rows_and_components_shape_with_pec_conversion() {
+        let row = json!({
+            "endpoint": "weapons", "item_id": "abc", "item_name": "Opal",
+            "data": {"name": "Opal", "economy": {"decay": 0.02, "ammo_burn": 200}},
+        });
+        assert_eq!(
+            entity_to_search_result(&row),
+            json!({
+                "catalogId": "abc", "name": "Opal", "decay": 0.02,
+                "ammoBurn": 2.0, "isLimited": false,
+            })
+        );
+        let limited = json!({
+            "endpoint": "weapons", "item_id": "l", "item_name": "L (L)",
+            "data": {"name": "L (L)", "economy": {}},
+        });
+        let shaped = entity_to_search_result(&limited);
+        assert_eq!(shaped["decay"], json!(0.0));
+        assert_eq!(shaped["ammoBurn"], json!(0.0));
+
+        let entity = json!({"name": "Amp", "economy": {"decay": 1.5, "ammo_burn": 100}});
+        assert_eq!(
+            weapon_search_result_from_entity(&json!("id1"), &entity, &json!(105), 2),
+            json!({
+                "catalogId": "id1", "name": "Amp", "decay": 1.5, "ammoBurn": 1.0,
+                "markupPercent": 105, "isLimited": false, "damageEnhancers": 2,
+            })
+        );
+    }
+
+    fn weapon_entity() -> Value {
+        json!({
+            "name": "Opal",
+            "economy": {"decay": 0.1, "ammo_burn": 100},
+            "damage": {"impact": 10.0},
+        })
+    }
+
+    fn amp_entity() -> Value {
+        json!({
+            "name": "Amp",
+            "economy": {"decay": 0.5, "ammo_burn": 50},
+            "damage": {"impact": 4.0},
+        })
+    }
+
+    fn tool_entity() -> Value {
+        json!({
+            "name": "Vivo",
+            "economy": {"decay": 0.08, "ammo_burn": 20},
+            "min_heal": 10.0, "max_heal": 40.0, "uses_per_minute": 30,
+        })
+    }
+
+    #[test]
+    fn library_rows_shape_each_type_and_refuse_missing_entities() {
+        // Weapon with amp and enhancers: the damage profile and the
+        // cost engine agree with the service's own figures.
+        let props = json!({
+            "weapon_entity": weapon_entity(),
+            "weapon_catalog_id": "w1",
+            "amp_entity": amp_entity(),
+            "amp_catalog_id": "a1",
+            "scope_entity": null,
+            "scope_catalog_id": null,
+            "absorber_entity": null,
+            "absorber_catalog_id": null,
+            "weapon_markup": 120, "amp_markup": 100, "scope_markup": 100,
+            "absorber_markup": 100, "damage_enhancers": 2,
+        });
+        let shaped = library_row_to_equipment(7, "Opal", "weapon", &props).unwrap();
+        let cost = cost_per_shot_from_props(&props, None);
+        assert_eq!(shaped["id"], "7");
+        assert_eq!(shaped["type"], "weapon");
+        assert_eq!(shaped["amplifierName"], "Amp");
+        assert_eq!(shaped["costPerUse"], cost["totalCostPerUse"]);
+        // total damage: 10 * 1.2 (enhancers) + min(10/2, 4) = 16.
+        assert_eq!(shaped["damageMin"], json!(8.0));
+        assert_eq!(shaped["damageMax"], json!(16.0));
+        assert_eq!(shaped["reloadSeconds"], json!(null));
+        assert_eq!(shaped["enrichmentLevel"], json!(2));
+
+        // Healing: markup-scaled cost and the reload rounding.
+        let props = json!({
+            "tool_entity": tool_entity(), "tool_catalog_id": "t1", "markup": 110,
+        });
+        let shaped = library_row_to_equipment(8, "Vivo", "healing", &props).unwrap();
+        assert_eq!(shaped["type"], "healing");
+        assert_eq!(
+            shaped["costPerUse"],
+            json!(heal_cost_per_use(&tool_entity(), 1.1))
+        );
+        assert_eq!(shaped["reloadSeconds"], json!(2.0));
+        assert_eq!(shaped["isLimited"], json!(false));
+
+        // Consumable: the fixed zero-cost shape.
+        let shaped = library_row_to_equipment(9, "Bar", "consumable", &json!({})).unwrap();
+        assert_eq!(
+            shaped,
+            json!({
+                "id": "9", "name": "Bar", "type": "consumable",
+                "amplifierName": null, "costPerUse": 0.0, "damageMin": null,
+                "damageMax": null, "reloadSeconds": null, "isLimited": false,
+                "enrichmentLevel": 1,
+            })
+        );
+
+        // A row missing its stored entity refuses to shape (the
+        // caller answers the unhandled-error 500).
+        assert!(library_row_to_equipment(1, "X", "weapon", &json!({})).is_none());
+        assert!(
+            library_row_to_equipment(1, "X", "weapon", &json!({"weapon_entity": null})).is_none()
+        );
+        assert!(library_row_to_equipment(1, "X", "healing", &json!({})).is_none());
+    }
+
+    #[test]
+    fn details_shape_components_breakdowns_and_fallbacks() {
+        let props = json!({
+            "weapon_entity": weapon_entity(),
+            "weapon_catalog_id": "w1",
+            "amp_entity": amp_entity(),
+            "amp_catalog_id": "a1",
+            "scope_entity": null,
+            "scope_catalog_id": null,
+            "absorber_entity": {"name": "Ab", "economy": {"decay": 0.2, "ammo_burn": 0, "absorption": 0.255}},
+            "absorber_catalog_id": "ab1",
+            "weapon_markup": 120, "amp_markup": 105, "scope_markup": 100,
+            "absorber_markup": 100, "damage_enhancers": 1,
+        });
+        let detail = library_row_to_detail(3, "Opal", "weapon", &Value::Null, &props).unwrap();
+        assert_eq!(detail["id"], "3");
+        assert_eq!(detail["weapon"]["catalogId"], "w1");
+        assert_eq!(detail["weapon"]["markupPercent"], json!(120));
+        assert_eq!(detail["weapon"]["damageEnhancers"], json!(1));
+        assert_eq!(detail["amplifier"]["name"], "Amp");
+        assert_eq!(detail["amplifier"]["markupPercent"], json!(105));
+        assert_eq!(detail["scope"], json!(null));
+        assert_eq!(detail["absorber"]["absorptionPercent"], json!(25.5));
+        let cost = cost_per_shot_from_props(&props, None);
+        assert_eq!(detail["costBreakdown"], cost["costBreakdown"]);
+        assert_eq!(detail["totalCostPerUse"], cost["totalCostPerUse"]);
+
+        // The weapon catalogue id falls to the row column when the
+        // stored one is falsy.
+        let mut fallback_props = props.clone();
+        fallback_props["weapon_catalog_id"] = json!("");
+        let detail =
+            library_row_to_detail(3, "Opal", "weapon", &json!("row-col"), &fallback_props).unwrap();
+        assert_eq!(detail["weapon"]["catalogId"], "row-col");
+
+        // Healing detail: the decay line plus the ammo line only when
+        // the tool burns ammo.
+        let props = json!({"tool_entity": tool_entity(), "tool_catalog_id": "t1", "markup": 110});
+        let detail = library_row_to_detail(4, "Vivo", "healing", &Value::Null, &props).unwrap();
+        assert_eq!(detail["weapon"]["catalogId"], "t1");
+        assert_eq!(detail["weapon"]["markupPercent"], json!(110));
+        assert_eq!(
+            detail["costBreakdown"],
+            json!([
+                {"component": "Decay", "costPec": 0.08, "markupMultiplier": 1.1,
+                 "effectiveCostPec": 0.088},
+                {"component": "Ammo", "costPec": 0.2, "markupMultiplier": 1.0,
+                 "effectiveCostPec": 0.2},
+            ])
+        );
+        let mut no_ammo = tool_entity();
+        no_ammo["economy"]["ammo_burn"] = json!(0);
+        let props = json!({"tool_entity": no_ammo, "tool_catalog_id": "t1", "markup": 100});
+        let detail = library_row_to_detail(4, "Vivo", "healing", &Value::Null, &props).unwrap();
+        assert_eq!(detail["costBreakdown"].as_array().unwrap().len(), 1);
+
+        // Consumable detail: the fixed shape over the row column.
+        let detail =
+            library_row_to_detail(5, "Bar", "consumable", &json!("c1"), &json!({})).unwrap();
+        assert_eq!(detail["weapon"]["catalogId"], "c1");
+        assert_eq!(detail["costBreakdown"], json!([]));
+        assert_eq!(detail["totalCostPerUse"], json!(0.0));
+
+        // Missing stored entities refuse to shape.
+        assert!(library_row_to_detail(1, "X", "weapon", &Value::Null, &json!({})).is_none());
+        assert!(library_row_to_detail(1, "X", "healing", &Value::Null, &json!({})).is_none());
+    }
+
+    fn request(item_type: &str) -> EquipmentRequest {
+        EquipmentRequest {
+            item_type: item_type.to_string(),
+            catalog_id: None,
+            name: None,
+            amp_catalog_id: None,
+            scope_catalog_id: None,
+            absorber_catalog_id: None,
+            weapon_markup: 100,
+            amp_markup: 100,
+            scope_markup: 100,
+            absorber_markup: 100,
+            damage_enhancers: 0,
+            taint: EquipmentTaint::default(),
+        }
+    }
+
+    async fn seeded_state(dir: &std::path::Path) -> HydrationState {
+        let snapshot = dir.join("snapshot");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let write = |name: &str, value: Value| {
+            std::fs::write(snapshot.join(name), serde_json::to_string(&value).unwrap()).unwrap();
+        };
+        write(
+            "weapons.json",
+            json!([{"id": "w1", "name": "Opal Mk1", "economy": {"decay": 0.1, "ammo_burn": 100}, "damage": {"impact": 10.0}}]),
+        );
+        write(
+            "weapon_amplifiers.json",
+            json!([{"id": "a1", "name": "Amp", "economy": {"decay": 0.5, "ammo_burn": 50}, "damage": {"impact": 4.0}}]),
+        );
+        write(
+            "medical_tools.json",
+            json!([{"id": "t1", "name": "Vivo", "economy": {"decay": 0.08, "ammo_burn": 20}, "min_heal": 10.0, "max_heal": 40.0, "uses_per_minute": 30}]),
+        );
+        write("stimulants.json", json!([{"id": "s1", "name": "Stim"}]));
+        let db = Db::open(&dir.join("entropia_orme.db")).await.unwrap();
+        HydrationState::new(
+            db,
+            Arc::new(GameDataStore::new(&snapshot).unwrap()),
+            Arc::new(MockClock::new(None, 0.0)),
+            dir.to_path_buf(),
+        )
+    }
+
+    async fn parts(response: Response<Body>) -> (StatusCode, Vec<u8>) {
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        (status, bytes)
+    }
+
+    #[tokio::test]
+    async fn the_cost_route_walks_branches_gates_and_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seeded_state(dir.path()).await;
+
+        // Weapon only, with markup and enhancers.
+        let mut req = request("weapon");
+        req.catalog_id = Some("w1".into());
+        req.weapon_markup = 120;
+        req.damage_enhancers = 2;
+        let (status, body) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        // decay 0.1 * 1.2 (enhancers) = 0.12 PEC at a 1.2 multiplier.
+        assert_eq!(shaped["costBreakdown"][0]["component"], "Weapon decay");
+        assert_eq!(shaped["costBreakdown"][0]["markupMultiplier"], json!(1.2));
+
+        // Weapon + amp; empty-string components are skipped as falsy.
+        let mut req = request("weapon");
+        req.catalog_id = Some("w1".into());
+        req.amp_catalog_id = Some("a1".into());
+        req.scope_catalog_id = Some(String::new());
+        req.absorber_catalog_id = Some(String::new());
+        let (status, body) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        let components: Vec<&str> = shaped["costBreakdown"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            components,
+            ["Weapon decay", "Amp decay", "Ammo (weapon)", "Ammo (amp)"]
+        );
+
+        // Healing: the bare cost result.
+        let mut req = request("healing");
+        req.catalog_id = Some("t1".into());
+        req.weapon_markup = 110;
+        let (status, body) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            format!(
+                "{{\"costBreakdown\":[],\"totalCostPerUse\":{}}}",
+                heal_cost_per_use(&tool_entity(), 1.1)
+            )
+            .into_bytes()
+        );
+
+        // Unknown ids answer the catalogue 404 in fetch order.
+        let mut req = request("weapon");
+        req.catalog_id = Some("ghost".into());
+        req.amp_catalog_id = Some("also-ghost".into());
+        let (status, body) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            body,
+            b"{\"detail\":\"Entity 'ghost' not found in catalogue endpoint 'weapons'.\"}"
+        );
+
+        // Tainted ids answer the 500 at their consumption point.
+        let mut req = request("weapon");
+        req.catalog_id = Some("w1".into());
+        req.amp_catalog_id = Some("bad".into());
+        req.taint.amp_catalog_id = true;
+        let (status, _) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let mut req = request("healing");
+        req.catalog_id = Some("bad".into());
+        req.taint.catalog_id = true;
+        let (status, _) = parts(state.equipment_cost(&req).await).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn search_and_the_write_path_compose_over_the_catalogue() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seeded_state(dir.path()).await;
+
+        // Search: substring, case-insensitive, the short-query gate,
+        // the unknown-type 400.
+        let (status, body) = parts(state.equipment_search("OPAL", "weapon", None).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["catalogId"], "w1");
+        let (status, body) = parts(state.equipment_search("o", "weapon", None).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b"[]");
+        let (status, body) = parts(state.equipment_search("op", "banana", None).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, b"{\"detail\":\"Unknown type 'banana'\"}");
+
+        // The add path stores the bare-json.dumps props and shapes the
+        // response off the re-read row.
+        let mut req = request("weapon");
+        req.catalog_id = Some("w1".into());
+        req.amp_catalog_id = Some("a1".into());
+        req.weapon_markup = 120;
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(shaped["id"], "1");
+        assert_eq!(shaped["name"], "Opal Mk1");
+        assert_eq!(shaped["amplifierName"], "Amp");
+        assert_eq!(shaped["enrichmentLevel"], json!(2));
+        let stored: String =
+            sqlx::query_scalar("SELECT properties_json FROM equipment_library WHERE id = 1")
+                .fetch_one(state.pool())
+                .await
+                .unwrap();
+        assert!(stored.starts_with("{\"weapon_entity\": {\"id\": \"w1\""));
+        assert!(stored.contains("\"weapon_markup\": 120"));
+
+        // Update type gate, missing row, and a healing reconfigure.
+        let mut req = request("healing");
+        req.catalog_id = Some("t1".into());
+        let (status, body) = parts(state.equipment_update(1, &req).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, b"{\"detail\":\"Cannot change equipment type\"}");
+        let (status, body) = parts(state.equipment_update(9, &req).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, b"{\"detail\":\"Equipment item 9 not found\"}");
+        let mut req = request("weapon");
+        req.catalog_id = Some("w1".into());
+        req.damage_enhancers = -4;
+        let (status, body) = parts(state.equipment_update(1, &req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(shaped["amplifierName"], json!(null));
+        let stored: String =
+            sqlx::query_scalar("SELECT properties_json FROM equipment_library WHERE id = 1")
+                .fetch_one(state.pool())
+                .await
+                .unwrap();
+        assert!(
+            stored.contains("\"damage_enhancers\": 0"),
+            "negative enhancers clamp at zero: {stored}"
+        );
+
+        // build_props branch gates: the missing-id 400s, the unknown
+        // catalogue 404, the consumable identity rule, the name strip
+        // and its binding-taint 500.
+        let req = request("weapon");
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, b"{\"detail\":\"catalog_id required for weapon\"}");
+        let req = request("healing");
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body, b"{\"detail\":\"catalog_id required for healing\"}");
+        let mut req = request("consumable");
+        req.catalog_id = Some("ghost".into());
+        let (status, _) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let mut req = request("consumable");
+        req.catalog_id = Some("s1".into());
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(shaped["name"], "Stim");
+        let mut req = request("consumable");
+        req.name = Some("  Bar  ".into());
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let shaped: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(shaped["name"], "Bar", "the custom name strips");
+        let req = request("consumable");
+        let (status, body) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body,
+            b"{\"detail\":\"Consumable requires either catalog_id (catalogue pick) or name (custom)\"}"
+        );
+        let mut req = request("consumable");
+        req.name = Some("taint".into());
+        req.taint.name = true;
+        let (status, _) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        // The weapon's own tainted id gates before its fetch.
+        let mut req = request("weapon");
+        req.catalog_id = Some("bad".into());
+        req.taint.catalog_id = true;
+        let (status, _) = parts(state.equipment_add(&req).await).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        // The delete honours the trifecta guard read through the
+        // stored settings file.
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::to_string(&json!({
+                "trifecta_presets": [
+                    {"id": "main", "name": "Main", "small_weapon_id": 1,
+                     "big_weapon_id": null, "heal_id": null},
+                ],
+                "active_trifecta_preset_id": "main",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (status, body) = parts(state.equipment_delete(1).await).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body,
+            b"{\"detail\":\"Cannot remove equipment selected in a trifecta preset\"}"
+        );
+        let (status, body) = parts(state.equipment_delete(2).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, b"{\"status\":\"deleted\"}");
+    }
+}

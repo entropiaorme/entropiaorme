@@ -592,6 +592,23 @@ mod tests {
     }
 
     #[test]
+    fn float_extractors_read_present_values() {
+        let query = QueryString::parse(Some("a=2.5&b=abc"));
+        let mut v = Validation::new();
+        assert_eq!(float_or_default(&mut v, &query, "a", 0.0), Some(2.5));
+        assert_eq!(
+            float_or_default(&mut v, &query, "missing", 7.25),
+            Some(7.25)
+        );
+        assert_eq!(require_float(&mut v, &query, "a"), Some(2.5));
+        assert_eq!(opt_float(&mut v, &query, "a"), Some(Some(2.5)));
+        assert_eq!(opt_float(&mut v, &query, "missing"), Some(None));
+        assert!(v.is_ok());
+        assert_eq!(float_or_default(&mut v, &query, "b", 0.0), None);
+        assert!(!v.is_ok(), "an unparsable float records its issue");
+    }
+
+    #[test]
     fn binding_taint_notes_without_failing_validation() {
         let mut v = Validation::new();
         assert!(!v.binding_taint());

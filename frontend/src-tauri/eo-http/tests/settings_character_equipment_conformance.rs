@@ -514,6 +514,19 @@ async fn the_settings_character_and_equipment_surface_conforms() {
         arms.compare_read("GET", path, None).await;
     }
 
+    // Non-finite floats pass the sign gates (NaN comparisons are
+    // false on both arms) and serialise as JSON null on both arms
+    // (pydantic's inf_nan null form; serde's non-finite Number form).
+    for path in [
+        "/api/character/prospect?profession=BLP%20Sniper%20(Hit)&target_level=nan",
+        "/api/character/prospect?profession=BLP%20Sniper%20(Hit)&target_level=inf",
+        "/api/character/prospect?profession=BLP%20Sniper%20(Hit)&target_level=5&markup_uplift=nan",
+        "/api/character/prospect?profession=BLP%20Sniper%20(Hit)&target_level=5&markup_uplift=inf",
+        "/api/character/prospect?profession=X&target_level=-inf",
+    ] {
+        arms.compare_read("GET", path, None).await;
+    }
+
     // The character validation grid: envelope forms first (signature
     // order), then the handler's own 422 details.
     for path in [

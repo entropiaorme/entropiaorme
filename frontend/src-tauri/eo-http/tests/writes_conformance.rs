@@ -753,7 +753,60 @@ async fn the_write_surface_conforms_through_the_public_port() {
     .await;
     assert_eq!(ns, cs, "bom-less unicode utf-16 status");
     assert_eq!(nb, cb, "bom-less unicode utf-16 body");
+
+    // Surrogate consumption ORDER: another field's 422 wins over the
+    // taint; calibrate resolves missing/parse 422s, then its rank
+    // bound, then the codec message (singular and run forms).
+    arms.compare(
+        "POST",
+        "/api/quests",
+        Some("{\"name\": \"a\\ud800b\", \"reward_ped\": \"zz\"}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/calibrate",
+        Some("{\"species_name\": \"\\ud800\", \"rank\": \"x\"}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/calibrate",
+        Some("{\"species_name\": \"\\ud800\"}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/calibrate",
+        Some("{\"species_name\": \"\\ud800\", \"rank\": 26}"),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/calibrate",
+        Some("{\"species_name\": \"\\ud800\\ud801x\", \"rank\": 7}"),
+        false,
+    )
+    .await;
     arms.compare_db_state("adversarial grid").await;
+
+    // The multi-statement surrogate residual: both arms answer the
+    // binding 500, but the reference commits the parent quest row
+    // before the mob insert crashes while the native arm writes
+    // nothing (the register's recorded state divergence), so this
+    // probe is response-only and runs after the last state
+    // comparison.
+    arms.compare(
+        "POST",
+        "/api/quests",
+        Some("{\"name\": \"MobSur\", \"mobs\": [\"a\\ud800\"]}"),
+        false,
+    )
+    .await;
 
     // The deferral: codex claim and meta-claim stay proxied (the
     // sidecar's server header proves the arm) and answer identically.

@@ -103,6 +103,7 @@ pub struct Validation {
     issues: Vec<String>,
     unparsable_body: bool,
     unrenderable: bool,
+    binding_taint: bool,
 }
 
 impl Validation {
@@ -128,6 +129,19 @@ impl Validation {
     /// and [`Validation::into_response`] answers the same.
     pub fn mark_unrenderable(&mut self) {
         self.unrenderable = true;
+    }
+
+    /// A surrogate-tainted string PASSED validation (the backend's
+    /// strings do) and will crash at storage binding if the request
+    /// reaches it: validation issues still answer their 422 first,
+    /// exactly as the backend orders it, and the caller consults this
+    /// only on an otherwise-clean request.
+    pub fn note_binding_taint(&mut self) {
+        self.binding_taint = true;
+    }
+
+    pub fn binding_taint(&self) -> bool {
+        self.binding_taint
     }
 
     fn push_value(&mut self, issue: Value) {

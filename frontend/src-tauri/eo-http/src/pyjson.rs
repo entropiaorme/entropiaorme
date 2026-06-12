@@ -41,6 +41,11 @@ pub enum PyValue {
         lossy: String,
         code: u32,
         position: usize,
+        /// The length of the leading run of consecutive lone
+        /// surrogates at `position` (the reference's codec message
+        /// uses a singular form for one and a position range for a
+        /// run).
+        run: usize,
     },
     List(Vec<PyValue>),
     /// Insertion-ordered members; a duplicate key keeps the first
@@ -550,7 +555,7 @@ impl Scanner<'_> {
     fn scan_string(&self, start: usize) -> Result<(ScannedString, usize), PyJsonFailure> {
         let begin = start - 1;
         let mut out = String::new();
-        let mut taint: Option<(u32, usize)> = None;
+        let mut taint: Option<(u32, usize, usize)> = None;
         let mut chars_out = 0usize;
         let mut idx = start;
         loop {
@@ -582,8 +587,12 @@ impl Scanner<'_> {
                                 }
                                 UnicodeEscape::LoneSurrogate(code, next) => {
                                     out.push('\u{FFFD}');
-                                    if taint.is_none() {
-                                        taint = Some((code, chars_out));
+                                    match &mut taint {
+                                        None => taint = Some((code, chars_out, 1)),
+                                        Some((_, start, run)) if chars_out == *start + *run => {
+                                            *run += 1;
+                                        }
+                                        Some(_) => {}
                                     }
                                     chars_out += 1;
                                     idx = next;
@@ -660,17 +669,18 @@ enum UnicodeEscape {
 /// surrogate's code point and character position), when any.
 struct ScannedString {
     text: String,
-    taint: Option<(u32, usize)>,
+    taint: Option<(u32, usize, usize)>,
 }
 
 impl ScannedString {
     fn into_value(self) -> PyValue {
         match self.taint {
             None => PyValue::Str(self.text),
-            Some((code, position)) => PyValue::TaintedStr {
+            Some((code, position, run)) => PyValue::TaintedStr {
                 lossy: self.text,
                 code,
                 position,
+                run,
             },
         }
     }

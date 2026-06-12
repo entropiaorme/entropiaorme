@@ -219,6 +219,13 @@ fn quest_create_dump(
     if !v.is_ok() {
         return Err(Box::new(v.into_response()));
     }
+    if v.binding_taint() {
+        // A surrogate-tainted string survived validation; the backend
+        // crashes at storage binding before any commit on these
+        // single-statement writes (multi-statement partial commits are
+        // the register's recorded residual).
+        return Err(Box::new(internal_server_error()));
+    }
     let chain_position = int_value(chain_position.expect("validated"))?;
     let chain_total = int_value(chain_total.expect("validated"))?;
     Ok(json!({
@@ -333,6 +340,13 @@ fn quest_update_dump(
     if !v.is_ok() {
         return Err(Box::new(v.into_response()));
     }
+    if v.binding_taint() {
+        // A surrogate-tainted string survived validation; the backend
+        // crashes at storage binding before any commit on these
+        // single-statement writes (multi-statement partial commits are
+        // the register's recorded residual).
+        return Err(Box::new(internal_server_error()));
+    }
     if overflow {
         return Err(Box::new(internal_server_error()));
     }
@@ -356,6 +370,13 @@ fn playlist_create_dump(
     let items = playlist_items(&mut v, &object);
     if !v.is_ok() {
         return Err(Box::new(v.into_response()));
+    }
+    if v.binding_taint() {
+        // A surrogate-tainted string survived validation; the backend
+        // crashes at storage binding before any commit on these
+        // single-statement writes (multi-statement partial commits are
+        // the register's recorded residual).
+        return Err(Box::new(internal_server_error()));
     }
     let estimated = int_value(estimated.map(Some).expect("validated"))?;
     let quest_ids = int_list_value(quest_ids.expect("validated"))?;
@@ -577,6 +598,13 @@ fn playlist_update_dump(
     if !v.is_ok() {
         return Err(Box::new(v.into_response()));
     }
+    if v.binding_taint() {
+        // A surrogate-tainted string survived validation; the backend
+        // crashes at storage binding before any commit on these
+        // single-statement writes (multi-statement partial commits are
+        // the register's recorded residual).
+        return Err(Box::new(internal_server_error()));
+    }
     if overflow || dump_has_overflow(&dump) {
         return Err(Box::new(internal_server_error()));
     }
@@ -741,17 +769,6 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
         return v.into_response();
     };
-    // A surrogate-tainted species reaches the backend's service call,
-    // whose encode failure is a ValueError its router maps to a 400
-    // with the codec message; the taint carries what the message
-    // needs.
-    if let Some(PyValue::TaintedStr { code, position, .. }) = object.get("species_name") {
-        let detail = format!(
-            "'utf-8' codec can't encode character '\\u{code:04x}' in position {position}: \
-             surrogates not allowed"
-        );
-        return hydration.codex_value_error(&detail);
-    }
     let species = body::required_str(&mut v, &object, "species_name");
     let rank = body::required_int_at(
         &mut v,
@@ -760,6 +777,8 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
         "rank",
         &[Loc::Field("rank")],
     );
+    // Validation issues answer first (their 422s, or the render 500
+    // when the envelope cannot serialise), as the backend orders it.
     if !v.is_ok() {
         return v.into_response();
     }
@@ -771,6 +790,37 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
         // value yields the same bound reply.
         BodyInt::Overflow => 26,
     };
+    // The backend's service checks the rank domain BEFORE the species
+    // string reaches an encoder, so the bound message wins over the
+    // surrogate failure.
+    if !(0..=25).contains(&rank) {
+        return hydration.codex_value_error("Rank must be 0-25");
+    }
+    // A surrogate-tainted species then reaches the encode step, whose
+    // failure is a ValueError the backend's router maps to a 400 with
+    // the codec message (singular for one surrogate, a position range
+    // for a consecutive run).
+    if let Some(PyValue::TaintedStr {
+        code,
+        position,
+        run,
+        ..
+    }) = object.get("species_name")
+    {
+        let detail = if *run > 1 {
+            format!(
+                "'utf-8' codec can't encode characters in position {}-{}: surrogates not allowed",
+                position,
+                position + run - 1
+            )
+        } else {
+            format!(
+                "'utf-8' codec can't encode character '\\u{code:04x}' in position {position}: \
+                 surrogates not allowed"
+            )
+        };
+        return hydration.codex_value_error(&detail);
+    }
     hydration.codex_calibrate(&species, rank).await
 }
 

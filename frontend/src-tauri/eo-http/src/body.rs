@@ -285,12 +285,13 @@ pub fn required_str(
             None
         }
         Some(PyValue::Str(value)) => Some(value.clone()),
-        Some(PyValue::TaintedStr { .. }) => {
-            // The reference accepts the string and crashes at storage
-            // binding, before any commit: the same plain-text 500,
-            // with the same nothing-written state.
-            validation.mark_unrenderable();
-            None
+        Some(PyValue::TaintedStr { lossy, .. }) => {
+            // The reference accepts the string at validation and only
+            // crashes at storage binding; the taint defers the 500 to
+            // the post-validation check so other fields' 422s win
+            // first, as the backend orders it.
+            validation.note_binding_taint();
+            Some(lossy.clone())
         }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
@@ -321,9 +322,9 @@ pub fn opt_str(
     match object.get(name) {
         None | Some(PyValue::Null) => Some(None),
         Some(PyValue::Str(value)) => Some(Some(value.clone())),
-        Some(PyValue::TaintedStr { .. }) => {
-            validation.mark_unrenderable();
-            None
+        Some(PyValue::TaintedStr { lossy, .. }) => {
+            validation.note_binding_taint();
+            Some(Some(lossy.clone()))
         }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
@@ -342,9 +343,9 @@ pub fn str_or_default(
     match object.get(name) {
         None => Some(default.to_string()),
         Some(PyValue::Str(value)) => Some(value.clone()),
-        Some(PyValue::TaintedStr { .. }) => {
-            validation.mark_unrenderable();
-            None
+        Some(PyValue::TaintedStr { lossy, .. }) => {
+            validation.note_binding_taint();
+            Some(lossy.clone())
         }
         Some(other) => {
             string_type_issue(validation, &[Loc::Field(name)], other);
@@ -650,9 +651,9 @@ pub fn list_of_str_or_default(
     for (index, item) in items.iter().enumerate() {
         match item {
             PyValue::Str(text) => out.push(text.clone()),
-            PyValue::TaintedStr { .. } => {
-                validation.mark_unrenderable();
-                ok = false;
+            PyValue::TaintedStr { lossy, .. } => {
+                validation.note_binding_taint();
+                out.push(lossy.clone());
             }
             other => {
                 string_type_issue(validation, &[Loc::Field(name), Loc::Index(index)], other);

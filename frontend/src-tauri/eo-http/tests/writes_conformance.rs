@@ -320,9 +320,10 @@ async fn the_write_surface_conforms_through_the_public_port() {
         GameDataStore::new(&repo_root().join("backend/data/snapshot")).expect("snapshot loads"),
     );
     let hydration = Arc::new(HydrationState::new(
-        pool,
+        eo_services::db::Db::from_pool(pool),
         game_data,
         Arc::new(RealClock::new()),
+        upstream.data_dir.path().to_path_buf(),
     ));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind substrate");
     listener.set_nonblocking(true).expect("nonblocking");

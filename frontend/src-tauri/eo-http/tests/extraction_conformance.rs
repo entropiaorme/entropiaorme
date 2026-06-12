@@ -310,9 +310,10 @@ async fn the_registered_surface_conforms_through_the_public_port() {
         GameDataStore::new(&repo_root().join("backend/data/snapshot")).expect("snapshot loads"),
     );
     let hydration = Arc::new(HydrationState::new(
-        pool,
+        eo_services::db::Db::from_pool(pool),
         game_data,
         Arc::new(RealClock::new()),
+        sidecar.data_dir.path().to_path_buf(),
     ));
 
     // Serve the substrate on its own public port, proxying everything

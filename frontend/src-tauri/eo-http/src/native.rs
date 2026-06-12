@@ -22,10 +22,13 @@ use crate::body::{
     list_of_str_or_default, opt_f64, opt_int, opt_list_of_str, opt_str, str_or_default, BodyInt,
     BodyObject, Loc,
 };
+use crate::character_routes::ProspectQuery;
+use crate::equipment_routes::{EquipmentRequest, EquipmentTaint};
 use crate::extract::{
-    decode_path_segment, literal_or_default, parse_int_lax, require_bounded_int, require_str,
-    LaxInt, QueryString, Validation,
+    decode_path_segment, float_or_default, literal_or_default, opt_float, parse_int_lax,
+    require_bounded_int, require_float, require_str, LaxInt, QueryString, Validation,
 };
+use crate::hydration::{detail, error_response};
 use crate::pyjson::PyValue;
 use crate::{arm_routed, AppState, ArmRoutes};
 
@@ -166,6 +169,45 @@ fn path_id(raw_segment: &str, name: &'static str) -> PathId {
     }
 }
 
+/// A path parameter on a BODY-CARRYING route. The backend validates
+/// path and body parameters together: an unparsable id records its
+/// issue and the body still validates, one aggregated envelope with
+/// the path issue first. A decoded slash stays the route-level 404
+/// (matching precedes validation), and a beyond-i64 id VALIDATES
+/// (Python's int is unbounded) and crashes at the handler's first
+/// parameter binding, the deliberate 500, after the envelope resolves.
+enum PathParam {
+    NotFound,
+    Invalid,
+    Value(i64),
+    Overflow,
+}
+
+fn path_param(v: &mut Validation, raw_segment: &str, name: &'static str) -> PathParam {
+    let decoded = decode_path_segment(raw_segment);
+    if decoded.contains('/') {
+        return PathParam::NotFound;
+    }
+    match parse_int_lax(&decoded) {
+        Some(LaxInt::Value(value)) => PathParam::Value(value),
+        Some(_) => PathParam::Overflow,
+        None => {
+            v.int_parsing("path", name, &decoded);
+            PathParam::Invalid
+        }
+    }
+}
+
+/// A dump builder's outcome once extraction has run. Any issues live
+/// in the SHARED validation (path issues included), which the caller
+/// renders first; the deferred 500s (surrogate taint at a binding, a
+/// beyond-i64 integer) apply only to an otherwise-clean request.
+enum Built<T> {
+    Invalid,
+    Deferred500,
+    Value(T),
+}
+
 /// The `{quest_id}` segment of `/api/quests/{quest_id}[/suffix]`.
 fn quest_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
     path.strip_prefix("/api/quests/")
@@ -198,41 +240,38 @@ fn str_value(value: Option<String>) -> Value {
 /// Extract a full QuestCreate model dump (every field present,
 /// defaults applied) in declaration order. `Err` carries the reply
 /// (422 or the deliberate overflow 500).
-fn quest_create_dump(
-    content_type: Option<&str>,
-    bytes: &[u8],
-) -> Result<Value, Box<Response<Body>>> {
-    let mut v = Validation::new();
-    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(Box::new(v.into_response()));
-    };
-    let name = body::required_str(&mut v, &object, "name");
-    let planet = str_or_default(&mut v, &object, "planet", "Calypso");
-    let category = opt_str(&mut v, &object, "category");
-    let waypoint = opt_str(&mut v, &object, "waypoint");
-    let cooldown_hours = opt_f64(&mut v, &object, "cooldown_hours");
-    let reward_ped = opt_f64(&mut v, &object, "reward_ped");
-    let reward_is_skill = bool_or_default(&mut v, &object, "reward_is_skill", false);
-    let markup = opt_f64(&mut v, &object, "expected_reward_markup_percent");
-    let reward_description = opt_str(&mut v, &object, "reward_description");
-    let notes = opt_str(&mut v, &object, "notes");
-    let chain_name = opt_str(&mut v, &object, "chain_name");
-    let chain_position = opt_int(&mut v, &object, "chain_position");
-    let chain_total = opt_int(&mut v, &object, "chain_total");
-    let mobs = list_of_str_or_default(&mut v, &object, "mobs");
+fn quest_create_dump(v: &mut Validation, object: &BodyObject) -> Built<Value> {
+    let name = body::required_str(v, object, "name");
+    let planet = str_or_default(v, object, "planet", "Calypso");
+    let category = opt_str(v, object, "category");
+    let waypoint = opt_str(v, object, "waypoint");
+    let cooldown_hours = opt_f64(v, object, "cooldown_hours");
+    let reward_ped = opt_f64(v, object, "reward_ped");
+    let reward_is_skill = bool_or_default(v, object, "reward_is_skill", false);
+    let markup = opt_f64(v, object, "expected_reward_markup_percent");
+    let reward_description = opt_str(v, object, "reward_description");
+    let notes = opt_str(v, object, "notes");
+    let chain_name = opt_str(v, object, "chain_name");
+    let chain_position = opt_int(v, object, "chain_position");
+    let chain_total = opt_int(v, object, "chain_total");
+    let mobs = list_of_str_or_default(v, object, "mobs");
     if !v.is_ok() {
-        return Err(Box::new(v.into_response()));
+        return Built::Invalid;
     }
     if v.binding_taint() {
         // A surrogate-tainted string survived validation; the backend
         // crashes at storage binding before any commit on these
         // single-statement writes (multi-statement partial commits are
         // the register's recorded residual).
-        return Err(Box::new(internal_server_error()));
+        return Built::Deferred500;
     }
-    let chain_position = int_value(chain_position.expect("validated"))?;
-    let chain_total = int_value(chain_total.expect("validated"))?;
-    Ok(json!({
+    let Some(chain_position) = int_value(chain_position.expect("validated")) else {
+        return Built::Deferred500;
+    };
+    let Some(chain_total) = int_value(chain_total.expect("validated")) else {
+        return Built::Deferred500;
+    };
+    Built::Value(json!({
         "name": name.expect("validated"),
         "planet": planet.expect("validated"),
         "category": str_value(category.expect("validated")),
@@ -250,26 +289,19 @@ fn quest_create_dump(
     }))
 }
 
-/// An optional int that may carry the deliberate overflow reply.
-fn int_value(value: Option<BodyInt>) -> Result<Value, Box<Response<Body>>> {
+/// An optional int; None marks the deliberate beyond-i64 500.
+fn int_value(value: Option<BodyInt>) -> Option<Value> {
     match value {
-        None => Ok(Value::Null),
-        Some(BodyInt::Value(v)) => Ok(json!(v)),
-        Some(BodyInt::Overflow) => Err(Box::new(internal_server_error())),
+        None => Some(Value::Null),
+        Some(BodyInt::Value(v)) => Some(json!(v)),
+        Some(BodyInt::Overflow) => None,
     }
 }
 
 /// Extract a QuestUpdate set-fields dump: only fields present in the
 /// body land in the dict (present-null included), mirroring the
 /// backend's exclude-unset model dump.
-fn quest_update_dump(
-    content_type: Option<&str>,
-    bytes: &[u8],
-) -> Result<Value, Box<Response<Body>>> {
-    let mut v = Validation::new();
-    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(Box::new(v.into_response()));
-    };
+fn quest_update_dump(v: &mut Validation, object: &BodyObject) -> Built<Value> {
     // Fields validate in MODEL DECLARATION ORDER (multi-error
     // envelopes list issues in that order), present fields only.
     enum FieldKind {
@@ -304,17 +336,17 @@ fn quest_update_dump(
         let name = field;
         match kind {
             FieldKind::Str => {
-                if let Some(value) = opt_str(&mut v, &object, name) {
+                if let Some(value) = opt_str(v, object, name) {
                     dump.insert(field.to_string(), str_value(value));
                 }
             }
             FieldKind::Float => {
-                if let Some(value) = opt_f64(&mut v, &object, name) {
+                if let Some(value) = opt_f64(v, object, name) {
                     dump.insert(field.to_string(), f64_value(value));
                 }
             }
             FieldKind::Bool => {
-                if let Some(value) = body::opt_bool(&mut v, &object, name) {
+                if let Some(value) = body::opt_bool(v, object, name) {
                     dump.insert(
                         field.to_string(),
                         value.map(Value::Bool).unwrap_or(Value::Null),
@@ -322,17 +354,17 @@ fn quest_update_dump(
                 }
             }
             FieldKind::Int => {
-                if let Some(value) = opt_int(&mut v, &object, name) {
+                if let Some(value) = opt_int(v, object, name) {
                     match int_value(value) {
-                        Ok(rendered) => {
+                        Some(rendered) => {
                             dump.insert(field.to_string(), rendered);
                         }
-                        Err(_) => overflow = true,
+                        None => overflow = true,
                     }
                 }
             }
             FieldKind::StrList => {
-                if let Some(value) = opt_list_of_str(&mut v, &object, name) {
+                if let Some(value) = opt_list_of_str(v, object, name) {
                     dump.insert(
                         field.to_string(),
                         value.map(|items| json!(items)).unwrap_or(Value::Null),
@@ -342,66 +374,62 @@ fn quest_update_dump(
         }
     }
     if !v.is_ok() {
-        return Err(Box::new(v.into_response()));
+        return Built::Invalid;
     }
-    if v.binding_taint() {
-        // A surrogate-tainted string survived validation; the backend
-        // crashes at storage binding before any commit on these
-        // single-statement writes (multi-statement partial commits are
-        // the register's recorded residual).
-        return Err(Box::new(internal_server_error()));
+    if v.binding_taint() || overflow {
+        // The taint comment on the create dump applies here verbatim.
+        return Built::Deferred500;
     }
-    if overflow {
-        return Err(Box::new(internal_server_error()));
-    }
-    Ok(Value::Object(dump))
+    Built::Value(Value::Object(dump))
 }
 
 /// PlaylistCreate: name, planet and estimated-minutes defaults,
 /// quest_ids, and the optional nested items.
-fn playlist_create_dump(
-    content_type: Option<&str>,
-    bytes: &[u8],
-) -> Result<Value, Box<Response<Body>>> {
-    let mut v = Validation::new();
-    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(Box::new(v.into_response()));
-    };
-    let name = body::required_str(&mut v, &object, "name");
-    let planet = str_or_default(&mut v, &object, "planet", "Calypso");
-    let estimated = int_or_default(&mut v, &object, "estimated_minutes", 30);
-    let quest_ids = list_of_int_or_default(&mut v, &object, "quest_ids");
-    let items = playlist_items(&mut v, &object);
+fn playlist_create_dump(v: &mut Validation, object: &BodyObject) -> Built<Value> {
+    let name = body::required_str(v, object, "name");
+    let planet = str_or_default(v, object, "planet", "Calypso");
+    let estimated = int_or_default(v, object, "estimated_minutes", 30);
+    let quest_ids = list_of_int_or_default(v, object, "quest_ids");
+    let items = playlist_items(v, object);
     if !v.is_ok() {
-        return Err(Box::new(v.into_response()));
+        return Built::Invalid;
     }
     if v.binding_taint() {
-        // A surrogate-tainted string survived validation; the backend
-        // crashes at storage binding before any commit on these
-        // single-statement writes (multi-statement partial commits are
-        // the register's recorded residual).
-        return Err(Box::new(internal_server_error()));
+        // The taint comment on the create dump applies here verbatim.
+        return Built::Deferred500;
     }
-    let estimated = int_value(estimated.map(Some).expect("validated"))?;
-    let quest_ids = int_list_value(quest_ids.expect("validated"))?;
-    Ok(json!({
+    let Some(estimated) = int_value(estimated.map(Some).expect("validated")) else {
+        return Built::Deferred500;
+    };
+    let Some(quest_ids) = int_list_value(quest_ids.expect("validated")) else {
+        return Built::Deferred500;
+    };
+    let items = items.expect("validated");
+    if items
+        .as_array()
+        .is_some_and(|entries| entries.iter().any(|item| item.get("__overflow").is_some()))
+    {
+        return Built::Deferred500;
+    }
+    Built::Value(json!({
         "name": name.expect("validated"),
         "planet": planet.expect("validated"),
         "estimated_minutes": estimated,
         "quest_ids": quest_ids,
-        "items": items.expect("validated"),
+        "items": items,
     }))
 }
 
-fn int_list_value(values: Vec<BodyInt>) -> Result<Value, Box<Response<Body>>> {
+/// None marks a beyond-i64 member (the deliberate 500).
+fn int_list_value(values: Vec<BodyInt>) -> Option<Value> {
     let mut out = Vec::with_capacity(values.len());
     for value in values {
         match value {
             BodyInt::Value(v) => out.push(json!(v)),
-            BodyInt::Overflow => return Err(Box::new(internal_server_error())),
+            BodyInt::Overflow => return None,
         }
     }
-    Ok(Value::Array(out))
+    Some(Value::Array(out))
 }
 
 /// `items: list[PlaylistItemInput] | None`, validated item by item in
@@ -550,30 +578,23 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
 }
 
 /// PlaylistUpdate: only-present fields, exclude-unset shaped.
-fn playlist_update_dump(
-    content_type: Option<&str>,
-    bytes: &[u8],
-) -> Result<Value, Box<Response<Body>>> {
-    let mut v = Validation::new();
-    let Some(object) = body::read_object(content_type, bytes, &mut v) else {
-        return Err(Box::new(v.into_response()));
-    };
+fn playlist_update_dump(v: &mut Validation, object: &BodyObject) -> Built<Value> {
     let mut dump = Map::new();
     let mut overflow = false;
     for field in ["name", "planet"] {
         if object.get(field).is_some() {
-            if let Some(value) = opt_str(&mut v, &object, field) {
+            if let Some(value) = opt_str(v, object, field) {
                 dump.insert(field.to_string(), str_value(value));
             }
         }
     }
     if object.get("estimated_minutes").is_some() {
-        if let Some(value) = opt_int(&mut v, &object, "estimated_minutes") {
+        if let Some(value) = opt_int(v, object, "estimated_minutes") {
             match int_value(value) {
-                Ok(rendered) => {
+                Some(rendered) => {
                     dump.insert("estimated_minutes".into(), rendered);
                 }
-                Err(_) => overflow = true,
+                None => overflow = true,
             }
         }
     }
@@ -583,36 +604,30 @@ fn playlist_update_dump(
                 dump.insert("quest_ids".into(), Value::Null);
             }
             _ => {
-                if let Some(values) = list_of_int_or_default(&mut v, &object, "quest_ids") {
+                if let Some(values) = list_of_int_or_default(v, object, "quest_ids") {
                     match int_list_value(values) {
-                        Ok(rendered) => {
+                        Some(rendered) => {
                             dump.insert("quest_ids".into(), rendered);
                         }
-                        Err(_) => overflow = true,
+                        None => overflow = true,
                     }
                 }
             }
         }
     }
     if object.get("items").is_some() {
-        if let Some(items) = playlist_items(&mut v, &object) {
+        if let Some(items) = playlist_items(v, object) {
             dump.insert("items".into(), items);
         }
     }
     if !v.is_ok() {
-        return Err(Box::new(v.into_response()));
+        return Built::Invalid;
     }
-    if v.binding_taint() {
-        // A surrogate-tainted string survived validation; the backend
-        // crashes at storage binding before any commit on these
-        // single-statement writes (multi-statement partial commits are
-        // the register's recorded residual).
-        return Err(Box::new(internal_server_error()));
+    if v.binding_taint() || overflow || dump_has_overflow(&dump) {
+        // The taint comment on the create dump applies here verbatim.
+        return Built::Deferred500;
     }
-    if overflow || dump_has_overflow(&dump) {
-        return Err(Box::new(internal_server_error()));
-    }
-    Ok(Value::Object(dump))
+    Built::Value(Value::Object(dump))
 }
 
 fn dump_has_overflow(dump: &Map<String, Value>) -> bool {
@@ -621,18 +636,35 @@ fn dump_has_overflow(dump: &Map<String, Value>) -> bool {
         .is_some_and(|items| items.iter().any(|item| item.get("__overflow").is_some()))
 }
 
+/// Read the request body to its VALUE level, answering the standalone
+/// reply forms (the scanner's envelope, the encoding/depth 400s, the
+/// render 500) that the backend never aggregates with path issues.
+async fn standalone_body_value(req: Request) -> Result<body::BodyValue, Box<Response<Body>>> {
+    let (content_type, bytes) = body_parts(req).await?;
+    let mut value_validation = Validation::new();
+    match body::read_body_value(content_type.as_deref(), &bytes, &mut value_validation) {
+        Some(value) => Ok(value),
+        None => Err(Box::new(value_validation.into_response())),
+    }
+}
+
 /// POST /api/quests
 async fn quests_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let (content_type, bytes) = match body_parts(req).await {
-        Ok(parts) => parts,
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
         Err(reply) => return *reply,
     };
-    match quest_create_dump(content_type.as_deref(), &bytes) {
-        Ok(dump) => hydration.create_quest(&dump).await,
-        Err(reply) => *reply,
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match quest_create_dump(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(dump) => hydration.create_quest(&dump).await,
     }
 }
 
@@ -654,17 +686,27 @@ async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let id = match path_id(quest_id_segment(req.uri().path(), ""), "quest_id") {
-        PathId::Value(id) => id,
-        PathId::Reply(reply) => return reply,
+    let mut v = Validation::new();
+    let path = match path_param(&mut v, quest_id_segment(req.uri().path(), ""), "quest_id") {
+        PathParam::NotFound => return router_not_found(),
+        outcome => outcome,
     };
-    let (content_type, bytes) = match body_parts(req).await {
-        Ok(parts) => parts,
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
         Err(reply) => return *reply,
     };
-    match quest_update_dump(content_type.as_deref(), &bytes) {
-        Ok(dump) => hydration.update_quest(id, &dump).await,
-        Err(reply) => *reply,
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match quest_update_dump(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(dump) => match path {
+            PathParam::Value(id) => hydration.update_quest(id, &dump).await,
+            // The unbounded path int validated; it crashes at the
+            // handler's first parameter binding.
+            _ => internal_server_error(),
+        },
     }
 }
 
@@ -704,24 +746,32 @@ async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let id = match path_id(quest_id_segment(req.uri().path(), "/cancel"), "quest_id") {
-        PathId::Value(id) => id,
-        PathId::Reply(reply) => return reply,
+    let mut v = Validation::new();
+    let path = match path_param(
+        &mut v,
+        quest_id_segment(req.uri().path(), "/cancel"),
+        "quest_id",
+    ) {
+        PathParam::NotFound => return router_not_found(),
+        outcome => outcome,
     };
-    let (content_type, bytes) = match body_parts(req).await {
-        Ok(parts) => parts,
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
         Err(reply) => return *reply,
     };
-    let mut v = Validation::new();
-    let undo_reward = match body::read_optional_object(content_type.as_deref(), &bytes, &mut v) {
-        Some(None) => false,
-        Some(Some(object)) => match bool_or_default(&mut v, &object, "undo_reward", false) {
-            Some(value) => value,
-            None => return v.into_response(),
-        },
-        None => return v.into_response(),
+    let undo_reward = match body::optional_object_from_body(body_value, &mut v) {
+        Some(None) => Some(false),
+        Some(Some(object)) => bool_or_default(&mut v, &object, "undo_reward", false),
+        None => None,
     };
-    hydration.cancel_quest(id, undo_reward).await
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    let undo_reward = undo_reward.unwrap_or(false);
+    match path {
+        PathParam::Value(id) => hydration.cancel_quest(id, undo_reward).await,
+        _ => internal_server_error(),
+    }
 }
 
 /// POST /api/quests/playlists
@@ -729,22 +779,18 @@ async fn playlists_create(state: Arc<AppState>, req: Request) -> Response<Body> 
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let (content_type, bytes) = match body_parts(req).await {
-        Ok(parts) => parts,
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
         Err(reply) => return *reply,
     };
-    match playlist_create_dump(content_type.as_deref(), &bytes) {
-        Ok(dump) => {
-            if dump
-                .get("items")
-                .and_then(Value::as_array)
-                .is_some_and(|items| items.iter().any(|item| item.get("__overflow").is_some()))
-            {
-                return internal_server_error();
-            }
-            hydration.create_playlist(&dump).await
-        }
-        Err(reply) => *reply,
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match playlist_create_dump(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(dump) => hydration.create_playlist(&dump).await,
     }
 }
 
@@ -753,17 +799,25 @@ async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
         return state.proxy(req).await;
     };
-    let id = match path_id(playlist_id_segment(req.uri().path()), "playlist_id") {
-        PathId::Value(id) => id,
-        PathId::Reply(reply) => return reply,
+    let mut v = Validation::new();
+    let path = match path_param(&mut v, playlist_id_segment(req.uri().path()), "playlist_id") {
+        PathParam::NotFound => return router_not_found(),
+        outcome => outcome,
     };
-    let (content_type, bytes) = match body_parts(req).await {
-        Ok(parts) => parts,
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
         Err(reply) => return *reply,
     };
-    match playlist_update_dump(content_type.as_deref(), &bytes) {
-        Ok(dump) => hydration.update_playlist(id, &dump).await,
-        Err(reply) => *reply,
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match playlist_update_dump(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(dump) => match path {
+            PathParam::Value(id) => hydration.update_playlist(id, &dump).await,
+            _ => internal_server_error(),
+        },
     }
 }
 
@@ -844,6 +898,375 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
         return hydration.codex_value_error(&detail);
     }
     hydration.codex_calibrate(&species, rank).await
+}
+
+// ── Settings adapters (reads only; the writes stay proxied until the
+//    producer cutover, falling to each path's proxy fallback) ────────
+
+simple_get!(settings_get, settings);
+simple_get!(overlay_position_get, overlay_position);
+
+// ── Character adapters ──────────────────────────────────────────────
+
+simple_get!(character_calibration, character_calibration);
+simple_get!(character_stats, character_stats);
+simple_get!(character_skills, character_skills);
+simple_get!(character_professions, character_professions);
+simple_get!(character_prospect_options, character_prospect_options);
+simple_get!(character_hp_optimizer, character_hp_optimizer);
+simple_get!(character_codex, character_codex);
+
+/// GET /api/character/prospect: the query family validates in
+/// signature order (the envelope), then the handler's own 422 details
+/// in code order.
+async fn character_prospect(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    let target_level = require_float(&mut validation, &query, "target_level");
+    let slice_type = query.last("slice_type").unwrap_or("global");
+    let slice_value = query.last("slice_value");
+    let markup_uplift = float_or_default(&mut validation, &query, "markup_uplift", 0.0);
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let (profession, target_level, markup_uplift) = (
+        profession.expect("validated"),
+        target_level.expect("validated"),
+        markup_uplift.expect("validated"),
+    );
+    if target_level <= 0.0 {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("target_level must be positive"),
+        );
+    }
+    if markup_uplift < 0.0 {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("markup_uplift must be zero or positive"),
+        );
+    }
+    if !["global", "tag", "mob", "weapon"].contains(&slice_type) {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("slice_type must be global, tag, mob, or weapon"),
+        );
+    }
+    if slice_type != "global" && slice_value.is_none_or(|v| v.is_empty()) {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("slice_value is required for non-global slices"),
+        );
+    }
+    let prospect_query = ProspectQuery {
+        profession: profession.to_string(),
+        target_level,
+        slice_type: slice_type.to_string(),
+        slice_value: slice_value.map(str::to_string),
+        markup_uplift,
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .character_prospect(&prospect_query, inm.as_deref())
+        .await
+}
+
+/// GET /api/character/profession-optimizer.
+async fn character_profession_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .character_profession_optimizer(profession.expect("validated"), inm.as_deref())
+        .await
+}
+
+/// GET /api/character/profession-path-optimizer: exactly one of
+/// target_level / ped_budget after the envelope validation.
+async fn character_path_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let profession = require_str(&mut validation, &query, "profession");
+    let target_level = opt_float(&mut validation, &query, "target_level");
+    let ped_budget = opt_float(&mut validation, &query, "ped_budget");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let (profession, target_level, ped_budget) = (
+        profession.expect("validated"),
+        target_level.expect("validated"),
+        ped_budget.expect("validated"),
+    );
+    if target_level.is_none() == ped_budget.is_none() {
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &detail("Exactly one of target_level or ped_budget must be provided"),
+        );
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .character_path_optimizer(profession, target_level, ped_budget, inm.as_deref())
+        .await
+}
+
+// ── Equipment adapters ──────────────────────────────────────────────
+
+simple_get!(equipment_library, equipment_library);
+
+/// GET /api/equipment/search.
+async fn equipment_search(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let q = query.last("q").unwrap_or("").to_string();
+    let item_type = query.last("type").unwrap_or("weapon").to_string();
+    let inm = if_none_match(&req);
+    hydration
+        .equipment_search(&q, &item_type, inm.as_deref())
+        .await
+}
+
+/// The `{item_id}` segment of `/api/equipment/library/{item_id}[/suffix]`.
+fn equipment_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
+    path.strip_prefix("/api/equipment/library/")
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .unwrap_or_default()
+}
+
+/// Whether a string field arrived surrogate-tainted: read from the
+/// value itself, so EVERY tainted field flags independently (the
+/// validation's own marker is a single sticky bool).
+fn field_tainted(object: &BodyObject, name: &str) -> bool {
+    matches!(object.get(name), Some(PyValue::TaintedStr { .. }))
+}
+
+/// Extract an AddWeaponRequest in model declaration order, capturing
+/// per-field surrogate taints (the handler resolves each at its
+/// consumption point; an unused tainted field keeps flowing, exactly
+/// as the backend lets it).
+fn add_weapon_request(v: &mut Validation, object: &BodyObject) -> Built<EquipmentRequest> {
+    let taint = EquipmentTaint {
+        catalog_id: field_tainted(object, "catalog_id"),
+        name: field_tainted(object, "name"),
+        amp_catalog_id: field_tainted(object, "amp_catalog_id"),
+        scope_catalog_id: field_tainted(object, "scope_catalog_id"),
+        absorber_catalog_id: field_tainted(object, "absorber_catalog_id"),
+    };
+    let item_type = body::literal_required(v, object, "type", &["weapon", "healing", "consumable"]);
+    let catalog_id = opt_str(v, object, "catalog_id");
+    let name = opt_str(v, object, "name");
+    let amp_catalog_id = opt_str(v, object, "amp_catalog_id");
+    let scope_catalog_id = opt_str(v, object, "scope_catalog_id");
+    let absorber_catalog_id = opt_str(v, object, "absorber_catalog_id");
+    let weapon_markup = int_or_default(v, object, "weapon_markup", 100);
+    let amp_markup = int_or_default(v, object, "amp_markup", 100);
+    let scope_markup = int_or_default(v, object, "scope_markup", 100);
+    let absorber_markup = int_or_default(v, object, "absorber_markup", 100);
+    let damage_enhancers = int_or_default(v, object, "damage_enhancers", 0);
+    if !v.is_ok() {
+        return Built::Invalid;
+    }
+    let ints = [
+        weapon_markup.expect("validated"),
+        amp_markup.expect("validated"),
+        scope_markup.expect("validated"),
+        absorber_markup.expect("validated"),
+        damage_enhancers.expect("validated"),
+    ]
+    .map(equipment_int);
+    let [Some(weapon_markup), Some(amp_markup), Some(scope_markup), Some(absorber_markup), Some(damage_enhancers)] =
+        ints
+    else {
+        return Built::Deferred500;
+    };
+    Built::Value(EquipmentRequest {
+        item_type: item_type.expect("validated"),
+        catalog_id: catalog_id.expect("validated"),
+        name: name.expect("validated"),
+        amp_catalog_id: amp_catalog_id.expect("validated"),
+        scope_catalog_id: scope_catalog_id.expect("validated"),
+        absorber_catalog_id: absorber_catalog_id.expect("validated"),
+        weapon_markup,
+        amp_markup,
+        scope_markup,
+        absorber_markup,
+        damage_enhancers,
+        taint,
+    })
+}
+
+/// Extract a CalculateCostRequest in model declaration order
+/// (catalog_id first, then the two-value type literal).
+fn calculate_cost_request(v: &mut Validation, object: &BodyObject) -> Built<EquipmentRequest> {
+    let taint = EquipmentTaint {
+        catalog_id: field_tainted(object, "catalog_id"),
+        name: false,
+        amp_catalog_id: field_tainted(object, "amp_catalog_id"),
+        scope_catalog_id: field_tainted(object, "scope_catalog_id"),
+        absorber_catalog_id: field_tainted(object, "absorber_catalog_id"),
+    };
+    let catalog_id = body::required_str(v, object, "catalog_id");
+    let item_type = body::literal_with_default(v, object, "type", &["weapon", "healing"], "weapon");
+    let amp_catalog_id = opt_str(v, object, "amp_catalog_id");
+    let scope_catalog_id = opt_str(v, object, "scope_catalog_id");
+    let absorber_catalog_id = opt_str(v, object, "absorber_catalog_id");
+    let weapon_markup = int_or_default(v, object, "weapon_markup", 100);
+    let amp_markup = int_or_default(v, object, "amp_markup", 100);
+    let scope_markup = int_or_default(v, object, "scope_markup", 100);
+    let absorber_markup = int_or_default(v, object, "absorber_markup", 100);
+    let damage_enhancers = int_or_default(v, object, "damage_enhancers", 0);
+    if !v.is_ok() {
+        return Built::Invalid;
+    }
+    let ints = [
+        weapon_markup.expect("validated"),
+        amp_markup.expect("validated"),
+        scope_markup.expect("validated"),
+        absorber_markup.expect("validated"),
+        damage_enhancers.expect("validated"),
+    ]
+    .map(equipment_int);
+    let [Some(weapon_markup), Some(amp_markup), Some(scope_markup), Some(absorber_markup), Some(damage_enhancers)] =
+        ints
+    else {
+        return Built::Deferred500;
+    };
+    Built::Value(EquipmentRequest {
+        item_type: item_type.expect("validated"),
+        catalog_id: Some(catalog_id.expect("validated")),
+        name: None,
+        amp_catalog_id: amp_catalog_id.expect("validated"),
+        scope_catalog_id: scope_catalog_id.expect("validated"),
+        absorber_catalog_id: absorber_catalog_id.expect("validated"),
+        weapon_markup,
+        amp_markup,
+        scope_markup,
+        absorber_markup,
+        damage_enhancers,
+        taint,
+    })
+}
+
+/// An equipment int field. The backend carries arbitrary-precision
+/// integers through these (they flow into a JSON text column, never a
+/// direct parameter binding); the native side answers the deliberate
+/// 500 beyond i64 instead. See the divergence register (D-14).
+fn equipment_int(value: BodyInt) -> Option<i64> {
+    match value {
+        BodyInt::Value(v) => Some(v),
+        BodyInt::Overflow => None,
+    }
+}
+
+/// POST /api/equipment/library.
+async fn equipment_add(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match add_weapon_request(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(request) => hydration.equipment_add(&request).await,
+    }
+}
+
+/// PUT /api/equipment/library/{item_id}.
+async fn equipment_update(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let mut v = Validation::new();
+    let path = match path_param(
+        &mut v,
+        equipment_id_segment(req.uri().path(), ""),
+        "item_id",
+    ) {
+        PathParam::NotFound => return router_not_found(),
+        outcome => outcome,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match add_weapon_request(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(request) => match path {
+            PathParam::Value(id) => hydration.equipment_update(id, &request).await,
+            _ => internal_server_error(),
+        },
+    }
+}
+
+/// DELETE /api/equipment/library/{item_id}.
+async fn equipment_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let id = match path_id(equipment_id_segment(req.uri().path(), ""), "item_id") {
+        PathId::Value(id) => id,
+        PathId::Reply(reply) => return reply,
+    };
+    hydration.equipment_delete(id).await
+}
+
+/// GET /api/equipment/library/{item_id}/detail.
+async fn equipment_detail(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let id = match path_id(equipment_id_segment(req.uri().path(), "/detail"), "item_id") {
+        PathId::Value(id) => id,
+        PathId::Reply(reply) => return reply,
+    };
+    let inm = if_none_match(&req);
+    hydration.equipment_detail(id, inm.as_deref()).await
+}
+
+/// POST /api/equipment/cost/calculate.
+async fn equipment_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    match calculate_cost_request(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(request) => hydration.equipment_cost(&request).await,
+    }
 }
 
 /// Register the natively-served quests/codex hydration GETs; one
@@ -947,6 +1370,120 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/codex/meta/attributes",
                 codex_meta_attributes,
+            ),
+        )
+        .route(
+            "/api/settings",
+            arm_routed(MethodFilter::GET, "/api/settings", settings_get),
+        )
+        .route(
+            "/api/settings/overlay-position",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/settings/overlay-position",
+                overlay_position_get,
+            ),
+        )
+        .route(
+            "/api/character/calibration",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/calibration",
+                character_calibration,
+            ),
+        )
+        .route(
+            "/api/character/stats",
+            arm_routed(MethodFilter::GET, "/api/character/stats", character_stats),
+        )
+        .route(
+            "/api/character/skills",
+            arm_routed(MethodFilter::GET, "/api/character/skills", character_skills),
+        )
+        .route(
+            "/api/character/professions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/professions",
+                character_professions,
+            ),
+        )
+        .route(
+            "/api/character/prospect-options",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/prospect-options",
+                character_prospect_options,
+            ),
+        )
+        .route(
+            "/api/character/prospect",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/prospect",
+                character_prospect,
+            ),
+        )
+        .route(
+            "/api/character/profession-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/profession-optimizer",
+                character_profession_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/profession-path-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/profession-path-optimizer",
+                character_path_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/hp-optimizer",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/character/hp-optimizer",
+                character_hp_optimizer,
+            ),
+        )
+        .route(
+            "/api/character/codex",
+            arm_routed(MethodFilter::GET, "/api/character/codex", character_codex),
+        )
+        .route(
+            "/api/equipment/search",
+            arm_routed(MethodFilter::GET, "/api/equipment/search", equipment_search),
+        )
+        .route(
+            "/api/equipment/library",
+            ArmRoutes::at("/api/equipment/library")
+                .on(MethodFilter::GET, equipment_library)
+                .on(MethodFilter::POST, equipment_add)
+                .into_method_router(),
+        )
+        .route(
+            "/api/equipment/library/{item_id}",
+            ArmRoutes::at("/api/equipment/library/{item_id}")
+                .on(MethodFilter::PUT, equipment_update)
+                .on(MethodFilter::DELETE, equipment_delete)
+                .into_method_router(),
+        )
+        .route(
+            "/api/equipment/library/{item_id}/detail",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/equipment/library/{item_id}/detail",
+                equipment_detail,
+            ),
+        )
+        .route(
+            "/api/equipment/cost/calculate",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/equipment/cost/calculate",
+                equipment_cost,
             ),
         )
 }

@@ -346,6 +346,84 @@ fn write_wire_value(out: &mut String, value: &Value) {
     }
 }
 
+/// Serialise as Python's bare `json.dumps(value)`: insertion-order
+/// keys, item separator `", "`, key separator `": "`, and the default
+/// `ensure_ascii=True` escaping (BMP as `\uXXXX`, astral characters as
+/// surrogate pairs). The form the backend stores into TEXT columns
+/// when it calls `json.dumps` with no arguments.
+pub fn to_python_json_dumps(value: &Value) -> String {
+    let mut out = String::new();
+    write_dumps_value(&mut out, value);
+    out
+}
+
+fn write_dumps_value(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(n) => write_number(out, n),
+        Value::String(s) => write_ascii_string(out, s),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_dumps_value(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (i, (key, entry)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_ascii_string(out, key);
+                out.push_str(": ");
+                write_dumps_value(out, entry);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// Escape a string as Python's `json` encoder does with its DEFAULT
+/// `ensure_ascii=True`: the short escapes, other C0 controls as
+/// `\uXXXX`, and every character past `~` as `\uXXXX` (DEL included;
+/// astral characters as a surrogate pair). `/` stays verbatim.
+fn write_ascii_string(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0C}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c if c.is_ascii() => out.push(c),
+            c => {
+                let code = c as u32;
+                if code <= 0xFFFF {
+                    out.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    let reduced = code - 0x10000;
+                    let high = 0xD800 + (reduced >> 10);
+                    let low = 0xDC00 + (reduced & 0x3FF);
+                    out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+                }
+            }
+        }
+    }
+    out.push('"');
+}
+
 fn write_value(out: &mut String, value: &Value, indent: Option<usize>, depth: usize) {
     match value {
         Value::Null => out.push_str("null"),
@@ -662,6 +740,29 @@ mod tests {
         assert_eq!(
             norm_compact(&value),
             r#""AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA""#
+        );
+    }
+
+    #[test]
+    fn python_json_dumps_renders_the_stored_text_form() {
+        let value = serde_json::json!({
+            "weapon_entity": {"name": "Frussj\u{00e4}ger \u{1F600}", "economy": {"decay": 0.02}},
+            "amp_entity": null,
+            "damage_enhancers": 0,
+            "items": [1, 2.5, "x\ty"],
+        });
+        assert_eq!(
+            to_python_json_dumps(&value),
+            "{\"weapon_entity\": {\"name\": \"Frussj\\u00e4ger \\ud83d\\ude00\", \
+             \"economy\": {\"decay\": 0.02}}, \"amp_entity\": null, \
+             \"damage_enhancers\": 0, \"items\": [1, 2.5, \"x\\ty\"]}",
+        );
+        assert_eq!(to_python_json_dumps(&serde_json::json!({})), "{}");
+        assert_eq!(to_python_json_dumps(&serde_json::json!([])), "[]");
+        assert_eq!(
+            to_python_json_dumps(&serde_json::json!("a\u{7f}b")),
+            "\"a\\u007fb\"",
+            "DEL escapes under default ensure_ascii"
         );
     }
 

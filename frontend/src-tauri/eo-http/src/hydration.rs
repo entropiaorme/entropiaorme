@@ -12,12 +12,14 @@
 //! natively (registration in `native_routes` is the cutover, one line
 //! per route, with the runtime arm override as the rollback).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{header, Response, StatusCode};
 use eo_services::clock::Clock;
 use eo_services::codex::{CodexError, CodexService};
+use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use eo_services::quests::{QuestError, QuestService};
 use eo_wire::normalizer::to_wire_json;
@@ -29,14 +31,35 @@ use sqlx::SqlitePool;
 pub struct HydrationState {
     quests: QuestService,
     codex: CodexService,
+    pub(crate) db: Db,
+    pub(crate) game_data: Arc<GameDataStore>,
+    pub(crate) clock: Arc<dyn Clock>,
+    /// The data directory the substrate serves: the config read-through
+    /// (`settings.json` stays sidecar-written until the producer
+    /// cutover) and the `dbPath` settings field both render from it.
+    pub(crate) data_dir: PathBuf,
 }
 
 impl HydrationState {
-    pub fn new(pool: SqlitePool, game_data: Arc<GameDataStore>, clock: Arc<dyn Clock>) -> Self {
+    pub fn new(
+        db: Db,
+        game_data: Arc<GameDataStore>,
+        clock: Arc<dyn Clock>,
+        data_dir: PathBuf,
+    ) -> Self {
+        let pool: SqlitePool = db.pool().clone();
         Self {
             quests: QuestService::new(pool.clone(), clock.clone()),
-            codex: CodexService::new(pool, game_data, clock),
+            codex: CodexService::new(pool, game_data.clone(), clock.clone()),
+            db,
+            game_data,
+            clock,
+            data_dir,
         }
+    }
+
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        self.db.pool()
     }
 }
 
@@ -71,7 +94,7 @@ fn if_none_match_matches(header_value: Option<&str>, current_etag: &str) -> bool
 /// A hydration JSON response under the conditional-GET contract: 200
 /// with the body (or 304 with none) plus the ETag and Cache-Control
 /// headers either way.
-fn json_response(payload: &Value, if_none_match: Option<&str>) -> Response<Body> {
+pub(crate) fn json_response(payload: &Value, if_none_match: Option<&str>) -> Response<Body> {
     let body = to_wire_json(payload).into_bytes();
     let etag = compute_strong_etag(&body);
     let not_modified = if_none_match_matches(if_none_match, &etag);
@@ -97,7 +120,7 @@ fn json_response(payload: &Value, if_none_match: Option<&str>) -> Response<Body>
 
 /// A non-2xx JSON error response (no ETag: the middleware touches
 /// only successful responses).
-fn error_response(status: StatusCode, payload: &Value) -> Response<Body> {
+pub(crate) fn error_response(status: StatusCode, payload: &Value) -> Response<Body> {
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/json")
@@ -106,13 +129,13 @@ fn error_response(status: StatusCode, payload: &Value) -> Response<Body> {
 }
 
 /// The backend's HTTPException rendering: `{"detail": <message>}`.
-fn detail(message: &str) -> Value {
+pub(crate) fn detail(message: &str) -> Value {
     json!({"detail": message})
 }
 
 /// A service failure surfaces as the backend's unhandled-exception
 /// envelope (500 with the generic body).
-fn internal_error() -> Response<Body> {
+pub(crate) fn internal_error() -> Response<Body> {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
@@ -260,7 +283,7 @@ fn format_playlist_analytics(row: &Value) -> Value {
 
 /// `str(value)` as the formatters apply it to ids (integers render
 /// identically in both languages; strings pass through).
-fn python_str_of(value: &Value) -> String {
+pub(crate) fn python_str_of(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Number(number) => number.to_string(),
@@ -551,8 +574,10 @@ impl HydrationState {
     }
 }
 
-/// A write-route JSON reply: status 200, no conditional-GET headers.
-fn plain_json_response(payload: &Value) -> Response<Body> {
+/// A plain JSON 200: no conditional-GET headers. Write replies use
+/// it everywhere; reads outside the ETag middleware's prefixes
+/// (settings, character, equipment) use it too.
+pub(crate) fn plain_json_response(payload: &Value) -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
@@ -584,7 +609,6 @@ pub fn quest_error_response(_error: QuestError) -> Response<Body> {
 mod tests {
     use super::*;
     use eo_services::clock::MockClock;
-    use eo_services::db::Db;
     use http_body_util::BodyExt;
 
     #[test]
@@ -780,9 +804,10 @@ mod tests {
         std::fs::write(snapshot.join("skills.json"), "[]").unwrap();
         let db = Db::open(&dir.join("entropia_orme.db")).await.unwrap();
         HydrationState::new(
-            db.pool().clone(),
+            db,
             Arc::new(GameDataStore::new(&snapshot).unwrap()),
             Arc::new(MockClock::new(None, 0.0)),
+            dir.to_path_buf(),
         )
     }
 

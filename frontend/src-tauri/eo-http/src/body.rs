@@ -98,26 +98,51 @@ impl BodyObject {
     }
 }
 
-/// Read and shape a request body as the backend does. `None` means a
-/// reply was recorded on the validation report. A body of top-level
-/// JSON `null` means ABSENT to the backend's model binding: a
-/// required-body route answers the missing-["body"] envelope.
-pub fn read_object(
+/// A request body at the VALUE level: absent (no bytes arrived) or a
+/// parsed value. The split matters for envelope aggregation: the
+/// backend validates path and body parameters together, so MODEL-level
+/// issues (a missing body, a non-object body, field issues) join any
+/// path issues in one envelope, while VALUE-level failures (the JSON
+/// scanner, encodings, depth, the render classes) answer ALONE,
+/// dropping path issues recorded beside them.
+pub enum BodyValue {
+    Absent,
+    Value(PyValue),
+}
+
+/// Value-level read. A failure records its standalone reply form into
+/// `validation` and returns None; an empty body is `Absent` (a
+/// model-level concern, never a failure here).
+pub fn read_body_value(
     content_type: Option<&str>,
     bytes: &[u8],
     validation: &mut Validation,
-) -> Option<BodyObject> {
-    match read_value(content_type, bytes, validation)? {
-        PyValue::Object(pairs) => {
+) -> Option<BodyValue> {
+    if bytes.is_empty() {
+        return Some(BodyValue::Absent);
+    }
+    Some(BodyValue::Value(read_value(
+        content_type,
+        bytes,
+        validation,
+    )?))
+}
+
+/// Model-level required-object binding: JSON `null` (and an absent
+/// body) mean ABSENT to the backend's model binding, the
+/// missing-["body"] envelope.
+pub fn object_from_body(value: BodyValue, validation: &mut Validation) -> Option<BodyObject> {
+    match value {
+        BodyValue::Value(PyValue::Object(pairs)) => {
             let whole = PyValue::Object(pairs.clone());
             let echo = echo_renders(&whole, 0).then(|| whole.to_echo_json());
             Some(BodyObject { pairs, echo })
         }
-        PyValue::Null => {
+        BodyValue::Absent | BodyValue::Value(PyValue::Null) => {
             body_issue(validation, "missing", &[], "Field required", "null", None);
             None
         }
-        other => {
+        BodyValue::Value(other) => {
             let echo = echo_or_unrenderable(validation, &other)?;
             body_issue(
                 validation,
@@ -134,24 +159,20 @@ pub fn read_object(
 
 /// The optional-body variant (a route whose body model defaults to
 /// None): an absent body OR a top-level JSON `null` is `Some(None)`, a
-/// present body validates as usual (`Some(Some(..))`), and `None`
-/// means a reply was recorded.
-pub fn read_optional_object(
-    content_type: Option<&str>,
-    bytes: &[u8],
+/// present object validates as usual (`Some(Some(..))`), and `None`
+/// means an issue was recorded.
+pub fn optional_object_from_body(
+    value: BodyValue,
     validation: &mut Validation,
 ) -> Option<Option<BodyObject>> {
-    if bytes.is_empty() {
-        return Some(None);
-    }
-    match read_value(content_type, bytes, validation)? {
-        PyValue::Null => Some(None),
-        PyValue::Object(pairs) => {
+    match value {
+        BodyValue::Absent | BodyValue::Value(PyValue::Null) => Some(None),
+        BodyValue::Value(PyValue::Object(pairs)) => {
             let whole = PyValue::Object(pairs.clone());
             let echo = echo_renders(&whole, 0).then(|| whole.to_echo_json());
             Some(Some(BodyObject { pairs, echo }))
         }
-        other => {
+        BodyValue::Value(other) => {
             let echo = echo_or_unrenderable(validation, &other)?;
             body_issue(
                 validation,
@@ -164,6 +185,27 @@ pub fn read_optional_object(
             None
         }
     }
+}
+
+/// One-validation convenience over the two levels (routes without
+/// path parameters, where nothing aggregates).
+pub fn read_object(
+    content_type: Option<&str>,
+    bytes: &[u8],
+    validation: &mut Validation,
+) -> Option<BodyObject> {
+    let value = read_body_value(content_type, bytes, validation)?;
+    object_from_body(value, validation)
+}
+
+/// The one-validation optional-body convenience.
+pub fn read_optional_object(
+    content_type: Option<&str>,
+    bytes: &[u8],
+    validation: &mut Validation,
+) -> Option<Option<BodyObject>> {
+    let value = read_body_value(content_type, bytes, validation)?;
+    optional_object_from_body(value, validation)
 }
 
 /// Whether the backend's body reader treats `content_type` as JSON:
@@ -189,10 +231,6 @@ fn read_value(
     bytes: &[u8],
     validation: &mut Validation,
 ) -> Option<PyValue> {
-    if bytes.is_empty() {
-        body_issue(validation, "missing", &[], "Field required", "null", None);
-        return None;
-    }
     if !is_json_content_type(content_type) {
         // Without a JSON content type the backend treats the raw text
         // as the submitted value (a string), which then fails the
@@ -354,13 +392,82 @@ pub fn str_or_default(
     }
 }
 
+/// A required `Literal[...]` string field: pydantic accepts exactly
+/// the allowed strings and answers everything else (other strings,
+/// nulls, non-strings) with the literal_error envelope.
+pub fn literal_required(
+    validation: &mut Validation,
+    object: &BodyObject,
+    name: &'static str,
+    allowed: &[&str],
+) -> Option<String> {
+    match object.get(name) {
+        None => {
+            match object.echo() {
+                Some(echo) => {
+                    body_issue(
+                        validation,
+                        "missing",
+                        &[Loc::Field(name)],
+                        "Field required",
+                        echo,
+                        None,
+                    );
+                }
+                None => validation.mark_unrenderable(),
+            }
+            None
+        }
+        Some(value) => literal_of(validation, name, value, allowed),
+    }
+}
+
+/// A `Literal[...]` field with a default (absent takes the default;
+/// a present value, null included, validates against the set).
+pub fn literal_with_default(
+    validation: &mut Validation,
+    object: &BodyObject,
+    name: &'static str,
+    allowed: &[&str],
+    default: &str,
+) -> Option<String> {
+    match object.get(name) {
+        None => Some(default.to_string()),
+        Some(value) => literal_of(validation, name, value, allowed),
+    }
+}
+
+fn literal_of(
+    validation: &mut Validation,
+    name: &'static str,
+    value: &PyValue,
+    allowed: &[&str],
+) -> Option<String> {
+    if let PyValue::Str(text) = value {
+        if allowed.contains(&text.as_str()) {
+            return Some(text.clone());
+        }
+    }
+    let echo = echo_or_unrenderable(validation, value)?;
+    let expected = crate::extract::render_expected(allowed);
+    body_issue(
+        validation,
+        "literal_error",
+        &[Loc::Field(name)],
+        &format!("Input should be {expected}"),
+        &echo,
+        Some(("expected", escape_json_str(&expected))),
+    );
+    None
+}
+
 /// The backend's lax string-to-float: whitespace trim, the
 /// `inf`/`infinity`/`nan` names, and its underscore gate (probed:
 /// whole-string, not between-digits: no leading, trailing, or doubled
 /// underscore, then every underscore strips before parsing, so
 /// `"1_.5"`, `"1e_5"`, and `"+_1"` all parse while `"_1.5"`, `"1.5_"`,
 /// and `"1__0.5"` do not).
-fn lax_float_from_str(raw: &str) -> Option<f64> {
+pub(crate) fn lax_float_from_str(raw: &str) -> Option<f64> {
     let trimmed = raw.trim();
     if trimmed.is_empty()
         || trimmed.starts_with('_')

@@ -20,7 +20,7 @@ pub(crate) const ATTRIBUTE_SKILLS: [&str; 6] = [
     "Strength",
 ];
 
-fn is_attribute(skill_name: &str) -> bool {
+pub fn is_attribute(skill_name: &str) -> bool {
     ATTRIBUTE_SKILLS.contains(&skill_name)
 }
 

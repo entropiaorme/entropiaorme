@@ -127,8 +127,10 @@ pub(crate) fn decoded_f64(row: &sqlx::sqlite::SqliteRow, index: usize) -> f64 {
         })
 }
 
-/// The application database handle.
-#[derive(Debug)]
+/// The application database handle. Cloning shares the one underlying
+/// pool (the composition root still opens the database exactly once);
+/// a clone is a handle, never a second owner.
+#[derive(Debug, Clone)]
 pub struct Db {
     pool: SqlitePool,
 }
@@ -138,6 +140,14 @@ impl Db {
     /// (the catalogue snapshot and the replay spike).
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    /// Rebind a handle over an already-opened pool. The composition
+    /// root still opens the application database exactly once via
+    /// [`Db::open`]; this exists for harnesses attaching to a database
+    /// another process created and migrated.
+    pub fn from_pool(pool: SqlitePool) -> Db {
+        Db { pool }
     }
 
     /// Open (creating if missing), adopt or refuse an existing schema,

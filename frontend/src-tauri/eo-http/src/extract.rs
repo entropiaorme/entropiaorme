@@ -526,6 +526,17 @@ mod tests {
     }
 
     #[test]
+    fn binding_taint_notes_without_failing_validation() {
+        let mut v = Validation::new();
+        assert!(!v.binding_taint());
+        v.note_binding_taint();
+        assert!(v.binding_taint());
+        // The taint alone leaves validation passing: issues answer
+        // first, the caller consults the taint afterwards.
+        assert!(v.is_ok());
+    }
+
+    #[test]
     fn composed_extractors_validate_in_declaration_order() {
         let q = QueryString::parse(Some("rank=abc&target=xx"));
         let mut v = Validation::new();

@@ -259,60 +259,75 @@ fn quest_update_dump(
     let Some(object) = body::read_object(content_type, bytes, &mut v) else {
         return Err(Box::new(v.into_response()));
     };
+    // Fields validate in MODEL DECLARATION ORDER (multi-error
+    // envelopes list issues in that order), present fields only.
+    enum FieldKind {
+        Str,
+        Float,
+        Bool,
+        Int,
+        StrList,
+    }
+    const FIELDS: [(&str, FieldKind); 14] = [
+        ("name", FieldKind::Str),
+        ("planet", FieldKind::Str),
+        ("category", FieldKind::Str),
+        ("waypoint", FieldKind::Str),
+        ("cooldown_hours", FieldKind::Float),
+        ("reward_ped", FieldKind::Float),
+        ("reward_is_skill", FieldKind::Bool),
+        ("expected_reward_markup_percent", FieldKind::Float),
+        ("reward_description", FieldKind::Str),
+        ("notes", FieldKind::Str),
+        ("chain_name", FieldKind::Str),
+        ("chain_position", FieldKind::Int),
+        ("chain_total", FieldKind::Int),
+        ("mobs", FieldKind::StrList),
+    ];
     let mut dump = Map::new();
     let mut overflow = false;
-    for field in [
-        "name",
-        "planet",
-        "category",
-        "waypoint",
-        "reward_description",
-        "notes",
-        "chain_name",
-    ] {
-        if object.get(field).is_some() {
-            if let Some(value) = opt_str(&mut v, &object, leak_field(field)) {
-                dump.insert(field.to_string(), str_value(value));
-            }
+    for (field, kind) in FIELDS {
+        if object.get(field).is_none() {
+            continue;
         }
-    }
-    for field in [
-        "cooldown_hours",
-        "reward_ped",
-        "expected_reward_markup_percent",
-    ] {
-        if object.get(field).is_some() {
-            if let Some(value) = opt_f64(&mut v, &object, leak_field(field)) {
-                dump.insert(field.to_string(), f64_value(value));
-            }
-        }
-    }
-    if object.get("reward_is_skill").is_some() {
-        if let Some(value) = body::opt_bool(&mut v, &object, "reward_is_skill") {
-            dump.insert(
-                "reward_is_skill".into(),
-                value.map(Value::Bool).unwrap_or(Value::Null),
-            );
-        }
-    }
-    for field in ["chain_position", "chain_total"] {
-        if object.get(field).is_some() {
-            if let Some(value) = opt_int(&mut v, &object, leak_field(field)) {
-                match int_value(value) {
-                    Ok(rendered) => {
-                        dump.insert(field.to_string(), rendered);
-                    }
-                    Err(_) => overflow = true,
+        let name = field;
+        match kind {
+            FieldKind::Str => {
+                if let Some(value) = opt_str(&mut v, &object, name) {
+                    dump.insert(field.to_string(), str_value(value));
                 }
             }
-        }
-    }
-    if object.get("mobs").is_some() {
-        if let Some(value) = opt_list_of_str(&mut v, &object, "mobs") {
-            dump.insert(
-                "mobs".into(),
-                value.map(|items| json!(items)).unwrap_or(Value::Null),
-            );
+            FieldKind::Float => {
+                if let Some(value) = opt_f64(&mut v, &object, name) {
+                    dump.insert(field.to_string(), f64_value(value));
+                }
+            }
+            FieldKind::Bool => {
+                if let Some(value) = body::opt_bool(&mut v, &object, name) {
+                    dump.insert(
+                        field.to_string(),
+                        value.map(Value::Bool).unwrap_or(Value::Null),
+                    );
+                }
+            }
+            FieldKind::Int => {
+                if let Some(value) = opt_int(&mut v, &object, name) {
+                    match int_value(value) {
+                        Ok(rendered) => {
+                            dump.insert(field.to_string(), rendered);
+                        }
+                        Err(_) => overflow = true,
+                    }
+                }
+            }
+            FieldKind::StrList => {
+                if let Some(value) = opt_list_of_str(&mut v, &object, name) {
+                    dump.insert(
+                        field.to_string(),
+                        value.map(|items| json!(items)).unwrap_or(Value::Null),
+                    );
+                }
+            }
         }
     }
     if !v.is_ok() {
@@ -322,26 +337,6 @@ fn quest_update_dump(
         return Err(Box::new(internal_server_error()));
     }
     Ok(Value::Object(dump))
-}
-
-/// The update extractors take `&'static str` names; the fixed field
-/// list above is static by construction.
-fn leak_field(field: &str) -> &'static str {
-    match field {
-        "name" => "name",
-        "planet" => "planet",
-        "category" => "category",
-        "waypoint" => "waypoint",
-        "reward_description" => "reward_description",
-        "notes" => "notes",
-        "chain_name" => "chain_name",
-        "cooldown_hours" => "cooldown_hours",
-        "reward_ped" => "reward_ped",
-        "expected_reward_markup_percent" => "expected_reward_markup_percent",
-        "chain_position" => "chain_position",
-        "chain_total" => "chain_total",
-        _ => unreachable!("fixed field list"),
-    }
 }
 
 /// PlaylistCreate: name, planet and estimated-minutes defaults,
@@ -417,18 +412,38 @@ fn playlist_items(v: &mut Validation, object: &BodyObject) -> Option<Value> {
             ok = false;
             continue;
         };
-        let item_echo = item.to_echo_json();
-        let quest_id = body::required_int_at(
-            v,
-            pairs,
-            &item_echo,
-            "quest_id",
-            &[
-                Loc::Field("items"),
-                Loc::Index(index),
-                Loc::Field("quest_id"),
-            ],
-        );
+        // The item echo renders only when needed (a missing quest_id),
+        // so a hazardous value in an otherwise-valid item never trips
+        // a render check the reference would not perform.
+        let quest_id = if pairs.iter().any(|(key, _)| key == "quest_id") {
+            body::required_int_at(
+                v,
+                pairs,
+                None,
+                "quest_id",
+                &[
+                    Loc::Field("items"),
+                    Loc::Index(index),
+                    Loc::Field("quest_id"),
+                ],
+            )
+        } else {
+            if let Some(echo) = body::echo_or_unrenderable(v, item) {
+                body::body_issue(
+                    v,
+                    "missing",
+                    &[
+                        Loc::Field("items"),
+                        Loc::Index(index),
+                        Loc::Field("quest_id"),
+                    ],
+                    "Field required",
+                    &echo,
+                    None,
+                );
+            }
+            None
+        };
         let description = pairs
             .iter()
             .find(|(key, _)| key == "description")
@@ -514,7 +529,7 @@ fn playlist_update_dump(
     let mut overflow = false;
     for field in ["name", "planet"] {
         if object.get(field).is_some() {
-            if let Some(value) = opt_str(&mut v, &object, leak_playlist_field(field)) {
+            if let Some(value) = opt_str(&mut v, &object, field) {
                 dump.insert(field.to_string(), str_value(value));
             }
         }
@@ -558,14 +573,6 @@ fn playlist_update_dump(
         return Err(Box::new(internal_server_error()));
     }
     Ok(Value::Object(dump))
-}
-
-fn leak_playlist_field(field: &str) -> &'static str {
-    match field {
-        "name" => "name",
-        "planet" => "planet",
-        _ => unreachable!("fixed field list"),
-    }
 }
 
 fn dump_has_overflow(dump: &Map<String, Value>) -> bool {

@@ -102,6 +102,7 @@ pub fn decode_path_segment(raw: &str) -> String {
 pub struct Validation {
     issues: Vec<String>,
     unparsable_body: bool,
+    unrenderable: bool,
 }
 
 impl Validation {
@@ -110,7 +111,7 @@ impl Validation {
     }
 
     pub fn is_ok(&self) -> bool {
-        self.issues.is_empty() && !self.unparsable_body
+        self.issues.is_empty() && !self.unparsable_body && !self.unrenderable
     }
 
     /// The body failed to parse in the way the backend answers with
@@ -119,6 +120,14 @@ impl Validation {
     /// that reply.
     pub fn mark_unparsable_body(&mut self) {
         self.unparsable_body = true;
+    }
+
+    /// The reply would carry a value the backend's response serialiser
+    /// cannot render (a non-finite float echo, an over-deep echo, a
+    /// lone surrogate): the backend crashes with its plain-text 500,
+    /// and [`Validation::into_response`] answers the same.
+    pub fn mark_unrenderable(&mut self) {
+        self.unrenderable = true;
     }
 
     fn push_value(&mut self, issue: Value) {
@@ -189,10 +198,18 @@ impl Validation {
     }
 
     /// The 422 envelope carrying every accumulated issue (or the
-    /// backend's generic body-parse 400 when the body never parsed).
+    /// backend's generic body-parse 400 when the body never parsed,
+    /// or its plain-text 500 when the reply itself cannot render).
     /// No ETag and no Cache-Control: validation replies bypass the
     /// conditional-GET middleware.
     pub fn into_response(self) -> Response<Body> {
+        if self.unrenderable {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("Internal Server Error"))
+                .expect("static 500 builds");
+        }
         if self.unparsable_body {
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)

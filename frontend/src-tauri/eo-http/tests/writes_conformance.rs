@@ -111,17 +111,36 @@ async fn request(
     path: &str,
     body: Option<&str>,
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    request_raw(
+        port,
+        method,
+        path,
+        body.map(|payload| payload.as_bytes().to_vec()),
+        body.map(|_| "application/json"),
+    )
+    .await
+}
+
+/// The fully-general form: raw body bytes and an explicit content
+/// type (the encoding and content-type probes need both).
+async fn request_raw(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<Vec<u8>>,
+    content_type: Option<&str>,
+) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     let authority = format!("127.0.0.1:{port}");
     let mut builder = http::Request::builder()
         .method(method)
         .uri(format!("http://{authority}{path}"))
         .header("host", &authority)
         .header("origin", "tauri://localhost");
+    if let Some(ct) = content_type {
+        builder = builder.header("content-type", ct);
+    }
     let request = match body {
-        Some(payload) => {
-            builder = builder.header("content-type", "application/json");
-            builder.body(Body::from(payload.to_string())).unwrap()
-        }
+        Some(payload) => builder.body(Body::from(payload)).unwrap(),
         None => builder.body(Body::empty()).unwrap(),
     };
     let response = client().request(request).await.expect("request succeeds");
@@ -497,6 +516,215 @@ async fn the_write_surface_conforms_through_the_public_port() {
     }
     arms.compare_db_state("error legs + non-finite create")
         .await;
+
+    // The adversarial-form grid (validation taxonomy, declaration
+    // order, render-crash 500s; none of these mutate).
+    let lone_surrogate_body = "{\"planet\": \"\\ud800\"}";
+    for (method, path, body) in [
+        // Multi-error issues list in model declaration order.
+        (
+            "PUT",
+            "/api/quests/1",
+            r#"{"reward_description": 5, "cooldown_hours": "x"}"#,
+        ),
+        (
+            "PUT",
+            "/api/quests/1",
+            r#"{"expected_reward_markup_percent": "x", "reward_is_skill": "zz"}"#,
+        ),
+        // The bool taxonomy split.
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": null}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": 1.5}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": [1]}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": 2.0}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": 2}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "B", "reward_is_skill": 999999999999999999999999}"#,
+        ),
+        // Beyond-i64 floats into int fields: the size 422 (both exact
+        // bounds excluded); digit strings stay the storage 500.
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "I", "chain_position": 1e30}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "I", "chain_position": 9223372036854775808.0}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "I", "chain_position": -9223372036854775808.0}"#,
+        ),
+        (
+            "POST",
+            "/api/quests/playlists",
+            r#"{"name": "P", "items": [{"quest_id": 1e19}]}"#,
+        ),
+        // The render-crash 500s: non-finite and lone-surrogate echoes.
+        ("POST", "/api/quests", r#"{"name": Infinity}"#),
+        ("POST", "/api/quests", r#"{"chain_position": Infinity}"#),
+        ("POST", "/api/quests", lone_surrogate_body),
+        // Float underscore gate: rejected forms.
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "F", "reward_ped": "_1.5"}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "F", "reward_ped": "1.5_"}"#,
+        ),
+        (
+            "POST",
+            "/api/quests",
+            r#"{"name": "F", "reward_ped": "1__0.5"}"#,
+        ),
+    ] {
+        arms.compare(method, path, Some(body), false).await;
+    }
+
+    // Top-level null bodies: ABSENT to the model binding (missing on
+    // required-body routes, no-body semantics on cancel).
+    for (method, path) in [
+        ("POST", "/api/quests"),
+        ("PUT", "/api/quests/1"),
+        ("POST", "/api/quests/424242/cancel"),
+    ] {
+        arms.compare(method, path, Some("null"), false).await;
+    }
+
+    // The deep-echo render crash (both arms 500 past the reference's
+    // render limit) and the parity at its last passing depth.
+    let deep_value =
+        |depth: usize| format!(r#"{{"name": {}{}}}"#, "[".repeat(depth), "]".repeat(depth));
+    arms.compare("POST", "/api/quests", Some(&deep_value(984)), false)
+        .await;
+    arms.compare("POST", "/api/quests", Some(&deep_value(990)), false)
+        .await;
+
+    // Content-type gating: a non-application maintype with a +json
+    // suffix is NOT JSON to the backend (raw-string echo), while
+    // application subtypes match case-insensitively (those two create,
+    // identically on both arms).
+    for (ct, body) in [
+        ("text/whatever+json", r#"{"name": "TW"}"#),
+        ("application/hal+JSON", r#"{"name": "HAL"}"#),
+        ("Application/JSON", r#"{"name": "CASEY"}"#),
+    ] {
+        let (ns, _, nb) = request_raw(
+            arms.substrate_port,
+            "POST",
+            "/api/quests",
+            Some(body.as_bytes().to_vec()),
+            Some(ct),
+        )
+        .await;
+        let (cs, _, cb) = request_raw(
+            arms.comparison_port,
+            "POST",
+            "/api/quests",
+            Some(body.as_bytes().to_vec()),
+            Some(ct),
+        )
+        .await;
+        assert_eq!(ns, cs, "content-type {ct} status");
+        assert_eq!(nb, cb, "content-type {ct} body");
+    }
+
+    // Body-encoding detection: UTF-16 and BOM-prefixed bodies parse
+    // (and create, identically); invalid UTF-8 answers the generic
+    // body-parse 400.
+    let utf16: Vec<u8> = r#"{"name": "U16"}"#.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let bom = [vec![0xEF, 0xBB, 0xBF], br#"{"name": "BOM"}"#.to_vec()].concat();
+    let bad_utf8 = [br#"{"name": ""#.to_vec(), vec![0xFF], br#""}"#.to_vec()].concat();
+    for (bytes, label) in [
+        (utf16, "utf-16-le"),
+        (bom, "utf-8 bom"),
+        (bad_utf8, "invalid utf-8"),
+    ] {
+        let (ns, _, nb) = request_raw(
+            arms.substrate_port,
+            "POST",
+            "/api/quests",
+            Some(bytes.clone()),
+            Some("application/json"),
+        )
+        .await;
+        let (cs, _, cb) = request_raw(
+            arms.comparison_port,
+            "POST",
+            "/api/quests",
+            Some(bytes),
+            Some("application/json"),
+        )
+        .await;
+        assert_eq!(ns, cs, "encoding {label} status");
+        assert_eq!(nb, cb, "encoding {label} body");
+    }
+
+    // Accepted underscore floats create identically on both arms.
+    for raw in ["1_.5", "1._5", "1e_5", "+_1"] {
+        let body = format!(r#"{{"name": "UF{raw}", "reward_ped": "{raw}"}}"#);
+        arms.compare("POST", "/api/quests", Some(&body), false)
+            .await;
+    }
+    arms.compare_db_state("adversarial grid").await;
+
+    // The deferral: codex claim and meta-claim stay proxied (the
+    // sidecar's server header proves the arm) and answer identically.
+    let (status, headers, _) = request_raw(
+        arms.substrate_port,
+        "POST",
+        "/api/codex/claim",
+        Some(br#"{"species_name": "1", "rank": 99, "skill_name": "X"}"#.to_vec()),
+        Some("application/json"),
+    )
+    .await;
+    assert!(
+        headers.contains_key(http::header::SERVER),
+        "codex claim stays on the proxy arm (deferred with the producer cutover)"
+    );
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    arms.compare(
+        "POST",
+        "/api/codex/claim",
+        Some(r#"{"species_name": "1", "rank": 99, "skill_name": "X"}"#),
+        false,
+    )
+    .await;
+    arms.compare(
+        "POST",
+        "/api/codex/meta/claim",
+        Some(r#"{"attribute_name": "Nope"}"#),
+        false,
+    )
+    .await;
 
     // Nesting beyond both parsers' limits answers the backend's
     // generic body-parse 400 on both arms.

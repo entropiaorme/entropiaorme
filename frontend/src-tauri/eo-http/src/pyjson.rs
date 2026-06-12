@@ -93,26 +93,121 @@ impl PyJsonError {
 }
 
 /// How a parse fails: malformed input (the reference's message and
-/// position, echoed in the validation envelope) or nesting beyond the
-/// depth cap (the reference's parser hits its own recursion limit on
-/// such input and the HTTP layer answers a generic body-parse 400).
+/// position, echoed in the validation envelope), nesting beyond the
+/// depth cap (the reference's HTTP layer answers its generic
+/// body-parse 400 once ITS parser gives up), undecodable bytes (the
+/// same 400: the reference's decode step fails before its scanner), or
+/// input the reference's response serialiser cannot render (a lone
+/// surrogate escape: the reference parses it and then crashes with a
+/// plain-text 500 wherever the value reaches a response; the native
+/// reply is the same 500 without the mutation, recorded in the
+/// divergence register).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PyJsonFailure {
     Malformed(PyJsonError),
     TooDeep,
+    Undecodable,
+    Unrenderable,
 }
 
-/// Container nesting beyond this answers as the reference's HTTP layer
-/// does for its parser's recursion limit. The reference's own limit
-/// sits above this cap (probed: 10000 parses, 50000 fails), so inputs
-/// between the two thresholds answer the body-parse 400 here while
-/// that reference build still parses them: a tolerance confined to
-/// adversarial nesting depth no legitimate client reaches. The scanner
-/// runs on an explicit stack, so parsing never grows the native call
-/// stack; the cap bounds the remaining recursive walks over a PARSED
-/// value (the destructor, the issue-echo renderer) well inside a
-/// worker thread's stack.
+/// Container nesting beyond this answers the generic body-parse 400.
+/// The reference's reply ladder for deep bodies, probed through the
+/// route: echoed envelopes render to depth 984 and crash to the
+/// plain-text 500 from 985 (the render limit, mirrored exactly by the
+/// echo machinery in [`crate::body`]); deep values in IGNORED fields
+/// parse and answer 200 up to its parser's own limit (between 10000
+/// and 50000 on the probed build), past which the generic 400 takes
+/// over. The native cap therefore diverges only in [2000, that parse
+/// limit): an ignored-field depth there answers 400 natively where the
+/// reference answers 200, and an echoed depth there answers 400 where
+/// the reference answers its render 500. Both bands are adversarial
+/// nesting no legitimate client reaches, held as a recorded tolerance.
+/// The scanner runs on an explicit stack, so parsing never grows the
+/// native call stack; the cap bounds the remaining recursive walks
+/// over a PARSED value (the destructor, the issue-echo renderer) well
+/// inside a worker thread's stack.
 const MAX_DEPTH: usize = 2_000;
+
+/// Parse raw body bytes as the reference does: its encoding detection
+/// (UTF-8 default, BOM-marked or NUL-patterned UTF-16/32 accepted)
+/// followed by a STRICT decode (invalid bytes fail the whole body, the
+/// generic 400), then the scanner.
+pub fn loads_bytes(bytes: &[u8]) -> Result<PyValue, PyJsonFailure> {
+    let text = decode_reference_encodings(bytes).ok_or(PyJsonFailure::Undecodable)?;
+    loads(&text)
+}
+
+/// The reference's body-encoding detection: a BOM wins; otherwise the
+/// NUL pattern of the first bytes distinguishes UTF-16/32 variants,
+/// defaulting to UTF-8. Decodes strictly (None on any invalid
+/// sequence).
+fn decode_reference_encodings(bytes: &[u8]) -> Option<String> {
+    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8(rest.to_vec()).ok();
+    }
+    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+    {
+        return decode_utf32(&bytes[4..], bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]));
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, true);
+    }
+    if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, false);
+    }
+    // BOM-less detection by the NUL pattern of the first two
+    // characters, as the reference performs it.
+    if bytes.len() >= 4 {
+        match (bytes[0] == 0, bytes[1] == 0, bytes[2] == 0, bytes[3] == 0) {
+            (false, true, true, true) => return decode_utf32(bytes, true),
+            (true, true, true, false) => return decode_utf32(bytes, false),
+            (false, true, false, true) => return decode_utf16(bytes, true),
+            (true, false, true, false) => return decode_utf16(bytes, false),
+            _ => {}
+        }
+    } else if bytes.len() == 2 {
+        match (bytes[0] == 0, bytes[1] == 0) {
+            (false, true) => return decode_utf16(bytes, true),
+            (true, false) => return decode_utf16(bytes, false),
+            _ => {}
+        }
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
+    if !bytes.len().is_multiple_of(2) {
+        return None;
+    }
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            if little_endian {
+                u16::from_le_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_be_bytes([pair[0], pair[1]])
+            }
+        })
+        .collect();
+    String::from_utf16(&units).ok()
+}
+
+fn decode_utf32(bytes: &[u8], little_endian: bool) -> Option<String> {
+    if !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    bytes
+        .chunks_exact(4)
+        .map(|quad| {
+            let value = if little_endian {
+                u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]])
+            } else {
+                u32::from_be_bytes([quad[0], quad[1], quad[2], quad[3]])
+            };
+            char::from_u32(value)
+        })
+        .collect()
+}
 
 /// Parse a body as the reference does: decode positions are CHARACTER
 /// indices into the decoded text.
@@ -213,7 +308,7 @@ impl Scanner<'_> {
                         continue 'expect_value;
                     }
                 }
-                _ => self.scan_scalar(idx).map_err(PyJsonFailure::Malformed)?,
+                _ => self.scan_scalar(idx)?,
             };
             // ── A value completed; feed the enclosing frames ──
             loop {
@@ -316,9 +411,7 @@ impl Scanner<'_> {
     /// Read a `"key":` sequence into the topmost object frame and
     /// return the value's start index. `at_key` sits on the quote.
     fn read_key_into(&self, stack: &mut [Frame], at_key: usize) -> Result<usize, PyJsonFailure> {
-        let (parsed_key, mut idx) = self
-            .scan_string(at_key + 1)
-            .map_err(PyJsonFailure::Malformed)?;
+        let (parsed_key, mut idx) = self.scan_string(at_key + 1)?;
         if self.at(idx) != Some(':') {
             idx = self.skip_ws(idx);
             if self.at(idx) != Some(':') {
@@ -333,9 +426,9 @@ impl Scanner<'_> {
     }
 
     /// A scalar at `idx`: string, number, or literal.
-    fn scan_scalar(&self, idx: usize) -> Result<(PyValue, usize), PyJsonError> {
+    fn scan_scalar(&self, idx: usize) -> Result<(PyValue, usize), PyJsonFailure> {
         let Some(ch) = self.at(idx) else {
-            return Err(PyJsonError::new("Expecting value", idx));
+            return Err(malformed("Expecting value", idx));
         };
         match ch {
             '"' => {
@@ -354,8 +447,8 @@ impl Scanner<'_> {
             }
             '-' | '0'..='9' => self
                 .scan_number(idx)
-                .ok_or_else(|| PyJsonError::new("Expecting value", idx)),
-            _ => Err(PyJsonError::new("Expecting value", idx)),
+                .ok_or_else(|| malformed("Expecting value", idx)),
+            _ => Err(malformed("Expecting value", idx)),
         }
     }
 
@@ -416,20 +509,20 @@ impl Scanner<'_> {
 
     /// The reference's string scanner, positions included: an
     /// unterminated string reports the OPENING quote's position.
-    fn scan_string(&self, start: usize) -> Result<(String, usize), PyJsonError> {
+    fn scan_string(&self, start: usize) -> Result<(String, usize), PyJsonFailure> {
         let begin = start - 1;
         let mut out = String::new();
         let mut idx = start;
         loop {
             let Some(ch) = self.at(idx) else {
-                return Err(PyJsonError::new("Unterminated string starting at", begin));
+                return Err(malformed("Unterminated string starting at", begin));
             };
             match ch {
                 '"' => return Ok((out, idx + 1)),
                 '\\' => {
                     idx += 1;
                     let Some(esc) = self.at(idx) else {
-                        return Err(PyJsonError::new("Unterminated string starting at", begin));
+                        return Err(malformed("Unterminated string starting at", begin));
                     };
                     match esc {
                         '"' => out.push('"'),
@@ -447,13 +540,13 @@ impl Scanner<'_> {
                             continue;
                         }
                         _ => {
-                            return Err(PyJsonError::new("Invalid \\escape", idx - 1));
+                            return Err(malformed("Invalid \\escape", idx - 1));
                         }
                     }
                     idx += 1;
                 }
                 ch if (ch as u32) < 0x20 => {
-                    return Err(PyJsonError::new("Invalid control character at", idx));
+                    return Err(malformed("Invalid control character at", idx));
                 }
                 ch => {
                     out.push(ch);
@@ -466,14 +559,14 @@ impl Scanner<'_> {
     /// `\uXXXX`, with surrogate pairing as the reference performs it;
     /// `idx` sits on the `u`. Returns the decoded char and the index
     /// just past the escape.
-    fn scan_unicode_escape(&self, idx: usize) -> Result<(char, usize), PyJsonError> {
+    fn scan_unicode_escape(&self, idx: usize) -> Result<(char, usize), PyJsonFailure> {
         // The reference reports the escape's `u` position on a short
         // or non-hex group.
-        let hex = |at: usize| -> Result<u32, PyJsonError> {
+        let hex = |at: usize| -> Result<u32, PyJsonFailure> {
             let mut value = 0u32;
             for offset in 0..4 {
                 let Some(ch) = self.at(at + offset).and_then(|c| c.to_digit(16)) else {
-                    return Err(PyJsonError::new("Invalid \\uXXXX escape", at - 1));
+                    return Err(malformed("Invalid \\uXXXX escape", at - 1));
                 };
                 value = value * 16 + ch;
             }
@@ -488,16 +581,23 @@ impl Scanner<'_> {
                 if (0xDC00..0xE000).contains(&second) {
                     let combined = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00);
                     let ch = char::from_u32(combined)
-                        .ok_or_else(|| PyJsonError::new("Invalid \\uXXXX escape", idx + 7))?;
+                        .ok_or_else(|| malformed("Invalid \\uXXXX escape", idx + 7))?;
                     return Ok((ch, idx + 11));
                 }
             }
         }
-        // A lone surrogate survives in the reference as the surrogate
-        // code point; Rust chars cannot carry it, so the replacement
-        // character stands in (the only divergence, unreachable from
-        // well-formed clients and pinned in the battery as accepted).
-        let ch = char::from_u32(first).unwrap_or('\u{FFFD}');
+        if (0xD800..0xE000).contains(&first) {
+            // A lone surrogate parses in the reference (its strings
+            // carry surrogate code points) and then crashes its
+            // response serialiser with a plain-text 500 wherever the
+            // value reaches a reply, mutating first on accepted-write
+            // paths. Rust strings cannot carry the value at all; the
+            // native arm answers the same 500 WITHOUT the mutation
+            // (divergence-register entry, adversarial-input-only).
+            return Err(PyJsonFailure::Unrenderable);
+        }
+        let ch =
+            char::from_u32(first).ok_or_else(|| malformed("Invalid \\uXXXX escape", idx + 1))?;
         Ok((ch, idx + 5))
     }
 }
@@ -509,7 +609,7 @@ mod tests {
     fn err(text: &str) -> PyJsonError {
         match loads(text).expect_err("expected a parse failure") {
             PyJsonFailure::Malformed(error) => error,
-            PyJsonFailure::TooDeep => panic!("expected a malformed failure, got TooDeep"),
+            other => panic!("expected a malformed failure, got {other:?}"),
         }
     }
 

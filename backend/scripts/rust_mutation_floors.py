@@ -206,6 +206,17 @@ FLOORS: dict[str, float] = {
     # makes unreachable, and the exactly-on-the-boundary band comparisons).
     # Floor a shade under, ratchet-up-only.
     "eo-http/src/analytics_routes.rs": 92.0,
+    # The tracking session-read router (sessions list, session detail, tag
+    # suggestions). Hermetic pins cover the list + detail aggregation
+    # (cost/returns/net/returnRate, costBreakdown, loot/tool/mob breakdown,
+    # skillGains, the timestamp render incl. the microsecond carry/borrow),
+    # globals/hofs counting, and the tag-suggestions filter; measured 91.9.
+    # The residual survivors are the cross-language seeded killers (the heavy
+    # get_session_impl per-row products and the stable-sort helpers, which the
+    # two-arm battery exercises over multi-row real data, feature-gated off
+    # hermetically) plus boundary/equivalent guards. Floor a shade under,
+    # ratchet-up-only.
+    "eo-http/src/tracking_routes.rs": 90.0,
 }
 
 

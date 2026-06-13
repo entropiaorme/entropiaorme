@@ -182,6 +182,37 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
             "{path}"
         );
     }
+    // Analytics serves natively but OUTSIDE the ETag middleware's prefixes,
+    // so its reads are plain 200s (no ETag / Cache-Control). The overview's
+    // cycledBreakdown keeps engine integer zeros (the Any field) while the
+    // float-declared aggregates coerce; activity returns three empty tables.
+    for (path, expected_body) in [
+        (
+            "/api/analytics/overview?period=all",
+            "{\"totalReturnRate\":0.0,\"trend\":\"stable\",\"returnsBreakdown\":\
+             {\"lootTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\
+             \"lossesBreakdown\":{\"trackingCost\":0.0,\"cycledBreakdown\":\
+             {\"weapon\":0,\"healing\":0,\"enhancer\":0,\"armour\":0,\"dangling\":0},\
+             \"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\"timeline\":[],\
+             \"monthlyBreakdown\":[]}",
+        ),
+        (
+            "/api/analytics/activity",
+            "{\"mobComparisons\":[],\"tagComparisons\":[],\"weaponComparisons\":[]}",
+        ),
+    ] {
+        let (status, headers, body) = get(port, path).await;
+        assert_eq!(status, http::StatusCode::OK, "{path}");
+        assert_eq!(body, expected_body.as_bytes(), "{path}");
+        assert!(!headers.contains_key(http::header::ETAG), "{path}");
+        assert_eq!(
+            headers
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json"),
+            "{path}"
+        );
+    }
     // The path-parameter route: decoded lookup misses on the empty
     // catalogue with the handler's message, errors carry no ETag.
     let (status, headers, body) = get(port, "/api/codex/species/No%20Such/ranks").await;
@@ -320,8 +351,11 @@ async fn the_router_validates_through_the_extraction_layer() {
 async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
     let (port, state, _dir) = serve_substrate().await;
     // An unregistered route falls back to the proxy: 502 against the
-    // dead upstream proves which arm answered.
-    let (status, _, _) = get(port, "/api/analytics/overview").await;
+    // dead upstream proves which arm answered. The analytics ledger and
+    // inventory CRUD routes stay with the sidecar until the write
+    // endpoints are ported natively, while overview and activity serve
+    // natively now.
+    let (status, _, _) = get(port, "/api/analytics/ledger").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
     // A registered path's unported method falls back too: the
     // settings PATCH stays with the sidecar until the producer

@@ -29,11 +29,13 @@ sqlx.workspace = true
 sha2.workspace = true
 tokio-stream.workspace = true
 percent-encoding.workspace = true
+# Epoch-to-date arithmetic for the analytics period windows, mirroring the
+# router's datetime.fromtimestamp(...).strftime date math.
+chrono.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
 tempfile.workspace = true
-chrono.workspace = true
 # test-util powers the paused-clock keep-alive cadence test; dev-only so
 # the feature never reaches a shipped build.
 tokio = { workspace = true, features = ["test-util"] }

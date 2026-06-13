@@ -10,6 +10,7 @@
 //! The route-by-route takeover plan is documented in
 //! `backend/architecture/PORT-READINESS.md`.
 
+pub mod analytics_routes;
 pub mod arms;
 pub mod body;
 pub mod character_routes;

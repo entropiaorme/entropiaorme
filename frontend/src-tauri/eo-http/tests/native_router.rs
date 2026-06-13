@@ -320,8 +320,11 @@ async fn the_router_validates_through_the_extraction_layer() {
 async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
     let (port, state, _dir) = serve_substrate().await;
     // An unregistered route falls back to the proxy: 502 against the
-    // dead upstream proves which arm answered.
-    let (status, _, _) = get(port, "/api/analytics/overview").await;
+    // dead upstream proves which arm answered. The analytics ledger and
+    // inventory CRUD routes stay with the sidecar until the write
+    // endpoints are ported natively, while overview and activity serve
+    // natively now.
+    let (status, _, _) = get(port, "/api/analytics/ledger").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
     // A registered path's unported method falls back too: the
     // settings PATCH stays with the sidecar until the producer

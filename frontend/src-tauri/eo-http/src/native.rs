@@ -916,6 +916,22 @@ simple_get!(character_prospect_options, character_prospect_options);
 simple_get!(character_hp_optimizer, character_hp_optimizer);
 simple_get!(character_codex, character_codex);
 
+// ── Analytics adapters ──────────────────────────────────────────────
+
+simple_get!(analytics_activity, analytics_activity);
+
+/// GET /api/analytics/overview: the `period` query selects the window.
+/// Any unrecognised value falls through to all-time (the reference's
+/// `dict.get` miss), so no validation envelope applies.
+async fn analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let period = query.last("period").unwrap_or("all").to_string();
+    hydration.analytics_overview(&period).await
+}
+
 /// GET /api/character/prospect: the query family validates in
 /// signature order (the envelope), then the handler's own 422 details
 /// in code order.
@@ -1370,6 +1386,22 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/codex/meta/attributes",
                 codex_meta_attributes,
+            ),
+        )
+        .route(
+            "/api/analytics/overview",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/analytics/overview",
+                analytics_overview,
+            ),
+        )
+        .route(
+            "/api/analytics/activity",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/analytics/activity",
+                analytics_activity,
             ),
         )
         .route(

@@ -252,6 +252,136 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
     assert_eq!(status, http::StatusCode::OK);
 }
 
+/// The analytics write adapters serve natively over the composed state:
+/// the success paths, the validation envelopes (exercising required_f64),
+/// and the handler error legs, all without the cross-language battery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_analytics_write_routes_serve_natively() {
+    let (port, _state, _dir) = serve_substrate().await;
+    let del = |port, path: &'static str| async move {
+        request(port, "DELETE", path, &[("origin", "tauri://localhost")]).await
+    };
+
+    // Ledger: create -> 200 with a generated id; missing required float ->
+    // 422 (required_f64); delete-404.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/ledger",
+        r#"{"date":"2026-05-01","type":"expense","description":"Ammo","amount":12.5,"tag":"ammo"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let entry: Value = serde_json::from_slice(&body).unwrap();
+    assert!(entry["id"].as_str().is_some());
+    assert_eq!(entry["amount"], serde_json::json!(12.5));
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/ledger",
+        r#"{"date":"2026-05-01","type":"expense","description":"x","tag":"t"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing"]);
+    let (status, _, body) = del(port, "/api/analytics/ledger/nope").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Entry not found\"}");
+
+    // Presets: create -> 200; bad type -> 400; delete-404.
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/analytics/ledger/presets",
+        r#"{"name":"Decay","type":"expense","description":"d","amount":0.5,"tag":"decay"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/ledger/presets",
+        r#"{"name":"Bad","type":"income","description":"d","amount":1.0,"tag":"t"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body, b"{\"detail\":\"type must be 'expense' or 'markup'\"}");
+    let (status, _, body) = del(port, "/api/analytics/ledger/presets/nope").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Preset not found\"}");
+
+    // Inventory: create (snake_case) -> 200 camelCase; missing name -> 422;
+    // patch + delete + sell over the created id; the 404 legs.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/inventory",
+        r#"{"name":"Sword","tt_value":10.0,"markup_paid":2.0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let item: Value = serde_json::from_slice(&body).unwrap();
+    let id = item["id"].as_str().unwrap().to_string();
+    assert_eq!(item["ttValue"], serde_json::json!(10.0));
+    assert_eq!(item["markupPaid"], serde_json::json!(2.0));
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/inventory",
+        r#"{"tt_value":1.0,"markup_paid":0.0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing"]);
+    let (status, _, body) = send_json(
+        port,
+        "PATCH",
+        &format!("/api/analytics/inventory/{id}"),
+        r#"{"name":"Renamed"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let patched: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(patched["name"], serde_json::json!("Renamed"));
+    let (status, _, _) = request(
+        port,
+        "PATCH",
+        "/api/analytics/inventory/nope",
+        &[("origin", "tauri://localhost")],
+    )
+    .await;
+    // PATCH carries no body here, so the missing-body envelope precedes the
+    // 404; either way it is not a 200.
+    assert_ne!(status, http::StatusCode::OK);
+    let (status, _, body) = del(port, "/api/analytics/inventory/nope").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Inventory item not found\"}");
+
+    // Sell the created item -> 200 with a markup ledger entry; sell-404.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/analytics/inventory/{id}/sell"),
+        r#"{"sale_price":20.0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let sold: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sold["ledgerEntry"]["type"], serde_json::json!("markup"));
+    assert_eq!(sold["ledgerEntry"]["amount"], serde_json::json!(8.0));
+    // The item was renamed by the earlier PATCH leg.
+    assert_eq!(sold["soldItem"]["name"], serde_json::json!("Renamed"));
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/analytics/inventory/nope/sell",
+        r#"{"sale_price":1.0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Inventory item not found\"}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_browser_surface_is_answered_at_the_substrate() {
     let (port, _state, _dir) = serve_substrate().await;

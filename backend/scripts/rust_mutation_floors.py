@@ -196,6 +196,16 @@ FLOORS: dict[str, float] = {
     # component edges.
     "eo-http/src/character_routes.rs": 85.0,
     "eo-http/src/equipment_routes.rs": 90.0,
+    # The analytics overview/activity router. Hermetic pins cover the
+    # engine-typed emission, the rate arithmetic, the OR filter, the trend
+    # bands, dominance + the tag split, and both handlers; measured 93.1
+    # after them. The residual hermetic survivors are the cross-language
+    # seeded-timeline killers (the per-day/-month bucket fill, the rate
+    # formula over unequal-loss windows and ledger-in-trend) plus genuinely
+    # equivalent guards (the `cycled > 0` slice check the upstream filter
+    # makes unreachable, and the exactly-on-the-boundary band comparisons).
+    # Floor a shade under, ratchet-up-only.
+    "eo-http/src/analytics_routes.rs": 92.0,
 }
 
 

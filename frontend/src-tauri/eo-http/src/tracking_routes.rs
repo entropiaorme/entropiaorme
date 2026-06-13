@@ -32,7 +32,9 @@ use serde_json::{json, Value};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
 
-use crate::hydration::{detail, error_response, internal_error, json_response, HydrationState};
+use crate::hydration::{
+    detail, error_response, internal_error, json_response, plain_json_response, HydrationState,
+};
 
 /// The attribute skills the session-detail skill-gain aggregate excludes
 /// (`backend.services.character_calc.ATTRIBUTE_SKILLS`). A Python `set`, so
@@ -621,6 +623,386 @@ async fn tag_suggestions_impl(
     Ok(json!(names))
 }
 
+// ── Session edits (rename-mob / restore-mob / loot flip / armour-cost) ──
+//
+// Post-hoc edits to ENDED sessions, byte-faithful to
+// `backend/routers/tracking.py`. Each mutates only the shared SQLite
+// database. The four mob/loot edits share the active-session guard
+// (`_validate_session_exists`): 404 when the session is absent, 409 when
+// it is still active. `armour-cost` deliberately omits that guard (the
+// reference does too), accepting the edit on any session that exists.
+//
+// These reply as plain JSON 200s; the ETag middleware decorates only
+// 2xx GETs, so writes carry no conditional-GET headers.
+
+/// A handler-level edit failure carrying the reference's exact HTTP
+/// status and detail string. `Internal` is the unhandled-exception 500.
+#[derive(Debug)]
+enum EditError {
+    Http(StatusCode, String),
+    Internal,
+}
+
+impl From<sqlx::Error> for EditError {
+    fn from(_: sqlx::Error) -> Self {
+        EditError::Internal
+    }
+}
+
+impl EditError {
+    fn into_response(self) -> Response<Body> {
+        match self {
+            EditError::Http(status, message) => error_response(status, &detail(&message)),
+            EditError::Internal => internal_error(),
+        }
+    }
+}
+
+/// `_validate_session_exists`: 404 if the session row is absent, 409 if
+/// it is still active (`is_active = 1`).
+async fn validate_session_exists(pool: &SqlitePool, session_id: &str) -> Result<(), EditError> {
+    let row = sqlx::query("SELECT id, is_active FROM tracking_sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return Err(EditError::Http(
+            StatusCode::NOT_FOUND,
+            "Session not found".to_string(),
+        ));
+    };
+    if row.get::<i64, _>(1) != 0 {
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            "Session mob edits are only available after the session has ended".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// `_build_mob_edit_response`: the post-mutation per-mob kill count for
+/// the resulting `mob_name`.
+async fn build_mob_edit_response(
+    pool: &SqlitePool,
+    session_id: &str,
+    mob_name: &str,
+) -> Result<Value, EditError> {
+    let row = sqlx::query("SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?")
+        .bind(session_id)
+        .bind(mob_name)
+        .fetch_one(pool)
+        .await?;
+    Ok(json!({
+        "sessionId": session_id,
+        "mobName": mob_name,
+        "killCount": row.get::<i64, _>(0),
+    }))
+}
+
+/// `_build_loot_item_edit_response`: affected row count, the signed
+/// value delta (4dp), and the session's recomputed returns total (2dp).
+async fn build_loot_item_edit_response(
+    pool: &SqlitePool,
+    session_id: &str,
+    item_name: &str,
+    affected_rows: i64,
+    total_value_delta: f64,
+) -> Result<Value, EditError> {
+    let row =
+        sqlx::query("SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?")
+            .bind(session_id)
+            .fetch_one(pool)
+            .await?;
+    let session_returns = as_f64(&sql_number(&row, 0));
+    Ok(json!({
+        "sessionId": session_id,
+        "itemName": item_name,
+        "affectedRows": affected_rows,
+        "totalValueDelta": round(total_value_delta, 4),
+        "sessionTotalReturns": round(session_returns, 2),
+    }))
+}
+
+/// `_rename_session_mob_impl`.
+async fn rename_session_mob_impl(
+    pool: &SqlitePool,
+    session_id: &str,
+    from_mob: &str,
+    to_mob: &str,
+) -> Result<Value, EditError> {
+    validate_session_exists(pool, session_id).await?;
+    let from_mob = from_mob.trim();
+    let to_mob = to_mob.trim();
+    if from_mob.is_empty() || to_mob.is_empty() {
+        return Err(EditError::Http(
+            StatusCode::BAD_REQUEST,
+            "Mob names cannot be blank".to_string(),
+        ));
+    }
+    if from_mob == to_mob {
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            "rename target matches the current value (no-op)".to_string(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    // Preserve the first original via COALESCE; the rowcount inside the
+    // transaction is the precondition (zero matches -> rollback + 409).
+    let preserve = sqlx::query(
+        "UPDATE kills \
+         SET original_mob_name = COALESCE(original_mob_name, mob_name) \
+         WHERE session_id = ? AND mob_name = ?",
+    )
+    .bind(session_id)
+    .bind(from_mob)
+    .execute(&mut *tx)
+    .await?;
+    if preserve.rows_affected() == 0 {
+        // Drop the transaction (rollback) before the 409.
+        drop(tx);
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            format!("No kills in this session match mob_name='{from_mob}'"),
+        ));
+    }
+    // Rewrite mob_name; clear the preservation column on a round-trip to
+    // the genuinely-original capture (CASE: original == new -> NULL).
+    sqlx::query(
+        "UPDATE kills \
+         SET mob_name = ?, \
+             original_mob_name = CASE \
+                 WHEN original_mob_name = ? THEN NULL \
+                 ELSE original_mob_name \
+             END \
+         WHERE session_id = ? AND mob_name = ?",
+    )
+    .bind(to_mob)
+    .bind(to_mob)
+    .bind(session_id)
+    .bind(from_mob)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM session_summaries WHERE session_id = ?")
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    build_mob_edit_response(pool, session_id, to_mob).await
+}
+
+/// `_restore_session_mob_impl`.
+async fn restore_session_mob_impl(
+    pool: &SqlitePool,
+    session_id: &str,
+    current_mob: &str,
+) -> Result<Value, EditError> {
+    validate_session_exists(pool, session_id).await?;
+    let current_mob = current_mob.trim();
+    if current_mob.is_empty() {
+        return Err(EditError::Http(
+            StatusCode::BAD_REQUEST,
+            "Mob name cannot be blank".to_string(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    let restored_rows = sqlx::query(
+        "UPDATE kills \
+         SET mob_name = original_mob_name, original_mob_name = NULL \
+         WHERE session_id = ? AND mob_name = ? AND original_mob_name IS NOT NULL \
+         RETURNING mob_name",
+    )
+    .bind(session_id)
+    .bind(current_mob)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if restored_rows.is_empty() {
+        drop(tx);
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            format!(
+                "No restorable kills in this session for mob_name='{current_mob}' \
+                 (either no rename has happened or the preservation column is empty)"
+            ),
+        ));
+    }
+
+    // Distinct originals (a Python set): >1 means several prior names
+    // merged into the current one; the single-result shape cannot split
+    // them, so refuse with the ambiguous 409.
+    let mut distinct: Vec<String> = Vec::new();
+    for row in &restored_rows {
+        let original = row.get::<String, _>(0);
+        if !distinct.contains(&original) {
+            distinct.push(original);
+        }
+    }
+    if distinct.len() > 1 {
+        drop(tx);
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            format!(
+                "Ambiguous restore for mob_name='{current_mob}': {} distinct prior names merged into it.",
+                distinct.len()
+            ),
+        ));
+    }
+    let restored_to = distinct.into_iter().next().expect("one distinct original");
+
+    sqlx::query("DELETE FROM session_summaries WHERE session_id = ?")
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    build_mob_edit_response(pool, session_id, &restored_to).await
+}
+
+/// `_bulk_flip_loot_item`: flip every matching loot row in the opposite
+/// state, recompute each parent kill's denormalised `loot_total_ped`,
+/// invalidate the session summary. `to_state` is "deactivated" or
+/// "active".
+async fn bulk_flip_loot_item(
+    pool: &SqlitePool,
+    session_id: &str,
+    item_name: &str,
+    to_state: &str,
+) -> Result<Value, EditError> {
+    validate_session_exists(pool, session_id).await?;
+    let item_name = item_name.trim();
+    if item_name.is_empty() {
+        return Err(EditError::Http(
+            StatusCode::BAD_REQUEST,
+            "Item name cannot be blank".to_string(),
+        ));
+    }
+
+    // `unixepoch('now')` is the wall clock, exactly as the reference's
+    // flag write is; the flip STATE (null vs not) is what callers and
+    // the A/B db-state comparison observe, not the literal timestamp.
+    let (opposite_clause, new_flag_sql, delta_sign) = match to_state {
+        "deactivated" => ("l.deactivated_at IS NULL", "unixepoch('now')", -1.0_f64),
+        "active" => ("l.deactivated_at IS NOT NULL", "NULL", 1.0_f64),
+        other => panic!("unsupported to_state: {other:?}"),
+    };
+
+    let mut tx = pool.begin().await?;
+    let flip_sql = format!(
+        "UPDATE kill_loot_items \
+         SET deactivated_at = {new_flag_sql} \
+         WHERE id IN ( \
+             SELECT l.id \
+             FROM kill_loot_items l \
+             JOIN kills k ON k.id = l.kill_id \
+             WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause} \
+         ) \
+         RETURNING kill_id, value_ped"
+    );
+    let flipped = sqlx::query(sqlx::AssertSqlSafe(flip_sql))
+        .bind(session_id)
+        .bind(item_name)
+        .fetch_all(&mut *tx)
+        .await?;
+
+    if flipped.is_empty() {
+        // 404 (item not in session) vs 409 (already in target state),
+        // decided from the same locked transaction.
+        let any_row = sqlx::query(
+            "SELECT 1 FROM kill_loot_items l \
+             JOIN kills k ON k.id = l.kill_id \
+             WHERE k.session_id = ? AND l.item_name = ? \
+             LIMIT 1",
+        )
+        .bind(session_id)
+        .bind(item_name)
+        .fetch_optional(&mut *tx)
+        .await?;
+        drop(tx);
+        if any_row.is_none() {
+            return Err(EditError::Http(
+                StatusCode::NOT_FOUND,
+                format!("No loot named '{item_name}' in this session"),
+            ));
+        }
+        return Err(EditError::Http(
+            StatusCode::CONFLICT,
+            format!("All '{item_name}' rows in this session are already {to_state}"),
+        ));
+    }
+
+    // Aggregate per-kill deltas from RETURNING so each parent gets one
+    // UPDATE rather than N. Insertion order preserves the Python dict's.
+    let mut order: Vec<String> = Vec::new();
+    let mut per_kill: BTreeMap<String, f64> = BTreeMap::new();
+    let mut total_delta = 0.0;
+    for row in &flipped {
+        let kill_id = row.get::<String, _>(0);
+        let value = as_f64(&sql_number(row, 1));
+        if !per_kill.contains_key(&kill_id) {
+            order.push(kill_id.clone());
+        }
+        *per_kill.entry(kill_id).or_insert(0.0) += value;
+        total_delta += value;
+    }
+    for kill_id in &order {
+        let kill_delta = per_kill[kill_id];
+        sqlx::query("UPDATE kills SET loot_total_ped = loot_total_ped + ? WHERE id = ?")
+            .bind(delta_sign * kill_delta)
+            .bind(kill_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM session_summaries WHERE session_id = ?")
+        .bind(session_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    build_loot_item_edit_response(
+        pool,
+        session_id,
+        item_name,
+        flipped.len() as i64,
+        delta_sign * total_delta,
+    )
+    .await
+}
+
+/// `set_armour_cost`: 404 if absent (NO active-session guard), else add
+/// the cost to the session's COALESCE(armour_cost, 0). The response
+/// echoes `round(cost, 2)` (the submitted value, float-coerced), NOT
+/// the new total.
+async fn set_armour_cost_impl(
+    pool: &SqlitePool,
+    session_id: &str,
+    cost: f64,
+) -> Result<Value, EditError> {
+    let row = sqlx::query("SELECT id FROM tracking_sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+    if row.is_none() {
+        return Err(EditError::Http(
+            StatusCode::NOT_FOUND,
+            "Session not found".to_string(),
+        ));
+    }
+    sqlx::query(
+        "UPDATE tracking_sessions SET armour_cost = COALESCE(armour_cost, 0) + ? WHERE id = ?",
+    )
+    .bind(cost)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    Ok(json!({
+        "sessionId": session_id,
+        "armourCost": round(cost, 2),
+    }))
+}
+
 // ── The three handlers on the composition-root state ──
 
 impl HydrationState {
@@ -659,6 +1041,63 @@ impl HydrationState {
             Err(_) => internal_error(),
         }
     }
+
+    /// POST /api/tracking/session/{session_id}/rename-mob
+    pub async fn tracking_rename_mob(
+        &self,
+        session_id: &str,
+        from_mob: &str,
+        to_mob: &str,
+    ) -> Response<Body> {
+        match rename_session_mob_impl(self.pool(), session_id, from_mob, to_mob).await {
+            Ok(value) => plain_json_response(&value),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    /// POST /api/tracking/session/{session_id}/restore-mob
+    pub async fn tracking_restore_mob(
+        &self,
+        session_id: &str,
+        current_mob: &str,
+    ) -> Response<Body> {
+        match restore_session_mob_impl(self.pool(), session_id, current_mob).await {
+            Ok(value) => plain_json_response(&value),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    /// POST /api/tracking/session/{session_id}/loot-item/{item_name:path}/deactivate
+    pub async fn tracking_deactivate_loot_item(
+        &self,
+        session_id: &str,
+        item_name: &str,
+    ) -> Response<Body> {
+        match bulk_flip_loot_item(self.pool(), session_id, item_name, "deactivated").await {
+            Ok(value) => plain_json_response(&value),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    /// POST /api/tracking/session/{session_id}/loot-item/{item_name:path}/activate
+    pub async fn tracking_activate_loot_item(
+        &self,
+        session_id: &str,
+        item_name: &str,
+    ) -> Response<Body> {
+        match bulk_flip_loot_item(self.pool(), session_id, item_name, "active").await {
+            Ok(value) => plain_json_response(&value),
+            Err(error) => error.into_response(),
+        }
+    }
+
+    /// POST /api/tracking/session/{session_id}/armour-cost
+    pub async fn tracking_set_armour_cost(&self, session_id: &str, cost: f64) -> Response<Body> {
+        match set_armour_cost_impl(self.pool(), session_id, cost).await {
+            Ok(value) => plain_json_response(&value),
+            Err(error) => error.into_response(),
+        }
+    }
 }
 
 // The expected values in these tests are the backend's own outputs, held
@@ -695,6 +1134,7 @@ mod tests {
              source TEXT, scanned_at REAL)",
             "CREATE TABLE notable_events(id INTEGER PRIMARY KEY, session_id TEXT, kill_id TEXT, \
              event_type TEXT, mob_or_item TEXT, value_ped REAL, timestamp REAL)",
+            "CREATE TABLE session_summaries(session_id TEXT PRIMARY KEY, computed_at REAL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("ddl");
         }
@@ -1007,5 +1447,381 @@ mod tests {
         assert!(to_wire_json(&value).contains("\"duration\":120"));
         // endTime is null for an active session.
         assert!(to_wire_json(&value).contains("\"endTime\":null"));
+    }
+
+    // ── Session-edit hermetic pins ──
+    //
+    // These exercise the edit impls directly against an in-memory pool;
+    // the cross-language A/B battery holds the same surface byte-for-byte
+    // against the live backend.
+
+    /// An ended session with three kills (two `Atrox`, one `Foul`), one
+    /// of the Atrox already renamed from `Daikiba`, plus active loot
+    /// (`Animal Hide` on both Atrox, a slash-bearing `Metal/Residue` on
+    /// Foul) and a `session_summaries` cache row to watch invalidate.
+    async fn seed_edit(pool: &SqlitePool) {
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,armour_cost,heal_cost,\
+             dangling_cost,mob_tracking_mode,updated_at) VALUES('ended',1000.0,4600.0,0,5.0,0,0,'mob',4600.0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,armour_cost,heal_cost,\
+             dangling_cost,mob_tracking_mode,updated_at) VALUES('act',1000.0,NULL,1,0,0,0,'mob',1000.0)",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        for (id, mob, ts, loot, orig) in [
+            ("k1", "Atrox", 1001.0, 10.0, None),
+            ("k2", "Atrox", 1002.0, 20.0, Some("Daikiba")),
+            ("k3", "Foul", 1003.0, 5.0, None),
+        ] {
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,timestamp,loot_total_ped,original_mob_name) \
+                 VALUES(?,?,?,?,?,?)",
+            )
+            .bind(id)
+            .bind("ended")
+            .bind(mob)
+            .bind(ts)
+            .bind(loot)
+            .bind(orig)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        for (kid, item, qty, val) in [
+            ("k1", "Animal Hide", 2_i64, 3.0),
+            ("k2", "Animal Hide", 1, 1.5),
+            ("k3", "Metal/Residue", 1, 2.25),
+        ] {
+            sqlx::query(
+                "INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,\
+                 is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,0,NULL)",
+            )
+            .bind(kid)
+            .bind(item)
+            .bind(qty)
+            .bind(val)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO session_summaries(session_id,computed_at) VALUES('ended',1.0)")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn summary_exists(pool: &SqlitePool) -> bool {
+        sqlx::query("SELECT 1 FROM session_summaries WHERE session_id = 'ended'")
+            .fetch_optional(pool)
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    async fn original_of(pool: &SqlitePool, kill_id: &str) -> Option<String> {
+        sqlx::query("SELECT original_mob_name FROM kills WHERE id = ?")
+            .bind(kill_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+            .get::<Option<String>, _>(0)
+    }
+
+    async fn loot_state(pool: &SqlitePool, kill_id: &str, item: &str) -> (bool, f64) {
+        let row =
+            sqlx::query("SELECT deactivated_at, value_ped FROM kill_loot_items WHERE kill_id = ? AND item_name = ?")
+                .bind(kill_id)
+                .bind(item)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        (
+            row.try_get::<Option<f64>, _>(0).ok().flatten().is_some(),
+            row.get::<f64, _>(1),
+        )
+    }
+
+    async fn kill_loot_total(pool: &SqlitePool, kill_id: &str) -> f64 {
+        as_f64(&sql_number(
+            &sqlx::query("SELECT loot_total_ped FROM kills WHERE id = ?")
+                .bind(kill_id)
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            0,
+        ))
+    }
+
+    fn assert_http(result: Result<Value, EditError>, status: StatusCode, message: &str) {
+        match result {
+            Err(EditError::Http(got_status, got_message)) => {
+                assert_eq!(got_status, status);
+                assert_eq!(got_message, message);
+            }
+            other => panic!("expected Http({status}, {message:?}), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_mob_preserves_first_original_and_invalidates_summary() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        let value = rename_session_mob_impl(&pool, "ended", "Atrox", "Argo")
+            .await
+            .unwrap();
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"sessionId\":\"ended\",\"mobName\":\"Argo\",\"killCount\":2}"
+        );
+        // k1 had no original -> COALESCE records Atrox; k2 keeps the
+        // genuinely-first Daikiba.
+        assert_eq!(original_of(&pool, "k1").await.as_deref(), Some("Atrox"));
+        assert_eq!(original_of(&pool, "k2").await.as_deref(), Some("Daikiba"));
+        assert!(!summary_exists(&pool).await, "summary invalidated");
+    }
+
+    #[tokio::test]
+    async fn rename_mob_round_trip_clears_the_preservation_column() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // Atrox -> Argo, then Argo -> Daikiba on k2 lands back at its
+        // genuine original, clearing original_mob_name via the CASE.
+        rename_session_mob_impl(&pool, "ended", "Atrox", "Argo")
+            .await
+            .unwrap();
+        // Only k2 had Daikiba preserved; rename the cohort to Daikiba.
+        // k1's original was Atrox (not Daikiba) so it stays set.
+        rename_session_mob_impl(&pool, "ended", "Argo", "Daikiba")
+            .await
+            .unwrap();
+        assert_eq!(
+            original_of(&pool, "k2").await,
+            None,
+            "round-trip to the genuine original clears preservation"
+        );
+        assert_eq!(original_of(&pool, "k1").await.as_deref(), Some("Atrox"));
+    }
+
+    #[tokio::test]
+    async fn rename_mob_error_legs() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        assert_http(
+            rename_session_mob_impl(&pool, "nope", "Atrox", "Argo").await,
+            StatusCode::NOT_FOUND,
+            "Session not found",
+        );
+        assert_http(
+            rename_session_mob_impl(&pool, "act", "Atrox", "Argo").await,
+            StatusCode::CONFLICT,
+            "Session mob edits are only available after the session has ended",
+        );
+        assert_http(
+            rename_session_mob_impl(&pool, "ended", "Atrox", "Atrox").await,
+            StatusCode::CONFLICT,
+            "rename target matches the current value (no-op)",
+        );
+        assert_http(
+            rename_session_mob_impl(&pool, "ended", "  ", "Argo").await,
+            StatusCode::BAD_REQUEST,
+            "Mob names cannot be blank",
+        );
+        assert_http(
+            rename_session_mob_impl(&pool, "ended", "Zzz", "Argo").await,
+            StatusCode::CONFLICT,
+            "No kills in this session match mob_name='Zzz'",
+        );
+        // A failed precondition leaves no side effects.
+        assert!(summary_exists(&pool).await);
+    }
+
+    #[tokio::test]
+    async fn restore_mob_clean_and_ambiguous() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // Rename both Atrox -> Argo: now k1 original=Atrox, k2 original=Daikiba.
+        rename_session_mob_impl(&pool, "ended", "Atrox", "Argo")
+            .await
+            .unwrap();
+        // Two distinct originals merged into Argo -> ambiguous 409.
+        assert_http(
+            restore_session_mob_impl(&pool, "ended", "Argo").await,
+            StatusCode::CONFLICT,
+            "Ambiguous restore for mob_name='Argo': 2 distinct prior names merged into it.",
+        );
+        // Nothing to restore for a name with no preserved original.
+        assert_http(
+            restore_session_mob_impl(&pool, "ended", "Foul").await,
+            StatusCode::CONFLICT,
+            "No restorable kills in this session for mob_name='Foul' \
+             (either no rename has happened or the preservation column is empty)",
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_mob_clean_reverts() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // Give both Atrox the SAME original so the restore is unambiguous.
+        sqlx::query(
+            "UPDATE kills SET mob_name='Argo', original_mob_name='Wolf' WHERE mob_name='Atrox'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let value = restore_session_mob_impl(&pool, "ended", "Argo")
+            .await
+            .unwrap();
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"sessionId\":\"ended\",\"mobName\":\"Wolf\",\"killCount\":2}"
+        );
+        assert_eq!(original_of(&pool, "k1").await, None);
+        assert_eq!(original_of(&pool, "k2").await, None);
+        assert!(!summary_exists(&pool).await);
+    }
+
+    #[tokio::test]
+    async fn loot_deactivate_recomputes_totals_and_response() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        let value = bulk_flip_loot_item(&pool, "ended", "Animal Hide", "deactivated")
+            .await
+            .unwrap();
+        // delta = -(3.0 + 1.5) = -4.5; session returns = 7.0 + 18.5 + 5.0.
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"sessionId\":\"ended\",\"itemName\":\"Animal Hide\",\"affectedRows\":2,\
+             \"totalValueDelta\":-4.5,\"sessionTotalReturns\":30.5}"
+        );
+        assert!(
+            loot_state(&pool, "k1", "Animal Hide").await.0,
+            "deactivated"
+        );
+        assert_eq!(kill_loot_total(&pool, "k1").await, 7.0);
+        assert_eq!(kill_loot_total(&pool, "k2").await, 18.5);
+        assert!(!summary_exists(&pool).await);
+    }
+
+    #[tokio::test]
+    async fn loot_activate_is_the_inverse() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        bulk_flip_loot_item(&pool, "ended", "Animal Hide", "deactivated")
+            .await
+            .unwrap();
+        let value = bulk_flip_loot_item(&pool, "ended", "Animal Hide", "active")
+            .await
+            .unwrap();
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"sessionId\":\"ended\",\"itemName\":\"Animal Hide\",\"affectedRows\":2,\
+             \"totalValueDelta\":4.5,\"sessionTotalReturns\":35.0}"
+        );
+        assert!(
+            !loot_state(&pool, "k1", "Animal Hide").await.0,
+            "reactivated"
+        );
+        assert_eq!(kill_loot_total(&pool, "k1").await, 10.0);
+    }
+
+    #[tokio::test]
+    async fn loot_slash_item_name_flows_through() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // The `:path` item name carries a literal slash end to end.
+        let value = bulk_flip_loot_item(&pool, "ended", "Metal/Residue", "deactivated")
+            .await
+            .unwrap();
+        assert!(
+            to_wire_json(&value).contains("\"itemName\":\"Metal/Residue\""),
+            "{}",
+            to_wire_json(&value)
+        );
+        assert!(loot_state(&pool, "k3", "Metal/Residue").await.0);
+    }
+
+    #[tokio::test]
+    async fn loot_error_legs() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        assert_http(
+            bulk_flip_loot_item(&pool, "nope", "Animal Hide", "deactivated").await,
+            StatusCode::NOT_FOUND,
+            "Session not found",
+        );
+        assert_http(
+            bulk_flip_loot_item(&pool, "act", "Animal Hide", "deactivated").await,
+            StatusCode::CONFLICT,
+            "Session mob edits are only available after the session has ended",
+        );
+        assert_http(
+            bulk_flip_loot_item(&pool, "ended", "Nonexist", "deactivated").await,
+            StatusCode::NOT_FOUND,
+            "No loot named 'Nonexist' in this session",
+        );
+        // Already active -> activate finds nothing in the opposite state.
+        assert_http(
+            bulk_flip_loot_item(&pool, "ended", "Animal Hide", "active").await,
+            StatusCode::CONFLICT,
+            "All 'Animal Hide' rows in this session are already active",
+        );
+        assert_http(
+            bulk_flip_loot_item(&pool, "ended", "  ", "deactivated").await,
+            StatusCode::BAD_REQUEST,
+            "Item name cannot be blank",
+        );
+    }
+
+    #[tokio::test]
+    async fn armour_cost_adds_and_echoes_the_submitted_value() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // Echoes round(cost, 2) (the submitted value), NOT the new total.
+        let value = set_armour_cost_impl(&pool, "ended", 2.5).await.unwrap();
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"sessionId\":\"ended\",\"armourCost\":2.5}"
+        );
+        let total = as_f64(&sql_number(
+            &sqlx::query("SELECT armour_cost FROM tracking_sessions WHERE id='ended'")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0,
+        ));
+        assert_eq!(total, 7.5, "5.0 + 2.5 accumulates");
+        // Integer cost coerces to a float on the wire.
+        assert_eq!(
+            to_wire_json(&set_armour_cost_impl(&pool, "ended", 3.0).await.unwrap()),
+            "{\"sessionId\":\"ended\",\"armourCost\":3.0}"
+        );
+        // Banker's rounding on the echo.
+        assert_eq!(
+            to_wire_json(&set_armour_cost_impl(&pool, "ended", 2.675).await.unwrap()),
+            "{\"sessionId\":\"ended\",\"armourCost\":2.67}"
+        );
+    }
+
+    #[tokio::test]
+    async fn armour_cost_has_no_active_guard_and_404s_when_absent() {
+        let pool = memory_pool().await;
+        seed_edit(&pool).await;
+        // Active session: armour-cost still succeeds (no _validate guard).
+        assert_eq!(
+            to_wire_json(&set_armour_cost_impl(&pool, "act", 1.0).await.unwrap()),
+            "{\"sessionId\":\"act\",\"armourCost\":1.0}"
+        );
+        assert_http(
+            set_armour_cost_impl(&pool, "nope", 1.0).await,
+            StatusCode::NOT_FOUND,
+            "Session not found",
+        );
     }
 }

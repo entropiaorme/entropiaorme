@@ -197,6 +197,9 @@ fn id_a() -> &'static str {
 fn id_b() -> &'static str {
     "22222222-2222-4222-8222-222222222222"
 }
+fn id_c() -> &'static str {
+    "33333333-3333-4333-8333-333333333333"
+}
 
 /// Seed two representative ended sessions plus the full child-row spread the
 /// session detail reads: tool stats, active + deactivated loot (a partial
@@ -320,6 +323,44 @@ async fn seed_tracking(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("seed cal 2");
+
+    // Session C: deliberate TIES on every GROUP-BY/ORDER-BY key the reference
+    // leaves without an explicit tie-break (two mobs at equal kills, two tools
+    // at equal shots, two loot items at equal value). The reference relies on
+    // SQLite's group order here; this leg proves the native arm's bundled
+    // SQLite and the sidecar's sqlite3 resolve those ties identically, so the
+    // verbatim-SQL port stays byte-faithful without inventing a tie-break.
+    let cstart = "2026-03-10T10:00:00";
+    sqlx::query(
+        "INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,armour_cost,heal_cost,dangling_cost,mob_tracking_mode,updated_at) \
+         VALUES(?,?,?,0,0.0,0.0,0.0,'mob',?)",
+    )
+    .bind(id_c()).bind(ts(cstart)).bind(ts(cstart) + 3600.0).bind(ts(cstart) + 3600.0)
+    .execute(pool).await.expect("seed session c");
+    for (i, mob) in ["Mob Alpha", "Mob Beta"].iter().enumerate() {
+        for j in 0..3 {
+            let kid = format!("k-c-{i}-{j}");
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,shots_fired,damage_dealt,damage_taken,critical_hits,cost_ped,enhancer_cost,loot_total_ped,is_global,is_hof,original_mob_name) \
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,NULL)",
+            )
+            .bind(&kid).bind(id_c()).bind(*mob).bind("Spec").bind("Old")
+            .bind(ts(cstart) + (i * 3 + j) as f64).bind(20_i64).bind(200.0).bind(0.0).bind(0_i64)
+            .bind(0.2).bind(0.0).bind(4.0)
+            .execute(pool).await.expect("seed kill c");
+            // Tools alternate so both reach an equal total of 60 shots.
+            let tool = if j % 2 == 0 { "Tool One" } else { "Tool Two" };
+            sqlx::query("INSERT INTO kill_tool_stats(kill_id,tool_name,shots_fired,damage_dealt,critical_hits,cost_per_shot) VALUES(?,?,?,?,?,?)")
+                .bind(&kid).bind(tool).bind(10_i64).bind(100.0).bind(0_i64).bind(0.01)
+                .execute(pool).await.expect("seed tool c");
+            // Two loot items at equal aggregate value.
+            for item in ["Loot X", "Loot Y"] {
+                sqlx::query("INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,0,NULL)")
+                    .bind(&kid).bind(item).bind(1_i64).bind(2.0)
+                    .execute(pool).await.expect("seed loot c");
+            }
+        }
+    }
 }
 
 async fn boot(seeded: bool) -> (Sidecar, u16) {
@@ -437,6 +478,16 @@ async fn the_tracking_read_surface_conforms_over_seeded_state() {
         substrate,
         upstream.port,
         &format!("/api/tracking/session/{}", id_b()),
+    )
+    .await;
+    // Session C: the tie-resolution leg. Its detail (mobBreakdown, toolStats,
+    // lootBreakdown) and its /sessions row (primaryMobs/primaryWeapons) all
+    // turn on group keys the reference does not tie-break, so a byte-identical
+    // result here proves the two SQLite engines order the ties the same way.
+    compare(
+        substrate,
+        upstream.port,
+        &format!("/api/tracking/session/{}", id_c()),
     )
     .await;
     // A nonexistent session: the byte-identical 404 envelope.

@@ -582,8 +582,9 @@ async fn session_skill_gains(pool: &SqlitePool, session_id: &str) -> Result<Valu
 /// Stable descending sort by an i64 key (Python's `sorted(reverse=True)`
 /// over a single numeric key keeps the original order of equal elements).
 fn stable_sort_desc_by_key(entries: &mut [(i64, Value)]) {
-    // `sort_by` is stable in Rust's std; reverse the comparison only.
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    // `sort_by_key` is stable in Rust's std; `Reverse` makes it descending
+    // while preserving the original order of equal keys.
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 }
 
 /// Stable descending sort by an f64 key.

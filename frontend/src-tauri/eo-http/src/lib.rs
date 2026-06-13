@@ -23,6 +23,7 @@ pub mod proxy;
 pub mod pyjson;
 pub mod settings_routes;
 pub mod sse;
+pub mod tracking_routes;
 
 use std::future::Future;
 use std::sync::{Arc, RwLock};

@@ -26,7 +26,8 @@ use crate::character_routes::ProspectQuery;
 use crate::equipment_routes::{EquipmentRequest, EquipmentTaint};
 use crate::extract::{
     decode_path_segment, float_or_default, literal_or_default, opt_float, parse_int_lax,
-    require_bounded_int, require_float, require_str, LaxInt, QueryString, Validation,
+    query_int_or_default, require_bounded_int, require_float, require_str, LaxInt, QueryString,
+    Validation,
 };
 use crate::hydration::{detail, error_response};
 use crate::pyjson::PyValue;
@@ -932,6 +933,53 @@ async fn analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body
     hydration.analytics_overview(&period).await
 }
 
+// ── Tracking session-read adapters ──────────────────────────────────
+
+simple_get!(tracking_sessions, tracking_sessions);
+
+/// GET /api/tracking/session/{session_id}: the one path-parameter route of
+/// this surface. The raw segment percent-decodes before the lookup; a
+/// decoded slash reproduces the backend's route-level 404 (matching precedes
+/// the handler, exactly as the codex-ranks adapter handles it).
+async fn tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/tracking/session/")
+        .unwrap_or_default();
+    let session_id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .tracking_session(&session_id, inm.as_deref())
+        .await
+}
+
+/// GET /api/tracking/tag-suggestions?q=&limit=: `q` defaults to the empty
+/// string (short-circuiting to `[]`), `limit` to 10 (clamped to 1..=20 in
+/// the handler). An unparseable `limit` is the backend's 422 int_parsing.
+async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let q = query.last("q").unwrap_or("").to_string();
+    let mut validation = Validation::new();
+    let limit = query_int_or_default(&mut validation, &query, "limit", 10);
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .tracking_tag_suggestions(&q, limit.expect("validated"), inm.as_deref())
+        .await
+}
+
 // ── Analytics ledger / preset / inventory write adapters ──
 
 /// Decode a string path-id; a percent-encoded slash de-matches the route
@@ -1678,6 +1726,30 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/analytics/activity",
                 analytics_activity,
+            ),
+        )
+        .route(
+            "/api/tracking/sessions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/sessions",
+                tracking_sessions,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/session/{session_id}",
+                tracking_session,
+            ),
+        )
+        .route(
+            "/api/tracking/tag-suggestions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/tag-suggestions",
+                tracking_tag_suggestions,
             ),
         )
         .route(

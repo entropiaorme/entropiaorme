@@ -169,6 +169,9 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
              {\"name\":\"Strength\",\"currentLevel\":null}]",
         ),
         ("/api/codex/recommend?species_name=X&rank=4", "[]"),
+        // The tracking session reads (ETag-scoped; empty db -> []).
+        ("/api/tracking/sessions", "[]"),
+        ("/api/tracking/tag-suggestions?q=a", "[]"),
     ] {
         let (status, headers, body) = get(port, path).await;
         assert_eq!(status, http::StatusCode::OK, "{path}");
@@ -222,6 +225,12 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
     let (status, headers, body) = get(port, "/api/codex/species/No%20Such/ranks").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Species 'No Such' not found\"}");
+    assert!(!headers.contains_key(http::header::ETAG));
+
+    // A missing tracking session: the handler's 404, no ETag.
+    let (status, headers, body) = get(port, "/api/tracking/session/no-such").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Session not found\"}");
     assert!(!headers.contains_key(http::header::ETAG));
 
     // The conditional-GET leg: the current validator earns a 304 with

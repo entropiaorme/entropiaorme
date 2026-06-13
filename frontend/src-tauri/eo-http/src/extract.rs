@@ -372,6 +372,31 @@ pub fn require_bounded_int(
     }
 }
 
+/// An integer query parameter with a default (`limit: int = 10`): absent
+/// takes the default, unparseable text is an `int_parsing` issue, and a
+/// magnitude beyond i64 resolves to the i64 bound in its direction
+/// (Python's int is unbounded; every native consumer of this clamps the
+/// value into a small range, so the saturating bound is faithful).
+pub fn query_int_or_default(
+    validation: &mut Validation,
+    query: &QueryString,
+    name: &str,
+    default: i64,
+) -> Option<i64> {
+    match query.last(name) {
+        None => Some(default),
+        Some(raw) => match parse_int_lax(raw) {
+            Some(LaxInt::Value(value)) => Some(value),
+            Some(LaxInt::OverflowPositive) => Some(i64::MAX),
+            Some(LaxInt::OverflowNegative) => Some(i64::MIN),
+            None => {
+                validation.int_parsing("query", name, raw);
+                None
+            }
+        },
+    }
+}
+
 /// A required string query parameter (`missing` when absent; any text,
 /// the empty string included, is a value).
 pub fn require_str<'q>(
@@ -497,6 +522,31 @@ mod tests {
         assert_eq!(q.last("e"), Some("+5"));
         assert_eq!(q.last("missing"), None);
         assert_eq!(QueryString::parse(None).last("a"), None);
+    }
+
+    #[test]
+    fn query_int_or_default_defaults_parses_and_rejects() {
+        // Absent -> the supplied default (not a constant).
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("q=a")), "limit", 10),
+            Some(10)
+        );
+        assert!(v.is_ok());
+        // Present and valid -> the parsed value.
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("limit=5")), "limit", 10),
+            Some(5)
+        );
+        assert!(v.is_ok());
+        // Unparseable -> None + an int_parsing violation at ["query","limit"].
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("limit=abc")), "limit", 10),
+            None
+        );
+        assert!(!v.is_ok());
     }
 
     #[test]

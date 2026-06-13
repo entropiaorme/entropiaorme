@@ -1122,16 +1122,199 @@ mod tests {
         assert_eq!(mobs.len(), 1);
         assert_eq!(mobs[0]["mobName"], json!("Atrox"));
         assert_eq!(mobs[0]["kills"], json!(5));
+        assert_eq!(mobs[0]["hours"], json!(1.0)); // 3600s / 3600
         assert_eq!(mobs[0]["cycled"], json!(6.75));
+        // pesPer100Ped = (skill 3.0 / cycled 6.75) * 100; lootRate = loot 50 / cycled.
+        assert_eq!(mobs[0]["pesPer100Ped"], json!(44.44));
+        assert_eq!(mobs[0]["lootRate"], json!(7.4074));
         let tags = v["tagComparisons"].as_array().unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0]["tagName"], json!("Thing"));
         assert_eq!(tags[0]["kills"], json!(3));
-        // weapon comparison keys kills off the session total (5 + 3 = 8).
+        assert_eq!(tags[0]["cycled"], json!(2.4));
+        assert_eq!(tags[0]["pesPer100Ped"], json!(41.67));
+        assert_eq!(tags[0]["lootRate"], json!(6.25));
+        // weapon comparison keys kills off the session total (5 + 3 = 8) and
+        // aggregates both sessions' hours / cycled / rates.
         let weapons = v["weaponComparisons"].as_array().unwrap();
         assert_eq!(weapons.len(), 1);
         assert_eq!(weapons[0]["weaponName"], json!("Opalo"));
         assert_eq!(weapons[0]["kills"], json!(8));
+        assert_eq!(weapons[0]["hours"], json!(2.0));
+        assert_eq!(weapons[0]["cycled"], json!(9.15));
+        assert_eq!(weapons[0]["pesPer100Ped"], json!(43.72));
+        assert_eq!(weapons[0]["lootRate"], json!(7.1038));
+    }
+
+    /// The activity filter drops a session failing ANY of the three guards
+    /// (duration > 0, cycled > 0, kills > 0); `||` not `&&`. Three sessions,
+    /// each dominated by its own mob, each failing exactly one guard except
+    /// the keeper: only the keeper's mob survives.
+    #[tokio::test]
+    async fn activity_filter_drops_a_session_failing_any_single_guard() {
+        let pool = memory_pool().await;
+        // keeper: kills, duration, cost all positive.
+        seed_filter_session(&pool, "keep", "Keeper", 1000.0, 1000.0 + 3600.0, 5.0, 2).await;
+        // zero cost -> cycled 0 -> dropped by the cycled guard alone.
+        seed_filter_session(&pool, "zcost", "Zerocost", 1000.0, 1000.0 + 3600.0, 0.0, 2).await;
+        // zero duration (start == end) -> dropped by the duration guard alone.
+        seed_filter_session(&pool, "zdur", "Zerodur", 1000.0, 1000.0, 5.0, 2).await;
+        let v = activity_impl(&pool).await.unwrap();
+        let mobs = v["mobComparisons"].as_array().unwrap();
+        assert_eq!(mobs.len(), 1, "only the keeper survives the OR filter");
+        assert_eq!(mobs[0]["mobName"], json!("Keeper"));
+    }
+
+    async fn seed_filter_session(
+        pool: &SqlitePool,
+        id: &str,
+        mob: &str,
+        start: f64,
+        end: f64,
+        armour: f64,
+        kills: i64,
+    ) {
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,armour_cost,heal_cost,dangling_cost) \
+             VALUES(?,?,?,?,0,0)",
+        )
+        .bind(id).bind(start).bind(end).bind(armour)
+        .execute(pool).await.expect("seed");
+        for i in 0..kills {
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,enhancer_cost,loot_total_ped) \
+                 VALUES(?,?,?,?,?,?,?,?)",
+            )
+            .bind(format!("{id}-k{i}")).bind(id).bind(mob).bind("Spec").bind("Young")
+            .bind(start + i as f64).bind(0.0).bind(1.0)
+            .execute(pool).await.expect("seed");
+        }
+    }
+
+    /// Seed one session (cost via armour) and `kills` loot rows at `ts`, so a
+    /// window's rate is loot_total / armour_cost.
+    async fn seed_rate(pool: &SqlitePool, id: &str, ts: f64, cost: f64, kills: i64, loot: f64) {
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,armour_cost,heal_cost,dangling_cost) \
+             VALUES(?,?,?,?,0,0)",
+        )
+        .bind(id).bind(ts).bind(ts + 3600.0).bind(cost)
+        .execute(pool).await.expect("seed");
+        for i in 0..kills {
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,timestamp,enhancer_cost,loot_total_ped) \
+                 VALUES(?,?,?,?,0,?)",
+            )
+            .bind(format!("{id}-k{i}"))
+            .bind(id)
+            .bind("M")
+            .bind(ts + i as f64)
+            .bind(loot)
+            .execute(pool)
+            .await
+            .expect("seed");
+        }
+    }
+
+    /// The trend compares the recent-30d rate against the prior-30d rate with
+    /// a +/-2% band, guarded by both rates being positive.
+    #[tokio::test]
+    async fn overview_trend_bands() {
+        let now = 1_800_000_000.0;
+        let day = 86400.0;
+        let trend = |v: Value| v["trend"].clone();
+
+        // declining: recent rate 1.0 (10/10) below prior 2.0 (20/10) * 0.98.
+        let pool = memory_pool().await;
+        seed_rate(&pool, "r", now - 10.0 * day, 10.0, 1, 10.0).await;
+        seed_rate(&pool, "p", now - 45.0 * day, 10.0, 1, 20.0).await;
+        assert_eq!(
+            trend(overview_impl(&pool, now, "all").await.unwrap()),
+            json!("declining")
+        );
+
+        // improving: recent 2.0 above prior 1.0 * 1.02.
+        let pool = memory_pool().await;
+        seed_rate(&pool, "r", now - 10.0 * day, 10.0, 1, 20.0).await;
+        seed_rate(&pool, "p", now - 45.0 * day, 10.0, 1, 10.0).await;
+        assert_eq!(
+            trend(overview_impl(&pool, now, "all").await.unwrap()),
+            json!("improving")
+        );
+
+        // stable: recent equals prior, inside the band.
+        let pool = memory_pool().await;
+        seed_rate(&pool, "r", now - 10.0 * day, 10.0, 1, 10.0).await;
+        seed_rate(&pool, "p", now - 45.0 * day, 10.0, 1, 10.0).await;
+        assert_eq!(
+            trend(overview_impl(&pool, now, "all").await.unwrap()),
+            json!("stable")
+        );
+
+        // zero recent rate: the positivity guard short-circuits to stable
+        // (a mutated guard would fall through into the banding and declare a
+        // direction).
+        let pool = memory_pool().await;
+        seed_rate(&pool, "p", now - 45.0 * day, 10.0, 1, 20.0).await;
+        assert_eq!(
+            trend(overview_impl(&pool, now, "all").await.unwrap()),
+            json!("stable")
+        );
+
+        // zero prior rate: the other half of the guard.
+        let pool = memory_pool().await;
+        seed_rate(&pool, "r", now - 10.0 * day, 10.0, 1, 20.0).await;
+        assert_eq!(
+            trend(overview_impl(&pool, now, "all").await.unwrap()),
+            json!("stable")
+        );
+    }
+
+    /// Dominance needs the top group at or above 60% of known kills, and the
+    /// species/maturity presence decides mob vs tag.
+    #[tokio::test]
+    async fn activity_dominance_threshold_and_tag_split() {
+        // Non-dominant: three distinct mobs, one kill each (33% each, below
+        // the 0.6 floor) -> no dominant element, no comparison rows.
+        let pool = memory_pool().await;
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,armour_cost,heal_cost,dangling_cost) \
+             VALUES('nd',1000.0,4600.0,5.0,0,0)",
+        )
+        .execute(&pool).await.expect("seed");
+        for (i, mob) in ["Alpha", "Bravo", "Charlie"].iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,enhancer_cost,loot_total_ped) \
+                 VALUES(?,'nd',?,'Spec','Young',?,0,1.0)",
+            )
+            .bind(format!("nd-{i}")).bind(*mob).bind(1000.0 + i as f64)
+            .execute(&pool).await.expect("seed");
+        }
+        let v = activity_impl(&pool).await.unwrap();
+        assert_eq!(v["mobComparisons"].as_array().unwrap().len(), 0);
+        assert_eq!(v["tagComparisons"].as_array().unwrap().len(), 0);
+
+        // Asymmetric: species present, maturity empty -> still a mob (the
+        // presence test is OR, not AND), so it lands in mobComparisons.
+        let pool = memory_pool().await;
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,armour_cost,heal_cost,dangling_cost) \
+             VALUES('as',1000.0,4600.0,5.0,0,0)",
+        )
+        .execute(&pool).await.expect("seed");
+        for i in 0..2 {
+            sqlx::query(
+                "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,enhancer_cost,loot_total_ped) \
+                 VALUES(?,'as','Foo','Bar','',?,0,1.0)",
+            )
+            .bind(format!("as-{i}")).bind(1000.0 + i as f64)
+            .execute(&pool).await.expect("seed");
+        }
+        let v = activity_impl(&pool).await.unwrap();
+        let mobs = v["mobComparisons"].as_array().unwrap();
+        assert_eq!(mobs.len(), 1);
+        assert_eq!(mobs[0]["mobName"], json!("Foo"));
+        assert_eq!(v["tagComparisons"].as_array().unwrap().len(), 0);
     }
 
     #[test]

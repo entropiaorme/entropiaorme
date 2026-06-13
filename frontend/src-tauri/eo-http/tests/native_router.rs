@@ -347,16 +347,17 @@ async fn the_analytics_write_routes_serve_natively() {
     assert_eq!(status, http::StatusCode::OK);
     let patched: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(patched["name"], serde_json::json!("Renamed"));
-    let (status, _, _) = request(
+    let (status, _, body) = request(
         port,
         "PATCH",
         "/api/analytics/inventory/nope",
         &[("origin", "tauri://localhost")],
     )
     .await;
-    // PATCH carries no body here, so the missing-body envelope precedes the
-    // 404; either way it is not a 200.
-    assert_ne!(status, http::StatusCode::OK);
+    // PATCH carries no body here, so the missing-body validation envelope
+    // precedes the 404 item lookup.
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["missing"]);
     let (status, _, body) = del(port, "/api/analytics/inventory/nope").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Inventory item not found\"}");

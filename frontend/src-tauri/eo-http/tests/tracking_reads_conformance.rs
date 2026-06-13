@@ -348,11 +348,13 @@ async fn seed_tracking(pool: &SqlitePool) {
             .bind(ts(cstart) + (i * 3 + j) as f64).bind(20_i64).bind(200.0).bind(0.0).bind(0_i64)
             .bind(0.2).bind(0.0).bind(4.0)
             .execute(pool).await.expect("seed kill c");
-            // Tools alternate so both reach an equal total of 60 shots.
-            let tool = if j % 2 == 0 { "Tool One" } else { "Tool Two" };
-            sqlx::query("INSERT INTO kill_tool_stats(kill_id,tool_name,shots_fired,damage_dealt,critical_hits,cost_per_shot) VALUES(?,?,?,?,?,?)")
-                .bind(&kid).bind(tool).bind(10_i64).bind(100.0).bind(0_i64).bind(0.01)
-                .execute(pool).await.expect("seed tool c");
+            // Both tools on every kill with equal shots, so each accumulates
+            // an identical total (6 x 10 = 60) and the two tie on shots_fired.
+            for tool in ["Tool One", "Tool Two"] {
+                sqlx::query("INSERT INTO kill_tool_stats(kill_id,tool_name,shots_fired,damage_dealt,critical_hits,cost_per_shot) VALUES(?,?,?,?,?,?)")
+                    .bind(&kid).bind(tool).bind(10_i64).bind(100.0).bind(0_i64).bind(0.01)
+                    .execute(pool).await.expect("seed tool c");
+            }
             // Two loot items at equal aggregate value.
             for item in ["Loot X", "Loot Y"] {
                 sqlx::query("INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,0,NULL)")

@@ -540,6 +540,66 @@ pub fn opt_f64(
     }
 }
 
+/// A required float (`amount: float`): absent reports `missing`, null and
+/// other non-numeric types report `float_type`, an unparseable string
+/// `float_parsing`; otherwise the lax coercion mirrors `opt_f64`.
+pub fn required_f64(
+    validation: &mut Validation,
+    object: &BodyObject,
+    name: &'static str,
+) -> Option<f64> {
+    let value = match object.get(name) {
+        None => {
+            match object.echo() {
+                Some(echo) => body_issue(
+                    validation,
+                    "missing",
+                    &[Loc::Field(name)],
+                    "Field required",
+                    echo,
+                    None,
+                ),
+                None => validation.mark_unrenderable(),
+            }
+            return None;
+        }
+        Some(value) => value,
+    };
+    match value {
+        PyValue::Float(v) => Some(*v),
+        PyValue::Int(v) => Some(*v as f64),
+        PyValue::BigInt(text) => Some(text.parse().unwrap_or(f64::INFINITY)),
+        PyValue::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+        PyValue::Str(raw) => match lax_float_from_str(raw) {
+            Some(v) => Some(v),
+            None => {
+                let echo = echo_or_unrenderable(validation, value)?;
+                body_issue(
+                    validation,
+                    "float_parsing",
+                    &[Loc::Field(name)],
+                    "Input should be a valid number, unable to parse string as a number",
+                    &echo,
+                    None,
+                );
+                None
+            }
+        },
+        other => {
+            let echo = echo_or_unrenderable(validation, other)?;
+            body_issue(
+                validation,
+                "float_type",
+                &[Loc::Field(name)],
+                "Input should be a valid number",
+                &echo,
+                None,
+            );
+            None
+        }
+    }
+}
+
 /// The backend's lax boolean set: exact strings (case-insensitive, no
 /// whitespace tolerance), 0/1 numbers. Failures split the backend's
 /// way (probed): coercion-CLASS values with the wrong content (other

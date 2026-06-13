@@ -932,6 +932,282 @@ async fn analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body
     hydration.analytics_overview(&period).await
 }
 
+// ── Analytics ledger / preset / inventory write adapters ──
+
+/// Decode a string path-id; a percent-encoded slash de-matches the route
+/// (the backend decodes before matching), reproducing its framework 404.
+fn string_path_id(raw_segment: &str) -> Result<String, Box<Response<Body>>> {
+    let decoded = decode_path_segment(raw_segment);
+    if decoded.contains('/') {
+        return Err(Box::new(router_not_found()));
+    }
+    Ok(decoded)
+}
+
+async fn ledger_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    hydration.list_ledger().await
+}
+
+async fn ledger_create(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let date = body::required_str(&mut v, &object, "date");
+    let kind = body::required_str(&mut v, &object, "type");
+    let description = body::required_str(&mut v, &object, "description");
+    let amount = body::required_f64(&mut v, &object, "amount");
+    let tag = body::required_str(&mut v, &object, "tag");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .create_ledger_entry(
+            &date.expect("validated"),
+            &kind.expect("validated"),
+            &description.expect("validated"),
+            amount.expect("validated"),
+            &tag.expect("validated"),
+        )
+        .await
+}
+
+async fn ledger_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/analytics/ledger/")
+        .unwrap_or_default();
+    let id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    hydration.delete_ledger_entry(&id).await
+}
+
+async fn presets_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    hydration.list_ledger_presets().await
+}
+
+async fn presets_create(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let name = body::required_str(&mut v, &object, "name");
+    let kind = body::required_str(&mut v, &object, "type");
+    let description = body::required_str(&mut v, &object, "description");
+    let amount = body::required_f64(&mut v, &object, "amount");
+    let tag = body::required_str(&mut v, &object, "tag");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .create_ledger_preset(
+            &name.expect("validated"),
+            &kind.expect("validated"),
+            &description.expect("validated"),
+            amount.expect("validated"),
+            &tag.expect("validated"),
+        )
+        .await
+}
+
+async fn preset_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/analytics/ledger/presets/")
+        .unwrap_or_default();
+    let id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    hydration.delete_ledger_preset(&id).await
+}
+
+async fn inventory_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    hydration.list_inventory().await
+}
+
+async fn inventory_create(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let name = body::required_str(&mut v, &object, "name");
+    let tt_value = body::required_f64(&mut v, &object, "tt_value");
+    let markup_paid = body::required_f64(&mut v, &object, "markup_paid");
+    let notes = opt_str(&mut v, &object, "notes");
+    let acquired_at = opt_str(&mut v, &object, "acquired_at");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    let notes = notes.expect("validated");
+    let acquired_at = acquired_at.expect("validated");
+    hydration
+        .create_inventory_item(
+            &name.expect("validated"),
+            tt_value.expect("validated"),
+            markup_paid.expect("validated"),
+            notes.as_deref(),
+            acquired_at.as_deref(),
+        )
+        .await
+}
+
+async fn inventory_patch(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/analytics/inventory/")
+        .unwrap_or_default();
+    let id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let name = opt_str(&mut v, &object, "name");
+    let tt_value = opt_f64(&mut v, &object, "tt_value");
+    let markup_paid = opt_f64(&mut v, &object, "markup_paid");
+    let notes = opt_str(&mut v, &object, "notes");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    // Only a provided (non-null) field updates: the reference's
+    // `if patch.x is not None` over each Optional field.
+    let name = name.expect("validated");
+    let tt_value = tt_value.expect("validated");
+    let markup_paid = markup_paid.expect("validated");
+    let notes = notes.expect("validated");
+    hydration
+        .update_inventory_item(
+            &id,
+            name.as_deref(),
+            tt_value,
+            markup_paid,
+            notes.as_deref(),
+        )
+        .await
+}
+
+async fn inventory_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/analytics/inventory/")
+        .unwrap_or_default();
+    let id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    hydration.delete_inventory_item(&id).await
+}
+
+async fn inventory_sell(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/analytics/inventory/")
+        .and_then(|rest| rest.strip_suffix("/sell"))
+        .unwrap_or_default();
+    let id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let sale_price = body::required_f64(&mut v, &object, "sale_price");
+    let description = opt_str(&mut v, &object, "description");
+    let sold_at = opt_str(&mut v, &object, "sold_at");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    let description = description.expect("validated");
+    let sold_at = sold_at.expect("validated");
+    hydration
+        .sell_inventory_item(
+            &id,
+            sale_price.expect("validated"),
+            description.as_deref(),
+            sold_at.as_deref(),
+        )
+        .await
+}
+
 /// GET /api/character/prospect: the query family validates in
 /// signature order (the envelope), then the handler's own 422 details
 /// in code order.
@@ -1403,6 +1679,58 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 "/api/analytics/activity",
                 analytics_activity,
             ),
+        )
+        .route(
+            "/api/analytics/ledger",
+            ArmRoutes::at("/api/analytics/ledger")
+                .on(MethodFilter::GET, ledger_list)
+                .on(MethodFilter::POST, ledger_create)
+                .into_method_router(),
+        )
+        .route(
+            "/api/analytics/ledger/presets",
+            ArmRoutes::at("/api/analytics/ledger/presets")
+                .on(MethodFilter::GET, presets_list)
+                .on(MethodFilter::POST, presets_create)
+                .into_method_router(),
+        )
+        .route(
+            "/api/analytics/ledger/presets/{preset_id}",
+            arm_routed(
+                MethodFilter::DELETE,
+                "/api/analytics/ledger/presets/{preset_id}",
+                preset_delete,
+            ),
+        )
+        .route(
+            "/api/analytics/ledger/{entry_id}",
+            arm_routed(
+                MethodFilter::DELETE,
+                "/api/analytics/ledger/{entry_id}",
+                ledger_delete,
+            ),
+        )
+        .route(
+            "/api/analytics/inventory",
+            ArmRoutes::at("/api/analytics/inventory")
+                .on(MethodFilter::GET, inventory_list)
+                .on(MethodFilter::POST, inventory_create)
+                .into_method_router(),
+        )
+        .route(
+            "/api/analytics/inventory/{item_id}/sell",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/analytics/inventory/{item_id}/sell",
+                inventory_sell,
+            ),
+        )
+        .route(
+            "/api/analytics/inventory/{item_id}",
+            ArmRoutes::at("/api/analytics/inventory/{item_id}")
+                .on(MethodFilter::PATCH, inventory_patch)
+                .on(MethodFilter::DELETE, inventory_delete)
+                .into_method_router(),
         )
         .route(
             "/api/settings",

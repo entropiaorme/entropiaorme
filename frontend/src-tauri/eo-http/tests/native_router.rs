@@ -200,6 +200,10 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
             "/api/analytics/activity",
             "{\"mobComparisons\":[],\"tagComparisons\":[],\"weaponComparisons\":[]}",
         ),
+        // The ledger / preset / inventory list reads (empty db -> []).
+        ("/api/analytics/ledger", "[]"),
+        ("/api/analytics/ledger/presets", "[]"),
+        ("/api/analytics/inventory", "[]"),
     ] {
         let (status, headers, body) = get(port, path).await;
         assert_eq!(status, http::StatusCode::OK, "{path}");

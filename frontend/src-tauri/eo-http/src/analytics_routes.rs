@@ -2046,4 +2046,66 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body["detail"], json!("Inventory item not found"));
     }
+
+    #[tokio::test]
+    async fn ledger_delete_removes_then_reports_missing() {
+        let state = write_state().await;
+        let (_, created) = body_of(
+            state
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+        // A successful delete reports "deleted" (the rows_affected == 0 guard
+        // is false for an existing row); a second delete hits the 404.
+        let (status, body) = body_of(state.delete_ledger_entry(&id).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], json!("deleted"));
+        let (status, body) = body_of(state.delete_ledger_entry(&id).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["detail"], json!("Entry not found"));
+    }
+
+    #[tokio::test]
+    async fn preset_list_shapes_rows_then_delete_removes() {
+        let state = write_state().await;
+        let (_, created) = body_of(
+            state
+                .create_ledger_preset("Decay", "expense", "d", 0.5, "decay")
+                .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+        // The list shapes the row via preset_item (not an empty default).
+        let (status, list) = body_of(state.list_ledger_presets().await).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], json!("Decay"));
+        assert_eq!(rows[0]["amount"], json!(0.5));
+        assert_eq!(rows[0]["tag"], json!("decay"));
+        let (status, body) = body_of(state.delete_ledger_preset(&id).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], json!("deleted"));
+        let (status, _) = body_of(state.delete_ledger_preset(&id).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn inventory_delete_removes_then_reports_missing() {
+        let state = write_state().await;
+        let (_, created) = body_of(
+            state
+                .create_inventory_item("Sword", 10.0, 2.0, None, None)
+                .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+        let (status, body) = body_of(state.delete_inventory_item(&id).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], json!("deleted"));
+        let (status, _) = body_of(state.delete_inventory_item(&id).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
 }

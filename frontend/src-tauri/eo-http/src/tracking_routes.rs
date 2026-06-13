@@ -13,7 +13,9 @@
 //! The fidelity cruxes:
 //! - `_ts_to_iso`: `datetime.fromtimestamp(ts, tz=UTC).isoformat()`, which
 //!   emits `+00:00` and 6-digit microseconds only when the fraction is
-//!   non-zero. [`ts_to_iso`] reproduces that exactly.
+//!   non-zero. [`ts_to_iso`] reproduces that exactly, splitting the fraction
+//!   out (CPython's `modf`) before rounding so it does not inherit the
+//!   sub-microsecond precision loss of a whole-timestamp `* 1e6`.
 //! - pydantic coercion: a `float`-declared field coerces an engine-typed
 //!   integer to its float form (`0` -> `0.0`); an `int`-declared field stays
 //!   integer. The `cost`/`returns`/`net`/`returnRate` columns are
@@ -87,11 +89,24 @@ fn ts_to_iso(ts: Option<f64>) -> Value {
     let Some(ts) = ts else {
         return Value::Null;
     };
-    // Round to the nearest microsecond as Python's fromtimestamp does
-    // (round-half-to-even on the microsecond count).
-    let micros_total = (ts * 1_000_000.0).round() as i64;
-    let secs = micros_total.div_euclid(1_000_000);
-    let micros = micros_total.rem_euclid(1_000_000);
+    // Mirror CPython's `datetime.fromtimestamp`: split the timestamp into
+    // its integral seconds and fractional part with `modf`, then round ONLY
+    // the fraction to the nearest microsecond (round-half-to-even). Rounding
+    // the WHOLE `ts * 1e6` instead loses sub-microsecond precision at the
+    // current epoch (magnitude ~1.78e15 vs an f64 ULP of ~0.25us), which
+    // diverged from CPython on ~12% of realistic timestamps.
+    let frac = ts.fract();
+    let whole = ts.trunc() as i64;
+    let mut micros = eo_wire::normalizer::round_half_even(frac * 1_000_000.0, 0) as i64;
+    let mut secs = whole;
+    // The fraction can round to +/- 1e6; carry/borrow as CPython does.
+    if micros >= 1_000_000 {
+        secs += 1;
+        micros -= 1_000_000;
+    } else if micros < 0 {
+        secs -= 1;
+        micros += 1_000_000;
+    }
     let dt = chrono::DateTime::from_timestamp(secs, (micros as u32) * 1_000)
         .expect("timestamp within range");
     let base = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
@@ -801,6 +816,23 @@ mod tests {
             json!("2025-05-20T10:00:00.500000+00:00")
         );
         assert_eq!(ts_to_iso(Some(0.0)), json!("1970-01-01T00:00:00+00:00"));
+        // Sub-microsecond fractions at the current epoch: CPython splits the
+        // fraction out before rounding (modf), so the whole-ts `* 1e6`
+        // precision loss does not apply. These pins were verified against
+        // `datetime.fromtimestamp(ts, tz=UTC).isoformat()`.
+        assert_eq!(
+            ts_to_iso(Some(1_747_735_200.000_000_5)),
+            json!("2025-05-20T10:00:00+00:00")
+        );
+        assert_eq!(
+            ts_to_iso(Some(1_747_735_200.123_456_5)),
+            json!("2025-05-20T10:00:00.123456+00:00")
+        );
+        // Negative (pre-epoch) timestamps borrow a second for the fraction.
+        assert_eq!(
+            ts_to_iso(Some(-0.000_001_5)),
+            json!("1969-12-31T23:59:59.999998+00:00")
+        );
     }
 
     #[test]

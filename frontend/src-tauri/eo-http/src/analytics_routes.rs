@@ -1142,7 +1142,10 @@ impl HydrationState {
         acquired_at: Option<&str>,
     ) -> Response<Body> {
         let id = Uuid::new_v4().to_string();
+        // `item.acquired_at or _utc_date_str(clock)`: the reference's `or`
+        // treats an empty string as falsy, so "" defaults to the clock date.
         let date = acquired_at
+            .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| self.default_date());
         if sqlx::query(
@@ -1272,7 +1275,9 @@ impl HydrationState {
         let markup_paid = sql_number(&row, 3).as_f64().unwrap_or(0.0);
         let cost_basis = tt_value + markup_paid;
         let delta = sale_price - cost_basis;
+        // `payload.sold_at or _utc_date_str(clock)`: empty string is falsy.
         let sold_at = sold_at
+            .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| self.default_date());
         let sold_item = inventory_item(&row);
@@ -1285,7 +1290,9 @@ impl HydrationState {
             let entry_id = Uuid::new_v4().to_string();
             let entry_type = if delta > 0.0 { "markup" } else { "expense" };
             let amount = delta.abs();
+            // `payload.description or "Inventory Sale: {name}"`: "" is falsy.
             let description = description
+                .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("Inventory Sale: {name}"));
             if sqlx::query(

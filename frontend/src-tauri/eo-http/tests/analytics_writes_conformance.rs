@@ -647,6 +647,22 @@ async fn the_analytics_write_surface_conforms_through_the_public_port() {
     assert_eq!(created["notes"], Value::Null, "absent notes is null");
     arms.compare_inventory_state("inventory create defaults")
         .await;
+    // EMPTY-STRING acquired_at: the reference's `item.acquired_at or ...`
+    // treats "" as falsy, so it defaults to the frozen clock date.
+    let empty_acq = arms
+        .compare_response(
+            "POST",
+            "/api/analytics/inventory",
+            Some(r#"{"name": "EmptyAcq", "tt_value": 1.0, "markup_paid": 0.0, "acquired_at": ""}"#),
+        )
+        .await;
+    assert_eq!(
+        empty_acq["acquiredAt"],
+        json!(CLOCK_DATE),
+        "empty acquired_at defaults to the clock date"
+    );
+    arms.compare_inventory_state("inventory create empty acquired_at")
+        .await;
     // list.
     arms.compare_response("GET", "/api/analytics/inventory", None)
         .await;
@@ -815,6 +831,40 @@ async fn the_analytics_write_surface_conforms_through_the_public_port() {
     )
     .await;
     arms.compare_db_state("sell profit default-desc explicit-date")
+        .await;
+    // EMPTY-STRING description + sold_at: both falsy under the reference's
+    // `or`, so description defaults to "Inventory Sale: {name}" and the
+    // ledger date to the clock date.
+    seed_both(&arms, |db| async move {
+        seed_inventory(
+            &db,
+            "dddddddd-0000-4000-8000-000000000005",
+            "Empty Strings Item",
+            1.0,
+            0.0,
+            "2026-02-05",
+        )
+        .await;
+    })
+    .await;
+    let empty_sell = arms
+        .compare_response(
+            "POST",
+            "/api/analytics/inventory/dddddddd-0000-4000-8000-000000000005/sell",
+            Some(r#"{"sale_price": 5.0, "description": "", "sold_at": ""}"#),
+        )
+        .await;
+    assert_eq!(
+        empty_sell["ledgerEntry"]["description"],
+        json!("Inventory Sale: Empty Strings Item"),
+        "empty description defaults to the item-name form"
+    );
+    assert_eq!(
+        empty_sell["ledgerEntry"]["date"],
+        json!(CLOCK_DATE),
+        "empty sold_at defaults to the clock date"
+    );
+    arms.compare_db_state("sell empty description + sold_at")
         .await;
     // sell-404.
     arms.compare_response(

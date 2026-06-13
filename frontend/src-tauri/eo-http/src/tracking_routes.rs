@@ -833,6 +833,11 @@ mod tests {
             ts_to_iso(Some(-0.000_001_5)),
             json!("1969-12-31T23:59:59.999998+00:00")
         );
+        // A fraction that rounds up to a whole second carries into the second.
+        assert_eq!(
+            ts_to_iso(Some(1_747_735_200.999_999_6)),
+            json!("2025-05-20T10:00:01+00:00")
+        );
     }
 
     #[test]
@@ -881,6 +886,12 @@ mod tests {
         assert!(wire.contains("\"pes\":4.0"), "{wire}");
         assert!(wire.contains("\"kills\":6"), "{wire}");
         assert!(wire.contains("\"weaponCost\":2.75"), "{wire}");
+        // summary cost = the five cost components summed; returns/net/rate
+        // derived (pins the sum + the rate division and its zero-guard).
+        assert!(wire.contains("\"cost\":6.75"), "{wire}");
+        assert!(wire.contains("\"returns\":51.0"), "{wire}");
+        assert!(wire.contains("\"net\":44.25"), "{wire}");
+        assert!(wire.contains("\"returnRate\":7.5556"), "{wire}");
         // notable events: global then hof, target==item, value coerced float.
         assert!(wire.contains("\"type\":\"global\",\"eventType\":\"global_kill\",\"target\":\"Atrox\",\"item\":\"Atrox\",\"value\":55.0"), "{wire}");
         // loot breakdown: only Animal Hide (shrapnel none seeded).

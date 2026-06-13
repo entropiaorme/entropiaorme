@@ -525,6 +525,31 @@ mod tests {
     }
 
     #[test]
+    fn query_int_or_default_defaults_parses_and_rejects() {
+        // Absent -> the supplied default (not a constant).
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("q=a")), "limit", 10),
+            Some(10)
+        );
+        assert!(v.is_ok());
+        // Present and valid -> the parsed value.
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("limit=5")), "limit", 10),
+            Some(5)
+        );
+        assert!(v.is_ok());
+        // Unparseable -> None + an int_parsing violation at ["query","limit"].
+        let mut v = Validation::new();
+        assert_eq!(
+            query_int_or_default(&mut v, &QueryString::parse(Some("limit=abc")), "limit", 10),
+            None
+        );
+        assert!(!v.is_ok());
+    }
+
+    #[test]
     fn path_segments_decode_percent_but_not_plus() {
         assert_eq!(decode_path_segment("No%20Such"), "No Such");
         assert_eq!(decode_path_segment("a+b"), "a+b");

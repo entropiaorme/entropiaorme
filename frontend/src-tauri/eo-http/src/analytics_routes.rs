@@ -1352,10 +1352,53 @@ mod tests {
             "CREATE TABLE quest_claims(id INTEGER PRIMARY KEY, claimed_at REAL, ped_value REAL)",
             "CREATE TABLE ledger_entries(id TEXT PRIMARY KEY, date TEXT, type TEXT, \
              description TEXT, amount REAL, tag TEXT)",
+            "CREATE TABLE ledger_presets(id TEXT PRIMARY KEY, name TEXT, type TEXT, \
+             description TEXT, amount REAL, tag TEXT, created_at REAL)",
+            "CREATE TABLE inventory_items(id TEXT PRIMARY KEY, name TEXT, tt_value REAL, \
+             markup_paid REAL, notes TEXT, acquired_at TEXT, updated_at REAL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("ddl");
         }
         pool
+    }
+
+    /// A minimal `HydrationState` over an in-memory pool, its clock frozen so
+    /// `default_date()` (`_utc_date_str(clock)`) is deterministic. The
+    /// game-data store loads empty (no snapshot dir), which the write surface
+    /// never touches.
+    async fn write_state() -> crate::hydration::HydrationState {
+        use eo_services::clock::MockClock;
+        use eo_services::game_data_store::GameDataStore;
+        use std::path::Path;
+        use std::sync::Arc;
+        let pool = memory_pool().await;
+        let db = eo_services::db::Db::from_pool(pool);
+        let naive =
+            chrono::NaiveDateTime::parse_from_str("2026-06-01T12:00:00", "%Y-%m-%dT%H:%M:%S")
+                .unwrap();
+        crate::hydration::HydrationState::new(
+            db,
+            Arc::new(GameDataStore::new(Path::new("/nonexistent/snapshot")).unwrap()),
+            Arc::new(MockClock::new(Some(naive), 0.0)),
+            std::path::PathBuf::from("."),
+        )
+    }
+
+    /// Status + parsed JSON body of a handler response.
+    async fn body_of(
+        response: axum::http::Response<axum::body::Body>,
+    ) -> (axum::http::StatusCode, Value) {
+        use http_body_util::BodyExt;
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect")
+            .to_bytes()
+            .to_vec();
+        let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        (status, value)
     }
 
     #[tokio::test]
@@ -1782,5 +1825,218 @@ mod tests {
     fn number_sum_is_integral_only_when_both_are() {
         assert_eq!(number_sum(&json!(2), &json!(3)), json!(5));
         assert_eq!(number_sum(&json!(2), &json!(0.5)), json!(2.5));
+    }
+
+    // ── Hermetic write-handler tests (the mutation campaign's kills) ──
+
+    /// Create then list round-trips for the ledger: the create echoes the
+    /// input plus a generated id, and the list reads it back.
+    #[tokio::test]
+    async fn ledger_create_and_list_round_trip() {
+        let state = write_state().await;
+        let (status, body) = body_of(
+            state
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["date"], json!("2026-05-01"));
+        assert_eq!(body["type"], json!("expense"));
+        assert_eq!(body["amount"], json!(12.5));
+        assert_eq!(body["tag"], json!("ammo"));
+        assert!(body["id"].as_str().is_some(), "create generates an id");
+
+        let (status, list) = body_of(state.list_ledger().await).await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = list.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["description"], json!("Ammo"));
+        assert_eq!(rows[0]["id"], body["id"]);
+    }
+
+    /// The preset type guard: only 'expense'/'markup' pass; anything else is
+    /// a 400 with the reference's detail and writes nothing.
+    #[tokio::test]
+    async fn preset_create_validates_type() {
+        let state = write_state().await;
+        for kind in ["expense", "markup"] {
+            let (status, _) =
+                body_of(state.create_ledger_preset("P", kind, "d", 1.0, "t").await).await;
+            assert_eq!(status, StatusCode::OK, "{kind} accepted");
+        }
+        let (status, body) = body_of(
+            state
+                .create_ledger_preset("Bad", "income", "d", 1.0, "t")
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["detail"], json!("type must be 'expense' or 'markup'"));
+        // Only the two valid presets were written.
+        let (_, list) = body_of(state.list_ledger_presets().await).await;
+        assert_eq!(list.as_array().unwrap().len(), 2);
+    }
+
+    /// Create with the optional fields absent: notes is null and acquired_at
+    /// defaults to the (frozen) clock's UTC date.
+    #[tokio::test]
+    async fn inventory_create_defaults_date_and_notes() {
+        let state = write_state().await;
+        let (status, body) = body_of(
+            state
+                .create_inventory_item("Imk2", 50.0, 5.0, None, None)
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Response is camelCase even though the request body is snake_case.
+        assert_eq!(body["ttValue"], json!(50.0));
+        assert_eq!(body["markupPaid"], json!(5.0));
+        assert_eq!(body["notes"], Value::Null);
+        assert_eq!(body["acquiredAt"], json!("2026-06-01"));
+
+        // An explicit acquired_at / notes are honoured.
+        let (_, body) = body_of(
+            state
+                .create_inventory_item("X", 1.0, 0.0, Some("spare"), Some("2026-01-02"))
+                .await,
+        )
+        .await;
+        assert_eq!(body["notes"], json!("spare"));
+        assert_eq!(body["acquiredAt"], json!("2026-01-02"));
+    }
+
+    /// PATCH field-selection: only PROVIDED (Some) fields update; a None
+    /// field is left untouched, exactly as the reference's
+    /// `if patch.x is not None`.
+    #[tokio::test]
+    async fn inventory_patch_updates_only_provided_fields() {
+        let state = write_state().await;
+        let (_, created) = body_of(
+            state
+                .create_inventory_item("Orig", 20.0, 3.0, Some("keep"), Some("2026-03-01"))
+                .await,
+        )
+        .await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        // Provide name + tt_value only: markup_paid and notes stay.
+        let (status, patched) = body_of(
+            state
+                .update_inventory_item(&id, Some("Renamed"), Some(25.0), None, None)
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(patched["name"], json!("Renamed"));
+        assert_eq!(patched["ttValue"], json!(25.0));
+        assert_eq!(patched["markupPaid"], json!(3.0), "untouched");
+        assert_eq!(patched["notes"], json!("keep"), "untouched");
+
+        // An all-None patch re-reads and returns the row unchanged.
+        let (status, same) = body_of(
+            state
+                .update_inventory_item(&id, None, None, None, None)
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(same, patched);
+
+        // Patch a missing id -> 404.
+        let (status, body) = body_of(
+            state
+                .update_inventory_item("no-such", Some("Z"), None, None, None)
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["detail"], json!("Inventory item not found"));
+    }
+
+    /// Sell a created item, asserting the delta/type/description-default
+    /// branch for profit / loss / zero-delta and the atomic item removal.
+    #[tokio::test]
+    async fn sell_emits_the_right_delta_branch() {
+        // PROFIT: sale 20 over cost 12 -> markup 8.0; default description.
+        let state = write_state().await;
+        let (_, item) = body_of(
+            state
+                .create_inventory_item("Sword", 10.0, 2.0, None, Some("2026-02-01"))
+                .await,
+        )
+        .await;
+        let id = item["id"].as_str().unwrap().to_string();
+        let (status, body) = body_of(
+            state
+                .sell_inventory_item(&id, 20.0, None, Some("2026-05-10"))
+                .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let entry = &body["ledgerEntry"];
+        assert_eq!(entry["type"], json!("markup"));
+        assert_eq!(entry["amount"], json!(8.0));
+        assert_eq!(entry["tag"], json!("inventory_sale"));
+        assert_eq!(entry["date"], json!("2026-05-10"));
+        assert_eq!(
+            entry["description"],
+            json!("Inventory Sale: Sword"),
+            "default description form"
+        );
+        assert_eq!(body["soldItem"]["name"], json!("Sword"));
+        // Item removed; the emitted ledger row is the only one.
+        let (_, inv) = body_of(state.list_inventory().await).await;
+        assert_eq!(inv.as_array().unwrap().len(), 0);
+        let (_, ledger) = body_of(state.list_ledger().await).await;
+        assert_eq!(ledger.as_array().unwrap().len(), 1);
+
+        // LOSS: sale 5 under cost 12 -> expense 7.0; explicit description.
+        let state = write_state().await;
+        let (_, item) = body_of(
+            state
+                .create_inventory_item("Shield", 10.0, 2.0, None, Some("2026-02-01"))
+                .await,
+        )
+        .await;
+        let id = item["id"].as_str().unwrap().to_string();
+        let (_, body) = body_of(
+            state
+                .sell_inventory_item(&id, 5.0, Some("Dumped it"), None)
+                .await,
+        )
+        .await;
+        let entry = &body["ledgerEntry"];
+        assert_eq!(entry["type"], json!("expense"));
+        assert_eq!(entry["amount"], json!(7.0));
+        assert_eq!(entry["description"], json!("Dumped it"));
+        // Default sold_at is the frozen clock date.
+        assert_eq!(entry["date"], json!("2026-06-01"));
+
+        // ZERO-DELTA: sale == cost -> no ledger entry, item still removed.
+        let state = write_state().await;
+        let (_, item) = body_of(
+            state
+                .create_inventory_item("Even", 8.0, 2.0, None, Some("2026-02-01"))
+                .await,
+        )
+        .await;
+        let id = item["id"].as_str().unwrap().to_string();
+        let (status, body) = body_of(state.sell_inventory_item(&id, 10.0, None, None).await).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ledgerEntry"], Value::Null);
+        assert_eq!(body["soldItem"]["name"], json!("Even"));
+        let (_, ledger) = body_of(state.list_ledger().await).await;
+        assert_eq!(ledger.as_array().unwrap().len(), 0, "no noise row");
+        let (_, inv) = body_of(state.list_inventory().await).await;
+        assert_eq!(inv.as_array().unwrap().len(), 0, "item removed");
+
+        // Sell a missing id -> 404.
+        let state = write_state().await;
+        let (status, body) =
+            body_of(state.sell_inventory_item("no-such", 1.0, None, None).await).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["detail"], json!("Inventory item not found"));
     }
 }

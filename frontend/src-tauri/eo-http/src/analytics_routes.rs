@@ -660,7 +660,13 @@ async fn load_activity_sessions(pool: &SqlitePool) -> Result<Vec<SessionAgg>, sq
     .fetch_all(pool)
     .await?;
     for row in &kill_rows {
-        if let Some(s) = sessions.get_mut(&row.get::<String, _>(0)) {
+        // The FK session_id is NOT NULL in production; a NULL is skipped to
+        // mirror the reference's `sessions.get(None)` miss (and to keep a
+        // malformed row from aborting the decode) rather than to admit one.
+        let Some(sid) = row.try_get::<Option<String>, _>(0).ok().flatten() else {
+            continue;
+        };
+        if let Some(s) = sessions.get_mut(&sid) {
             s.kills = row.get::<i64, _>(1);
             s.loot_tt = as_float(row, 2);
             s.enhancer_cost = as_float(row, 3);
@@ -675,7 +681,10 @@ async fn load_activity_sessions(pool: &SqlitePool) -> Result<Vec<SessionAgg>, sq
     .fetch_all(pool)
     .await?;
     for row in &weapon_rows {
-        if let Some(s) = sessions.get_mut(&row.get::<String, _>(0)) {
+        let Some(sid) = row.try_get::<Option<String>, _>(0).ok().flatten() else {
+            continue;
+        };
+        if let Some(s) = sessions.get_mut(&sid) {
             s.weapon_cost = as_float(row, 1);
             s.weapon_shots = as_float(row, 2);
         }
@@ -688,7 +697,10 @@ async fn load_activity_sessions(pool: &SqlitePool) -> Result<Vec<SessionAgg>, sq
     .fetch_all(pool)
     .await?;
     for row in &skill_rows {
-        if let Some(s) = sessions.get_mut(&row.get::<String, _>(0)) {
+        let Some(sid) = row.try_get::<Option<String>, _>(0).ok().flatten() else {
+            continue;
+        };
+        if let Some(s) = sessions.get_mut(&sid) {
             s.skill_tt = as_float(row, 1);
         }
     }
@@ -708,7 +720,9 @@ async fn load_activity_sessions(pool: &SqlitePool) -> Result<Vec<SessionAgg>, sq
     > = std::collections::HashMap::new();
     let mut group_order: Vec<String> = Vec::new();
     for row in &group_rows {
-        let sid = row.get::<String, _>(0);
+        let Some(sid) = row.try_get::<Option<String>, _>(0).ok().flatten() else {
+            continue;
+        };
         let entry = groups_by_session.entry(sid.clone()).or_insert_with(|| {
             group_order.push(sid.clone());
             Vec::new()
@@ -756,7 +770,9 @@ async fn load_activity_sessions(pool: &SqlitePool) -> Result<Vec<SessionAgg>, sq
         std::collections::HashMap::new();
     let mut weapon_order: Vec<String> = Vec::new();
     for row in &weapon_groups {
-        let sid = row.get::<String, _>(0);
+        let Some(sid) = row.try_get::<Option<String>, _>(0).ok().flatten() else {
+            continue;
+        };
         let entry = weapons_by_session.entry(sid.clone()).or_insert_with(|| {
             weapon_order.push(sid.clone());
             Vec::new()
@@ -1315,6 +1331,27 @@ mod tests {
         assert_eq!(mobs.len(), 1);
         assert_eq!(mobs[0]["mobName"], json!("Foo"));
         assert_eq!(v["tagComparisons"].as_array().unwrap().len(), 0);
+    }
+
+    /// A kill carrying a NULL session_id (forbidden by the production FK but
+    /// representable here) is skipped, not decoded into a panic, matching the
+    /// reference's `sessions.get(None)` miss.
+    #[tokio::test]
+    async fn activity_tolerates_a_null_session_id_row() {
+        let pool = memory_pool().await;
+        // A valid completed session with one dominant-mob kill.
+        seed_filter_session(&pool, "ok", "Real", 1000.0, 1000.0 + 3600.0, 5.0, 2).await;
+        // An orphan kill with no session_id (and no matching session row).
+        sqlx::query(
+            "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,enhancer_cost,loot_total_ped) \
+             VALUES('orphan',NULL,'Ghost','Spec','Young',1.0,0,9.0)",
+        )
+        .execute(&pool).await.expect("seed");
+        // Must not panic; only the real session's mob is compared.
+        let v = activity_impl(&pool).await.unwrap();
+        let mobs = v["mobComparisons"].as_array().unwrap();
+        assert_eq!(mobs.len(), 1);
+        assert_eq!(mobs[0]["mobName"], json!("Real"));
     }
 
     #[test]

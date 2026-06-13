@@ -388,9 +388,12 @@ async fn presets_readback(db_path: &Path) -> Value {
 /// `updated_at` (wall-clock `unixepoch('now')`) is excluded.
 async fn inventory_readback(db_path: &Path) -> Value {
     let pool = open_pool(db_path).await;
+    // Ordered by name (deterministic): items sharing an acquired_at date
+    // (e.g. two clock-date defaults) would otherwise tie and fall back to the
+    // random-UUID id, diverging the encounter-order symbolisation per arm.
     let rows = sqlx::query_as::<_, (String, String, f64, f64, Option<String>, String)>(
         "SELECT id, name, tt_value, markup_paid, notes, acquired_at FROM inventory_items \
-         ORDER BY acquired_at DESC, id DESC",
+         ORDER BY name ASC",
     )
     .fetch_all(&pool)
     .await
@@ -663,8 +666,9 @@ async fn the_analytics_write_surface_conforms_through_the_public_port() {
     );
     arms.compare_inventory_state("inventory create empty acquired_at")
         .await;
-    // list.
-    arms.compare_response("GET", "/api/analytics/inventory", None)
+    // list: two items now share the clock-date default, so the route's
+    // `acquired_at DESC, id DESC` ties on the random id; compare as a set.
+    arms.compare_list_unordered("/api/analytics/inventory", "name")
         .await;
 
     // patch a fixed-seeded item: partial update (only some fields).

@@ -397,6 +397,32 @@ pub fn query_int_or_default(
     }
 }
 
+/// An optional integer query parameter (`page_count: int | None = None`):
+/// absent yields `Some(None)` (no value, no issue), unparseable text records
+/// an `int_parsing` issue and yields `None` (validation failed), and a
+/// magnitude beyond `i64` saturates to the bound in its direction (Python's
+/// int is unbounded; the one consumer range-checks the value, so the
+/// saturating bound is faithful). The outer `Option` mirrors the other
+/// extractors' "valid?" convention; the inner is the absent-vs-present value.
+pub fn opt_query_int(
+    validation: &mut Validation,
+    query: &QueryString,
+    name: &str,
+) -> Option<Option<i64>> {
+    match query.last(name) {
+        None => Some(None),
+        Some(raw) => match parse_int_lax(raw) {
+            Some(LaxInt::Value(value)) => Some(Some(value)),
+            Some(LaxInt::OverflowPositive) => Some(Some(i64::MAX)),
+            Some(LaxInt::OverflowNegative) => Some(Some(i64::MIN)),
+            None => {
+                validation.int_parsing("query", name, raw);
+                None
+            }
+        },
+    }
+}
+
 /// A required string query parameter (`missing` when absent; any text,
 /// the empty string included, is a value).
 pub fn require_str<'q>(

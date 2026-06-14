@@ -578,7 +578,12 @@ async fn compose_scan_services(
     let vocab: Vec<String> = game_data
         .get_entities("skills")
         .iter()
-        .filter_map(|entity| entity.get("name").and_then(Value::as_str).map(str::to_string))
+        .filter_map(|entity| {
+            entity
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .collect();
 
     // The skill-scan provider seams: engine availability is fixed at the
@@ -597,9 +602,10 @@ async fn compose_scan_services(
     let extract_engine = ocr_engine.clone();
     let extract_geom = skill_geom;
     let extract_vocab = vocab;
-    let extract_page_levels: eo_services::skill_scan_manual::PageExtractor = Arc::new(
-        move |png: &[u8]| read_skill_page_levels(&extract_engine, &extract_geom, &extract_vocab, png),
-    );
+    let extract_page_levels: eo_services::skill_scan_manual::PageExtractor =
+        Arc::new(move |png: &[u8]| {
+            read_skill_page_levels(&extract_engine, &extract_geom, &extract_vocab, png)
+        });
 
     let scan_providers = ScanProviders {
         engine_available: Arc::new(move || has_engine),

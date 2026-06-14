@@ -22,6 +22,7 @@ pub mod native;
 pub mod producer_routes;
 pub mod proxy;
 pub mod pyjson;
+pub mod scan_routes;
 pub mod settings_routes;
 pub mod sse;
 pub mod tracking_routes;

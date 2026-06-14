@@ -1899,9 +1899,13 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
     use eo_services::event_bus::EventBus;
     use std::sync::Mutex;
 
+    use eo_services::clock::Clock;
     use eo_services::config_service::ConfigService;
+    use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
+    use eo_services::skill_panel::BgrImage;
+    use eo_services::skill_scan_manual::{ScanProviders, SkillScanManual};
     use eo_services::skill_tracker::SkillTracker;
-    use eo_services::tracker::{HuntTracker, Providers};
+    use eo_services::tracker::{naive_to_epoch, HuntTracker, Providers};
 
     let dir = tempfile::tempdir().expect("temp dir");
     // The attribution gate and the idle tag-mode leg read settings.json
@@ -1945,6 +1949,57 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
     let config_service = Arc::new(Mutex::new(
         ConfigService::new(dir.path()).expect("config service opens"),
     ));
+
+    // The manual skill scan and repair-cost reader, composed over
+    // deterministic test providers (no real screen capture or OCR): the
+    // engine reads available, a fixed region is found, a capture yields fixed
+    // PNG bytes, and extraction yields two skills. This exercises the full
+    // HTTP state machine and the byte-faithful projection hermetically. The
+    // completion callback persists through the shared pool exactly as
+    // composition wires it (bridging onto this runtime from the handler).
+    let skill_scan = SkillScanManual::new(
+        ScanProviders {
+            engine_available: Arc::new(|| true),
+            skill_region: Arc::new(|| Some(([0, 0], [100, 200]))),
+            capture_region: Arc::new(|_| Some(SCAN_CAPTURE_PNG.to_vec())),
+            extract_page_levels: Arc::new(|_| {
+                vec![("Anatomy".to_string(), 40.0), ("Rifle".to_string(), 100.5)]
+            }),
+        },
+        clock.clone(),
+        Some(bus.clone()),
+        None,
+        0,
+    );
+    let completion_pool = db.pool().clone();
+    let completion_clock = clock.clone();
+    let completion_runtime = tokio::runtime::Handle::current();
+    skill_scan.set_completion_callback(Arc::new(move |levels: &[(String, f64)]| {
+        let levels = levels.to_vec();
+        let pool = completion_pool.clone();
+        let scan_time = naive_to_epoch(completion_clock.now());
+        let fut = async move {
+            eo_services::scan_completion::complete_skill_scan(&pool, &levels, scan_time).await
+        };
+        let result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| completion_runtime.block_on(fut))
+        } else {
+            completion_runtime.block_on(fut)
+        };
+        result.map(|_| ()).map_err(|err| err.to_string())
+    }));
+    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
+        repair_region: Arc::new(|| Some(([10, 20], [110, 60]))),
+        capture_region: Arc::new(|_, _, _, _| {
+            Some(BgrImage {
+                data: vec![0; 12],
+                h: 2,
+                w: 2,
+            })
+        }),
+        read_text: Arc::new(|_| Some(("2,20 PED".to_string(), 0.97))),
+    }));
+
     let hydration = Arc::new(HydrationState::new(
         eo_services::db::Db::from_pool(db.pool().clone()),
         game_data,
@@ -1961,6 +2016,8 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
             .with_tracker(tracker)
             .with_skill_tracker(skill_tracker)
             .with_config_service(config_service)
+            .with_skill_scan(skill_scan)
+            .with_repair_ocr(repair_ocr)
             .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
@@ -1986,6 +2043,11 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
 /// gate passes (`_validate_hotbar`), so `/start` succeeds without a
 /// configured trifecta.
 const HOTBAR_BOUND_CONFIG: &str = r#"{"hotbar_hooks_enabled": true, "hotbar": {"1": 7}}"#;
+
+/// The fixed bytes the test scan capturer returns; the capture-PNG route
+/// serves them verbatim, so the route test asserts the body and the strong
+/// ETag (the SHA-256 of these bytes) against them.
+const SCAN_CAPTURE_PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
@@ -2465,4 +2527,252 @@ async fn config_write_routes_serve_natively_active_session() {
         "",
         "an active mob-mode release clears the manual selection, not the tag"
     );
+}
+
+/// The full manual-scan state machine over the native arm: each verb's status
+/// code, ETag scoping (GETs in the /api/scan ETag prefix carry it, the POST
+/// verbs do not), the response-model field order, and the logical refusals
+/// riding the plain-200 body exactly as the reference returns the dict.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scan_skills_state_machine_serves_natively() {
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+
+    // status: 200 + the conditional-GET contract, idle, full field set in the
+    // ScanManualStatus declaration order.
+    let (status, headers, body) = get(port, "/api/scan/skills/status").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(headers.contains_key(http::header::ETAG));
+    assert_eq!(
+        headers.get(http::header::CACHE_CONTROL).unwrap(),
+        "no-cache"
+    );
+    let resting = body_json(&body);
+    assert_eq!(resting["phase"], "idle");
+    assert_eq!(resting["captured_pages"], 0);
+    assert_eq!(resting["configured"], true);
+    assert_eq!(resting["game_window_present"], true);
+    let keys: Vec<&str> = resting
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "active",
+            "processing",
+            "captured_pages",
+            "expected_pages",
+            "last_scan_time",
+            "skills_count",
+            "configured",
+            "game_window_present",
+            "phase",
+            "processing_progress",
+            "has_pending_result",
+            "error",
+        ]
+    );
+
+    // A status re-read with the matching validator is a 304 (the conditional
+    // GET the polling overlay relies on).
+    let etag = headers
+        .get(http::header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let (status, _, body) = request(
+        port,
+        "GET",
+        "/api/scan/skills/status",
+        &[("if-none-match", &etag)],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    // capture before start: a plain 200 carrying the refusal (no ETag: POST).
+    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    assert_eq!(
+        body_json(&body)["error"],
+        "No active scan: call start first"
+    );
+
+    // start with 2 pages: capturing.
+    let (status, headers, body) =
+        send_json(port, "POST", "/api/scan/skills/start?page_count=2", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    let started = body_json(&body);
+    assert_eq!(started["phase"], "capturing");
+    assert_eq!(started["expected_pages"], 2);
+
+    // capture twice: page/captured present, AFTER the inherited status fields
+    // (the ScanCaptureResult subclass order).
+    let (_, _, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    let first = body_json(&body);
+    assert_eq!(first["page"], 1);
+    assert_eq!(first["captured"], true);
+    let keys: Vec<&str> = first
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys[0], "active", "the inherited status fields lead");
+    assert_eq!(&keys[keys.len() - 2..], ["page", "captured"]);
+    let (_, _, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    assert_eq!(body_json(&body)["captured_pages"], 2);
+
+    // pending before processing: the reference's 404 (a non-2xx, so no ETag).
+    let (status, headers, body) = get(port, "/api/scan/skills/pending").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert!(!headers.contains_key(http::header::ETAG));
+    assert_eq!(body_json(&body)["detail"], "No pending skill scan result");
+
+    // process: kicks extraction off on the worker thread.
+    let (status, _, _) = send_json(port, "POST", "/api/scan/skills/process", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // The worker settles the held result; poll the status to review.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_, _, body) = get(port, "/api/scan/skills/status").await;
+        if body_json(&body)["phase"] == "awaiting_review" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the scan never settled to review"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // pending: 200 + ETag, the held result as a {name: level} object in
+    // first-seen order.
+    let (status, headers, body) = get(port, "/api/scan/skills/pending").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(headers.contains_key(http::header::ETAG));
+    let pending = body_json(&body);
+    assert_eq!(pending["skills"]["Anatomy"], 40.0);
+    assert_eq!(pending["skills"]["Rifle"], 100.5);
+
+    // accept: 200 with the persisted count, fields in ScanAcceptResult order.
+    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/accept", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    let accepted = body_json(&body);
+    assert_eq!(accepted["ok"], true);
+    assert_eq!(accepted["skills_persisted"], 2);
+    let keys: Vec<&str> = accepted
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, ["ok", "skills_persisted"]);
+
+    // The accepted scan settled the resting status: idle, two skills.
+    let (_, _, body) = get(port, "/api/scan/skills/status").await;
+    let settled = body_json(&body);
+    assert_eq!(settled["phase"], "idle");
+    assert_eq!(settled["skills_count"], 2);
+}
+
+/// The capture-PNG read serves the stored bytes under the same conditional-GET
+/// contract the JSON reads carry (the ETag middleware covers any media type in
+/// scope), 404s a missing page, and 422s an unparseable one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scan_capture_png_serves_with_etag_and_refuses() {
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    send_json(port, "POST", "/api/scan/skills/start?page_count=2", "").await;
+    send_json(port, "POST", "/api/scan/skills/capture", "").await;
+
+    // capture/1: 200 image/png, the strong ETag of the bytes, the bytes.
+    let (status, headers, body) = get(port, "/api/scan/skills/capture/1").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        headers.get(http::header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
+    assert_eq!(
+        headers.get(http::header::CACHE_CONTROL).unwrap(),
+        "no-cache"
+    );
+    let etag = headers
+        .get(http::header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        etag,
+        eo_http::hydration::compute_strong_etag(SCAN_CAPTURE_PNG)
+    );
+    assert_eq!(body, SCAN_CAPTURE_PNG);
+
+    // The matching validator: 304, empty body.
+    let (status, _, body) = request(
+        port,
+        "GET",
+        "/api/scan/skills/capture/1",
+        &[("if-none-match", &etag)],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    // A page with no capture: the reference's 404.
+    let (status, _, body) = get(port, "/api/scan/skills/capture/99").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body_json(&body)["detail"], "Capture not available");
+
+    // An unparseable page: the framework's 422 int_parsing on the path param.
+    let (status, _, body) = get(port, "/api/scan/skills/capture/abc").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(&body)["detail"][0]["type"], "int_parsing");
+    assert_eq!(
+        body_json(&body)["detail"][0]["loc"],
+        serde_json::json!(["path", "page"])
+    );
+}
+
+/// The repair-cost read runs the OCR provider chain and gates on the live
+/// `repair_ocr_enabled` flag (the reference's 400 when off). A plain 200
+/// (POST, outside the ETag scope) carrying the declared fields in model order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repair_scan_serves_and_gates_on_the_config_flag() {
+    let (port, _state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": true}"#).await;
+    let (status, headers, body) =
+        send_json(port, "POST", "/api/tracking/session/abc/repair-scan", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        !headers.contains_key(http::header::ETAG),
+        "POST is outside the ETag scope"
+    );
+    let result = body_json(&body);
+    assert_eq!(result["cost_ped"], 2.2);
+    assert_eq!(result["raw_text"], "2,20 PED");
+    assert_eq!(result["confidence"], 0.97);
+    let keys: Vec<&str> = result
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        ["cost_ped", "raw_text", "confidence"],
+        "success carries the declared fields only, no null error key"
+    );
+
+    let (port, _state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": false}"#).await;
+    let (status, _, body) =
+        send_json(port, "POST", "/api/tracking/session/abc/repair-scan", "").await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(&body)["detail"], "Repair OCR is disabled");
 }

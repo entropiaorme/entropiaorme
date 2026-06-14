@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// One cell type's panel-relative rect, with per-row anchors for
 /// interpolation: `y_top(r) = round(first_y_top + r * (last_y_top -
@@ -57,6 +57,29 @@ impl PanelAnchor {
             n_rows: None,
             cells: Vec::new(),
         }
+    }
+
+    /// Encode the grid geometry as the JSON `skill_panel::read_skill_panel`
+    /// (and `slice_panel_cells`) consume: `n_rows` plus a `cells` map of
+    /// per-cell pixel extents. Built from this merged anchor (the
+    /// calibration file applied over the fallback), so an uncalibrated
+    /// anchor yields `{"n_rows": null, "cells": {}}` and the reader returns
+    /// no rows, exactly as the sidecar skips extraction without calibration.
+    pub fn to_geom_value(&self) -> Value {
+        let mut cells = serde_json::Map::new();
+        for (name, cell) in &self.cells {
+            cells.insert(
+                name.clone(),
+                json!({
+                    "x_left": cell.x_left,
+                    "x_right": cell.x_right,
+                    "first_y_top": cell.first_y_top,
+                    "last_y_top": cell.last_y_top,
+                    "height": cell.height,
+                }),
+            );
+        }
+        json!({ "n_rows": self.n_rows, "cells": Value::Object(cells) })
     }
 }
 
@@ -169,6 +192,29 @@ pub fn compute_region(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn to_geom_value_encodes_the_calibrated_grid_for_the_reader() {
+        let entry = json!({
+            "n_rows": 12,
+            "cells": {
+                "name": {"x_left": 5, "x_right": 100, "first_y_top": 10, "last_y_top": 300, "height": 18},
+                "level": {"x_left": 105, "x_right": 140, "first_y_top": 10, "last_y_top": 300, "height": 18},
+            }
+        });
+        let geom = build_anchor(Some(&entry), skill_fallback()).to_geom_value();
+        assert_eq!(geom["n_rows"], 12);
+        assert_eq!(geom["cells"]["name"]["x_left"], 5);
+        assert_eq!(geom["cells"]["name"]["x_right"], 100);
+        assert_eq!(geom["cells"]["level"]["height"], 18);
+    }
+
+    #[test]
+    fn to_geom_value_of_an_uncalibrated_anchor_carries_no_cells() {
+        let geom = skill_fallback().to_geom_value();
+        assert_eq!(geom["n_rows"], Value::Null);
+        assert_eq!(geom["cells"], json!({}));
+    }
 
     #[test]
     fn fallback_constants_govern_without_a_geometry_file() {

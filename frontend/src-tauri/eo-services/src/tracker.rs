@@ -361,11 +361,14 @@ impl HuntTracker {
     /// Whether the active session was captured in tag mode
     /// (`backend.services.hunt_tracker.is_session_tag_mode`): the
     /// per-session mode snapshotted at `start_session`, not the live
-    /// config. Idle (no session) reads the default `"mob"`, so this is
-    /// `false`; the manual-mob-suggestions handler only consults it
-    /// while tracking, gating the idle case on the live config instead.
+    /// config. The snapshot is not cleared at `stop_session`, so the
+    /// active-session guard is what makes idle read `false` (a stopped
+    /// tag session would otherwise leave the snapshot at `"tag"`); the
+    /// manual-mob-suggestions handler only consults it while tracking,
+    /// gating the idle case on the live config instead.
     pub fn is_session_tag_mode(&self) -> bool {
-        self.lock_state().session_mob_tracking_mode == "tag"
+        let state = self.lock_state();
+        state.session.is_some() && state.session_mob_tracking_mode == "tag"
     }
 
     /// Close sessions left open by a crash: end at the latest kill
@@ -3849,8 +3852,9 @@ mod tests {
     #[test]
     fn is_session_tag_mode_reflects_the_session_capture() {
         // The flag is the per-session mode snapshotted at start_session,
-        // not the live config: idle is false, a tag-mode session is true,
-        // a mob-mode session is false.
+        // not the live config: idle is false (both before any session and
+        // after one stops, since the snapshot is not cleared on stop), a
+        // tag-mode session is true, a mob-mode session is false.
         let tag_rig = rig();
         let tagged = tag_rig.tracker(Providers {
             mob_tracking_mode: Arc::new(|| "tag".to_string()),
@@ -3867,6 +3871,10 @@ mod tests {
             "a session captured in tag mode reports tag mode"
         );
         tagged.stop_session().unwrap();
+        assert!(
+            !tagged.is_session_tag_mode(),
+            "idle after stopping a tag session is never tag mode"
+        );
 
         let mob_rig = rig();
         let mobbed = mob_rig.tracker(Providers {

@@ -37,7 +37,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.routers.demo as demo_module
-from backend.main import BACKEND_PORT, app
+from backend.main import BACKEND_PORT, app, create_app
 from backend.middleware.etag import (
     CACHE_CONTROL_VALUE,
     ETAG_PREFIXES,
@@ -208,10 +208,27 @@ def test_if_none_match_mismatch_falls_through_to_200(client: TestClient) -> None
 def test_covered_get_routes_enumerates_every_hydration_route() -> None:
     """The introspection helper finds every GET route under the hydration
     prefixes and only those. The assertion message lists the discovered
-    routes so a silent miss reads cleanly in the failure output."""
-    routes = covered_get_routes(app)
+    routes so a silent miss reads cleanly in the failure output.
 
-    assert routes, "covered_get_routes returned no routes; substrate empty"
+    A freshly built ``create_app()`` is introspected rather than the
+    process-global ``app`` singleton. The helper is a pure function of an
+    app's route table, so the canonical input is a clean app built at call
+    time; reading the module-global instead couples the test to whatever
+    global state earlier tests left behind in the same process. Under the
+    parallel CI run (``--dist=loadfile`` packs whole files onto one worker)
+    that coupling surfaced as a spurious empty enumeration even though the
+    global app served every route correctly, so a fresh app is the
+    isolation-proof input. The total-route count in the failure message
+    distinguishes a genuinely empty app from a populated-but-unenumerated
+    one should the assertion ever fire again."""
+    fresh_app = create_app()
+    routes = covered_get_routes(fresh_app)
+
+    assert routes, (
+        "covered_get_routes returned no routes for a freshly built app "
+        f"(app exposes {len(list(getattr(fresh_app, 'routes', [])))} total "
+        "routes); substrate empty"
+    )
     for route in routes:
         assert path_is_in_etag_scope(route), (
             f"covered_get_routes returned {route!r} which is not under any "

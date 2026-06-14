@@ -678,12 +678,13 @@ fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future
 mod tests {
     use super::*;
 
-    /// Serialises the tests that pin `ORT_DYLIB_PATH` (a process-global,
-    /// not-thread-safe env var that ORT reads via `getenv`). Async-aware so
-    /// the guard can be held across the `compose_with(...).await` that
-    /// builds the engine and reads the env, without the
-    /// `await_holding_lock` hazard a `std::sync::Mutex` would raise. Only
-    /// ever contended across distinct tests, so no intra-test deadlock.
+    /// Serialises the tests that mutate process-global, not-thread-safe
+    /// state: `ORT_DYLIB_PATH` (the env var ORT reads via `getenv`) and the
+    /// current working directory (`set_current_dir`). Async-aware so the
+    /// guard can be held across the `compose_with(...).await` that builds
+    /// the engine and reads the env, without the `await_holding_lock`
+    /// hazard a `std::sync::Mutex` would raise. Only ever contended across
+    /// distinct tests, so no intra-test deadlock.
     static ORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     fn repo_snapshot() -> PathBuf {
@@ -761,8 +762,11 @@ mod tests {
     /// the installed `resource_dir` and the compiled-in `dev_project_root`,
     /// neither of which reads CWD) and prove it by resolving, changing the
     /// CWD, resolving again, and asserting the two are byte-identical.
-    #[test]
-    fn ort_dylib_path_is_absolute_and_cwd_independent() {
+    #[tokio::test]
+    async fn ort_dylib_path_is_absolute_and_cwd_independent() {
+        // Serialised: this test mutates the process-global CWD, which would
+        // race any concurrent test reading the CWD or a relative path.
+        let _ort = ORT_TEST_LOCK.lock().await;
         let resource = PathBuf::from("X:/resources");
         let resolved = ort_dylib_path(Some(&resource));
 

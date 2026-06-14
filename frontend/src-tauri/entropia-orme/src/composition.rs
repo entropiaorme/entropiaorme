@@ -73,13 +73,21 @@ use eo_services::config_service::{
 };
 use eo_services::cost_engine::cost_per_shot_from_props;
 use eo_services::db::{AdoptError, Db};
+use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::game_data_store::GameDataStore;
+use eo_services::ocr_engine::load_bgr_png;
 pub use eo_services::ocr_engine::OcrEngine;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
 use eo_services::quests::QuestService;
+use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
+use eo_services::scan_completion::{complete_skill_scan, hydrate_skill_scan_state};
+use eo_services::scan_presets::ScanPresets;
+use eo_services::screen_capture::{capture_region_bgr, capture_region_png};
+use eo_services::skill_panel::{read_skill_panel, BgrImage};
+use eo_services::skill_scan_manual::{ScanProviders, ScanRegion, SkillScanManual};
 use eo_services::skill_tracker::SkillTracker;
-use eo_services::tracker::{EquipmentProfile, HuntTracker, Providers};
+use eo_services::tracker::{naive_to_epoch, EquipmentProfile, HuntTracker, Providers};
 use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
 use eo_wire::domain_events::DomainEvent;
 use eo_wire::sse::SseHub;
@@ -257,10 +265,14 @@ pub struct ProducerState {
     // for the substrate's lifetime, and exposed: the codex claim routes
     // call `suppress_next` on it.
     skill_tracker: Arc<SkillTracker>,
+    // The in-process event bus the whole spine publishes on. Stored (rather
+    // than left implicit on the subscriber handles) so the scan services
+    // composed alongside the spine publish `scan.status.changed` on the SAME
+    // bus the SSE bridge subscribes, and so the `/api/events` stream carries
+    // scan-status frames once the scan routes flip.
+    bus: Arc<EventBus>,
     // Held to keep its permanent bus subscription alive for the substrate's
-    // lifetime; never read directly here. The bus itself stays alive through
-    // the strong handles these (and the watcher and tracker) hold, so the
-    // spine need not store it separately.
+    // lifetime; never read directly here.
     _quests: Arc<QuestService>,
 }
 
@@ -324,6 +336,14 @@ impl ProducerState {
     pub fn skill_tracker_handle(&self) -> Arc<SkillTracker> {
         self.skill_tracker.clone()
     }
+
+    /// A handle to the spine's event bus. The scan services compose on this
+    /// same `Arc<EventBus>`, so their `scan.status.changed` envelopes reach
+    /// the SSE bridge (subscribed in [`compose_producers`]) and the
+    /// `/api/events` stream, exactly as the tracker's session frames do.
+    pub fn bus_handle(&self) -> Arc<EventBus> {
+        self.bus.clone()
+    }
 }
 
 /// What a successful composition yields: the read surface, the producer
@@ -343,6 +363,15 @@ pub struct Composed {
     pub hydration: Arc<HydrationState>,
     pub producers: ProducerState,
     pub ocr_engine: Option<Arc<OcrEngine>>,
+    /// The manual skill-scan state machine, composed on the spine bus (its
+    /// `scan.status.changed` envelopes reach the SSE stream) over the OCR
+    /// extraction providers. Always constructed so the scan routes serve;
+    /// its capture and extraction seams stand down to "engine unavailable"
+    /// when the OCR runtime is absent, exactly as the sidecar reports.
+    pub skill_scan: Arc<SkillScanManual>,
+    /// The one-shot repair-cost OCR service, composed over the same capture
+    /// and recogniser seams.
+    pub repair_ocr: Arc<RepairOcrService>,
 }
 
 /// Compose the native services, or decline with a logged reason.
@@ -439,11 +468,33 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     // recorded provider live in `OcrEngine::new_with_providers`.
     let ocr_engine = build_ocr_engine(models).await;
 
+    // The scan services compose on the spine bus (so their status frames
+    // reach the SSE stream) over the OCR extraction providers and the
+    // shared single-owner pool, before the read surface takes ownership of
+    // `db`/`game_data`/`clock`/`data_dir`. The calibration artefact sits
+    // beside the snapshot dir in both the dev and installed layouts, so it
+    // resolves as the snapshot's sibling.
+    let geometry_path = snapshot
+        .parent()
+        .map(|parent| parent.join("panel_geometry.json"))
+        .unwrap_or_else(|| snapshot.join("panel_geometry.json"));
+    let (skill_scan, repair_ocr) = compose_scan_services(
+        producers.bus_handle(),
+        ocr_engine.clone(),
+        game_data.clone(),
+        db.clone(),
+        clock.clone(),
+        geometry_path,
+    )
+    .await;
+
     let hydration = Arc::new(HydrationState::new(db, game_data, clock, data_dir));
     Some(Composed {
         hydration,
         producers,
         ocr_engine,
+        skill_scan,
+        repair_ocr,
     })
 }
 
@@ -495,6 +546,153 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
     let warming = engine.clone();
     tokio::task::spawn_blocking(move || warming.warm_up());
     Some(engine)
+}
+
+/// Compose the manual skill scan and the repair-cost OCR over the OCR
+/// engine, the live game-window region lookups, and the on-demand screen
+/// capturer. The scan publishes `scan.status.changed` on the spine `bus`
+/// (so its frames reach the SSE stream), persists accepted calibrations
+/// through the shared `pool`, and hydrates its resting status from the
+/// same. When the OCR runtime is absent the providers stand down to
+/// "engine unavailable" rather than declining composition, so the routes
+/// still serve (the scan reports offline), exactly as the sidecar does
+/// without a loadable engine. Both services are always constructed.
+async fn compose_scan_services(
+    bus: Arc<EventBus>,
+    ocr_engine: Option<Arc<OcrEngine>>,
+    game_data: Arc<GameDataStore>,
+    db: Db,
+    clock: Arc<dyn Clock>,
+    geometry_path: PathBuf,
+) -> (Arc<SkillScanManual>, Arc<RepairOcrService>) {
+    let runtime = tokio::runtime::Handle::current();
+    let pool = db.pool().clone();
+
+    // The calibrated panel grid and the canonical skill vocabulary the
+    // panel reader resolves names against; both read existing snapshot
+    // assets (the geometry artefact beside the snapshot dir, the skill
+    // names from the bundled `skills` endpoint), so this is port scope, not
+    // new surface.
+    let presets = Arc::new(ScanPresets::new(&geometry_path));
+    let skill_geom = presets.skill.to_geom_value();
+    let vocab: Vec<String> = game_data
+        .get_entities("skills")
+        .iter()
+        .filter_map(|entity| entity.get("name").and_then(Value::as_str).map(str::to_string))
+        .collect();
+
+    // The skill-scan provider seams: engine availability is fixed at the
+    // load attempt (the engine never reloads at runtime); the region lookup
+    // reads the live game window through the calibrated anchor; the capturer
+    // grabs the PNG on demand; the extractor decodes, slices, OCRs, and
+    // filters to resolved (name, level) rows.
+    let has_engine = ocr_engine.is_some();
+    let region_presets = presets.clone();
+    let skill_region: Arc<dyn Fn() -> Option<ScanRegion> + Send + Sync> =
+        Arc::new(move || eu_window::skill_region(&region_presets));
+    let capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync> =
+        Arc::new(|(tl, br): ScanRegion| {
+            capture_region_png(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
+        });
+    let extract_engine = ocr_engine.clone();
+    let extract_geom = skill_geom;
+    let extract_vocab = vocab;
+    let extract_page_levels: eo_services::skill_scan_manual::PageExtractor = Arc::new(
+        move |png: &[u8]| read_skill_page_levels(&extract_engine, &extract_geom, &extract_vocab, png),
+    );
+
+    let scan_providers = ScanProviders {
+        engine_available: Arc::new(move || has_engine),
+        skill_region,
+        capture_region,
+        extract_page_levels,
+    };
+
+    // Hydrate the resting status from the persisted calibration history,
+    // exactly as the sidecar seeds initial scan time and skill count.
+    let (initial_scan_time, initial_skills_count) =
+        hydrate_skill_scan_state(&pool).await.unwrap_or((None, 0));
+
+    let skill_scan = SkillScanManual::new(
+        scan_providers,
+        clock.clone(),
+        Some(bus),
+        initial_scan_time,
+        initial_skills_count,
+    );
+
+    // The completion callback persists accepted calibrations through the
+    // shared pool, bridging onto the runtime from the scan's worker thread
+    // the same dual way the tracker's providers do; a persist error
+    // surfaces on the scan status, exactly as the sidecar's caught
+    // exception does.
+    let completion_pool = pool;
+    let completion_clock = clock.clone();
+    let completion_runtime = runtime;
+    skill_scan.set_completion_callback(Arc::new(move |levels: &[(String, f64)]| {
+        let scan_time = naive_to_epoch(completion_clock.now());
+        let levels = levels.to_vec();
+        let pool = completion_pool.clone();
+        block_on_pool(&completion_runtime, async move {
+            complete_skill_scan(&pool, &levels, scan_time).await
+        })
+        .map(|_drift| ())
+        .map_err(|err| err.to_string())
+    }));
+
+    // The repair-OCR provider seams: the same calibrated region lookup and
+    // capturer (BGR pixels here), recognised by the shared engine.
+    let repair_presets = presets;
+    let repair_engine = ocr_engine;
+    let repair_ocr = RepairOcrService::new(RepairProviders {
+        repair_region: Arc::new(move || eu_window::repair_region(&repair_presets)),
+        capture_region: Arc::new(capture_region_bgr),
+        read_text: Arc::new(move |frame: &BgrImage| {
+            repair_engine
+                .as_ref()?
+                .recognize_bgr(&frame.data, frame.h, frame.w)
+                .ok()
+        }),
+    });
+
+    (skill_scan, Arc::new(repair_ocr))
+}
+
+/// Extract `{canonical_name: level}` rows from one captured skill-panel
+/// PNG: decode to BGR, slice the calibrated grid, OCR each name/level cell,
+/// estimate each bar fill, and keep only the rows that both resolved a name
+/// and parsed a level. Returns no rows when the engine is absent, the PNG
+/// is unreadable, or the grid is uncalibrated (the reader would otherwise
+/// have no rows to slice and would panic), so an installed build missing
+/// the calibration artefact degrades to an empty scan rather than crashing.
+fn read_skill_page_levels(
+    engine: &Option<Arc<OcrEngine>>,
+    skill_geom: &Value,
+    vocab: &[String],
+    png: &[u8],
+) -> Vec<(String, f64)> {
+    let Some(engine) = engine.as_ref() else {
+        return Vec::new();
+    };
+    if skill_geom.get("n_rows").and_then(Value::as_i64).is_none() {
+        return Vec::new();
+    }
+    let Ok((data, h, w)) = load_bgr_png(png) else {
+        return Vec::new();
+    };
+    let panel = BgrImage { data, h, w };
+    let read = |crop: &BgrImage| -> (String, f64) {
+        engine
+            .recognize_bgr(&crop.data, crop.h, crop.w)
+            .unwrap_or_default()
+    };
+    read_skill_panel(&read, &panel, skill_geom, vocab)
+        .into_iter()
+        .filter_map(|row| match (row.name, row.level) {
+            (Some(name), Some(level)) => Some((name, level)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Build and start the producer spine over the shared pool and clock.
@@ -571,6 +769,7 @@ fn compose_producers(
         sse_hub,
         config_service,
         skill_tracker,
+        bus,
         _quests: quests,
     })
 }
@@ -1035,6 +1234,51 @@ mod tests {
                 );
             }
         }
+
+        composed.producers.stop();
+    }
+
+    /// The composed scan services are reachable and wired over the LIVE
+    /// providers, not the inert defaults: the manual scan reports a resting
+    /// idle status whose `configured` flag mirrors whether the OCR engine
+    /// loaded (the inert default's `engine_available` is always false, so a
+    /// host where the engine loads proves the real provider), and the repair
+    /// reader runs its provider chain to the window-not-found leg. The scan
+    /// also publishes onto the spine bus: a status-moving verb dispatches one
+    /// `scan.status.changed` frame through the SSE bridge composed alongside.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn composes_the_scan_services_over_live_providers() {
+        let _ort = ORT_TEST_LOCK.lock().await;
+        // Pin the repo dylib when present so the engine can load on a capable
+        // host; absent, the services still compose with the engine `None`.
+        let dylib = ort_dylib_path(None);
+        if dylib.is_file() {
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let composed = compose_with(dir.path().join("data"), repo_snapshot(), repo_models())
+            .await
+            .expect("composition succeeds");
+
+        let status = composed.skill_scan.get_status();
+        assert_eq!(status["phase"], "idle");
+        assert_eq!(status["captured_pages"], 0);
+        // `configured` mirrors whether the engine loaded (the real provider);
+        // the game window is never present on a headless host.
+        assert_eq!(status["configured"], composed.ocr_engine.is_some());
+        assert_eq!(status["game_window_present"], false);
+
+        // The repair reader runs its composed provider chain to the
+        // no-window leg (its region lookup reads the live game window).
+        let repair = composed.repair_ocr.scan_repair_cost();
+        assert_eq!(
+            repair["error"],
+            "Entropia Universe window not found: start the game first"
+        );
+        // The scan composed on the spine bus (its status frames reach the SSE
+        // stream); the bridge forwarding is covered by `sse_bridge_*`.
 
         composed.producers.stop();
     }

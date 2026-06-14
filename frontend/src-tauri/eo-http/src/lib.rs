@@ -50,6 +50,8 @@ pub struct AppState {
     sse_hub: Option<Arc<eo_wire::sse::SseHub>>,
     config_service: Option<Arc<Mutex<eo_services::config_service::ConfigService>>>,
     skill_tracker: Option<Arc<eo_services::skill_tracker::SkillTracker>>,
+    skill_scan: Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>,
+    repair_ocr: Option<Arc<eo_services::repair_ocr::RepairOcrService>>,
     cors: Option<cors::CorsConfig>,
 }
 
@@ -72,6 +74,8 @@ impl AppState {
             sse_hub: None,
             config_service: None,
             skill_tracker: None,
+            skill_scan: None,
+            repair_ocr: None,
             cors: None,
         }
     }
@@ -164,6 +168,40 @@ impl AppState {
     /// The live producer-spine skill tracker, when composed.
     pub(crate) fn skill_tracker(&self) -> Option<Arc<eo_services::skill_tracker::SkillTracker>> {
         self.skill_tracker.clone()
+    }
+
+    /// Attach the composed manual skill-scan service (the OCR scan
+    /// state machine). Without it (a substrate built before composition,
+    /// composition declined, or the OCR runtime absent off Windows) the
+    /// scan routes fall back to the proxy arm.
+    pub fn with_skill_scan(
+        mut self,
+        skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
+    ) -> Self {
+        self.skill_scan = Some(skill_scan);
+        self
+    }
+
+    /// The composed manual skill-scan service, when present.
+    pub(crate) fn skill_scan(
+        &self,
+    ) -> Option<Arc<eo_services::skill_scan_manual::SkillScanManual>> {
+        self.skill_scan.clone()
+    }
+
+    /// Attach the composed repair-OCR service. Without it the repair-scan
+    /// route falls back to the proxy arm.
+    pub fn with_repair_ocr(
+        mut self,
+        repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
+    ) -> Self {
+        self.repair_ocr = Some(repair_ocr);
+        self
+    }
+
+    /// The composed repair-OCR service, when present.
+    pub(crate) fn repair_ocr(&self) -> Option<Arc<eo_services::repair_ocr::RepairOcrService>> {
+        self.repair_ocr.clone()
     }
 
     pub fn upstream(&self) -> &str {

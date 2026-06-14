@@ -304,7 +304,12 @@ fn spawn_http_substrate(
                 .with_tracker(composed.producers.tracker_handle())
                 .with_sse_hub(composed.producers.sse_hub_handle())
                 .with_config_service(composed.producers.config_service_handle())
-                .with_skill_tracker(composed.producers.skill_tracker_handle());
+                .with_skill_tracker(composed.producers.skill_tracker_handle())
+                // The OCR scan state machine and the repair-cost reader serve
+                // the scan routes over the same `Arc`s composed on the spine
+                // bus (their status frames reach the `/api/events` stream).
+                .with_skill_scan(composed.skill_scan)
+                .with_repair_ocr(composed.repair_ocr);
             // Hand the producer spine to the exit seam so it stops the
             // tail thread and ends any session on app close.
             app.manage(Producers(Mutex::new(Some(composed.producers))));

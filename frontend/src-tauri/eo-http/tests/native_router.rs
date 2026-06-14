@@ -20,6 +20,8 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use http_body_util::BodyExt;
 use serde_json::Value;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
 
 async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1437,4 +1439,291 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     )
     .await;
     assert_eq!(status, http::StatusCode::OK);
+}
+
+// ── Tracking session-edit write adapters, end-to-end and hermetic ──────
+//
+// The five edit adapters (`native.rs`) and the HydrationState method
+// wrappers (`tracking_routes.rs`) are only driven end-to-end by the
+// feature-gated cross-language battery, so the hermetic mutation
+// campaign never exercises them. This test seeds an ended + an active
+// session straight into the substrate's database and drives every edit
+// through the public port, asserting the RESPONSE BODY fields (not just
+// the status) so an adapter/wrapper degraded to `Default::default()`
+// (an empty `Response`) is caught. Activate vs deactivate produce
+// distinct results from the same wildcard registration, distinguishing
+// the suffix dispatch and the path splitter.
+
+const ENDED_MOB: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ENDED_LOOT: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const ACTIVE: &str = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+async fn open_pool(path: std::path::PathBuf) -> SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .foreign_keys(false)
+                .busy_timeout(Duration::from_secs(5)),
+        )
+        .await
+        .expect("open shared database")
+}
+
+/// Seed the substrate's own database (the schema was created by
+/// `Db::open` in `serve_substrate`) with the fixtures every edit needs:
+///   - `ENDED_MOB` (is_active=0): two "Atrox" kills (rename target) and
+///     one "Argo" kill whose `original_mob_name` is "Wolf" (restore
+///     target);
+///   - `ENDED_LOOT` (is_active=0): a kill with an ACTIVE "AnimalOil"
+///     loot row (deactivate target) and a kill with a DEACTIVATED "Old
+///     Hide" row (activate target), plus an item name carrying a slash;
+///   - `ACTIVE` (is_active=1): the 409 case.
+async fn seed_edits(pool: &SqlitePool) {
+    let base = 1_750_000_000.0_f64;
+    for (id, active) in [(ENDED_MOB, 0_i64), (ENDED_LOOT, 0), (ACTIVE, 1)] {
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,armour_cost,heal_cost,dangling_cost,mob_tracking_mode,updated_at) \
+             VALUES(?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(base)
+        .bind(if active == 0 { Some(base + 3600.0) } else { None })
+        .bind(active)
+        .bind(1.0_f64)
+        .bind(0.0_f64)
+        .bind(0.0_f64)
+        .bind("mob")
+        .bind(base + 3600.0)
+        .execute(pool)
+        .await
+        .expect("seed session");
+    }
+
+    // ENDED_MOB: two Atrox kills (rename) + one renamed Argo (restore).
+    for i in 0..2 {
+        sqlx::query(
+            "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,shots_fired,damage_dealt,damage_taken,critical_hits,cost_ped,enhancer_cost,loot_total_ped,is_global,is_hof,original_mob_name) \
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(format!("k-mob-{i}")).bind(ENDED_MOB).bind("Atrox").bind("").bind("")
+        .bind(base + i as f64).bind(10_i64).bind(50.0).bind(0.0).bind(0_i64)
+        .bind(0.5).bind(0.0).bind(3.0).bind(0_i64).bind(0_i64).bind(Option::<String>::None)
+        .execute(pool).await.expect("seed mob kill");
+    }
+    sqlx::query(
+        "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,shots_fired,damage_dealt,damage_taken,critical_hits,cost_ped,enhancer_cost,loot_total_ped,is_global,is_hof,original_mob_name) \
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind("k-mob-renamed").bind(ENDED_MOB).bind("Argo").bind("").bind("")
+    .bind(base + 10.0).bind(10_i64).bind(50.0).bind(0.0).bind(0_i64)
+    .bind(0.5).bind(0.0).bind(3.0).bind(0_i64).bind(0_i64).bind(Some("Wolf"))
+    .execute(pool).await.expect("seed renamed kill");
+
+    // ENDED_LOOT: K_LD carries an ACTIVE "AnimalOil" (deactivate
+    // target, value 2.0, parent loot_total 5.0); K_LA carries a
+    // DEACTIVATED "OldHide" (activate target, value 3.0, parent
+    // loot_total 4.0) plus a slash-bearing item name.
+    sqlx::query(
+        "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,shots_fired,damage_dealt,damage_taken,critical_hits,cost_ped,enhancer_cost,loot_total_ped,is_global,is_hof,original_mob_name) \
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind("k-ld").bind(ENDED_LOOT).bind("Atrox").bind("").bind("")
+    .bind(base).bind(10_i64).bind(50.0).bind(0.0).bind(0_i64)
+    .bind(0.5).bind(0.0).bind(5.0).bind(0_i64).bind(0_i64).bind(Option::<String>::None)
+    .execute(pool).await.expect("seed ld kill");
+    sqlx::query(
+        "INSERT INTO kills(id,session_id,mob_name,mob_species,mob_maturity,timestamp,shots_fired,damage_dealt,damage_taken,critical_hits,cost_ped,enhancer_cost,loot_total_ped,is_global,is_hof,original_mob_name) \
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind("k-la").bind(ENDED_LOOT).bind("Atrox").bind("").bind("")
+    .bind(base + 1.0).bind(10_i64).bind(50.0).bind(0.0).bind(0_i64)
+    .bind(0.5).bind(0.0).bind(4.0).bind(0_i64).bind(0_i64).bind(Option::<String>::None)
+    .execute(pool).await.expect("seed la kill");
+    sqlx::query("INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,?,?)")
+        .bind("k-ld").bind("AnimalOil").bind(1_i64).bind(2.0).bind(0_i64).bind(Option::<f64>::None)
+        .execute(pool).await.expect("seed active loot");
+    sqlx::query("INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,?,?)")
+        .bind("k-la").bind("OldHide").bind(1_i64).bind(3.0).bind(0_i64).bind(Some(base + 50.0))
+        .execute(pool).await.expect("seed deactivated loot");
+    // A slash-bearing item name: the `{item_name:path}` converter KEEPS
+    // the decoded slash rather than 404-ing it (the session id, a single
+    // segment, still de-matches a slash).
+    sqlx::query("INSERT INTO kill_loot_items(kill_id,item_name,quantity,value_ped,is_enhancer_shrapnel,deactivated_at) VALUES(?,?,?,?,?,?)")
+        .bind("k-ld").bind("Metal/Wire").bind(1_i64).bind(1.0).bind(0_i64).bind(Option::<f64>::None)
+        .execute(pool).await.expect("seed slash loot");
+}
+
+fn body_json(body: &[u8]) -> Value {
+    serde_json::from_slice(body).expect("response body is JSON")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
+    let (port, _state, dir) = serve_substrate().await;
+    let pool = open_pool(dir.path().join("entropia_orme.db")).await;
+    seed_edits(&pool).await;
+
+    // ── rename-mob: success body (sessionId / mobName / killCount) ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_MOB}/rename-mob"),
+        "{\"fromMobName\":\"Atrox\",\"toMobName\":\"Daikiba\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], ENDED_MOB);
+    assert_eq!(v["mobName"], "Daikiba");
+    assert_eq!(v["killCount"], 2);
+
+    // ── restore-mob: the "Argo" kill restores to its "Wolf" original ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_MOB}/restore-mob"),
+        "{\"currentMobName\":\"Argo\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], ENDED_MOB);
+    assert_eq!(v["mobName"], "Wolf");
+    assert_eq!(v["killCount"], 1);
+
+    // ── loot-item deactivate: full body, incl. signed delta + totals ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/AnimalOil/deactivate"),
+        "",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], ENDED_LOOT);
+    assert_eq!(v["itemName"], "AnimalOil");
+    assert_eq!(v["affectedRows"], 1);
+    assert_eq!(v["totalValueDelta"], -2.0);
+    // K_LD 5.0 - 2.0 = 3.0; K_LA still 4.0 -> 7.0.
+    assert_eq!(v["sessionTotalReturns"], 7.0);
+
+    // ── loot-item activate on a DEACTIVATED row: the OTHER suffix arm,
+    //    distinct result -> kills the wildcard split + suffix dispatch ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/OldHide/activate"),
+        "",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], ENDED_LOOT);
+    assert_eq!(v["itemName"], "OldHide");
+    assert_eq!(v["affectedRows"], 1);
+    assert_eq!(v["totalValueDelta"], 3.0);
+    // K_LD now 3.0; K_LA 4.0 + 3.0 = 7.0 -> 10.0.
+    assert_eq!(v["sessionTotalReturns"], 10.0);
+
+    // ── loot-item with a slash in the {item_name:path} segment: the
+    //    converter KEEPS the slash, so the item is found and flipped ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/Metal/Wire/deactivate"),
+        "",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["itemName"], "Metal/Wire");
+    assert_eq!(v["affectedRows"], 1);
+
+    // ── armour-cost: echoes round(cost, 2), NOT the new total ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_LOOT}/armour-cost"),
+        "{\"cost\":2.5}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], ENDED_LOOT);
+    assert_eq!(v["armourCost"], 2.5);
+
+    // ── 404: a missing session on every guarded edit ──
+    let missing = "00000000-0000-4000-8000-000000000000";
+    for (path, body) in [
+        (
+            format!("/api/tracking/session/{missing}/rename-mob"),
+            "{\"fromMobName\":\"a\",\"toMobName\":\"b\"}",
+        ),
+        (
+            format!("/api/tracking/session/{missing}/restore-mob"),
+            "{\"currentMobName\":\"a\"}",
+        ),
+        (
+            format!("/api/tracking/session/{missing}/loot-item/AnimalOil/deactivate"),
+            "",
+        ),
+        (
+            format!("/api/tracking/session/{missing}/armour-cost"),
+            "{\"cost\":1.0}",
+        ),
+    ] {
+        let (status, _, _) = send_json(port, "POST", &path, body).await;
+        assert_eq!(
+            status,
+            http::StatusCode::NOT_FOUND,
+            "missing session 404: {path}"
+        );
+    }
+
+    // ── 409: an ACTIVE session on the three guarded mob/loot edits
+    //    (armour-cost deliberately omits the guard) ──
+    for (path, body) in [
+        (
+            format!("/api/tracking/session/{ACTIVE}/rename-mob"),
+            "{\"fromMobName\":\"a\",\"toMobName\":\"b\"}",
+        ),
+        (
+            format!("/api/tracking/session/{ACTIVE}/restore-mob"),
+            "{\"currentMobName\":\"a\"}",
+        ),
+        (
+            format!("/api/tracking/session/{ACTIVE}/loot-item/AnimalOil/deactivate"),
+            "",
+        ),
+    ] {
+        let (status, _, _) = send_json(port, "POST", &path, body).await;
+        assert_eq!(
+            status,
+            http::StatusCode::CONFLICT,
+            "active session 409: {path}"
+        );
+    }
+
+    // ── 400: a blank mob name (the validated-then-trimmed empty leg) ──
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_MOB}/rename-mob"),
+        "{\"fromMobName\":\"   \",\"toMobName\":\"x\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+
+    // ── 404: the wildcard tail matches NEITHER suffix ──
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/Foo/bogus"),
+        "",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
 }

@@ -980,6 +980,53 @@ async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Respons
         .await
 }
 
+// ── Tracking producer adapters (live-tracker spine) ─────────────────
+//
+// These three reach a DIFFERENT dependency than the session-read
+// adapters above: the live `Arc<HuntTracker>` (start/stop, and the
+// manual-mob tag-mode gate) plus the bundled mobs catalogue (the
+// suggestions). They proxy unless BOTH the tracker and the read surface
+// are composed (the suggestions handler reads the catalogue through the
+// hydration state), exactly as the read surface proxies without
+// `with_hydration`.
+
+/// POST /api/tracking/start
+async fn tracking_start(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
+        return state.proxy(req).await;
+    };
+    hydration.tracking_start(&tracker).await
+}
+
+/// POST /api/tracking/stop
+async fn tracking_stop(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
+        return state.proxy(req).await;
+    };
+    hydration.tracking_stop(&tracker).await
+}
+
+/// GET /api/tracking/manual-mob-suggestions?q=&limit=: `q` defaults to the
+/// empty string (the tag-mode 409 still precedes the `[]` short-circuit),
+/// `limit` to 10 (clamped to 1..=20 in the handler). An unparseable `limit`
+/// is the backend's 422 int_parsing.
+async fn tracking_manual_mob_suggestions(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let q = query.last("q").unwrap_or("").to_string();
+    let mut validation = Validation::new();
+    let limit = query_int_or_default(&mut validation, &query, "limit", 10);
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    let inm = if_none_match(&req);
+    hydration
+        .tracking_manual_mob_suggestions(&tracker, &q, limit.expect("validated"), inm.as_deref())
+        .await
+}
+
 // ── Tracking session-edit write adapters ──────────────────────────────
 
 /// The `{session_id}` of a `/api/tracking/session/{session_id}/<suffix>`
@@ -1952,6 +1999,22 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/tracking/tag-suggestions",
                 tracking_tag_suggestions,
+            ),
+        )
+        .route(
+            "/api/tracking/start",
+            arm_routed(MethodFilter::POST, "/api/tracking/start", tracking_start),
+        )
+        .route(
+            "/api/tracking/stop",
+            arm_routed(MethodFilter::POST, "/api/tracking/stop", tracking_stop),
+        )
+        .route(
+            "/api/tracking/manual-mob-suggestions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/manual-mob-suggestions",
+                tracking_manual_mob_suggestions,
             ),
         )
         .route(

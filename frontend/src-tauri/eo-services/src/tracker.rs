@@ -358,6 +358,16 @@ impl HuntTracker {
         self.lock_state().session.is_some()
     }
 
+    /// Whether the active session was captured in tag mode
+    /// (`backend.services.hunt_tracker.is_session_tag_mode`): the
+    /// per-session mode snapshotted at `start_session`, not the live
+    /// config. Idle (no session) reads the default `"mob"`, so this is
+    /// `false`; the manual-mob-suggestions handler only consults it
+    /// while tracking, gating the idle case on the live config instead.
+    pub fn is_session_tag_mode(&self) -> bool {
+        self.lock_state().session_mob_tracking_mode == "tag"
+    }
+
     /// Close sessions left open by a crash: end at the latest kill
     /// (or the start), write the ledger gains and the summary, and
     /// clear the active flag.
@@ -2085,7 +2095,11 @@ fn epoch_to_naive(epoch: f64) -> NaiveDateTime {
 
 /// `datetime.isoformat()` for naive instants (ledger dates, the
 /// readout's started_at): microseconds only when non-zero.
-fn naive_isoformat(instant: NaiveDateTime) -> String {
+/// A naive `datetime.isoformat()`: no offset suffix, microseconds only
+/// when non-zero. The start/stop producer routes render
+/// `session.start_time.isoformat()` / `session.end_time.isoformat()`
+/// through this, exactly as the snapshot renders `started_at`.
+pub fn naive_isoformat(instant: NaiveDateTime) -> String {
     if instant.and_utc().timestamp_subsec_micros() == 0 {
         instant.format("%Y-%m-%dT%H:%M:%S").to_string()
     } else {
@@ -3830,6 +3844,41 @@ mod tests {
         let state = tracker.lock_state();
         assert_eq!(state.confirmed_mob_name, "Team");
         assert_eq!(state.mob_source, Some("tag"));
+    }
+
+    #[test]
+    fn is_session_tag_mode_reflects_the_session_capture() {
+        // The flag is the per-session mode snapshotted at start_session,
+        // not the live config: idle is false, a tag-mode session is true,
+        // a mob-mode session is false.
+        let tag_rig = rig();
+        let tagged = tag_rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "tag".to_string()),
+            mob_tracking_tag: Arc::new(|| "Team".to_string()),
+            ..Providers::default()
+        });
+        assert!(
+            !tagged.is_session_tag_mode(),
+            "idle (no session) is never tag mode"
+        );
+        tagged.start_session().unwrap();
+        assert!(
+            tagged.is_session_tag_mode(),
+            "a session captured in tag mode reports tag mode"
+        );
+        tagged.stop_session().unwrap();
+
+        let mob_rig = rig();
+        let mobbed = mob_rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "mob".to_string()),
+            ..Providers::default()
+        });
+        mobbed.start_session().unwrap();
+        assert!(
+            !mobbed.is_session_tag_mode(),
+            "a session captured in mob mode is not tag mode"
+        );
+        mobbed.stop_session().unwrap();
     }
 
     #[test]

@@ -271,6 +271,15 @@ impl ProducerState {
     pub fn tracker(&self) -> &Arc<HuntTracker> {
         &self.tracker
     }
+
+    /// A handle to the composed tracker. The producer routes serve over
+    /// this same `Arc<HuntTracker>`: the composition handoff clones it into
+    /// the HTTP app state before this `ProducerState` moves into the
+    /// Tauri-managed producer holder, so the routes and the exit-seam
+    /// teardown share one tracker.
+    pub fn tracker_handle(&self) -> Arc<HuntTracker> {
+        self.tracker.clone()
+    }
 }
 
 /// What a successful composition yields: the read surface, the producer

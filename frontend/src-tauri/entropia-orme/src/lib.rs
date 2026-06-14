@@ -59,6 +59,24 @@ struct SidecarChild(Mutex<Option<CommandChild>>);
 // sidecar child).
 struct Producers(Mutex<Option<composition::ProducerState>>);
 
+// Holds the substrate's warmed OCR engine for the app's lifetime. The
+// composition root constructs and warms it (binding the bundled ONNX
+// Runtime), then hands it here so it outlives composition and is reachable
+// when the scan consumer routes flip to it. Unlike `Producers`, there is
+// no exit-seam stop: the engine owns no thread and no subscription, its
+// ONNX session drops with this managed state, and the ORT environment
+// self-releases via its own process-exit hook. `None` when the runtime or
+// model was unavailable (OCR is an optional faculty).
+//
+// The handle is held to keep the warmed engine (and its ONNX session)
+// alive for the substrate's lifetime; the scan routes that read it flip
+// in a later cutover, so it is not read directly yet. The `dead_code`
+// allow is scoped to this one field (not the struct, not the module) and
+// justified by that held-not-read intent, the same shape the producer
+// spine documents for its kept-alive bus subscriptions; it is removed
+// when the scan routes start reading the handle.
+struct OcrEngineState(#[allow(dead_code)] Mutex<Option<std::sync::Arc<composition::OcrEngine>>>);
+
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
@@ -280,6 +298,11 @@ fn spawn_http_substrate(
             // Hand the producer spine to the exit seam so it stops the
             // tail thread and ends any session on app close.
             app.manage(Producers(Mutex::new(Some(composed.producers))));
+            // Hold the warmed OCR engine for the app's lifetime so the
+            // scan consumer routes can pull it when they flip; no exit
+            // stop (the session drops with the managed state, the ORT env
+            // self-releases at process exit).
+            app.manage(OcrEngineState(Mutex::new(composed.ocr_engine)));
         }
         let state = std::sync::Arc::new(app_state);
         let listener = match tokio::net::TcpListener::from_std(listener) {

@@ -52,7 +52,7 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # maintained binding for the current ONNX Runtime API, rc versions are
 # immutable and checksum-locked, and the audit cadence bumps this to
 # 2.0.0 final when it lands.
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24", "directml"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows = "0.61"
 # The strangler-fig HTTP substrate: axum owns the public loopback address and

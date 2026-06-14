@@ -28,4 +28,26 @@ exclude_re = [
     # composition.rs, which stay in the campaign.
     "lib\\.rs.*replace run with \\(\\)",
     "lib\\.rs.*replace spawn_http_substrate with \\(\\)",
+    # The composition root's OCR/ONNX-Runtime orchestration wrappers. Their
+    # LOGIC is mutation-tested in the helpers they delegate to (the path
+    # resolvers `ort_dylib_path`/`models_dir`, the dylib pin
+    # `pin_ort_dylib_env`, and `OcrEngine::new_with_providers`); these
+    # whole-function-deletion mutants only ask "is the wrapper wired in",
+    # which is integration-level: `compose_native` is the env/filesystem-
+    # reading boundary (`compose_with` is the hermetic seam), `init_ort_runtime`
+    # is the process-global once-only ORT init, and `build_ocr_engine` yields
+    # an engine only when the runtime + GPU are present (host-gated). All are
+    # exercised by the running app, not the portable campaign.
+    "composition\\.rs.*replace compose_native ->",
+    "composition\\.rs.*replace init_ort_runtime with \\(\\)",
+    "composition\\.rs.*replace build_ocr_engine ->",
+    # Release-only branch: `Some(dir) if !cfg!(debug_assertions)` selects the
+    # installed resource dir; in the debug test build the guard is dead, so
+    # flipping it to `false` is an equivalent mutant (the dev branch is taken
+    # either way). The resolved paths are pinned by the resolver tests.
+    "composition\\.rs.*replace match guard !cfg!\\(debug_assertions\\) with false",
+    # Best-effort warm-up: runs a dummy inference and discards the result, so
+    # it has no observable behaviour a test could assert (its only effect is
+    # latency). Deleting its body is undetectable by construction.
+    "ocr_engine\\.rs.*replace OcrEngine::warm_up with \\(\\)",
 ]

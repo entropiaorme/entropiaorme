@@ -1,18 +1,20 @@
 //! Native tracking PRODUCER routes (`backend/routers/tracking.py`): the
-//! lifecycle pair and the manual-mob autocomplete, served over the live
-//! producer-spine tracker rather than the read-only database surface.
+//! routes served over the live producer-spine tracker rather than the
+//! read-only database surface.
 //!
-//! These three routes differ from the session-READ surface
-//! (`tracking_routes`) in their dependency: they touch the live
-//! `Arc<HuntTracker>` (its in-memory session state and its DB-backed
-//! start/stop) and, for the suggestions, the bundled mobs catalogue.
-//! They do NOT write `settings.json`; the three config-writing tracking
-//! routes (release-mob, manual-mob-lock, tag-lock) ride the later
-//! settings-write cutover.
+//! These differ from the session-READ surface (`tracking_routes`) in their
+//! dependency: they touch the live `Arc<HuntTracker>` (its in-memory session
+//! state and its DB-backed start/stop), the settings writer, the bundled
+//! mobs catalogue, and (for the snapshot) the hotbar listener's running
+//! state.
 //!
 //!   POST /api/tracking/start                  -> TrackingStartResult
 //!   POST /api/tracking/stop                   -> TrackingStopResult
 //!   GET  /api/tracking/manual-mob-suggestions -> list[ManualMobSuggestion]
+//!   POST /api/tracking/release-mob            -> ReleaseMobResult
+//!   POST /api/tracking/manual-mob-lock        -> ManualMobLockResult
+//!   POST /api/tracking/tag-lock               -> TagLockResult
+//!   GET  /api/tracking/snapshot               -> TrackingSnapshot
 //!
 //! Fidelity cruxes mirrored from the reference handlers:
 //! - start/stop reply as PLAIN 200s (POST is outside the `/api/tracking`

@@ -24,6 +24,9 @@ eo-http = { workspace = true }
 # The composition root constructs the ported services the substrate's
 # native routes read through.
 eo-services = { workspace = true }
+# The composition root owns the SSE fan-out hub and bridges the producer
+# bus's domain topics onto it (the `/api/events` stream serves over it).
+eo-wire = { workspace = true }
 tokio = { workspace = true }
 # The composition root discharges the ONNX Runtime obligations the
 # recogniser depends on: it pins the bundled dylib to an absolute path

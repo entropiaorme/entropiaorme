@@ -294,13 +294,15 @@ fn spawn_http_substrate(
         // middleware would, from the same environment inputs.
         .with_cors(eo_http::cors::CorsConfig::from_env());
         if let Some(composed) = composition::compose_native(resource_dir).await {
-            // Clone the live tracker out of the producer spine BEFORE it
-            // moves into the Tauri-managed holder below, so the producer
-            // routes serve over the same `Arc<HuntTracker>` the exit-seam
-            // teardown stops.
+            // Clone the live tracker and the SSE hub out of the producer
+            // spine BEFORE it moves into the Tauri-managed holder below, so
+            // the producer routes serve over the same `Arc<HuntTracker>` the
+            // exit-seam teardown stops, and the `/api/events` stream serves
+            // over the same `Arc<SseHub>` the producer-bus bridge feeds.
             app_state = app_state
                 .with_hydration(composed.hydration)
-                .with_tracker(composed.producers.tracker_handle());
+                .with_tracker(composed.producers.tracker_handle())
+                .with_sse_hub(composed.producers.sse_hub_handle());
             // Hand the producer spine to the exit seam so it stops the
             // tail thread and ends any session on app close.
             app.manage(Producers(Mutex::new(Some(composed.producers))));

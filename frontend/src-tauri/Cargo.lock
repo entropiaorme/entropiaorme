@@ -1067,6 +1067,7 @@ dependencies = [
  "chrono",
  "eo-http",
  "eo-services",
+ "eo-wire",
  "ort",
  "serde",
  "serde_json",

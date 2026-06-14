@@ -47,6 +47,7 @@ pub struct AppState {
     overrides: RwLock<ArmOverrides>,
     hydration: Option<Arc<crate::hydration::HydrationState>>,
     tracker: Option<Arc<eo_services::tracker::HuntTracker>>,
+    sse_hub: Option<Arc<eo_wire::sse::SseHub>>,
     cors: Option<cors::CorsConfig>,
 }
 
@@ -66,6 +67,7 @@ impl AppState {
             overrides: RwLock::new(overrides),
             hydration: None,
             tracker: None,
+            sse_hub: None,
             cors: None,
         }
     }
@@ -107,6 +109,21 @@ impl AppState {
     /// The live producer-spine tracker, when composed.
     pub(crate) fn tracker(&self) -> Option<Arc<eo_services::tracker::HuntTracker>> {
         self.tracker.clone()
+    }
+
+    /// Attach the live producer-spine SSE hub (the same `Arc<SseHub>` the
+    /// producer-bus bridge dispatches onto). Without it (a substrate built
+    /// before composition, or composition declined at startup) the
+    /// `/api/events` stream falls back to the proxy arm, exactly like the
+    /// read surface without [`with_hydration`].
+    pub fn with_sse_hub(mut self, sse_hub: Arc<eo_wire::sse::SseHub>) -> Self {
+        self.sse_hub = Some(sse_hub);
+        self
+    }
+
+    /// The live producer-spine SSE hub, when composed.
+    pub(crate) fn sse_hub(&self) -> Option<Arc<eo_wire::sse::SseHub>> {
+        self.sse_hub.clone()
     }
 
     pub fn upstream(&self) -> &str {

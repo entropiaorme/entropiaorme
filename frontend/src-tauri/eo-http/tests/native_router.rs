@@ -2134,3 +2134,121 @@ async fn producer_routes_fall_back_without_a_composed_tracker() {
     let (status, _, _) = get(port, "/api/tracking/manual-mob-suggestions?q=a").await;
     assert_eq!(status, http::StatusCode::BAD_GATEWAY);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn events_stream_falls_back_without_a_composed_hub() {
+    // The read-only harness composes NO SSE hub, so `/api/events` falls to
+    // the proxy arm (dead upstream -> 502), proving the route is registered
+    // and the no-hub branch proxies rather than serving an empty native
+    // stream. The hub-present branch is covered by the test below.
+    let (port, _state, _dir) = serve_substrate().await;
+    let (status, _, _) = get(port, "/api/events").await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+}
+
+/// Bring up the substrate with a composed SSE hub, returning the hub so the
+/// test can dispatch onto it. Mirrors [`serve_substrate`] but threads an
+/// `Arc<SseHub>` into the app state, so `/api/events` resolves to the native
+/// arm.
+async fn serve_substrate_with_sse() -> (u16, Arc<eo_wire::sse::SseHub>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = Db::open(&dir.path().join("entropia_orme.db"))
+        .await
+        .expect("temp db opens");
+    let game_data = Arc::new(GameDataStore::new(&dir.path().join("empty")).expect("empty store"));
+    let hydration = Arc::new(HydrationState::new(
+        db,
+        game_data,
+        Arc::new(RealClock::new()),
+        dir.path().to_path_buf(),
+    ));
+    let hub = Arc::new(eo_wire::sse::SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("addr").port();
+    let state = Arc::new(
+        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
+            .with_hydration(hydration)
+            .with_sse_hub(hub.clone())
+            .with_cors(CorsConfig::new(5173, None)),
+    );
+    let serve_state = state.clone();
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+        eo_http::serve(listener, serve_state).await.expect("serve");
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if get(port, "/api/health").await.0 == http::StatusCode::OK {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "substrate never came up"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    (port, hub, dir)
+}
+
+/// Read the next non-empty SSE data chunk off a streaming response body,
+/// bounded by a timeout so a missing frame fails fast rather than hanging.
+async fn next_sse_chunk(body: &mut hyper::body::Incoming) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        return String::from_utf8(data.to_vec()).expect("utf8 frame");
+                    }
+                }
+                other => panic!("stream ended unexpectedly: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("an SSE chunk arrives within the timeout")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn events_stream_serves_natively_from_the_composed_hub() {
+    use eo_wire::domain_events::{
+        DomainEvent, ScanPhase, ScanStatusChanged, ScanStatusChangedPayload, ScanStatusChangedTag,
+    };
+
+    let (port, hub, _dir) = serve_substrate_with_sse().await;
+
+    // Opening the stream returns the native `: ready` comment, proving the
+    // route resolves to the native arm (not the proxy fallback) when a hub
+    // is composed.
+    let authority = format!("127.0.0.1:{port}");
+    let request = http::Request::builder()
+        .method("GET")
+        .uri(format!("http://{authority}/api/events"))
+        .header("host", &authority)
+        .body(Body::empty())
+        .unwrap();
+    let mut body = eo_http::proxy::build_client()
+        .request(request)
+        .await
+        .expect("stream opens")
+        .into_body();
+    assert_eq!(next_sse_chunk(&mut body).await, ": ready\n\n");
+
+    // A domain event dispatched on the composed hub reaches this stream as a
+    // framed SSE event end-to-end through the native route.
+    let event = DomainEvent::ScanStatusChanged(ScanStatusChanged {
+        topic: ScanStatusChangedTag,
+        event_version: 1,
+        occurred_at: "t".into(),
+        payload: ScanStatusChangedPayload {
+            phase: ScanPhase::Capturing,
+        },
+    });
+    hub.dispatch(&event);
+    let frame = next_sse_chunk(&mut body).await;
+    assert!(
+        frame.starts_with("id: 1\nevent: scan.status.changed\n"),
+        "native stream carried the dispatched frame: {frame:?}"
+    );
+}

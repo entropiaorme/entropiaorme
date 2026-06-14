@@ -1027,6 +1027,23 @@ async fn tracking_manual_mob_suggestions(state: Arc<AppState>, req: Request) -> 
         .await
 }
 
+// ── SSE event stream (producer-bus fan-out) ────────────────────────────
+//
+// `GET /api/events` is a long-lived `text/event-stream`. The native arm
+// serves it from the composed SSE hub (the producer-bus bridge forwards the
+// frontend-facing domain topics onto it); without a composed hub it proxies
+// to the sidecar, which streams the same contract. The route sits outside
+// the ETag hydration prefixes (an unbounded stream cannot be body-hashed)
+// and is OpenAPI-excluded, exactly as the sidecar's is.
+
+/// GET /api/events
+async fn events_stream(state: Arc<AppState>, req: Request) -> Response<Body> {
+    match state.sse_hub() {
+        Some(hub) => crate::sse::event_stream_response(hub),
+        None => state.proxy(req).await,
+    }
+}
+
 // ── Tracking session-edit write adapters ──────────────────────────────
 
 /// The `{session_id}` of a `/api/tracking/session/{session_id}/<suffix>`
@@ -2230,5 +2247,9 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 "/api/equipment/cost/calculate",
                 equipment_cost,
             ),
+        )
+        .route(
+            "/api/events",
+            arm_routed(MethodFilter::GET, "/api/events", events_stream),
         )
 }

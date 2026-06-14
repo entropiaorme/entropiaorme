@@ -483,9 +483,11 @@ async fn codex_claim_invalid_input_conforms() {
 async fn codex_claim_surrogate_input_conforms() {
     let (_upstream, _comparison, arms) = boot("{}").await;
 
-    // A lone-surrogate species name: the codex encode path raises a
-    // ValueError the reference maps to a 400 with the codec message. The
-    // native arm must produce the same envelope (not a binding-taint 500).
+    // A lone-surrogate species name reaches the codex lookup, which is not
+    // found; the reference's would-be 400 then cannot be rendered (the
+    // surrogate is unencodable in the detail body), so it surfaces as a
+    // plain-text 500. The native arm must produce the same envelope (its
+    // binding-taint 500), which this byte-for-byte comparison pins.
     arms.compare(
         "POST",
         "/api/codex/claim",

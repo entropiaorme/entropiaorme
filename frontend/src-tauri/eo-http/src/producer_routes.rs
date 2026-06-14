@@ -273,8 +273,12 @@ impl HydrationState {
         if guard.update(&updates).is_err() {
             return internal_error();
         }
-        if tracker.is_tracking() {
-            let _ = tracker.set_manual_mob(&display, species, maturity);
+        if tracker.is_tracking() && tracker.set_manual_mob(&display, species, maturity).is_err() {
+            // The gate already cleared an active, non-tag session, so the only
+            // reachable error is the live config having flipped to tag mode
+            // since the session started (manual entry disabled): the reference
+            // raises there and 500s, after the same config write. Mirror it.
+            return internal_error();
         }
         plain_json_response(&json!({
             "mobName": display,

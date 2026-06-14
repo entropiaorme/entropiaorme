@@ -49,6 +49,16 @@ fn hide_scan_overlay(app: tauri::AppHandle) {
 // linger (and keep port 8421 bound) past app close.
 struct SidecarChild(Mutex<Option<CommandChild>>);
 
+// Holds the substrate's live producer spine so the Tauri exit seam can
+// stop it deterministically. The substrate task composes the producers
+// inside its own async context (after the database opens) and hands the
+// spine here; `RunEvent::Exit` then stops the chat-log tail thread and
+// ends any open session before the process tears down. There is no
+// graceful-shutdown signal into the substrate's serve loop, so this exit
+// seam is the producer teardown path (the same seam that kills the
+// sidecar child).
+struct Producers(Mutex<Option<composition::ProducerState>>);
+
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
@@ -88,6 +98,7 @@ pub fn run() {
                     Some((listener, sidecar_port)) => {
                         spawn_backend_sidecar(app.handle(), Some(sidecar_port));
                         spawn_http_substrate(
+                            app.handle().clone(),
                             listener,
                             sidecar_port,
                             app.path().resource_dir().ok(),
@@ -102,7 +113,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             if let Some(sidecar_port) = dev_sidecar_port() {
                 if let Some(listener) = bind_substrate_listener() {
-                    spawn_http_substrate(listener, sidecar_port, None);
+                    spawn_http_substrate(app.handle().clone(), listener, sidecar_port, None);
                 }
             }
             Ok(())
@@ -126,6 +137,18 @@ pub fn run() {
         if let RunEvent::Exit = event {
             #[cfg(windows)]
             destroy_runtime_window_icons(app);
+
+            // Stop the producer spine first (before the sidecar dies):
+            // end any open session so its stop events publish, then stop
+            // the chat-log tail thread. The substrate's serve task has no
+            // shutdown signal, so this is where the producers wind down.
+            if let Some(state) = app.try_state::<Producers>() {
+                if let Ok(mut guard) = state.0.lock() {
+                    if let Some(producers) = guard.take() {
+                        producers.stop();
+                    }
+                }
+            }
 
             if let Some(state) = app.try_state::<SidecarChild>() {
                 if let Ok(mut guard) = state.0.lock() {
@@ -236,6 +259,7 @@ fn dev_sidecar_port() -> Option<u16> {
 /// Native services compose first (inside the task, before the first
 /// request); a declined composition serves proxy-only.
 fn spawn_http_substrate(
+    app: tauri::AppHandle,
     listener: std::net::TcpListener,
     sidecar_port: u16,
     resource_dir: Option<std::path::PathBuf>,
@@ -251,8 +275,11 @@ fn spawn_http_substrate(
         // rules, response decoration) exactly as the sidecar's own
         // middleware would, from the same environment inputs.
         .with_cors(eo_http::cors::CorsConfig::from_env());
-        if let Some(hydration) = composition::compose_native(resource_dir).await {
-            app_state = app_state.with_hydration(hydration);
+        if let Some(composed) = composition::compose_native(resource_dir).await {
+            app_state = app_state.with_hydration(composed.hydration);
+            // Hand the producer spine to the exit seam so it stops the
+            // tail thread and ends any session on app close.
+            app.manage(Producers(Mutex::new(Some(composed.producers))));
         }
         let state = std::sync::Arc::new(app_state);
         let listener = match tokio::net::TcpListener::from_std(listener) {

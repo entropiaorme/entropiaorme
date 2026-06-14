@@ -28,6 +28,10 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Test-only: the composition-integration and concurrency tests assert
+# directly against the substrate's database pool and build a frozen clock.
+sqlx = { workspace = true }
+chrono = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

@@ -222,6 +222,32 @@ impl Db {
         Ok(row)
     }
 
+    /// The first weapon-row `properties_json` whose name contains the
+    /// supplied fragment, ported from the backend's
+    /// `_equipment_profile_lookup`: a `LIKE '%fragment%'` over weapon
+    /// rows, with the fragment's own `%` / `_` / `\` escaped (so an
+    /// embedded wildcard cannot widen the match) under an explicit
+    /// `ESCAPE '\'`. The fragment is trimmed exactly as the backend
+    /// trims it before the query.
+    pub async fn weapon_properties_by_name_fragment(
+        &self,
+        fragment: &str,
+    ) -> Result<Option<String>, DbError> {
+        let safe = fragment
+            .trim()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT properties_json FROM equipment_library \
+             WHERE item_type = 'weapon' AND name LIKE ? ESCAPE '\\'",
+        )
+        .bind(format!("%{safe}%"))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(properties_json,)| properties_json))
+    }
+
     /// Test seeding for equipment-reading services (compiled into the
     /// crate's own test builds only).
     #[cfg(test)]
@@ -385,6 +411,57 @@ mod tests {
 
     async fn fresh_db(dir: &std::path::Path) -> Db {
         Db::open(&dir.join("entropia_orme.db")).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn weapon_profile_lookup_matches_on_a_fragment_and_escapes_wildcards() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        db.insert_equipment_for_tests(1, "ArMatrix LR-35", "weapon", r#"{"weapon_entity":{}}"#)
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(2, "Healer", "healing", r#"{"tool_entity":{}}"#)
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(
+            3,
+            "100% Plain Name",
+            "weapon",
+            r#"{"weapon_entity":{"id":3}}"#,
+        )
+        .await
+        .unwrap();
+
+        // A fragment matches the weapon row.
+        let found = db
+            .weapon_properties_by_name_fragment("LR-35")
+            .await
+            .unwrap();
+        assert_eq!(found.as_deref(), Some(r#"{"weapon_entity":{}}"#));
+
+        // Healing rows are never returned (weapon-only filter).
+        let absent = db
+            .weapon_properties_by_name_fragment("Healer")
+            .await
+            .unwrap();
+        assert_eq!(absent, None);
+
+        // A literal `%` in the fragment is escaped: it matches the row
+        // whose name actually contains `%`, not every row.
+        let percent = db.weapon_properties_by_name_fragment("100%").await.unwrap();
+        assert_eq!(percent.as_deref(), Some(r#"{"weapon_entity":{"id":3}}"#));
+        // A bare wildcard, were it unescaped, would match everything;
+        // escaped, it matches nothing because no name contains a literal
+        // percent-followed-by-space-P beyond row 3, and the leading `%`
+        // here is a literal.
+        let only_literal = db
+            .weapon_properties_by_name_fragment("%Plain")
+            .await
+            .unwrap();
+        assert_eq!(
+            only_literal, None,
+            "the leading % is a literal, not a wildcard"
+        );
     }
 
     #[tokio::test]

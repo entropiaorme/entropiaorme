@@ -17,10 +17,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eo_http::hydration::HydrationState;
+use eo_services::chatlog_watcher::{ChatlogWatcher, QuestRewardFilter};
 use eo_services::clock::{Clock, RealClock};
+use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
+use eo_services::cost_engine::cost_per_shot_from_props;
 use eo_services::db::{AdoptError, Db};
+use eo_services::event_bus::EventBus;
 use eo_services::game_data_store::GameDataStore;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
+use eo_services::quests::QuestService;
+use eo_services::skill_tracker::SkillTracker;
+use eo_services::tracker::{EquipmentProfile, HuntTracker, Providers};
+use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
+use serde_json::{Map, Value};
 
 /// The repository root, compiled into dev builds (the manifest dir is
 /// `frontend/src-tauri/entropia-orme`). Release builds never read it.
@@ -62,16 +71,74 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     }
 }
 
-/// Compose the native hydration services, or decline with a logged
-/// reason. Declining is always safe: the substrate then proxies every
-/// route to the sidecar.
-pub async fn compose_native(resource_dir: Option<PathBuf>) -> Option<Arc<HydrationState>> {
+/// The live producer spine: the in-process event bus, the chat-log
+/// watcher (tailing in its own thread), and the trackers subscribed to
+/// the bus, all sharing the substrate's single-owner database pool and
+/// one injected clock. Kept as a sibling of [`HydrationState`] so the
+/// read surface stays a pure read surface and the producers are a
+/// separate, stoppable concern.
+///
+/// The struct owns the producers for the substrate's lifetime; the
+/// trackers and the quest service hold their own bus registrations and
+/// stay alive only because this struct does. [`ProducerState::stop`]
+/// (driven from the Tauri exit seam) stops the watcher's tail thread,
+/// ends any open session, and drops the bus, so the OS-thread machinery
+/// the watcher owns is torn down deterministically rather than left to
+/// process-exit teardown.
+pub struct ProducerState {
+    watcher: ChatlogWatcher,
+    tracker: Arc<HuntTracker>,
+    // Held to keep their permanent bus subscriptions alive for the
+    // substrate's lifetime; never read directly here. The bus itself
+    // stays alive through the strong handles these (and the watcher and
+    // tracker) hold, so the spine need not store it separately.
+    _skill_tracker: Arc<SkillTracker>,
+    _quests: Arc<QuestService>,
+}
+
+impl ProducerState {
+    /// Stop the producer spine: end any open session (so its stop
+    /// events publish cleanly while the bus is still live), stop the
+    /// watcher's tail thread, then drop the bus. Idempotent enough for
+    /// the exit path: a second stop is a no-op on an already-stopped
+    /// watcher and an already-idle tracker.
+    pub fn stop(&self) {
+        if self.tracker.is_tracking() {
+            let _ = self.tracker.stop_session();
+        }
+        self.watcher.stop();
+    }
+
+    /// The composed watcher, for tests driving a replay through it.
+    #[cfg(test)]
+    pub fn watcher(&self) -> &ChatlogWatcher {
+        &self.watcher
+    }
+
+    /// The composed tracker, for tests asserting its readout.
+    #[cfg(test)]
+    pub fn tracker(&self) -> &Arc<HuntTracker> {
+        &self.tracker
+    }
+}
+
+/// What a successful composition yields: the read surface and the
+/// producer spine, sharing one pool and one clock.
+pub struct Composed {
+    pub hydration: Arc<HydrationState>,
+    pub producers: ProducerState,
+}
+
+/// Compose the native services, or decline with a logged reason.
+/// Declining is always safe: the substrate then proxies every route to
+/// the sidecar.
+pub async fn compose_native(resource_dir: Option<PathBuf>) -> Option<Composed> {
     compose_with(data_dir(), snapshot_dir(resource_dir.as_ref())).await
 }
 
 /// Composition over already-resolved locations (separated from the
 /// environment-reading resolution so the decline paths are testable).
-async fn compose_with(data_dir: PathBuf, snapshot: PathBuf) -> Option<Arc<HydrationState>> {
+async fn compose_with(data_dir: PathBuf, snapshot: PathBuf) -> Option<Composed> {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         eprintln!(
             "[composition] data dir {} not creatable ({err}); native services stand down",
@@ -119,9 +186,272 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf) -> Option<Arc<Hydrat
         return None;
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
-    Some(Arc::new(HydrationState::new(
-        db, game_data, clock, data_dir,
-    )))
+
+    // The producer spine shares the substrate's single-owner pool with
+    // the read surface: one connection, one owner, serialised access
+    // (WAL + busy_timeout, max_connections(1)), so producer writes and
+    // HTTP reads queue through the single connection without deadlock.
+    // A second handle over the SAME pool: `Db` is a thin clonable handle
+    // around the connection pool, so the producers and the read surface
+    // share one connection (one owner, serialised access) rather than
+    // opening a second.
+    let producer_db = Db::from_pool(db.pool().clone());
+    let producers = match compose_producers(producer_db, clock.clone(), &data_dir, None) {
+        Ok(producers) => producers,
+        Err(err) => {
+            eprintln!("[composition] producer spine failed ({err}); native services stand down");
+            return None;
+        }
+    };
+
+    let hydration = Arc::new(HydrationState::new(db, game_data, clock, data_dir));
+    Some(Composed {
+        hydration,
+        producers,
+    })
+}
+
+/// Build and start the producer spine over the shared pool and clock.
+/// The providers are wired faithfully to the backend's own composition
+/// (`backend/main.py`): every lookup the tracker consults reads through
+/// the same database or the same config read-through the sidecar wrote.
+fn compose_producers(
+    db: Db,
+    clock: Arc<dyn Clock>,
+    data_dir: &std::path::Path,
+    chatlog_override: Option<PathBuf>,
+) -> Result<ProducerState, eo_services::db::DbError> {
+    // The producers run on the substrate's tokio runtime; the trackers
+    // bridge their database work onto this handle from their own
+    // (non-runtime) producer threads, exactly as the sidecar's tracker
+    // bridges onto its event loop.
+    let runtime = tokio::runtime::Handle::current();
+    let bus = Arc::new(EventBus::new());
+
+    // The config read-through: producers read the live config the same
+    // way the read surface does (`settings.json` stays sidecar-written
+    // until a later cutover), so a wrong default never silently
+    // corrupts tracker DB state. A read failure falls back to the typed
+    // defaults, exactly as the backend's loader does.
+    let config = load_config_readonly(data_dir).unwrap_or_default();
+
+    // The quest service is bus-subscribed (session tracking + mission
+    // auto-start) and supplies the watcher's quest-reward filter, so a
+    // mission completion can suppress its reward echo just as the
+    // sidecar's does.
+    let quests = Arc::new(QuestService::new(db.pool().clone(), clock.clone()));
+    quests.subscribe(&bus, runtime.clone());
+
+    let watched_chatlog = chatlog_override.unwrap_or_else(|| PathBuf::from(&config.chatlog_path));
+    let quest_reward_filter = quest_reward_filter_adapter(quests.clone(), runtime.clone());
+    let watcher = ChatlogWatcher::new(bus.clone(), watched_chatlog, Some(quest_reward_filter));
+
+    let skill_tracker = SkillTracker::new(&bus, db.pool().clone(), runtime.clone(), clock.clone());
+
+    let tracker = HuntTracker::new(
+        bus.clone(),
+        db.pool().clone(),
+        runtime.clone(),
+        clock.clone(),
+        build_providers(db, data_dir, &config, runtime.clone()),
+    )?;
+
+    // Start the tail thread last, after every subscriber is registered,
+    // so no published tick can land before the trackers can see it.
+    watcher.start();
+
+    Ok(ProducerState {
+        watcher,
+        tracker,
+        _skill_tracker: skill_tracker,
+        _quests: quests,
+    })
+}
+
+/// Adapt the quest service's async reward filter to the watcher's
+/// synchronous `QuestRewardFilter` closure: the watcher invokes it from
+/// its tail thread, where there is no current runtime, so the closure
+/// bridges onto the substrate runtime and parks. A filter error
+/// surfaces as no suppression, exactly as the backend contains a filter
+/// exception.
+fn quest_reward_filter_adapter(
+    quests: Arc<QuestService>,
+    runtime: tokio::runtime::Handle,
+) -> QuestRewardFilter {
+    Arc::new(
+        move |mission_name: &str, loot_items: &[Value], skill_gains: &[Value]| {
+            let mission_name = mission_name.to_string();
+            let loot_items = loot_items.to_vec();
+            let skill_gains = skill_gains.to_vec();
+            let quests = quests.clone();
+            let result = if tokio::runtime::Handle::try_current().is_ok() {
+                tokio::task::block_in_place(|| {
+                    runtime.block_on(async {
+                        quests
+                            .quest_reward_filter(&mission_name, &loot_items, &skill_gains)
+                            .await
+                    })
+                })
+            } else {
+                runtime.block_on(async {
+                    quests
+                        .quest_reward_filter(&mission_name, &loot_items, &skill_gains)
+                        .await
+                })
+            };
+            result.unwrap_or(None)
+        },
+    )
+}
+
+/// Wire the hunt-tracker providers to the same sources the backend's
+/// composition uses. Lookups that read the equipment library bridge
+/// onto the runtime from inside the (synchronous) provider callback;
+/// config-derived providers read the live config read-through so they
+/// follow sidecar writes. `enhancer_tt_lookup` is intentionally absent:
+/// the Rust tracker never reads it (see `tracker.rs`).
+fn build_providers(
+    db: Db,
+    data_dir: &std::path::Path,
+    initial_config: &AppConfig,
+    runtime: tokio::runtime::Handle,
+) -> Providers {
+    let data_dir = data_dir.to_path_buf();
+
+    // equipment_profile_lookup: the weapon row whose name contains the
+    // tool fragment, as parsed JSON properties.
+    let profile_db = db.clone();
+    let profile_runtime = runtime.clone();
+    let equipment_profile_lookup: Arc<dyn Fn(&str) -> EquipmentProfile + Send + Sync> =
+        Arc::new(move |tool_name: &str| {
+            let tool_name = tool_name.to_string();
+            let db = profile_db.clone();
+            let json = block_on_pool(&profile_runtime, async move {
+                db.weapon_properties_by_name_fragment(&tool_name)
+                    .await
+                    .ok()
+                    .flatten()
+            })?;
+            match serde_json::from_str::<Value>(&json) {
+                Ok(Value::Object(map)) => Some(map),
+                _ => None,
+            }
+        });
+
+    // equipment_cost_lookup: the per-shot cost in PED derived from the
+    // profile, `totalCostPerUse / 100`, or 0.0 when the tool is unknown.
+    let cost_lookup_profile = equipment_profile_lookup.clone();
+    let equipment_cost_lookup: Arc<dyn Fn(&str) -> f64 + Send + Sync> = Arc::new(
+        move |tool_name: &str| match cost_lookup_profile(tool_name) {
+            Some(props) => {
+                let cost = cost_per_shot_from_props(&Value::Object(props), None);
+                cost["totalCostPerUse"].as_f64().unwrap_or(0.0) / 100.0
+            }
+            None => 0.0,
+        },
+    );
+
+    // The config-derived providers read the live read-through so they
+    // follow the sidecar's writes between sessions.
+    let mode_dir = data_dir.clone();
+    let mob_tracking_mode: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
+        load_config_readonly(&mode_dir)
+            .map(|c| c.mob_tracking_mode)
+            .unwrap_or_else(|_| "mob".to_string())
+    });
+    let tag_dir = data_dir.clone();
+    let mob_tracking_tag: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
+        load_config_readonly(&tag_dir)
+            .map(|c| c.mob_tracking_tag)
+            .unwrap_or_default()
+    });
+    let manual_enabled_dir = data_dir.clone();
+    let manual_mob_entry_enabled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+        load_config_readonly(&manual_enabled_dir)
+            .map(|c| c.mob_tracking_mode != "tag")
+            .unwrap_or(true)
+    });
+    let manual_mob_dir = data_dir.clone();
+    let manual_mob: Arc<dyn Fn() -> Option<(String, String)> + Send + Sync> = Arc::new(move || {
+        let config = load_config_readonly(&manual_mob_dir).ok()?;
+        let species = config.manual_mob_species.trim().to_string();
+        let maturity = config.manual_mob_maturity.trim().to_string();
+        if species.is_empty() {
+            return None;
+        }
+        Some((species, maturity))
+    });
+    let trifecta_mode_dir = data_dir.clone();
+    let weapon_attribution_trifecta: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+        // `not hotbar_hooks_enabled`, exactly as the backend's
+        // `_is_weapon_attribution_trifecta`.
+        load_config_readonly(&trifecta_mode_dir)
+            .map(|c| !c.hotbar_hooks_enabled)
+            .unwrap_or(false)
+    });
+    let blacklist_dir = data_dir.clone();
+    let loot_filter_blacklist_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync> =
+        Arc::new(move || {
+            load_config_readonly(&blacklist_dir)
+                .map(|c| c.loot_filter_blacklist)
+                .unwrap_or_default()
+        });
+
+    // trifecta_resolver: resolve the active preset's attribution map
+    // off the live config and the equipment library (the backend's
+    // `_resolve_trifecta`); the resolver discards the validation reason
+    // and yields just the data, as the backend does.
+    let resolver_db = db;
+    let resolver_dir = data_dir;
+    let resolver_runtime = runtime;
+    let trifecta_resolver: Arc<dyn Fn() -> Option<Map<String, Value>> + Send + Sync> =
+        Arc::new(move || {
+            let config = load_config_readonly(&resolver_dir).ok()?;
+            let preset = active_trifecta_preset(&config).map(|p| TrifectaPreset {
+                small_weapon_id: p.small_weapon_id,
+                big_weapon_id: p.big_weapon_id,
+                heal_id: p.heal_id,
+            });
+            let db = resolver_db.clone();
+            block_on_pool(&resolver_runtime, async move {
+                describe_trifecta(&db, preset.as_ref())
+                    .await
+                    .ok()
+                    .and_then(|(data, _error)| data)
+            })
+        });
+
+    Providers {
+        equipment_cost_lookup,
+        equipment_profile_lookup,
+        player_name: initial_config.player_name.clone(),
+        loot_filter_blacklist: initial_config.loot_filter_blacklist.clone(),
+        loot_filter_blacklist_provider: Some(loot_filter_blacklist_provider),
+        weapon_attribution_trifecta,
+        mob_tracking_mode,
+        mob_tracking_tag,
+        manual_mob_entry_enabled,
+        manual_mob,
+        trifecta_resolver,
+    }
+}
+
+/// Run a database future from inside a synchronous provider callback,
+/// from either calling context: a runtime worker thread (an HTTP-driven
+/// reload) yields its slot, while a plain producer thread parks. The
+/// tracker's own `block_on` uses this exact dual shape.
+fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future: F) -> F::Output {
+    // Never `Handle::current()`: the provider callbacks run on the
+    // chat-log watcher's plain OS thread (no current runtime), so the
+    // handle is the one captured at composition time. A runtime worker
+    // thread (an HTTP-driven reload) yields its slot via `block_in_place`;
+    // a plain producer thread parks directly. This mirrors the tracker's
+    // own `block_on` and the quest-reward-filter adapter.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::task::block_in_place(|| handle.block_on(future))
+    } else {
+        handle.block_on(future)
+    }
 }
 
 #[cfg(test)]
@@ -135,15 +465,18 @@ mod tests {
             .join("snapshot")
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_over_a_fresh_data_dir_and_the_repo_snapshot() {
         let dir = tempfile::tempdir().unwrap();
         let composed = compose_with(dir.path().join("data"), repo_snapshot()).await;
-        assert!(composed.is_some(), "fresh-dir composition succeeds");
+        let composed = composed.expect("fresh-dir composition succeeds");
         assert!(
             dir.path().join("data").join(DB_FILE_NAME).exists(),
             "the database file is created at the resolved location"
         );
+        // The producer spine composed alongside the read surface; tear
+        // it down so no tail thread outlives the test.
+        composed.producers.stop();
     }
 
     #[tokio::test]
@@ -174,5 +507,428 @@ mod tests {
         } else {
             assert_eq!(resolved, PathBuf::from("X:/resources").join("snapshot"));
         }
+    }
+
+    use std::io::Write as _;
+    use std::time::Duration;
+
+    use eo_services::clock::MockClock;
+
+    /// Build the producer spine alone over an injected clock, pool, and
+    /// explicit chat-log, mirroring `compose_with`'s producer step. The
+    /// integration tests drive a deterministic replay through this spine
+    /// without the data-dir/snapshot resolution `compose_native` does.
+    fn compose_producers_for_test(
+        db: Db,
+        clock: Arc<dyn Clock>,
+        data_dir: &std::path::Path,
+        chatlog: PathBuf,
+    ) -> ProducerState {
+        compose_producers(db, clock, data_dir, Some(chatlog)).expect("producer spine composes")
+    }
+
+    /// A composed-spine replay: feed a recorded-shape chat-log through
+    /// the *composed* watcher (shared bus, shared single-owner pool,
+    /// injected clock) and assert the composed hunt tracker persisted
+    /// the expected session and kill rows. This proves the real-provider
+    /// wiring and the shared bus/clock/single-Db composition preserve the
+    /// pipeline; it does not claim byte-identical parity with the
+    /// default-provider corpus goldens (the real providers stamp mobs and
+    /// blacklist loot, which the inert defaults do not).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn composed_spine_replays_a_scenario_into_the_expected_db_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        // Open the database the same single-owner way the substrate does.
+        let db = Db::open_adopted(&data_dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+
+        // A frozen, plan-advanced clock, exactly the corpus oracle's
+        // protocol: the watcher guards its own drain timeout against a
+        // frozen clock internally.
+        let start =
+            chrono::NaiveDateTime::parse_from_str("2026-05-19 10:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(Some(start), 0.0));
+
+        let chatlog = data_dir.join("chat_replay.log");
+        std::fs::File::create(&chatlog).expect("empty chatlog exists before the watcher starts");
+
+        let producers = compose_producers_for_test(
+            Db::from_pool(pool.clone()),
+            clock.clone(),
+            &data_dir,
+            chatlog.clone(),
+        );
+        producers
+            .tracker()
+            .start_session()
+            .expect("composed session starts");
+
+        // Three lines across three ticks: a combat tick, then two loot
+        // ticks that each close a kill.
+        let appended = 3u64;
+        {
+            let mut sink = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&chatlog)
+                .expect("chatlog append");
+            // One flush per tick so the tail never sees EOF mid-tick.
+            sink.write_all(
+                b"2026-05-19 10:00:01 [System] [] You inflicted 12.0 points of damage\n",
+            )
+            .unwrap();
+            sink.flush().unwrap();
+            sink.write_all(
+                b"2026-05-19 10:00:02 [System] [] You received Shrapnel x (500) Value: 5.00 PED\n",
+            )
+            .unwrap();
+            sink.flush().unwrap();
+            sink.write_all(b"2026-05-19 10:00:03 [System] [] You received Wool Value: 1.50 PED\n")
+                .unwrap();
+            sink.flush().unwrap();
+        }
+        producers
+            .watcher()
+            .wait_until_drained(appended, Duration::from_secs(10))
+            .expect("composed watcher drains the scenario");
+
+        // A snapshot proves the live tracker accumulated through the
+        // composed bus.
+        let readout = producers.tracker().snapshot().expect("snapshot");
+        let active = readout.active.expect("a session is active");
+        assert_eq!(active.kill_count, 2, "two loot groups, two kills");
+
+        producers.tracker().stop_session().expect("session stops");
+        producers.stop();
+
+        // The persisted rows match: one session, two kills.
+        let session_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tracking_sessions WHERE is_active = 0")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(session_count, 1, "one closed session persisted");
+        let kill_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kills")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kill_count, 2, "two kills persisted by the composed tracker");
+    }
+
+    /// `ProducerState::stop` must end any session left open: it is the
+    /// exit seam's one chance to close the session cleanly while the bus
+    /// is still live. Start a session through the composed tracker, then
+    /// call `stop()` WITHOUT a prior `stop_session()`, and assert the
+    /// open session was ended (its `tracking_sessions` row flipped to
+    /// `is_active = 0` with an `ended_at` stamp). Replacing `stop`'s body
+    /// with `()` would leave the session open, so this assertion fails:
+    /// the mutant is killed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_ends_an_open_session_left_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let db = Db::open_adopted(&data_dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+
+        let start =
+            chrono::NaiveDateTime::parse_from_str("2026-05-19 10:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap();
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(Some(start), 0.0));
+
+        let chatlog = data_dir.join("chat_replay.log");
+        std::fs::File::create(&chatlog).expect("empty chatlog exists before the watcher starts");
+
+        let producers = compose_producers_for_test(
+            Db::from_pool(pool.clone()),
+            clock.clone(),
+            &data_dir,
+            chatlog.clone(),
+        );
+        producers
+            .tracker()
+            .start_session()
+            .expect("composed session starts");
+
+        // Before stop: exactly one active session row exists.
+        let active_before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tracking_sessions WHERE is_active = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active_before, 1, "a session is open before stop");
+        assert!(
+            producers.tracker().is_tracking(),
+            "the tracker reports an active session before stop"
+        );
+
+        // Stop the spine WITHOUT a prior stop_session: stop() itself must
+        // end the open session. A stop body replaced with () leaves the
+        // session open and fails the assertions below.
+        producers.stop();
+
+        let active_after: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tracking_sessions WHERE is_active = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(active_after, 0, "stop() ended the open session");
+        let ended_set: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM tracking_sessions WHERE is_active = 0 AND ended_at IS NOT NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ended_set, 1, "the closed session carries an ended_at stamp");
+    }
+
+    /// Seed a weapon row directly through the shared pool, the same shape
+    /// `Db::weapon_properties_by_name_fragment` reads (item_type 'weapon',
+    /// a name carrying the lookup fragment, a JSON-object properties blob).
+    async fn seed_weapon(pool: &sqlx::SqlitePool, id: i64, name: &str, properties_json: &str) {
+        sqlx::query(
+            "INSERT INTO equipment_library (id, name, item_type, properties_json) \
+             VALUES (?, ?, 'weapon', ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(properties_json)
+        .execute(pool)
+        .await
+        .expect("weapon row seeds");
+    }
+
+    /// Write a minimal `settings.json` carrying just the keys a test
+    /// pins; the read-through loader reads any JSON object and defaults
+    /// the rest, so a partial object is enough to exercise the
+    /// config-derived providers' live reads.
+    fn write_settings(data_dir: &std::path::Path, settings: &Value) {
+        std::fs::write(
+            data_dir.join("settings.json"),
+            serde_json::to_string(settings).unwrap(),
+        )
+        .expect("settings.json writes");
+    }
+
+    /// The `build_providers` transforms, each invoked against on-disk
+    /// fixtures so a mutation to any one transform is observable:
+    ///
+    /// - equipment_profile_lookup returns the parsed property object for a
+    ///   weapon matched by name fragment (kills the deleted `Ok(Object)`
+    ///   match arm and the `Default::default()` whole-function replacement,
+    ///   both of which yield `None`).
+    /// - equipment_cost_lookup returns `totalCostPerUse / 100`; the seeded
+    ///   props make totalCostPerUse == 250 so the expected 2.5 differs from
+    ///   both `250 % 100` (50.0) and `250 * 100` (25000.0): kills the `/`->`%`
+    ///   and `/`->`*` mutants.
+    /// - manual_mob_entry_enabled is `mob_tracking_mode != "tag"`: false
+    ///   under "tag", true under "mob" (kills `!=`->`==`, which flips both).
+    /// - weapon_attribution_trifecta is `!hotbar_hooks_enabled`: false when
+    ///   hooks are on, true when off (kills the deleted `!`, which flips both).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn build_providers_transforms_pin_their_exact_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let db = Db::open_adopted(&data_dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+
+        // A weapon whose name carries the fragment "Korss", with a
+        // property object whose economy yields a known totalCostPerUse.
+        // ammo_burn 25000 -> 250 PEC ammo at markup 1.0, decay 0 ->
+        // totalCostPerUse == 250, so equipment_cost_lookup == 250/100 == 2.5.
+        let props = serde_json::json!({
+            "weapon_entity": {"economy": {"decay": 0.0, "ammo_burn": 25000}},
+            "weapon_markup": 100,
+        });
+        seed_weapon(
+            &pool,
+            1,
+            "Korss H400 (L)",
+            &serde_json::to_string(&props).unwrap(),
+        )
+        .await;
+
+        // First on-disk config: tag mode, hotbar hooks ENABLED.
+        write_settings(
+            &data_dir,
+            &serde_json::json!({
+                "mob_tracking_mode": "tag",
+                "hotbar_hooks_enabled": true,
+            }),
+        );
+        let config = load_config_readonly(&data_dir).expect("config reads");
+        let providers = build_providers(
+            Db::from_pool(pool.clone()),
+            &data_dir,
+            &config,
+            tokio::runtime::Handle::current(),
+        );
+
+        // equipment_profile_lookup: the parsed property object, by fragment.
+        let profile = (providers.equipment_profile_lookup)("Korss")
+            .expect("the seeded weapon resolves to a property object");
+        assert_eq!(
+            profile.get("weapon_markup").and_then(Value::as_f64),
+            Some(100.0),
+            "the profile carries the seeded keys"
+        );
+        assert!(
+            profile.contains_key("weapon_entity"),
+            "the profile carries the weapon entity"
+        );
+
+        // equipment_cost_lookup: totalCostPerUse (250) / 100 == 2.5.
+        let cost = (providers.equipment_cost_lookup)("Korss");
+        assert!(
+            (cost - 2.5).abs() < 1e-9,
+            "per-shot cost is totalCostPerUse/100 == 2.5, not {cost} \
+             (% would be 50.0, * would be 25000.0)"
+        );
+
+        // Config-derived providers read live: under tag mode + hooks-on,
+        // manual entry is disabled and trifecta attribution is off.
+        assert!(
+            !(providers.manual_mob_entry_enabled)(),
+            "manual mob entry is disabled in tag mode"
+        );
+        assert!(
+            !(providers.weapon_attribution_trifecta)(),
+            "trifecta attribution is off when hotbar hooks are enabled"
+        );
+
+        // Rewrite settings.json and re-invoke the SAME closures: they read
+        // live, so the flipped config flips both booleans. mob mode +
+        // hooks-off -> manual entry enabled, trifecta attribution on.
+        write_settings(
+            &data_dir,
+            &serde_json::json!({
+                "mob_tracking_mode": "mob",
+                "hotbar_hooks_enabled": false,
+            }),
+        );
+        assert!(
+            (providers.manual_mob_entry_enabled)(),
+            "manual mob entry is enabled outside tag mode"
+        );
+        assert!(
+            (providers.weapon_attribution_trifecta)(),
+            "trifecta attribution is on when hotbar hooks are disabled"
+        );
+    }
+
+    /// REGRESSION: the equipment provider runs on the chat-log watcher's
+    /// plain OS thread, which has NO current tokio runtime (the bus
+    /// dispatches synchronously on the watcher's tail thread). The
+    /// provider's `block_on_pool` must therefore use the runtime handle
+    /// captured at composition time, never `Handle::current()` (which
+    /// panics off-runtime). Build the providers inside the runtime, then
+    /// invoke the lookup from a plain `std::thread` with no runtime
+    /// context and assert it resolves rather than panicking.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn equipment_provider_resolves_from_a_non_runtime_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let db = Db::open_adopted(&data_dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+        let props = serde_json::json!({
+            "weapon_entity": {"economy": {"decay": 0.0, "ammo_burn": 25000}},
+            "weapon_markup": 100,
+        });
+        seed_weapon(
+            &pool,
+            1,
+            "Korss H400 (L)",
+            &serde_json::to_string(&props).unwrap(),
+        )
+        .await;
+        write_settings(&data_dir, &serde_json::json!({}));
+        let config = load_config_readonly(&data_dir).expect("config reads");
+        let providers = build_providers(
+            Db::from_pool(pool),
+            &data_dir,
+            &config,
+            tokio::runtime::Handle::current(),
+        );
+
+        // Invoke the lookup AND the derived cost from a plain OS thread
+        // (no current runtime), exactly the watcher tail-thread context.
+        let profile_lookup = providers.equipment_profile_lookup.clone();
+        let cost_lookup = providers.equipment_cost_lookup.clone();
+        let outcome = std::thread::spawn(move || {
+            let resolved = profile_lookup("Korss").is_some();
+            let cost = cost_lookup("Korss");
+            (resolved, cost)
+        })
+        .join()
+        .expect("the provider must not panic off-runtime");
+        assert!(
+            outcome.0,
+            "equipment_profile_lookup resolves from a non-runtime thread"
+        );
+        assert!(
+            (outcome.1 - 2.5).abs() < 1e-9,
+            "equipment_cost_lookup resolves off-runtime to 2.5, got {}",
+            outcome.1
+        );
+    }
+
+    /// The single-owner pool tolerates an HTTP-shaped read concurrent
+    /// with a producer-shaped write without deadlock and within a bounded
+    /// latency: sqlx serialises both through the one connection, so the
+    /// read simply queues behind the write rather than locking.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_read_during_a_producer_write_does_not_deadlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_adopted(&dir.path().join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+
+        // A producer-shaped write: a short transaction holding the single
+        // connection briefly, exactly the shape of a tracker persistence
+        // write.
+        let write_pool = pool.clone();
+        let writer = tokio::spawn(async move {
+            let mut tx = write_pool.begin().await.expect("begin");
+            sqlx::query(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('cc-test', 0, 0)",
+            )
+            .execute(&mut *tx)
+            .await
+            .expect("insert under tx");
+            // Hold the connection a moment so the read genuinely contends.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tx.commit().await.expect("commit");
+        });
+
+        // An HTTP-shaped read on the same pool, bounded by a generous
+        // deadline: if the single connection deadlocked, this would
+        // time out.
+        let read = tokio::time::timeout(Duration::from_secs(5), async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracking_sessions")
+                .fetch_one(&pool)
+                .await
+                .expect("read query")
+        })
+        .await;
+        assert!(
+            read.is_ok(),
+            "the concurrent read completed without deadlock"
+        );
+
+        writer.await.expect("writer task joins");
+        let final_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracking_sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(final_count, 1, "the write committed");
     }
 }

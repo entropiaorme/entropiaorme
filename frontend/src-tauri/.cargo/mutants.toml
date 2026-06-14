@@ -18,4 +18,14 @@ exclude_re = [
     # Thin delegators over the platform lookups: None-on-this-platform
     # by construction.
     "eu_window\\.rs.*replace (find_game_window|get_window_geometry|game_window_present|live_region|skill_region|profession_region|repair_region)",
+    # The application entry point and the HTTP-substrate spawn: the Tauri
+    # event-loop runner and the task that binds the listener and serves
+    # the router. Both are integration glue exercised only by an actually
+    # running app (the packaged-build verification), never by the
+    # hermetic suite; the whole-function-deletion mutants here are
+    # vacuous. The wiring they perform (producer composition, teardown,
+    # provider construction) is covered by its own mutants in
+    # composition.rs, which stay in the campaign.
+    "lib\\.rs.*replace run with \\(\\)",
+    "lib\\.rs.*replace spawn_http_substrate with \\(\\)",
 ]

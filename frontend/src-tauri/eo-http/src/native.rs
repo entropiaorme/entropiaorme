@@ -1381,6 +1381,21 @@ async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body>
         .await
 }
 
+/// GET /api/tracking/snapshot: the consolidated dashboard hydration, over the
+/// live tracker, the config, and the hotbar listener's running state. Proxies
+/// unless all three are composed (the snapshot reads each).
+async fn tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker), Some(hotbar)) =
+        (state.hydration(), state.tracker(), state.hotbar_listener())
+    else {
+        return state.proxy(req).await;
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .tracking_snapshot(&tracker, &hotbar, inm.as_deref())
+        .await
+}
+
 // ── SSE event stream (producer-bus fan-out) ────────────────────────────
 //
 // `GET /api/events` is a long-lived `text/event-stream`. The native arm
@@ -2398,6 +2413,14 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/tracking/manual-mob-suggestions",
                 tracking_manual_mob_suggestions,
+            ),
+        )
+        .route(
+            "/api/tracking/snapshot",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/snapshot",
+                tracking_snapshot,
             ),
         )
         .route(

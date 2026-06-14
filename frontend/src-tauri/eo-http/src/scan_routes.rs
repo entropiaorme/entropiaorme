@@ -85,8 +85,10 @@ const REPAIR_FIELDS: [&str; 4] = ["cost_ped", "raw_text", "confidence", "error"]
 /// models in this surface (the status read, the repair result) always carry
 /// their full declared set from the service, so this also yields their
 /// complete ordered object; the one declared-optional key absent on success
-/// (`error`) is correctly omitted exactly as `extra="allow"` leaves it.
-fn project(value: &Value, order: &[&str]) -> Value {
+/// (`error`) is correctly omitted exactly as `extra="allow"` leaves it. Shared
+/// with the snapshot route, whose polymorphic `exclude_unset` model carries no
+/// undeclared top-level keys, so the same present-keys-in-order rule applies.
+pub(crate) fn project(value: &Value, order: &[&str]) -> Value {
     let mut out = Map::new();
     if let Some(object) = value.as_object() {
         for &field in order {

@@ -1901,6 +1901,7 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
 
     use eo_services::clock::Clock;
     use eo_services::config_service::ConfigService;
+    use eo_services::hotbar_listener::HotbarListener;
     use eo_services::keystroke_source::MockKeystrokeSource;
     use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
     use eo_services::skill_panel::BgrImage;
@@ -2007,6 +2008,13 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
         skill_scan.clone(),
         Some(Arc::new(MockKeystrokeSource::new())),
     );
+    // The hotbar listener (the snapshot route reads its running state). A mock
+    // source and no resolver, never enabled, so it reports not-running.
+    let hotbar = HotbarListener::new(
+        bus.clone(),
+        Some(Arc::new(MockKeystrokeSource::new())),
+        None,
+    );
 
     let hydration = Arc::new(HydrationState::new(
         eo_services::db::Db::from_pool(db.pool().clone()),
@@ -2027,6 +2035,7 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
             .with_skill_scan(skill_scan)
             .with_repair_ocr(repair_ocr)
             .with_spacebar_listener(spacebar)
+            .with_hotbar_listener(hotbar)
             .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
@@ -2828,4 +2837,138 @@ async fn spacebar_capture_toggle_serves_and_validates() {
     let (status, _, body) = send_json(port, "POST", "/api/scan/spacebar-capture", "").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(&body)["detail"][0]["type"], "missing");
+}
+
+/// The dashboard snapshot serves both states under the conditional-GET
+/// contract, each keeping its own polymorphic shape in the model's
+/// declaration order (the snake-case status trio among the camelCase numbers).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_snapshot_serves_idle_and_active() {
+    // ── idle, trifecta-mode (the default preset exists, nothing bound) ──
+    let (port, _state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": false}"#).await;
+    let (status, headers, body) = get(port, "/api/tracking/snapshot").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        headers.contains_key(http::header::ETAG),
+        "the snapshot GET carries the conditional-GET contract"
+    );
+    let idle = body_json(&body);
+    assert_eq!(idle["status"], "idle");
+    assert_eq!(idle["hotbarListenerActive"], false);
+    assert_eq!(idle["weaponAttribution"], "trifecta");
+    assert_eq!(idle["recentEvents"], serde_json::json!([]));
+    let keys: Vec<&str> = idle
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "status",
+            "hotbarListenerActive",
+            "weaponAttribution",
+            "repairOcrEnabled",
+            "endOfSessionArmourReminderEnabled",
+            "mobEntryMode",
+            "currentMob",
+            "mobSource",
+            "currentTool",
+            "trifectaAttribution",
+            "recentEvents",
+        ]
+    );
+    // The trifecta summary populates (a default preset exists) with nothing
+    // bound, in its own insertion order.
+    let summary = &idle["trifectaAttribution"];
+    assert_eq!(summary["smallWeapon"], serde_json::Value::Null);
+    assert!(summary["presets"].is_array());
+    let summary_keys: Vec<&str> = summary
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        summary_keys,
+        [
+            "activePresetId",
+            "presetName",
+            "presets",
+            "smallWeapon",
+            "bigWeapon",
+            "healTool",
+        ]
+    );
+
+    // ── active, hotbar-mode (a started session) ──
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    let session_id = body_json(&body)["session_id"]
+        .as_str()
+        .expect("session id")
+        .to_string();
+
+    let (status, headers, body) = get(port, "/api/tracking/snapshot").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(headers.contains_key(http::header::ETAG));
+    let active = body_json(&body);
+    assert_eq!(active["status"], "active");
+    assert_eq!(active["session_id"], session_id);
+    assert_eq!(active["kill_count"], 0);
+    assert_eq!(active["hotbarListenerActive"], false);
+    assert_eq!(active["weaponAttribution"], "hotbar");
+    assert_eq!(active["trifectaAttribution"], serde_json::Value::Null);
+    assert_eq!(active["recentEvents"], serde_json::json!([]));
+    assert_eq!(active["warnings"], serde_json::json!([]));
+    // The full polymorphic shape in the model's declaration order: status,
+    // then the shared envelope, then the active-only block ending in warnings.
+    let keys: Vec<&str> = active
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "status",
+            "hotbarListenerActive",
+            "weaponAttribution",
+            "repairOcrEnabled",
+            "endOfSessionArmourReminderEnabled",
+            "mobEntryMode",
+            "currentMob",
+            "mobSource",
+            "currentTool",
+            "trifectaAttribution",
+            "recentEvents",
+            "session_id",
+            "started_at",
+            "kill_count",
+            "elapsed",
+            "cost",
+            "returns",
+            "pes",
+            "net",
+            "returnRate",
+            "damageDealtTotal",
+            "weaponDamageDealt",
+            "weaponCost",
+            "shotsFiredTotal",
+            "criticalHitsTotal",
+            "maxDamage",
+            "globalsCount",
+            "hofsCount",
+            "latestKillLoot",
+            "multiplierLast",
+            "multiplierAvg",
+            "multiplierMax",
+            "multiplierHistory",
+            "cumulativeNetHistory",
+            "warnings",
+        ]
+    );
 }

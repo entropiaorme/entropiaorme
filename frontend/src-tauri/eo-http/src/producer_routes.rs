@@ -35,8 +35,10 @@ use axum::http::{Response, StatusCode};
 use eo_services::config_service::{
     active_trifecta_preset, load_config_readonly, AppConfig, ConfigService,
 };
+use eo_services::db::DbError;
+use eo_services::hotbar_listener::HotbarListener;
 use eo_services::mob_lookup_service::{python_whitespace, MobLookupService};
-use eo_services::tracker::{naive_isoformat, HuntTracker};
+use eo_services::tracker::{naive_isoformat, to_iso_utc, HuntTracker};
 use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use serde_json::{json, Map, Value};
 
@@ -44,6 +46,50 @@ use crate::hydration::HydrationState;
 use crate::hydration::{
     detail, error_response, internal_error, json_response, plain_json_response,
 };
+use crate::scan_routes::project;
+
+/// The `TrackingSnapshot` response-model field order (the polymorphic
+/// dashboard hydration shape, served `exclude_unset`). The snake-case status
+/// trio sits among the camelCase headline numbers exactly as the model
+/// declares them; the projection emits whichever keys the active or idle
+/// branch set, in this order.
+const SNAPSHOT_FIELDS: [&str; 35] = [
+    "status",
+    "hotbarListenerActive",
+    "weaponAttribution",
+    "repairOcrEnabled",
+    "endOfSessionArmourReminderEnabled",
+    "mobEntryMode",
+    "currentMob",
+    "mobSource",
+    "currentTool",
+    "trifectaAttribution",
+    "recentEvents",
+    "session_id",
+    "started_at",
+    "kill_count",
+    "elapsed",
+    "cost",
+    "returns",
+    "pes",
+    "net",
+    "returnRate",
+    "damageDealtTotal",
+    "weaponDamageDealt",
+    "weaponCost",
+    "shotsFiredTotal",
+    "criticalHitsTotal",
+    "maxDamage",
+    "globalsCount",
+    "hofsCount",
+    "latestKillLoot",
+    "multiplierLast",
+    "multiplierAvg",
+    "multiplierMax",
+    "multiplierHistory",
+    "cumulativeNetHistory",
+    "warnings",
+];
 
 /// `_validate_hotbar`: hotbar attribution is workable as long as at least
 /// one slot is bound (a non-null library id). The reference does NOT
@@ -340,6 +386,281 @@ impl HydrationState {
             let _ = tracker.set_manual_tag(tag);
         }
         plain_json_response(&json!({ "tag": tag }))
+    }
+
+    /// GET /api/tracking/snapshot: the consolidated dashboard hydration. The
+    /// union of the live tracker readout, the configuration- and
+    /// runtime-derived envelope (attribution mode, the repair-OCR flag, the
+    /// hotbar listener's running state, the trifecta summary), and the
+    /// recent-events / warnings feeds. Polymorphic across idle and active; the
+    /// `exclude_unset` projection emits each state's own keys in the model's
+    /// declaration order (the snake-case status trio kept among the camelCase
+    /// numbers as the dashboard reads them). A 2xx GET under the
+    /// `/api/tracking` ETag prefix, so it carries the conditional-GET contract.
+    pub async fn tracking_snapshot(
+        &self,
+        tracker: &Arc<HuntTracker>,
+        hotbar: &Arc<HotbarListener>,
+        if_none_match: Option<&str>,
+    ) -> Response<Body> {
+        let Ok(config) = load_config_readonly(&self.data_dir) else {
+            return internal_error();
+        };
+        // `_weapon_attribution`: trifecta unless the hotbar hooks are on.
+        let weapon_attribution = if config.hotbar_hooks_enabled {
+            "hotbar"
+        } else {
+            "trifecta"
+        };
+        let trifecta_attribution = if weapon_attribution == "trifecta" {
+            match self.trifecta_attribution_summary(&config).await {
+                Ok(summary) => summary,
+                Err(_) => return internal_error(),
+            }
+        } else {
+            Value::Null
+        };
+        let readout = match tracker.snapshot() {
+            Ok(readout) => readout,
+            Err(_) => return internal_error(),
+        };
+        let current_tool = match &readout.current_tool {
+            Some(tool) => Value::String(tool.clone()),
+            None => Value::Null,
+        };
+
+        let value = match &readout.active {
+            None => {
+                // The configured manual label hydrates an idle dashboard.
+                let (current_mob, mob_source) = configured_manual_label(&config);
+                json!({
+                    "status": "idle",
+                    "hotbarListenerActive": hotbar.is_running(),
+                    "weaponAttribution": weapon_attribution,
+                    "repairOcrEnabled": config.repair_ocr_enabled,
+                    "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
+                    "currentTool": current_tool,
+                    "trifectaAttribution": trifecta_attribution,
+                    "mobEntryMode": config.mob_tracking_mode,
+                    "currentMob": current_mob,
+                    "mobSource": mob_source,
+                    "recentEvents": [],
+                })
+            }
+            Some(active) => {
+                let recent_events: Vec<Value> = active
+                    .notable_event_rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (event_type, mob_or_item, value_ped, ts))| {
+                        // Built in the NotableEvent declaration order with the
+                        // extra `id` last, exactly as `extra="allow"` emits it.
+                        json!({
+                            "type": notable_event_category(event_type),
+                            "description": notable_event_description(event_type, mob_or_item, *value_ped),
+                            "value": *value_ped,
+                            "eventType": event_type.clone(),
+                            "timestamp": ts_to_iso(*ts),
+                            "id": format!("ne-{index}"),
+                        })
+                    })
+                    .collect();
+                let warnings: Vec<Value> = active
+                    .warnings
+                    .iter()
+                    // The tracker warning shares NotableEvent's required trio;
+                    // its `value` is the model-coerced float zero.
+                    .map(|message| json!({"type": "warning", "description": message, "value": 0.0}))
+                    .collect();
+                json!({
+                    "status": "active",
+                    "session_id": active.session_id.clone(),
+                    "started_at": active.started_at.clone(),
+                    "kill_count": active.kill_count,
+                    "elapsed": active.elapsed,
+                    "cost": active.cost,
+                    "returns": active.returns,
+                    "pes": active.pes,
+                    "net": active.net,
+                    "returnRate": active.return_rate,
+                    "damageDealtTotal": active.damage_dealt_total,
+                    "weaponDamageDealt": active.weapon_damage_dealt,
+                    "weaponCost": active.weapon_cost,
+                    "shotsFiredTotal": active.shots_fired_total,
+                    "criticalHitsTotal": active.critical_hits_total,
+                    "maxDamage": active.max_damage,
+                    "globalsCount": active.globals_count,
+                    "hofsCount": active.hofs_count,
+                    "latestKillLoot": active.latest_kill_loot,
+                    "multiplierLast": active.multiplier_last,
+                    "multiplierAvg": active.multiplier_avg,
+                    "multiplierMax": active.multiplier_max,
+                    "multiplierHistory": active.multiplier_history.clone(),
+                    "cumulativeNetHistory": active.cumulative_net_history.clone(),
+                    "hotbarListenerActive": hotbar.is_running(),
+                    "weaponAttribution": weapon_attribution,
+                    "repairOcrEnabled": config.repair_ocr_enabled,
+                    "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
+                    "currentTool": current_tool,
+                    "trifectaAttribution": trifecta_attribution,
+                    "mobEntryMode": active.mob_entry_mode.clone(),
+                    "currentMob": active.current_mob.clone(),
+                    "mobSource": active.mob_source.clone(),
+                    "recentEvents": recent_events,
+                    "warnings": warnings,
+                })
+            }
+        };
+        json_response(&project(&value, &SNAPSHOT_FIELDS), if_none_match)
+    }
+
+    /// `_trifecta_attribution_summary`: the active preset's bound weapon/heal
+    /// names plus the preset list, or null when no preset exists and nothing
+    /// is bound.
+    async fn trifecta_attribution_summary(&self, config: &AppConfig) -> Result<Value, DbError> {
+        let active = active_trifecta_preset(config);
+        let small = active.and_then(|preset| preset.small_weapon_id);
+        let big = active.and_then(|preset| preset.big_weapon_id);
+        let heal = active.and_then(|preset| preset.heal_id);
+        let presets: Vec<Value> = config
+            .trifecta_presets
+            .iter()
+            .map(|preset| json!({"id": preset.id, "name": preset.name}))
+            .collect();
+        if presets.is_empty() && small.is_none() && big.is_none() && heal.is_none() {
+            return Ok(Value::Null);
+        }
+        let mut summary = Map::new();
+        summary.insert(
+            "activePresetId".into(),
+            match &config.active_trifecta_preset_id {
+                Some(id) => Value::String(id.clone()),
+                None => Value::Null,
+            },
+        );
+        summary.insert(
+            "presetName".into(),
+            match active {
+                Some(preset) => Value::String(preset.name.clone()),
+                None => Value::Null,
+            },
+        );
+        summary.insert("presets".into(), Value::Array(presets));
+        summary.insert(
+            "smallWeapon".into(),
+            self.equipment_name(small, "weapon").await?,
+        );
+        summary.insert(
+            "bigWeapon".into(),
+            self.equipment_name(big, "weapon").await?,
+        );
+        summary.insert(
+            "healTool".into(),
+            self.equipment_name(heal, "healing").await?,
+        );
+        Ok(Value::Object(summary))
+    }
+
+    /// The equipment-library name for a bound id and type, or null when the id
+    /// is unset or the row is absent.
+    async fn equipment_name(&self, id: Option<i64>, item_type: &str) -> Result<Value, DbError> {
+        let Some(id) = id else {
+            return Ok(Value::Null);
+        };
+        match self.db.equipment_item(id, item_type).await? {
+            Some((_id, name, _properties)) => Ok(Value::String(name)),
+            None => Ok(Value::Null),
+        }
+    }
+}
+
+/// `_configured_manual_label`: the idle-state mob label and its source. Tag
+/// mode reports the trimmed free-text tag (or none); manual mode reports the
+/// stored species (with maturity) display (or none).
+fn configured_manual_label(config: &AppConfig) -> (Value, Value) {
+    if config.mob_tracking_mode == "tag" {
+        let tag = config.mob_tracking_tag.trim();
+        if tag.is_empty() {
+            return (Value::Null, Value::Null);
+        }
+        return (
+            Value::String(tag.to_string()),
+            Value::String("tag".to_string()),
+        );
+    }
+    let species = config.manual_mob_species.trim();
+    let maturity = config.manual_mob_maturity.trim();
+    if species.is_empty() {
+        return (Value::Null, Value::Null);
+    }
+    let display = if maturity.is_empty() {
+        species.to_string()
+    } else {
+        format!("{maturity} {species}")
+    };
+    (Value::String(display), Value::String("manual".to_string()))
+}
+
+/// `_ts_to_iso`: a Unix timestamp to an ISO 8601 UTC string (the same
+/// `+00:00`-suffixed form the domain events stamp), or null.
+fn ts_to_iso(ts: Option<f64>) -> Value {
+    match ts {
+        Some(ts) => Value::String(to_iso_utc(ts)),
+        None => Value::Null,
+    }
+}
+
+/// `_notable_event_category`: quest / HoF / global from the event-type prefix.
+fn notable_event_category(event_type: &str) -> &'static str {
+    if event_type.starts_with("quest_") {
+        "quest"
+    } else if event_type.starts_with("hof_") {
+        "hof"
+    } else {
+        "global"
+    }
+}
+
+/// `_notable_event_label`: the curated label for the known event types, else
+/// the category title-cased (`HoF` kept as the special case).
+fn notable_event_label(event_type: &str) -> String {
+    match event_type {
+        "global_kill" => "Global Kill".to_string(),
+        "global_item" => "Global Item".to_string(),
+        "hof_kill" => "HoF Kill".to_string(),
+        "hof_item" => "HoF Item".to_string(),
+        "quest_started" => "Quest Started".to_string(),
+        "quest_completed" => "Quest Completed".to_string(),
+        _ => {
+            let category = notable_event_category(event_type);
+            if category == "hof" {
+                "HoF".to_string()
+            } else {
+                capitalize(category)
+            }
+        }
+    }
+}
+
+/// `_notable_event_description`: the label with the mob or item, and the value
+/// in PED for everything but the quest events.
+fn notable_event_description(event_type: &str, mob_or_item: &str, value_ped: f64) -> String {
+    let label = notable_event_label(event_type);
+    if event_type.starts_with("quest_") {
+        format!("{label}: {mob_or_item}")
+    } else {
+        format!("{label}: {mob_or_item} ({value_ped:.2} PED)")
+    }
+}
+
+/// Python `str.capitalize` over an ASCII category: first letter upper, the
+/// rest lower (the category words are already lower-case, so this upper-cases
+/// the lead).
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 

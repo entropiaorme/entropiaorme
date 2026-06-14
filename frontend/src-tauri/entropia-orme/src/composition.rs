@@ -1940,4 +1940,42 @@ mod tests {
         let delivered = tokio::time::timeout(Duration::from_millis(100), client.next_frame()).await;
         assert!(delivered.is_err(), "a non-domain payload yields no frame");
     }
+
+    /// The LIVE scan-status path now the scan composes on the spine bus: a
+    /// status-moving verb on a `SkillScanManual` built over the same bus the
+    /// bridge subscribes reaches an SSE client as a `scan.status.changed`
+    /// frame, end to end (the bridge-forwards test publishes the event
+    /// directly; this proves the scan's own publish flows through it).
+    #[tokio::test]
+    async fn the_composed_scan_delivers_a_status_frame_to_an_sse_client() {
+        let bus = Arc::new(EventBus::new());
+        let hub = Arc::new(SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
+        subscribe_sse_bridge(&bus, &hub);
+        let client = hub.register();
+
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
+        let scan = SkillScanManual::new(
+            ScanProviders {
+                engine_available: Arc::new(|| true),
+                skill_region: Arc::new(|| Some(([0, 0], [100, 200]))),
+                capture_region: Arc::new(|_| Some(vec![1, 2, 3])),
+                extract_page_levels: Arc::new(|_: &[u8]| Vec::new()),
+            },
+            clock,
+            Some(bus.clone()),
+            None,
+            0,
+        );
+        // `start` moves the status idle -> capturing, publishing one frame.
+        scan.start(Some(2));
+        let frame = client.next_frame().await;
+        assert!(
+            frame.contains("event: scan.status.changed"),
+            "the scan's status publish reaches the stream: {frame}"
+        );
+        assert!(
+            frame.contains("capturing"),
+            "the frame carries the moved phase: {frame}"
+        );
+    }
 }

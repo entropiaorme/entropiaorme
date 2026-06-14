@@ -35,6 +35,7 @@ pub mod repair_ocr;
 pub mod scan_completion;
 pub mod scan_drift;
 pub mod scan_presets;
+pub mod screen_capture;
 pub mod session_summary;
 pub mod skill_panel;
 pub mod skill_scan_manual;

@@ -214,9 +214,16 @@ struct Arms {
 impl Arms {
     /// Drive a request through both arms; assert status + contract headers
     /// match and the bodies are byte-identical (no per-arm random ids or
-    /// clock fields in these responses). Returns the native body as JSON
-    /// for follow-up assertions.
-    async fn compare(&self, method: &str, path: &str, body: Option<&str>) -> Value {
+    /// clock fields in these responses). Returns the native status and body
+    /// (as JSON) so a call site can pin the absolute status code too, not
+    /// just native/Python parity (both arms could otherwise drift to the
+    /// same wrong code and still pass).
+    async fn compare(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+    ) -> (http::StatusCode, Value) {
         let (native_status, native_headers, native_body) =
             request(self.substrate_port, method, path, body, None).await;
         let (cmp_status, cmp_headers, cmp_body) =
@@ -242,7 +249,10 @@ impl Arms {
             String::from_utf8_lossy(&native_body),
             String::from_utf8_lossy(&cmp_body),
         );
-        serde_json::from_slice(&native_body).unwrap_or(Value::Null)
+        (
+            native_status,
+            serde_json::from_slice(&native_body).unwrap_or(Value::Null),
+        )
     }
 
     /// The conditional-GET 304 leg on the ETag-scoped suggestion: fetch to
@@ -517,14 +527,19 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
     seed_both(&arms).await;
 
     // ── GET suggestion: all six computed reasons ──
+    // Each leg pins the absolute status (not just native/Python parity, which
+    // `compare` already asserts): a code that drifts on both arms together
+    // must still fail here.
     // no_completions: all link fields null.
-    let v = arms.compare("GET", &suggestion_path(S_NONE), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_NONE), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "none");
     assert_eq!(v["reason"], "no_completions");
     assert!(v["questId"].is_null() && v["playlistId"].is_null());
 
     // single_quest: questId is the stringified int, playlist null.
-    let v = arms.compare("GET", &suggestion_path(S_QUEST), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_QUEST), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "quest");
     assert_eq!(v["reason"], "single_quest");
     assert_eq!(v["questId"], "2");
@@ -532,7 +547,8 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
     assert!(v["playlistId"].is_null());
 
     // exact_playlist: playlistId set (P3), quest null.
-    let v = arms.compare("GET", &suggestion_path(S_EXACT), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_EXACT), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "playlist");
     assert_eq!(v["reason"], "exact_playlist");
     assert_eq!(v["playlistId"], "3");
@@ -540,27 +556,31 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
     assert!(v["questId"].is_null());
 
     // ambiguous_playlist: matches >1 playlist -> none, all link fields null.
-    let v = arms.compare("GET", &suggestion_path(S_AMBIG), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_AMBIG), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "none");
     assert_eq!(v["reason"], "ambiguous_playlist");
     assert!(v["questId"].is_null() && v["playlistId"].is_null());
 
     // unclean: >1 completion matching 0 playlists -> none.
-    let v = arms.compare("GET", &suggestion_path(S_UNCLEAN), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_UNCLEAN), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "none");
     assert_eq!(v["reason"], "unclean");
 
     // ── GET 404: a session that was never seeded ──
-    let v = arms.compare("GET", &suggestion_path(S_MISSING), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_MISSING), None).await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(v["detail"], "Session not found");
 
     // ── GET 304 conditional leg on a 200-bearing suggestion ──
     arms.compare_conditional(&suggestion_path(S_QUEST)).await;
 
     // ── POST accept-quest: persists, replies the 7-field linked object ──
-    let v = arms
+    let (status, v) = arms
         .compare("POST", &link_path(S_QUEST), Some(r#"{"action": "accept"}"#))
         .await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["status"], "linked");
     assert_eq!(v["linkType"], "quest");
     assert_eq!(v["questId"], "2");
@@ -570,16 +590,18 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
 
     // The accepted session's re-GET now reports already_linked, echoing the
     // stored quest_id/name (the existing-row branch of the suggestion).
-    let v = arms.compare("GET", &suggestion_path(S_QUEST), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_QUEST), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "none");
     assert_eq!(v["reason"], "already_linked");
     assert_eq!(v["questId"], "2");
     assert_eq!(v["questName"], "Quest 2");
 
     // ── POST accept-playlist: the playlist arm of accept ──
-    let v = arms
+    let (status, v) = arms
         .compare("POST", &link_path(S_EXACT), Some(r#"{"action": "accept"}"#))
         .await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["status"], "linked");
     assert_eq!(v["linkType"], "playlist");
     assert_eq!(v["playlistId"], "3");
@@ -589,9 +611,10 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
     // ── POST accept when nothing is linkable -> 409 ──
     // S_AMBIG's suggestion is "none"/"ambiguous_playlist"; accept maps the
     // ValueError to 409 with the reference's exact message.
-    let v = arms
+    let (status, v) = arms
         .compare("POST", &link_path(S_AMBIG), Some(r#"{"action": "accept"}"#))
         .await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
     assert_eq!(
         v["detail"],
         format!("No linkable suggestion for session {S_AMBIG}: ambiguous_playlist")
@@ -600,13 +623,14 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
     // ── POST decline: EXACTLY {sessionId, status} (the field-set make-or-
     //    break). The byte comparison in `compare` already proves the field
     //    set; assert it here too against the parsed object. ──
-    let v = arms
+    let (status, v) = arms
         .compare(
             "POST",
             &link_path(S_DECLINE),
             Some(r#"{"action": "decline"}"#),
         )
         .await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["sessionId"], S_DECLINE);
     assert_eq!(v["status"], "declined");
     let object = v.as_object().expect("decline body is an object");
@@ -619,33 +643,38 @@ async fn the_quest_link_surface_conforms_through_the_public_port() {
 
     // The declined session's re-GET reports the declined reason, with the
     // stored (null) quest/playlist ids echoed through.
-    let v = arms.compare("GET", &suggestion_path(S_DECLINE), None).await;
+    let (status, v) = arms.compare("GET", &suggestion_path(S_DECLINE), None).await;
+    assert_eq!(status, http::StatusCode::OK);
     assert_eq!(v["suggestionType"], "none");
     assert_eq!(v["reason"], "declined");
 
     // ── POST bad action -> 400 with the reference's detail ──
-    let v = arms
+    let (status, v) = arms
         .compare(
             "POST",
             &link_path(S_NONE),
             Some(r#"{"action": "frobnicate"}"#),
         )
         .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(v["detail"], "Action must be 'accept' or 'decline'");
 
     // ── POST 404: a missing session (the existence guard runs before the
     //    service, but AFTER body validation; a valid body here) ──
-    let v = arms
+    let (status, v) = arms
         .compare(
             "POST",
             &link_path(S_MISSING),
             Some(r#"{"action": "decline"}"#),
         )
         .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(v["detail"], "Session not found");
 
     // ── POST 422: a missing `action` field. Body validation precedes the
     //    404, so even on a missing session this is the 422, not the 404. ──
-    arms.compare("POST", &link_path(S_MISSING), Some("{}"))
+    let (status, _) = arms
+        .compare("POST", &link_path(S_MISSING), Some("{}"))
         .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
 }

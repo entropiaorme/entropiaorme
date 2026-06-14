@@ -980,6 +980,155 @@ async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Respons
         .await
 }
 
+// ── Tracking session-edit write adapters ──────────────────────────────
+
+/// The `{session_id}` of a `/api/tracking/session/{session_id}/<suffix>`
+/// edit route. A percent-encoded slash de-matches (the framework 404),
+/// exactly as the single-segment string path-id rule elsewhere.
+fn session_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
+    path.strip_prefix("/api/tracking/session/")
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .unwrap_or_default()
+}
+
+/// POST /api/tracking/session/{session_id}/rename-mob
+async fn tracking_rename_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let session_id = match string_path_id(session_id_segment(req.uri().path(), "/rename-mob")) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    // RenameMobRequest declaration order: fromMobName, then toMobName.
+    let from_mob = body::required_str(&mut v, &object, "fromMobName");
+    let to_mob = body::required_str(&mut v, &object, "toMobName");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .tracking_rename_mob(
+            &session_id,
+            &from_mob.expect("validated"),
+            &to_mob.expect("validated"),
+        )
+        .await
+}
+
+/// POST /api/tracking/session/{session_id}/restore-mob
+async fn tracking_restore_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let session_id = match string_path_id(session_id_segment(req.uri().path(), "/restore-mob")) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let current_mob = body::required_str(&mut v, &object, "currentMobName");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .tracking_restore_mob(&session_id, &current_mob.expect("validated"))
+        .await
+}
+
+/// The `{session_id}` and `{item_name:path}` of a loot-flip route. The
+/// item segment is a FastAPI `:path` converter: it CONTAINS slashes
+/// (raw or percent-encoded), so a decoded slash is KEPT rather than
+/// turned into a 404 (the single-segment rule). The session id stays a
+/// single segment, so its own decoded slash still de-matches.
+fn loot_flip_segments(path: &str, suffix: &str) -> Option<(String, String)> {
+    let rest = path.strip_prefix("/api/tracking/session/")?;
+    let rest = rest.strip_suffix(suffix)?;
+    // rest is `{session_id}/loot-item/{item_name:path}`; the session id
+    // is the first segment, the item name is everything after the
+    // `/loot-item/` marker (slashes included).
+    let (session_raw, after) = rest.split_once('/')?;
+    let item_raw = after.strip_prefix("loot-item/")?;
+    let session_id = decode_path_segment(session_raw);
+    if session_id.contains('/') {
+        return None;
+    }
+    Some((session_id, decode_path_segment(item_raw)))
+}
+
+/// POST /api/tracking/session/{session_id}/loot-item/{item_name:path}/{deactivate|activate}
+///
+/// One adapter for both flip directions: axum's catch-all (`{*rest}`)
+/// must be terminal, so the two suffix-distinguished FastAPI routes land
+/// on a single wildcard registration here, dispatched on the trailing
+/// `/deactivate` or `/activate` segment. A tail matching neither suffix
+/// is the framework 404 (no FastAPI route would have matched it either).
+async fn tracking_loot_item_flip(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let path = req.uri().path();
+    if let Some((session_id, item_name)) = loot_flip_segments(path, "/deactivate") {
+        hydration
+            .tracking_deactivate_loot_item(&session_id, &item_name)
+            .await
+    } else if let Some((session_id, item_name)) = loot_flip_segments(path, "/activate") {
+        hydration
+            .tracking_activate_loot_item(&session_id, &item_name)
+            .await
+    } else {
+        router_not_found()
+    }
+}
+
+/// POST /api/tracking/session/{session_id}/armour-cost
+async fn tracking_armour_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let session_id = match string_path_id(session_id_segment(req.uri().path(), "/armour-cost")) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let cost = body::required_f64(&mut v, &object, "cost");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .tracking_set_armour_cost(&session_id, cost.expect("validated"))
+        .await
+}
+
 // ── Analytics ledger / preset / inventory write adapters ──
 
 /// Decode a string path-id; a percent-encoded slash de-matches the route
@@ -1750,6 +1899,38 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/tracking/tag-suggestions",
                 tracking_tag_suggestions,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/rename-mob",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/rename-mob",
+                tracking_rename_mob,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/restore-mob",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/restore-mob",
+                tracking_restore_mob,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/loot-item/{*item_action}",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/loot-item/{*item_action}",
+                tracking_loot_item_flip,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/armour-cost",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/armour-cost",
+                tracking_armour_cost,
             ),
         )
         .route(

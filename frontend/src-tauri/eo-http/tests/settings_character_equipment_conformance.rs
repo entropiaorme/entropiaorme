@@ -18,7 +18,7 @@
 //!   cargo test -p eo-http --features cross-language \n//!     --test settings_character_equipment_conformance
 #![cfg(feature = "cross-language")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -266,7 +266,7 @@ impl Arms {
     }
 }
 
-async fn snapshot_of(db_path: &PathBuf) -> String {
+async fn snapshot_of(db_path: &Path) -> String {
     let db = eo_services::db::Db::open(db_path)
         .await
         .expect("open db for snapshot");

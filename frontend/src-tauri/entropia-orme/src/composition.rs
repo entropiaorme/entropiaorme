@@ -253,7 +253,7 @@ fn compose_producers(
         db.pool().clone(),
         runtime.clone(),
         clock.clone(),
-        build_providers(db, data_dir, &config),
+        build_providers(db, data_dir, &config, runtime.clone()),
     )?;
 
     // Start the tail thread last, after every subscriber is registered,
@@ -310,17 +310,23 @@ fn quest_reward_filter_adapter(
 /// config-derived providers read the live config read-through so they
 /// follow sidecar writes. `enhancer_tt_lookup` is intentionally absent:
 /// the Rust tracker never reads it (see `tracker.rs`).
-fn build_providers(db: Db, data_dir: &std::path::Path, initial_config: &AppConfig) -> Providers {
+fn build_providers(
+    db: Db,
+    data_dir: &std::path::Path,
+    initial_config: &AppConfig,
+    runtime: tokio::runtime::Handle,
+) -> Providers {
     let data_dir = data_dir.to_path_buf();
 
     // equipment_profile_lookup: the weapon row whose name contains the
     // tool fragment, as parsed JSON properties.
     let profile_db = db.clone();
+    let profile_runtime = runtime.clone();
     let equipment_profile_lookup: Arc<dyn Fn(&str) -> EquipmentProfile + Send + Sync> =
         Arc::new(move |tool_name: &str| {
             let tool_name = tool_name.to_string();
             let db = profile_db.clone();
-            let json = block_on_pool(async move {
+            let json = block_on_pool(&profile_runtime, async move {
                 db.weapon_properties_by_name_fragment(&tool_name)
                     .await
                     .ok()
@@ -397,6 +403,7 @@ fn build_providers(db: Db, data_dir: &std::path::Path, initial_config: &AppConfi
     // and yields just the data, as the backend does.
     let resolver_db = db;
     let resolver_dir = data_dir;
+    let resolver_runtime = runtime;
     let trifecta_resolver: Arc<dyn Fn() -> Option<Map<String, Value>> + Send + Sync> =
         Arc::new(move || {
             let config = load_config_readonly(&resolver_dir).ok()?;
@@ -406,7 +413,7 @@ fn build_providers(db: Db, data_dir: &std::path::Path, initial_config: &AppConfi
                 heal_id: p.heal_id,
             });
             let db = resolver_db.clone();
-            block_on_pool(async move {
+            block_on_pool(&resolver_runtime, async move {
                 describe_trifecta(&db, preset.as_ref())
                     .await
                     .ok()
@@ -433,8 +440,13 @@ fn build_providers(db: Db, data_dir: &std::path::Path, initial_config: &AppConfi
 /// from either calling context: a runtime worker thread (an HTTP-driven
 /// reload) yields its slot, while a plain producer thread parks. The
 /// tracker's own `block_on` uses this exact dual shape.
-fn block_on_pool<F: std::future::Future>(future: F) -> F::Output {
-    let handle = tokio::runtime::Handle::current();
+fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future: F) -> F::Output {
+    // Never `Handle::current()`: the provider callbacks run on the
+    // chat-log watcher's plain OS thread (no current runtime), so the
+    // handle is the one captured at composition time. A runtime worker
+    // thread (an HTTP-driven reload) yields its slot via `block_in_place`;
+    // a plain producer thread parks directly. This mirrors the tracker's
+    // own `block_on` and the quest-reward-filter adapter.
     if tokio::runtime::Handle::try_current().is_ok() {
         tokio::task::block_in_place(|| handle.block_on(future))
     } else {
@@ -751,7 +763,12 @@ mod tests {
             }),
         );
         let config = load_config_readonly(&data_dir).expect("config reads");
-        let providers = build_providers(Db::from_pool(pool.clone()), &data_dir, &config);
+        let providers = build_providers(
+            Db::from_pool(pool.clone()),
+            &data_dir,
+            &config,
+            tokio::runtime::Handle::current(),
+        );
 
         // equipment_profile_lookup: the parsed property object, by fragment.
         let profile = (providers.equipment_profile_lookup)("Korss")
@@ -802,6 +819,64 @@ mod tests {
         assert!(
             (providers.weapon_attribution_trifecta)(),
             "trifecta attribution is on when hotbar hooks are disabled"
+        );
+    }
+
+    /// REGRESSION: the equipment provider runs on the chat-log watcher's
+    /// plain OS thread, which has NO current tokio runtime (the bus
+    /// dispatches synchronously on the watcher's tail thread). The
+    /// provider's `block_on_pool` must therefore use the runtime handle
+    /// captured at composition time, never `Handle::current()` (which
+    /// panics off-runtime). Build the providers inside the runtime, then
+    /// invoke the lookup from a plain `std::thread` with no runtime
+    /// context and assert it resolves rather than panicking.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn equipment_provider_resolves_from_a_non_runtime_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        let db = Db::open_adopted(&data_dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let pool = db.pool().clone();
+        let props = serde_json::json!({
+            "weapon_entity": {"economy": {"decay": 0.0, "ammo_burn": 25000}},
+            "weapon_markup": 100,
+        });
+        seed_weapon(
+            &pool,
+            1,
+            "Korss H400 (L)",
+            &serde_json::to_string(&props).unwrap(),
+        )
+        .await;
+        write_settings(&data_dir, &serde_json::json!({}));
+        let config = load_config_readonly(&data_dir).expect("config reads");
+        let providers = build_providers(
+            Db::from_pool(pool),
+            &data_dir,
+            &config,
+            tokio::runtime::Handle::current(),
+        );
+
+        // Invoke the lookup AND the derived cost from a plain OS thread
+        // (no current runtime), exactly the watcher tail-thread context.
+        let profile_lookup = providers.equipment_profile_lookup.clone();
+        let cost_lookup = providers.equipment_cost_lookup.clone();
+        let outcome = std::thread::spawn(move || {
+            let resolved = profile_lookup("Korss").is_some();
+            let cost = cost_lookup("Korss");
+            (resolved, cost)
+        })
+        .join()
+        .expect("the provider must not panic off-runtime");
+        assert!(
+            outcome.0,
+            "equipment_profile_lookup resolves from a non-runtime thread"
+        );
+        assert!(
+            (outcome.1 - 2.5).abs() < 1e-9,
+            "equipment_cost_lookup resolves off-runtime to 2.5, got {}",
+            outcome.1
         );
     }
 

@@ -103,12 +103,12 @@ impl HydrationState {
         let mut updates = Map::new();
         updates.insert("overlay_x".into(), json!(x));
         updates.insert("overlay_y".into(), json!(y));
-        if config
-            .lock()
-            .expect("config lock never poisoned")
-            .update(&updates)
-            .is_err()
-        {
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task.
+            return internal_error();
+        };
+        if guard.update(&updates).is_err() {
             return internal_error();
         }
         plain_json_response(&json!({ "ok": true }))

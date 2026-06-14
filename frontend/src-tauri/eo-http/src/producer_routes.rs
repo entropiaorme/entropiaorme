@@ -199,7 +199,11 @@ impl HydrationState {
         config: &Arc<Mutex<ConfigService>>,
         tracker: &Arc<HuntTracker>,
     ) -> Response<Body> {
-        let mut guard = config.lock().expect("config lock never poisoned");
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
         if tracker.is_tracking() && tracker.is_session_tag_mode() {
             let released = tracker.release_current_mob();
             if guard.update(&clear_tag()).is_err() {
@@ -246,7 +250,11 @@ impl HydrationState {
         species: &str,
         maturity: &str,
     ) -> Response<Body> {
-        let mut guard = config.lock().expect("config lock never poisoned");
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
         let idle_tag_mode = !tracker.is_tracking() && guard.get().mob_tracking_mode == "tag";
         if (tracker.is_tracking() && tracker.is_session_tag_mode()) || idle_tag_mode {
             return error_response(
@@ -301,7 +309,11 @@ impl HydrationState {
         tag: &str,
         tainted: bool,
     ) -> Response<Body> {
-        let mut guard = config.lock().expect("config lock never poisoned");
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
         if tracker.is_tracking() {
             if !tracker.is_session_tag_mode() {
                 return error_response(

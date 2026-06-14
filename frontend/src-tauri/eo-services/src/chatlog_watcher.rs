@@ -319,7 +319,19 @@ struct TickBuffer {
 }
 
 fn process_line(shared: &Shared, tick: &mut TickBuffer, line: &str) {
+    // Parse and buffer the line first, then count it as seen. The
+    // `lines_seen` bump MUST be last: it is the (test-only) drain barrier's
+    // signal, and `pending_tick` is set inside `process_parsed_line` before
+    // it. Counting the line before its events were buffered left a window
+    // where a drain waiter saw `lines_seen >= n` with `pending_tick` still
+    // false and returned before the line's events were dispatchable: an
+    // intermittent "drained but event not yet published" flake under load.
+    // Every line (event-bearing or skipped) still counts exactly once.
+    process_parsed_line(shared, tick, line);
     shared.lines_seen_total.fetch_add(1, Ordering::SeqCst);
+}
+
+fn process_parsed_line(shared: &Shared, tick: &mut TickBuffer, line: &str) {
     if can_skip_idle_combat_line(shared, line) {
         return;
     }

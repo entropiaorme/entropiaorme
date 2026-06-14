@@ -62,7 +62,9 @@
     "targets": ["nsis"],
     "externalBin": ["binaries/entropiaorme-backend"],
     "resources": {
-      "../../../backend/data/snapshot/": "snapshot/"
+      "../../../backend/data/snapshot/": "snapshot/",
+      "../../../backend/assets/models/": "models/",
+      "resources/ort/*.dll": "ort/"
     },
     "license": "MIT",
     "licenseFile": "installer/LICENSE.txt",

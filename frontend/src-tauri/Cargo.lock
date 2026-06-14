@@ -1064,10 +1064,12 @@ dependencies = [
 name = "entropia-orme"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "eo-http",
  "eo-services",
  "serde",
  "serde_json",
+ "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",

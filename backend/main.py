@@ -180,6 +180,25 @@ def _build_test_mode() -> TestModeConfig:
     return TestModeConfig.from_env()
 
 
+def _producers_idle() -> bool:
+    """Whether this process should stand its event producers down.
+
+    When the native substrate owns production, the sidecar must not also
+    run its producers: two chat-log tailers writing the same database and
+    two OS keyboard hooks would double-count and conflict. Setting
+    ``ENTROPIAORME_PRODUCERS_IDLE`` to a truthy value keeps every proxied
+    HTTP route serving while constructing no live producer machinery (no
+    chat-log tail thread, no OS key hooks, no background scan or OCR). It
+    touches only producer startup, never any HTTP or database-state
+    response shape, so it is golden-neutral by construction. Same
+    defence-in-depth posture as the test-mode overlay: a frozen build
+    still honours it, because the substrate that sets it is the frozen
+    app's own shell.
+    """
+    raw = os.environ.get("ENTROPIAORME_PRODUCERS_IDLE", "").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
 def _constant_factory(instance: object) -> Callable[[], object]:
     """A capturer factory returning one shared pre-built instance.
 
@@ -258,6 +277,17 @@ async def lifespan(app: FastAPI):
     # frozen builds). Resolved once here; every seam selection below is a
     # one-shot wiring decision, never a hot-path branch.
     test_mode = _build_test_mode()
+
+    # Producer-idle overlay: when the native substrate owns production, the
+    # sidecar constructs its services (so every proxied route still serves)
+    # but starts no live producer machinery. Resolved once here; each
+    # producer-start site below is a one-shot wiring decision. Test mode and
+    # idle mode are independent: test mode redirects the seams, idle mode
+    # declines to start them.
+    producers_idle = _producers_idle()
+    if producers_idle:
+        log.info("Producers idle: the sidecar serves routes but starts no producers")
+
     events_sink: EventsJsonlSink | None = None
     if test_mode.enabled:
         log.info(
@@ -495,9 +525,12 @@ async def lifespan(app: FastAPI):
     # Test mode swaps in an injectable mock source (one per listener,
     # preserving the production shape) so a replay process never installs a
     # real OS keyboard hook.
+    # Idle mode swaps in the mock source too, so no real OS keyboard hook is
+    # installed when the substrate owns input; the listener is constructed
+    # either way so the routes that read its state still serve.
     hotbar_keystroke_source: KeystrokeSource
     spacebar_keystroke_source: KeystrokeSource
-    if test_mode.enabled:
+    if test_mode.enabled or producers_idle:
         hotbar_keystroke_source = MockKeystrokeSource()
     else:
         hotbar_keystroke_source = PynputKeystrokeSource(
@@ -508,7 +541,11 @@ async def lifespan(app: FastAPI):
         keystroke_source=hotbar_keystroke_source,
         hotbar_resolver=_hotbar_resolver,
     )
-    hotbar_listener.apply_config(hotbar_hooks_enabled=config.hotbar_hooks_enabled)
+    # Idle mode keeps the hook latent regardless of the stored toggle; the
+    # substrate's listener owns the hotbar instead.
+    hotbar_listener.apply_config(
+        hotbar_hooks_enabled=config.hotbar_hooks_enabled and not producers_idle
+    )
 
     repair_ocr = RepairOcrService(
         config_service, capturer_factory=repair_capturer_factory
@@ -518,7 +555,7 @@ async def lifespan(app: FastAPI):
     # the space key only; fires capture on the active skill scan when the user
     # opts in via the scan-overlay toggle. Off until the frontend explicitly
     # enables it.
-    if test_mode.enabled:
+    if test_mode.enabled or producers_idle:
         spacebar_keystroke_source = MockKeystrokeSource()
     else:
         spacebar_keystroke_source = PynputKeystrokeSource(
@@ -564,8 +601,11 @@ async def lifespan(app: FastAPI):
     )
     set_services(services)
 
-    # Start event producers
-    chatlog_watcher.start()
+    # Start event producers. Idle mode declines: the substrate's own
+    # chat-log tailer owns production, so the sidecar must not tail the same
+    # log into the same database.
+    if not producers_idle:
+        chatlog_watcher.start()
 
     yield
 

@@ -71,7 +71,7 @@ use eo_services::clock::{Clock, RealClock};
 use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
 use eo_services::cost_engine::cost_per_shot_from_props;
 use eo_services::db::{AdoptError, Db};
-use eo_services::event_bus::EventBus;
+use eo_services::event_bus::{EventBus, Topic};
 use eo_services::game_data_store::GameDataStore;
 pub use eo_services::ocr_engine::OcrEngine;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
@@ -79,6 +79,8 @@ use eo_services::quests::QuestService;
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::tracker::{EquipmentProfile, HuntTracker, Providers};
 use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
+use eo_wire::domain_events::DomainEvent;
+use eo_wire::sse::SseHub;
 use serde_json::{Map, Value};
 
 /// The repository root, compiled into dev builds (the manifest dir is
@@ -239,6 +241,12 @@ fn init_ort_runtime(resource_dir: Option<&PathBuf>) {
 pub struct ProducerState {
     watcher: ChatlogWatcher,
     tracker: Arc<HuntTracker>,
+    // The SSE fan-out hub. The bus bridge (subscribed below) holds clones
+    // of this through its subscriber closures, and the HTTP `/api/events`
+    // handler serves over a clone handed off before this state moves into
+    // the Tauri holder, so the publisher side and the stream side share
+    // one hub.
+    sse_hub: Arc<SseHub>,
     // Held to keep their permanent bus subscriptions alive for the
     // substrate's lifetime; never read directly here. The bus itself
     // stays alive through the strong handles these (and the watcher and
@@ -279,6 +287,15 @@ impl ProducerState {
     /// teardown share one tracker.
     pub fn tracker_handle(&self) -> Arc<HuntTracker> {
         self.tracker.clone()
+    }
+
+    /// A handle to the composed SSE hub. The `/api/events` stream serves
+    /// over this same `Arc<SseHub>`: the composition handoff clones it into
+    /// the HTTP app state before this `ProducerState` moves into the
+    /// Tauri-managed producer holder, so the stream and the producer-bus
+    /// bridge share one hub.
+    pub fn sse_hub_handle(&self) -> Arc<SseHub> {
+        self.sse_hub.clone()
     }
 }
 
@@ -470,6 +487,16 @@ fn compose_producers(
     let runtime = tokio::runtime::Handle::current();
     let bus = Arc::new(EventBus::new());
 
+    // The SSE bridge: forward the frontend-facing domain topics off the
+    // in-process bus to the `/api/events` fan-out hub, mirroring the
+    // sidecar's `EventStreamHub`. Subscribed here, before the watcher's
+    // tail thread starts, so an event published the instant a producer
+    // ticks is never raced away from a connected stream. The hub is held
+    // in `ProducerState` (and through these subscriber closures), and a
+    // clone is handed to the HTTP layer at composition.
+    let sse_hub = Arc::new(SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
+    subscribe_sse_bridge(&bus, &sse_hub);
+
     // The config read-through: producers read the live config the same
     // way the read surface does (`settings.json` stays sidecar-written
     // until a later cutover), so a wrong default never silently
@@ -505,9 +532,32 @@ fn compose_producers(
     Ok(ProducerState {
         watcher,
         tracker,
+        sse_hub,
         _skill_tracker: skill_tracker,
         _quests: quests,
     })
+}
+
+/// Bridge the producer bus's frontend-facing domain topics onto the SSE
+/// fan-out hub, mirroring the sidecar's `EventStreamHub`: the same two
+/// topics, the same drop-non-domain-payload contract. Each publish carries
+/// the full `DomainEvent` serialised to a `Value` (see the tracker and
+/// skill-scan publish sites); the bridge deserialises it back and hands the
+/// typed envelope to the hub, which assigns the shared sequence number and
+/// frames it. A payload that is not a `DomainEvent` on a domain topic would
+/// be an upstream programming error, so it is dropped rather than forwarded
+/// as an untyped frame. The subscriptions live in the bus (held alive by
+/// the producer spine) and capture hub clones, so they need no separate
+/// registration store; they drop with the bus when the spine tears down.
+fn subscribe_sse_bridge(bus: &EventBus, hub: &Arc<SseHub>) {
+    for topic in [Topic::TrackingSessionUpdated, Topic::ScanStatusChanged] {
+        let hub = hub.clone();
+        bus.subscribe(topic, move |value| {
+            if let Ok(event) = serde_json::from_value::<DomainEvent>(value.clone()) {
+                hub.dispatch(&event);
+            }
+        });
+    }
 }
 
 /// Adapt the quest service's async reward filter to the watcher's
@@ -1373,5 +1423,84 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(final_count, 1, "the write committed");
+    }
+
+    #[tokio::test]
+    async fn sse_bridge_forwards_domain_events_to_a_hub_client() {
+        use eo_wire::domain_events::{
+            ScanPhase, ScanStatusChanged, ScanStatusChangedPayload, ScanStatusChangedTag,
+            TrackingReason, TrackingSessionUpdated, TrackingSessionUpdatedPayload,
+            TrackingSessionUpdatedTag, TrackingStatus,
+        };
+
+        let bus = EventBus::new();
+        let hub = Arc::new(SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
+        subscribe_sse_bridge(&bus, &hub);
+        let client = hub.register();
+
+        // A tracking event published on the bus (the full DomainEvent
+        // serialised, exactly as the tracker publishes it) is reframed by
+        // the hub and delivered to the client.
+        let tracking = DomainEvent::TrackingSessionUpdated(TrackingSessionUpdated {
+            topic: TrackingSessionUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-01-01T00:00:00Z".to_string(),
+            payload: TrackingSessionUpdatedPayload {
+                session_id: Some("s1".to_string()),
+                status: TrackingStatus::Active,
+                reason: TrackingReason::Started,
+            },
+        });
+        bus.publish(
+            Topic::TrackingSessionUpdated,
+            &serde_json::to_value(&tracking).unwrap(),
+        );
+        assert_eq!(
+            client.next_frame().await,
+            format!(
+                "id: 1\nevent: tracking.session.updated\ndata: {}\n\n",
+                tracking.to_wire_json()
+            )
+        );
+
+        // The other bridged topic is delivered too, sharing the hub's
+        // process-monotonic sequence.
+        let scan = DomainEvent::ScanStatusChanged(ScanStatusChanged {
+            topic: ScanStatusChangedTag,
+            event_version: 1,
+            occurred_at: "2026-01-01T00:00:01Z".to_string(),
+            payload: ScanStatusChangedPayload {
+                phase: ScanPhase::Capturing,
+            },
+        });
+        bus.publish(
+            Topic::ScanStatusChanged,
+            &serde_json::to_value(&scan).unwrap(),
+        );
+        assert_eq!(
+            client.next_frame().await,
+            format!(
+                "id: 2\nevent: scan.status.changed\ndata: {}\n\n",
+                scan.to_wire_json()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn sse_bridge_drops_a_non_domain_payload() {
+        let bus = EventBus::new();
+        let hub = Arc::new(SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
+        subscribe_sse_bridge(&bus, &hub);
+        let client = hub.register();
+
+        // A payload that does not deserialise to a DomainEvent on a domain
+        // topic is an upstream programming error: the bridge drops it rather
+        // than forward an untyped frame, so no frame ever reaches the client.
+        bus.publish(
+            Topic::TrackingSessionUpdated,
+            &serde_json::json!({"unexpected": "shape"}),
+        );
+        let delivered = tokio::time::timeout(Duration::from_millis(100), client.next_frame()).await;
+        assert!(delivered.is_err(), "a non-domain payload yields no frame");
     }
 }

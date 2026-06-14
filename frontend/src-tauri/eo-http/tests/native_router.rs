@@ -2972,3 +2972,28 @@ async fn tracking_snapshot_serves_idle_and_active() {
         ]
     );
 }
+
+/// The cancel / undo / reject verbs respond with their service bodies (not an
+/// empty default): cancel from idle returns the resting status, undo from idle
+/// the no-active-scan refusal, reject the no-pending refusal. Plain 200s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scan_skills_cancel_undo_reject_respond() {
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+
+    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/cancel", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    assert_eq!(body_json(&body)["phase"], "idle");
+    assert_eq!(body_json(&body)["captured_pages"], 0);
+
+    let (status, _, body) = send_json(port, "POST", "/api/scan/skills/undo", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        body_json(&body)["error"],
+        "No active scan: call start first"
+    );
+
+    let (status, _, body) = send_json(port, "POST", "/api/scan/skills/reject", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body)["error"], "No pending result to reject");
+}

@@ -434,6 +434,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hotbar_equipment_row_reads_name_type_and_properties_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        db.insert_equipment_for_tests(7, "Healer", "healing", r#"{"tool_entity":{"x":1}}"#)
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(8, "Opalo", "weapon", r#"{"weapon_entity":{}}"#)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.hotbar_equipment_row(7).await.unwrap(),
+            Some((
+                "Healer".to_string(),
+                "healing".to_string(),
+                r#"{"tool_entity":{"x":1}}"#.to_string(),
+            )),
+        );
+        assert_eq!(
+            db.hotbar_equipment_row(8).await.unwrap(),
+            Some((
+                "Opalo".to_string(),
+                "weapon".to_string(),
+                r#"{"weapon_entity":{}}"#.to_string(),
+            )),
+        );
+        // An absent id yields None.
+        assert_eq!(db.hotbar_equipment_row(999).await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn weapon_profile_lookup_matches_on_a_fragment_and_escapes_wildcards() {
         let dir = tempfile::tempdir().unwrap();
         let db = fresh_db(dir.path()).await;

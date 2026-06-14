@@ -58,4 +58,10 @@ exclude_re = [
     # it has no observable behaviour a test could assert (its only effect is
     # latency). Deleting its body is undetectable by construction.
     "ocr_engine\\.rs.*replace OcrEngine::warm_up with \\(\\)",
+    # The spacebar listener's capturing gate is a thread-spawn optimization:
+    # flipping it to `true` only spawns an off-thread `capture_current_page`,
+    # which the scan itself rejects (its own active-state guard) when not
+    # capturing, with no observable effect (no page captured, no status
+    # published). Equivalent to the gated form for any assertion.
+    "spacebar_capture_listener\\.rs.*replace SpacebarCaptureListener::is_capturing -> bool with true",
 ]

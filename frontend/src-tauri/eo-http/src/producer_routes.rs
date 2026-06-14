@@ -692,3 +692,152 @@ fn mob_display(species: &str, maturity: &str) -> Value {
         Value::String(format!("{maturity} {species}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eo_services::config_service::{AppConfig, TrifectaPresetConfig};
+
+    #[test]
+    fn notable_event_category_keys_on_the_prefix() {
+        assert_eq!(notable_event_category("quest_started"), "quest");
+        assert_eq!(notable_event_category("hof_kill"), "hof");
+        assert_eq!(notable_event_category("global_item"), "global");
+        assert_eq!(notable_event_category("anything_else"), "global");
+    }
+
+    #[test]
+    fn notable_event_label_curates_the_known_types_then_title_cases() {
+        assert_eq!(notable_event_label("global_kill"), "Global Kill");
+        assert_eq!(notable_event_label("global_item"), "Global Item");
+        assert_eq!(notable_event_label("hof_kill"), "HoF Kill");
+        assert_eq!(notable_event_label("hof_item"), "HoF Item");
+        assert_eq!(notable_event_label("quest_started"), "Quest Started");
+        assert_eq!(notable_event_label("quest_completed"), "Quest Completed");
+        // Unknown types fall back to the category title-case (HoF kept).
+        assert_eq!(notable_event_label("hof_unknown"), "HoF");
+        assert_eq!(notable_event_label("global_unknown"), "Global");
+        assert_eq!(notable_event_label("quest_unknown"), "Quest");
+    }
+
+    #[test]
+    fn notable_event_description_carries_the_value_except_for_quests() {
+        assert_eq!(
+            notable_event_description("global_kill", "Atrox Old", 12.5),
+            "Global Kill: Atrox Old (12.50 PED)"
+        );
+        assert_eq!(
+            notable_event_description("quest_completed", "Sweat Collector", 0.0),
+            "Quest Completed: Sweat Collector"
+        );
+    }
+
+    #[test]
+    fn capitalize_upper_cases_the_lead() {
+        assert_eq!(capitalize("global"), "Global");
+        assert_eq!(capitalize("quest"), "Quest");
+        assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn ts_to_iso_renders_the_utc_string_or_null() {
+        assert_eq!(ts_to_iso(None), Value::Null);
+        let rendered = ts_to_iso(Some(1_780_000_000.0));
+        let text = rendered.as_str().expect("a string instant");
+        assert!(text.contains('T'), "got {text}");
+        assert!(text.ends_with("+00:00"), "got {text}");
+    }
+
+    #[test]
+    fn configured_manual_label_reports_tag_then_manual() {
+        // Tag mode with a tag set.
+        let config = AppConfig {
+            mob_tracking_mode: "tag".into(),
+            mob_tracking_tag: "Boss Hunt".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            configured_manual_label(&config),
+            (json!("Boss Hunt"), json!("tag"))
+        );
+        // Tag mode, blank tag -> nulls.
+        let config = AppConfig {
+            mob_tracking_mode: "tag".into(),
+            mob_tracking_tag: "  ".into(),
+            ..Default::default()
+        };
+        assert_eq!(configured_manual_label(&config), (Value::Null, Value::Null));
+
+        // Manual (non-tag) mode with a species + maturity.
+        let config = AppConfig {
+            mob_tracking_mode: "mob".into(),
+            manual_mob_species: "Atrox".into(),
+            manual_mob_maturity: "Old".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            configured_manual_label(&config),
+            (json!("Old Atrox"), json!("manual"))
+        );
+        // No maturity -> the bare species.
+        let config = AppConfig {
+            mob_tracking_mode: "mob".into(),
+            manual_mob_species: "Atrox".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            configured_manual_label(&config),
+            (json!("Atrox"), json!("manual"))
+        );
+        // No species -> nulls.
+        let config = AppConfig {
+            mob_tracking_mode: "mob".into(),
+            ..Default::default()
+        };
+        assert_eq!(configured_manual_label(&config), (Value::Null, Value::Null));
+    }
+
+    #[tokio::test]
+    async fn trifecta_summary_resolves_bound_equipment_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = eo_services::db::Db::open(&dir.path().join("entropia_orme.db"))
+            .await
+            .unwrap();
+        // A bound small weapon; the big-weapon and heal slots stay unbound.
+        sqlx::query(
+            "INSERT INTO equipment_library (id, name, item_type, properties_json) \
+             VALUES (5, 'Opalo', 'weapon', '{}')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let game_data = std::sync::Arc::new(
+            eo_services::game_data_store::GameDataStore::new(dir.path()).unwrap(),
+        );
+        let clock: std::sync::Arc<dyn eo_services::clock::Clock> =
+            std::sync::Arc::new(eo_services::clock::MockClock::new(None, 0.0));
+        let hydration = HydrationState::new(db, game_data, clock, dir.path().to_path_buf());
+
+        let config = AppConfig {
+            trifecta_presets: vec![TrifectaPresetConfig {
+                id: "p1".into(),
+                name: "Preset One".into(),
+                small_weapon_id: Some(5),
+                big_weapon_id: None,
+                heal_id: None,
+            }],
+            active_trifecta_preset_id: Some("p1".into()),
+            ..Default::default()
+        };
+
+        let summary = hydration
+            .trifecta_attribution_summary(&config)
+            .await
+            .expect("the summary resolves");
+        assert_eq!(summary["activePresetId"], "p1");
+        assert_eq!(summary["presetName"], "Preset One");
+        assert_eq!(summary["smallWeapon"], "Opalo");
+        assert_eq!(summary["bigWeapon"], Value::Null);
+        assert_eq!(summary["healTool"], Value::Null);
+    }
+}

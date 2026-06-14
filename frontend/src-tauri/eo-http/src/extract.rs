@@ -175,6 +175,18 @@ impl Validation {
         }));
     }
 
+    /// A parameter that failed boolean parsing; `raw` re-renders the
+    /// request text exactly as received (the coercion-class failure the
+    /// backend answers for an uninterpretable boolean string).
+    pub fn bool_parsing(&mut self, loc: &str, name: &str, raw: &str) {
+        self.push_value(json!({
+            "type": "bool_parsing",
+            "loc": [loc, name],
+            "msg": "Input should be a valid boolean, unable to interpret input",
+            "input": raw,
+        }));
+    }
+
     /// A literal-set parameter holding a value outside its set; the
     /// message and ctx render the allowed values as the backend does
     /// (single-quoted, "or"-joined).
@@ -420,6 +432,30 @@ pub fn opt_query_int(
                 None
             }
         },
+    }
+}
+
+/// A required boolean query parameter (`enabled: bool`): absent is the
+/// framework's `missing`, an uninterpretable value is `bool_parsing`, and the
+/// lax string set (case-insensitive `true/t/yes/y/on/1` and
+/// `false/f/no/n/off/0`) is accepted, matching the body bool coercion over the
+/// string a boolean query parameter always arrives as.
+pub fn require_query_bool(
+    validation: &mut Validation,
+    query: &QueryString,
+    name: &str,
+) -> Option<bool> {
+    let Some(raw) = query.last(name) else {
+        validation.missing("query", name);
+        return None;
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "true" | "t" | "yes" | "y" | "on" | "1" => Some(true),
+        "false" | "f" | "no" | "n" | "off" | "0" => Some(false),
+        _ => {
+            validation.bool_parsing("query", name, raw);
+            None
+        }
     }
 }
 

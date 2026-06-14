@@ -1901,10 +1901,12 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
 
     use eo_services::clock::Clock;
     use eo_services::config_service::ConfigService;
+    use eo_services::keystroke_source::MockKeystrokeSource;
     use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
     use eo_services::skill_panel::BgrImage;
     use eo_services::skill_scan_manual::{ScanProviders, SkillScanManual};
     use eo_services::skill_tracker::SkillTracker;
+    use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
     use eo_services::tracker::{naive_to_epoch, HuntTracker, Providers};
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1999,6 +2001,12 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
         }),
         read_text: Arc::new(|_| Some(("2,20 PED".to_string(), 0.97))),
     }));
+    // The spacebar-capture listener over a mock source: the toggle route
+    // drives its enabled state, which the mock source's start/stop honour.
+    let spacebar = SpacebarCaptureListener::new(
+        skill_scan.clone(),
+        Some(Arc::new(MockKeystrokeSource::new())),
+    );
 
     let hydration = Arc::new(HydrationState::new(
         eo_services::db::Db::from_pool(db.pool().clone()),
@@ -2018,6 +2026,7 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
             .with_config_service(config_service)
             .with_skill_scan(skill_scan)
             .with_repair_ocr(repair_ocr)
+            .with_spacebar_listener(spacebar)
             .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
@@ -2775,4 +2784,48 @@ async fn repair_scan_serves_and_gates_on_the_config_flag() {
         send_json(port, "POST", "/api/tracking/session/abc/repair-scan", "").await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body_json(&body)["detail"], "Repair OCR is disabled");
+}
+
+/// The spacebar-capture toggle route serves its acknowledgement and validates
+/// the required `enabled` boolean the framework's way (bool_parsing on an
+/// uninterpretable value, missing when absent).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spacebar_capture_toggle_serves_and_validates() {
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+
+    // enable: a plain 200 (POST), {ok, enabled} in model order.
+    let (status, headers, body) =
+        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=true", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    let enabled = body_json(&body);
+    assert_eq!(enabled["ok"], true);
+    assert_eq!(enabled["enabled"], true);
+    let keys: Vec<&str> = enabled
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, ["ok", "enabled"]);
+
+    // disable.
+    let (_, _, body) =
+        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=false", "").await;
+    assert_eq!(body_json(&body)["enabled"], false);
+
+    // an uninterpretable value: 422 bool_parsing on the query param.
+    let (status, _, body) =
+        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=maybe", "").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(&body)["detail"][0]["type"], "bool_parsing");
+    assert_eq!(
+        body_json(&body)["detail"][0]["loc"],
+        serde_json::json!(["query", "enabled"])
+    );
+
+    // absent: the framework's 422 missing.
+    let (status, _, body) = send_json(port, "POST", "/api/scan/spacebar-capture", "").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(&body)["detail"][0]["type"], "missing");
 }

@@ -71,11 +71,13 @@ use eo_services::clock::{Clock, RealClock};
 use eo_services::config_service::{
     active_trifecta_preset, load_config_readonly, AppConfig, ConfigService,
 };
-use eo_services::cost_engine::cost_per_shot_from_props;
+use eo_services::cost_engine::{cost_per_shot_from_props, heal_cost_per_use, heal_reload_seconds};
 use eo_services::db::{AdoptError, Db};
 use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::game_data_store::GameDataStore;
+use eo_services::hotbar_listener::{HotbarListener, HotbarResolver, HOTBAR_SLOT_KEYS};
+use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
 use eo_services::ocr_engine::load_bgr_png;
 pub use eo_services::ocr_engine::OcrEngine;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
@@ -85,8 +87,10 @@ use eo_services::scan_completion::{complete_skill_scan, hydrate_skill_scan_state
 use eo_services::scan_presets::ScanPresets;
 use eo_services::screen_capture::{capture_region_bgr, capture_region_png};
 use eo_services::skill_panel::{read_skill_panel, BgrImage};
-use eo_services::skill_scan_manual::{ScanProviders, ScanRegion, SkillScanManual};
+pub use eo_services::skill_scan_manual::SkillScanManual;
+use eo_services::skill_scan_manual::{ScanProviders, ScanRegion};
 use eo_services::skill_tracker::SkillTracker;
+pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::tracker::{naive_to_epoch, EquipmentProfile, HuntTracker, Providers};
 use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
 use eo_wire::domain_events::DomainEvent;
@@ -271,6 +275,17 @@ pub struct ProducerState {
     // bus the SSE bridge subscribes, and so the `/api/events` stream carries
     // scan-status frames once the scan routes flip.
     bus: Arc<EventBus>,
+    // The hotbar key listener. A producer (it publishes tool-change events on
+    // the bus), gated on the hotbar-hooks toggle and an active session; held
+    // here so the snapshot route can read whether it is running and so the
+    // exit seam stops it. Shares the one keystroke source below.
+    hotbar: Arc<HotbarListener>,
+    // The one OS keyboard hook the input listeners share (the hotbar listener
+    // here and the spacebar listener composed alongside the scan services).
+    // Held so the spacebar listener can be built over the SAME source; the
+    // hook is single-instance, so two independent sources would have one
+    // stand inert.
+    keystroke_source: Arc<dyn KeystrokeSource>,
     // Held to keep its permanent bus subscription alive for the substrate's
     // lifetime; never read directly here.
     _quests: Arc<QuestService>,
@@ -283,6 +298,9 @@ impl ProducerState {
     /// the exit path: a second stop is a no-op on an already-stopped
     /// watcher and an already-idle tracker.
     pub fn stop(&self) {
+        // Stop the input listener first (it detaches the shared OS hook), then
+        // end any open session while the bus is live, then the watcher.
+        self.hotbar.stop();
         if self.tracker.is_tracking() {
             let _ = self.tracker.stop_session();
         }
@@ -344,6 +362,20 @@ impl ProducerState {
     pub fn bus_handle(&self) -> Arc<EventBus> {
         self.bus.clone()
     }
+
+    /// A handle to the composed hotbar listener. The snapshot route reads its
+    /// `is_running` flag; cloned into the app state at the handoff so the
+    /// route side and the producer-spine side share one listener.
+    pub fn hotbar_handle(&self) -> Arc<HotbarListener> {
+        self.hotbar.clone()
+    }
+
+    /// A handle to the shared OS keyboard hook. The spacebar-capture listener
+    /// composes over this SAME source, so both input listeners ride one hook
+    /// (it is single-instance) while each gates independently.
+    pub fn keystroke_source_handle(&self) -> Arc<dyn KeystrokeSource> {
+        self.keystroke_source.clone()
+    }
 }
 
 /// What a successful composition yields: the read surface, the producer
@@ -372,6 +404,10 @@ pub struct Composed {
     /// The one-shot repair-cost OCR service, composed over the same capture
     /// and recogniser seams.
     pub repair_ocr: Arc<RepairOcrService>,
+    /// The spacebar-capture listener, composed over the scan and the shared
+    /// OS hook. Held for the spacebar-capture route (its toggle) and the exit
+    /// seam (its teardown).
+    pub spacebar_listener: Arc<SpacebarCaptureListener>,
 }
 
 /// Compose the native services, or decline with a logged reason.
@@ -478,13 +514,14 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
         .parent()
         .map(|parent| parent.join("panel_geometry.json"))
         .unwrap_or_else(|| snapshot.join("panel_geometry.json"));
-    let (skill_scan, repair_ocr) = compose_scan_services(
+    let (skill_scan, repair_ocr, spacebar_listener) = compose_scan_services(
         producers.bus_handle(),
         ocr_engine.clone(),
         game_data.clone(),
         db.clone(),
         clock.clone(),
         geometry_path,
+        producers.keystroke_source_handle(),
     )
     .await;
 
@@ -495,6 +532,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
         ocr_engine,
         skill_scan,
         repair_ocr,
+        spacebar_listener,
     })
 }
 
@@ -564,7 +602,12 @@ async fn compose_scan_services(
     db: Db,
     clock: Arc<dyn Clock>,
     geometry_path: PathBuf,
-) -> (Arc<SkillScanManual>, Arc<RepairOcrService>) {
+    keystroke_source: Arc<dyn KeystrokeSource>,
+) -> (
+    Arc<SkillScanManual>,
+    Arc<RepairOcrService>,
+    Arc<SpacebarCaptureListener>,
+) {
     let runtime = tokio::runtime::Handle::current();
     let pool = db.pool().clone();
 
@@ -650,7 +693,7 @@ async fn compose_scan_services(
     // capturer (BGR pixels here), recognised by the shared engine.
     let repair_presets = presets;
     let repair_engine = ocr_engine;
-    let repair_ocr = RepairOcrService::new(RepairProviders {
+    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
         repair_region: Arc::new(move || eu_window::repair_region(&repair_presets)),
         capture_region: Arc::new(capture_region_bgr),
         read_text: Arc::new(move |frame: &BgrImage| {
@@ -659,9 +702,15 @@ async fn compose_scan_services(
                 .recognize_bgr(&frame.data, frame.h, frame.w)
                 .ok()
         }),
-    });
+    }));
 
-    (skill_scan, Arc::new(repair_ocr))
+    // The spacebar-capture listener fires a manual-scan capture on a space
+    // press while the scan is capturing, over the SAME OS hook the hotbar
+    // listener rides (the hook is single-instance). Off until the overlay
+    // toggle enables it through the spacebar-capture route.
+    let spacebar = SpacebarCaptureListener::new(skill_scan.clone(), Some(keystroke_source));
+
+    (skill_scan, repair_ocr, spacebar)
 }
 
 /// Extract `{canonical_name: level}` rows from one captured skill-panel
@@ -757,6 +806,30 @@ fn compose_producers(
 
     let skill_tracker = SkillTracker::new(&bus, db.pool().clone(), runtime.clone(), clock.clone());
 
+    // The input listeners share ONE OS keyboard hook (it is single-instance):
+    // a ref-counted source wraps the low-level hook, filtered at its boundary
+    // to the hotbar digit keys and the space key. The hotbar listener is a
+    // producer (it publishes tool-change events on the bus), gated on the
+    // hotbar-hooks toggle AND an active session; the spacebar listener is
+    // composed alongside the scan services over this same source. Off Windows
+    // (or in a headless run) the hook is inert, so both listeners never run.
+    let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
+        .iter()
+        .map(|key| key.to_string())
+        .chain(std::iter::once("space".to_string()))
+        .collect();
+    let keystroke_source: Arc<dyn KeystrokeSource> = Arc::new(SharedKeystrokeSource::new(
+        Arc::new(HookKeystrokeSource::new(Some(allowlist))),
+    ));
+    let hotbar = HotbarListener::new(
+        bus.clone(),
+        Some(keystroke_source.clone()),
+        Some(build_hotbar_resolver(db.clone(), data_dir, runtime.clone())),
+    );
+    // Apply the stored toggle; the source still only attaches while a session
+    // is active (the listener reconciles on the session bus events).
+    hotbar.set_hotbar_hooks_enabled(config.hotbar_hooks_enabled);
+
     let tracker = HuntTracker::new(
         bus.clone(),
         db.pool().clone(),
@@ -776,8 +849,85 @@ fn compose_producers(
         config_service,
         skill_tracker,
         bus,
+        hotbar,
+        keystroke_source,
         _quests: quests,
     })
+}
+
+/// The hotbar slot resolver, mirroring the backend's `_hotbar_resolver`: the
+/// live config maps the slot key to an equipment-library id; the row's item
+/// type selects the outcome (a healing tool's per-use cost and reload from its
+/// entity, a consumable's zero-cost one-off, or a weapon's per-shot cost
+/// looked up by name fragment exactly as the cost provider does). An unbound
+/// slot, an absent row, or a read failure yields None (no tool change).
+fn build_hotbar_resolver(
+    db: Db,
+    data_dir: &std::path::Path,
+    runtime: tokio::runtime::Handle,
+) -> HotbarResolver {
+    let data_dir = data_dir.to_path_buf();
+    Arc::new(move |slot: &str| {
+        let config = load_config_readonly(&data_dir).ok()?;
+        let equip_id = config.hotbar.get(slot).and_then(Value::as_i64)?;
+        let db = db.clone();
+        block_on_pool(&runtime, async move {
+            let (name, item_type, properties_json) =
+                db.hotbar_equipment_row(equip_id).await.ok().flatten()?;
+            let outcome = match item_type.as_str() {
+                "healing" => {
+                    let (cost_ped, reload_seconds) = heal_cost_from_props(&properties_json);
+                    (name, cost_ped, "healing".to_string(), reload_seconds)
+                }
+                "consumable" => (name, 0.0, "consumable".to_string(), 0.0),
+                _ => {
+                    let cost = weapon_cost_by_name(&db, &name).await;
+                    (name, cost, "weapon".to_string(), 0.0)
+                }
+            };
+            Some(outcome)
+        })
+    })
+}
+
+/// The per-shot weapon cost in PED for a tool by name fragment, mirroring the
+/// cost provider's `_equipment_cost_lookup`: `totalCostPerUse / 100`, or 0
+/// when the tool is unknown.
+async fn weapon_cost_by_name(db: &Db, name: &str) -> f64 {
+    match db
+        .weapon_properties_by_name_fragment(name)
+        .await
+        .ok()
+        .flatten()
+    {
+        Some(properties_json) => {
+            let props: Value = serde_json::from_str(&properties_json).unwrap_or(Value::Null);
+            cost_per_shot_from_props(&props, None)["totalCostPerUse"]
+                .as_f64()
+                .unwrap_or(0.0)
+                / 100.0
+        }
+        None => 0.0,
+    }
+}
+
+/// The healing-tool per-use cost (PED) and reload (seconds) from a row's
+/// properties, mirroring `_heal_tool_cost_lookup`: a missing or empty tool
+/// entity falls back to `(0, 2.5)`; otherwise the cost engine's per-use cost
+/// over the entity and its markup, in PED, and the entity's reload.
+fn heal_cost_from_props(properties_json: &str) -> (f64, f64) {
+    let props: Value = serde_json::from_str(properties_json).unwrap_or(Value::Null);
+    let tool = props
+        .get("tool_entity")
+        .filter(|value| !value.is_null() && value.as_object().is_none_or(|map| !map.is_empty()));
+    let Some(tool) = tool else {
+        return (0.0, 2.5);
+    };
+    let markup = props.get("markup").and_then(Value::as_f64).unwrap_or(100.0) / 100.0;
+    (
+        heal_cost_per_use(tool, markup) / 100.0,
+        heal_reload_seconds(tool),
+    )
 }
 
 /// Bridge the producer bus's frontend-facing domain topics onto the SSE

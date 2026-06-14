@@ -20,6 +20,7 @@ use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use eo_services::repair_ocr::RepairOcrService;
 use eo_services::skill_scan_manual::SkillScanManual;
+use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use serde_json::{json, Map, Value};
 
 use crate::hydration::{
@@ -188,4 +189,15 @@ pub(crate) fn repair_scan(repair: &Arc<RepairOcrService>, enabled: bool) -> Resp
         return error_response(StatusCode::BAD_REQUEST, &detail("Repair OCR is disabled"));
     }
     plain_json_response(&project(&repair.scan_repair_cost(), &REPAIR_FIELDS))
+}
+
+/// POST /api/scan/spacebar-capture?enabled=: toggle the hands-free capture
+/// listener and acknowledge with the resulting enabled state. A plain 200
+/// (POST, outside the ETag scope).
+pub(crate) fn spacebar_capture(
+    listener: &Arc<SpacebarCaptureListener>,
+    enabled: bool,
+) -> Response<Body> {
+    listener.set_enabled(enabled);
+    plain_json_response(&json!({ "ok": true, "enabled": listener.is_enabled() }))
 }

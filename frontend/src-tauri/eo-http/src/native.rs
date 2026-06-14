@@ -26,8 +26,8 @@ use crate::character_routes::ProspectQuery;
 use crate::equipment_routes::{EquipmentRequest, EquipmentTaint};
 use crate::extract::{
     decode_path_segment, float_or_default, literal_or_default, opt_float, opt_query_int,
-    parse_int_lax, query_int_or_default, require_bounded_int, require_float, require_str, LaxInt,
-    QueryString, Validation,
+    parse_int_lax, query_int_or_default, require_bounded_int, require_float, require_query_bool,
+    require_str, LaxInt, QueryString, Validation,
 };
 use crate::hydration::{detail, error_response, internal_error};
 use crate::pyjson::PyValue;
@@ -1118,6 +1118,22 @@ async fn tracking_repair_scan(state: Arc<AppState>, req: Request) -> Response<Bo
         guard.get().repair_ocr_enabled
     };
     crate::scan_routes::repair_scan(&repair, enabled)
+}
+
+/// POST /api/scan/spacebar-capture?enabled=: toggle the hands-free capture
+/// listener. `enabled` is a required bool; an uninterpretable value is the
+/// backend's 422 bool_parsing, absent is its 422 missing.
+async fn scan_spacebar_capture(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(listener) = state.spacebar_listener() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let enabled = require_query_bool(&mut validation, &query, "enabled");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    crate::scan_routes::spacebar_capture(&listener, enabled.expect("validated"))
 }
 
 // ── Settings adapters ───────────────────────────────────────────────
@@ -2542,6 +2558,14 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/scan/skills/pending",
                 scan_skills_pending,
+            ),
+        )
+        .route(
+            "/api/scan/spacebar-capture",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/spacebar-capture",
+                scan_spacebar_capture,
             ),
         )
         .route(

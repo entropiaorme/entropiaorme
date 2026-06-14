@@ -222,6 +222,26 @@ impl Db {
         Ok(row)
     }
 
+    /// One equipment-library row by id alone: `(name, item_type, properties
+    /// JSON)`, or None when absent. The hotbar resolver reads it to branch on
+    /// the item type the slot's bound id resolves to (mirroring the backend's
+    /// `SELECT id, name, item_type FROM equipment_library WHERE id = ?`, with
+    /// the properties carried so the healing branch reads them without a
+    /// second query).
+    pub async fn hotbar_equipment_row(
+        &self,
+        id: i64,
+    ) -> Result<Option<(String, String, String)>, DbError> {
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT name, item_type, properties_json FROM equipment_library \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// The first weapon-row `properties_json` whose name contains the
     /// supplied fragment, ported from the backend's
     /// `_equipment_profile_lookup`: a `LIKE '%fragment%'` over weapon

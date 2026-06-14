@@ -285,12 +285,17 @@ impl HydrationState {
 
     /// POST /api/tracking/tag-lock: set the active free-text tag. 409 when
     /// not in tag mode (an active session not in tag mode, or idle config
-    /// not in tag mode), 400 on an empty tag. Mirrors `tag_lock`.
+    /// not in tag mode), 400 on an empty tag. Mirrors `tag_lock`. `tainted`
+    /// flags a surrogate body string: it survives validation but the
+    /// settings.json write cannot encode it, so (after the gate + empty
+    /// check, exactly the reference's order) it is the 500 the encoder
+    /// raises rather than a silently-lossy write.
     pub async fn tag_lock(
         &self,
         config: &Arc<Mutex<ConfigService>>,
         tracker: &Arc<HuntTracker>,
         tag: &str,
+        tainted: bool,
     ) -> Response<Body> {
         let mut guard = config.lock().expect("config lock never poisoned");
         if tracker.is_tracking() {
@@ -306,6 +311,9 @@ impl HydrationState {
         let tag = tag.trim();
         if tag.is_empty() {
             return error_response(StatusCode::BAD_REQUEST, &detail("Tag cannot be empty"));
+        }
+        if tainted {
+            return internal_error();
         }
         let mut updates = Map::new();
         updates.insert("mob_tracking_tag".into(), json!(tag));

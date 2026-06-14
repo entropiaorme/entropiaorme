@@ -29,7 +29,7 @@ use crate::extract::{
     query_int_or_default, require_bounded_int, require_float, require_str, LaxInt, QueryString,
     Validation,
 };
-use crate::hydration::{detail, error_response};
+use crate::hydration::{detail, error_response, internal_error};
 use crate::pyjson::PyValue;
 use crate::{arm_routed, AppState, ArmRoutes};
 
@@ -930,6 +930,12 @@ async fn codex_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
     if !v.is_ok() {
         return v.into_response();
     }
+    // A surrogate-tainted string reaches the codex service before any gate
+    // and crashes its lookup unhandled (the reference's 500), unlike the
+    // calibrate path whose encode raises a ValueError -> 400. Mirror the 500.
+    if v.binding_taint() {
+        return internal_error();
+    }
     let rank = body_int_or_max(rank.expect("validated"));
     hydration
         .codex_claim(
@@ -960,6 +966,11 @@ async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> 
     let attribute = body::required_str(&mut v, &object, "attribute_name");
     if !v.is_ok() {
         return v.into_response();
+    }
+    // The surrogate reaches the meta-claim lookup unhandled (the reference's
+    // 500), mirrored here.
+    if v.binding_taint() {
+        return internal_error();
     }
     hydration
         .codex_meta_claim(&tracker, &skill_tracker, &attribute.expect("validated"))
@@ -1202,7 +1213,12 @@ async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body>
         return v.into_response();
     }
     hydration
-        .tag_lock(&config, &tracker, &tag.expect("validated"))
+        .tag_lock(
+            &config,
+            &tracker,
+            &tag.expect("validated"),
+            v.binding_taint(),
+        )
         .await
 }
 

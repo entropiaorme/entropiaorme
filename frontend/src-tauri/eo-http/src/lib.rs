@@ -19,6 +19,7 @@ pub mod equipment_routes;
 pub mod extract;
 pub mod hydration;
 pub mod native;
+pub mod producer_routes;
 pub mod proxy;
 pub mod pyjson;
 pub mod settings_routes;
@@ -45,6 +46,7 @@ pub struct AppState {
     allowed_hosts: [String; 2],
     overrides: RwLock<ArmOverrides>,
     hydration: Option<Arc<crate::hydration::HydrationState>>,
+    tracker: Option<Arc<eo_services::tracker::HuntTracker>>,
     cors: Option<cors::CorsConfig>,
 }
 
@@ -63,6 +65,7 @@ impl AppState {
             ],
             overrides: RwLock::new(overrides),
             hydration: None,
+            tracker: None,
             cors: None,
         }
     }
@@ -89,6 +92,21 @@ impl AppState {
     /// The composed native services, when present.
     pub(crate) fn hydration(&self) -> Option<Arc<crate::hydration::HydrationState>> {
         self.hydration.clone()
+    }
+
+    /// Attach the live producer-spine tracker (the same `Arc<HuntTracker>`
+    /// held by the Tauri-managed producer state). Without it (a substrate
+    /// built before composition, or composition declined at startup) the
+    /// producer routes that need the live tracker fall back to the proxy
+    /// arm, exactly like the read surface without [`with_hydration`].
+    pub fn with_tracker(mut self, tracker: Arc<eo_services::tracker::HuntTracker>) -> Self {
+        self.tracker = Some(tracker);
+        self
+    }
+
+    /// The live producer-spine tracker, when composed.
+    pub(crate) fn tracker(&self) -> Option<Arc<eo_services::tracker::HuntTracker>> {
+        self.tracker.clone()
     }
 
     pub fn upstream(&self) -> &str {

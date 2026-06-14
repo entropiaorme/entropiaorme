@@ -1875,3 +1875,262 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
         "Action must be 'accept' or 'decline'"
     );
 }
+
+// ── Tracking PRODUCER routes (start / stop / manual-mob-suggestions) ──
+//
+// These three reach the live `Arc<HuntTracker>` (and, for the
+// suggestions, the bundled mobs catalogue) rather than the read-only
+// database surface, so the hermetic harness above (no tracker) cannot
+// drive them: it composes hydration only, so they fall to the proxy.
+// This block boots a SEPARATE substrate that wires both the read surface
+// AND a live tracker over a shared single-owner pool, plus a temp data
+// dir carrying a `mobs.json` (the suggestions catalogue) and a
+// `settings.json` (the attribution gate's config read), then drives the
+// full leg set through the public port asserting RESPONSE BODY fields so
+// a wrapper degraded to an empty `Response` is caught. The
+// cross-language battery proves the same surface byte-identical against
+// the running backend.
+
+/// A substrate composed with BOTH the read surface and a live tracker
+/// over a shared pool. `config_json` seeds `settings.json` (the
+/// attribution gate + the idle tag-mode leg read it); a small mobs
+/// catalogue seeds the suggestions lookup.
+async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tempfile::TempDir) {
+    use eo_services::event_bus::EventBus;
+    use eo_services::tracker::{HuntTracker, Providers};
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    // The attribution gate and the idle tag-mode leg read settings.json
+    // from the data dir; seed it before composition.
+    std::fs::write(dir.path().join("settings.json"), config_json).expect("seed settings");
+    // The suggestions lookup reads the mobs catalogue from the game-data
+    // store directory.
+    let store_dir = dir.path().join("snapshot");
+    std::fs::create_dir_all(&store_dir).expect("store dir");
+    std::fs::write(
+        store_dir.join("mobs.json"),
+        r#"[{"id":1,"species":{"name":"Atrox"},"maturities":[{"name":"Young"},{"name":"Old"}]}]"#,
+    )
+    .expect("seed mobs");
+
+    let db = Db::open(&dir.path().join("entropia_orme.db"))
+        .await
+        .expect("temp db opens");
+    let game_data = Arc::new(GameDataStore::new(&store_dir).expect("mobs store"));
+    let clock = Arc::new(RealClock::new());
+    // The tracker shares the substrate's single-owner pool (one
+    // connection, serialised access), exactly as composition wires it.
+    let tracker = HuntTracker::new(
+        Arc::new(EventBus::new()),
+        db.pool().clone(),
+        tokio::runtime::Handle::current(),
+        clock.clone(),
+        Providers::default(),
+    )
+    .expect("tracker builds over the fresh pool");
+    let hydration = Arc::new(HydrationState::new(
+        eo_services::db::Db::from_pool(db.pool().clone()),
+        game_data,
+        clock,
+        dir.path().to_path_buf(),
+    ));
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("nonblocking");
+    let port = listener.local_addr().expect("addr").port();
+    let state = Arc::new(
+        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
+            .with_hydration(hydration)
+            .with_tracker(tracker)
+            .with_cors(CorsConfig::new(5173, None)),
+    );
+    let serve_state = state.clone();
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+        eo_http::serve(listener, serve_state).await.expect("serve");
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if get(port, "/api/health").await.0 == http::StatusCode::OK {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "substrate never came up"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    (port, state, dir)
+}
+
+/// A settings.json with hotbar mode and slot "1" bound: the attribution
+/// gate passes (`_validate_hotbar`), so `/start` succeeds without a
+/// configured trifecta.
+const HOTBAR_BOUND_CONFIG: &str = r#"{"hotbar_hooks_enabled": true, "hotbar": {"1": 7}}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
+    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+
+    // ── start: 200 with the lifecycle acknowledgement (plain, no ETag) ──
+    let (status, headers, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        !headers.contains_key(http::header::ETAG),
+        "start replies plain (POST is outside the ETag middleware)"
+    );
+    let started = body_json(&body);
+    let session_id = started["session_id"]
+        .as_str()
+        .expect("session_id is a string")
+        .to_string();
+    assert!(!session_id.is_empty());
+    assert_eq!(started["status"], "active");
+    assert!(started["started_at"].as_str().is_some());
+
+    // ── start again while active: 409 "Session already active" ──
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
+    assert_eq!(body_json(&body)["detail"], "Session already active");
+
+    // ── stop: 200 with the stop acknowledgement, same session id ──
+    let (status, headers, body) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    let stopped = body_json(&body);
+    assert_eq!(stopped["session_id"], session_id);
+    assert!(stopped["started_at"].as_str().is_some());
+    assert!(stopped["ended_at"].as_str().is_some());
+    assert_eq!(stopped["kill_count"], 0);
+
+    // ── stop with no active session: 409 "No active session" ──
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
+    assert_eq!(body_json(&body)["detail"], "No active session");
+
+    // ── manual-mob-suggestions success: ETag-scoped 200 over the
+    //    catalogue (mob mode -> no tag-mode gate) ──
+    let (status, headers, body) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(
+        headers.contains_key(http::header::ETAG),
+        "the 200 suggestions leg is ETag-scoped (a GET under /api/tracking)"
+    );
+    let suggestions = body_json(&body);
+    let displays: Vec<&str> = suggestions
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|row| row["display"].as_str().unwrap())
+        .collect();
+    assert_eq!(displays, ["Old Atrox", "Young Atrox"]);
+    assert_eq!(suggestions[0]["species"], "Atrox");
+    assert_eq!(suggestions[0]["maturity"], "Old");
+
+    // ── the empty-q short-circuit: 200 [], still ETag-scoped ──
+    let (status, headers, body) = get(port, "/api/tracking/manual-mob-suggestions?q=").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(headers.contains_key(http::header::ETAG));
+    assert_eq!(body, b"[]");
+    // No `q` at all behaves the same.
+    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"[]");
+
+    // ── the limit clamp: limit=99 clamps to 20 (here only 2 rows exist,
+    //    so both surface); limit=0 clamps to 1 (one row) ──
+    let (status, _, body) = get(
+        port,
+        "/api/tracking/manual-mob-suggestions?q=atrox&limit=99",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body).as_array().unwrap().len(), 2);
+    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox&limit=0").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body).as_array().unwrap().len(), 1);
+
+    // ── 422: an unparseable limit (the adapter's int_parsing envelope) ──
+    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions?q=a&limit=abc").await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(detail_types(&body), ["int_parsing"]);
+
+    // ── conditional GET: the suggestions 200 earns a 304 on its ETag ──
+    let (_, headers, _) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox").await;
+    let etag = headers
+        .get(http::header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let (status, _, body) = request(
+        port,
+        "GET",
+        "/api/tracking/manual-mob-suggestions?q=atrox",
+        &[("if-none-match", etag.as_str())],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_start_rejects_an_unready_attribution() {
+    // No hotbar, no configured trifecta (the default-preset slots are
+    // null): the attribution gate fails with the trifecta 400.
+    let (port, _state, _dir) = serve_producer_substrate("{}").await;
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
+    );
+    // Hotbar mode with NO bound slot: the hotbar-specific 400.
+    let (port, _state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": true}"#).await;
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Bind at least one hotbar slot in the Equipment page before tracking."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_mob_suggestions_tag_mode_409_precedes_the_empty_q_shortcut() {
+    // Idle tag mode: the live config's `mob_tracking_mode == "tag"` gates
+    // BEFORE the empty-q short-circuit, so even `q=` 409s (not []).
+    let (port, _state, _dir) =
+        serve_producer_substrate(r#"{"mob_tracking_mode": "tag", "mob_tracking_tag": "Boss"}"#)
+            .await;
+    for path in [
+        "/api/tracking/manual-mob-suggestions?q=atrox",
+        "/api/tracking/manual-mob-suggestions?q=",
+        "/api/tracking/manual-mob-suggestions",
+    ] {
+        let (status, headers, body) = get(port, path).await;
+        assert_eq!(status, http::StatusCode::CONFLICT, "{path}");
+        assert_eq!(
+            body_json(&body)["detail"],
+            "Tag mode disables manual mob selection",
+            "{path}"
+        );
+        assert!(
+            !headers.contains_key(http::header::ETAG),
+            "the 409 leg is non-2xx, so it carries no ETag: {path}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn producer_routes_fall_back_without_a_composed_tracker() {
+    // The read-only harness composes hydration but NO tracker, so the
+    // three producer routes fall to the proxy arm (dead upstream -> 502),
+    // proving the adapters require the live tracker.
+    let (port, _state, _dir) = serve_substrate().await;
+    let (status, _, _) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    let (status, _, _) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    let (status, _, _) = get(port, "/api/tracking/manual-mob-suggestions?q=a").await;
+    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+}

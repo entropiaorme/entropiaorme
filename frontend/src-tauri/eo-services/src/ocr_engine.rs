@@ -407,6 +407,21 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Serialises every test that pins `ORT_DYLIB_PATH` and builds a real
+    /// ONNX Runtime session. `set_var` is process-global and NOT
+    /// thread-safe against ORT's own `getenv`, and the runtime init is
+    /// once-only; two such tests running concurrently (cargo's default)
+    /// race, which surfaced as an intermittent baseline failure. Holding
+    /// this lock across the env-set + session-build makes them sequential.
+    /// Poison-tolerant so a panicking test cannot wedge the rest.
+    static ORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_ort() -> std::sync::MutexGuard<'static, ()> {
+        ORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// The repo's bundled recogniser model + dict, the same pair the
     /// offline bench resolves.
     fn repo_model_paths() -> (PathBuf, PathBuf) {
@@ -447,6 +462,7 @@ mod tests {
     /// rather than passing vacuously.
     #[test]
     fn new_with_providers_runs_the_dml_then_cpu_ladder_and_records_the_selection() {
+        let _ort = lock_ort();
         let dylib = repo_ort_dylib();
         if !dylib.is_file() {
             eprintln!(
@@ -460,7 +476,8 @@ mod tests {
         // (and its sibling DirectML.dll / providers-shared) authoritative
         // without a system install. Process-global and once-only: the
         // first load wins, which is exactly the production contract.
-        // SAFETY: single-threaded test setup, before any ORT use.
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
         unsafe {
             std::env::set_var("ORT_DYLIB_PATH", &dylib);
         }
@@ -504,12 +521,14 @@ mod tests {
     /// or CPU claim it did not make. Same host-gating as the ladder test.
     #[test]
     fn new_records_the_default_provider() {
+        let _ort = lock_ort();
         let dylib = repo_ort_dylib();
         if !dylib.is_file() {
             eprintln!("committed ONNX Runtime dylib absent; skipping");
             return;
         }
-        // SAFETY: single-threaded test setup, before any ORT use.
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
         unsafe {
             std::env::set_var("ORT_DYLIB_PATH", &dylib);
         }

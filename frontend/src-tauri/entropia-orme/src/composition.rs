@@ -678,6 +678,14 @@ fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future
 mod tests {
     use super::*;
 
+    /// Serialises the tests that pin `ORT_DYLIB_PATH` (a process-global,
+    /// not-thread-safe env var that ORT reads via `getenv`). Async-aware so
+    /// the guard can be held across the `compose_with(...).await` that
+    /// builds the engine and reads the env, without the
+    /// `await_holding_lock` hazard a `std::sync::Mutex` would raise. Only
+    /// ever contended across distinct tests, so no intra-test deadlock.
+    static ORT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn repo_snapshot() -> PathBuf {
         dev_project_root()
             .join("backend")
@@ -823,8 +831,9 @@ mod tests {
     /// the pin sets the env to the absolute path, never a bare name. (Every
     /// writer in the suite pins the same dev path, so the shared-env set is
     /// idempotent.)
-    #[test]
-    fn pin_writes_the_absolute_dylib_path_to_the_env_never_a_bare_name() {
+    #[tokio::test]
+    async fn pin_writes_the_absolute_dylib_path_to_the_env_never_a_bare_name() {
+        let _ort = ORT_TEST_LOCK.lock().await;
         let pinned = pin_ort_dylib_env(None);
         assert!(
             pinned.is_absolute(),
@@ -870,6 +879,7 @@ mod tests {
     /// dylib is absent on this host the test skips with its reason.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_with_a_warmed_ocr_engine_when_the_runtime_loads() {
+        let _ort = ORT_TEST_LOCK.lock().await;
         let dylib = ort_dylib_path(None);
         if !dylib.is_file() {
             eprintln!(

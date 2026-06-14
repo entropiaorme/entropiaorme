@@ -1,7 +1,15 @@
 # Exclude fastapi 0.136.3: security advisory MAL-2026-4750 flags that release
 # for adding an undocumented package to its optional "standard" extra. Drop the
 # exclusion once a fixed release is published.
-fastapi>=0.115.0,!=0.136.3
+#
+# Cap below 0.137: that release reworked ``include_router`` to defer route
+# inclusion behind lazy ``_IncludedRouter`` wrappers rather than flattening the
+# included APIRoutes onto ``app.routes`` eagerly. The app still serves and its
+# OpenAPI schema is unchanged, but route-table introspection (the ETag
+# route-coverage check) and any code that walks ``app.routes`` expecting
+# APIRoutes no longer sees them. Pin to the eager model the backend is built
+# against until the introspection is migrated to the new model deliberately.
+fastapi>=0.115.0,!=0.136.3,<0.137
 uvicorn[standard]>=0.32.0
 pydantic>=2.0
 python-dotenv>=1.0

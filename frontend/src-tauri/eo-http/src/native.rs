@@ -1129,6 +1129,59 @@ async fn tracking_armour_cost(state: Arc<AppState>, req: Request) -> Response<Bo
         .await
 }
 
+/// GET /api/tracking/session/{session_id}/quest-link-suggestion: the
+/// curated post-session linkage suggestion, under the conditional-GET
+/// contract. A decoded slash in the session id de-matches (framework
+/// 404), exactly as the other single-segment session routes.
+async fn tracking_quest_link_suggestion(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let session_id = match string_path_id(session_id_segment(
+        req.uri().path(),
+        "/quest-link-suggestion",
+    )) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .session_quest_link_suggestion(&session_id, inm.as_deref())
+        .await
+}
+
+/// POST /api/tracking/session/{session_id}/quest-link: persist the
+/// accept/decline decision. The body model (`SessionQuestLinkDecisionBody`)
+/// requires a string `action`; validation precedes the route logic, so a
+/// missing action is the 422 the framework raises before the handler's 404.
+async fn tracking_quest_link_decide(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return state.proxy(req).await;
+    };
+    let session_id = match string_path_id(session_id_segment(req.uri().path(), "/quest-link")) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    let body_value = match standalone_body_value(req).await {
+        Ok(value) => value,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::object_from_body(body_value, &mut v) else {
+        return v.into_response();
+    };
+    let action = body::required_str(&mut v, &object, "action");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_server_error();
+    }
+    hydration
+        .decide_session_quest_link(&session_id, &action.expect("validated"))
+        .await
+}
+
 // ── Analytics ledger / preset / inventory write adapters ──
 
 /// Decode a string path-id; a percent-encoded slash de-matches the route
@@ -1931,6 +1984,22 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::POST,
                 "/api/tracking/session/{session_id}/armour-cost",
                 tracking_armour_cost,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/quest-link-suggestion",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/session/{session_id}/quest-link-suggestion",
+                tracking_quest_link_suggestion,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/quest-link",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/quest-link",
+                tracking_quest_link_decide,
             ),
         )
         .route(

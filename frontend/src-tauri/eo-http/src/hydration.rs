@@ -321,6 +321,32 @@ fn rounded(value: &Value, places: usize) -> Value {
     }
 }
 
+/// `str(id) if id is not None else None` over a suggestion's nullable
+/// id (the quest-link routes stringify the integer ids, leaving null
+/// through).
+fn str_id_or_null(value: &Value) -> Value {
+    if value.is_null() {
+        Value::Null
+    } else {
+        json!(python_str_of(value))
+    }
+}
+
+/// The quest-link suggestion wire shape, mirroring
+/// `get_session_quest_link_suggestion`'s dict construction (all seven
+/// fields always present; the link fields null when absent).
+fn format_quest_link_suggestion(session_id: &str, suggestion: &Value) -> Value {
+    json!({
+        "sessionId": session_id,
+        "suggestionType": suggestion["suggestion_type"],
+        "reason": suggestion["reason"],
+        "questId": str_id_or_null(&suggestion["quest_id"]),
+        "questName": suggestion["quest_name"],
+        "playlistId": str_id_or_null(&suggestion["playlist_id"]),
+        "playlistName": suggestion["playlist_name"],
+    })
+}
+
 // ── The nine hydration handlers ─────────────────────────────────────
 
 impl HydrationState {
@@ -554,6 +580,93 @@ impl HydrationState {
         }
     }
 
+    /// GET /api/tracking/session/{session_id}/quest-link-suggestion (a
+    /// read: the conditional-GET contract applies). 404 if the session
+    /// is absent, checked before the quest service runs.
+    pub async fn session_quest_link_suggestion(
+        &self,
+        session_id: &str,
+        if_none_match: Option<&str>,
+    ) -> Response<Body> {
+        match self.session_exists(session_id).await {
+            Ok(true) => {}
+            Ok(false) => return session_not_found(),
+            Err(_) => return internal_error(),
+        }
+        match self.quests.get_session_link_suggestion(session_id).await {
+            Ok(suggestion) => json_response(
+                &format_quest_link_suggestion(session_id, &suggestion),
+                if_none_match,
+            ),
+            Err(error) => quest_error_response(error),
+        }
+    }
+
+    /// POST /api/tracking/session/{session_id}/quest-link (a plain-200
+    /// write). 404 if the session is absent; an unknown action is a
+    /// 400. Accept persists the curated suggestion and replies with the
+    /// full link object; decline records the refusal and replies with
+    /// only `sessionId`/`status` (the reference serialises the decision
+    /// with `response_model_exclude_unset`, so the two arms emit
+    /// different field sets).
+    pub async fn decide_session_quest_link(
+        &self,
+        session_id: &str,
+        action: &str,
+    ) -> Response<Body> {
+        match self.session_exists(session_id).await {
+            Ok(true) => {}
+            Ok(false) => return session_not_found(),
+            Err(_) => return internal_error(),
+        }
+        let action = action.trim().to_lowercase();
+        if action == "accept" {
+            return match self.quests.accept_session_link_suggestion(session_id).await {
+                Ok(suggestion) => plain_json_response(&json!({
+                    "sessionId": session_id,
+                    "status": "linked",
+                    "linkType": suggestion["suggestion_type"],
+                    "questId": str_id_or_null(&suggestion["quest_id"]),
+                    "questName": suggestion["quest_name"],
+                    "playlistId": str_id_or_null(&suggestion["playlist_id"]),
+                    "playlistName": suggestion["playlist_name"],
+                })),
+                // The route catches the no-linkable-suggestion
+                // ValueError and maps it to 409 (unlike the rest of the
+                // quest surface, where Invalid stays an unhandled 500);
+                // a genuine database failure still surfaces as 500.
+                Err(QuestError::Invalid(message)) => {
+                    error_response(StatusCode::CONFLICT, &detail(&message))
+                }
+                Err(QuestError::Db(_)) => internal_error(),
+            };
+        }
+        if action == "decline" {
+            return match self.quests.decline_session_link(session_id).await {
+                Ok(()) => plain_json_response(&json!({
+                    "sessionId": session_id,
+                    "status": "declined",
+                })),
+                Err(error) => quest_error_response(error),
+            };
+        }
+        error_response(
+            StatusCode::BAD_REQUEST,
+            &detail("Action must be 'accept' or 'decline'"),
+        )
+    }
+
+    /// The session-existence precondition both quest-link routes apply
+    /// before the quest service runs (a bare `SELECT id`, the
+    /// reference's own guard).
+    async fn session_exists(&self, session_id: &str) -> Result<bool, sqlx::Error> {
+        let row = sqlx::query("SELECT id FROM tracking_sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(self.pool())
+            .await?;
+        Ok(row.is_some())
+    }
+
     /// The codex routers' ValueError mapping: a 400 with the message
     /// as the detail (adapters reproduce service-adjacent failures the
     /// reference raises as ValueError through this).
@@ -591,6 +704,10 @@ fn quest_not_found() -> Response<Body> {
 
 fn playlist_not_found() -> Response<Body> {
     error_response(StatusCode::NOT_FOUND, &detail("Playlist not found"))
+}
+
+fn session_not_found() -> Response<Body> {
+    error_response(StatusCode::NOT_FOUND, &detail("Session not found"))
 }
 
 /// The quest router's error mapping: the quests router catches no

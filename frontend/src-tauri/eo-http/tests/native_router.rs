@@ -1727,3 +1727,151 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
     .await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
 }
+
+// ── Quest-link routes: hermetic body-asserting coverage ──
+
+const QL_QUEST: &str = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"; // single_quest -> accept
+const QL_DECLINE: &str = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"; // decline
+
+/// Seed the quest-link fixtures into the substrate's own database: one
+/// quest (id 2), a single-quest completion for `QL_QUEST` (the accept
+/// target) and a separate session `QL_DECLINE` with one completion (the
+/// decline target). No playlists are needed for the single-quest path.
+async fn seed_quest_link(pool: &SqlitePool) {
+    for id in [QL_QUEST, QL_DECLINE] {
+        sqlx::query(
+            "INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,armour_cost,heal_cost,dangling_cost,mob_tracking_mode,updated_at) \
+             VALUES(?,1000.0,4600.0,0,0,0,0,'mob',4600.0)",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("seed quest-link session");
+    }
+    sqlx::query(
+        "INSERT INTO quests(id,name,planet,is_active,created_at,category) VALUES(2,'Quest 2','Calypso',1,1000.0,'kill')",
+    )
+    .execute(pool)
+    .await
+    .expect("seed quest");
+    for id in [QL_QUEST, QL_DECLINE] {
+        sqlx::query(
+            "INSERT INTO session_quest_completions(session_id,quest_id,completed_at) VALUES(?,2,2000.0)",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .expect("seed completion");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
+    let (port, _state, dir) = serve_substrate().await;
+    let pool = open_pool(dir.path().join("entropia_orme.db")).await;
+    seed_quest_link(&pool).await;
+
+    // ── GET suggestion for a single_quest session: the 7-field body ──
+    let (status, headers, body) = get(
+        port,
+        &format!("/api/tracking/session/{QL_QUEST}/quest-link-suggestion"),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], QL_QUEST);
+    assert_eq!(v["suggestionType"], "quest");
+    assert_eq!(v["reason"], "single_quest");
+    assert_eq!(v["questId"], "2");
+    assert_eq!(v["questName"], "Quest 2");
+    assert!(v["playlistId"].is_null());
+    assert!(v["playlistName"].is_null());
+    // ETag-scoped: the read carries a strong ETag for the 304 leg below.
+    let etag = headers
+        .get(http::header::ETAG)
+        .expect("suggestion etag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // ── GET 304: re-fetch with the prior ETag -> empty 304 ──
+    let (status, _, body) = request(
+        port,
+        "GET",
+        &format!("/api/tracking/session/{QL_QUEST}/quest-link-suggestion"),
+        &[("if-none-match", etag.as_str())],
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    // ── POST accept: persists; replies linked + linkType + questId ──
+    let (status, headers, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{QL_QUEST}/quest-link"),
+        "{\"action\":\"accept\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    // The write is a plain 200: no ETag (unlike the GET).
+    assert!(!headers.contains_key(http::header::ETAG));
+    let v = body_json(&body);
+    assert_eq!(v["sessionId"], QL_QUEST);
+    assert_eq!(v["status"], "linked");
+    assert_eq!(v["linkType"], "quest");
+    assert_eq!(v["questId"], "2");
+    assert_eq!(v["questName"], "Quest 2");
+
+    // ── POST decline on another session: EXACTLY {sessionId, status} ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{QL_DECLINE}/quest-link"),
+        "{\"action\":\"decline\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    let v = body_json(&body);
+    let object = v.as_object().expect("decline body is an object");
+    assert_eq!(
+        object.len(),
+        2,
+        "decline omits the link fields entirely (exactly sessionId + status), got {object:?}"
+    );
+    assert_eq!(v["sessionId"], QL_DECLINE);
+    assert_eq!(v["status"], "declined");
+
+    // ── 404: a missing session on BOTH routes ──
+    let missing = "00000000-0000-4000-8000-000000000000";
+    let (status, _, body) = get(
+        port,
+        &format!("/api/tracking/session/{missing}/quest-link-suggestion"),
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body_json(&body)["detail"], "Session not found");
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{missing}/quest-link"),
+        "{\"action\":\"decline\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body_json(&body)["detail"], "Session not found");
+
+    // ── 400: an unrecognised action ──
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        &format!("/api/tracking/session/{QL_QUEST}/quest-link"),
+        "{\"action\":\"frobnicate\"}",
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Action must be 'accept' or 'decline'"
+    );
+}

@@ -302,7 +302,9 @@ fn spawn_http_substrate(
             app_state = app_state
                 .with_hydration(composed.hydration)
                 .with_tracker(composed.producers.tracker_handle())
-                .with_sse_hub(composed.producers.sse_hub_handle());
+                .with_sse_hub(composed.producers.sse_hub_handle())
+                .with_config_service(composed.producers.config_service_handle())
+                .with_skill_tracker(composed.producers.skill_tracker_handle());
             // Hand the producer spine to the exit seam so it stops the
             // tail thread and ends any session on app close.
             app.manage(Producers(Mutex::new(Some(composed.producers))));

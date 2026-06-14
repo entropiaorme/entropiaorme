@@ -19,7 +19,7 @@ use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use http_body_util::BodyExt;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
@@ -1897,6 +1897,10 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 /// catalogue seeds the suggestions lookup.
 async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tempfile::TempDir) {
     use eo_services::event_bus::EventBus;
+    use std::sync::Mutex;
+
+    use eo_services::config_service::ConfigService;
+    use eo_services::skill_tracker::SkillTracker;
     use eo_services::tracker::{HuntTracker, Providers};
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1918,16 +1922,29 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
         .expect("temp db opens");
     let game_data = Arc::new(GameDataStore::new(&store_dir).expect("mobs store"));
     let clock = Arc::new(RealClock::new());
+    let bus = Arc::new(EventBus::new());
     // The tracker shares the substrate's single-owner pool (one
     // connection, serialised access), exactly as composition wires it.
     let tracker = HuntTracker::new(
-        Arc::new(EventBus::new()),
+        bus.clone(),
         db.pool().clone(),
         tokio::runtime::Handle::current(),
         clock.clone(),
         Providers::default(),
     )
     .expect("tracker builds over the fresh pool");
+    // The skill tracker (codex suppress-next) and the settings writer (the
+    // config-write routes) share the same pool, clock, and data dir, exactly
+    // as composition wires them, so the write routes serve natively here.
+    let skill_tracker = SkillTracker::new(
+        &bus,
+        db.pool().clone(),
+        tokio::runtime::Handle::current(),
+        clock.clone(),
+    );
+    let config_service = Arc::new(Mutex::new(
+        ConfigService::new(dir.path()).expect("config service opens"),
+    ));
     let hydration = Arc::new(HydrationState::new(
         eo_services::db::Db::from_pool(db.pool().clone()),
         game_data,
@@ -1942,6 +1959,8 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
         AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
             .with_hydration(hydration)
             .with_tracker(tracker)
+            .with_skill_tracker(skill_tracker)
+            .with_config_service(config_service)
             .with_cors(CorsConfig::new(5173, None)),
     );
     let serve_state = state.clone();
@@ -2250,5 +2269,200 @@ async fn events_stream_serves_natively_from_the_composed_hub() {
     assert!(
         frame.starts_with("id: 1\nevent: scan.status.changed\n"),
         "native stream carried the dispatched frame: {frame:?}"
+    );
+}
+
+/// Read the substrate's `settings.json` (the config-write target) as JSON.
+fn read_settings(dir: &std::path::Path) -> Value {
+    let raw = std::fs::read_to_string(dir.join("settings.json")).expect("settings.json reads");
+    serde_json::from_str(&raw).expect("settings.json parses")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_write_routes_serve_natively_idle_mob_mode() {
+    // Mob-mode config, no active session. Drives the native config-write
+    // handlers (over the composed ConfigService + skill tracker) and pins
+    // their responses + the settings.json they persist; the dead proxy
+    // (port 9) means any handler that fell back would 502 instead.
+    let (port, _state, dir) = serve_producer_substrate("{}").await;
+
+    // overlay-position: plain 200 {"ok": true}, exact coordinates persisted.
+    let (status, headers, body) = send_json(
+        port,
+        "PUT",
+        "/api/settings/overlay-position",
+        r#"{"x": 7, "y": 9}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert!(!headers.contains_key(http::header::ETAG));
+    assert_eq!(body_json(&body), json!({"ok": true}));
+    let cfg = read_settings(dir.path());
+    assert_eq!(cfg["overlay_x"], 7);
+    assert_eq!(cfg["overlay_y"], 9);
+
+    // An unparseable coordinate is the 422 int_parsing envelope.
+    let (status, _, _) = send_json(
+        port,
+        "PUT",
+        "/api/settings/overlay-position",
+        r#"{"x": "nope", "y": 0}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
+
+    // manual-mob-lock: a catalogue match locks; the selection persists.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/tracking/manual-mob-lock",
+        r#"{"species": "Atrox", "maturity": "Old"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        body_json(&body),
+        json!({"mobName": "Old Atrox", "species": "Atrox", "maturity": "Old"})
+    );
+    let cfg = read_settings(dir.path());
+    assert_eq!(cfg["manual_mob_species"], "Atrox");
+    assert_eq!(cfg["manual_mob_maturity"], "Old");
+
+    // A mob absent from the catalogue is the 400.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/tracking/manual-mob-lock",
+        r#"{"species": "Notamob", "maturity": ""}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Mob is not present in the catalogue"
+    );
+
+    // tag-lock outside tag mode is the 409.
+    let (status, _, body) =
+        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
+    assert_eq!(body_json(&body)["detail"], "Tag mode is not enabled");
+
+    // release-mob in idle manual mode returns the stored display and clears it.
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body), json!({"released": "Old Atrox"}));
+    let cfg = read_settings(dir.path());
+    assert_eq!(cfg["manual_mob_species"], "");
+    assert_eq!(cfg["manual_mob_maturity"], "");
+
+    // release-mob again with nothing stored: released is null.
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body), json!({ "released": Value::Null }));
+
+    // codex claim/meta over a catalogue with no codex data: the service's
+    // not-found ValueError is the 400 (exercises the suppress-next handlers
+    // and their skill-tracker dependency; idle, so no suppression fires).
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/codex/claim",
+        r#"{"species_name": "Notaspecies", "rank": 1, "skill_name": "Anatomy"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    let (status, _, _) = send_json(
+        port,
+        "POST",
+        "/api/codex/meta/claim",
+        r#"{"attribute_name": "Notanattribute"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_write_routes_serve_natively_idle_tag_mode() {
+    // Tag-mode config, no active session: the tag-lock success/empty legs,
+    // the manual-mob-lock tag-mode 409, and the idle-tag release branch.
+    let (port, _state, dir) = serve_producer_substrate(r#"{"mob_tracking_mode": "tag"}"#).await;
+
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/tracking/tag-lock",
+        r#"{"tag": "Daily Hunt"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body), json!({"tag": "Daily Hunt"}));
+    assert_eq!(read_settings(dir.path())["mob_tracking_tag"], "Daily Hunt");
+
+    // An all-whitespace tag is the 400.
+    let (status, _, body) =
+        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "   "}"#).await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(&body)["detail"], "Tag cannot be empty");
+
+    // manual-mob-lock is disabled in tag mode: the 409.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/tracking/manual-mob-lock",
+        r#"{"species": "Atrox", "maturity": ""}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Tag mode disables manual mob selection"
+    );
+
+    // release-mob in idle tag mode returns the trimmed tag and clears it.
+    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body), json!({"released": "Daily Hunt"}));
+    assert_eq!(read_settings(dir.path())["mob_tracking_tag"], "");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_write_routes_serve_natively_active_session() {
+    // An active mob-mode session: the tracker in-memory calls fire, the
+    // tag-lock active-session 409 leg, and release-mob's active branch
+    // (clears the manual selection, not the tag).
+    let (port, _state, dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (status, _, _) = send_json(port, "POST", "/api/tracking/start", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+
+    // manual-mob-lock while tracking: 200, sets the live tracker + config.
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/tracking/manual-mob-lock",
+        r#"{"species": "Atrox", "maturity": "Young"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body_json(&body)["mobName"], "Young Atrox");
+    assert_eq!(read_settings(dir.path())["manual_mob_species"], "Atrox");
+
+    // tag-lock against a mob-mode active session: the session-snapshot 409.
+    let (status, _, body) =
+        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
+    assert_eq!(status, http::StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "Active session is not in tag mode"
+    );
+
+    // release-mob in an active non-tag session clears the MANUAL selection
+    // (the active-non-tag branch), not the tag.
+    let (status, _, _) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(
+        read_settings(dir.path())["manual_mob_species"],
+        "",
+        "an active mob-mode release clears the manual selection, not the tag"
     );
 }

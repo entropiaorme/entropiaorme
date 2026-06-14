@@ -63,12 +63,14 @@
 //! defaulting to unavailable until the scan routes flip).
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eo_http::hydration::HydrationState;
 use eo_services::chatlog_watcher::{ChatlogWatcher, QuestRewardFilter};
 use eo_services::clock::{Clock, RealClock};
-use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
+use eo_services::config_service::{
+    active_trifecta_preset, load_config_readonly, AppConfig, ConfigService,
+};
 use eo_services::cost_engine::cost_per_shot_from_props;
 use eo_services::db::{AdoptError, Db};
 use eo_services::event_bus::{EventBus, Topic};
@@ -247,11 +249,18 @@ pub struct ProducerState {
     // the Tauri holder, so the publisher side and the stream side share
     // one hub.
     sse_hub: Arc<SseHub>,
-    // Held to keep their permanent bus subscriptions alive for the
-    // substrate's lifetime; never read directly here. The bus itself
-    // stays alive through the strong handles these (and the watcher and
-    // tracker) hold, so the spine need not store it separately.
-    _skill_tracker: Arc<SkillTracker>,
+    // The settings writer. Held here so the producer spine and the HTTP
+    // write path share one service; a clone is handed to the app state at
+    // composition. Mutex-guarded because `update`/`reset` take `&mut self`.
+    config_service: Arc<Mutex<ConfigService>>,
+    // The skill tracker. Held to keep its permanent bus subscription alive
+    // for the substrate's lifetime, and exposed: the codex claim routes
+    // call `suppress_next` on it.
+    skill_tracker: Arc<SkillTracker>,
+    // Held to keep its permanent bus subscription alive for the substrate's
+    // lifetime; never read directly here. The bus itself stays alive through
+    // the strong handles these (and the watcher and tracker) hold, so the
+    // spine need not store it separately.
     _quests: Arc<QuestService>,
 }
 
@@ -296,6 +305,24 @@ impl ProducerState {
     /// bridge share one hub.
     pub fn sse_hub_handle(&self) -> Arc<SseHub> {
         self.sse_hub.clone()
+    }
+
+    /// A handle to the composed settings writer. The settings-write routes
+    /// serve over this same `Arc<Mutex<ConfigService>>`: the composition
+    /// handoff clones it into the HTTP app state before this `ProducerState`
+    /// moves into the Tauri-managed holder, so the write path and the spine
+    /// share one service (reads elsewhere stay file-based, coherent because
+    /// every save reads-merges-before-write).
+    pub fn config_service_handle(&self) -> Arc<Mutex<ConfigService>> {
+        self.config_service.clone()
+    }
+
+    /// A handle to the composed skill tracker. The codex claim routes call
+    /// `suppress_next` on this same `Arc<SkillTracker>`: cloned into the app
+    /// state at the handoff, so the route side and the producer-bus
+    /// subscription side share one tracker.
+    pub fn skill_tracker_handle(&self) -> Arc<SkillTracker> {
+        self.skill_tracker.clone()
     }
 }
 
@@ -504,6 +531,15 @@ fn compose_producers(
     // defaults, exactly as the backend's loader does.
     let config = load_config_readonly(data_dir).unwrap_or_default();
 
+    // The settings writer the write routes serve over. A corrupt or
+    // wrong-shape settings file fails composition loudly (declining native
+    // composition so the surface proxies), exactly as the sidecar's loader
+    // would crash rather than silently reset user settings.
+    let config_service = Arc::new(Mutex::new(
+        ConfigService::new(data_dir)
+            .map_err(|e| eo_services::db::DbError::Driver(e.to_string()))?,
+    ));
+
     // The quest service is bus-subscribed (session tracking + mission
     // auto-start) and supplies the watcher's quest-reward filter, so a
     // mission completion can suppress its reward echo just as the
@@ -533,7 +569,8 @@ fn compose_producers(
         watcher,
         tracker,
         sse_hub,
-        _skill_tracker: skill_tracker,
+        config_service,
+        skill_tracker,
         _quests: quests,
     })
 }

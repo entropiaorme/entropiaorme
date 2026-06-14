@@ -14,9 +14,11 @@
 
 use std::path::Path;
 
+use std::sync::{Arc, Mutex};
+
 use axum::body::Body;
 use axum::http::Response;
-use eo_services::config_service::{load_config_readonly, AppConfig};
+use eo_services::config_service::{load_config_readonly, AppConfig, ConfigService};
 use eo_services::paths::DB_FILE_NAME;
 use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use serde_json::{json, Map, Value};
@@ -85,6 +87,31 @@ impl HydrationState {
             return internal_error();
         };
         plain_json_response(&json!({"x": config.overlay_x, "y": config.overlay_y}))
+    }
+
+    /// PUT /api/settings/overlay-position: persist the overlay window
+    /// position. Mirrors `set_overlay_position`: writes `overlay_x` /
+    /// `overlay_y` and replies `{"ok": true}`. No producer side effects, so
+    /// (unlike the PATCH / reset writes) it carries no watcher / hotbar /
+    /// tracker reload.
+    pub async fn overlay_position_set(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        x: i64,
+        y: i64,
+    ) -> Response<Body> {
+        let mut updates = Map::new();
+        updates.insert("overlay_x".into(), json!(x));
+        updates.insert("overlay_y".into(), json!(y));
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task.
+            return internal_error();
+        };
+        if guard.update(&updates).is_err() {
+            return internal_error();
+        }
+        plain_json_response(&json!({ "ok": true }))
     }
 
     /// The trifecta block: every preset validated against the live

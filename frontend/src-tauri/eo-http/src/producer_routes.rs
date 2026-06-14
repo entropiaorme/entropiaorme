@@ -28,13 +28,17 @@
 //!   200 legs (success and the empty-`q` `[]`) ARE ETag-scoped (a GET under
 //!   `/api/tracking`), the 409 legs are not (non-2xx).
 
+use std::sync::{Arc, Mutex};
+
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
-use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
+use eo_services::config_service::{
+    active_trifecta_preset, load_config_readonly, AppConfig, ConfigService,
+};
 use eo_services::mob_lookup_service::{python_whitespace, MobLookupService};
 use eo_services::tracker::{naive_isoformat, HuntTracker};
 use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::hydration::HydrationState;
 use crate::hydration::{
@@ -181,5 +185,187 @@ impl HydrationState {
         let lookup = MobLookupService::new(&self.game_data);
         let suggestions = lookup.search_mob_names(query, bounded);
         json_response(&Value::Array(suggestions), if_none_match)
+    }
+
+    /// POST /api/tracking/release-mob: clear the locked mob or tag. Mirrors
+    /// `release_mob`: an active tag-mode session releases the tracker's mob
+    /// and clears the config tag; idle in tag mode returns the trimmed
+    /// config tag (or null) and clears it; idle in manual mode returns the
+    /// stored species display (or null) and clears the manual selection; an
+    /// active non-tag session releases the tracker's mob and clears the
+    /// manual selection. A plain 200 (POST, outside the ETag scope).
+    pub async fn release_mob(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        tracker: &Arc<HuntTracker>,
+    ) -> Response<Body> {
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
+        if tracker.is_tracking() && tracker.is_session_tag_mode() {
+            let released = tracker.release_current_mob();
+            if guard.update(&clear_tag()).is_err() {
+                return internal_error();
+            }
+            return plain_json_response(&json!({ "released": released }));
+        }
+        if !tracker.is_tracking() {
+            if guard.get().mob_tracking_mode == "tag" {
+                let trimmed = guard.get().mob_tracking_tag.trim().to_string();
+                let released = if trimmed.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(trimmed)
+                };
+                if guard.update(&clear_tag()).is_err() {
+                    return internal_error();
+                }
+                return plain_json_response(&json!({ "released": released }));
+            }
+            let species = guard.get().manual_mob_species.trim().to_string();
+            let maturity = guard.get().manual_mob_maturity.trim().to_string();
+            let released = mob_display(&species, &maturity);
+            if guard.update(&clear_manual_mob()).is_err() {
+                return internal_error();
+            }
+            return plain_json_response(&json!({ "released": released }));
+        }
+        // Active session, not in tag mode: release the tracker's mob.
+        let released = tracker.release_current_mob();
+        if guard.update(&clear_manual_mob()).is_err() {
+            return internal_error();
+        }
+        plain_json_response(&json!({ "released": released }))
+    }
+
+    /// POST /api/tracking/manual-mob-lock: lock a catalogue mob for manual
+    /// kill stamping. 409 in tag mode (active session OR idle config), 400
+    /// when the mob is absent from the catalogue. Mirrors `manual_mob_lock`.
+    pub async fn manual_mob_lock(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        tracker: &Arc<HuntTracker>,
+        species: &str,
+        maturity: &str,
+    ) -> Response<Body> {
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
+        let idle_tag_mode = !tracker.is_tracking() && guard.get().mob_tracking_mode == "tag";
+        if (tracker.is_tracking() && tracker.is_session_tag_mode()) || idle_tag_mode {
+            return error_response(
+                StatusCode::CONFLICT,
+                &detail("Tag mode disables manual mob selection"),
+            );
+        }
+        let species = species.trim();
+        let maturity = maturity.trim();
+        if !MobLookupService::new(&self.game_data).has_mob_name(species, maturity) {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                &detail("Mob is not present in the catalogue"),
+            );
+        }
+        let display = if maturity.is_empty() {
+            species.to_string()
+        } else {
+            format!("{maturity} {species}")
+        };
+        let mut updates = Map::new();
+        updates.insert("manual_mob_species".into(), json!(species));
+        updates.insert("manual_mob_maturity".into(), json!(maturity));
+        if guard.update(&updates).is_err() {
+            return internal_error();
+        }
+        if tracker.is_tracking() && tracker.set_manual_mob(&display, species, maturity).is_err() {
+            // The gate already cleared an active, non-tag session, so the only
+            // reachable error is the live config having flipped to tag mode
+            // since the session started (manual entry disabled): the reference
+            // raises there and 500s, after the same config write. Mirror it.
+            return internal_error();
+        }
+        plain_json_response(&json!({
+            "mobName": display,
+            "species": species,
+            "maturity": maturity,
+        }))
+    }
+
+    /// POST /api/tracking/tag-lock: set the active free-text tag. 409 when
+    /// not in tag mode (an active session not in tag mode, or idle config
+    /// not in tag mode), 400 on an empty tag. Mirrors `tag_lock`. `tainted`
+    /// flags a surrogate body string: it survives validation but the
+    /// settings.json write cannot encode it, so (after the gate + empty
+    /// check, exactly the reference's order) it is the 500 the encoder
+    /// raises rather than a silently-lossy write.
+    pub async fn tag_lock(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        tracker: &Arc<HuntTracker>,
+        tag: &str,
+        tainted: bool,
+    ) -> Response<Body> {
+        let Ok(mut guard) = config.lock() else {
+            // A poisoned lock means a prior holder panicked; degrade to a 500
+            // rather than panic this request task (and the endpoint family).
+            return internal_error();
+        };
+        if tracker.is_tracking() {
+            if !tracker.is_session_tag_mode() {
+                return error_response(
+                    StatusCode::CONFLICT,
+                    &detail("Active session is not in tag mode"),
+                );
+            }
+        } else if guard.get().mob_tracking_mode != "tag" {
+            return error_response(StatusCode::CONFLICT, &detail("Tag mode is not enabled"));
+        }
+        let tag = tag.trim();
+        if tag.is_empty() {
+            return error_response(StatusCode::BAD_REQUEST, &detail("Tag cannot be empty"));
+        }
+        if tainted {
+            return internal_error();
+        }
+        let mut updates = Map::new();
+        updates.insert("mob_tracking_tag".into(), json!(tag));
+        if guard.update(&updates).is_err() {
+            return internal_error();
+        }
+        if tracker.is_tracking() {
+            let _ = tracker.set_manual_tag(tag);
+        }
+        plain_json_response(&json!({ "tag": tag }))
+    }
+}
+
+/// The config update that clears the free-text session tag.
+fn clear_tag() -> Map<String, Value> {
+    let mut updates = Map::new();
+    updates.insert("mob_tracking_tag".into(), json!(""));
+    updates
+}
+
+/// The config update that clears the stored manual-mob selection.
+fn clear_manual_mob() -> Map<String, Value> {
+    let mut updates = Map::new();
+    updates.insert("manual_mob_species".into(), json!(""));
+    updates.insert("manual_mob_maturity".into(), json!(""));
+    updates
+}
+
+/// The released-mob display value: null when no species, the bare species
+/// when no maturity, else `"{maturity} {species}"` (the reference's form).
+fn mob_display(species: &str, maturity: &str) -> Value {
+    if species.is_empty() {
+        Value::Null
+    } else if maturity.is_empty() {
+        Value::String(species.to_string())
+    } else {
+        Value::String(format!("{maturity} {species}"))
     }
 }

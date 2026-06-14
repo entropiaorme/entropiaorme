@@ -22,6 +22,8 @@ use eo_services::codex::{CodexError, CodexService};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use eo_services::quests::{QuestError, QuestService};
+use eo_services::skill_tracker::{SkillTracker, SUPPRESS_TIMEOUT_SECONDS};
+use eo_services::tracker::HuntTracker;
 use eo_wire::normalizer::to_wire_json;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -679,6 +681,57 @@ impl HydrationState {
     pub async fn codex_calibrate(&self, species_name: &str, rank: i64) -> Response<Body> {
         match self.codex.calibrate(species_name, rank).await {
             Ok(result) => plain_json_response(&result),
+            Err(CodexError::Invalid(message)) => {
+                error_response(StatusCode::BAD_REQUEST, &detail(&message))
+            }
+            Err(CodexError::Db(_)) => internal_error(),
+        }
+    }
+
+    /// POST /api/codex/claim: claim a codex rank reward. Mirrors
+    /// `claim_rank`: the service's invalid-input errors map to a 400 with
+    /// the message; on success, an active session suppresses the upcoming
+    /// skill gain from dedup (`suppress_next`), exactly as the reference
+    /// does and only after the claim succeeds.
+    pub async fn codex_claim(
+        &self,
+        tracker: &Arc<HuntTracker>,
+        skill_tracker: &Arc<SkillTracker>,
+        species_name: &str,
+        rank: i64,
+        skill_name: &str,
+    ) -> Response<Body> {
+        match self.codex.claim_rank(species_name, rank, skill_name).await {
+            Ok(result) => {
+                if tracker.is_tracking() {
+                    skill_tracker.suppress_next(skill_name, SUPPRESS_TIMEOUT_SECONDS);
+                }
+                plain_json_response(&result)
+            }
+            Err(CodexError::Invalid(message)) => {
+                error_response(StatusCode::BAD_REQUEST, &detail(&message))
+            }
+            Err(CodexError::Db(_)) => internal_error(),
+        }
+    }
+
+    /// POST /api/codex/meta/claim: claim a meta codex reward (1 PED into an
+    /// attribute). Mirrors `meta_claim`: invalid input maps to a 400; on
+    /// success, an active session suppresses the upcoming attribute skill
+    /// gain (`suppress_next`).
+    pub async fn codex_meta_claim(
+        &self,
+        tracker: &Arc<HuntTracker>,
+        skill_tracker: &Arc<SkillTracker>,
+        attribute_name: &str,
+    ) -> Response<Body> {
+        match self.codex.meta_claim(attribute_name).await {
+            Ok(result) => {
+                if tracker.is_tracking() {
+                    skill_tracker.suppress_next(attribute_name, SUPPRESS_TIMEOUT_SECONDS);
+                }
+                plain_json_response(&result)
+            }
             Err(CodexError::Invalid(message)) => {
                 error_response(StatusCode::BAD_REQUEST, &detail(&message))
             }

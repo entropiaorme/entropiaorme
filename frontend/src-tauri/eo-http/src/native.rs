@@ -29,7 +29,7 @@ use crate::extract::{
     query_int_or_default, require_bounded_int, require_float, require_str, LaxInt, QueryString,
     Validation,
 };
-use crate::hydration::{detail, error_response};
+use crate::hydration::{detail, error_response, internal_error};
 use crate::pyjson::PyValue;
 use crate::{arm_routed, AppState, ArmRoutes};
 
@@ -901,11 +901,137 @@ async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     hydration.codex_calibrate(&species, rank).await
 }
 
-// ── Settings adapters (reads only; the writes stay proxied until the
-//    producer cutover, falling to each path's proxy fallback) ────────
+/// POST /api/codex/claim: `{species_name, rank, skill_name}`. The service's
+/// invalid-input errors map to a 400; on success a live session suppresses
+/// the claimed skill's next gain. Mirrors `claim_rank`.
+async fn codex_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker), Some(skill_tracker)) =
+        (state.hydration(), state.tracker(), state.skill_tracker())
+    else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let species = body::required_str(&mut v, &object, "species_name");
+    let rank = body::required_int_at(
+        &mut v,
+        object.pairs(),
+        object.echo(),
+        "rank",
+        &[Loc::Field("rank")],
+    );
+    let skill = body::required_str(&mut v, &object, "skill_name");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    // A surrogate-tainted string reaches the codex service before any gate
+    // and crashes its lookup unhandled (the reference's 500), unlike the
+    // calibrate path whose encode raises a ValueError -> 400. Mirror the 500.
+    if v.binding_taint() {
+        return internal_error();
+    }
+    let rank = body_int_or_max(rank.expect("validated"));
+    hydration
+        .codex_claim(
+            &tracker,
+            &skill_tracker,
+            &species.expect("validated"),
+            rank,
+            &skill.expect("validated"),
+        )
+        .await
+}
+
+/// POST /api/codex/meta/claim: `{attribute_name}`. Mirrors `meta_claim`.
+async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker), Some(skill_tracker)) =
+        (state.hydration(), state.tracker(), state.skill_tracker())
+    else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let attribute = body::required_str(&mut v, &object, "attribute_name");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    // The surrogate reaches the meta-claim lookup unhandled (the reference's
+    // 500), mirrored here.
+    if v.binding_taint() {
+        return internal_error();
+    }
+    hydration
+        .codex_meta_claim(&tracker, &skill_tracker, &attribute.expect("validated"))
+        .await
+}
+
+// ── Settings adapters ───────────────────────────────────────────────
+//
+// The reads serve natively; the overlay-position write serves natively
+// too (it has no producer side effects). PATCH /settings + POST
+// /settings/reset stay proxied until the input-listener composition
+// (they signal the hotbar listener), falling to each path's proxy arm.
 
 simple_get!(settings_get, settings);
 simple_get!(overlay_position_get, overlay_position);
+
+/// PUT /api/settings/overlay-position: `{x, y}` ints. An unparseable
+/// coordinate is the backend's 422 int_parsing.
+async fn overlay_position_set(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config)) = (state.hydration(), state.config_service()) else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let x = body::required_int_at(
+        &mut v,
+        object.pairs(),
+        object.echo(),
+        "x",
+        &[Loc::Field("x")],
+    );
+    let y = body::required_int_at(
+        &mut v,
+        object.pairs(),
+        object.echo(),
+        "y",
+        &[Loc::Field("y")],
+    );
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    let x = body_int_or_max(x.expect("validated"));
+    let y = body_int_or_max(y.expect("validated"));
+    hydration.overlay_position_set(&config, x, y).await
+}
+
+/// A parsed body int, with a beyond-`i64` value clamped to the max (an
+/// absurd coordinate the reference would store as an unbounded Python int;
+/// realistic values fit `i64`, so the clamp is never reached in practice).
+fn body_int_or_max(value: BodyInt) -> i64 {
+    match value {
+        BodyInt::Value(parsed) => parsed,
+        BodyInt::Overflow => i64::MAX,
+    }
+}
 
 // ── Character adapters ──────────────────────────────────────────────
 
@@ -1024,6 +1150,75 @@ async fn tracking_manual_mob_suggestions(state: Arc<AppState>, req: Request) -> 
     let inm = if_none_match(&req);
     hydration
         .tracking_manual_mob_suggestions(&tracker, &q, limit.expect("validated"), inm.as_deref())
+        .await
+}
+
+/// POST /api/tracking/release-mob: clear the locked mob or tag (empty body).
+async fn tracking_release_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config), Some(tracker)) =
+        (state.hydration(), state.config_service(), state.tracker())
+    else {
+        return state.proxy(req).await;
+    };
+    hydration.release_mob(&config, &tracker).await
+}
+
+/// POST /api/tracking/manual-mob-lock: `{species, maturity?}`.
+async fn tracking_manual_mob_lock(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config), Some(tracker)) =
+        (state.hydration(), state.config_service(), state.tracker())
+    else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let species = body::required_str(&mut v, &object, "species");
+    let maturity = body::str_or_default(&mut v, &object, "maturity", "");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    hydration
+        .manual_mob_lock(
+            &config,
+            &tracker,
+            &species.expect("validated"),
+            &maturity.expect("validated"),
+        )
+        .await
+}
+
+/// POST /api/tracking/tag-lock: `{tag}`.
+async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config), Some(tracker)) =
+        (state.hydration(), state.config_service(), state.tracker())
+    else {
+        return state.proxy(req).await;
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let tag = body::required_str(&mut v, &object, "tag");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    hydration
+        .tag_lock(
+            &config,
+            &tracker,
+            &tag.expect("validated"),
+            v.binding_taint(),
+        )
         .await
 }
 
@@ -1971,6 +2166,18 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             arm_routed(MethodFilter::POST, "/api/codex/calibrate", codex_calibrate),
         )
         .route(
+            "/api/codex/claim",
+            arm_routed(MethodFilter::POST, "/api/codex/claim", codex_claim),
+        )
+        .route(
+            "/api/codex/meta/claim",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/codex/meta/claim",
+                codex_meta_claim,
+            ),
+        )
+        .route(
             "/api/codex/meta/attributes",
             arm_routed(
                 MethodFilter::GET,
@@ -2032,6 +2239,30 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/tracking/manual-mob-suggestions",
                 tracking_manual_mob_suggestions,
+            ),
+        )
+        .route(
+            "/api/tracking/release-mob",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/release-mob",
+                tracking_release_mob,
+            ),
+        )
+        .route(
+            "/api/tracking/manual-mob-lock",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/manual-mob-lock",
+                tracking_manual_mob_lock,
+            ),
+        )
+        .route(
+            "/api/tracking/tag-lock",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/tag-lock",
+                tracking_tag_lock,
             ),
         )
         .route(
@@ -2140,11 +2371,10 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/settings/overlay-position",
-            arm_routed(
-                MethodFilter::GET,
-                "/api/settings/overlay-position",
-                overlay_position_get,
-            ),
+            ArmRoutes::at("/api/settings/overlay-position")
+                .on(MethodFilter::GET, overlay_position_get)
+                .on(MethodFilter::PUT, overlay_position_set)
+                .into_method_router(),
         )
         .route(
             "/api/character/calibration",

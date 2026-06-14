@@ -27,7 +27,7 @@ pub mod sse;
 pub mod tracking_routes;
 
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State};
 use axum::response::Response;
@@ -48,6 +48,8 @@ pub struct AppState {
     hydration: Option<Arc<crate::hydration::HydrationState>>,
     tracker: Option<Arc<eo_services::tracker::HuntTracker>>,
     sse_hub: Option<Arc<eo_wire::sse::SseHub>>,
+    config_service: Option<Arc<Mutex<eo_services::config_service::ConfigService>>>,
+    skill_tracker: Option<Arc<eo_services::skill_tracker::SkillTracker>>,
     cors: Option<cors::CorsConfig>,
 }
 
@@ -68,6 +70,8 @@ impl AppState {
             hydration: None,
             tracker: None,
             sse_hub: None,
+            config_service: None,
+            skill_tracker: None,
             cors: None,
         }
     }
@@ -124,6 +128,42 @@ impl AppState {
     /// The live producer-spine SSE hub, when composed.
     pub(crate) fn sse_hub(&self) -> Option<Arc<eo_wire::sse::SseHub>> {
         self.sse_hub.clone()
+    }
+
+    /// Attach the settings writer (the same `Arc<Mutex<ConfigService>>` the
+    /// producer spine holds). Without it (a substrate built before
+    /// composition, or composition declined at startup) the settings-write
+    /// routes fall back to the proxy arm, exactly like the read surface
+    /// without [`with_hydration`].
+    pub fn with_config_service(
+        mut self,
+        config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
+    ) -> Self {
+        self.config_service = Some(config_service);
+        self
+    }
+
+    /// The settings writer, when composed.
+    pub(crate) fn config_service(
+        &self,
+    ) -> Option<Arc<Mutex<eo_services::config_service::ConfigService>>> {
+        self.config_service.clone()
+    }
+
+    /// Attach the live producer-spine skill tracker (the same
+    /// `Arc<SkillTracker>` held by the producer spine). Without it the codex
+    /// claim routes that arm `suppress_next` fall back to the proxy arm.
+    pub fn with_skill_tracker(
+        mut self,
+        skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
+    ) -> Self {
+        self.skill_tracker = Some(skill_tracker);
+        self
+    }
+
+    /// The live producer-spine skill tracker, when composed.
+    pub(crate) fn skill_tracker(&self) -> Option<Arc<eo_services::skill_tracker::SkillTracker>> {
+        self.skill_tracker.clone()
     }
 
     pub fn upstream(&self) -> &str {

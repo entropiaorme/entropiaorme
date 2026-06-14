@@ -463,6 +463,14 @@ mod tests {
     #[test]
     fn new_with_providers_runs_the_dml_then_cpu_ladder_and_records_the_selection() {
         let _ort = lock_ort();
+        // The bundled ONNX Runtime is the Windows onnxruntime-directml build;
+        // loading that PE via the loader on a non-Windows host hangs rather
+        // than erroring, so this load-bearing test runs only on Windows
+        // (where the real runtime is present and the OCR feature ships).
+        if !cfg!(windows) {
+            eprintln!("the bundled ONNX Runtime is Windows-only; skipping on this platform");
+            return;
+        }
         let dylib = repo_ort_dylib();
         if !dylib.is_file() {
             eprintln!(
@@ -522,6 +530,12 @@ mod tests {
     #[test]
     fn new_records_the_default_provider() {
         let _ort = lock_ort();
+        // Windows-only: see `new_with_providers_...` (loading the bundled
+        // Windows runtime on another platform hangs the loader).
+        if !cfg!(windows) {
+            eprintln!("the bundled ONNX Runtime is Windows-only; skipping on this platform");
+            return;
+        }
         let dylib = repo_ort_dylib();
         if !dylib.is_file() {
             eprintln!("committed ONNX Runtime dylib absent; skipping");

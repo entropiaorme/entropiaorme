@@ -193,6 +193,12 @@ fn pin_ort_dylib_env(resource_dir: Option<&PathBuf>) -> PathBuf {
 }
 
 fn init_ort_runtime(resource_dir: Option<&PathBuf>) {
+    // The bundled ONNX Runtime is the Windows onnxruntime-directml build; on
+    // any other platform there is no compatible runtime to pin (and loading
+    // the Windows PE there hangs the loader), so OCR simply stays offline.
+    if !cfg!(windows) {
+        return;
+    }
     static ORT_INIT: std::sync::Once = std::sync::Once::new();
     ORT_INIT.call_once(|| {
         // Pin the fallback loader to the absolute path before any ORT use
@@ -399,6 +405,13 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
 /// anything, more faithful. Returns `None` (logged) on any load failure:
 /// OCR is an optional faculty and never declines composition.
 async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
+    // OCR ships only where a compatible ONNX Runtime is bundled, which today
+    // is Windows (the onnxruntime-directml libraries). On other platforms the
+    // engine stays absent rather than attempting to load the Windows runtime
+    // (which hangs the loader), exactly as a failed load would leave it.
+    if !cfg!(windows) {
+        return None;
+    }
     let model_path = models.join("svtrv2_rec.onnx");
     let dict_path = models.join("ppocr_keys_v1.txt");
     let constructed =

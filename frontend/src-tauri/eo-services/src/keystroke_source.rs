@@ -189,6 +189,66 @@ impl KeystrokeSource for HookKeystrokeSource {
     fn stop(&self) {}
 }
 
+/// A reference-counted wrapper over a single [`KeystrokeSource`], so several
+/// listeners can share one underlying OS hook. The Windows low-level keyboard
+/// hook is single-instance ([`HookKeystrokeSource`] refuses a second
+/// concurrent hook through its process-global slot), so two listeners that
+/// each owned their own hook would have one stand inert; sharing one source
+/// behind this wrapper lets both subscribe and drive `start`/`stop`
+/// independently. The inner source attaches on the first `start` and detaches
+/// only on the last `stop`, so a listener that wants events keeps the hook
+/// live for the others while each still gates on its own running flag. Off the
+/// supported platform (or on an attach failure) the inner `start` returns
+/// false and the count stays at zero, so a later `start` retries rather than
+/// latching a dead source.
+pub struct SharedKeystrokeSource {
+    inner: Arc<dyn KeystrokeSource>,
+    active: Mutex<usize>,
+}
+
+impl SharedKeystrokeSource {
+    pub fn new(inner: Arc<dyn KeystrokeSource>) -> Self {
+        Self {
+            inner,
+            active: Mutex::new(0),
+        }
+    }
+
+    fn lock_active(&self) -> std::sync::MutexGuard<'_, usize> {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl KeystrokeSource for SharedKeystrokeSource {
+    fn subscribe(&self, callback: KeystrokeCallback) {
+        self.inner.subscribe(callback);
+    }
+
+    fn start(&self) -> bool {
+        let mut active = self.lock_active();
+        if *active == 0 && !self.inner.start() {
+            // The underlying mechanism did not attach; do not count a start
+            // that produced no live hook, so the next caller retries.
+            return false;
+        }
+        *active += 1;
+        true
+    }
+
+    fn stop(&self) {
+        let mut active = self.lock_active();
+        if *active == 0 {
+            return;
+        }
+        *active -= 1;
+        if *active == 0 {
+            self.inner.stop();
+        }
+    }
+}
+
 /// The Windows hook plumbing: a dedicated thread installs the
 /// low-level keyboard hook and pumps messages; the hook procedure
 /// filters by allowlist and hands the worker queue one entry per
@@ -457,5 +517,44 @@ mod tests {
         // The portable dispatch path proves the registration landed.
         HookKeystrokeSource::dispatch(&source.callbacks, &None, "1", KeystrokeKind::Press);
         assert_eq!(*seen.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn the_shared_source_refcounts_start_and_stop_over_one_inner() {
+        let inner = Arc::new(MockKeystrokeSource::new());
+        let shared = SharedKeystrokeSource::new(inner.clone() as Arc<dyn KeystrokeSource>);
+        let seen = Arc::new(Mutex::new(0usize));
+        let sink = seen.clone();
+        shared.subscribe(Arc::new(move |_: &KeystrokeEvent| {
+            *sink.lock().unwrap() += 1;
+        }));
+
+        // Two listeners start: the inner attaches once and delivers.
+        assert!(shared.start());
+        assert!(shared.start());
+        inner.inject("space", now(), KeystrokeKind::Press);
+        assert_eq!(*seen.lock().unwrap(), 1);
+
+        // One stop: the other listener still wants events, so the inner stays
+        // attached and keeps delivering.
+        shared.stop();
+        inner.inject("space", now(), KeystrokeKind::Press);
+        assert_eq!(*seen.lock().unwrap(), 2);
+
+        // The last stop detaches the inner: no more delivery. A redundant
+        // stop past zero is a no-op.
+        shared.stop();
+        shared.stop();
+        inner.inject("space", now(), KeystrokeKind::Press);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            2,
+            "the last stop detached the shared source"
+        );
+
+        // A fresh start re-attaches.
+        assert!(shared.start());
+        inner.inject("space", now(), KeystrokeKind::Press);
+        assert_eq!(*seen.lock().unwrap(), 3);
     }
 }

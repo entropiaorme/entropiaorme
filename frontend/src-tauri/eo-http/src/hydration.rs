@@ -93,11 +93,17 @@ fn if_none_match_matches(header_value: Option<&str>, current_etag: &str) -> bool
     })
 }
 
-/// A hydration JSON response under the conditional-GET contract: 200
-/// with the body (or 304 with none) plus the ETag and Cache-Control
-/// headers either way.
-pub(crate) fn json_response(payload: &Value, if_none_match: Option<&str>) -> Response<Body> {
-    let body = to_wire_json(payload).into_bytes();
+/// A 200 response under the conditional-GET contract for an arbitrary body
+/// and media type: the strong ETag over the body, `Cache-Control: no-cache`,
+/// and `304 Not Modified` (empty body) on a matching `If-None-Match`. The
+/// ETag middleware covers every 2xx GET under its prefixes regardless of
+/// media type, so the manual-scan capture PNG rides this exactly as the JSON
+/// reads do; [`json_response`] is this specialised to JSON.
+pub(crate) fn conditional_response(
+    body: Vec<u8>,
+    media_type: &'static str,
+    if_none_match: Option<&str>,
+) -> Response<Body> {
     let etag = compute_strong_etag(&body);
     let not_modified = if_none_match_matches(if_none_match, &etag);
     let mut response = Response::builder()
@@ -109,7 +115,7 @@ pub(crate) fn json_response(payload: &Value, if_none_match: Option<&str>) -> Res
         .header(header::ETAG, &etag)
         .header(header::CACHE_CONTROL, "no-cache");
     if !not_modified {
-        response = response.header(header::CONTENT_TYPE, "application/json");
+        response = response.header(header::CONTENT_TYPE, media_type);
     }
     response
         .body(if not_modified {
@@ -118,6 +124,17 @@ pub(crate) fn json_response(payload: &Value, if_none_match: Option<&str>) -> Res
             Body::from(body)
         })
         .expect("response assembles")
+}
+
+/// A hydration JSON response under the conditional-GET contract: 200
+/// with the body (or 304 with none) plus the ETag and Cache-Control
+/// headers either way.
+pub(crate) fn json_response(payload: &Value, if_none_match: Option<&str>) -> Response<Body> {
+    conditional_response(
+        to_wire_json(payload).into_bytes(),
+        "application/json",
+        if_none_match,
+    )
 }
 
 /// A non-2xx JSON error response (no ETag: the middleware touches

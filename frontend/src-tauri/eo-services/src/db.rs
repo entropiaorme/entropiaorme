@@ -222,6 +222,26 @@ impl Db {
         Ok(row)
     }
 
+    /// One equipment-library row by id alone: `(name, item_type, properties
+    /// JSON)`, or None when absent. The hotbar resolver reads it to branch on
+    /// the item type the slot's bound id resolves to (mirroring the backend's
+    /// `SELECT id, name, item_type FROM equipment_library WHERE id = ?`, with
+    /// the properties carried so the healing branch reads them without a
+    /// second query).
+    pub async fn hotbar_equipment_row(
+        &self,
+        id: i64,
+    ) -> Result<Option<(String, String, String)>, DbError> {
+        let row = sqlx::query_as::<_, (String, String, String)>(
+            "SELECT name, item_type, properties_json FROM equipment_library \
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// The first weapon-row `properties_json` whose name contains the
     /// supplied fragment, ported from the backend's
     /// `_equipment_profile_lookup`: a `LIKE '%fragment%'` over weapon
@@ -411,6 +431,37 @@ mod tests {
 
     async fn fresh_db(dir: &std::path::Path) -> Db {
         Db::open(&dir.join("entropia_orme.db")).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn hotbar_equipment_row_reads_name_type_and_properties_by_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        db.insert_equipment_for_tests(7, "Healer", "healing", r#"{"tool_entity":{"x":1}}"#)
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(8, "Opalo", "weapon", r#"{"weapon_entity":{}}"#)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.hotbar_equipment_row(7).await.unwrap(),
+            Some((
+                "Healer".to_string(),
+                "healing".to_string(),
+                r#"{"tool_entity":{"x":1}}"#.to_string(),
+            )),
+        );
+        assert_eq!(
+            db.hotbar_equipment_row(8).await.unwrap(),
+            Some((
+                "Opalo".to_string(),
+                "weapon".to_string(),
+                r#"{"weapon_entity":{}}"#.to_string(),
+            )),
+        );
+        // An absent id yields None.
+        assert_eq!(db.hotbar_equipment_row(999).await.unwrap(), None);
     }
 
     #[tokio::test]

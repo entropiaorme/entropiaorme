@@ -22,6 +22,7 @@ pub mod native;
 pub mod producer_routes;
 pub mod proxy;
 pub mod pyjson;
+pub mod scan_routes;
 pub mod settings_routes;
 pub mod sse;
 pub mod tracking_routes;
@@ -50,6 +51,10 @@ pub struct AppState {
     sse_hub: Option<Arc<eo_wire::sse::SseHub>>,
     config_service: Option<Arc<Mutex<eo_services::config_service::ConfigService>>>,
     skill_tracker: Option<Arc<eo_services::skill_tracker::SkillTracker>>,
+    skill_scan: Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>,
+    repair_ocr: Option<Arc<eo_services::repair_ocr::RepairOcrService>>,
+    spacebar_listener: Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>>,
+    hotbar_listener: Option<Arc<eo_services::hotbar_listener::HotbarListener>>,
     cors: Option<cors::CorsConfig>,
 }
 
@@ -72,6 +77,10 @@ impl AppState {
             sse_hub: None,
             config_service: None,
             skill_tracker: None,
+            skill_scan: None,
+            repair_ocr: None,
+            spacebar_listener: None,
+            hotbar_listener: None,
             cors: None,
         }
     }
@@ -164,6 +173,75 @@ impl AppState {
     /// The live producer-spine skill tracker, when composed.
     pub(crate) fn skill_tracker(&self) -> Option<Arc<eo_services::skill_tracker::SkillTracker>> {
         self.skill_tracker.clone()
+    }
+
+    /// Attach the composed manual skill-scan service (the OCR scan
+    /// state machine). Without it (a substrate built before composition,
+    /// composition declined, or the OCR runtime absent off Windows) the
+    /// scan routes fall back to the proxy arm.
+    pub fn with_skill_scan(
+        mut self,
+        skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
+    ) -> Self {
+        self.skill_scan = Some(skill_scan);
+        self
+    }
+
+    /// The composed manual skill-scan service, when present.
+    pub(crate) fn skill_scan(
+        &self,
+    ) -> Option<Arc<eo_services::skill_scan_manual::SkillScanManual>> {
+        self.skill_scan.clone()
+    }
+
+    /// Attach the composed repair-OCR service. Without it the repair-scan
+    /// route falls back to the proxy arm.
+    pub fn with_repair_ocr(
+        mut self,
+        repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
+    ) -> Self {
+        self.repair_ocr = Some(repair_ocr);
+        self
+    }
+
+    /// The composed repair-OCR service, when present.
+    pub(crate) fn repair_ocr(&self) -> Option<Arc<eo_services::repair_ocr::RepairOcrService>> {
+        self.repair_ocr.clone()
+    }
+
+    /// Attach the composed spacebar-capture listener. Without it the
+    /// spacebar-capture toggle route falls back to the proxy arm.
+    pub fn with_spacebar_listener(
+        mut self,
+        spacebar_listener: Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>,
+    ) -> Self {
+        self.spacebar_listener = Some(spacebar_listener);
+        self
+    }
+
+    /// The composed spacebar-capture listener, when present.
+    pub(crate) fn spacebar_listener(
+        &self,
+    ) -> Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>> {
+        self.spacebar_listener.clone()
+    }
+
+    /// Attach the composed hotbar listener (the same `Arc<HotbarListener>` the
+    /// producer spine holds). Without it the snapshot route falls back to the
+    /// proxy arm (it reads the listener's running state).
+    pub fn with_hotbar_listener(
+        mut self,
+        hotbar_listener: Arc<eo_services::hotbar_listener::HotbarListener>,
+    ) -> Self {
+        self.hotbar_listener = Some(hotbar_listener);
+        self
+    }
+
+    /// The composed hotbar listener, when present.
+    pub(crate) fn hotbar_listener(
+        &self,
+    ) -> Option<Arc<eo_services::hotbar_listener::HotbarListener>> {
+        self.hotbar_listener.clone()
     }
 
     pub fn upstream(&self) -> &str {

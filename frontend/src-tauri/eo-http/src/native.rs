@@ -25,9 +25,9 @@ use crate::body::{
 use crate::character_routes::ProspectQuery;
 use crate::equipment_routes::{EquipmentRequest, EquipmentTaint};
 use crate::extract::{
-    decode_path_segment, float_or_default, literal_or_default, opt_float, parse_int_lax,
-    query_int_or_default, require_bounded_int, require_float, require_str, LaxInt, QueryString,
-    Validation,
+    decode_path_segment, float_or_default, literal_or_default, opt_float, opt_query_int,
+    parse_int_lax, query_int_or_default, require_bounded_int, require_float, require_query_bool,
+    require_str, LaxInt, QueryString, Validation,
 };
 use crate::hydration::{detail, error_response, internal_error};
 use crate::pyjson::PyValue;
@@ -977,6 +977,165 @@ async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> 
         .await
 }
 
+// ── Manual scan adapters (scan_manual.py) ──────────────────────────────
+//
+// The skill-scan state machine and the one-shot repair-cost read serve over
+// the composed `SkillScanManual` / `RepairOcrService` (always constructed;
+// off Windows the OCR runtime is absent, so they report "engine unavailable"
+// but the state machine still serves). They proxy only when composition was
+// declined. The verbs' projection-and-serialise logic lives in `scan_routes`;
+// these adapters extract each route's parameters the backend's way.
+
+/// GET /api/scan/skills/status
+async fn scan_skills_status(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    let inm = if_none_match(&req);
+    crate::scan_routes::status(&scan, inm.as_deref())
+}
+
+/// POST /api/scan/skills/start?page_count=: `page_count` is `int | None`; an
+/// unparseable value is the backend's 422 int_parsing, the range check (the
+/// service's 1..=30) rides the plain-200 body.
+async fn scan_skills_start(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let page_count = opt_query_int(&mut validation, &query, "page_count");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    crate::scan_routes::start(&scan, page_count.flatten())
+}
+
+/// POST /api/scan/skills/capture
+async fn scan_skills_capture(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::capture(&scan)
+}
+
+/// POST /api/scan/skills/cancel
+async fn scan_skills_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::cancel(&scan)
+}
+
+/// POST /api/scan/skills/undo
+async fn scan_skills_undo(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::undo(&scan)
+}
+
+/// POST /api/scan/skills/process
+async fn scan_skills_process(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::process(&scan)
+}
+
+/// POST /api/scan/skills/accept
+async fn scan_skills_accept(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::accept(&scan)
+}
+
+/// POST /api/scan/skills/reject
+async fn scan_skills_reject(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    crate::scan_routes::reject(&scan)
+}
+
+/// GET /api/scan/skills/pending
+async fn scan_skills_pending(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    let inm = if_none_match(&req);
+    crate::scan_routes::pending(&scan, inm.as_deref())
+}
+
+/// GET /api/scan/skills/capture/{page}: the `{page}` is an `int` path param.
+/// A percent-encoded slash de-matches (the framework 404), unparseable text
+/// is the 422 int_parsing, and a magnitude beyond `i64` saturates to the
+/// bound (the service then finds no such page and serves its own 404, exactly
+/// as the reference's unbounded `int` indexes out of range to None).
+async fn scan_skills_capture_png(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(scan) = state.skill_scan() else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/scan/skills/capture/")
+        .unwrap_or_default();
+    let decoded = decode_path_segment(raw);
+    if decoded.contains('/') {
+        return router_not_found();
+    }
+    let page = match parse_int_lax(&decoded) {
+        Some(LaxInt::Value(value)) => value,
+        Some(LaxInt::OverflowPositive) => i64::MAX,
+        Some(LaxInt::OverflowNegative) => i64::MIN,
+        None => {
+            let mut v = Validation::new();
+            v.int_parsing("path", "page", &decoded);
+            return v.into_response();
+        }
+    };
+    let inm = if_none_match(&req);
+    crate::scan_routes::capture_png(&scan, page, inm.as_deref())
+}
+
+/// POST /api/tracking/session/{session_id}/repair-scan: the `session_id` is
+/// routing-only (the reference ignores it), so a decoded slash still
+/// de-matches (the framework 404) but the value is unused. Gated on the live
+/// `repair_ocr_enabled` config flag (400 when off).
+async fn tracking_repair_scan(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(repair), Some(config)) = (state.repair_ocr(), state.config_service()) else {
+        return state.proxy(req).await;
+    };
+    if let Err(reply) = string_path_id(session_id_segment(req.uri().path(), "/repair-scan")) {
+        return *reply;
+    }
+    let enabled = {
+        let Ok(guard) = config.lock() else {
+            return internal_error();
+        };
+        guard.get().repair_ocr_enabled
+    };
+    crate::scan_routes::repair_scan(&repair, enabled)
+}
+
+/// POST /api/scan/spacebar-capture?enabled=: toggle the hands-free capture
+/// listener. `enabled` is a required bool; an uninterpretable value is the
+/// backend's 422 bool_parsing, absent is its 422 missing.
+async fn scan_spacebar_capture(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(listener) = state.spacebar_listener() else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let mut validation = Validation::new();
+    let enabled = require_query_bool(&mut validation, &query, "enabled");
+    if !validation.is_ok() {
+        return validation.into_response();
+    }
+    crate::scan_routes::spacebar_capture(&listener, enabled.expect("validated"))
+}
+
 // ── Settings adapters ───────────────────────────────────────────────
 //
 // The reads serve natively; the overlay-position write serves natively
@@ -1219,6 +1378,21 @@ async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body>
             &tag.expect("validated"),
             v.binding_taint(),
         )
+        .await
+}
+
+/// GET /api/tracking/snapshot: the consolidated dashboard hydration, over the
+/// live tracker, the config, and the hotbar listener's running state. Proxies
+/// unless all three are composed (the snapshot reads each).
+async fn tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(tracker), Some(hotbar)) =
+        (state.hydration(), state.tracker(), state.hotbar_listener())
+    else {
+        return state.proxy(req).await;
+    };
+    let inm = if_none_match(&req);
+    hydration
+        .tracking_snapshot(&tracker, &hotbar, inm.as_deref())
         .await
 }
 
@@ -2242,6 +2416,14 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             ),
         )
         .route(
+            "/api/tracking/snapshot",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/tracking/snapshot",
+                tracking_snapshot,
+            ),
+        )
+        .route(
             "/api/tracking/release-mob",
             arm_routed(
                 MethodFilter::POST,
@@ -2311,6 +2493,102 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::POST,
                 "/api/tracking/session/{session_id}/quest-link",
                 tracking_quest_link_decide,
+            ),
+        )
+        .route(
+            "/api/tracking/session/{session_id}/repair-scan",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/tracking/session/{session_id}/repair-scan",
+                tracking_repair_scan,
+            ),
+        )
+        .route(
+            "/api/scan/skills/status",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/scan/skills/status",
+                scan_skills_status,
+            ),
+        )
+        .route(
+            "/api/scan/skills/start",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/start",
+                scan_skills_start,
+            ),
+        )
+        .route(
+            "/api/scan/skills/capture",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/capture",
+                scan_skills_capture,
+            ),
+        )
+        .route(
+            "/api/scan/skills/capture/{page}",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/scan/skills/capture/{page}",
+                scan_skills_capture_png,
+            ),
+        )
+        .route(
+            "/api/scan/skills/cancel",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/cancel",
+                scan_skills_cancel,
+            ),
+        )
+        .route(
+            "/api/scan/skills/undo",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/undo",
+                scan_skills_undo,
+            ),
+        )
+        .route(
+            "/api/scan/skills/process",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/process",
+                scan_skills_process,
+            ),
+        )
+        .route(
+            "/api/scan/skills/accept",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/accept",
+                scan_skills_accept,
+            ),
+        )
+        .route(
+            "/api/scan/skills/reject",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/skills/reject",
+                scan_skills_reject,
+            ),
+        )
+        .route(
+            "/api/scan/skills/pending",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/scan/skills/pending",
+                scan_skills_pending,
+            ),
+        )
+        .route(
+            "/api/scan/spacebar-capture",
+            arm_routed(
+                MethodFilter::POST,
+                "/api/scan/spacebar-capture",
+                scan_spacebar_capture,
             ),
         )
         .route(

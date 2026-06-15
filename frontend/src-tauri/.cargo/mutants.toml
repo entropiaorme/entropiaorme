@@ -18,6 +18,14 @@ exclude_re = [
     # Thin delegators over the platform lookups: None-on-this-platform
     # by construction.
     "eu_window\\.rs.*replace (find_game_window|get_window_geometry|game_window_present|live_region|skill_region|profession_region|repair_region)",
+    # The screen capturer: the Windows GDI platform module and the thin
+    # PNG/BGR grabbers over it. The portable platform's `capture_bgra` is a
+    # `None` stub, so the grabbers short-circuit to `None` and their pixel-
+    # conversion bodies are unreachable here; their mutants are as vacuous as
+    # the eu_window lookups. The real capture flows are exercised on the
+    # platform CI leg and the live scan.
+    "screen_capture\\.rs.*platform",
+    "screen_capture\\.rs.*replace (capture_region_png|capture_region_bgr) ->",
     # The application entry point and the HTTP-substrate spawn: the Tauri
     # event-loop runner and the task that binds the listener and serves
     # the router. Both are integration glue exercised only by an actually
@@ -50,4 +58,10 @@ exclude_re = [
     # it has no observable behaviour a test could assert (its only effect is
     # latency). Deleting its body is undetectable by construction.
     "ocr_engine\\.rs.*replace OcrEngine::warm_up with \\(\\)",
+    # The spacebar listener's capturing gate is a thread-spawn optimisation:
+    # flipping it to `true` only spawns an off-thread `capture_current_page`,
+    # which the scan itself rejects (its own active-state guard) when not
+    # capturing, with no observable effect (no page captured, no status
+    # published). Equivalent to the gated form for any assertion.
+    "spacebar_capture_listener\\.rs.*replace SpacebarCaptureListener::is_capturing -> bool with true",
 ]

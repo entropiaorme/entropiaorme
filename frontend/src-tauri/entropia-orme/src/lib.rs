@@ -77,6 +77,16 @@ struct Producers(Mutex<Option<composition::ProducerState>>);
 // when the scan routes start reading the handle.
 struct OcrEngineState(#[allow(dead_code)] Mutex<Option<std::sync::Arc<composition::OcrEngine>>>);
 
+// Holds the manual-scan input listener and the scan state machine so the exit
+// seam tears them down: the spacebar listener detaches its share of the shared
+// OS keyboard hook (the hotbar listener detaches the other share via
+// `ProducerState::stop`), and the scan resets any in-flight capture state.
+// Both are the same `Arc`s the HTTP app state serves the scan routes over.
+struct ScanInput {
+    spacebar: std::sync::Arc<composition::SpacebarCaptureListener>,
+    skill_scan: std::sync::Arc<composition::SkillScanManual>,
+}
+
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
@@ -166,6 +176,13 @@ pub fn run() {
                         producers.stop();
                     }
                 }
+            }
+
+            // Tear down the scan input listener and reset the scan: the
+            // spacebar listener detaches its share of the shared OS hook.
+            if let Some(state) = app.try_state::<ScanInput>() {
+                state.spacebar.stop();
+                state.skill_scan.shutdown();
             }
 
             if let Some(state) = app.try_state::<SidecarChild>() {
@@ -299,20 +316,40 @@ fn spawn_http_substrate(
             // the producer routes serve over the same `Arc<HuntTracker>` the
             // exit-seam teardown stops, and the `/api/events` stream serves
             // over the same `Arc<SseHub>` the producer-bus bridge feeds.
+            // Clones for the exit seam, taken before the originals move into
+            // the app state below: the spacebar listener detaches its share of
+            // the shared OS hook and the scan resets in-flight state on close.
+            let exit_spacebar = composed.spacebar_listener.clone();
+            let exit_skill_scan = composed.skill_scan.clone();
             app_state = app_state
                 .with_hydration(composed.hydration)
                 .with_tracker(composed.producers.tracker_handle())
                 .with_sse_hub(composed.producers.sse_hub_handle())
                 .with_config_service(composed.producers.config_service_handle())
-                .with_skill_tracker(composed.producers.skill_tracker_handle());
+                .with_skill_tracker(composed.producers.skill_tracker_handle())
+                // The OCR scan state machine and the repair-cost reader serve
+                // the scan routes over the same `Arc`s composed on the spine
+                // bus (their status frames reach the `/api/events` stream).
+                .with_skill_scan(composed.skill_scan)
+                .with_repair_ocr(composed.repair_ocr)
+                // The spacebar-capture toggle and the snapshot route's
+                // hotbar-running read serve over the composed listeners.
+                .with_spacebar_listener(composed.spacebar_listener)
+                .with_hotbar_listener(composed.producers.hotbar_handle());
             // Hand the producer spine to the exit seam so it stops the
-            // tail thread and ends any session on app close.
+            // tail thread, the hotbar listener, and ends any session on close.
             app.manage(Producers(Mutex::new(Some(composed.producers))));
             // Hold the warmed OCR engine for the app's lifetime so the
             // scan consumer routes can pull it when they flip; no exit
             // stop (the session drops with the managed state, the ORT env
             // self-releases at process exit).
             app.manage(OcrEngineState(Mutex::new(composed.ocr_engine)));
+            // Hand the scan input listener and the scan state machine to the
+            // exit seam for deterministic teardown.
+            app.manage(ScanInput {
+                spacebar: exit_spacebar,
+                skill_scan: exit_skill_scan,
+            });
         }
         let state = std::sync::Arc::new(app_state);
         let listener = match tokio::net::TcpListener::from_std(listener) {

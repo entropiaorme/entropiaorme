@@ -457,6 +457,24 @@ fn route_arm_overrides() -> eo_http::arms::ArmOverrides {
     overrides
 }
 
+/// The environment a RELOCATED sidecar runs under: its private bind port,
+/// plus the producer-idle gate. When the substrate relocates the sidecar it
+/// has taken the public port and owns production: its composed native spine
+/// is the sole chat-log tailer, tracker, and OS-hook owner, so the sidecar
+/// must serve proxied reads WITHOUT running its own producers. Two producers
+/// writing the shared database would double-count loot and cost, and two OS
+/// keyboard hooks would conflict (the backend's `_producers_idle` documents
+/// the same invariant). The legacy-fallback spawn (not relocated, the
+/// sidecar on the public port as the only backend) does NOT idle, since it
+/// is then the sole producer.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn relocated_sidecar_env(port: u16) -> [(&'static str, String); 2] {
+    [
+        ("ENTROPIAORME_BACKEND_PORT", port.to_string()),
+        ("ENTROPIAORME_PRODUCERS_IDLE", "1".to_string()),
+    ]
+}
+
 // In debug builds the call site above is compiled out (dev uses a separately
 // launched backend), leaving this function without a caller; silence the
 // resulting dead-code lint rather than drop the release-only definition.
@@ -470,10 +488,16 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
         }
     };
     // Relocation: the sidecar reads its bind port (and derives its own
-    // Host-header guard) from this variable; the substrate's proxy arm
-    // rewrites Host to the private authority accordingly.
+    // Host-header guard) from `ENTROPIAORME_BACKEND_PORT`; the substrate's
+    // proxy arm rewrites Host to the private authority accordingly. The
+    // relocated sidecar is also told to idle its producers (see
+    // `relocated_sidecar_env`), because the substrate that relocated it owns
+    // production. The legacy-fallback spawn (`None`, the sidecar on the
+    // public port as the only backend) keeps producing.
     let sidecar = match relocated_port {
-        Some(port) => sidecar.env("ENTROPIAORME_BACKEND_PORT", port.to_string()),
+        Some(port) => relocated_sidecar_env(port)
+            .into_iter()
+            .fold(sidecar, |cmd, (key, value)| cmd.env(key, value)),
         None => sidecar,
     };
 
@@ -625,5 +649,30 @@ mod windows_runtime_icons {
             // Saturating multiply keeps absurd DPI values from overflowing.
             assert_eq!(choose_icon_size(u32::MAX, u32::MAX), 256);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relocated_sidecar_env;
+
+    #[test]
+    fn a_relocated_sidecar_is_told_to_idle_its_producers() {
+        // The substrate owns production once it relocates the sidecar, so the
+        // sidecar must serve proxied reads WITHOUT running its own producers,
+        // or two chat-log tailers would double-count into the shared
+        // database. (The legacy fallback, which is not relocated, is the sole
+        // backend and keeps producing.)
+        let env = relocated_sidecar_env(18421);
+        let idle = env
+            .iter()
+            .find(|(key, _)| *key == "ENTROPIAORME_PRODUCERS_IDLE")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(idle, Some("1"), "the relocated sidecar idles its producers");
+        let bind = env
+            .iter()
+            .find(|(key, _)| *key == "ENTROPIAORME_BACKEND_PORT")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(bind, Some("18421"), "and binds the private port");
     }
 }

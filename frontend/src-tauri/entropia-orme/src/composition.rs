@@ -410,12 +410,29 @@ pub struct Composed {
     pub spacebar_listener: Arc<SpacebarCaptureListener>,
 }
 
+/// The outcome of a composition attempt at the substrate's startup, which
+/// the orchestration acts on: install the services, retry shortly, or stay
+/// proxy-only for the session.
+pub enum Composition {
+    /// The native services are built and ready to install.
+    Ready(Composed),
+    /// The existing database is below the adoptable baseline: the sidecar
+    /// has not finished migrating it forward yet (the first launch after an
+    /// upgrade). Retrying composition once it has will adopt it, so the
+    /// caller waits briefly and tries again rather than standing down.
+    AwaitingMigration,
+    /// A permanent decline (a missing/empty snapshot, a producer fault, or a
+    /// database fault unrelated to the migration race). The substrate stays
+    /// proxy-only for the rest of the session; retrying would not help.
+    Declined,
+}
+
 /// Compose the native services, or decline with a logged reason.
 /// Declining is always safe: the substrate then proxies every route to
 /// the sidecar. The ONNX Runtime dylib is pinned (once) before any
 /// composition step, so the engine constructed inside `compose_with`
 /// binds the bundled runtime, not a stray one off `PATH`.
-pub async fn compose_native(resource_dir: Option<PathBuf>) -> Option<Composed> {
+pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     init_ort_runtime(resource_dir.as_ref());
     compose_with(
         data_dir(),
@@ -430,27 +447,35 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Option<Composed> {
 /// `models` is the recogniser's model+dict directory; the engine is
 /// constructed and warmed from it, but a failed engine load never
 /// declines composition (OCR is optional).
-async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> Option<Composed> {
+async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         eprintln!(
             "[composition] data dir {} not creatable ({err}); native services stand down",
             data_dir.display()
         );
-        return None;
+        return Composition::Declined;
     }
     let db_path = data_dir.join(DB_FILE_NAME);
     let db = match Db::open_adopted(&db_path).await {
         Ok(db) => db,
+        Err(err) if err.is_below_baseline() => {
+            // The existing database is still at the pre-upgrade schema: the
+            // sidecar has not finished migrating it up to the baseline this
+            // substrate adopts at. This is the first-launch-after-upgrade
+            // race, not a fault, so stand down only for now and let the
+            // caller retry once the sidecar has migrated it forward.
+            return Composition::AwaitingMigration;
+        }
         Err(err @ AdoptError::Quarantined { .. }) => {
-            // An existing database we cannot adopt is surfaced loudly
-            // and left untouched; the sidecar (whose own migration
-            // logic governs it as before) keeps serving.
+            // An existing database we cannot adopt (for any other reason) is
+            // surfaced loudly and left untouched; the sidecar (whose own
+            // migration logic governs it as before) keeps serving.
             eprintln!("[composition] {err}");
-            return None;
+            return Composition::Declined;
         }
         Err(err) => {
             eprintln!("[composition] database open failed ({err}); native services stand down");
-            return None;
+            return Composition::Declined;
         }
     };
     let game_data = match GameDataStore::new(&snapshot) {
@@ -461,7 +486,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
                  stand down",
                 snapshot.display()
             );
-            return None;
+            return Composition::Declined;
         }
     };
     // The store tolerates a missing directory (the backend's
@@ -475,7 +500,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
             "[composition] game-data snapshot at {} is empty; native services stand down",
             snapshot.display()
         );
-        return None;
+        return Composition::Declined;
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
 
@@ -492,7 +517,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
         Ok(producers) => producers,
         Err(err) => {
             eprintln!("[composition] producer spine failed ({err}); native services stand down");
-            return None;
+            return Composition::Declined;
         }
     };
 
@@ -526,7 +551,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     .await;
 
     let hydration = Arc::new(HydrationState::new(db, game_data, clock, data_dir));
-    Some(Composed {
+    Composition::Ready(Composed {
         hydration,
         producers,
         ocr_engine,
@@ -1169,8 +1194,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_over_a_fresh_data_dir_and_the_repo_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let composed = compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await;
-        let composed = composed.expect("fresh-dir composition succeeds");
+        let Composition::Ready(composed) =
+            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        else {
+            panic!("fresh-dir composition succeeds");
+        };
         assert!(
             dir.path().join("data").join(DB_FILE_NAME).exists(),
             "the database file is created at the resolved location"
@@ -1188,8 +1216,39 @@ mod tests {
         let db_path = data_dir.join(DB_FILE_NAME);
         std::fs::write(&db_path, b"not a database").unwrap();
         let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
-        assert!(composed.is_none(), "quarantine declines composition");
+        assert!(
+            matches!(composed, Composition::Declined),
+            "quarantine declines composition"
+        );
         assert_eq!(std::fs::read(&db_path).unwrap(), b"not a database");
+    }
+
+    #[tokio::test]
+    async fn awaits_migration_on_a_below_baseline_database() {
+        // Seed a database the backend created but has not yet migrated up to
+        // the baseline (the first-launch-after-upgrade state). Composition
+        // must report AwaitingMigration (retry once the sidecar migrates it)
+        // rather than Declined (give up proxy-only for the whole session).
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let db_path = data_dir.join(DB_FILE_NAME);
+        {
+            let db = eo_services::db::Db::open(&db_path).await.unwrap();
+            sqlx::query("UPDATE db_metadata SET value = '28' WHERE key = 'version'")
+                .execute(db.pool())
+                .await
+                .unwrap();
+            sqlx::query("DROP TABLE _sqlx_migrations")
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
+        assert!(
+            matches!(composed, Composition::AwaitingMigration),
+            "a below-baseline database awaits the sidecar's migration"
+        );
     }
 
     #[tokio::test]
@@ -1201,7 +1260,10 @@ mod tests {
             repo_models(),
         )
         .await;
-        assert!(composed.is_none(), "missing snapshot declines composition");
+        assert!(
+            matches!(composed, Composition::Declined),
+            "missing snapshot declines composition"
+        );
     }
 
     #[test]
@@ -1363,9 +1425,11 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let composed = compose_with(dir.path().join("data"), repo_snapshot(), repo_models())
-            .await
-            .expect("composition succeeds regardless of OCR availability");
+        let Composition::Ready(composed) =
+            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        else {
+            panic!("composition succeeds regardless of OCR availability");
+        };
 
         match &composed.ocr_engine {
             Some(engine) => {
@@ -1414,9 +1478,11 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let composed = compose_with(dir.path().join("data"), repo_snapshot(), repo_models())
-            .await
-            .expect("composition succeeds");
+        let Composition::Ready(composed) =
+            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        else {
+            panic!("composition succeeds");
+        };
 
         let status = composed.skill_scan.get_status();
         assert_eq!(status["phase"], "idle");

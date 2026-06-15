@@ -229,9 +229,9 @@ fn init_ort_runtime(resource_dir: Option<&PathBuf>) {
                 // configured).
                 let _ = builder.with_name("entropiaorme").commit();
             }
-            Err(err) => eprintln!(
-                "[composition] ONNX Runtime at {} unavailable ({err}); OCR will be offline \
-                 until restart",
+            Err(err) => tracing::warn!(
+                target: "eo::composition",
+                "ONNX Runtime at {} unavailable ({err}); OCR will be offline until restart",
                 dylib.display()
             ),
         }
@@ -449,8 +449,9 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
 /// declines composition (OCR is optional).
 async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
-        eprintln!(
-            "[composition] data dir {} not creatable ({err}); native services stand down",
+        tracing::error!(
+            target: "eo::composition",
+            "data dir {} not creatable ({err}); native services stand down",
             data_dir.display()
         );
         return Composition::Declined;
@@ -470,20 +471,23 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
             // An existing database we cannot adopt (for any other reason) is
             // surfaced loudly and left untouched; the sidecar (whose own
             // migration logic governs it as before) keeps serving.
-            eprintln!("[composition] {err}");
+            tracing::error!(target: "eo::composition", "{err}");
             return Composition::Declined;
         }
         Err(err) => {
-            eprintln!("[composition] database open failed ({err}); native services stand down");
+            tracing::error!(
+                target: "eo::composition",
+                "database open failed ({err}); native services stand down"
+            );
             return Composition::Declined;
         }
     };
     let game_data = match GameDataStore::new(&snapshot) {
         Ok(store) => Arc::new(store),
         Err(err) => {
-            eprintln!(
-                "[composition] game-data snapshot at {} unreadable ({err}); native services \
-                 stand down",
+            tracing::error!(
+                target: "eo::composition",
+                "game-data snapshot at {} unreadable ({err}); native services stand down",
                 snapshot.display()
             );
             return Composition::Declined;
@@ -496,8 +500,9 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     // silently diverge from the sidecar's embedded copy. Stand down
     // and let the proxy serve instead.
     if game_data.total_entities() == 0 {
-        eprintln!(
-            "[composition] game-data snapshot at {} is empty; native services stand down",
+        tracing::error!(
+            target: "eo::composition",
+            "game-data snapshot at {} is empty; native services stand down",
             snapshot.display()
         );
         return Composition::Declined;
@@ -516,7 +521,10 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     let producers = match compose_producers(producer_db, clock.clone(), &data_dir, None) {
         Ok(producers) => producers,
         Err(err) => {
-            eprintln!("[composition] producer spine failed ({err}); native services stand down");
+            tracing::error!(
+                target: "eo::composition",
+                "producer spine failed ({err}); native services stand down"
+            );
             return Composition::Declined;
         }
     };
@@ -587,20 +595,23 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
     let engine = match constructed {
         Ok(Ok(engine)) => Arc::new(engine),
         Ok(Err(err)) => {
-            eprintln!(
-                "[composition] OCR engine unavailable ({err}); scan features offline until restart"
+            tracing::warn!(
+                target: "eo::composition",
+                "OCR engine unavailable ({err}); scan features offline until restart"
             );
             return None;
         }
         Err(err) => {
-            eprintln!(
-                "[composition] OCR engine construction task failed ({err}); scan features offline"
+            tracing::warn!(
+                target: "eo::composition",
+                "OCR engine construction task failed ({err}); scan features offline"
             );
             return None;
         }
     };
-    eprintln!(
-        "[composition] OCR engine ready (provider={})",
+    tracing::info!(
+        target: "eo::composition",
+        "OCR engine ready (provider={})",
         engine.provider()
     );
     // Warm up detached so the multi-second first inference never gates the

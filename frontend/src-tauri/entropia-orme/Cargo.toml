@@ -34,6 +34,11 @@ tokio = { workspace = true }
 # any session is built. The recogniser itself (in eo-services) stays
 # EP-agnostic; the runtime wiring is a composition-root concern.
 ort = { workspace = true }
+# The composition root installs the process-wide tracing subscriber: a fmt
+# layer, an env-filter, and the metrics-aggregating layer that turns sqlx
+# query events into database-latency samples in the in-process registry.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

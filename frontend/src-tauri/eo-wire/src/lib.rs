@@ -22,6 +22,7 @@ pub mod db_snapshot;
 pub mod domain_events;
 pub mod fingerprint;
 pub mod http_fingerprint;
+pub mod metrics;
 pub mod models;
 pub mod normalizer;
 pub mod sse;

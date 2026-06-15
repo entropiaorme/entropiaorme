@@ -106,6 +106,20 @@ proptest = "1"
 # Decode the raw-capture HTTP bodies in the equivalence emitter proof
 # (eo-wire dev-dependency).
 base64 = "0.22"
+# Structured diagnostics + telemetry (the observability floor). `tracing` is
+# the facade the workspace instruments with (already in the tree transitively;
+# this promotes it to a direct dependency); `tracing-subscriber` builds the
+# process-wide subscriber: a fmt layer (stderr, plus the rolling appender once
+# it lands), an env-filter, and the metrics-aggregating layer that feeds the
+# in-process registry. Both are MIT, already on the deny.toml allowlist.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "registry",
+    "fmt",
+    "env-filter",
+    "ansi",
+    "std",
+] }
 
 eo-http = { path = "eo-http" }
 eo-services = { path = "eo-services" }

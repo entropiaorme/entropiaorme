@@ -507,10 +507,36 @@ where
     ArmRoutes::at(route).on(filter, native).into_method_router()
 }
 
+/// Observe-only per-request instrumentation. As the OUTERMOST layer it times
+/// the whole request (guards, CORS, and the handler) and records one sample
+/// into the metrics registry, emitting a structured trace with method, path,
+/// and status. It is pure pass-through: it reads the request line and the
+/// response status but never mutates the request or the response (no body
+/// rewrite, no added header), so it is behaviour-neutral against the proxy
+/// and native goldens. The path is logged, never the query string, so no
+/// caller-supplied value reaches the logs.
+async fn observe(req: Request, next: axum::middleware::Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let response = next.run(req).await;
+    let elapsed = started.elapsed();
+    eo_wire::metrics::metrics().record_http_request(elapsed);
+    tracing::debug!(
+        target: "eo::http",
+        method = %method,
+        path = %path,
+        status = response.status().as_u16(),
+        elapsed_us = elapsed.as_micros() as u64,
+        "request served"
+    );
+    response
+}
+
 /// The substrate router: natively-registered routes take precedence, the
 /// proxy fallback carries every other method and path to the sidecar, and
-/// the guard stack fronts both arms in the backend's own order (CORS
-/// outermost, then the Host/origin guard).
+/// the guard stack fronts both arms in the backend's own order (the
+/// observe layer outermost, then CORS, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
         .fallback(any(proxy_fallback))
@@ -522,6 +548,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             state.clone(),
             cors_layer,
         ))
+        // Outermost: times the full request including the guard/CORS layers.
+        .layer(axum::middleware::from_fn(observe))
         .with_state(state)
 }
 
@@ -584,5 +612,40 @@ mod tests {
         assert_eq!(state.arm_for("/api/health"), Arm::Native);
         state.set_overrides(ArmOverrides::parse_env_value("/api/health=proxy"));
         assert_eq!(state.arm_for("/api/health"), Arm::Proxy);
+    }
+
+    /// Driving a request through the built router records one HTTP-request
+    /// sample (the observe layer fires for "a request" per the round's
+    /// acceptance), and the response is unchanged: a 200 from the native
+    /// health handler. The native `/api/health` arm answers without a
+    /// sidecar, so the timing layer is exercised end to end here.
+    #[tokio::test]
+    async fn a_served_request_records_one_http_sample_without_altering_the_response() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+
+        let state = Arc::new(AppState::new(
+            "127.0.0.1:1".into(),
+            8421,
+            ArmOverrides::empty(),
+        ));
+        let router = build_router(state);
+
+        let before = eo_wire::metrics::metrics().snapshot().http_requests;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let after = eo_wire::metrics::metrics().snapshot().http_requests;
+        assert!(
+            after > before,
+            "the observe layer must record the served request (before={before}, after={after})"
+        );
     }
 }

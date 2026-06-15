@@ -28,8 +28,7 @@ Each test builds a fresh on-disk DB and drives the real production query paths,
 mirroring the sibling property suite.
 """
 
-import tempfile
-from pathlib import Path
+import pytest
 
 from backend.db.app_database import AppDatabase
 from backend.services.quest_service import (
@@ -63,9 +62,25 @@ _TRACKER_SCHEMA = """
 """
 
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's DB temp dirs under pytest's auto-rotated basetemp.
+
+    ``_make_service`` is a plain helper called from test bodies, not through
+    the fixture protocol, so it cannot request ``tmp_path_factory`` itself.
+    Binding it here keeps every helper-created dir under the tree pytest
+    prunes, instead of the OS temp directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
+
 def _make_service() -> QuestService:
     """A QuestService over a fresh on-disk DB with the tracker tables present."""
-    tmp = Path(tempfile.mkdtemp()) / "quests.db"
+    tmp = _tmp_factory.mktemp("quests") / "quests.db"
     db = AppDatabase(tmp)
     db.conn.executescript(_TRACKER_SCHEMA)
     db.conn.commit()

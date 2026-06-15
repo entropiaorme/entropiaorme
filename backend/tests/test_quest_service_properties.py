@@ -21,9 +21,8 @@ properties run against real production query paths.
 """
 
 import contextlib
-import tempfile
-from pathlib import Path
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -70,9 +69,26 @@ _NONE_REASONS = {
 }
 
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's DB temp dirs under pytest's auto-rotated basetemp.
+
+    ``_make_service`` is a plain helper called per generated example from the
+    property test bodies, not through the fixture protocol, so it cannot
+    request ``tmp_path_factory`` itself. Binding it here keeps every
+    helper-created dir under the tree pytest prunes, instead of the OS temp
+    directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
+
 def _make_service() -> QuestService:
     """A QuestService over a fresh on-disk DB with the tracker tables present."""
-    tmp = Path(tempfile.mkdtemp()) / "quests.db"
+    tmp = _tmp_factory.mktemp("quests") / "quests.db"
     db = AppDatabase(tmp)
     db.conn.executescript(_TRACKER_SCHEMA)
     db.conn.commit()

@@ -22,12 +22,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import tempfile
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 # A combat tick then one loot tick (both loot lines share a timestamp,
@@ -46,6 +46,23 @@ def _append(chatlog: Path, lines: list[str]) -> None:
         handle.flush()
 
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's temp dirs under pytest's auto-rotated basetemp.
+
+    ``_lifespan`` is a plain contextmanager entered from test bodies, not
+    through the fixture protocol, so it cannot request ``tmp_path_factory``
+    itself. Binding it here keeps every helper-created dir under the tree
+    pytest prunes, instead of the OS temp directory an interrupted run never
+    cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
+
 @contextmanager
 def _lifespan(*, idle: bool) -> Iterator[tuple[TestClient, Path]]:
     """Boot ``backend.main.app``'s lifespan against a temp data dir.
@@ -55,8 +72,8 @@ def _lifespan(*, idle: bool) -> Iterator[tuple[TestClient, Path]]:
     set in the environment before the lifespan reads it on TestClient
     enter and restored on exit.
     """
-    data_dir = Path(tempfile.mkdtemp(prefix="eo_idle_gate_data_"))
-    chatlog = Path(tempfile.mkdtemp(prefix="eo_idle_gate_log_")) / "chat_testing.log"
+    data_dir = _tmp_factory.mktemp("idle_gate_data")
+    chatlog = _tmp_factory.mktemp("idle_gate_log") / "chat_testing.log"
     chatlog.touch()
     (data_dir / "settings.json").write_text(
         json.dumps({"chatlog_path": str(chatlog)}),

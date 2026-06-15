@@ -37,7 +37,6 @@ inline rather than over-claimed.
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -71,6 +70,23 @@ from backend.tracking.tracker import HuntTracker
 _EPOCH = "2024-01-01 10:00:00"
 
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's temp dirs under pytest's auto-rotated basetemp.
+
+    The replay/parse helpers below are plain functions called from test
+    bodies (some per generated example), not through the fixture protocol, so
+    they cannot request ``tmp_path_factory`` themselves. Binding it here keeps
+    every helper-created dir under the tree pytest prunes, instead of the OS
+    temp directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
+
 @contextmanager
 def _pipeline() -> Iterator[
     tuple[ChatlogWatcher, HuntTracker, Path, sqlite3.Connection]
@@ -83,7 +99,7 @@ def _pipeline() -> Iterator[
     is started here and stopped on exit so the relation exercises the same
     file-write to SQLite path the live game drives.
     """
-    tmp = Path(tempfile.mkdtemp(prefix="eo_metamorphic_"))
+    tmp = _tmp_factory.mktemp("metamorphic")
     chatlog = tmp / "chat.log"
     chatlog.touch()
     db = sqlite3.connect(":memory:", check_same_thread=False)
@@ -472,7 +488,7 @@ def test_parse_file_distributes_over_concatenation(
     segment_a = _damage_line(damage)
     segment_b = _loot_line(loot_name, loot_value)
 
-    tmp = Path(tempfile.mkdtemp(prefix="eo_metamorphic_parse_"))
+    tmp = _tmp_factory.mktemp("metamorphic_parse")
     path_a = tmp / "a.log"
     path_b = tmp / "b.log"
     path_ab = tmp / "ab.log"

@@ -1,7 +1,6 @@
 """Tests for skill gain tracking during sessions."""
 
 import os
-import tempfile
 from datetime import datetime
 
 import pytest
@@ -11,10 +10,25 @@ from backend.data.tt_value_curve import tt_value_of_gain
 from backend.db.app_database import AppDatabase
 from backend.services.skill_tracker import SkillTracker
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's DB temp dirs under pytest's auto-rotated basetemp.
+
+    ``_make_tracker`` is a plain helper called from test bodies, not through
+    the fixture protocol, so it cannot request ``tmp_path_factory`` itself.
+    Binding it here keeps every helper-created dir under the tree pytest
+    prunes, instead of the OS temp directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
 
 def _make_tracker():
-    """Create a SkillTracker with a fresh in-memory DB."""
-    td = tempfile.mkdtemp()
+    """Create a SkillTracker with a fresh on-disk DB."""
+    td = _tmp_factory.mktemp("skill_tracker")
     db = AppDatabase(os.path.join(td, "test.db"))
     bus = EventBus()
     tracker = SkillTracker(bus, db)

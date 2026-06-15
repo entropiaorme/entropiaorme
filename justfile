@@ -48,6 +48,19 @@ test-equivalence:
     $env:EO_ORACLE_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path; cargo test --manifest-path frontend/src-tauri/Cargo.toml -p eo-wire -p eo-services --features cross-language
     .venv/Scripts/python.exe -m pytest backend/tests/test_normalizer_conformance.py backend/tests/test_equivalence_emitters.py backend/tests/test_equivalence_yml_family.py
 
+# Run the native backend (Rust) test suite. Invoked from the workspace so
+# frontend/src-tauri/.cargo/config.toml is discovered: it redirects test temp
+# into target/, keeping an interrupted run from accumulating scratch dirs in
+# the OS temp directory. Reclaim any leftovers from a prior interrupted run
+# with `cargo clean`.
+[windows]
+test-rust:
+    cd frontend/src-tauri; cargo nextest run -p eo-wire -p eo-http -p eo-services
+
+[unix]
+test-rust:
+    cd frontend/src-tauri && cargo nextest run -p eo-wire -p eo-http -p eo-services
+
 # Each step is its own recipe line (just stops on the first non-zero exit)
 # rather than an `&&` chain, so the body runs under any shell, including
 # Windows PowerShell, which does not support `&&`. `npm --prefix` runs each

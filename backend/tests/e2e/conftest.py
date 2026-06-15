@@ -34,7 +34,6 @@ import json
 import os
 import shutil
 import sqlite3
-import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, redirect_stdout
 from pathlib import Path
@@ -191,6 +190,7 @@ def golden_set(update_fingerprints: bool) -> Callable[[Path], GoldenSet]:
 @pytest.fixture
 def make_e2e_http_pipeline(
     tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> Callable[..., AbstractContextManager[tuple[TestClient, Path, ChatlogWatcher]]]:
     """Factory: boot the full FastAPI lifespan against a temp data dir.
 
@@ -222,8 +222,8 @@ def make_e2e_http_pipeline(
     def _make(
         scenario_dir: Path | None = None,
     ) -> Iterator[tuple[TestClient, Path, ChatlogWatcher]]:
-        data_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_data_"))
-        demo_dir = Path(tempfile.mkdtemp(prefix="eo_http_fp_demo_"))
+        data_dir = tmp_path_factory.mktemp("http_fp_data")
+        demo_dir = tmp_path_factory.mktemp("http_fp_demo")
         chatlog = tmp_path / "chat_testing.log"
         chatlog.touch()
 

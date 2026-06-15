@@ -31,7 +31,6 @@ import asyncio
 import json
 import os
 import shutil
-import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -55,7 +54,7 @@ _STARTUP_TIMEOUT = 15.0
 
 
 @pytest.fixture
-def live_server() -> Iterator[int]:
+def live_server(tmp_path) -> Iterator[int]:
     """Run the real app on a loopback uvicorn server for one test.
 
     Uvicorn binds an ephemeral port itself (``port=0``) and the actual port is
@@ -66,7 +65,7 @@ def live_server() -> Iterator[int]:
     the event bus, hub, and tracker) is wired by uvicorn itself, so the seam runs
     against production startup.
     """
-    data_dir = tempfile.mkdtemp(prefix="eo_sse_seam_")
+    data_dir = str(tmp_path)
     original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
     os.environ["ENTROPIAORME_DATA_DIR"] = data_dir
 

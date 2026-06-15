@@ -153,13 +153,7 @@ pub fn run() {
                     // Dev's backend is launched (and owned) by the dev
                     // launcher, never idled by us, so there is no relocated
                     // sidecar for the substrate to recover.
-                    spawn_http_substrate(
-                        app.handle().clone(),
-                        listener,
-                        sidecar_port,
-                        None,
-                        false,
-                    );
+                    spawn_http_substrate(app.handle().clone(), listener, sidecar_port, None, false);
                 }
             }
             Ok(())

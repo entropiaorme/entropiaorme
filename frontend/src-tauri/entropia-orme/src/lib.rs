@@ -1,5 +1,6 @@
 mod composition;
 mod crash;
+mod resources;
 mod telemetry;
 
 #[cfg(windows)]
@@ -104,6 +105,11 @@ pub fn run() {
     // it adds nothing to the standard panic behaviour; only when the user has
     // opted in does a panic write a PII-scrubbed, local-only report.
     crash::install_panic_hook(composition::data_dir());
+
+    // Start the periodic resource sampler feeding the drift gauges (the metrics
+    // page reads them live; each sample is also logged so the rolling file
+    // carries the drift series the soak's drift gate reads).
+    resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -339,7 +345,10 @@ fn spawn_http_substrate(
         // The substrate answers the browser surface (preflights, origin
         // rules, response decoration) exactly as the sidecar's own
         // middleware would, from the same environment inputs.
-        .with_cors(eo_http::cors::CorsConfig::from_env());
+        .with_cors(eo_http::cors::CorsConfig::from_env())
+        // The data dir powers the hidden dev-tools routes (the developer-mode
+        // gate and the crash-reporting toggle).
+        .with_data_dir(composition::data_dir());
         let state = std::sync::Arc::new(app_state);
 
         // Compose the native services off the serve path and install them

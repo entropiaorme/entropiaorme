@@ -27,26 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
-
-/// The Rust-owned observability config file, holding the crash-reporting
-/// opt-in (and any future shell-owned observability toggles).
-const OBSERVABILITY_CONFIG: &str = "observability.json";
-const CRASH_REPORTING_KEY: &str = "crash_reporting_enabled";
-
-/// Whether crash reporting is enabled. Reads `observability.json` from the data
-/// directory; absent, unreadable, malformed, or missing-the-key all read as
-/// `false` (the default-off contract).
-pub(crate) fn reporting_enabled(data_dir: &Path) -> bool {
-    let raw = match std::fs::read_to_string(data_dir.join(OBSERVABILITY_CONFIG)) {
-        Ok(raw) => raw,
-        Err(_) => return false,
-    };
-    serde_json::from_str::<Value>(&raw)
-        .ok()
-        .and_then(|value| value.get(CRASH_REPORTING_KEY).and_then(Value::as_bool))
-        .unwrap_or(false)
-}
+use eo_services::observability_config::crash_reporting_enabled;
 
 /// The personal data to strip from a crash report: the player name and the
 /// machine-specific paths (the configured chat-log path and the data
@@ -179,7 +160,7 @@ fn write_report(data_dir: &Path, report: &str) -> std::io::Result<PathBuf> {
 /// installing a process-global hook. Writes a scrubbed report ONLY when the
 /// opt-in is enabled; otherwise it is a no-op (the default-off contract).
 fn handle_panic(data_dir: &Path, message: &str, location: Option<&str>, thread_name: &str) {
-    if !reporting_enabled(data_dir) {
+    if !crash_reporting_enabled(data_dir) {
         return;
     }
     let secrets = Secrets::from_data_dir(data_dir);
@@ -220,26 +201,6 @@ fn panic_payload_string(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reporting_is_off_by_default_and_when_the_file_is_absent_or_malformed() {
-        let dir = tempfile::tempdir().unwrap();
-        // Absent file.
-        assert!(!reporting_enabled(dir.path()));
-        // Malformed file.
-        std::fs::write(dir.path().join(OBSERVABILITY_CONFIG), "{not json").unwrap();
-        assert!(!reporting_enabled(dir.path()));
-        // Present but the key is missing.
-        std::fs::write(dir.path().join(OBSERVABILITY_CONFIG), "{}").unwrap();
-        assert!(!reporting_enabled(dir.path()));
-        // Present and explicitly false.
-        std::fs::write(
-            dir.path().join(OBSERVABILITY_CONFIG),
-            r#"{"crash_reporting_enabled": false}"#,
-        )
-        .unwrap();
-        assert!(!reporting_enabled(dir.path()));
-    }
 
     #[test]
     fn the_scrubber_strips_the_player_name_and_account_paths() {
@@ -307,11 +268,7 @@ mod tests {
             r#"{"player_name":"SecretHunter","chatlog_path":"C:\\Users\\realaccount\\chat.log"}"#,
         )
         .unwrap();
-        std::fs::write(
-            dir.path().join(OBSERVABILITY_CONFIG),
-            r#"{"crash_reporting_enabled": true}"#,
-        )
-        .unwrap();
+        eo_services::observability_config::set_crash_reporting_enabled(dir.path(), true).unwrap();
 
         handle_panic(
             dir.path(),

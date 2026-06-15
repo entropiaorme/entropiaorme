@@ -58,9 +58,16 @@ impl SpacebarCaptureListener {
             key_tap: Mutex::new(None),
         });
         if let Some(source) = source {
-            let dispatch = listener.clone();
+            // A weak handle, so the source's subscription does not form a
+            // strong cycle (`listener -> source -> callback -> listener`) that
+            // `stop` cannot break. The listener's real owners (the app state
+            // and the exit holder) keep it alive, so the upgrade succeeds for
+            // its whole lifetime; once they drop it, the callback is inert.
+            let dispatch = Arc::downgrade(&listener);
             source.subscribe(Arc::new(move |event: &KeystrokeEvent| {
-                dispatch.on_keystroke(event);
+                if let Some(listener) = dispatch.upgrade() {
+                    listener.on_keystroke(event);
+                }
             }));
         }
         listener

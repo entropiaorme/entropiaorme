@@ -124,15 +124,24 @@ pub fn run() {
                     .and_then(|listener| allocate_private_port().map(|port| (listener, port)));
                 match relocation {
                     Some((listener, sidecar_port)) => {
-                        spawn_backend_sidecar(app.handle(), Some(sidecar_port));
+                        spawn_backend_sidecar(
+                            app.handle(),
+                            SidecarSpawn::RelocatedIdle(sidecar_port),
+                        );
                         spawn_http_substrate(
                             app.handle().clone(),
                             listener,
                             sidecar_port,
                             app.path().resource_dir().ok(),
+                            // The substrate owns production once it relocates
+                            // and idles the sidecar; if the native spine never
+                            // composes, recover by respawning that sidecar as
+                            // the producer so the session is never left with
+                            // no producer at all.
+                            true,
                         );
                     }
-                    None => spawn_backend_sidecar(app.handle(), None),
+                    None => spawn_backend_sidecar(app.handle(), SidecarSpawn::Legacy),
                 }
             }
             // Dev runs the backend from the dev launcher; the substrate
@@ -141,7 +150,16 @@ pub fn run() {
             #[cfg(debug_assertions)]
             if let Some(sidecar_port) = dev_sidecar_port() {
                 if let Some(listener) = bind_substrate_listener() {
-                    spawn_http_substrate(app.handle().clone(), listener, sidecar_port, None);
+                    // Dev's backend is launched (and owned) by the dev
+                    // launcher, never idled by us, so there is no relocated
+                    // sidecar for the substrate to recover.
+                    spawn_http_substrate(
+                        app.handle().clone(),
+                        listener,
+                        sidecar_port,
+                        None,
+                        false,
+                    );
                 }
             }
             Ok(())
@@ -302,6 +320,7 @@ fn spawn_http_substrate(
     listener: std::net::TcpListener,
     sidecar_port: u16,
     resource_dir: Option<std::path::PathBuf>,
+    recover: bool,
 ) {
     let overrides = route_arm_overrides();
     tauri::async_runtime::spawn(async move {
@@ -322,7 +341,15 @@ fn spawn_http_substrate(
         // registered routes each fall back to the proxy arm while their
         // service is absent, so the install flips them to native on the next
         // request with no re-registration and no restart.
-        compose_and_install(app, state.clone(), resource_dir);
+        compose_and_install(
+            app,
+            state.clone(),
+            resource_dir,
+            // Only the release relocated topology spawned an idled sidecar
+            // for the substrate to recover into a producer on a permanent
+            // decline; dev (and any non-relocated path) passes None.
+            recover.then_some(sidecar_port),
+        );
 
         let listener = match tokio::net::TcpListener::from_std(listener) {
             Ok(listener) => listener,
@@ -352,13 +379,21 @@ const COMPOSE_RETRY_CEILING: std::time::Duration = std::time::Duration::from_sec
 /// Compose the native services off the serve path and install them into the
 /// already-serving `state` once ready. Retries ONLY while the database is
 /// below the adoptable baseline (the first-launch-after-upgrade race, where
-/// the sidecar is still migrating it forward); a permanent decline, or the
-/// retry ceiling, leaves the substrate proxy-only for the session.
+/// the sidecar is still migrating it forward).
+///
+/// A permanent decline, or the retry ceiling, leaves the substrate proxy-only
+/// for the session. In the relocated topology (`recovery_port` is `Some`) the
+/// sidecar was spawned idle in anticipation of a native producer spine, so a
+/// proxy-only outcome would leave the session with NO producer; recovery then
+/// respawns that sidecar as the producer (see [`recover_orphaned_production`]).
+/// `recovery_port` is `None` when there is no idled sidecar we own (dev, where
+/// the launcher owns the backend).
 #[cfg_attr(debug_assertions, allow(dead_code))]
 fn compose_and_install(
     app: tauri::AppHandle,
     state: std::sync::Arc<eo_http::AppState>,
     resource_dir: Option<std::path::PathBuf>,
+    recovery_port: Option<u16>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut waited = std::time::Duration::ZERO;
@@ -380,18 +415,57 @@ fn compose_and_install(
                     if waited >= COMPOSE_RETRY_CEILING {
                         eprintln!(
                             "[substrate] database stayed below the adoptable baseline for {}s; \
-                             serving proxy-only for the session (the sidecar owns the database)",
+                             serving proxy-only for the session",
                             COMPOSE_RETRY_CEILING.as_secs()
                         );
+                        recover_orphaned_production(&app, recovery_port);
                         return;
                     }
                     tokio::time::sleep(COMPOSE_RETRY_INTERVAL).await;
                     waited += COMPOSE_RETRY_INTERVAL;
                 }
-                composition::Composition::Declined => return,
+                composition::Composition::Declined => {
+                    recover_orphaned_production(&app, recovery_port);
+                    return;
+                }
             }
         }
     });
+}
+
+/// Recover production after the native spine failed to compose. In the
+/// relocated topology the sidecar was spawned idle (`RelocatedIdle`) because
+/// the substrate's native spine was expected to own production; if that spine
+/// never composes the substrate stays proxy-only, and an idled sidecar would
+/// leave the session with no chat-log tailer, no tracker, and no OS hooks
+/// (live tracking silently dead, while proxied reads keep serving stale
+/// state). Respawn the relocated sidecar PRODUCING so it resumes the producer
+/// role it holds in the legacy topology; the substrate keeps proxying the
+/// public port to it. A no-op when `recovery_port` is `None` (no idled sidecar
+/// we own: dev, or the legacy direct topology, where the sidecar already
+/// produces).
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn recover_orphaned_production(app: &tauri::AppHandle, recovery_port: Option<u16>) {
+    let Some(sidecar_port) = recovery_port else {
+        return;
+    };
+    eprintln!(
+        "[substrate] native services did not compose; respawning the sidecar as the producer \
+         so live tracking continues (serving proxy-only for the session)"
+    );
+    // Kill the idled relocated sidecar before rebinding its private port: the
+    // substrate's proxy authority is fixed at that port, so the producing
+    // respawn must reclaim it. The exit seam reads the same handle, so the
+    // kill and the re-store both go through the shared `SidecarChild` lock.
+    if let Some(state) = app.try_state::<SidecarChild>() {
+        if let Ok(mut guard) = state.0.lock() {
+            if let Some(child) = guard.take() {
+                kill_sidecar_tree(&child);
+                drop(child);
+            }
+        }
+    }
+    spawn_backend_sidecar(app, SidecarSpawn::RelocatedProducing(sidecar_port));
 }
 
 /// Install the composed services into the live, already-serving app state
@@ -457,29 +531,61 @@ fn route_arm_overrides() -> eo_http::arms::ArmOverrides {
     overrides
 }
 
-/// The environment a RELOCATED sidecar runs under: its private bind port,
-/// plus the producer-idle gate. When the substrate relocates the sidecar it
-/// has taken the public port and owns production: its composed native spine
-/// is the sole chat-log tailer, tracker, and OS-hook owner, so the sidecar
-/// must serve proxied reads WITHOUT running its own producers. Two producers
+/// How a sidecar process is spawned, which fixes its environment and so its
+/// role.
+///
+/// When the substrate relocates the sidecar it has taken the public port and
+/// owns production: its composed native spine is the sole chat-log tailer,
+/// tracker, and OS-hook owner, so the relocated sidecar must serve proxied
+/// reads WITHOUT running its own producers (`RelocatedIdle`). Two producers
 /// writing the shared database would double-count loot and cost, and two OS
 /// keyboard hooks would conflict (the backend's `_producers_idle` documents
-/// the same invariant). The legacy-fallback spawn (not relocated, the
-/// sidecar on the public port as the only backend) does NOT idle, since it
-/// is then the sole producer.
+/// the same invariant).
+///
+/// But idling is correct only while the substrate actually produces. If the
+/// native spine never composes (a permanent decline, or the
+/// first-launch-after-upgrade migration ceiling), the substrate stays
+/// proxy-only and an idled sidecar would leave the session with no producer
+/// at all. The recovery respawns the relocated sidecar PRODUCING
+/// (`RelocatedProducing`) so it resumes the producer role it holds in the
+/// legacy topology, with the substrate still proxying the public port to it.
+///
+/// The legacy spawn (`Legacy`, the only backend, on the public port) always
+/// produces.
 #[cfg_attr(debug_assertions, allow(dead_code))]
-fn relocated_sidecar_env(port: u16) -> [(&'static str, String); 2] {
-    [
-        ("ENTROPIAORME_BACKEND_PORT", port.to_string()),
-        ("ENTROPIAORME_PRODUCERS_IDLE", "1".to_string()),
-    ]
+enum SidecarSpawn {
+    /// Legacy direct topology: the only backend, on the public port.
+    Legacy,
+    /// Relocated behind the substrate proxy on a private port, producers idle
+    /// (the substrate's native spine owns production).
+    RelocatedIdle(u16),
+    /// Relocated behind the substrate proxy on a private port, but producing:
+    /// the recovery for when the native spine never composed.
+    RelocatedProducing(u16),
+}
+
+/// The environment variables a sidecar spawn runs under. The relocated forms
+/// bind the private port the substrate proxies to; only `RelocatedIdle` gates
+/// the producers off. `Legacy` and `RelocatedProducing` both keep producing.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn sidecar_spawn_env(spawn: &SidecarSpawn) -> Vec<(&'static str, String)> {
+    match spawn {
+        SidecarSpawn::Legacy => Vec::new(),
+        SidecarSpawn::RelocatedIdle(port) => vec![
+            ("ENTROPIAORME_BACKEND_PORT", port.to_string()),
+            ("ENTROPIAORME_PRODUCERS_IDLE", "1".to_string()),
+        ],
+        SidecarSpawn::RelocatedProducing(port) => {
+            vec![("ENTROPIAORME_BACKEND_PORT", port.to_string())]
+        }
+    }
 }
 
 // In debug builds the call site above is compiled out (dev uses a separately
 // launched backend), leaving this function without a caller; silence the
 // resulting dead-code lint rather than drop the release-only definition.
 #[cfg_attr(debug_assertions, allow(dead_code))]
-fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
+fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
     let sidecar = match app.shell().sidecar("entropiaorme-backend") {
         Ok(cmd) => cmd,
         Err(err) => {
@@ -487,19 +593,14 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
             return;
         }
     };
-    // Relocation: the sidecar reads its bind port (and derives its own
-    // Host-header guard) from `ENTROPIAORME_BACKEND_PORT`; the substrate's
-    // proxy arm rewrites Host to the private authority accordingly. The
-    // relocated sidecar is also told to idle its producers (see
-    // `relocated_sidecar_env`), because the substrate that relocated it owns
-    // production. The legacy-fallback spawn (`None`, the sidecar on the
-    // public port as the only backend) keeps producing.
-    let sidecar = match relocated_port {
-        Some(port) => relocated_sidecar_env(port)
-            .into_iter()
-            .fold(sidecar, |cmd, (key, value)| cmd.env(key, value)),
-        None => sidecar,
-    };
+    // A relocated sidecar reads its bind port (and derives its own Host-header
+    // guard) from `ENTROPIAORME_BACKEND_PORT`; the substrate's proxy arm
+    // rewrites Host to the private authority accordingly. `RelocatedIdle` also
+    // gates its producers off (the substrate owns production); `Legacy` and
+    // the `RelocatedProducing` recovery keep producing. See `SidecarSpawn`.
+    let sidecar = sidecar_spawn_env(&spawn)
+        .into_iter()
+        .fold(sidecar, |cmd, (key, value)| cmd.env(key, value));
 
     let (mut rx, child) = match sidecar.spawn() {
         Ok(pair) => pair,
@@ -509,7 +610,7 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
         }
     };
 
-    app.manage(SidecarChild(Mutex::new(Some(child))));
+    store_sidecar_child(app, child);
 
     // Drain stdout/stderr — Windows pipe buffers are ~4 KB and an unread
     // pipe stalls the child's logging once it fills.
@@ -525,6 +626,21 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, relocated_port: Option<u16>) {
             }
         }
     });
+}
+
+/// Hold the spawned sidecar for the exit seam. The first spawn manages the
+/// holder; a recovery respawn swaps the new child into the existing holder
+/// (its idled predecessor was already taken out and killed under the same
+/// lock), so the exit seam always kills whichever sidecar is live.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn store_sidecar_child(app: &tauri::AppHandle, child: CommandChild) {
+    if let Some(state) = app.try_state::<SidecarChild>() {
+        if let Ok(mut guard) = state.0.lock() {
+            *guard = Some(child);
+        }
+    } else {
+        app.manage(SidecarChild(Mutex::new(Some(child))));
+    }
 }
 
 #[cfg(windows)]
@@ -654,25 +770,57 @@ mod windows_runtime_icons {
 
 #[cfg(test)]
 mod tests {
-    use super::relocated_sidecar_env;
+    use super::{sidecar_spawn_env, SidecarSpawn};
+
+    fn env_value<'a>(env: &'a [(&'static str, String)], key: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, value)| value.as_str())
+    }
 
     #[test]
-    fn a_relocated_sidecar_is_told_to_idle_its_producers() {
+    fn a_relocated_idle_sidecar_binds_its_port_and_idles_its_producers() {
         // The substrate owns production once it relocates the sidecar, so the
         // sidecar must serve proxied reads WITHOUT running its own producers,
-        // or two chat-log tailers would double-count into the shared
-        // database. (The legacy fallback, which is not relocated, is the sole
-        // backend and keeps producing.)
-        let env = relocated_sidecar_env(18421);
-        let idle = env
-            .iter()
-            .find(|(key, _)| *key == "ENTROPIAORME_PRODUCERS_IDLE")
-            .map(|(_, value)| value.as_str());
-        assert_eq!(idle, Some("1"), "the relocated sidecar idles its producers");
-        let bind = env
-            .iter()
-            .find(|(key, _)| *key == "ENTROPIAORME_BACKEND_PORT")
-            .map(|(_, value)| value.as_str());
-        assert_eq!(bind, Some("18421"), "and binds the private port");
+        // or two chat-log tailers would double-count into the shared database.
+        let env = sidecar_spawn_env(&SidecarSpawn::RelocatedIdle(18421));
+        assert_eq!(
+            env_value(&env, "ENTROPIAORME_BACKEND_PORT"),
+            Some("18421"),
+            "the relocated sidecar binds its private port"
+        );
+        assert_eq!(
+            env_value(&env, "ENTROPIAORME_PRODUCERS_IDLE"),
+            Some("1"),
+            "and idles its producers"
+        );
+    }
+
+    #[test]
+    fn a_relocated_producing_sidecar_binds_its_port_but_keeps_producing() {
+        // The recovery for when the native spine never composes: the substrate
+        // stays proxy-only, so the relocated sidecar must resume production (no
+        // idle gate) or the session would have no producer at all.
+        let env = sidecar_spawn_env(&SidecarSpawn::RelocatedProducing(18421));
+        assert_eq!(
+            env_value(&env, "ENTROPIAORME_BACKEND_PORT"),
+            Some("18421"),
+            "the recovery sidecar binds the same private port the proxy targets"
+        );
+        assert_eq!(
+            env_value(&env, "ENTROPIAORME_PRODUCERS_IDLE"),
+            None,
+            "the recovery sidecar must NOT idle: it is the sole producer"
+        );
+    }
+
+    #[test]
+    fn a_legacy_sidecar_takes_no_relocation_env_and_produces() {
+        // The only backend, on the public port: no private bind, no idle gate.
+        let env = sidecar_spawn_env(&SidecarSpawn::Legacy);
+        assert!(
+            env.is_empty(),
+            "the legacy spawn carries no relocation env (no bind override, no idle gate)"
+        );
     }
 }

@@ -120,6 +120,10 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "ansi",
     "std",
 ] }
+# The non-blocking rolling-file appender for the local structured logs: a
+# background worker thread drains an MPSC channel so a slow disk never stalls a
+# hot path. MIT, already on the deny.toml allowlist.
+tracing-appender = "0.2"
 
 eo-http = { path = "eo-http" }
 eo-services = { path = "eo-services" }

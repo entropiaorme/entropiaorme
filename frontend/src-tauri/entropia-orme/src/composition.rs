@@ -125,6 +125,14 @@ fn data_dir() -> PathBuf {
     )
 }
 
+/// The rolling-log directory: a `logs/` subdirectory of the resolved data
+/// directory, so the structured logs sit beside the database under the same
+/// OS app-data root the backend already owns. Resolved the same way as
+/// [`data_dir`], so the shell can create it at startup before composition.
+pub(crate) fn log_dir() -> PathBuf {
+    data_dir().join("logs")
+}
+
 /// Where the game-data snapshot lives: the bundled resource directory
 /// in an installed build, the repository copy in dev.
 fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {

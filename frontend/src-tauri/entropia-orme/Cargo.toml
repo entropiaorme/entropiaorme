@@ -39,6 +39,7 @@ ort = { workspace = true }
 # query events into database-latency samples in the in-process registry.
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -331,8 +331,19 @@ pub fn parse_int_lax(raw: &str) -> Option<LaxInt> {
             _ => return None,
         }
     }
-    match cleaned.parse::<i64>() {
-        Ok(value) => Some(LaxInt::Value(if negative { -value } else { value })),
+    // Parse the FULL signed value, not the magnitude then negate: i64::MIN's
+    // magnitude (2^63) overflows i64 while the signed value -2^63 does not, so
+    // parsing `cleaned` alone would misclassify the valid i64::MIN as
+    // OverflowNegative, diverging from the backend's arbitrary-precision int
+    // (which takes i64::MIN as an ordinary value, e.g. a valid path id or a
+    // body int that resolves rather than overflows).
+    let signed = if negative {
+        format!("-{cleaned}")
+    } else {
+        cleaned
+    };
+    match signed.parse::<i64>() {
+        Ok(value) => Some(LaxInt::Value(value)),
         // All-digit input that exceeds i64: arbitrary-precision in the
         // backend, resolved by sign for bound checks here.
         Err(_) => Some(if negative {
@@ -639,6 +650,26 @@ mod tests {
         );
         assert_eq!(
             parse_int_lax("-999999999999999999999999"),
+            Some(LaxInt::OverflowNegative)
+        );
+        // The exact i64 boundaries: min/max are valid Values, one beyond each
+        // is overflow. i64::MIN's magnitude (2^63) overflows i64, so this pins
+        // that the parser reads the signed value (matching the backend's
+        // arbitrary-precision int), not the magnitude then negate.
+        assert_eq!(
+            parse_int_lax("9223372036854775807"),
+            Some(LaxInt::Value(i64::MAX))
+        );
+        assert_eq!(
+            parse_int_lax("-9223372036854775808"),
+            Some(LaxInt::Value(i64::MIN))
+        );
+        assert_eq!(
+            parse_int_lax("9223372036854775808"),
+            Some(LaxInt::OverflowPositive)
+        );
+        assert_eq!(
+            parse_int_lax("-9223372036854775809"),
             Some(LaxInt::OverflowNegative)
         );
     }

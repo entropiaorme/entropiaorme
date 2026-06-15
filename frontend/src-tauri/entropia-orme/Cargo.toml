@@ -21,7 +21,26 @@ tauri-plugin-store = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 eo-http = { workspace = true }
+# The composition root constructs the ported services the substrate's
+# native routes read through.
+eo-services = { workspace = true }
+# The composition root owns the SSE fan-out hub and bridges the producer
+# bus's domain topics onto it (the `/api/events` stream serves over it).
+eo-wire = { workspace = true }
 tokio = { workspace = true }
+# The composition root discharges the ONNX Runtime obligations the
+# recogniser depends on: it pins the bundled dylib to an absolute path
+# (`ort::init_from`) and configures the execution-provider ladder before
+# any session is built. The recogniser itself (in eo-services) stays
+# EP-agnostic; the runtime wiring is a composition-root concern.
+ort = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Test-only: the composition-integration and concurrency tests assert
+# directly against the substrate's database pool and build a frozen clock.
+sqlx = { workspace = true }
+chrono = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

@@ -141,7 +141,7 @@ impl<'a> MobLookupService<'a> {
 /// record/unit separators (U+001C..U+001F), which `str.split` and
 /// `str.strip` treat as whitespace but Rust's `char::is_whitespace`
 /// does not.
-pub(crate) fn python_whitespace(c: char) -> bool {
+pub fn python_whitespace(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 

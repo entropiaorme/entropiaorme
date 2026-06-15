@@ -13,3 +13,7 @@
 # Generated OpenAPI client types: keep LF on every platform so the
 # freshness check (`npm run gen:api:check`) compares byte-identical output.
 frontend/src/lib/api/schema.d.ts text eol=lf
+# Bundled native binaries (the ONNX Runtime + DirectML libraries and the OCR
+# model): always binary, never line-ending- or text-normalised.
+*.dll binary
+*.onnx binary

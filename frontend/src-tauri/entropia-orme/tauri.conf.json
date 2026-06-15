@@ -61,6 +61,12 @@
   "bundle": {
     "targets": ["nsis"],
     "externalBin": ["binaries/entropiaorme-backend"],
+    "resources": {
+      "../../../backend/data/snapshot/": "snapshot/",
+      "../../../backend/data/panel_geometry.json": "panel_geometry.json",
+      "../../../backend/assets/models/": "models/",
+      "resources/ort/*.dll": "ort/"
+    },
     "license": "MIT",
     "licenseFile": "installer/LICENSE.txt",
     "icon": [

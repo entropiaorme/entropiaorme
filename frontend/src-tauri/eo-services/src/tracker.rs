@@ -358,6 +358,19 @@ impl HuntTracker {
         self.lock_state().session.is_some()
     }
 
+    /// Whether the active session was captured in tag mode
+    /// (`backend.services.hunt_tracker.is_session_tag_mode`): the
+    /// per-session mode snapshotted at `start_session`, not the live
+    /// config. The snapshot is not cleared at `stop_session`, so the
+    /// active-session guard is what makes idle read `false` (a stopped
+    /// tag session would otherwise leave the snapshot at `"tag"`); the
+    /// manual-mob-suggestions handler only consults it while tracking,
+    /// gating the idle case on the live config instead.
+    pub fn is_session_tag_mode(&self) -> bool {
+        let state = self.lock_state();
+        state.session.is_some() && state.session_mob_tracking_mode == "tag"
+    }
+
     /// Close sessions left open by a crash: end at the latest kill
     /// (or the start), write the ledger gains and the summary, and
     /// clear the active flag.
@@ -2059,7 +2072,7 @@ fn epoch_to_parts(epoch: f64) -> (i64, u32) {
 /// The original's naive-local `datetime.timestamp()` (fold=0): the
 /// earliest interpretation for ambiguous instants; an instant inside
 /// a DST gap resolves through the neighbouring hour's offset.
-pub(crate) fn naive_to_epoch(instant: NaiveDateTime) -> f64 {
+pub fn naive_to_epoch(instant: NaiveDateTime) -> f64 {
     let resolved = match instant.and_local_timezone(chrono::Local) {
         chrono::LocalResult::Single(instant) => Some(instant),
         chrono::LocalResult::Ambiguous(earliest, _) => Some(earliest),
@@ -2085,7 +2098,11 @@ fn epoch_to_naive(epoch: f64) -> NaiveDateTime {
 
 /// `datetime.isoformat()` for naive instants (ledger dates, the
 /// readout's started_at): microseconds only when non-zero.
-fn naive_isoformat(instant: NaiveDateTime) -> String {
+/// A naive `datetime.isoformat()`: no offset suffix, microseconds only
+/// when non-zero. The start/stop producer routes render
+/// `session.start_time.isoformat()` / `session.end_time.isoformat()`
+/// through this, exactly as the snapshot renders `started_at`.
+pub fn naive_isoformat(instant: NaiveDateTime) -> String {
     if instant.and_utc().timestamp_subsec_micros() == 0 {
         instant.format("%Y-%m-%dT%H:%M:%S").to_string()
     } else {
@@ -2096,7 +2113,7 @@ fn naive_isoformat(instant: NaiveDateTime) -> String {
 /// `backend/core/domain_events.to_iso_utc`: render an epoch float as
 /// `datetime.fromtimestamp(ts, tz=UTC).isoformat()` does (the `T`
 /// separator, microseconds only when non-zero, `+00:00` suffix).
-pub(crate) fn to_iso_utc(ts: f64) -> String {
+pub fn to_iso_utc(ts: f64) -> String {
     let (secs, micros) = epoch_to_parts(ts);
     let instant = chrono::DateTime::from_timestamp(secs, micros * 1_000).unwrap_or_default();
     if micros == 0 {
@@ -3830,6 +3847,46 @@ mod tests {
         let state = tracker.lock_state();
         assert_eq!(state.confirmed_mob_name, "Team");
         assert_eq!(state.mob_source, Some("tag"));
+    }
+
+    #[test]
+    fn is_session_tag_mode_reflects_the_session_capture() {
+        // The flag is the per-session mode snapshotted at start_session,
+        // not the live config: idle is false (both before any session and
+        // after one stops, since the snapshot is not cleared on stop), a
+        // tag-mode session is true, a mob-mode session is false.
+        let tag_rig = rig();
+        let tagged = tag_rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "tag".to_string()),
+            mob_tracking_tag: Arc::new(|| "Team".to_string()),
+            ..Providers::default()
+        });
+        assert!(
+            !tagged.is_session_tag_mode(),
+            "idle (no session) is never tag mode"
+        );
+        tagged.start_session().unwrap();
+        assert!(
+            tagged.is_session_tag_mode(),
+            "a session captured in tag mode reports tag mode"
+        );
+        tagged.stop_session().unwrap();
+        assert!(
+            !tagged.is_session_tag_mode(),
+            "idle after stopping a tag session is never tag mode"
+        );
+
+        let mob_rig = rig();
+        let mobbed = mob_rig.tracker(Providers {
+            mob_tracking_mode: Arc::new(|| "mob".to_string()),
+            ..Providers::default()
+        });
+        mobbed.start_session().unwrap();
+        assert!(
+            !mobbed.is_session_tag_mode(),
+            "a session captured in mob mode is not tag mode"
+        );
+        mobbed.stop_session().unwrap();
     }
 
     #[test]

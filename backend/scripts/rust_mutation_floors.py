@@ -168,6 +168,55 @@ FLOORS: dict[str, float] = {
     # measured strength; ratchet as the comparison surface hardens.
     "eo-wire/src/normalizer.rs": 81.0,
     "eo-wire/src/http_fingerprint.rs": 97.0,
+    # The body-extraction stack's strongest killers are the
+    # cross-language conformance batteries (feature-gated off in the
+    # hermetic campaign this gate runs), which hold every validation
+    # envelope, coercion rule, scanner message/position, and encoding
+    # branch byte-for-byte against the running backend: the same
+    # staged-floor posture cost_engine took while its differential fuzz
+    # was feature-gated. Hermetic measurements 79.8 / 79.1 / 89.0;
+    # floors a shade under, ratchet-up-only as hermetic pins grow. The
+    # residual hermetic survivors cluster in the scanner's
+    # position/escape arithmetic, the lax-coercion edge branches, and
+    # the adapter dump plumbing, all live-pinned by the batteries.
+    "eo-http/src/pyjson.rs": 79.0,
+    "eo-http/src/body.rs": 78.0,
+    # Ratcheted from its 88.0 adoption once the envelope-aggregation
+    # and deferred-500 ladders gained hermetic pins (measured 98.3).
+    "eo-http/src/native.rs": 98.0,
+    # The same staged posture for the settings/character/equipment
+    # route stacks: their strongest killers are the same-state and
+    # two-arm conformance batteries (feature-gated off hermetically),
+    # which hold every response byte and stored row against the
+    # running backend. Hermetic measurements 85.2 / 90.3 after the
+    # pure-helper and seeded-handler pins; floors a shade under,
+    # ratchet-up-only. The residual hermetic survivors sit in the
+    # prospect forecast's doubling-and-bisection arithmetic, the
+    # handler glue the batteries answer per route, and the cost/detail
+    # component edges.
+    "eo-http/src/character_routes.rs": 85.0,
+    "eo-http/src/equipment_routes.rs": 90.0,
+    # The analytics overview/activity router. Hermetic pins cover the
+    # engine-typed emission, the rate arithmetic, the OR filter, the trend
+    # bands, dominance + the tag split, and both handlers; measured 93.1
+    # after them. The residual hermetic survivors are the cross-language
+    # seeded-timeline killers (the per-day/-month bucket fill, the rate
+    # formula over unequal-loss windows and ledger-in-trend) plus genuinely
+    # equivalent guards (the `cycled > 0` slice check the upstream filter
+    # makes unreachable, and the exactly-on-the-boundary band comparisons).
+    # Floor a shade under, ratchet-up-only.
+    "eo-http/src/analytics_routes.rs": 92.0,
+    # The tracking session-read router (sessions list, session detail, tag
+    # suggestions). Hermetic pins cover the list + detail aggregation
+    # (cost/returns/net/returnRate, costBreakdown, loot/tool/mob breakdown,
+    # skillGains, the timestamp render incl. the microsecond carry/borrow),
+    # globals/hofs counting, and the tag-suggestions filter; measured 91.9.
+    # The residual survivors are the cross-language seeded killers (the heavy
+    # get_session_impl per-row products and the stable-sort helpers, which the
+    # two-arm battery exercises over multi-row real data, feature-gated off
+    # hermetically) plus boundary/equivalent guards. Floor a shade under,
+    # ratchet-up-only.
+    "eo-http/src/tracking_routes.rs": 90.0,
 }
 
 

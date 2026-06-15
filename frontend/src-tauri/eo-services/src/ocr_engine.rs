@@ -23,7 +23,8 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use ort::session::builder::GraphOptimizationLevel;
+use ort::ep::{DirectML, ExecutionProviderDispatch, CPU};
+use ort::session::builder::{GraphOptimizationLevel, SessionBuilder};
 use ort::session::Session;
 use ort::value::Tensor;
 
@@ -191,13 +192,51 @@ pub struct OcrEngine {
     session: Mutex<Session>,
     input_name: String,
     chars: Vec<String>,
+    /// The execution provider the session was actually built on, as the
+    /// original records `session.get_providers()[0]`. This ort version
+    /// exposes no per-session provider readout, so the value is derived
+    /// from the construction control flow (the DirectML-then-CPU attempt
+    /// in [`OcrEngine::new_with_providers`]): the requested-and-committed
+    /// provider, not a queried one. `new` (no EP selection) records the
+    /// runtime's own default.
+    provider: &'static str,
+}
+
+/// The base session options every engine shares, matching the
+/// original's `SessionOptions` exactly: full graph optimisation,
+/// single intra/inter-op thread, sequential execution, and the
+/// anti-stutter spinning controls so an idle session never pegs a
+/// core between reads (`session.{intra,inter}_op.allow_spinning=0`
+/// plus `session.force_spinning_stop=1`). The optimisation level and
+/// thread counts mirror the EP-agnostic `new`; the sequential and
+/// anti-stutter options are added here for provider parity.
+fn base_session_options(builder: SessionBuilder) -> Result<SessionBuilder, String> {
+    builder
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .map_err(|error| error.to_string())?
+        .with_intra_threads(1)
+        .map_err(|error| error.to_string())?
+        .with_inter_threads(1)
+        .map_err(|error| error.to_string())?
+        .with_parallel_execution(false)
+        .map_err(|error| error.to_string())?
+        .with_intra_op_spinning(false)
+        .map_err(|error| error.to_string())?
+        .with_inter_op_spinning(false)
+        .map_err(|error| error.to_string())?
+        .with_config_entry("session.force_spinning_stop", "1")
+        .map_err(|error| error.to_string())
 }
 
 impl OcrEngine {
-    /// Load the model and the decode alphabet. Fails (rather than
-    /// panicking) when the ONNX Runtime library, the model, or the
-    /// dict is absent: engine availability is a queryable condition
-    /// on the scan surface, not an invariant.
+    /// Load the model and the decode alphabet with the ONNX Runtime's
+    /// own default execution provider (no DirectML preference, no
+    /// fallback ladder). The EP-agnostic path the hermetic recogniser
+    /// tests and the offline bench exercise; production composes the
+    /// engine through [`OcrEngine::new_with_providers`]. Fails (rather
+    /// than panicking) when the ONNX Runtime library, the model, or the
+    /// dict is absent: engine availability is a queryable condition on
+    /// the scan surface, not an invariant.
     pub fn new(model_path: &Path, dict_path: &Path) -> Result<Self, String> {
         let chars = load_dict(dict_path)?;
         let session = (|| -> Result<Session, String> {
@@ -213,6 +252,74 @@ impl OcrEngine {
                 .map_err(|error| error.to_string())
         })()
         .map_err(|error| format!("OCR engine load failed: {error}"))?;
+        // The default-provider path does not run the DirectML attempt,
+        // so it cannot honestly claim DirectML; record the runtime's own
+        // default rather than fabricate a selection.
+        Self::from_session(session, chars, "default")
+    }
+
+    /// Load the model with the production execution-provider ladder:
+    /// DirectML preferred, CPU fallback, faithful to `local_ocr.py`'s
+    /// `try InferenceSession(providers=["Dml","CPU"]) except CPU-only`.
+    ///
+    /// The fallback is deliberately a two-attempt control flow rather
+    /// than a single mixed `[DirectML, CPU]` commit. DirectML's
+    /// registration succeeds even with no DX12 GPU (it only appends the
+    /// EP to the session options); the no-GPU failure surfaces at session
+    /// commit, which a mixed list does NOT auto-recover from. So the
+    /// first attempt asks for DirectML (with CPU in the list for per-op
+    /// fallback once the session is up); on a commit error the second
+    /// attempt rebuilds CPU-only. The succeeding attempt also tells us
+    /// which provider we actually got, recorded on the engine since this
+    /// ort version exposes no `Session::get_providers()`.
+    pub fn new_with_providers(model_path: &Path, dict_path: &Path) -> Result<Self, String> {
+        let chars = load_dict(dict_path)?;
+        let build = |eps: Vec<ExecutionProviderDispatch>| -> Result<Session, String> {
+            let builder = Session::builder().map_err(|error| error.to_string())?;
+            let builder = builder
+                .with_execution_providers(eps)
+                .map_err(|error| error.to_string())?;
+            base_session_options(builder)?
+                .commit_from_file(model_path)
+                .map_err(|error| error.to_string())
+        };
+
+        let (session, provider) =
+            // `error_on_failure` so a DirectML REGISTRATION failure (no DML
+            // runtime / non-Windows / no DX12) surfaces as an `Err` and
+            // routes to the honest CPU-only retry below, rather than being
+            // swallowed (ort's default) into a CPU-only session that would
+            // still be mislabelled `DmlExecutionProvider`. The recorded
+            // provider then never lies: it is DML only when DML truly ran.
+            match build(vec![
+                DirectML::default().build().error_on_failure(),
+                CPU::default().build(),
+            ]) {
+                Ok(session) => (session, "DmlExecutionProvider"),
+                Err(dml_error) => {
+                    // The whole-session DirectML init failed (no DX12 GPU,
+                    // driver mismatch, GPU OOM); retry CPU-only exactly as
+                    // the original's except-branch does.
+                    eprintln!(
+                        "[ocr] DirectML session init failed ({dml_error}); falling back to CPU"
+                    );
+                    let session = build(vec![CPU::default().build()])
+                        .map_err(|error| format!("OCR engine load failed: {error}"))?;
+                    (session, "CPUExecutionProvider")
+                }
+            };
+        Self::from_session(session, chars, provider)
+    }
+
+    /// Finalise an engine over a committed session: resolve the model's
+    /// input name and stash the decode alphabet and the recorded
+    /// provider. Shared by both constructors so the session-derived
+    /// state is built one way.
+    fn from_session(
+        session: Session,
+        chars: Vec<String>,
+        provider: &'static str,
+    ) -> Result<Self, String> {
         let input_name = session
             .inputs()
             .first()
@@ -222,7 +329,28 @@ impl OcrEngine {
             session: Mutex::new(session),
             input_name,
             chars,
+            provider,
         })
+    }
+
+    /// The execution provider the session was built on, as the original
+    /// logs `session.get_providers()[0]`: `"DmlExecutionProvider"` or
+    /// `"CPUExecutionProvider"` from [`OcrEngine::new_with_providers`],
+    /// `"default"` from the EP-agnostic [`OcrEngine::new`].
+    pub fn provider(&self) -> &'static str {
+        self.provider
+    }
+
+    /// Force the first (cold) inference off the production hot path,
+    /// mirroring `local_ocr.warm_up`: one recognition over a 48x200
+    /// all-white BGR cell, the result discarded. Best-effort by design;
+    /// a warm-up failure is no different from a real-inference failure
+    /// the scan path already reports, so it must not change engine
+    /// construction. DirectML in particular compiles shaders / JITs
+    /// kernels on first run, which this absorbs at startup.
+    pub fn warm_up(&self) {
+        let dummy = vec![255u8; TARGET_H * 200 * 3];
+        let _ = self.recognize_bgr(&dummy, TARGET_H, 200);
     }
 
     /// Recognise one BGR HWC cell; `(text, score)`.
@@ -277,6 +405,165 @@ impl OcrEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// Serialises every test that pins `ORT_DYLIB_PATH` and builds a real
+    /// ONNX Runtime session. `set_var` is process-global and NOT
+    /// thread-safe against ORT's own `getenv`, and the runtime init is
+    /// once-only; two such tests running concurrently (cargo's default)
+    /// race, which surfaced as an intermittent baseline failure. Holding
+    /// this lock across the env-set + session-build makes them sequential.
+    /// Poison-tolerant so a panicking test cannot wedge the rest.
+    static ORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_ort() -> std::sync::MutexGuard<'static, ()> {
+        ORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// The repo's bundled recogniser model + dict, the same pair the
+    /// offline bench resolves.
+    fn repo_model_paths() -> (PathBuf, PathBuf) {
+        let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join("backend/assets/models");
+        (
+            assets.join("svtrv2_rec.onnx"),
+            assets.join("ppocr_keys_v1.txt"),
+        )
+    }
+
+    /// The committed ONNX Runtime dylib next to the bundle's DirectML.dll
+    /// and providers-shared sibling: the dev resource layout.
+    fn repo_ort_dylib() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join("frontend/src-tauri/entropia-orme/resources/ort/onnxruntime.dll")
+    }
+
+    /// PROVIDER SELECTION: `new_with_providers` runs the DirectML-then-CPU
+    /// ladder and records a *real* provider (never the EP-agnostic
+    /// `"default"`), faithful to `local_ocr.py` recording
+    /// `session.get_providers()[0]`. On a DX12 host the first attempt
+    /// commits and records `DmlExecutionProvider`; on a host without a
+    /// DX12 GPU (or a non-Windows target, where DirectML registration
+    /// itself fails) the second attempt fires and records
+    /// `CPUExecutionProvider`. We assert the provider is one of those two
+    /// (host-dependent which), proving the ladder ran and recorded its
+    /// selection; the [DirectML, CPU] order is fixed in
+    /// `new_with_providers` and the EP-agnostic `new` is asserted to
+    /// record `"default"` so the two paths never blur.
+    ///
+    /// Host-gated like `ocr_bench_differential`: the committed dylib is
+    /// pinned via `ORT_DYLIB_PATH` so the test can load the runtime
+    /// without a system install; if the dylib is absent or the runtime
+    /// cannot be loaded on this host, the test skips with its reason
+    /// rather than passing vacuously.
+    #[test]
+    fn new_with_providers_runs_the_dml_then_cpu_ladder_and_records_the_selection() {
+        let _ort = lock_ort();
+        // The bundled ONNX Runtime is the Windows onnxruntime-directml build;
+        // loading that PE via the loader on a non-Windows host hangs rather
+        // than erroring, so this load-bearing test runs only on Windows
+        // (where the real runtime is present and the OCR feature ships).
+        if !cfg!(windows) {
+            eprintln!("the bundled ONNX Runtime is Windows-only; skipping on this platform");
+            return;
+        }
+        let dylib = repo_ort_dylib();
+        if !dylib.is_file() {
+            eprintln!(
+                "committed ONNX Runtime dylib absent at {} on this host; skipping",
+                dylib.display()
+            );
+            return;
+        }
+        // Pin the dylib for this process. ORT loads it lazily on first
+        // use; setting the absolute path here makes the bundled runtime
+        // (and its sibling DirectML.dll / providers-shared) authoritative
+        // without a system install. Process-global and once-only: the
+        // first load wins, which is exactly the production contract.
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", &dylib);
+        }
+
+        let (model, dict) = repo_model_paths();
+        if !model.is_file() {
+            eprintln!("repo model absent at {}; skipping", model.display());
+            return;
+        }
+        let engine = match OcrEngine::new_with_providers(&model, &dict) {
+            Ok(engine) => engine,
+            Err(error) => {
+                eprintln!("ONNX Runtime unavailable on this host ({error}); skipping");
+                return;
+            }
+        };
+        let provider = engine.provider();
+        assert!(
+            provider == "DmlExecutionProvider" || provider == "CPUExecutionProvider",
+            "the ladder records a real provider (DML on a DX12 host, CPU otherwise), \
+             got {provider:?}"
+        );
+        assert_ne!(
+            provider, "default",
+            "new_with_providers never records the EP-agnostic default"
+        );
+        eprintln!("new_with_providers selected provider={provider}");
+
+        // The warmed engine still recognises: a white cell reads to a
+        // (possibly empty) string and a finite score without panicking,
+        // proving the EP-configured session is live, not just built.
+        engine.warm_up();
+        let white = vec![255u8; TARGET_H * 200 * 3];
+        let (_text, score) = engine
+            .recognize_bgr(&white, TARGET_H, 200)
+            .expect("the EP-configured session recognises a warm-up-shaped cell");
+        assert!(score.is_finite(), "the score is finite, got {score}");
+    }
+
+    /// The EP-agnostic constructor records `"default"`, never a DirectML
+    /// or CPU claim it did not make. Same host-gating as the ladder test.
+    #[test]
+    fn new_records_the_default_provider() {
+        let _ort = lock_ort();
+        // Windows-only: see `new_with_providers_...` (loading the bundled
+        // Windows runtime on another platform hangs the loader).
+        if !cfg!(windows) {
+            eprintln!("the bundled ONNX Runtime is Windows-only; skipping on this platform");
+            return;
+        }
+        let dylib = repo_ort_dylib();
+        if !dylib.is_file() {
+            eprintln!("committed ONNX Runtime dylib absent; skipping");
+            return;
+        }
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", &dylib);
+        }
+        let (model, dict) = repo_model_paths();
+        if !model.is_file() {
+            eprintln!("repo model absent; skipping");
+            return;
+        }
+        let engine = match OcrEngine::new(&model, &dict) {
+            Ok(engine) => engine,
+            Err(error) => {
+                eprintln!("ONNX Runtime unavailable ({error}); skipping");
+                return;
+            }
+        };
+        assert_eq!(
+            engine.provider(),
+            "default",
+            "the EP-agnostic new records the runtime's own default, not a fabricated selection"
+        );
+    }
 
     #[test]
     fn cv_round_ties_to_even() {

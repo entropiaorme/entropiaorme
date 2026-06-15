@@ -1,0 +1,17 @@
+ONNX Runtime (DirectML) bundled binaries
+
+Source: onnxruntime-directml 1.24.4 (PyPI wheel onnxruntime_directml-1.24.4-cp314-cp314-win_amd64.whl),
+the same ONNX Runtime build the Python backend ships on Windows (backend/requirements.txt).
+ONNX Runtime C API version 24, matching the ort crate pin (api-24).
+Extracted verbatim from the wheel's onnxruntime/capi/ directory.
+
+Upstream anchor (the digest a third party can cross-check against PyPI without
+trusting this repo: PyPI publishes the whole-wheel sha256, then the per-DLL
+hashes below are reproducible by extracting onnxruntime/capi/ from that wheel):
+  wheel onnxruntime_directml-1.24.4-cp314-cp314-win_amd64.whl
+  sha256 51d86bb949488e572b00422f344990a4a81d982416d73b6c0e4ced2bcd423d19  (25571098 bytes)
+
+sha256 (extracted DLLs):
+  13af15778e6e587169e5990ce8c51fd9964ca7ece8000df2a8b4f6b3fbd5f34a  DirectML.dll  (18527776 bytes)
+  3153de3c4f0a98a3dda5351f2561219cd75c42af7c8a8dd6db8ed17b6d22697a  onnxruntime.dll  (21111840 bytes)
+  d7ca6ef9dc3689bfcf24625139722f660add057945890ac7f50c43184e5cbce3  onnxruntime_providers_shared.dll  (21528 bytes)

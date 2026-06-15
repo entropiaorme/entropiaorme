@@ -101,7 +101,9 @@ def main() -> int:
                 "install",
                 "--force-reinstall",
                 "--no-deps",
-                "onnxruntime-directml",
+                # Lockstep with the requirements pin: a bare name here
+                # would drift the frozen build off the coherent line.
+                "onnxruntime-directml==1.24.4",
             ],
             cwd=PROJECT_ROOT,
             check=True,

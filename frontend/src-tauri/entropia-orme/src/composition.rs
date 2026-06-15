@@ -109,7 +109,7 @@ fn dev_project_root() -> PathBuf {
 /// Where the user's data lives, by the backend's own rules. Release
 /// builds are "frozen" in the backend's sense (the installed app);
 /// dev builds honour `ENTROPIAORME_DATA_DIR` and the repo default.
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     let override_value = std::env::var("ENTROPIAORME_DATA_DIR").ok();
     let frozen = !cfg!(debug_assertions);
     let appdata_root = std::env::var("APPDATA")

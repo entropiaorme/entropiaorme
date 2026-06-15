@@ -1,4 +1,5 @@
 mod composition;
+mod crash;
 mod telemetry;
 
 #[cfg(windows)]
@@ -95,9 +96,14 @@ struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 pub fn run() {
     // Install the process-wide tracing subscriber first, before anything
     // else runs, so every diagnostic and every instrumented seam is captured
-    // from the first instant. The guard is held for the whole process (it
-    // flushes the rolling log appender at exit once that lands).
+    // from the first instant. The guard is held for the whole process so the
+    // rolling log appender flushes at exit.
     let _telemetry = telemetry::init();
+
+    // Install the default-off, opt-in crash reporter's panic hook. By default
+    // it adds nothing to the standard panic behaviour; only when the user has
+    // opted in does a panic write a PII-scrubbed, local-only report.
+    crash::install_panic_hook(composition::data_dir());
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

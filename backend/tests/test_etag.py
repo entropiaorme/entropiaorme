@@ -28,7 +28,6 @@ from __future__ import annotations
 import io
 import os
 import re
-import tempfile
 from collections.abc import Iterator
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -83,15 +82,15 @@ OUT_OF_SCOPE_GET_ROUTES: tuple[str, ...] = (
 
 
 @pytest.fixture(scope="module")
-def client() -> Iterator[TestClient]:
+def client(tmp_path_factory: pytest.TempPathFactory) -> Iterator[TestClient]:
     """Boot the real app lifespan against a throwaway data + demo dir.
 
     Mirrors ``test_api_contract.contract_env`` so the lifespan-init
     cost is paid once per module rather than per test. Restores the
     patched resolver and data-dir env on teardown.
     """
-    data_dir = tempfile.mkdtemp(prefix="eo_etag_data_")
-    demo_dir = tempfile.mkdtemp(prefix="eo_etag_demo_")
+    data_dir = str(tmp_path_factory.mktemp("etag_data"))
+    demo_dir = str(tmp_path_factory.mktemp("etag_demo"))
 
     from backend.scripts.demo_seed.__main__ import main as seed_demo
 

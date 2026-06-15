@@ -16,9 +16,6 @@ and the items-vs-quest_ids normalisation branch.
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
 from backend.db.app_database import AppDatabase
@@ -28,9 +25,24 @@ from backend.services.quest_service import (
     QuestService,
 )
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's DB temp dirs under pytest's auto-rotated basetemp.
+
+    ``_make_service`` is a plain helper called from test bodies, not through
+    the fixture protocol, so it cannot request ``tmp_path_factory`` itself.
+    Binding it here keeps every helper-created dir under the tree pytest
+    prunes, instead of the OS temp directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
 
 def _make_service() -> QuestService:
-    tmp = Path(tempfile.mkdtemp()) / "quests.db"
+    tmp = _tmp_factory.mktemp("quests") / "quests.db"
     db = AppDatabase(tmp)
     return QuestService(db)
 

@@ -1,0 +1,21 @@
+# Redirect the temporary directory for every process Cargo launches (test
+# binaries, build scripts, nextest) into the build output tree, so that an
+# interrupted `cargo test` / `cargo nextest run` leaves its scratch
+# directories under `target/` (ignored by Git, reclaimed by `cargo clean`)
+# instead of accumulating in the operating system's temporary directory, where
+# nothing prunes them. The conformance and differential test harnesses each
+# allocate a fresh `tempfile::TempDir`, which is removed on a clean exit but
+# not when the run is killed or interrupted; rooting them here bounds that
+# leak to a single, easily-reclaimed location.
+#
+# The target is `target` itself rather than a dedicated subdirectory because
+# `tempfile::TempDir::new()` requires its parent to already exist, and
+# `target` is the only path guaranteed present for a bare `cargo nextest run`
+# / `cargo test --workspace` (which build the test binaries but never create
+# an extra directory first). `relative = true` resolves the path against this
+# workspace regardless of the caller's working directory; `force = true`
+# overrides any inherited TMP / TEMP / TMPDIR.
+[env]
+TMP = { value = "target", relative = true, force = true }
+TEMP = { value = "target", relative = true, force = true }
+TMPDIR = { value = "target", relative = true, force = true }

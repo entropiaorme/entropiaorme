@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import json
 import shutil
-import tempfile
-from pathlib import Path
 from typing import Any
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -57,10 +56,26 @@ _CATALOGUE = st.fixed_dictionaries(
 )
 
 
+_tmp_factory: pytest.TempPathFactory
+
+
+@pytest.fixture(autouse=True)
+def _bind_tmp_factory(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Root the module's snapshot temp dirs under pytest's auto-rotated basetemp.
+
+    ``_store_from`` is a plain helper called per generated example from the
+    property test bodies, not through the fixture protocol, so it cannot
+    request ``tmp_path_factory`` itself. Binding it here keeps every
+    helper-created dir under the tree pytest prunes, instead of the OS temp
+    directory an interrupted run never cleans.
+    """
+    global _tmp_factory
+    _tmp_factory = tmp_path_factory
+
+
 def _store_from(catalogue: dict[str, list[dict[str, Any]]]) -> GameDataStore:
     """Materialise a catalogue as a snapshot directory and load a store."""
-    tmp = tempfile.mkdtemp()
-    snap = Path(tmp)
+    snap = _tmp_factory.mktemp("snapshot")
     try:
         for endpoint, entities in catalogue.items():
             (snap / f"{endpoint}.json").write_text(

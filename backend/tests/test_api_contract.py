@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import io
 import os
-import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -99,14 +98,14 @@ def _clamp_int64_params(params) -> None:
 
 
 @pytest.fixture(scope="module")
-def contract_env():
+def contract_env(tmp_path_factory: pytest.TempPathFactory):
     """Boot the real app lifespan against throwaway data + a seeded demo DB.
 
     Module-scoped: the lifespan and demo seed are built once for the whole
     contract run. Restores the patched resolver and data-dir env on teardown.
     """
-    data_dir = tempfile.mkdtemp(prefix="eo_contract_data_")
-    demo_dir = tempfile.mkdtemp(prefix="eo_contract_demo_")
+    data_dir = str(tmp_path_factory.mktemp("contract_data"))
+    demo_dir = str(tmp_path_factory.mktemp("contract_demo"))
 
     # Seed the curated demo DB into the temp dir and point the demo router's
     # resolver at it (resetting its lazily-built in-memory cache).

@@ -22,7 +22,6 @@ The asserts pin three kinds of behaviour the mutants break:
    scope, and fuzzy threshold boundary.
 """
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -81,8 +80,8 @@ _REWARD_KEYS = {
 
 
 @pytest.fixture
-def svc() -> QuestService:
-    tmp = Path(tempfile.mkdtemp()) / "quests.db"
+def svc(tmp_path: Path) -> QuestService:
+    tmp = tmp_path / "quests.db"
     db = AppDatabase(tmp)
     db.conn.executescript(_TRACKER_SCHEMA)
     db.conn.commit()

@@ -31,7 +31,6 @@ import io
 import json
 import os
 import shutil
-import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -87,15 +86,15 @@ def _stream_segment(source: Path, destination: Path) -> None:
 
 
 @pytest.fixture(scope="module")
-def contract_state_env():
+def contract_state_env(tmp_path_factory: pytest.TempPathFactory):
     """Boot the lifespan with a pre-seeded chatlog, then replay scenarios.
 
     Module-scoped: scenario replay + lifespan boot pay their cost once
     per contract-suite-with-state run, not per generated case. Tears
     down by stopping the lifespan, restoring demo + env state.
     """
-    data_dir_str = tempfile.mkdtemp(prefix="eo_contract_state_data_")
-    demo_dir_str = tempfile.mkdtemp(prefix="eo_contract_state_demo_")
+    data_dir_str = str(tmp_path_factory.mktemp("contract_state_data"))
+    demo_dir_str = str(tmp_path_factory.mktemp("contract_state_demo"))
     data_dir = Path(data_dir_str)
     demo_dir = Path(demo_dir_str)
     chatlog = data_dir / "chat_testing.log"

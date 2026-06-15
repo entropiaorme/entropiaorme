@@ -34,7 +34,6 @@ import asyncio
 import json
 import os
 import shutil
-import tempfile
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -94,7 +93,7 @@ def _recording_asgi(inner: Any, log: _RequestLog) -> Any:
 
 
 @pytest.fixture
-def recording_live_server() -> Iterator[tuple[int, _RequestLog]]:
+def recording_live_server(tmp_path) -> Iterator[tuple[int, _RequestLog]]:
     """Run the real app on a loopback uvicorn server behind a request recorder.
 
     Mirrors the SSE seam fixture (kernel-assigned ephemeral port, host-allow-list
@@ -102,7 +101,7 @@ def recording_live_server() -> Iterator[tuple[int, _RequestLog]]:
     app is wrapped in a recording ASGI layer so the test can assert the exact
     request signature the server saw.
     """
-    data_dir = tempfile.mkdtemp(prefix="eo_netquiet_seam_")
+    data_dir = str(tmp_path)
     original_data_dir = os.environ.get("ENTROPIAORME_DATA_DIR")
     os.environ["ENTROPIAORME_DATA_DIR"] = data_dir
 

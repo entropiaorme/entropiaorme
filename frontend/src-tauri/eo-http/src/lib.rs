@@ -39,23 +39,45 @@ use crate::arms::{Arm, ArmOverrides};
 use crate::proxy::ProxyClient;
 
 /// Shared router state: the pooled upstream client, the sidecar authority,
-/// the public-boundary Host allowlist, and the hot-swappable arm-override
-/// map.
+/// the public-boundary Host allowlist, the hot-swappable arm-override map,
+/// and the composed native services. The native-service handles sit behind
+/// `RwLock`s so composition can install them after `serve` has already
+/// started: the substrate begins proxy-only and hot-upgrades to native the
+/// moment composition succeeds (see [`AppState::install_native`]). That is
+/// how a first launch after an upgrade recovers once the sidecar has
+/// migrated the database up to the adoptable baseline, without a restart.
 pub struct AppState {
     client: ProxyClient,
     upstream: String,
     allowed_hosts: [String; 2],
     overrides: RwLock<ArmOverrides>,
-    hydration: Option<Arc<crate::hydration::HydrationState>>,
-    tracker: Option<Arc<eo_services::tracker::HuntTracker>>,
-    sse_hub: Option<Arc<eo_wire::sse::SseHub>>,
-    config_service: Option<Arc<Mutex<eo_services::config_service::ConfigService>>>,
-    skill_tracker: Option<Arc<eo_services::skill_tracker::SkillTracker>>,
-    skill_scan: Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>,
-    repair_ocr: Option<Arc<eo_services::repair_ocr::RepairOcrService>>,
-    spacebar_listener: Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>>,
-    hotbar_listener: Option<Arc<eo_services::hotbar_listener::HotbarListener>>,
+    hydration: RwLock<Option<Arc<crate::hydration::HydrationState>>>,
+    tracker: RwLock<Option<Arc<eo_services::tracker::HuntTracker>>>,
+    sse_hub: RwLock<Option<Arc<eo_wire::sse::SseHub>>>,
+    config_service: RwLock<Option<Arc<Mutex<eo_services::config_service::ConfigService>>>>,
+    skill_tracker: RwLock<Option<Arc<eo_services::skill_tracker::SkillTracker>>>,
+    skill_scan: RwLock<Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>>,
+    repair_ocr: RwLock<Option<Arc<eo_services::repair_ocr::RepairOcrService>>>,
+    spacebar_listener:
+        RwLock<Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>>>,
+    hotbar_listener: RwLock<Option<Arc<eo_services::hotbar_listener::HotbarListener>>>,
     cors: Option<cors::CorsConfig>,
+}
+
+/// The composed native services, handed to [`AppState::install_native`] to
+/// flip the natively-registered routes off their proxy fallback. Every
+/// handle is present (composition either yields the full set or declines),
+/// so the bundle carries them by value rather than as options.
+pub struct NativeServices {
+    pub hydration: Arc<crate::hydration::HydrationState>,
+    pub tracker: Arc<eo_services::tracker::HuntTracker>,
+    pub sse_hub: Arc<eo_wire::sse::SseHub>,
+    pub config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
+    pub skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
+    pub skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
+    pub repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
+    pub spacebar_listener: Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>,
+    pub hotbar_listener: Arc<eo_services::hotbar_listener::HotbarListener>,
 }
 
 impl AppState {
@@ -72,15 +94,15 @@ impl AppState {
                 format!("localhost:{public_port}"),
             ],
             overrides: RwLock::new(overrides),
-            hydration: None,
-            tracker: None,
-            sse_hub: None,
-            config_service: None,
-            skill_tracker: None,
-            skill_scan: None,
-            repair_ocr: None,
-            spacebar_listener: None,
-            hotbar_listener: None,
+            hydration: RwLock::new(None),
+            tracker: RwLock::new(None),
+            sse_hub: RwLock::new(None),
+            config_service: RwLock::new(None),
+            skill_tracker: RwLock::new(None),
+            skill_scan: RwLock::new(None),
+            repair_ocr: RwLock::new(None),
+            spacebar_listener: RwLock::new(None),
+            hotbar_listener: RwLock::new(None),
             cors: None,
         }
     }
@@ -100,13 +122,16 @@ impl AppState {
     /// built before composition, or composition declined at startup)
     /// every natively-registered route falls back to the proxy arm.
     pub fn with_hydration(mut self, hydration: Arc<crate::hydration::HydrationState>) -> Self {
-        self.hydration = Some(hydration);
+        self.hydration = RwLock::new(Some(hydration));
         self
     }
 
     /// The composed native services, when present.
     pub(crate) fn hydration(&self) -> Option<Arc<crate::hydration::HydrationState>> {
-        self.hydration.clone()
+        self.hydration
+            .read()
+            .expect("hydration service lock")
+            .clone()
     }
 
     /// Attach the live producer-spine tracker (the same `Arc<HuntTracker>`
@@ -115,13 +140,13 @@ impl AppState {
     /// producer routes that need the live tracker fall back to the proxy
     /// arm, exactly like the read surface without [`with_hydration`].
     pub fn with_tracker(mut self, tracker: Arc<eo_services::tracker::HuntTracker>) -> Self {
-        self.tracker = Some(tracker);
+        self.tracker = RwLock::new(Some(tracker));
         self
     }
 
     /// The live producer-spine tracker, when composed.
     pub(crate) fn tracker(&self) -> Option<Arc<eo_services::tracker::HuntTracker>> {
-        self.tracker.clone()
+        self.tracker.read().expect("tracker service lock").clone()
     }
 
     /// Attach the live producer-spine SSE hub (the same `Arc<SseHub>` the
@@ -130,13 +155,13 @@ impl AppState {
     /// `/api/events` stream falls back to the proxy arm, exactly like the
     /// read surface without [`with_hydration`].
     pub fn with_sse_hub(mut self, sse_hub: Arc<eo_wire::sse::SseHub>) -> Self {
-        self.sse_hub = Some(sse_hub);
+        self.sse_hub = RwLock::new(Some(sse_hub));
         self
     }
 
     /// The live producer-spine SSE hub, when composed.
     pub(crate) fn sse_hub(&self) -> Option<Arc<eo_wire::sse::SseHub>> {
-        self.sse_hub.clone()
+        self.sse_hub.read().expect("sse hub service lock").clone()
     }
 
     /// Attach the settings writer (the same `Arc<Mutex<ConfigService>>` the
@@ -148,7 +173,7 @@ impl AppState {
         mut self,
         config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
     ) -> Self {
-        self.config_service = Some(config_service);
+        self.config_service = RwLock::new(Some(config_service));
         self
     }
 
@@ -156,7 +181,10 @@ impl AppState {
     pub(crate) fn config_service(
         &self,
     ) -> Option<Arc<Mutex<eo_services::config_service::ConfigService>>> {
-        self.config_service.clone()
+        self.config_service
+            .read()
+            .expect("config service lock")
+            .clone()
     }
 
     /// Attach the live producer-spine skill tracker (the same
@@ -166,13 +194,16 @@ impl AppState {
         mut self,
         skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
     ) -> Self {
-        self.skill_tracker = Some(skill_tracker);
+        self.skill_tracker = RwLock::new(Some(skill_tracker));
         self
     }
 
     /// The live producer-spine skill tracker, when composed.
     pub(crate) fn skill_tracker(&self) -> Option<Arc<eo_services::skill_tracker::SkillTracker>> {
-        self.skill_tracker.clone()
+        self.skill_tracker
+            .read()
+            .expect("skill tracker service lock")
+            .clone()
     }
 
     /// Attach the composed manual skill-scan service (the OCR scan
@@ -183,7 +214,7 @@ impl AppState {
         mut self,
         skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
     ) -> Self {
-        self.skill_scan = Some(skill_scan);
+        self.skill_scan = RwLock::new(Some(skill_scan));
         self
     }
 
@@ -191,7 +222,10 @@ impl AppState {
     pub(crate) fn skill_scan(
         &self,
     ) -> Option<Arc<eo_services::skill_scan_manual::SkillScanManual>> {
-        self.skill_scan.clone()
+        self.skill_scan
+            .read()
+            .expect("skill scan service lock")
+            .clone()
     }
 
     /// Attach the composed repair-OCR service. Without it the repair-scan
@@ -200,13 +234,16 @@ impl AppState {
         mut self,
         repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
     ) -> Self {
-        self.repair_ocr = Some(repair_ocr);
+        self.repair_ocr = RwLock::new(Some(repair_ocr));
         self
     }
 
     /// The composed repair-OCR service, when present.
     pub(crate) fn repair_ocr(&self) -> Option<Arc<eo_services::repair_ocr::RepairOcrService>> {
-        self.repair_ocr.clone()
+        self.repair_ocr
+            .read()
+            .expect("repair ocr service lock")
+            .clone()
     }
 
     /// Attach the composed spacebar-capture listener. Without it the
@@ -215,7 +252,7 @@ impl AppState {
         mut self,
         spacebar_listener: Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>,
     ) -> Self {
-        self.spacebar_listener = Some(spacebar_listener);
+        self.spacebar_listener = RwLock::new(Some(spacebar_listener));
         self
     }
 
@@ -223,7 +260,10 @@ impl AppState {
     pub(crate) fn spacebar_listener(
         &self,
     ) -> Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>> {
-        self.spacebar_listener.clone()
+        self.spacebar_listener
+            .read()
+            .expect("spacebar listener service lock")
+            .clone()
     }
 
     /// Attach the composed hotbar listener (the same `Arc<HotbarListener>` the
@@ -233,7 +273,7 @@ impl AppState {
         mut self,
         hotbar_listener: Arc<eo_services::hotbar_listener::HotbarListener>,
     ) -> Self {
-        self.hotbar_listener = Some(hotbar_listener);
+        self.hotbar_listener = RwLock::new(Some(hotbar_listener));
         self
     }
 
@@ -241,7 +281,41 @@ impl AppState {
     pub(crate) fn hotbar_listener(
         &self,
     ) -> Option<Arc<eo_services::hotbar_listener::HotbarListener>> {
-        self.hotbar_listener.clone()
+        self.hotbar_listener
+            .read()
+            .expect("hotbar listener service lock")
+            .clone()
+    }
+
+    /// Install the composed native services after the substrate is already
+    /// serving. Composition runs in a background task off the startup path
+    /// (so the substrate answers proxy-only the instant it binds) and calls
+    /// this the moment it succeeds: each handle is written under its lock,
+    /// and the next request for a natively-registered route reads the
+    /// now-present service and runs its native arm instead of the proxy
+    /// fallback. A first launch that found the database below the adoptable
+    /// baseline (the sidecar had not yet migrated it) recovers here, without
+    /// a restart, the moment a retry of composition adopts the migrated
+    /// database.
+    pub fn install_native(&self, services: NativeServices) {
+        *self.hydration.write().expect("hydration service lock") = Some(services.hydration);
+        *self.tracker.write().expect("tracker service lock") = Some(services.tracker);
+        *self.sse_hub.write().expect("sse hub service lock") = Some(services.sse_hub);
+        *self.config_service.write().expect("config service lock") = Some(services.config_service);
+        *self
+            .skill_tracker
+            .write()
+            .expect("skill tracker service lock") = Some(services.skill_tracker);
+        *self.skill_scan.write().expect("skill scan service lock") = Some(services.skill_scan);
+        *self.repair_ocr.write().expect("repair ocr service lock") = Some(services.repair_ocr);
+        *self
+            .spacebar_listener
+            .write()
+            .expect("spacebar listener service lock") = Some(services.spacebar_listener);
+        *self
+            .hotbar_listener
+            .write()
+            .expect("hotbar listener service lock") = Some(services.hotbar_listener);
     }
 
     pub fn upstream(&self) -> &str {

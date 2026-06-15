@@ -99,6 +99,25 @@ impl std::fmt::Display for AdoptError {
 
 impl std::error::Error for AdoptError {}
 
+impl AdoptError {
+    /// True when the decline is "the existing database predates the
+    /// adoptable baseline" ([`DbError::UnsupportedSchemaVersion`]): the
+    /// transient state on a first launch after an upgrade, while the
+    /// co-bundled sidecar migrates the database forward to the baseline this
+    /// process adopts at. The composition root retries on this; every other
+    /// decline (a corrupt file, a driver fault) is final and the substrate
+    /// stays proxy-only for the session.
+    pub fn is_below_baseline(&self) -> bool {
+        matches!(
+            self,
+            AdoptError::Quarantined {
+                source: DbError::UnsupportedSchemaVersion { .. },
+                ..
+            }
+        )
+    }
+}
+
 impl From<sqlx::Error> for DbError {
     fn from(err: sqlx::Error) -> Self {
         DbError::Driver(err.to_string())
@@ -771,6 +790,46 @@ mod tests {
         }
         // The quarantine left the user's file byte-identical.
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn is_below_baseline_distinguishes_the_pre_upgrade_race_from_a_real_fault() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A database the backend created but has not yet migrated up to the
+        // baseline (version below it, no sqlx ledger): the first-launch-
+        // after-upgrade race. open_adopted quarantines it, and
+        // is_below_baseline() flags it as the retry-worthy case.
+        let below = dir.path().join("below.db");
+        {
+            let db = Db::open(&below).await.unwrap();
+            sqlx::query("UPDATE db_metadata SET value = '28' WHERE key = 'version'")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("DROP TABLE _sqlx_migrations")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let err = Db::open_adopted(&below).await.unwrap_err();
+        assert!(
+            err.is_below_baseline(),
+            "a pre-baseline database is the retry-worthy race, got {err:?}"
+        );
+
+        // A genuinely unadoptable file also quarantines, but is NOT the
+        // race: retrying would never help, so it must not be flagged.
+        let corrupt = dir.path().join("corrupt.db");
+        std::fs::write(&corrupt, b"this is not a sqlite database").unwrap();
+        let err = Db::open_adopted(&corrupt).await.unwrap_err();
+        assert!(
+            !err.is_below_baseline(),
+            "a corrupt file is a permanent fault, not the race, got {err:?}"
+        );
+
+        // A fresh-path failure is likewise never the race.
+        assert!(!AdoptError::Fresh(DbError::Driver("boom".into())).is_below_baseline());
     }
 
     #[test]

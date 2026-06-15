@@ -290,9 +290,13 @@ fn dev_sidecar_port() -> Option<u16> {
 }
 
 /// Serve the strangler router on the already-bound public listener,
-/// proxying not-yet-ported routes to the sidecar on `sidecar_port`.
-/// Native services compose first (inside the task, before the first
-/// request); a declined composition serves proxy-only.
+/// proxying not-yet-ported routes to the sidecar on `sidecar_port`. The
+/// substrate begins serving (proxy-only) the instant it binds; native
+/// services compose in the background and hot-install when ready, so a
+/// first launch after an upgrade (where the database is briefly below the
+/// adoptable baseline while the sidecar migrates it forward) upgrades to
+/// native without a restart, instead of standing down proxy-only for the
+/// whole session.
 fn spawn_http_substrate(
     app: tauri::AppHandle,
     listener: std::net::TcpListener,
@@ -301,7 +305,7 @@ fn spawn_http_substrate(
 ) {
     let overrides = route_arm_overrides();
     tauri::async_runtime::spawn(async move {
-        let mut app_state = eo_http::AppState::new(
+        let app_state = eo_http::AppState::new(
             format!("127.0.0.1:{sidecar_port}"),
             public_backend_port(),
             overrides,
@@ -310,48 +314,16 @@ fn spawn_http_substrate(
         // rules, response decoration) exactly as the sidecar's own
         // middleware would, from the same environment inputs.
         .with_cors(eo_http::cors::CorsConfig::from_env());
-        if let Some(composed) = composition::compose_native(resource_dir).await {
-            // Clone the live tracker and the SSE hub out of the producer
-            // spine BEFORE it moves into the Tauri-managed holder below, so
-            // the producer routes serve over the same `Arc<HuntTracker>` the
-            // exit-seam teardown stops, and the `/api/events` stream serves
-            // over the same `Arc<SseHub>` the producer-bus bridge feeds.
-            // Clones for the exit seam, taken before the originals move into
-            // the app state below: the spacebar listener detaches its share of
-            // the shared OS hook and the scan resets in-flight state on close.
-            let exit_spacebar = composed.spacebar_listener.clone();
-            let exit_skill_scan = composed.skill_scan.clone();
-            app_state = app_state
-                .with_hydration(composed.hydration)
-                .with_tracker(composed.producers.tracker_handle())
-                .with_sse_hub(composed.producers.sse_hub_handle())
-                .with_config_service(composed.producers.config_service_handle())
-                .with_skill_tracker(composed.producers.skill_tracker_handle())
-                // The OCR scan state machine and the repair-cost reader serve
-                // the scan routes over the same `Arc`s composed on the spine
-                // bus (their status frames reach the `/api/events` stream).
-                .with_skill_scan(composed.skill_scan)
-                .with_repair_ocr(composed.repair_ocr)
-                // The spacebar-capture toggle and the snapshot route's
-                // hotbar-running read serve over the composed listeners.
-                .with_spacebar_listener(composed.spacebar_listener)
-                .with_hotbar_listener(composed.producers.hotbar_handle());
-            // Hand the producer spine to the exit seam so it stops the
-            // tail thread, the hotbar listener, and ends any session on close.
-            app.manage(Producers(Mutex::new(Some(composed.producers))));
-            // Hold the warmed OCR engine for the app's lifetime so the
-            // scan consumer routes can pull it when they flip; no exit
-            // stop (the session drops with the managed state, the ORT env
-            // self-releases at process exit).
-            app.manage(OcrEngineState(Mutex::new(composed.ocr_engine)));
-            // Hand the scan input listener and the scan state machine to the
-            // exit seam for deterministic teardown.
-            app.manage(ScanInput {
-                spacebar: exit_spacebar,
-                skill_scan: exit_skill_scan,
-            });
-        }
         let state = std::sync::Arc::new(app_state);
+
+        // Compose the native services off the serve path and install them
+        // when ready, so the substrate answers (proxy-only) the instant it
+        // binds rather than blocking startup on composition. The natively
+        // registered routes each fall back to the proxy arm while their
+        // service is absent, so the install flips them to native on the next
+        // request with no re-registration and no restart.
+        compose_and_install(app, state.clone(), resource_dir);
+
         let listener = match tokio::net::TcpListener::from_std(listener) {
             Ok(listener) => listener,
             Err(err) => {
@@ -362,6 +334,109 @@ fn spawn_http_substrate(
         if let Err(err) = eo_http::serve(listener, state).await {
             eprintln!("[substrate] server exited: {err}");
         }
+    });
+}
+
+/// How often the composition retry re-attempts adoption while the database
+/// is below the adoptable baseline.
+const COMPOSE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// The ceiling on that retry. A first launch after an upgrade waits while
+/// the co-bundled sidecar unpacks (a ~180 MB onefile, possibly under
+/// on-access scanning) and migrates the database forward; the ceiling is
+/// generous enough to cover a slow cold boot while still surrendering to
+/// proxy-only if the database never reaches the baseline (a dead sidecar),
+/// rather than spinning forever.
+const COMPOSE_RETRY_CEILING: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Compose the native services off the serve path and install them into the
+/// already-serving `state` once ready. Retries ONLY while the database is
+/// below the adoptable baseline (the first-launch-after-upgrade race, where
+/// the sidecar is still migrating it forward); a permanent decline, or the
+/// retry ceiling, leaves the substrate proxy-only for the session.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn compose_and_install(
+    app: tauri::AppHandle,
+    state: std::sync::Arc<eo_http::AppState>,
+    resource_dir: Option<std::path::PathBuf>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut waited = std::time::Duration::ZERO;
+        let mut announced = false;
+        loop {
+            match composition::compose_native(resource_dir.clone()).await {
+                composition::Composition::Ready(composed) => {
+                    install_native_services(&app, &state, composed);
+                    return;
+                }
+                composition::Composition::AwaitingMigration => {
+                    if !announced {
+                        eprintln!(
+                            "[substrate] database below the adoptable baseline; serving \
+                             proxy-only while the sidecar migrates it, then upgrading to native"
+                        );
+                        announced = true;
+                    }
+                    if waited >= COMPOSE_RETRY_CEILING {
+                        eprintln!(
+                            "[substrate] database stayed below the adoptable baseline for {}s; \
+                             serving proxy-only for the session (the sidecar owns the database)",
+                            COMPOSE_RETRY_CEILING.as_secs()
+                        );
+                        return;
+                    }
+                    tokio::time::sleep(COMPOSE_RETRY_INTERVAL).await;
+                    waited += COMPOSE_RETRY_INTERVAL;
+                }
+                composition::Composition::Declined => return,
+            }
+        }
+    });
+}
+
+/// Install the composed services into the live, already-serving app state
+/// (flipping the native routes off their proxy fallback) and hand the
+/// stoppable handles to the Tauri-managed exit seam, exactly as the inline
+/// composition did before the retry moved it off the serve path.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn install_native_services(
+    app: &tauri::AppHandle,
+    state: &std::sync::Arc<eo_http::AppState>,
+    composed: composition::Composed,
+) {
+    // Clones for the exit seam, taken before the originals move into the
+    // installed bundle below: the spacebar listener detaches its share of
+    // the shared OS hook and the scan resets in-flight state on close.
+    let exit_spacebar = composed.spacebar_listener.clone();
+    let exit_skill_scan = composed.skill_scan.clone();
+    // The producer-spine handles (tracker, SSE hub, ...) are cloned out of
+    // the spine here, BEFORE it moves into the Tauri-managed holder below,
+    // so the producer routes serve over the same `Arc<HuntTracker>` the
+    // exit-seam teardown stops and the `/api/events` stream serves over the
+    // same `Arc<SseHub>` the producer-bus bridge feeds.
+    state.install_native(eo_http::NativeServices {
+        hydration: composed.hydration,
+        tracker: composed.producers.tracker_handle(),
+        sse_hub: composed.producers.sse_hub_handle(),
+        config_service: composed.producers.config_service_handle(),
+        skill_tracker: composed.producers.skill_tracker_handle(),
+        skill_scan: composed.skill_scan.clone(),
+        repair_ocr: composed.repair_ocr,
+        spacebar_listener: composed.spacebar_listener.clone(),
+        hotbar_listener: composed.producers.hotbar_handle(),
+    });
+    // Hand the producer spine to the exit seam so it stops the tail thread,
+    // the hotbar listener, and ends any session on close.
+    app.manage(Producers(Mutex::new(Some(composed.producers))));
+    // Hold the warmed OCR engine for the app's lifetime (no exit stop: the
+    // session drops with the managed state, the ORT env self-releases at
+    // process exit).
+    app.manage(OcrEngineState(Mutex::new(composed.ocr_engine)));
+    // Hand the scan input listener and the scan state machine to the exit
+    // seam for deterministic teardown.
+    app.manage(ScanInput {
+        spacebar: exit_spacebar,
+        skill_scan: exit_skill_scan,
     });
 }
 

@@ -1,20 +1,25 @@
 # entropiaorme dev-environment DNS resolver.
 #
-# Answers `*.localhost` queries with 127.0.0.1 (and `::1` for AAAA) so dev
-# hostnames resolve through every OS resolver path, including Windows
-# Winsock — which doesn't honour RFC 6761's `.localhost` reservation for
-# subdomains the way RFC-compliant resolvers (libcurl/c-ares, glibc) do.
-# Pairs with the Caddyfile: DNS resolves the hostname to loopback, Caddy
-# reverse-proxies the HTTPS request to the right frontend port.
+# Answers `*.localhost` queries with 127.0.0.1 (and `::1` for AAAA). This
+# only takes effect for queries that actually reach CoreDNS: a running
+# CoreDNS does not by itself make the OS consult it. Windows in particular
+# does not send `.localhost` lookups to a configured resolver by default
+# (it short-circuits the `.localhost` namespace), so the hostname path
+# needs a one-time OS-level step to route that namespace here: see the
+# README's "Optional dev environment" section (the NRPT rule). Without it
+# the OS returns NXDOMAIN for the dev hostname and `just dev` falls back to
+# the port-based URL. Pairs with the Caddyfile: DNS resolves the hostname to
+# loopback, Caddy reverse-proxies the HTTPS request to the right frontend
+# port.
 #
 # Start with `just dns-up`; `just dns-status` for a liveness check; `just
 # dns-down` to stop. Skipping the CoreDNS install keeps the existing
 # port-based `just dev` flow unmodified (no hostname resolution needed).
 #
 # Listens on 127.0.0.1:53 (loopback-only). Non-`.localhost` queries forward
-# to public upstream DNS so non-project resolution continues to work with
-# this server in the path. Cache caps upstream-DNS load; log/errors give
-# operational visibility during dev.
+# to public upstream DNS, so any non-project query that reaches this server
+# still resolves. Cache caps upstream-DNS load; log/errors give operational
+# visibility during dev.
 
 . {
     bind 127.0.0.1

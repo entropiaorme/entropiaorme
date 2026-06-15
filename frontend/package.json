@@ -24,6 +24,9 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
+		"test:e2e": "wdio run e2e/wdio.conf.mjs",
+		"test:visual": "wdio run e2e/wdio.conf.mjs --spec e2e/specs/dashboard.visual.mjs",
+		"test:visual:update": "wdio run e2e/wdio.conf.mjs --spec e2e/specs/dashboard.visual.mjs --update-visual-baseline",
 		"lint": "biome check .",
 		"format": "biome format --write ."
 	},
@@ -37,6 +40,12 @@
 		"@testing-library/svelte": "^5.3.1",
 		"@types/node": "^25.9.0",
 		"@vitest/coverage-v8": "^3.2.6",
+		"@wdio/cli": "^9.28.0",
+		"@wdio/local-runner": "^9.28.0",
+		"@wdio/mocha-framework": "^9.28.0",
+		"@wdio/spec-reporter": "^9.28.0",
+		"@wdio/visual-service": "^9.2.3",
+		"expect-webdriverio": "^5.6.8",
 		"happy-dom": "^20.9.0",
 		"openapi-typescript": "^7.13.0",
 		"svelte": "^5.51.0",
@@ -44,7 +53,8 @@
 		"tailwindcss": "^4.2.2",
 		"typescript": "^5.9.3",
 		"vite": "^7.3.1",
-		"vitest": "^3.2.6"
+		"vitest": "^3.2.6",
+		"webdriverio": "^9.28.0"
 	},
 	"dependencies": {
 		"@tauri-apps/api": "^2.10.1",

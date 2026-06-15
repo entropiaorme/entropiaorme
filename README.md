@@ -83,8 +83,10 @@ Revert with `Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddre
 
 ## Further documentation
 
+- The [architecture handbook](docs/): an mdBook covering the system overview, the service and crate map, the event taxonomy, the OCR pipeline, and the database schema reference, with the [architecture decision records](docs/src/adr/) alongside. It is published to GitHub Pages on release tags, together with the generated `cargo doc` API reference. Build it locally with `mdbook build docs`.
 - [`backend/architecture/README.md`](backend/architecture/README.md): how the backend is put together (the event spine, the hydration HTTP surface, the service and worker conventions, and the tests that enforce them), with a companion [`PORT-READINESS.md`](backend/architecture/PORT-READINESS.md) on how those shapes map onto a contemplated native port.
 - [`TESTING.md`](TESTING.md): the test suite, runtime tiers, and CI gates.
+- [`SECURITY.md`](SECURITY.md): the security policy, including the supply-chain review gates over dependencies and bundled assets.
 
 ## License
 

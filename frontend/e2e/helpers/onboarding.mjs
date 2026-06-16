@@ -64,10 +64,12 @@ export async function ensureDashboard(browser, devUrl) {
 			console.log(`[onboarding] step=${s.welcomeStep} path=${s.path}`);
 			if (s.welcomeStep < 0 || !s.path.startsWith('/welcome')) break;
 			if (s.welcomeStep >= 6) {
+				// The Terms checkbox is a visually-hidden styled input, which the
+				// strict clickability check rejects; toggle it directly via the DOM
+				// when present rather than gating on WebDriver clickability.
 				const accept = await browser.$('input[type="checkbox"]');
 				if (await accept.isExisting()) {
-					await accept.waitForClickable({ timeout: 5000 });
-					await accept.click();
+					await browser.execute((el) => el.click(), accept);
 				}
 				const start = await browser.$('button*=Get started');
 				await start.waitForClickable({ timeout: 5000 });

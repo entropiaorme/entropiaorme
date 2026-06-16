@@ -17,6 +17,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "store:default",
+    "updater:default",
+    "process:default",
     "shell:allow-open",
     {
       "identifier": "shell:allow-execute",

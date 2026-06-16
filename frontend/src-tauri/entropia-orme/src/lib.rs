@@ -1,4 +1,5 @@
 mod composition;
+mod updater;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -95,10 +96,15 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             show_scan_overlay,
-            hide_scan_overlay
+            hide_scan_overlay,
+            updater::check_for_update,
+            updater::get_update_channel,
+            updater::set_update_channel
         ])
         .setup(|app| {
             // Both uses of `app` compile out on a non-Windows debug build

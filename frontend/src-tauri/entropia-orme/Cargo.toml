@@ -18,6 +18,8 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-shell = { workspace = true }
 tauri-plugin-store = { workspace = true }
+tauri-plugin-updater = { workspace = true }
+tauri-plugin-process = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 eo-http = { workspace = true }

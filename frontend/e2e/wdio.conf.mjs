@@ -110,7 +110,7 @@ export const config = {
 	reporters: ['spec'],
 	mochaOpts: { ui: 'bdd', timeout: 180000 },
 
-	// The visual service backs deliverable 2 (dashboard visual-regression):
+	// The visual service backs the dashboard visual-regression layer:
 	// baselines committed in-repo, diffs tolerant to sub-pixel AA noise.
 	services: [
 		[

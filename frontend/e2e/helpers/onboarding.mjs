@@ -1,7 +1,7 @@
 // Drive the app to the dashboard, completing onboarding when present.
 //
-// The world's write-sandbox forbids seeding the plugin-store prefs file
-// (it lives outside the repo root), so onboarding state is established the
+// The plugin-store prefs file lives outside the repo tree, so it cannot be
+// seeded directly in the test environment; onboarding state is established the
 // only portable way: by walking the real onboarding flow through the UI,
 // which persists the prefs via the app's own runtime. Idempotent across runs
 // and machines: a fresh profile lands on /welcome and gets driven through; an

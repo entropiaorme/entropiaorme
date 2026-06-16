@@ -5,7 +5,7 @@ import { DEV_URL } from '../wdio.conf.mjs';
 
 // Functional panel-flow coverage against the REAL Tauri shell. The deterministic
 // stub backend (e2e/stub-backend.mjs) pins the dashboard's reads, so these
-// assertions are reproducible run-to-run. The IPC checks are the Phase-8 hedge:
+// assertions are reproducible run-to-run. The IPC checks are the migration hedge:
 // they exercise window.__TAURI_INTERNALS__, which only the native shell exposes
 // (a browser-only e2e is structurally blind to it).
 describe('dashboard (native Tauri shell)', () => {
@@ -35,10 +35,10 @@ describe('dashboard (native Tauri shell)', () => {
 		);
 	});
 
-	it('exposes the Tauri IPC surface (the Phase-8 hedge a browser cannot replicate)', async () => {
+	it('exposes the Tauri IPC surface a browser cannot replicate', async () => {
 		// The structural fact the native-shell net exists to guard: the live IPC
 		// bridge is present. A browser-served e2e has no __TAURI_INTERNALS__, so it
-		// is blind to the fetch->invoke surface Phase 8 rewrites.
+		// is blind to the surface the upcoming fetch-to-invoke migration rewrites.
 		const surface = await browser.execute(() => ({
 			hasInternals: typeof window.__TAURI_INTERNALS__ !== 'undefined',
 			invokeIsFn: typeof window.__TAURI_INTERNALS__?.invoke === 'function',

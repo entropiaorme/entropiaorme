@@ -2,7 +2,7 @@
 //
 // Drives the REAL Tauri shell (WebView2) through tauri-driver, which proxies
 // to a version-matched Microsoft Edge WebDriver. The shell is the production
-// IPC surface the Phase-8 fetch->invoke collapse will rewrite, so this net is
+// IPC surface the upcoming fetch-to-invoke collapse will rewrite, so this net is
 // that collapse's entry hedge: a browser-only harness cannot see window.__TAURI__.
 //
 // onPrepare brings up the full hermetic stack and onComplete tears it down:

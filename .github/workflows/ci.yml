@@ -454,6 +454,8 @@ jobs:
       # tauri-driver + the WebView2 runtime + the built shell), and the diff is
       # otherwise discarded with the runner. Path is repo-root relative;
       # upload-artifact does not honour the job's working-directory default.
+      # include-hidden-files is required: the output dir starts with a dot, and
+      # v4 excludes hidden paths by default (which would upload nothing).
       - name: Upload visual diff on failure
         if: failure()
         continue-on-error: true
@@ -461,8 +463,9 @@ jobs:
         with:
           name: visual-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: frontend/e2e/.visual-output
+          include-hidden-files: true
           retention-days: 14
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   rust-policy:
     name: Rust workspace (fmt + audit + deny)

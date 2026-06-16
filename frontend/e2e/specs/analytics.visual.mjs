@@ -19,6 +19,11 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// the real shell.
 		await ensureDashboard(browser, DEV_URL);
 		await browser.url(`${DEV_URL}analytics`);
+		// Log the capture-context viewport: the baselines are captured at a fixed
+		// window size, so a reflowed (wrong-size) layout here is the most likely
+		// cause of a whole-tab diff and must be visible in the run output.
+		const vp = await browser.execute(() => ({ w: window.innerWidth, h: window.innerHeight }));
+		console.log(`[analytics] viewport after load: ${vp.w}x${vp.h}`);
 	});
 
 	async function selectTab(id) {

@@ -47,11 +47,39 @@ export async function ensureDashboard(browser, devUrl) {
 	// `flex-1 min-h-0` panels (e.g. the loot-composition list) collapse to zero
 	// height; (2) a fixed size makes every visual baseline deterministic instead
 	// of varying with whatever size the shell happened to launch at.
-	try {
-		await browser.setWindowSize(1600, 1000);
-	} catch {
-		// Some driver/shell combinations reject Set Window Rect; fall back to the
-		// launch size rather than failing the whole suite.
+	// tauri-driver / WebView2 can intermittently reject or under-apply Set
+	// Window Rect, leaving the shell at its launch size. Every visual baseline
+	// is captured at 1600x1000, so a capture at any other size reflows the whole
+	// layout and swings the diff: set it, verify via getWindowSize, and retry
+	// rather than silently proceeding at the wrong size. Each attempt is logged
+	// (outer + inner viewport) so a residual size problem is visible in the run
+	// output. After the retries we proceed regardless (no worse than the prior
+	// fall-back), but a successful retry is what removes the size flake.
+	const TARGET_W = 1600;
+	const TARGET_H = 1000;
+	for (let attempt = 0; attempt < 6; attempt += 1) {
+		try {
+			await browser.setWindowSize(TARGET_W, TARGET_H);
+		} catch (e) {
+			console.log(`[onboarding] setWindowSize attempt ${attempt} rejected: ${e.message}`);
+		}
+		let outer = { width: -1, height: -1 };
+		try {
+			outer = await browser.getWindowSize();
+		} catch {
+			// getWindowSize unsupported on some drivers; the inner viewport read
+			// below still gates the layout.
+		}
+		const inner = await browser.execute(() => ({ w: window.innerWidth, h: window.innerHeight }));
+		console.log(
+			`[onboarding] window attempt ${attempt}: outer=${outer.width}x${outer.height} inner=${inner.w}x${inner.h}`,
+		);
+		// getWindowSize reads back the outer size we set; accept once it is close
+		// to target (a gross mismatch means the resize did not take).
+		if (Math.abs(outer.width - TARGET_W) <= 32 && Math.abs(outer.height - TARGET_H) <= 32) {
+			break;
+		}
+		await browser.pause(250);
 	}
 
 	// The debug shell launches at about:blank (the dev URL is injected by the

@@ -1,4 +1,7 @@
 mod composition;
+mod crash;
+mod resources;
+mod telemetry;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -92,6 +95,22 @@ struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the process-wide tracing subscriber first, before anything
+    // else runs, so every diagnostic and every instrumented seam is captured
+    // from the first instant. The guard is held for the whole process so the
+    // rolling log appender flushes at exit.
+    let _telemetry = telemetry::init();
+
+    // Install the default-off, opt-in crash reporter's panic hook. By default
+    // it adds nothing to the standard panic behaviour; only when the user has
+    // opted in does a panic write a PII-scrubbed, local-only report.
+    crash::install_panic_hook(composition::data_dir());
+
+    // Start the periodic resource sampler feeding the drift gauges (the metrics
+    // page reads them live; each sample is also logged so the rolling file
+    // carries the resource-drift series for long-running-session leak detection).
+    resources::spawn_resource_sampler();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -219,7 +238,7 @@ fn install_runtime_window_icons(app: &tauri::AppHandle) {
             Ok(handles) => {
                 app.manage(RuntimeWindowIcons(Mutex::new(handles)));
             }
-            Err(err) => eprintln!("[icon] runtime icon install failed: {err}"),
+            Err(err) => tracing::warn!(target: "eo::icon", "runtime icon install failed: {err}"),
         }
     }
 }
@@ -268,13 +287,13 @@ fn bind_substrate_listener() -> Option<std::net::TcpListener> {
     match std::net::TcpListener::bind(("127.0.0.1", port)) {
         Ok(listener) => {
             if let Err(err) = listener.set_nonblocking(true) {
-                eprintln!("[substrate] nonblocking mode failed: {err}");
+                tracing::warn!(target: "eo::substrate", "nonblocking mode failed: {err}");
                 return None;
             }
             Some(listener)
         }
         Err(err) => {
-            eprintln!("[substrate] public port {port} bind failed: {err}");
+            tracing::warn!(target: "eo::substrate", "public port {port} bind failed: {err}");
             None
         }
     }
@@ -286,7 +305,7 @@ fn allocate_private_port() -> Option<u16> {
     match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => listener.local_addr().ok().map(|addr| addr.port()),
         Err(err) => {
-            eprintln!("[substrate] private port allocation failed: {err}");
+            tracing::warn!(target: "eo::substrate", "private port allocation failed: {err}");
             None
         }
     }
@@ -326,7 +345,10 @@ fn spawn_http_substrate(
         // The substrate answers the browser surface (preflights, origin
         // rules, response decoration) exactly as the sidecar's own
         // middleware would, from the same environment inputs.
-        .with_cors(eo_http::cors::CorsConfig::from_env());
+        .with_cors(eo_http::cors::CorsConfig::from_env())
+        // The data dir powers the hidden dev-tools routes (the developer-mode
+        // gate and the crash-reporting toggle).
+        .with_data_dir(composition::data_dir());
         let state = std::sync::Arc::new(app_state);
 
         // Compose the native services off the serve path and install them
@@ -348,12 +370,12 @@ fn spawn_http_substrate(
         let listener = match tokio::net::TcpListener::from_std(listener) {
             Ok(listener) => listener,
             Err(err) => {
-                eprintln!("[substrate] listener handoff failed: {err}");
+                tracing::error!(target: "eo::substrate", "listener handoff failed: {err}");
                 return;
             }
         };
         if let Err(err) = eo_http::serve(listener, state).await {
-            eprintln!("[substrate] server exited: {err}");
+            tracing::error!(target: "eo::substrate", "server exited: {err}");
         }
     });
 }
@@ -400,16 +422,18 @@ fn compose_and_install(
                 }
                 composition::Composition::AwaitingMigration => {
                     if !announced {
-                        eprintln!(
-                            "[substrate] database below the adoptable baseline; serving \
-                             proxy-only while the sidecar migrates it, then upgrading to native"
+                        tracing::info!(
+                            target: "eo::substrate",
+                            "database below the adoptable baseline; serving proxy-only while the \
+                             sidecar migrates it, then upgrading to native"
                         );
                         announced = true;
                     }
                     if waited >= COMPOSE_RETRY_CEILING {
-                        eprintln!(
-                            "[substrate] database stayed below the adoptable baseline for {}s; \
-                             serving proxy-only for the session",
+                        tracing::warn!(
+                            target: "eo::substrate",
+                            "database stayed below the adoptable baseline for {}s; serving \
+                             proxy-only for the session",
                             COMPOSE_RETRY_CEILING.as_secs()
                         );
                         recover_orphaned_production(&app, recovery_port);
@@ -443,9 +467,10 @@ fn recover_orphaned_production(app: &tauri::AppHandle, recovery_port: Option<u16
     let Some(sidecar_port) = recovery_port else {
         return;
     };
-    eprintln!(
-        "[substrate] native services did not compose; respawning the sidecar as the producer \
-         so live tracking continues (serving proxy-only for the session)"
+    tracing::warn!(
+        target: "eo::substrate",
+        "native services did not compose; respawning the sidecar as the producer so live \
+         tracking continues (serving proxy-only for the session)"
     );
     // Kill the idled relocated sidecar before rebinding its private port: the
     // substrate's proxy authority is fixed at that port, so the producing
@@ -583,7 +608,7 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
     let sidecar = match app.shell().sidecar("entropiaorme-backend") {
         Ok(cmd) => cmd,
         Err(err) => {
-            eprintln!("[backend] sidecar resolve failed: {err}");
+            tracing::error!(target: "eo::sidecar", "sidecar resolve failed: {err}");
             return;
         }
     };
@@ -599,7 +624,7 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
     let (mut rx, child) = match sidecar.spawn() {
         Ok(pair) => pair,
         Err(err) => {
-            eprintln!("[backend] sidecar spawn failed: {err}");
+            tracing::error!(target: "eo::sidecar", "sidecar spawn failed: {err}");
             return;
         }
     };
@@ -613,7 +638,13 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
             match event {
                 CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
                     if let Ok(s) = std::str::from_utf8(&line) {
-                        eprint!("[backend] {s}");
+                        // Forward the sidecar's own (already-sanitised)
+                        // diagnostic output into the structured logs.
+                        tracing::info!(
+                            target: "eo::sidecar",
+                            "{}",
+                            s.trim_end_matches(['\r', '\n'])
+                        );
                     }
                 }
                 _ => {}

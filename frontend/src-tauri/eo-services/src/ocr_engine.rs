@@ -300,8 +300,9 @@ impl OcrEngine {
                     // The whole-session DirectML init failed (no DX12 GPU,
                     // driver mismatch, GPU OOM); retry CPU-only exactly as
                     // the original's except-branch does.
-                    eprintln!(
-                        "[ocr] DirectML session init failed ({dml_error}); falling back to CPU"
+                    tracing::warn!(
+                        target: "eo::ocr",
+                        "DirectML session init failed ({dml_error}); falling back to CPU"
                     );
                     let session = build(vec![CPU::default().build()])
                         .map_err(|error| format!("OCR engine load failed: {error}"))?;
@@ -367,6 +368,10 @@ impl OcrEngine {
                 h * w * 3
             ));
         }
+        // Observe-only OCR-latency timing around the inference + decode (the
+        // user-visible recognise cost). Recorded only on the success path; the
+        // degenerate/size/tensor error returns leave no sample.
+        let started = std::time::Instant::now();
         let (tensor_data, img_w) = preprocess(img, h, w);
         let tensor = Tensor::from_array(([1usize, 3, TARGET_H, img_w], tensor_data))
             .map_err(|error| format!("input tensor: {error}"))?;
@@ -392,7 +397,16 @@ impl OcrEngine {
                 self.chars.len()
             ));
         }
-        Ok(ctc_decode(data, t_len, n_classes, &self.chars))
+        let decoded = ctc_decode(data, t_len, n_classes, &self.chars);
+        let elapsed = started.elapsed();
+        eo_wire::metrics::metrics().record_ocr_latency(elapsed);
+        tracing::debug!(
+            target: "eo::ocr",
+            provider = self.provider,
+            elapsed_us = elapsed.as_micros() as u64,
+            "ocr inference"
+        );
+        Ok(decoded)
     }
 
     /// Recognise one PNG cell; `(text, score)`.
@@ -562,6 +576,52 @@ mod tests {
             engine.provider(),
             "default",
             "the EP-agnostic new records the runtime's own default, not a fabricated selection"
+        );
+    }
+
+    /// The OCR instrumentation fires: a real recognise records one latency
+    /// sample into the metrics registry (the OCR-latency proof for the
+    /// observability spine). Host-gated exactly like the ladder test above:
+    /// it needs the bundled Windows ONNX Runtime and the repo model, and skips
+    /// with a reason otherwise rather than passing vacuously.
+    #[test]
+    fn recognising_records_an_ocr_latency_sample() {
+        let _ort = lock_ort();
+        if !cfg!(windows) {
+            eprintln!("the bundled ONNX Runtime is Windows-only; skipping on this platform");
+            return;
+        }
+        let dylib = repo_ort_dylib();
+        if !dylib.is_file() {
+            eprintln!("committed ONNX Runtime dylib absent; skipping");
+            return;
+        }
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", &dylib);
+        }
+        let (model, dict) = repo_model_paths();
+        if !model.is_file() {
+            eprintln!("repo model absent; skipping");
+            return;
+        }
+        let engine = match OcrEngine::new_with_providers(&model, &dict) {
+            Ok(engine) => engine,
+            Err(error) => {
+                eprintln!("ONNX Runtime unavailable on this host ({error}); skipping");
+                return;
+            }
+        };
+        let before = eo_wire::metrics::metrics().snapshot().ocr_latency.count;
+        let white = vec![255u8; TARGET_H * 200 * 3];
+        let _ = engine
+            .recognize_bgr(&white, TARGET_H, 200)
+            .expect("the EP-configured session recognises a warm-up-shaped cell");
+        let after = eo_wire::metrics::metrics().snapshot().ocr_latency.count;
+        assert!(
+            after > before,
+            "a recognise records one OCR-latency sample (before={before}, after={after})"
         );
     }
 

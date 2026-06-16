@@ -15,6 +15,7 @@ pub mod arms;
 pub mod body;
 pub mod character_routes;
 pub mod cors;
+pub mod dev_routes;
 pub mod equipment_routes;
 pub mod extract;
 pub mod hydration;
@@ -28,6 +29,7 @@ pub mod sse;
 pub mod tracking_routes;
 
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State};
@@ -62,6 +64,11 @@ pub struct AppState {
         RwLock<Option<Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>>>,
     hotbar_listener: RwLock<Option<Arc<eo_services::hotbar_listener::HotbarListener>>>,
     cors: Option<cors::CorsConfig>,
+    // The resolved data directory, for the hidden dev-tools routes (the
+    // developer-mode gate reads it fresh, and the crash-reporting toggle
+    // reads/writes the shell-owned `observability.json` there). `None` on a
+    // substrate built without it: the dev routes then read as gate-off (404).
+    data_dir: Option<PathBuf>,
 }
 
 /// The composed native services, handed to [`AppState::install_native`] to
@@ -104,6 +111,7 @@ impl AppState {
             spacebar_listener: RwLock::new(None),
             hotbar_listener: RwLock::new(None),
             cors: None,
+            data_dir: None,
         }
     }
 
@@ -116,6 +124,33 @@ impl AppState {
     pub fn with_cors(mut self, cors: cors::CorsConfig) -> Self {
         self.cors = Some(cors);
         self
+    }
+
+    /// Attach the resolved data directory, enabling the hidden dev-tools
+    /// routes (the developer-mode gate and the crash-reporting toggle). Without
+    /// it those routes read as gate-off (404).
+    pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
+        self.data_dir = Some(data_dir);
+        self
+    }
+
+    /// The resolved data directory, when set.
+    pub(crate) fn data_dir(&self) -> Option<&Path> {
+        self.data_dir.as_deref()
+    }
+
+    /// Whether developer mode is currently enabled, read FRESH from the
+    /// settings file on each call (never cached), so the hidden dev-tools gate
+    /// reflects a toggle without a restart. The gate for every dev route: when
+    /// this is false (the default, and the case with no data dir), those routes
+    /// answer 404, keeping them off the equivalence-covered surface and
+    /// invisible to a default install.
+    pub(crate) fn developer_mode(&self) -> bool {
+        self.data_dir
+            .as_deref()
+            .and_then(|dir| eo_services::config_service::load_config_readonly(dir).ok())
+            .map(|config| config.developer_mode_enabled)
+            .unwrap_or(false)
     }
 
     /// Attach the composed native services. Without this (a substrate
@@ -507,10 +542,40 @@ where
     ArmRoutes::at(route).on(filter, native).into_method_router()
 }
 
+/// Observe-only per-request instrumentation. As the OUTERMOST layer it times
+/// the whole request (guards, CORS, and the handler) and records one sample
+/// into the metrics registry, emitting a structured trace with method, path,
+/// and status. It is pure pass-through: it reads the request line and the
+/// response status but never mutates the request or the response (no body
+/// rewrite, no added header), so it is behaviour-neutral against the proxy
+/// and native goldens. The path is logged, never the query string, so no
+/// caller-supplied value reaches the logs.
+async fn observe(req: Request, next: axum::middleware::Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let response = next.run(req).await;
+    let elapsed = started.elapsed();
+    // Exclude the hidden dev-tools routes from the throughput/latency metric:
+    // the metrics page's own polling must not inflate the figures it displays.
+    if !path.starts_with("/api/dev/") {
+        eo_wire::metrics::metrics().record_http_request(elapsed);
+    }
+    tracing::debug!(
+        target: "eo::http",
+        method = %method,
+        path = %path,
+        status = response.status().as_u16(),
+        elapsed_us = elapsed.as_micros() as u64,
+        "request served"
+    );
+    response
+}
+
 /// The substrate router: natively-registered routes take precedence, the
 /// proxy fallback carries every other method and path to the sidecar, and
-/// the guard stack fronts both arms in the backend's own order (CORS
-/// outermost, then the Host/origin guard).
+/// the guard stack fronts both arms in the backend's own order (the
+/// observe layer outermost, then CORS, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
         .fallback(any(proxy_fallback))
@@ -522,6 +587,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             state.clone(),
             cors_layer,
         ))
+        // Outermost: times the full request including the guard/CORS layers.
+        .layer(axum::middleware::from_fn(observe))
         .with_state(state)
 }
 
@@ -529,10 +596,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// `arm_routed` line (here or in [`native`]), and deleting a line is
 /// the source-level revert.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
-    native::register(router.route(
+    let router = native::register(router.route(
         "/api/health",
         arm_routed(MethodFilter::GET, "/api/health", routes::health),
-    ))
+    ));
+    // The hidden dev-tools routes: native-only (no Python arm, no golden),
+    // each self-gated on developer mode so they 404 off by default.
+    dev_routes::register(router)
 }
 
 /// The natively-served handlers, one function per taken-over route.
@@ -584,5 +654,40 @@ mod tests {
         assert_eq!(state.arm_for("/api/health"), Arm::Native);
         state.set_overrides(ArmOverrides::parse_env_value("/api/health=proxy"));
         assert_eq!(state.arm_for("/api/health"), Arm::Proxy);
+    }
+
+    /// Driving a request through the built router records one HTTP-request
+    /// sample (the observe layer records one sample per request), and the
+    /// response is unchanged: a 200 from the native health handler. The native
+    /// `/api/health` arm answers without a sidecar, so the timing layer is
+    /// exercised end to end here.
+    #[tokio::test]
+    async fn a_served_request_records_one_http_sample_without_altering_the_response() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+
+        let state = Arc::new(AppState::new(
+            "127.0.0.1:1".into(),
+            8421,
+            ArmOverrides::empty(),
+        ));
+        let router = build_router(state);
+
+        let before = eo_wire::metrics::metrics().snapshot().http_requests;
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let after = eo_wire::metrics::metrics().snapshot().http_requests;
+        assert!(
+            after > before,
+            "the observe layer must record the served request (before={before}, after={after})"
+        );
     }
 }

@@ -1,16 +1,21 @@
 name: Docs
 
 # Publishes the architecture handbook (mdBook) and the generated Rust API
-# reference (cargo doc) to GitHub Pages. The deploy runs on release tags only;
-# pull requests that touch the documentation sources get a build-only
-# validation so a broken book or a broken doc build is caught before a tag.
+# reference (cargo doc) to GitHub Pages. The handbook documents the latest
+# landed state, so the deploy runs on pushes to main that touch the docs or the
+# documented Rust crates; pull requests get a build-only validation so a broken
+# book or a broken doc build is caught before it reaches main.
 #
 # This is a standalone workflow. It is deliberately not wired into the required
 # ci-gate in ci.yml: a documentation publish should never gate a code merge.
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "frontend/src-tauri/**"
+      - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
@@ -80,8 +85,8 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    # Publish only from release tags; pull-request runs validate the build above.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Publish from main; pull-request runs validate the build above without deploying.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

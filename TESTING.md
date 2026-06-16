@@ -400,6 +400,29 @@ npm run format   # biome format --write: apply formatting
 
 The `frontend` CI job runs `npm run lint` on every change, and a pre-commit hook mirrors it locally through the lockfile-pinned Biome (run `npm ci` in `frontend/` once so the hook can resolve it). The tree went through a one-time formatting normalisation when the gate landed; `biome format` is a verified no-op from there on, so any diff the formatter wants is a real violation.
 
+### Frontend end-to-end tests (native shell)
+
+The end-to-end layer drives the **real desktop shell** (the Tauri WebView2 window), not a browser tab, through [WebdriverIO](https://webdriver.io) and [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/). Driving the real shell is the point: only there does the desktop IPC bridge (`window.__TAURI_INTERNALS__`) exist, so the suite can assert the panels render and the IPC surface is live across the boundary a browser-served harness is structurally blind to. The suite lives under `frontend/e2e/`.
+
+```sh
+cd frontend
+npm run test:e2e          # functional panel flows against the native shell
+```
+
+Prerequisites (installed once locally; the CI job provisions them per run):
+
+- **`tauri-driver`**: `cargo install tauri-driver --locked` (lands in `~/.cargo/bin`; override the path with `TAURI_DRIVER_PATH`).
+- **Microsoft Edge WebDriver** matching the installed WebView2 runtime version, placed at `frontend/e2e/.drivers/msedgedriver.exe` (gitignored; the version must match the runtime, so it is fetched per environment rather than committed).
+- **A debug shell build**: `npm run tauri build -- --debug --no-bundle --config src-tauri/entropia-orme/tauri.e2e.conf.json` produces `src-tauri/target/debug/entropia-orme.exe`. The `--debug` profile keeps the production sidecar from spawning, so the suite owns the backend; `tauri.e2e.conf.json` is an e2e-only CSP overlay (broadened `connect-src` for the stub backend) that never ships in a release.
+
+`e2e/wdio.conf.mjs` orchestrates the whole hermetic stack on `onPrepare` and tears it down on `onComplete`: a Vite dev server at the shell's dev origin, a deterministic Node **stub backend** (`e2e/stub-backend.mjs`, serving pinned fixtures from `e2e/fixtures/` because the WebDriver protocol has no request interception), and the `tauri-driver` bridge to the matched Edge WebDriver. The suite navigates the webview to the dev origin itself (a debug binary launched outside the `tauri dev` CLI starts at `about:blank`), then `e2e/helpers/onboarding.mjs` walks first-run onboarding through the UI so the run reaches the dashboard idempotently on either a fresh or an already-onboarded profile. Determinism comes from the pinned stub responses; the event stream is held open but silent so no live frame perturbs the rendered state.
+
+A dashboard visual-regression layer (`@wdio/visual-service`, already wired in `wdio.conf.mjs`; `npm run test:visual`) commits per-surface screenshot baselines and diffs against them with a fuzzy tolerance.
+
+### Runes-native frontend
+
+The Svelte frontend is **runes-native**: `svelte.config.js` forces runes mode for every non-`node_modules` file (`dynamicCompileOptions`), so the legacy Svelte-4 reactivity primitives (`$:` reactive statements, `export let` props) are compile errors rather than a style preference. The guard is the production build itself: `npm run build` (run by the `frontend` CI job) fails with `` `$:` is not allowed in runes mode `` on any legacy-reactivity reintroduction, which is why the convention cannot silently rot. New component state uses `$state` / `$derived` / `$effect` and `$props`; `onMount` stays for genuine run-once mount work, and ordinary `svelte/store` subscriptions are orthogonal to runes and are kept as they are.
+
 ## Rust workspace checks
 
 The Rust side is a cargo workspace at `frontend/src-tauri/`: the Tauri shell (`entropia-orme`, window orchestration and sidecar lifecycle) plus the native-backend members (`eo-http`, `eo-services`, `eo-wire`) that fill in as backend services are ported (see `backend/architecture/PORT-READINESS.md`). All of the commands below run from the workspace root:

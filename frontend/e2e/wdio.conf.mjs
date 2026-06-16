@@ -119,7 +119,7 @@ export const config = {
 				baselineFolder: join(E2E_DIR, 'baselines'),
 				screenshotPath: join(E2E_DIR, '.visual-output'),
 				formatImageName: '{tag}',
-				autoSaveBaseline: false,
+				autoSaveBaseline: true,
 				savePerInstance: false,
 			},
 		],

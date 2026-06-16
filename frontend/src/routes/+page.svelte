@@ -668,7 +668,10 @@
 				<div class="flex items-center gap-3">
 					<span class="signal-dot positive animate-pulse"></span>
 					<span class="text-sm font-medium text-text tracking-tight">Tracking active</span>
-					<span class="text-xs text-text-tertiary tabular-nums tracking-wider">
+					<span
+						class="text-xs text-text-tertiary tabular-nums tracking-wider"
+						data-testid="session-elapsed"
+					>
 						{formatElapsed(elapsedSeconds)}
 					</span>
 				</div>

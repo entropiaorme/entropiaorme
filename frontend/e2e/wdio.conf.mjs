@@ -92,6 +92,14 @@ function killImage(image) {
 export const config = {
 	runner: 'local',
 	specs: [join(E2E_DIR, 'specs', '**', '*.e2e.mjs')],
+	// Named suites let `npm run test:visual` target the visual specs as a group
+	// (a `--spec` CLI glob does not resolve reliably on Windows); new
+	// `*.visual.mjs` files join the suite automatically. The functional suite
+	// mirrors the default `specs` for symmetry.
+	suites: {
+		functional: [join(E2E_DIR, 'specs', '**', '*.e2e.mjs')],
+		visual: [join(E2E_DIR, 'specs', '**', '*.visual.mjs')],
+	},
 	maxInstances: 1,
 	hostname: '127.0.0.1',
 	port: TAURI_DRIVER_PORT,
@@ -121,6 +129,11 @@ export const config = {
 				formatImageName: '{tag}',
 				autoSaveBaseline: true,
 				savePerInstance: false,
+				// WebView2 via tauri-driver mis-clips the BiDi element-screenshot for
+				// elements taller than / below the fold (height=0 capture errors). The
+				// legacy method scrolls the element into view and captures it whole,
+				// which is what the broadened (full-panel / full-tab) element shots need.
+				enableLegacyScreenshotMethod: true,
 			},
 		],
 	],
@@ -135,12 +148,19 @@ export const config = {
 				...process.env,
 				ENTROPIAORME_FRONTEND_PORT: FRONTEND_PORT,
 				ENTROPIAORME_BACKEND_PORT: BACKEND_PORT,
+				// Settle the charts' JS-driven tweens instantly so the visual
+				// baselines capture each chart's end-state, not a mid-rescale frame.
+				E2E_FREEZE_TWEENS: '1',
 			},
 		});
 		// 2. Deterministic stub backend (hermetic data; WebDriver cannot mock).
+		//    Inherit stdio so its loud "UNMATCHED <route>" fall-through warnings
+		//    surface in the run output: a surface under test whose endpoint is not
+		//    modelled is then visible rather than silently baked into a baseline.
 		spawnProc('stub', 'node', [join(E2E_DIR, 'stub-backend.mjs')], {
 			cwd: FRONTEND_DIR,
 			env: { ...process.env, STUB_PORT: BACKEND_PORT, STUB_HOST: '127.0.0.1' },
+			stdio: 'inherit',
 		});
 		// 3. tauri-driver bridging to the matched msedgedriver.
 		spawnProc('tauri-driver', TAURI_DRIVER, ['--native-driver', MSEDGEDRIVER]);

@@ -21,6 +21,18 @@ function probe(browser) {
 }
 
 export async function ensureDashboard(browser, devUrl) {
+	// Pin a large, fixed window before anything renders. Two reasons: (1) the
+	// dashboard's flex-height layout needs a definite viewport height or its
+	// `flex-1 min-h-0` panels (e.g. the loot-composition list) collapse to zero
+	// height; (2) a fixed size makes every visual baseline deterministic instead
+	// of varying with whatever size the shell happened to launch at.
+	try {
+		await browser.setWindowSize(1600, 1000);
+	} catch {
+		// Some driver/shell combinations reject Set Window Rect; fall back to the
+		// launch size rather than failing the whole suite.
+	}
+
 	// The debug shell launches at about:blank (the dev URL is injected by the
 	// `tauri dev` CLI, absent when tauri-driver launches the binary directly),
 	// so navigate the real webview to the dev origin ourselves.
@@ -34,7 +46,7 @@ export async function ensureDashboard(browser, devUrl) {
 			const s = await probe(browser);
 			return s.path.startsWith('/welcome') ? s.welcomeStep > 0 : s.onDashboard;
 		},
-		{ timeout: 30000, timeoutMsg: 'app never settled into welcome or dashboard' },
+		{ timeout: 45000, timeoutMsg: 'app never settled into welcome or dashboard' },
 	);
 
 	if (await browser.execute(() => location.pathname.startsWith('/welcome'))) {

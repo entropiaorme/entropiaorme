@@ -25,8 +25,8 @@
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",
 		"test:e2e": "wdio run e2e/wdio.conf.mjs",
-		"test:visual": "wdio run e2e/wdio.conf.mjs --spec e2e/specs/dashboard.visual.mjs",
-		"test:visual:update": "wdio run e2e/wdio.conf.mjs --spec e2e/specs/dashboard.visual.mjs --update-visual-baseline",
+		"test:visual": "wdio run e2e/wdio.conf.mjs --suite visual",
+		"test:visual:update": "wdio run e2e/wdio.conf.mjs --suite visual --update-visual-baseline",
 		"lint": "biome check .",
 		"format": "biome format --write ."
 	},

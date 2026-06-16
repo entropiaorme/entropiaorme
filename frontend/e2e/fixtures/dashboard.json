@@ -40,5 +40,30 @@
     ]
   },
   "quests": [],
-  "playlists": []
+  "playlists": [],
+  "sessionDetail": {
+    "sessionId": "e2e-session",
+    "summary": {
+      "cost": 1000.0,
+      "returns": 1057.0,
+      "pes": 5.0,
+      "net": 57.0,
+      "returnRate": 1.057,
+      "kills": 42,
+      "duration": 3600
+    },
+    "mobEntryMode": "auto",
+    "lootBreakdown": [
+      { "name": "Animal Oil Residue", "quantity": 1200, "ttValue": 240.5 },
+      { "name": "Animal Muscle Oil", "quantity": 800, "ttValue": 160.0 },
+      { "name": "Vibrant Sweat", "quantity": 5000, "ttValue": 90.0 },
+      { "name": "Soft Hide", "quantity": 300, "ttValue": 45.0 },
+      { "name": "Wool", "quantity": 220, "ttValue": 22.0 }
+    ],
+    "deactivatedLootBreakdown": [],
+    "mobBreakdown": [],
+    "effectiveLoot": 557.5,
+    "toolStats": [],
+    "skillGains": []
+  }
 }

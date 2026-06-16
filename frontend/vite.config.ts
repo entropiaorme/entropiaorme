@@ -33,5 +33,10 @@ export default defineConfig({
 	},
 	define: {
 		'import.meta.env.ENTROPIAORME_BACKEND_PORT': JSON.stringify(String(backendPort)),
+		// Forces the JS-driven chart tweens to settle instantly (visual-regression
+		// determinism). Set to '1' only by the e2e's own Vite build; unset (so '')
+		// in every shipped build, where the freeze branch then folds to a static
+		// false and tree-shakes out. See frontend/src/lib/motion/testMotion.ts.
+		'import.meta.env.E2E_FREEZE_TWEENS': JSON.stringify(process.env.E2E_FREEZE_TWEENS ?? ''),
 	},
 });

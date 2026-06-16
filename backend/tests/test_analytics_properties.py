@@ -369,7 +369,9 @@ def test_inclusion_gate_excludes_degenerate_sessions():
     _insert_kill(conn, uuid.uuid4().hex, s_zero_cost, timestamp=0.0)
     # Positive duration and cost but no kills.
     s_zero_kills = uuid.uuid4().hex
-    _insert_session(conn, s_zero_kills, started_at=0.0, ended_at=3600.0, armour_cost=5.0)
+    _insert_session(
+        conn, s_zero_kills, started_at=0.0, ended_at=3600.0, armour_cost=5.0
+    )
     conn.commit()
 
     assert _load_activity_sessions(conn) == []

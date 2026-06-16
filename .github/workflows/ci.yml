@@ -389,13 +389,18 @@ jobs:
     # so it runs on Windows, the app's platform, and compiles the shell. This is
     # the entry net for the planned fetch-to-invoke command collapse: only the
     # native shell exposes the IPC surface that change rewrites. Gated on change
-    # scope like the backend matrix; the ci-gate sentinel covers the skip.
+    # scope like the backend matrix.
     #
-    # NOTE: this gate has not yet been observed green on a hosted runner (it
-    # needs an interactive desktop session, the WebView2 runtime, and a
-    # version-matched Edge WebDriver). Validate it on the first push and, if the
-    # hosted runner cannot drive the GUI reliably, move it out of the ci-gate
-    # required set until hardened rather than blocking unrelated work.
+    # NON-BLOCKING (runs for signal, does not gate the merge; see the ci-gate
+    # job): tauri-driver / WebView2 intermittently collapses the captured
+    # viewport on the hosted runner (a window/inner-viewport shrink that recurs
+    # after a navigation and cannot yet be fully stabilised from the test side),
+    # which would otherwise jam the merge queue on an environment flake rather
+    # than a real regression. The suite has been substantially hardened
+    # (onboarding interaction, capture window size, dashboard layout) and a
+    # failure uploads the actual + diff PNGs for inspection, but the residual
+    # viewport collapse is tracked for a proper fix before it returns to the
+    # required set.
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     env:
@@ -672,9 +677,17 @@ jobs:
             echo "Documentation-only change; the backend matrix, frontend build, and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$FRONTEND_E2E_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
-            echo "Backend matrix, frontend build + e2e, and Rust workspace jobs passed. Gate satisfied."
+          # The native-shell visual job (frontend-e2e) is intentionally
+          # NON-BLOCKING: it runs for signal but does not gate the merge.
+          # tauri-driver / WebView2 intermittently collapses the captured viewport
+          # on the hosted runner, which the visual suite cannot fully stabilise
+          # yet, so requiring it would jam the merge queue on an environment flake
+          # rather than a real regression. Its result is reported here, not
+          # enforced, and it is tracked for a proper fix.
+          echo "Native-shell visual job result (non-blocking): $FRONTEND_E2E_RESULT"
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
+            echo "Backend matrix, frontend build, and Rust workspace jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the backend matrix, the frontend build + e2e, and the Rust workspace jobs (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, frontend-e2e: $FRONTEND_E2E_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT)."
+          echo "::error::A code change must pass the backend matrix, the frontend build, and the Rust workspace jobs (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT). The native-shell visual job is non-blocking (result: $FRONTEND_E2E_RESULT)."
           exit 1

@@ -25,3 +25,4 @@
   - [ADR-0010: Descriptive response models](adr/0010-loose-response-models.md)
   - [ADR-0011: Strong-ETag conditional requests](adr/0011-etag-conditional-requests.md)
   - [ADR-0012: Supervised worker threads](adr/0012-supervised-worker-threads.md)
+  - [ADR-0014: An optional candle OCR backend](adr/0014-candle-second-ocr-backend.md)

@@ -39,6 +39,11 @@ The model weights ship inside the installer and the recogniser operates fully
 offline from a cold start: there is no network access at any point of the read
 path.
 
+The native side also carries an **optional second backend** that runs the same
+model on candle (a Rust ML framework), behind a default-off feature flag; it is
+described under [The candle second backend](#the-candle-second-backend).
+ONNX Runtime is the default and the only backend a normal build compiles.
+
 Two consumers share the recogniser:
 
 | Consumer | Input | Output |
@@ -312,6 +317,73 @@ on Windows, where the bundled Windows ONNX Runtime build is present.
 The rationale for pinning equivalence to this recorded corpus, rather than
 chasing a moving accuracy target, is recorded in
 [ADR-0008: OCR equivalence frozen to the corpus](../adr/0008-ocr-equivalence-frozen.md).
+
+## The candle second backend
+
+Alongside the ONNX Runtime engine, the recogniser carries an optional second
+backend that runs the same SVTRv2 model on
+[candle](https://github.com/huggingface/candle), a Rust ML framework, with no
+ONNX Runtime dependency. It is compiled only under the `candle` Cargo feature,
+which is **off by default**: a normal build neither compiles nor links it, so
+the default (and soaked) recognition path is unchanged. It is not the default
+and is not intended as one (it is slower on CPU; see below); it is an
+alternative implementation of the same recogniser.
+
+Both backends plug into a shared `InferenceBackend` seam in
+`frontend/src-tauri/eo-services/src/ocr_engine.rs`, so the candle path
+reimplements only the inference step. Everything around it (the PNG decode, the
+OpenCV-exact preprocess, and the CTC decode) is the same shared code both
+backends run.
+
+### How the candle backend is built
+
+The candle backend (`frontend/src-tauri/eo-services/src/ocr_candle.rs`)
+implements the SVTRv2-mobile forward pass from scratch: the LCNet convolutional
+encoder (a two-conv stem, then thirteen RepMixer blocks, with squeeze-excite on
+a subset and two height-halving downsample blocks), the SVTR sequence neck (the
+height pooled to a single row, two global multi-head-attention transformer
+blocks, then a convolutional re-fusion), and the CTC linear head. The weights
+come from a safetensors export of the same bundled ONNX model, produced by the
+reproducible `backend/scripts/convert_svtrv2_to_safetensors.py` (it lifts the
+ONNX graph's weight initialisers, transposes the linear weights into candle's
+layout, and writes `backend/assets/models/svtrv2_rec.safetensors`).
+
+### Faithfulness and the comparison sweep
+
+The candle backend is held to **reproduce** the ONNX Runtime engine, not to be
+independently different. The comparison harness
+(`frontend/src-tauri/eo-services/tests/ocr_backend_comparison.rs`) checks this
+two ways: a single-cell tensor-level diff (the post-softmax probabilities agree
+to **cosine 1.000000**, max-abs around 6e-5, with every timestep's argmax
+identical), and a corpus-level sweep over all 594 graded bench cells:
+
+| Backend | Raw-exact | Raw accuracy | Recognition latency (CPU) |
+| --- | --- | --- | --- |
+| ONNX Runtime (default) | 262 / 594 | 44.1% | ~37 ms / cell |
+| candle (`--features candle`) | 262 / 594 | 44.1% | ~158 ms / cell |
+
+candle matches ONNX Runtime on **every one of the 594 cells** (identical
+raw-exact count, 100% per-cell text agreement), so it inherits the same
+recovered accuracy through the downstream name resolution. It is roughly **four
+times slower** on CPU: candle's CPU kernels have no equivalent to ONNX
+Runtime's tuned inference. The gap is wider on a GPU host, where the default
+engine uses DirectML and candle has no matching backend (its GPU support is
+CUDA and Metal, not DirectML), so the comparison above is CPU-to-CPU. That
+latency gap, not any accuracy difference, is why candle stays an optional
+backend and ONNX Runtime remains the default. (The latencies are
+release-build means over the 594-cell corpus; the accuracy figures are
+build-independent. The recogniser's hot path
+also pools its preprocess scratch buffers so repeated cells allocate neither
+the resize buffer nor the input tensor; `benches/ocr.rs` carries the
+preprocess and recognition microbenchmarks.)
+
+Like the bench differential, the comparison harness and the OCR
+microbenchmarks are host-gated: they run only where `EO_OCR_BENCH_DIR` and the
+ONNX Runtime library are present, and skip with a stated reason otherwise.
+
+The decision to carry a second backend, and to keep it default-off, is recorded
+in
+[ADR-0014: an optional candle OCR backend](../adr/0014-candle-second-ocr-backend.md).
 
 ## The shared repair-cost read
 

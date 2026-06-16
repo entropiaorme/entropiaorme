@@ -59,4 +59,12 @@ ignore = [
     # attack vector is not present in our embedding. Single advisory ID
     # covers both rand versions.
     "RUSTSEC-2026-0097", # rand (0.7.3, 0.8.5)
+
+    # paste 1.0.15: unmaintained proc-macro for identifier pasting. Pulled
+    # ONLY under the default-off `candle` OCR-backend feature, transitively
+    # via candle-core's gemm (the pulp SIMD layer) and tokenizers. A
+    # build-time proc-macro, not present in the runtime binary; no exploit
+    # surface. The author recommends `pastey`; candle's tree has not migrated,
+    # so this is wait-for-upstream and not actionable here.
+    "RUSTSEC-2024-0436", # paste (candle feature only)
 ]

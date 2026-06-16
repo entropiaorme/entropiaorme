@@ -125,6 +125,14 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 # hot path. MIT, already on the deny.toml allowlist.
 tracing-appender = "0.2"
 
+# The pure-Rust ML framework for the optional second OCR backend (the
+# `candle` feature on eo-services, default-off). CPU-only needs no feature
+# flags (the cuda/metal/mkl accelerators are opt-in features left disabled),
+# so the default-features = false resolution stays toolchain-light. Declared
+# here, marked `optional` at the member so a default build never compiles it.
+candle-core = { version = "0.10", default-features = false }
+candle-nn = { version = "0.10", default-features = false }
+
 eo-http = { path = "eo-http" }
 eo-services = { path = "eo-services" }
 eo-wire = { path = "eo-wire" }

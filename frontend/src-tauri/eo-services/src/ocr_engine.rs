@@ -62,6 +62,22 @@ fn cv_round(v: f64) -> i32 {
 /// `(((b0*(r0>>4))>>16) + ((b1*(r1>>4))>>16) + 2) >> 2` blend with
 /// its deliberate 4-bit precision drop.
 pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -> Vec<u8> {
+    let mut dst = Vec::new();
+    resize_bilinear_into(src, sh, sw, dh, dw, &mut dst);
+    dst
+}
+
+/// [`resize_bilinear`] writing into a caller-provided buffer, so the hot
+/// recognise path can reuse one allocation across cells instead of allocating
+/// a fresh resize buffer per recognition.
+pub fn resize_bilinear_into(
+    src: &[u8],
+    sh: usize,
+    sw: usize,
+    dh: usize,
+    dw: usize,
+    dst: &mut Vec<u8>,
+) {
     const COEF_SCALE: f64 = 2048.0;
     let scale_x = sw as f64 / dw as f64;
     let scale_y = sh as f64 / dh as f64;
@@ -93,7 +109,8 @@ pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -
         *tap = tap_coords(dx, scale_x, sw);
     }
 
-    let mut dst = vec![0u8; dh * dw * 3];
+    dst.clear();
+    dst.resize(dh * dw * 3, 0);
     for dy in 0..dh {
         let (y0, y1, ib0, ib1) = tap_coords(dy, scale_y, sh);
 
@@ -109,28 +126,46 @@ pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -
             }
         }
     }
-    dst
 }
 
 /// `RecDynamicResize([48, 320])`: resize + normalise + zero-pad, CHW
 /// BGR f32; returns the tensor and its padded width.
 pub fn preprocess(img: &[u8], h: usize, w: usize) -> (Vec<f32>, usize) {
+    let mut resize_buf = Vec::new();
+    let mut tensor = Vec::new();
+    let img_w = preprocess_into(img, h, w, &mut resize_buf, &mut tensor);
+    (tensor, img_w)
+}
+
+/// [`preprocess`] reusing caller-provided scratch buffers (the resize buffer
+/// and the output tensor), so the hot recognise path allocates neither per
+/// cell. `tensor` is left holding the CHW f32 input; the return is the padded
+/// width. Both buffers are cleared and resized, so stale contents from a
+/// previous (larger) cell never leak into the zero-padding region.
+pub fn preprocess_into(
+    img: &[u8],
+    h: usize,
+    w: usize,
+    resize_buf: &mut Vec<u8>,
+    tensor: &mut Vec<f32>,
+) -> usize {
     let ratio = w as f64 / h as f64;
     let max_wh_ratio = ratio.max(MAX_RATIO);
     let img_w = (TARGET_H as f64 * max_wh_ratio) as usize;
     let ceil_w = (TARGET_H as f64 * ratio).ceil() as usize;
     let resized_w = if ceil_w > img_w { img_w } else { ceil_w };
-    let resized = resize_bilinear(img, h, w, TARGET_H, resized_w);
-    let mut tensor = vec![0f32; 3 * TARGET_H * img_w];
+    resize_bilinear_into(img, h, w, TARGET_H, resized_w, resize_buf);
+    tensor.clear();
+    tensor.resize(3 * TARGET_H * img_w, 0.0);
     for c in 0..3 {
         for y in 0..TARGET_H {
             for x in 0..resized_w {
-                let v = resized[(y * resized_w + x) * 3 + c] as f32;
+                let v = resize_buf[(y * resized_w + x) * 3 + c] as f32;
                 tensor[c * TARGET_H * img_w + y * img_w + x] = (v / 255.0 - 0.5) / 0.5;
             }
         }
     }
-    (tensor, img_w)
+    img_w
 }
 
 /// The decode alphabet: the character dictionary with the CTC blank
@@ -188,9 +223,29 @@ pub fn ctc_decode(
 /// single-threaded and sequential exactly as the original configures
 /// its engine (the model's session is not concurrency-safe to share,
 /// so calls serialise on the inner guard).
+/// The backend inference seam: a preprocessed CHW f32 input tensor in,
+/// CTC logits out. Everything around it (the PNG load, the cv2-exact
+/// resize, `preprocess`, `ctc_decode`, the decode alphabet, and the
+/// latency/tracing) is backend-agnostic and stays on [`OcrEngine`], so a
+/// second backend implements only this one method. The default path is
+/// [`OrtBackend`] (ONNX Runtime); `--features candle` adds a second
+/// `CandleBackend` alongside it without touching the shared stages.
+pub trait InferenceBackend: Send + Sync {
+    /// Run inference on a preprocessed CHW f32 tensor of shape
+    /// `[1, 3, TARGET_H, padded_width]` (channel order BGR, range
+    /// `[-1, 1]`); return the row-major logits (`logits[t * n_classes + c]`)
+    /// and their `(t_len, n_classes)` dimensions.
+    fn infer(
+        &self,
+        tensor_data: &[f32],
+        padded_width: usize,
+    ) -> Result<(Vec<f32>, (usize, usize)), String>;
+}
+
 pub struct OcrEngine {
-    session: Mutex<Session>,
-    input_name: String,
+    /// The pluggable inference backend; ONNX Runtime by default, behind the
+    /// [`InferenceBackend`] seam so a second backend swaps only inference.
+    backend: Box<dyn InferenceBackend>,
     chars: Vec<String>,
     /// The execution provider the session was actually built on, as the
     /// original records `session.get_providers()[0]`. This ort version
@@ -200,6 +255,41 @@ pub struct OcrEngine {
     /// provider, not a queried one. `new` (no EP selection) records the
     /// runtime's own default.
     provider: &'static str,
+}
+
+/// The default ONNX Runtime backend: the recogniser's original inference
+/// path (build the input tensor, run the committed session, extract the
+/// `(1, T, C)` logits), byte-for-byte unchanged, now behind the
+/// [`InferenceBackend`] seam so a second backend can sit beside it.
+struct OrtBackend {
+    session: Mutex<Session>,
+    input_name: String,
+}
+
+impl InferenceBackend for OrtBackend {
+    fn infer(
+        &self,
+        tensor_data: &[f32],
+        padded_width: usize,
+    ) -> Result<(Vec<f32>, (usize, usize)), String> {
+        let tensor = Tensor::from_array(([1usize, 3, TARGET_H, padded_width], tensor_data.to_vec()))
+            .map_err(|error| format!("input tensor: {error}"))?;
+        let mut session = self
+            .session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outputs = session
+            .run(ort::inputs![self.input_name.as_str() => tensor])
+            .map_err(|error| format!("session run: {error}"))?;
+        let (shape, data) = outputs[0]
+            .try_extract_tensor::<f32>()
+            .map_err(|error| format!("output tensor: {error}"))?;
+        let dims: Vec<i64> = shape.iter().copied().collect();
+        if dims.len() != 3 || dims[0] != 1 {
+            return Err(format!("expected a (1, T, C) output, got {dims:?}"));
+        }
+        Ok((data.to_vec(), (dims[1] as usize, dims[2] as usize)))
+    }
 }
 
 /// The base session options every engine shares, matching the
@@ -226,6 +316,21 @@ fn base_session_options(builder: SessionBuilder) -> Result<SessionBuilder, Strin
         .map_err(|error| error.to_string())?
         .with_config_entry("session.force_spinning_stop", "1")
         .map_err(|error| error.to_string())
+}
+
+/// Reusable per-thread scratch for the recognise hot path: the resize buffer
+/// and the CHW input tensor. Recognitions run on the chat-log / scan worker
+/// thread serially, so one buffer pair per thread carries no contention and
+/// turns the per-cell preprocess allocations into amortised reuse.
+#[derive(Default)]
+struct OcrScratch {
+    resized: Vec<u8>,
+    tensor: Vec<f32>,
+}
+
+thread_local! {
+    static OCR_SCRATCH: std::cell::RefCell<OcrScratch> =
+        std::cell::RefCell::new(OcrScratch::default());
 }
 
 impl OcrEngine {
@@ -327,8 +432,10 @@ impl OcrEngine {
             .map(|input| input.name().to_string())
             .ok_or_else(|| "model declares no inputs".to_string())?;
         Ok(Self {
-            session: Mutex::new(session),
-            input_name,
+            backend: Box::new(OrtBackend {
+                session: Mutex::new(session),
+                input_name,
+            }),
             chars,
             provider,
         })
@@ -368,36 +475,18 @@ impl OcrEngine {
                 h * w * 3
             ));
         }
-        // Observe-only OCR-latency timing around the inference + decode (the
-        // user-visible recognise cost). Recorded only on the success path; the
-        // degenerate/size/tensor error returns leave no sample.
+        // Observe-only OCR-latency timing around preprocess + inference +
+        // decode (the user-visible recognise cost). Recorded only on the
+        // success path; the degenerate/size/tensor error returns leave no sample.
         let started = std::time::Instant::now();
-        let (tensor_data, img_w) = preprocess(img, h, w);
-        let tensor = Tensor::from_array(([1usize, 3, TARGET_H, img_w], tensor_data))
-            .map_err(|error| format!("input tensor: {error}"))?;
-        let mut session = self
-            .session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let outputs = session
-            .run(ort::inputs![self.input_name.as_str() => tensor])
-            .map_err(|error| format!("session run: {error}"))?;
-        let (shape, data) = outputs[0]
-            .try_extract_tensor::<f32>()
-            .map_err(|error| format!("output tensor: {error}"))?;
-        let dims: Vec<i64> = shape.iter().copied().collect();
-        if dims.len() != 3 || dims[0] != 1 {
-            return Err(format!("expected a (1, T, C) output, got {dims:?}"));
-        }
-        let t_len = dims[1] as usize;
-        let n_classes = dims[2] as usize;
+        let (logits, (t_len, n_classes)) = self.infer_pooled(img, h, w)?;
         if n_classes != self.chars.len() {
             return Err(format!(
                 "model classes vs dict mismatch: {n_classes} vs {}",
                 self.chars.len()
             ));
         }
-        let decoded = ctc_decode(data, t_len, n_classes, &self.chars);
+        let decoded = ctc_decode(&logits, t_len, n_classes, &self.chars);
         let elapsed = started.elapsed();
         eo_wire::metrics::metrics().record_ocr_latency(elapsed);
         tracing::debug!(
@@ -409,10 +498,79 @@ impl OcrEngine {
         Ok(decoded)
     }
 
+    /// Preprocess (into the thread-local scratch buffers) then run the backend,
+    /// returning the raw `(logits, (t_len, n_classes))`. The scratch pool lets
+    /// repeated recognitions reuse one resize buffer and one input tensor
+    /// instead of allocating both per cell, which the scan path (many cells in
+    /// a burst) exercises hardest.
+    fn infer_pooled(
+        &self,
+        img: &[u8],
+        h: usize,
+        w: usize,
+    ) -> Result<(Vec<f32>, (usize, usize)), String> {
+        if h == 0 || w == 0 {
+            // The original's resize raises catchably on a degenerate crop;
+            // refuse before the arithmetic does anything wild.
+            return Err(format!("degenerate cell: {h}x{w}"));
+        }
+        if img.len() != h * w * 3 {
+            return Err(format!(
+                "cell buffer is {} bytes for {h}x{w} (expected {})",
+                img.len(),
+                h * w * 3
+            ));
+        }
+        OCR_SCRATCH.with(|scratch| {
+            let scratch = &mut *scratch.borrow_mut();
+            let img_w = preprocess_into(img, h, w, &mut scratch.resized, &mut scratch.tensor);
+            self.backend.infer(&scratch.tensor, img_w)
+        })
+    }
+
     /// Recognise one PNG cell; `(text, score)`.
     pub fn recognize_png(&self, png: &[u8]) -> Result<(String, f64), String> {
         let (img, h, w) = load_bgr_png(png)?;
         self.recognize_bgr(&img, h, w)
+    }
+
+    /// Run inference only (preprocess + backend) and return the raw CTC output
+    /// `(logits, (t_len, n_classes))` without decoding. The backend comparison
+    /// and benchmark harnesses use this to compare backends at the tensor
+    /// level, before the shared decode.
+    pub fn logits_bgr(
+        &self,
+        img: &[u8],
+        h: usize,
+        w: usize,
+    ) -> Result<(Vec<f32>, (usize, usize)), String> {
+        self.infer_pooled(img, h, w)
+    }
+
+    /// [`logits_bgr`](Self::logits_bgr) from a PNG cell.
+    pub fn logits_png(&self, png: &[u8]) -> Result<(Vec<f32>, (usize, usize)), String> {
+        let (img, h, w) = load_bgr_png(png)?;
+        self.logits_bgr(&img, h, w)
+    }
+}
+
+#[cfg(feature = "candle")]
+impl OcrEngine {
+    /// Build an engine over an arbitrary inference backend (the candle
+    /// path). The decode alphabet is loaded exactly as the ONNX
+    /// Runtime constructors load it, so `ctc_decode` reads an identical
+    /// vocabulary regardless of which backend produced the logits.
+    pub fn with_backend(
+        backend: Box<dyn InferenceBackend>,
+        dict_path: &Path,
+        provider: &'static str,
+    ) -> Result<Self, String> {
+        let chars = load_dict(dict_path)?;
+        Ok(Self {
+            backend,
+            chars,
+            provider,
+        })
     }
 }
 
@@ -420,6 +578,33 @@ impl OcrEngine {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// The pooled preprocess reuses its scratch buffers across cells (no
+    /// per-cell reallocation) and produces output byte-identical to the
+    /// fresh-allocating path (the zero-padding region never carries stale
+    /// values from a previous cell).
+    #[test]
+    fn preprocess_into_reuses_buffers_and_matches_fresh() {
+        let (h, w) = (48usize, 100usize);
+        let img = vec![128u8; h * w * 3];
+        let mut resize_buf = Vec::new();
+        let mut tensor = Vec::new();
+
+        let w1 = preprocess_into(&img, h, w, &mut resize_buf, &mut tensor);
+        let (cap_r, cap_t) = (resize_buf.capacity(), tensor.capacity());
+        assert!(cap_r > 0 && cap_t > 0);
+
+        // A second same-size cell reuses the allocations: capacity is unchanged.
+        let w2 = preprocess_into(&img, h, w, &mut resize_buf, &mut tensor);
+        assert_eq!(w1, w2);
+        assert_eq!(resize_buf.capacity(), cap_r, "resize buffer reallocated");
+        assert_eq!(tensor.capacity(), cap_t, "tensor buffer reallocated");
+
+        // The pooled output equals the fresh-allocating preprocess exactly.
+        let (fresh, wf) = preprocess(&img, h, w);
+        assert_eq!(wf, w2);
+        assert_eq!(fresh, tensor);
+    }
 
     /// Serialises every test that pins `ORT_DYLIB_PATH` and builds a real
     /// ONNX Runtime session. `set_var` is process-global and NOT

@@ -18,3 +18,4 @@ Every record here describes a decision that has landed in the codebase, so each 
 | [ADR-0010](0010-loose-response-models.md) | Descriptive read models, closed event envelopes |
 | [ADR-0011](0011-etag-conditional-requests.md) | Strong-ETag conditional requests on hydration reads |
 | [ADR-0012](0012-supervised-worker-threads.md) | Named, owned, supervised worker threads |
+| [ADR-0014](0014-candle-second-ocr-backend.md) | An optional candle OCR backend behind a default-off feature |

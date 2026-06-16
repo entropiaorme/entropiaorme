@@ -30,6 +30,10 @@ pub mod loot_filter;
 pub mod mob_lookup_service;
 pub mod observability_config;
 pub mod ocr_engine;
+/// The optional candle OCR backend (a from-scratch SVTRv2 forward pass on
+/// candle), compiled only under the default-off `candle` feature.
+#[cfg(feature = "candle")]
+pub mod ocr_candle;
 pub mod paths;
 pub mod quests;
 pub mod repair_ocr;

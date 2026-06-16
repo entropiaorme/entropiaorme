@@ -23,6 +23,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ort = { workspace = true }
 image = { workspace = true }
+# The optional pure-Rust OCR backend (the `candle` feature, default-off): a
+# from-scratch SVTRv2 forward pass beside the default ONNX Runtime engine.
+# Optional so a default build neither compiles nor links candle.
+candle-core = { workspace = true, optional = true }
+candle-nn = { workspace = true, optional = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 rapidfuzz = "0.5"
@@ -47,7 +52,15 @@ tempfile = { workspace = true }
 # Tests that shell out to the Python oracle at runtime (the cost-engine
 # differential). Off by default so the hermetic Rust CI jobs need no Python.
 cross-language = []
+# The pure-Rust second OCR backend (a from-scratch SVTRv2 forward pass on
+# candle), behind a default-off flag so the soaked default (ONNX Runtime)
+# path and every default build stay byte-identical and toolchain-light.
+candle = ["dep:candle-core", "dep:candle-nn"]
 
 [[bench]]
 name = "smoke"
+harness = false
+
+[[bench]]
+name = "ocr"
 harness = false

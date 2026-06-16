@@ -26,6 +26,9 @@ image = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 rapidfuzz = "0.5"
+# Observe-only instrumentation at the event-bus, OCR, and database seams
+# (structured events for the logs; the metrics registry is in eo-wire).
+tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

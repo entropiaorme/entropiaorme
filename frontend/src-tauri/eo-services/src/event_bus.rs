@@ -140,6 +140,14 @@ impl EventBus {
     /// lock and dispatched after release (the original's tuple
     /// snapshot), so callbacks may re-enter the bus freely.
     pub fn publish(&self, topic: Topic, data: &Value) {
+        // Observe-only event-throughput instrumentation: count the publish and
+        // emit a structured trace carrying the TOPIC ONLY, never `data` (which
+        // can hold chatlog-derived loot/skill content). Both are panic-free
+        // atomic/macro operations and run before dispatch, so they cannot
+        // perturb the synchronous fan-out the original contains exceptions
+        // around.
+        eo_wire::metrics::metrics().record_event_published();
+        tracing::trace!(target: "eo::events", topic = topic.as_str(), "event published");
         let (taps, subscribers): (Vec<Tap>, Vec<Subscriber>) = {
             let registry = self.registry.lock().expect("bus registry");
             (
@@ -216,6 +224,23 @@ mod tests {
         });
         bus.publish(Topic::Combat, &json!({}));
         assert_eq!(reached.load(Ordering::SeqCst), 1, "dispatch survives");
+    }
+
+    #[test]
+    fn publishing_records_the_event_throughput_metric() {
+        // The observe-only instrumentation in `publish` counts every publish
+        // into the process-wide registry (the per-service event-throughput
+        // signal). The counter is monotonic and shared, so assert a strict
+        // increase across two publishes rather than an absolute value.
+        let bus = EventBus::new();
+        let before = eo_wire::metrics::metrics().snapshot().events_published;
+        bus.publish(Topic::Combat, &json!({"amount": 1.0}));
+        bus.publish(Topic::TickFlushed, &json!({}));
+        let after = eo_wire::metrics::metrics().snapshot().events_published;
+        assert!(
+            after >= before + 2,
+            "two publishes record two throughput samples (before={before}, after={after})"
+        );
     }
 
     #[test]

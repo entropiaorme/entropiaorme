@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tweened } from 'svelte/motion';
+	import { settleTween } from '$lib/motion/testMotion';
 	import { cubicOut } from 'svelte/easing';
 	import { formatMultiplier, formatPed } from '$lib/utils/format';
 
@@ -59,7 +59,7 @@
 
 	// Smooth y-axis rescale. The chart "breathes" when a big multiplier
 	// lands or scrolls off the trailing edge.
-	const yMax = tweened(MIN_Y_MAX * Y_HEAD_ROOM, {
+	const yMax = settleTween(MIN_Y_MAX * Y_HEAD_ROOM, {
 		duration: 600,
 		easing: cubicOut,
 	});
@@ -191,8 +191,8 @@
 		return netTargetMin - pad;
 	});
 
-	const netMaxTween = tweened(NET_MIN_RANGE / 2, { duration: 600, easing: cubicOut });
-	const netMinTween = tweened(-NET_MIN_RANGE / 2, { duration: 600, easing: cubicOut });
+	const netMaxTween = settleTween(NET_MIN_RANGE / 2, { duration: 600, easing: cubicOut });
+	const netMinTween = settleTween(-NET_MIN_RANGE / 2, { duration: 600, easing: cubicOut });
 	$effect(() => {
 		void netMaxTween.set(netMaxFinal);
 		void netMinTween.set(netMinFinal);

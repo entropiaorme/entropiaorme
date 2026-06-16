@@ -1,0 +1,16 @@
+[book]
+title = "EntropiaOrme Architecture Handbook"
+description = "Architecture handbook and decision records for EntropiaOrme, an analytical desktop tool for Entropia Universe."
+authors = ["EntropiaOrme contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/entropiaorme/entropiaorme"
+edit-url-template = "https://github.com/entropiaorme/entropiaorme/edit/main/docs/{path}"
+
+# Link checking runs as a separate step (lychee over the rendered book) rather
+# than as an mdBook renderer backend, so the checker and mdBook can version
+# independently. See the docs workflow and CONTRIBUTING notes.

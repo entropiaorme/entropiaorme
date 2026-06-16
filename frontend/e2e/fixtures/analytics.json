@@ -1,0 +1,114 @@
+{
+  "overview": {
+    "totalReturnRate": 0.9434,
+    "trend": "flat",
+    "returnsBreakdown": {
+      "lootTt": 850.0,
+      "pes": 12.5,
+      "codexPes": 3.0,
+      "questPes": 1.5,
+      "ledger": { "item_sale": 120.0, "quest_reward": 30.0 }
+    },
+    "lossesBreakdown": {
+      "trackingCost": 1000.0,
+      "cycledBreakdown": {
+        "weapon": 700.0,
+        "healing": 150.0,
+        "enhancer": 100.0,
+        "armour": 50.0,
+        "dangling": 0.0
+      },
+      "ledger": { "equipment": 40.0, "repair": 20.0 }
+    },
+    "totalGains": 1000.0,
+    "totalLosses": 1060.0,
+    "timeline": [
+      {
+        "date": "2026-03-15T12:00:00.000Z",
+        "lootTt": 200.0,
+        "pes": 3.0,
+        "codexPes": 1.0,
+        "questPes": 0.0,
+        "ledgerGains": { "item_sale": 30.0 },
+        "trackingCost": 250.0,
+        "ledgerLosses": { "equipment": 10.0 }
+      },
+      {
+        "date": "2026-04-15T12:00:00.000Z",
+        "lootTt": 320.0,
+        "pes": 4.0,
+        "codexPes": 1.0,
+        "questPes": 1.0,
+        "ledgerGains": { "item_sale": 50.0 },
+        "trackingCost": 350.0,
+        "ledgerLosses": { "repair": 10.0 }
+      },
+      {
+        "date": "2026-05-15T12:00:00.000Z",
+        "lootTt": 330.0,
+        "pes": 5.0,
+        "codexPes": 1.0,
+        "questPes": 0.0,
+        "ledgerGains": { "item_sale": 40.0, "quest_reward": 30.0 },
+        "trackingCost": 400.0,
+        "ledgerLosses": { "equipment": 30.0 }
+      }
+    ],
+    "monthlyBreakdown": [
+      {
+        "month": "2026-03",
+        "lootTt": 200.0,
+        "pes": 3.0,
+        "codexPes": 1.0,
+        "questPes": 0.0,
+        "ledgerGains": { "item_sale": 30.0 },
+        "trackingCost": 250.0,
+        "ledgerLosses": { "equipment": 10.0 }
+      },
+      {
+        "month": "2026-04",
+        "lootTt": 320.0,
+        "pes": 4.0,
+        "codexPes": 1.0,
+        "questPes": 1.0,
+        "ledgerGains": { "item_sale": 50.0 },
+        "trackingCost": 350.0,
+        "ledgerLosses": { "repair": 10.0 }
+      },
+      {
+        "month": "2026-05",
+        "lootTt": 330.0,
+        "pes": 5.0,
+        "codexPes": 1.0,
+        "questPes": 0.0,
+        "ledgerGains": { "item_sale": 40.0, "quest_reward": 30.0 },
+        "trackingCost": 400.0,
+        "ledgerLosses": { "equipment": 30.0 }
+      }
+    ]
+  },
+  "activity": {
+    "mobComparisons": [
+      { "mobName": "Atrox Young", "sessions": 5, "kills": 320, "hours": 4.5, "cycled": 1200.0, "pesPer100Ped": 8.2, "lootRate": 0.91 },
+      { "mobName": "Combibo Old", "sessions": 3, "kills": 180, "hours": 2.1, "cycled": 640.0, "pesPer100Ped": 6.7, "lootRate": 0.88 }
+    ],
+    "tagComparisons": [
+      { "tagName": "Daily Hunt", "sessions": 6, "kills": 400, "hours": 5.0, "cycled": 1500.0, "pesPer100Ped": 7.9, "lootRate": 0.9 }
+    ],
+    "weaponComparisons": [
+      { "weaponName": "Sollomate Opalo", "sessions": 8, "kills": 500, "hours": 6.6, "cycled": 1840.0, "pesPer100Ped": 7.5, "lootRate": 0.89 }
+    ]
+  },
+  "ledger": [
+    { "id": "L1", "date": "2026-05-15T12:00:00.000Z", "type": "expense", "description": "L weapon purchase", "amount": 45.0, "tag": "equipment" },
+    { "id": "L2", "date": "2026-05-10T12:00:00.000Z", "type": "markup", "description": "Auction: rare ring", "amount": 30.0, "tag": "item_sale" },
+    { "id": "L3", "date": "2026-05-05T12:00:00.000Z", "type": "expense", "description": "Armour repair", "amount": 12.5, "tag": "repair" }
+  ],
+  "presets": [
+    { "id": "P1", "name": "L weapon", "type": "expense", "description": "L weapon purchase", "amount": 45.0, "tag": "equipment" }
+  ],
+  "inventory": [
+    { "id": "I1", "name": "Modified Mercenary (L)", "ttValue": 80.0, "markupPaid": 25.0, "notes": "primary armour set", "acquiredAt": "2026-02-15T12:00:00.000Z" }
+  ],
+  "sessions": []
+}

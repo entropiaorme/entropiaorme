@@ -1,0 +1,69 @@
+{
+  "snapshot": {
+    "status": "active",
+    "session_id": "e2e-session",
+    "started_at": "2026-01-01T00:00:00.000Z",
+    "kill_count": 42,
+    "cost": 123.45,
+    "returns": 130.5,
+    "pes": 5.0,
+    "returnRate": 1.0571,
+    "weaponAttribution": "trifecta",
+    "repairOcrEnabled": false,
+    "multiplierHistory": [1.0, 2.5, 1.2, 50.0, 1.0],
+    "cumulativeNetHistory": [1.0, 2.0, 3.0, 7.0, 7.05],
+    "recentEvents": [
+      {
+        "id": "e1",
+        "type": "loot",
+        "eventType": "loot",
+        "description": "Looted Animal Oil Residue",
+        "value": 2.5,
+        "timestamp": "2026-01-01T00:01:00.000Z"
+      },
+      {
+        "id": "e2",
+        "type": "hof",
+        "eventType": "hof",
+        "description": "HOF! Combibo Young",
+        "value": 250.0,
+        "timestamp": "2026-01-01T00:02:00.000Z"
+      },
+      {
+        "id": "e3",
+        "type": "global",
+        "eventType": "global",
+        "description": "Global! Atrox Old",
+        "value": 55.0,
+        "timestamp": "2026-01-01T00:03:00.000Z"
+      }
+    ]
+  },
+  "quests": [],
+  "playlists": [],
+  "sessionDetail": {
+    "sessionId": "e2e-session",
+    "summary": {
+      "cost": 1000.0,
+      "returns": 1057.0,
+      "pes": 5.0,
+      "net": 57.0,
+      "returnRate": 1.057,
+      "kills": 42,
+      "duration": 3600
+    },
+    "mobEntryMode": "auto",
+    "lootBreakdown": [
+      { "name": "Animal Oil Residue", "quantity": 1200, "ttValue": 240.5 },
+      { "name": "Animal Muscle Oil", "quantity": 800, "ttValue": 160.0 },
+      { "name": "Vibrant Sweat", "quantity": 5000, "ttValue": 90.0 },
+      { "name": "Soft Hide", "quantity": 300, "ttValue": 45.0 },
+      { "name": "Wool", "quantity": 220, "ttValue": 22.0 }
+    ],
+    "deactivatedLootBreakdown": [],
+    "mobBreakdown": [],
+    "effectiveLoot": 557.5,
+    "toolStats": [],
+    "skillGains": []
+  }
+}

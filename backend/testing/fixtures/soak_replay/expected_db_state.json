@@ -1,0 +1,73 @@
+{
+  "codex_claims": [
+    {
+      "attribute_name": null,
+      "claimed_at": "<TS_3>",
+      "kind": "rank",
+      "ped_value": 7.0,
+      "rank": 5,
+      "skill_name": "Laser Weaponry Technology",
+      "species_name": "Atrox"
+    }
+  ],
+  "codex_progress": [],
+  "kill_loot_items": [],
+  "kill_tool_stats": [],
+  "kills": [],
+  "ledger_entries": [],
+  "notable_events": [],
+  "quest_claims": [
+    {
+      "claimed_at": "<TS_3>",
+      "ped_value": 4.0,
+      "quest_id": 1,
+      "quest_name": "Iron Challenge: Atrox"
+    }
+  ],
+  "quest_mobs": [],
+  "quest_playlist_items": [],
+  "quest_playlists": [],
+  "quests": [],
+  "session_quest_analytics_links": [],
+  "session_quest_completions": [],
+  "skill_calibrations": [
+    {
+      "level": 100.0,
+      "scanned_at": "<TS_3>",
+      "skill_name": "Laser Weaponry Technology",
+      "source": "scan"
+    },
+    {
+      "level": 101.5,
+      "scanned_at": "<TS_4>",
+      "skill_name": "Laser Weaponry Technology",
+      "source": "chatlog"
+    }
+  ],
+  "skill_gains": [
+    {
+      "amount": 1.5,
+      "ped_value": 0.01,
+      "session_id": "<UUID_1>",
+      "skill_name": "Laser Weaponry Technology",
+      "timestamp": "<TS_4>"
+    },
+    {
+      "amount": 0.8,
+      "ped_value": null,
+      "session_id": "<UUID_1>",
+      "skill_name": "Anatomy",
+      "timestamp": "<TS_5>"
+    }
+  ],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_1>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_2>"
+    }
+  ]
+}

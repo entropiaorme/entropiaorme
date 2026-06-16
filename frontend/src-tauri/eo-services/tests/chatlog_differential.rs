@@ -137,7 +137,14 @@ fn corpus_chatlogs_parse_identically() {
             compared += 1;
         }
     }
-    assert!(compared > 100, "the corpus drives a meaningful line count");
+    // The floor reflects the COMMITTED corpus (the scripted scenarios plus the
+    // recorded placeholder, ~90 lines). The earlier `> 100` floor implicitly
+    // counted on locally-present recorded bundles, which are gitignored and so
+    // absent on a clean checkout / CI, making the assertion env-dependent
+    // (a clean checkout fell just short). A floor the committed corpus
+    // satisfies keeps the guard ("the differential ran over real content, not
+    // an empty glob") deterministic regardless of local recordings.
+    assert!(compared >= 80, "the corpus drives a meaningful line count");
     println!(
         "compared {compared} corpus lines across {} logs",
         logs.len()

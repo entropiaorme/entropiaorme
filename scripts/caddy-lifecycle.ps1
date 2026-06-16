@@ -61,22 +61,51 @@ if (-not (Test-Path $caddyfile)) {
     exit 1
 }
 
+# Pure start-vs-reload decision, split into caddy-lib.ps1 so it can be
+# unit-tested without this param-driven body (and its live caddy calls)
+# running on import.
+. (Join-Path $PSScriptRoot "caddy-lib.ps1")
+
+function Test-CaddyAdmin {
+    # Liveness probe via Caddy's admin endpoint. Dials 127.0.0.1, never
+    # `localhost`: when the `.localhost` namespace is routed to the local
+    # resolver, bare `localhost` resolves `::1`-first, and Caddy's admin
+    # endpoint binds IPv4 only, so a `localhost` probe false-negatives
+    # against a healthy Caddy.
+    try {
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:2019/config/" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 switch ($Action) {
     'up' {
-        & caddy start --config $caddyfile
+        # Idempotent ensure-up: start Caddy when it is down, reload it when
+        # it is already running. A bare `caddy start` errors if Caddy is
+        # already up, so a re-run (or `just proxy-up` over a running Caddy)
+        # would fail; routing through the start-vs-reload decision makes the
+        # action safe to invoke unconditionally. dev-launch.ps1 calls this
+        # so a dev launch guarantees a running, current-config Caddy rather
+        # than firing a reload at a possibly-dead admin endpoint.
+        if ((Get-CaddyEnsureAction -IsRunning (Test-CaddyAdmin)) -eq 'start') {
+            & caddy start --config $caddyfile
+        } else {
+            & caddy reload --config $caddyfile
+        }
     }
     'down' {
         & caddy stop
     }
     'status' {
-        # Cheap liveness probe via Caddy's admin endpoint (default
-        # localhost:2019). Mirrors the previous inline `just proxy-status`
-        # shape; kept here so every lifecycle action routes through one
-        # script.
-        try {
-            $null = Invoke-WebRequest -Uri "http://localhost:2019/config/" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        # Cheap liveness probe via Caddy's admin endpoint on 127.0.0.1:2019
+        # (see Test-CaddyAdmin for why not `localhost`). Mirrors the previous
+        # inline `just proxy-status` shape; kept here so every lifecycle
+        # action routes through one script.
+        if (Test-CaddyAdmin) {
             Write-Output "caddy running"
-        } catch {
+        } else {
             Write-Output "caddy not running"
         }
     }

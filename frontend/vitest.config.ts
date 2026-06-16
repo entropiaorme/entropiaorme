@@ -31,7 +31,10 @@ export default defineConfig({
 		env: {
 			TZ: 'UTC',
 		},
-		include: ['src/**/*.test.ts'],
+		// `src/**` covers the app suites; the `src-tauri` entry pulls in the
+		// dev-tooling build-script tests (e.g. build-dev-config), which live
+		// beside the script they exercise rather than under `src/`.
+		include: ['src/**/*.test.ts', 'src-tauri/entropia-orme/*.test.ts'],
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'html'],

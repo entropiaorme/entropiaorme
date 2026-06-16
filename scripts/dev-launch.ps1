@@ -27,15 +27,18 @@ if ($env:ENTROPIAORME_SIDECAR_PORT) { $sidecarPort = [int]$env:ENTROPIAORME_SIDE
 
 # Defensive CoreDNS start: the hostname-based devUrl resolves via OS DNS,
 # which means CoreDNS must be running before the Tauri shell's tauri-cli
-# resolves the devUrl during the tab launches below. The lifecycle
-# script is idempotent (already-running is a no-op), so this is safe
-# to invoke unconditionally on every dev launch. Skipped silently when
-# coredns is not on PATH (the CoreDNS install is optional; the
-# port-based devUrl fallback in build-dev-config.mjs keeps `just dev`
+# resolves the devUrl during the tab launches below. Gated on
+# ENTROPIAORME_HOSTNAME being set: a contributor on the plain-port flow
+# does not need the DNS layer, so we do not start it for them (matching
+# build-dev-config.mjs, which only does hostname work when the hostname is
+# set). The lifecycle script is idempotent (already-running is a no-op),
+# so this is safe to invoke on every hostname-mode dev launch. Skipped
+# silently when coredns is not on PATH (the CoreDNS install is optional;
+# the port-based devUrl fallback in build-dev-config.mjs keeps `just dev`
 # working without it). The catch covers rare PowerShell-level invocation
 # exceptions; non-zero exit from the lifecycle script surfaces its own
 # message rather than throwing.
-if (Get-Command coredns -ErrorAction SilentlyContinue) {
+if ($env:ENTROPIAORME_HOSTNAME -and (Get-Command coredns -ErrorAction SilentlyContinue)) {
     try {
         & (Join-Path $PSScriptRoot "dns-lifecycle.ps1") -Action up
     } catch {
@@ -43,24 +46,24 @@ if (Get-Command coredns -ErrorAction SilentlyContinue) {
     }
 }
 
-# Defensive Caddy reload: re-read the on-disk Caddyfile so any manual
-# edits or newly-allocated per-checkout fragments propagate without a
-# restart. Routes through caddy-lifecycle.ps1 so the main worktree's
-# Caddyfile (rather than this launching checkout's local copy) is the
-# reload target; that preserves multi-checkout coexistence, since the
-# main worktree's `.dev/Caddyfile.worktrees/` is the canonical home for
-# every active checkout's per-checkout routing fragment. No-op when
-# Caddy is reachable on its admin endpoint and the config is unchanged;
-# the lifecycle script surfaces caddy's own "admin endpoint
-# unreachable" stderr if Caddy is not running, but does not block dev
-# launch. Skipped silently when caddy is not on PATH (the Caddy install
-# is optional; the port-based devUrl fallback in build-dev-config.mjs
-# keeps `just dev` working without it).
-if (Get-Command caddy -ErrorAction SilentlyContinue) {
+# Defensive Caddy ensure-up: guarantee a running, current-config Caddy
+# before the Tauri tab resolves the HTTPS devUrl. Uses the idempotent
+# `up` action (start if down, reload if already up) rather than a bare
+# reload, which would silently no-op against a dead admin endpoint and
+# leave the hostname unrouted. Routes through caddy-lifecycle.ps1 so the
+# main worktree's Caddyfile (rather than this launching checkout's local
+# copy) is the target; that preserves multi-checkout coexistence, since
+# the main worktree's `.dev/Caddyfile.worktrees/` is the canonical home
+# for every active checkout's per-checkout routing fragment. Gated on
+# ENTROPIAORME_HOSTNAME being set so a contributor on the plain-port flow
+# does not get Caddy force-started. Skipped silently when caddy is not on
+# PATH (the Caddy install is optional; the port-based devUrl fallback in
+# build-dev-config.mjs keeps `just dev` working without it).
+if ($env:ENTROPIAORME_HOSTNAME -and (Get-Command caddy -ErrorAction SilentlyContinue)) {
     try {
-        & (Join-Path $PSScriptRoot "caddy-lifecycle.ps1") -Action reload
+        & (Join-Path $PSScriptRoot "caddy-lifecycle.ps1") -Action up
     } catch {
-        Write-Warning "caddy reload threw a PowerShell exception (continuing without reload): $($_.Exception.Message)"
+        Write-Warning "caddy ensure-up threw a PowerShell exception (continuing without proxy): $($_.Exception.Message)"
     }
 }
 

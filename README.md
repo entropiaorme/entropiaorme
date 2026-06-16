@@ -69,17 +69,16 @@ Installer chrome assets (header / sidebar BMPs + plain-text MIT licence) live un
 Beyond the core `just dev` flow, two optional capabilities are available: stable `https://entropiaorme.localhost` URLs via a reverse-proxy + DNS layer (useful for browser bookmarks, DevTools, screenshots, and running multiple checkouts of this repo on the same machine), and per-checkout env-var activation in ad-hoc shells. Skip this section to keep the basic flow unchanged.
 
 - [`caddy`](https://caddyserver.com/): reverse proxy fronting the dev stack on a stable `https://entropiaorme.localhost` hostname instead of a port number. Run `caddy trust` once after install (elevated on Windows, `sudo` on macOS/Linux) to install Caddy's local CA root into the OS trust store. Start via `just proxy-up`. (Windows: `winget install CaddyServer.Caddy`.)
-- [`coredns`](https://coredns.io/) (pairs with `caddy`): local DNS resolver answering `*.localhost` → `127.0.0.1` so the dev hostname above resolves through every OS resolver path; needed because Windows Winsock doesn't honour RFC 6761 for `.localhost` subdomains. Start via `just dns-up`; configure the primary network adapter's DNS once per machine (snippet below). (Windows: `scoop install coredns`.)
+- [`coredns`](https://coredns.io/) (pairs with `caddy`): local DNS resolver answering `*.localhost` → `127.0.0.1`. CoreDNS only answers queries that reach it, and Windows does not route `.localhost` lookups to a configured resolver by default, so the hostname path also needs a one-time Name Resolution Policy rule (below) to direct the `.localhost` namespace at CoreDNS. Start via `just dns-up`. (Windows: `scoop install coredns`.)
 - [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
 
-Once per machine, point your primary network adapter at CoreDNS (elevated PowerShell). The secondary upstream keeps non-`.localhost` resolution working when CoreDNS is down:
+Once per machine, route the `.localhost` namespace to CoreDNS with a Name Resolution Policy Table (NRPT) rule (elevated PowerShell). This is namespace-scoped: only `.localhost` names resolve through CoreDNS, so all other resolution stays on your normal adapter resolvers.
 
 ```powershell
-$iface = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).Name
-Set-DnsClientServerAddress -InterfaceAlias $iface -ServerAddresses '127.0.0.1','1.1.1.1'
+Add-DnsClientNrptRule -Namespace ".localhost" -NameServers "127.0.0.1"
 ```
 
-Revert with `Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddresses`.
+Revert with `Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.localhost' } | Remove-DnsClientNrptRule -Force`. Without this rule the OS returns NXDOMAIN for `entropiaorme.localhost`, and `just dev` serves the stack on `http://localhost:<port>` instead (a working plain-HTTP session; the rule is what unlocks the HTTPS hostname).
 
 ## Further documentation
 

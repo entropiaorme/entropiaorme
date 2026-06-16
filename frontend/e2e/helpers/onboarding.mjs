@@ -64,15 +64,28 @@ export async function ensureDashboard(browser, devUrl) {
 			console.log(`[onboarding] step=${s.welcomeStep} path=${s.path}`);
 			if (s.welcomeStep < 0 || !s.path.startsWith('/welcome')) break;
 			if (s.welcomeStep >= 6) {
-				// The Terms checkbox is a visually-hidden styled input, which the
-				// strict clickability check rejects; toggle it directly via the DOM
-				// when present rather than gating on WebDriver clickability.
+				// The primary button is disabled until the Terms checkbox is accepted
+				// (`canAdvance = step !== totalSteps || tosAccepted`), so accept first,
+				// then click through. A WebDriver click on the checkbox fires the
+				// change event the Svelte binding listens to (a raw DOM click does
+				// not reliably); the surrounding label is the fallback. Confirm the
+				// box registered as checked before clicking the now-enabled button.
+				const isChecked = () =>
+					browser.execute(() => !!document.querySelector('input[type="checkbox"]:checked'));
 				const accept = await browser.$('input[type="checkbox"]');
 				if (await accept.isExisting()) {
-					await browser.execute((el) => el.click(), accept);
+					try {
+						await accept.click();
+					} catch {
+						const label = await browser.$('label.accept');
+						if (await label.isExisting()) await label.click();
+					}
 				}
+				await browser.waitUntil(isChecked, {
+					timeout: 5000,
+					timeoutMsg: 'Terms checkbox never registered as accepted',
+				});
 				const start = await browser.$('button*=Get started');
-				await start.waitForClickable({ timeout: 5000 });
 				await start.click();
 				break;
 			}

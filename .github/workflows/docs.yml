@@ -52,7 +52,7 @@ jobs:
         run: mdbook build docs
 
       - name: Check in-book links (offline; fails on any broken internal link)
-        run: lychee --offline --no-progress docs/book
+        run: lychee --offline --no-progress --root-dir "$PWD/docs/book" docs/book
 
       - name: Build the Rust API reference for the backend crates
         # The native backend spine: the portable library crates that a

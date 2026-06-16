@@ -2,7 +2,7 @@
 
 EntropiaOrme is an analytical desktop tool for Entropia Universe. It runs as a Tauri 2 desktop shell hosting a Svelte 5 frontend, backed by a native Rust HTTP service spine that has taken over from the original Python sidecar through a strangler-fig migration.
 
-This handbook documents the system as it is built today. It is written for contributors and reviewers who want to understand how the pieces fit together: the process topology, the crate and service boundaries, the event spine that keeps the windows in sync, the optical-character-recognition pipeline that reads skill panels, and the database schema that backs it all. The reasoning behind these shapes is recorded separately as [architecture decision records](adr/README.md).
+This handbook documents the system as it is built today. It is written for contributors and reviewers who want to understand how the pieces fit together: the process topology, the crate and service boundaries, the event spine that keeps the windows in sync, the optical-character-recognition pipeline that reads skill panels, and the database schema that backs it all. The reasoning behind these shapes is recorded separately as [architecture decision records](adr/index.md).
 
 A companion API reference, generated from the Rust source by `cargo doc`, is published alongside this handbook.
 

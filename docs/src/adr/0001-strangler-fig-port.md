@@ -28,7 +28,7 @@ Native handlers depend on composed services held behind `RwLock`s in `AppState`.
 - The network-quiet steady state survives the seam: an idle client hydrates once, opens one event stream, and issues no further requests until a change is pushed. `backend/tests/test_network_quiet_seam.py` enforces this by recording every request the server handles while driving real state mutations through the production producers, asserting the exact request signature (the snapshot hydrations and the single stream, never a retired poll).
 - Equivalence between the two implementations is verified against shared oracles rather than trusted; see [ADR-0005](0005-cross-language-equivalence-oracle.md).
 
-See also the [architecture overview](../architecture/overview.md) and the [service map](../architecture/service-map.md), and the full [ADR index](README.md).
+See also the [architecture overview](../architecture/overview.md) and the [service map](../architecture/service-map.md), and the full [ADR index](index.md).
 
 ## Evidence
 

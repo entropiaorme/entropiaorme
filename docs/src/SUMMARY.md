@@ -12,7 +12,7 @@
 
 # Decision records
 
-- [Architecture decision records](adr/README.md)
+- [Architecture decision records](adr/index.md)
   - [ADR-0001: Strangler-fig Python-to-Rust port](adr/0001-strangler-fig-port.md)
   - [ADR-0002: Two-layer event spine](adr/0002-event-spine.md)
   - [ADR-0003: Injected-clock determinism seam](adr/0003-injected-clock-seam.md)

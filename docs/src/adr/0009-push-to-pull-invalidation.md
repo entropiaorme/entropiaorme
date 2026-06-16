@@ -41,4 +41,4 @@ This is enforced, not merely documented. `backend/tests/test_network_quiet_seam.
 ## Related
 
 - [ADR-0002: Event spine](0002-event-spine.md)
-- [ADR index](README.md)
+- [ADR index](index.md)

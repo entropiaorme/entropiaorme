@@ -1,0 +1,96 @@
+name: Docs
+
+# Publishes the architecture handbook (mdBook) and the generated Rust API
+# reference (cargo doc) to GitHub Pages. The deploy runs on release tags only;
+# pull requests that touch the documentation sources get a build-only
+# validation so a broken book or a broken doc build is caught before a tag.
+#
+# This is a standalone workflow. It is deliberately not wired into the required
+# ci-gate in ci.yml: a documentation publish should never gate a code merge.
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "frontend/src-tauri/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Least privilege by default. Only the deploy job is granted the Pages tokens.
+permissions:
+  contents: read
+
+# Allow a single concurrent Pages deployment and never cancel an in-flight
+# publish (a cancelled deploy can leave the site half-updated).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build handbook and API reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+
+      - name: Install mdBook and the link checker
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook,lychee
+
+      - name: Build the handbook
+        run: mdbook build docs
+
+      - name: Check in-book links (offline; fails on any broken internal link)
+        run: lychee --offline --no-progress --root-dir "$PWD/docs/book" docs/book
+
+      - name: Build the Rust API reference for the backend crates
+        # The native backend spine: the portable library crates that a
+        # contributor reads. The Tauri shell crate (entropia-orme) is a Windows
+        # host with platform-specific build inputs and is documented from the
+        # Windows build, so it is excluded here to keep this job runner-portable.
+        working-directory: frontend/src-tauri
+        run: cargo doc --no-deps -p eo-wire -p eo-http -p eo-services
+
+      - name: Assemble the published site
+        run: |
+          set -euo pipefail
+          site="$(mktemp -d)"
+          cp -r docs/book/. "$site/"
+          mkdir -p "$site/api"
+          cp -r frontend/src-tauri/target/doc/. "$site/api/"
+          # Redirect /api to a crate root so the API reference has a landing page.
+          printf '%s\n' '<!doctype html><meta http-equiv="refresh" content="0; url=eo_http/index.html">' > "$site/api/index.html"
+          echo "SITE_DIR=$site" >> "$GITHUB_ENV"
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.SITE_DIR }}
+
+  deploy:
+    name: Deploy to GitHub Pages
+    # Publish only from release tags; pull-request runs validate the build above.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

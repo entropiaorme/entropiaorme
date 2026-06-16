@@ -41,6 +41,49 @@ async function settle(browser, el, timeout = 8000) {
 	);
 }
 
+// Wait for an element to reach a STABLE size at or above a minimum height. The
+// dashboard's flex-height panels can momentarily collapse during the async
+// hydrate/reflow, so a capture taken then is a sliver; polling getSize() until
+// the box is stable across two reads AND tall enough makes a collapsed frame
+// fail loudly with a clear message rather than being baked into a baseline.
+export async function settleSize(browser, el, { timeout = 10000, min = 1 } = {}) {
+	let prev = null;
+	await browser.waitUntil(
+		async () => {
+			const s = await el.getSize();
+			const stable =
+				prev !== null && Math.abs(s.height - prev.height) < 1 && Math.abs(s.width - prev.width) < 1;
+			prev = s;
+			return stable && s.height >= min;
+		},
+		{
+			timeout,
+			interval: 120,
+			timeoutMsg: `element never reached a stable height >= ${min}px (collapsed or still reflowing)`,
+		},
+	);
+}
+
+// Await all FINITE in-flight Web Animations (e.g. the stat-grid FLIP), then a
+// double rAF so layout has committed, before a screenshot. disableCSSAnimations
+// cannot reach the WAAPI-driven FLIP, so this is the only gate that settles it
+// in the suite. Infinite animations (a pulse / spinner) are skipped so the
+// await can never hang.
+export async function animationsFinished(browser) {
+	await browser.executeAsync((done) => {
+		const finite = document.getAnimations().filter((a) => {
+			try {
+				return a.effect && a.effect.getComputedTiming().iterations !== Number.POSITIVE_INFINITY;
+			} catch {
+				return false;
+			}
+		});
+		Promise.all(finite.map((a) => a.finished.catch(() => {}))).then(() =>
+			requestAnimationFrame(() => requestAnimationFrame(done)),
+		);
+	});
+}
+
 export async function ensureDashboard(browser, devUrl) {
 	// Pin a large, fixed window before anything renders. Two reasons: (1) the
 	// dashboard's flex-height layout needs a definite viewport height or its

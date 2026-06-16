@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { flip } from 'svelte/animate';
+	import { shouldSettleInstantly } from '$lib/motion/testMotion';
 	import { quintOut } from 'svelte/easing';
 	import { get } from 'svelte/store';
 	import { ALL_STAT_IDS, STAT_DEFS } from '$lib/statsRegistry';
@@ -76,7 +77,7 @@
 					<button
 						type="button"
 						data-pill-id={pref.id}
-						animate:flip={{ duration: 240, easing: quintOut }}
+						animate:flip={{ duration: shouldSettleInstantly() ? 0 : 240, easing: quintOut }}
 						class="flex items-center justify-center rounded-md border px-3 py-1.5 text-[13px] font-medium
 							select-none
 							transition-[background-color,border-color,color] duration-[var(--duration-base)] ease-[var(--ease-out)]

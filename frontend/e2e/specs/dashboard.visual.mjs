@@ -76,7 +76,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		const widgets = await $('[data-guide-anchor="dashboard-widgets-area"]');
 		await widgets.scrollIntoView({ block: 'center' });
 		const lootTab = await widgets.$('[data-tab-id="loot"]');
-		await lootTab.waitForExist({ timeout: 10000 });
+		await lootTab.waitForClickable({ timeout: 10000 });
 		await lootTab.click();
 		await browser.pause(1000); // mount + first session-detail fetch
 		// Hydrates from the session-detail fixture; gate on a known loot row

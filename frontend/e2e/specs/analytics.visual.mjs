@@ -23,7 +23,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 
 	async function selectTab(id) {
 		const tab = await $(`[role="tablist"] [data-tab-id="${id}"]`);
-		await tab.waitForExist({ timeout: 10000 });
+		await tab.waitForClickable({ timeout: 10000 });
 		await tab.click();
 	}
 
@@ -31,6 +31,10 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// Overview is the default tab; the area renders only once data has loaded.
 		const area = await $('[data-guide-anchor="analytics-overview-area"]');
 		await area.waitForExist({ timeout: 15000 });
+		// Gate on the charts actually rendering, not just the container existing:
+		// the donut + cumulative-P&L are SVGs, so wait for one to mount before the
+		// shot, or a half-onboarded / pre-hydration capture swings the diff wildly.
+		await area.$('svg').waitForExist({ timeout: 12000 });
 		await browser.pause(700);
 		const mismatch = await browser.checkElement(area, 'analytics-overview', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);

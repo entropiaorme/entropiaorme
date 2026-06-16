@@ -53,23 +53,50 @@ export async function ensureDashboard(browser, devUrl) {
 		// Six-step flow: advance to the Terms step (6), accept, then "Get started"
 		// persists the prefs and routes to the dashboard. Step-aware off the
 		// progressbar rather than blind clicks.
+		// Every interaction waits for the control to be CLICKABLE (not merely
+		// present) before clicking, and each step gates on the progressbar
+		// actually advancing rather than a fixed pause: a click that lands mid
+		// fly/fade transition is rejected as "element not interactable" or
+		// silently no-ops, which is the flake that left the app half-onboarded
+		// when the visual shots were taken.
 		for (let guard = 0; guard < 12; guard += 1) {
 			const s = await probe(browser);
 			console.log(`[onboarding] step=${s.welcomeStep} path=${s.path}`);
 			if (s.welcomeStep < 0 || !s.path.startsWith('/welcome')) break;
 			if (s.welcomeStep >= 6) {
 				const accept = await browser.$('input[type="checkbox"]');
-				if (await accept.isExisting()) await accept.click();
-				await browser.pause(300);
+				if (await accept.isExisting()) {
+					await accept.waitForClickable({ timeout: 5000 });
+					await accept.click();
+				}
 				const start = await browser.$('button*=Get started');
-				if (await start.isExisting()) await start.click();
-				await browser.pause(2400); // complete() persists prefs, then goto('/') after 380ms
+				await start.waitForClickable({ timeout: 5000 });
+				await start.click();
 				break;
 			}
 			const cont = await browser.$('button*=Continue');
-			if (await cont.isExisting()) await cont.click();
-			else await browser.keys(['ArrowRight']); // keyboard fallback (handleKey -> next())
-			await browser.pause(800); // step transition (fly/fade ~520ms)
+			let clicked = false;
+			if (await cont.isExisting()) {
+				try {
+					await cont.waitForClickable({ timeout: 3000 });
+					await cont.click();
+					clicked = true;
+				} catch {
+					// Fall through to the keyboard path below.
+				}
+			}
+			if (!clicked) await browser.keys(['ArrowRight']); // keyboard fallback (handleKey -> next())
+			// Gate the next iteration on the step actually changing, so a missed
+			// click is retried rather than racing ahead into a wrong state.
+			await browser.waitUntil(
+				async () => {
+					const n = await probe(browser);
+					return (
+						!n.path.startsWith('/welcome') || n.welcomeStep < 0 || n.welcomeStep > s.welcomeStep
+					);
+				},
+				{ timeout: 6000, timeoutMsg: `onboarding step ${s.welcomeStep} never advanced` },
+			);
 		}
 	}
 

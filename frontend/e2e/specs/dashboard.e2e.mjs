@@ -66,6 +66,7 @@ describe('dashboard (native Tauri shell)', () => {
 	it('drives the overlay button over the real IPC boundary', async () => {
 		const overlayBtn = await $('[data-guide-anchor="dashboard-overlay-btn"] button');
 		await expect(overlayBtn).toBeExisting();
+		await overlayBtn.waitForClickable({ timeout: 10000 });
 		await overlayBtn.click(); // wired to the app's invoke('toggle_overlay')
 		await browser.pause(500);
 		// Shell still responsive on the dashboard after the IPC-wired interaction.

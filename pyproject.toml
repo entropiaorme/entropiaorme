@@ -278,6 +278,7 @@ pytest_add_cli_args_test_selection = [
     "backend/tests/test_mut_tracker__c0.py",
     "backend/tests/test_mut_tracker__c1.py",
     "backend/tests/test_mut_tracker__c10.py",
+    "backend/tests/test_mut_tracker__c11.py",
     "backend/tests/test_mut_tracker__c2.py",
     "backend/tests/test_mut_tracker__c3.py",
     "backend/tests/test_mut_tracker__c4.py",

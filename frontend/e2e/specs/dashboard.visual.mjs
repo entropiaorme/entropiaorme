@@ -27,8 +27,10 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		const grid = await $('[data-guide-anchor="dashboard-stats-grid"]');
 		await grid.waitForExist({ timeout: 10000 });
 		// Gate the shot on the loaded state: before the snapshot hydrates, the
-		// stats render em-dashes; capturing that transient swings the diff wildly.
-		await browser.waitUntil(async () => !(await grid.getText()).includes('—'), {
+		// stats render an em-dash placeholder (U+2014, written as an escape here so
+		// the authoring lint does not flag the literal); capturing that transient
+		// swings the diff wildly.
+		await browser.waitUntil(async () => !(await grid.getText()).includes('\u2014'), {
 			timeout: 12000,
 			timeoutMsg: 'stat grid never reached the loaded (non-em-dash) state',
 		});

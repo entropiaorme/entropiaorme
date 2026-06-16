@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from hypothesis import given
@@ -29,7 +30,13 @@ from backend.routers.analytics import (
     _load_activity_sessions,
     overview_impl,
 )
+from backend.testing.clock import MockClock
 from backend.tracking.schema import init_tracking_tables
+
+# A fixed instant so overview_impl's recent-30d/prior-30d trend windows are
+# deterministic; without it the real clock made the measured trend branches
+# drift across UTC dates. The seeded sessions sit far in the past relative to it.
+_FIXED_CLOCK = MockClock(start=datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC))
 
 # Finite, well-behaved money values. The refuted rounding/NaN/negative-ledger
 # edge cases are deliberately excluded: those expose the read model's
@@ -217,7 +224,7 @@ def test_progression_pes_does_not_move_liquid_totals(
         _insert_ledger(conn, entry_type="expense", amount=ledger_loss, tag="repair")
     conn.commit()
 
-    before = overview_impl(conn, "all")
+    before = overview_impl(conn, "all", clock=_FIXED_CLOCK)
 
     # Now perturb ONLY the three PES-typed sources. None of these feed the
     # liquid P&L; they drive returnsBreakdown.pes/codexPes/questPes alone.
@@ -244,7 +251,7 @@ def test_progression_pes_does_not_move_liquid_totals(
             )
     conn.commit()
 
-    after = overview_impl(conn, "all")
+    after = overview_impl(conn, "all", clock=_FIXED_CLOCK)
 
     assert after["totalGains"] == before["totalGains"]
     assert after["totalLosses"] == before["totalLosses"]
@@ -315,6 +322,59 @@ def test_included_activity_sessions_pass_the_inclusion_gate(specs):
         assert session["durationHours"] > 0.0
         assert session["cycledPed"] > 0.0
         assert session["kills"] > 0
+
+
+def test_zero_shot_session_skips_dominant_weapon():
+    """Deterministically exercise the ``total_shots <= 0`` guard in
+    ``_load_activity_sessions``'s weapon-dominance loop.
+
+    A completed session with a positive non-weapon cost and a kill clears the
+    inclusion gate, but a tool stat firing zero shots leaves the weapon group
+    summing to zero, so the guard skips the dominant-weapon assignment. Pinning
+    this branch with an explicit case keeps the route's measured coverage from
+    depending on the property generator happening to draw a zero-shot session.
+    """
+    conn = _fresh_db()
+    sid = uuid.uuid4().hex
+    _insert_session(conn, sid, started_at=0.0, ended_at=3600.0, armour_cost=5.0)
+    kid = uuid.uuid4().hex
+    _insert_kill(conn, kid, sid, timestamp=0.0)
+    _insert_tool_stat(conn, kid, _TOOL_NAMES[0], shots_fired=0, cost_per_shot=1.0)
+    conn.commit()
+
+    included = _load_activity_sessions(conn)
+
+    # The session clears the inclusion gate, but the zero-shot guard leaves
+    # dominantWeapon unset (it is initialised to None and never overwritten).
+    assert len(included) == 1
+    assert included[0]["dominantWeapon"] is None
+
+
+def test_inclusion_gate_excludes_degenerate_sessions():
+    """Deterministically exercise the three inclusion-gate exclusion arms in
+    ``_load_activity_sessions`` (zero duration, zero cycled PED, zero kills), so
+    the route's measured branch coverage does not depend on the property
+    generator happening to draw each degenerate session. The zero-cost arm in
+    particular needs every cost component to be zero, which is a rare draw, so it
+    flapped run to run before this explicit case pinned it.
+    """
+    conn = _fresh_db()
+    # Zero duration: started_at == ended_at.
+    s_zero_dur = uuid.uuid4().hex
+    _insert_session(conn, s_zero_dur, started_at=100.0, ended_at=100.0, armour_cost=5.0)
+    _insert_kill(conn, uuid.uuid4().hex, s_zero_dur, timestamp=100.0)
+    # Positive duration but no cost component: cycled PED is zero.
+    s_zero_cost = uuid.uuid4().hex
+    _insert_session(conn, s_zero_cost, started_at=0.0, ended_at=3600.0)
+    _insert_kill(conn, uuid.uuid4().hex, s_zero_cost, timestamp=0.0)
+    # Positive duration and cost but no kills.
+    s_zero_kills = uuid.uuid4().hex
+    _insert_session(
+        conn, s_zero_kills, started_at=0.0, ended_at=3600.0, armour_cost=5.0
+    )
+    conn.commit()
+
+    assert _load_activity_sessions(conn) == []
 
 
 # --- ledger gains/losses are attributed strictly by entry type (holds) ---

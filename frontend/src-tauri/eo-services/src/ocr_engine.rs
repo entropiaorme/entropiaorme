@@ -62,6 +62,22 @@ fn cv_round(v: f64) -> i32 {
 /// `(((b0*(r0>>4))>>16) + ((b1*(r1>>4))>>16) + 2) >> 2` blend with
 /// its deliberate 4-bit precision drop.
 pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -> Vec<u8> {
+    let mut dst = Vec::new();
+    resize_bilinear_into(src, sh, sw, dh, dw, &mut dst);
+    dst
+}
+
+/// [`resize_bilinear`] writing into a caller-provided buffer, so the hot
+/// recognise path can reuse one resize allocation across cells instead of
+/// allocating a fresh buffer per recognition.
+pub fn resize_bilinear_into(
+    src: &[u8],
+    sh: usize,
+    sw: usize,
+    dh: usize,
+    dw: usize,
+    dst: &mut Vec<u8>,
+) {
     const COEF_SCALE: f64 = 2048.0;
     let scale_x = sw as f64 / dw as f64;
     let scale_y = sh as f64 / dh as f64;
@@ -93,7 +109,8 @@ pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -
         *tap = tap_coords(dx, scale_x, sw);
     }
 
-    let mut dst = vec![0u8; dh * dw * 3];
+    dst.clear();
+    dst.resize(dh * dw * 3, 0);
     for dy in 0..dh {
         let (y0, y1, ib0, ib1) = tap_coords(dy, scale_y, sh);
 
@@ -109,28 +126,49 @@ pub fn resize_bilinear(src: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -
             }
         }
     }
-    dst
 }
 
 /// `RecDynamicResize([48, 320])`: resize + normalise + zero-pad, CHW
 /// BGR f32; returns the tensor and its padded width.
 pub fn preprocess(img: &[u8], h: usize, w: usize) -> (Vec<f32>, usize) {
+    let mut resize_buf = Vec::new();
+    preprocess_into(img, h, w, &mut resize_buf)
+}
+
+/// [`preprocess`] reusing a caller-provided resize buffer, so the hot
+/// recognise path does not allocate a fresh resize buffer per cell. The
+/// output tensor is returned owned (the caller moves it into the inference
+/// engine), so only the intermediate resize buffer is pooled.
+pub fn preprocess_into(
+    img: &[u8],
+    h: usize,
+    w: usize,
+    resize_buf: &mut Vec<u8>,
+) -> (Vec<f32>, usize) {
     let ratio = w as f64 / h as f64;
     let max_wh_ratio = ratio.max(MAX_RATIO);
     let img_w = (TARGET_H as f64 * max_wh_ratio) as usize;
     let ceil_w = (TARGET_H as f64 * ratio).ceil() as usize;
     let resized_w = if ceil_w > img_w { img_w } else { ceil_w };
-    let resized = resize_bilinear(img, h, w, TARGET_H, resized_w);
+    resize_bilinear_into(img, h, w, TARGET_H, resized_w, resize_buf);
     let mut tensor = vec![0f32; 3 * TARGET_H * img_w];
     for c in 0..3 {
         for y in 0..TARGET_H {
             for x in 0..resized_w {
-                let v = resized[(y * resized_w + x) * 3 + c] as f32;
+                let v = resize_buf[(y * resized_w + x) * 3 + c] as f32;
                 tensor[c * TARGET_H * img_w + y * img_w + x] = (v / 255.0 - 0.5) / 0.5;
             }
         }
     }
     (tensor, img_w)
+}
+
+// Reusable per-thread resize buffer for the recognise hot path. Recognitions
+// run serially on the chat-log / scan worker thread, so one buffer per thread
+// carries no contention and turns the per-cell resize allocation into reuse.
+thread_local! {
+    static OCR_RESIZE_SCRATCH: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The decode alphabet: the character dictionary with the CTC blank
@@ -372,7 +410,10 @@ impl OcrEngine {
         // user-visible recognise cost). Recorded only on the success path; the
         // degenerate/size/tensor error returns leave no sample.
         let started = std::time::Instant::now();
-        let (tensor_data, img_w) = preprocess(img, h, w);
+        let (tensor_data, img_w) = OCR_RESIZE_SCRATCH.with(|buf| {
+            let buf = &mut *buf.borrow_mut();
+            preprocess_into(img, h, w, buf)
+        });
         let tensor = Tensor::from_array(([1usize, 3, TARGET_H, img_w], tensor_data))
             .map_err(|error| format!("input tensor: {error}"))?;
         let mut session = self
@@ -420,6 +461,30 @@ impl OcrEngine {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// The pooled preprocess reuses its resize buffer across cells (no per-cell
+    /// reallocation) and produces output byte-identical to the fresh-allocating
+    /// path.
+    #[test]
+    fn preprocess_into_reuses_the_resize_buffer_and_matches_fresh() {
+        let (h, w) = (48usize, 100usize);
+        let img = vec![128u8; h * w * 3];
+        let mut resize_buf = Vec::new();
+
+        let (_, w1) = preprocess_into(&img, h, w, &mut resize_buf);
+        let cap = resize_buf.capacity();
+        assert!(cap > 0);
+
+        // A second same-size cell reuses the resize allocation: capacity unchanged.
+        let (pooled, w2) = preprocess_into(&img, h, w, &mut resize_buf);
+        assert_eq!(w1, w2);
+        assert_eq!(resize_buf.capacity(), cap, "resize buffer reallocated");
+
+        // The pooled output equals the fresh-allocating preprocess exactly.
+        let (fresh, wf) = preprocess(&img, h, w);
+        assert_eq!(wf, w2);
+        assert_eq!(fresh, pooled);
+    }
 
     /// Serialises every test that pins `ORT_DYLIB_PATH` and builds a real
     /// ONNX Runtime session. `set_var` is process-global and NOT

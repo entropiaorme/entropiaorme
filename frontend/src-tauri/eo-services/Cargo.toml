@@ -51,3 +51,7 @@ cross-language = []
 [[bench]]
 name = "smoke"
 harness = false
+
+[[bench]]
+name = "ocr"
+harness = false

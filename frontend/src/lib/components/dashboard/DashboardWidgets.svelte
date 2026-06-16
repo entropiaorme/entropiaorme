@@ -73,7 +73,7 @@
 </script>
 
 <section
-	class="panel p-4 flex-1 min-h-0 flex flex-col"
+	class="panel p-4 flex-1 min-h-[480px] flex flex-col"
 	data-guide-anchor="dashboard-widgets-area"
 >
 	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="mb-3" />

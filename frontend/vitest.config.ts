@@ -39,6 +39,7 @@ export default defineConfig({
 			provider: 'v8',
 			reporter: ['text', 'html'],
 			include: [
+				'src/lib/motion/testMotion.ts',
 				'src/lib/utils/format.ts',
 				'src/lib/statsRegistry.ts',
 				'src/lib/statsCustomisation.ts',

@@ -400,6 +400,43 @@ npm run format   # biome format --write: apply formatting
 
 The `frontend` CI job runs `npm run lint` on every change, and a pre-commit hook mirrors it locally through the lockfile-pinned Biome (run `npm ci` in `frontend/` once so the hook can resolve it). The tree went through a one-time formatting normalisation when the gate landed; `biome format` is a verified no-op from there on, so any diff the formatter wants is a real violation.
 
+### Frontend end-to-end tests (native shell)
+
+The end-to-end layer drives the **real desktop shell** (the Tauri WebView2 window), not a browser tab, through [WebdriverIO](https://webdriver.io) and [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/). Driving the real shell is the point: only there does the desktop IPC bridge (`window.__TAURI_INTERNALS__`) exist, so the suite can assert the panels render and the IPC surface is live across the boundary that a browser-served harness is structurally blind to. The suite lives under `frontend/e2e/`.
+
+```sh
+cd frontend
+npm run test:e2e          # functional panel flows against the native shell
+```
+
+Prerequisites (installed once locally; the CI job provisions them per run):
+
+- **`tauri-driver`**: `cargo install tauri-driver --locked` (lands in `~/.cargo/bin`; override the path with `TAURI_DRIVER_PATH`).
+- **Microsoft Edge WebDriver** matching the installed WebView2 runtime version, placed at `frontend/e2e/.drivers/msedgedriver.exe` (gitignored; the version must match the runtime, so it is fetched per environment rather than committed).
+- **A debug shell build**: `npm run tauri build -- --debug --no-bundle --config src-tauri/entropia-orme/tauri.e2e.conf.json` produces `src-tauri/target/debug/entropia-orme.exe`. The `--debug` profile keeps the production sidecar from spawning, so the suite owns the backend; `tauri.e2e.conf.json` is an e2e-only CSP overlay (broadened `connect-src` for the stub backend) that never ships in a release.
+
+`e2e/wdio.conf.mjs` orchestrates the whole hermetic stack on `onPrepare` and tears it down on `onComplete`: a Vite dev server at the shell's dev origin, a deterministic Node **stub backend** (`e2e/stub-backend.mjs`, answering each request from an explicit method-and-path route table over pinned fixtures in `e2e/fixtures/`, because the WebDriver protocol has no request interception), and the `tauri-driver` bridge to the matched Edge WebDriver. An unmodelled read falls through to an empty array logged as `UNMATCHED <route>`, so a surface whose endpoint is not yet stubbed shows up in the run output instead of silently rendering empty. The suite navigates the webview to the dev origin itself (a debug binary launched outside the `tauri dev` CLI starts at `about:blank`), then `e2e/helpers/onboarding.mjs` pins a fixed 1600x1000 window (a fixed size keeps screenshots deterministic, and the dashboard's flex-height panels need a definite viewport height to lay out) and walks first-run onboarding through the UI so the run reaches the dashboard idempotently on either a fresh or an already-onboarded profile. Determinism comes from the pinned stub responses; the event stream is held open but silent so no live frame perturbs the rendered state.
+
+#### Visual regression
+
+A visual-regression layer (`@wdio/visual-service`, wired in `wdio.conf.mjs`) commits per-surface screenshot baselines under `e2e/baselines/` and diffs against them with a small fuzzy tolerance (sub-pixel anti-aliasing noise only; a real change is far larger). The specs are the `*.visual.mjs` files, grouped under the `visual` suite:
+
+```sh
+cd frontend
+npm run test:visual          # diff every visual spec against its committed baseline
+npm run test:visual:update   # regenerate the baselines after an intended UI change
+```
+
+Every shot is **element-scoped** (`checkElement`), never a full viewport, and two things are excluded from every shot by construction: the session island (its elapsed timer ticks off the wall clock every second) and any whole-page capture (the auto-fill stat grid re-packs as widgets mount, a layout race no animation freeze can settle). The covered surfaces are the dashboard stat cell, recent-events island, Loot Pulse and Loot Composition widgets, and the analytics Overview, Ledger, and Activity tabs.
+
+Determinism is engineered on three levers: the stub pins the data; `disableCSSAnimations` freezes every CSS transition and keyframe for the shot; and the chart widgets' JavaScript-driven `svelte/motion` tweens, which no CSS suppression can reach, are settled instantly. That last lever lives in `src/lib/motion/testMotion.ts`: `settleTween` is a drop-in `tweened` wrapper that collapses to a zero-duration tween when either the build flag `E2E_FREEZE_TWEENS` is set (a build-time `define`, so the flag never reaches a shipped bundle) or the user prefers reduced motion (a genuine accessibility behaviour, not only a test affordance). Captures use the visual service's legacy screenshot method, because the WebView2 BiDi element capture mis-clips elements taller than the viewport.
+
+A new baseline is written automatically the first time a new visual spec runs (`autoSaveBaseline`); commit the generated PNG. Baselines are captured in one rendering environment (WebView2 on Windows), so a different renderer will diff: regenerate after an intended change rather than editing the image.
+
+### Runes-native frontend
+
+The Svelte frontend is **runes-native**: `svelte.config.js` forces runes mode for every non-`node_modules` file (`dynamicCompileOptions`), so the legacy Svelte-4 reactivity primitives (`$:` reactive statements, `export let` props) are compile errors rather than a style preference. The guard is the production build itself: `npm run build` (run by the `frontend` CI job) fails with `` `$:` is not allowed in runes mode `` on any legacy-reactivity reintroduction, which is why the convention cannot silently rot. New component state uses `$state` / `$derived` / `$effect` and `$props`; `onMount` stays for genuine run-once mount work, and ordinary `svelte/store` subscriptions are orthogonal to runes and are kept as they are.
+
 ## Rust workspace checks
 
 The Rust side is a cargo workspace at `frontend/src-tauri/`: the Tauri shell (`entropia-orme`, window orchestration and sidecar lifecycle) plus the native-backend members (`eo-http`, `eo-services`, `eo-wire`) that fill in as backend services are ported (see `backend/architecture/PORT-READINESS.md`). All of the commands below run from the workspace root:

@@ -382,6 +382,74 @@ jobs:
       - run: npm run lint
       - run: npm run test
 
+  frontend-e2e:
+    name: Frontend e2e + visual (native shell, Windows)
+    runs-on: windows-latest
+    # Drives the REAL Tauri WebView2 shell through tauri-driver (not a browser),
+    # so it runs on Windows, the app's platform, and compiles the shell. This is
+    # the entry net for the planned fetch-to-invoke command collapse: only the
+    # native shell exposes the IPC surface that change rewrites. Gated on change
+    # scope like the backend matrix; the ci-gate sentinel covers the skip.
+    #
+    # NOTE: this gate has not yet been observed green on a hosted runner (it
+    # needs an interactive desktop session, the WebView2 runtime, and a
+    # version-matched Edge WebDriver). Validate it on the first push and, if the
+    # hosted runner cannot drive the GUI reliably, move it out of the ci-gate
+    # required set until hardened rather than blocking unrelated work.
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    env:
+      SQLX_OFFLINE: "true"
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+      - run: npm ci
+      # tauri-driver bridges WebdriverIO to the platform WebView2 WebDriver.
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+      # The Edge WebDriver must match the runner's WebView2 Evergreen runtime
+      # version exactly, so it is resolved at run time rather than committed.
+      - name: Fetch the matching WebView2 driver
+        shell: pwsh
+        run: |
+          $key = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $pv = (Get-ItemProperty $key -ErrorAction SilentlyContinue).pv
+          if (-not $pv) { $pv = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon" -ErrorAction SilentlyContinue).version }
+          if (-not $pv) { throw "could not determine the WebView2 / Edge version" }
+          Write-Host "WebView2 / Edge version: $pv"
+          New-Item -ItemType Directory -Force -Path e2e/.drivers | Out-Null
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$pv/edgedriver_win64.zip" -OutFile "$env:RUNNER_TEMP\edgedriver.zip"
+          Expand-Archive "$env:RUNNER_TEMP\edgedriver.zip" -DestinationPath e2e/.drivers -Force
+      # tauri.conf.json declares the sidecar via bundle.externalBin; stage the
+      # same zero-byte placeholder the dev launch and the Rust build job stage.
+      - name: Stage the sidecar placeholder
+        shell: pwsh
+        run: New-Item -ItemType File -Force -Path src-tauri/entropia-orme/binaries/entropiaorme-backend-x86_64-pc-windows-msvc.exe | Out-Null
+      # The debug profile keeps the production sidecar from spawning, so the
+      # suite's stub backend owns the data; tauri.e2e.conf.json is an e2e-only
+      # CSP overlay (broadened connect-src for the stub) that never ships.
+      - name: Build the e2e shell
+        run: npx tauri build --debug --no-bundle --config src-tauri/entropia-orme/tauri.e2e.conf.json
+        env:
+          ENTROPIAORME_BACKEND_PORT: '8424'
+      - name: Run the native-shell e2e suite
+        run: npm run test:e2e
+      - name: Run the dashboard visual regression
+        run: npm run test:visual
+
   rust-policy:
     name: Rust workspace (fmt + audit + deny)
     runs-on: ubuntu-latest
@@ -557,7 +625,7 @@ jobs:
     # code change whose jobs did not pass, fails it, so a skip can never let an
     # untested change merge. This lets a documentation-only pull request go green
     # in seconds without deadlocking on a never-reported required job.
-    needs: [changes, backend, frontend, rust-policy, rust, rust-members, rust-coverage]
+    needs: [changes, backend, frontend, frontend-e2e, rust-policy, rust, rust-members, rust-coverage]
     if: always()
     steps:
       - name: Require the gated jobs to have passed (or been documentation-only)
@@ -566,6 +634,7 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
+          FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           RUST_POLICY_RESULT: ${{ needs.rust-policy.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           RUST_MEMBERS_RESULT: ${{ needs.rust-members.result }}
@@ -586,9 +655,9 @@ jobs:
             echo "Documentation-only change; the backend matrix, frontend build, and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
-            echo "Backend matrix, frontend build, and Rust workspace jobs passed. Gate satisfied."
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$FRONTEND_RESULT" = "success" ] && [ "$FRONTEND_E2E_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
+            echo "Backend matrix, frontend build + e2e, and Rust workspace jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the backend matrix, the frontend build, and the Rust workspace jobs (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT)."
+          echo "::error::A code change must pass the backend matrix, the frontend build + e2e, and the Rust workspace jobs (backend: $BACKEND_RESULT, frontend: $FRONTEND_RESULT, frontend-e2e: $FRONTEND_E2E_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT)."
           exit 1

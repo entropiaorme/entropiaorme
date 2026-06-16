@@ -1,0 +1,129 @@
+name: release
+
+# Tag-driven release pipeline. On a v* tag it builds the Windows artefacts,
+# attaches a CycloneDX SBOM, checksums, and a build-provenance attestation, and
+# drafts a GitHub Release for a human to review and publish. It is standalone
+# and tag-only: it never feeds the ci-gate sentinel and is not a required check,
+# so it cannot block pull requests. workflow_dispatch runs the same build as a
+# dry run (a clearly-named draft that is deleted after inspection).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, attest, and draft the release
+    runs-on: windows-latest
+    permissions:
+      contents: write # draft the GitHub Release and upload its assets
+      id-token: write # mint the OIDC token the provenance attestation signs with
+      attestations: write # record the build-provenance attestation
+    env:
+      SQLX_OFFLINE: "true"
+      # The updater signing key is provisioned out of band as a repository
+      # secret. While it is absent (the current state) the build produces
+      # unsigned installers and no updater artefacts; once it is present the
+      # same build signs the updater manifest. Mapping it to an env keeps it
+      # inert-by-default rather than a hard dependency of the pipeline.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: frontend/src-tauri
+          # Restrict cache writes to the trusted main timeline (parity with ci.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
+        with:
+          tool: cargo-cyclonedx
+
+      - name: Install backend build dependencies
+        # PyInstaller (in requirements-dev) freezes the sidecar; the runtime
+        # requirements are what it freezes.
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build the release artefacts
+        # The one-command builder: freezes the sidecar, builds the shell, and
+        # emits the brand-canonical NSIS installer + portable ZIP, each with a
+        # .sha256 sidecar. Unsigned while the signing key is absent.
+        run: python backend/build_app.py
+
+      - name: Stage release assets
+        # Collect the published assets in one directory so the SBOM, checksums,
+        # provenance, and release upload all operate on the same set.
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp frontend/src-tauri/target/release/bundle/nsis/entropiaorme-*-x64-setup.exe* dist/
+          cp frontend/src-tauri/target/release/entropiaorme-*-x64-portable.zip* dist/
+          ls -la dist/
+
+      - name: Generate the SBOM (CycloneDX)
+        # The shipped shell's full transitive dependency tree, vendored as
+        # SBOM.json alongside the release assets.
+        shell: bash
+        run: |
+          cargo cyclonedx --manifest-path frontend/src-tauri/entropia-orme/Cargo.toml -f json -q
+          cp frontend/src-tauri/entropia-orme/entropia-orme.cdx.json dist/SBOM.json
+
+      - name: Compute checksums
+        # A single checksums manifest over every published asset, in addition to
+        # the per-artefact .sha256 sidecars build_app.py emits.
+        shell: bash
+        working-directory: dist
+        run: sha256sum entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip SBOM.json > SHA256SUMS.txt
+
+      - name: Attest build provenance
+        # SLSA-style provenance over the installer + portable artefacts.
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/entropiaorme-*-x64-setup.exe
+            dist/entropiaorme-*-x64-portable.zip
+
+      - name: Draft the GitHub Release
+        # Draft + Pre-release for the 0.x window: a human reviews and publishes.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            gh release create "$TAG" --draft --prerelease \
+              --title "EntropiaOrme $TAG" --generate-notes dist/*
+          else
+            TAG="dry-run-${{ github.run_id }}"
+            gh release create "$TAG" --target "${{ github.sha }}" --draft --prerelease \
+              --title "Dry run $TAG" \
+              --notes "Dry-run build for pipeline inspection; delete after review." dist/*
+          fi

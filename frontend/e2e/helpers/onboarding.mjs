@@ -20,6 +20,27 @@ function probe(browser) {
 	}, DASH);
 }
 
+// Wait for an element to stop moving before interacting with it. Each welcome
+// step flies in via a `svelte/transition` (a JS-driven transform, so
+// disableCSSAnimations does not reach it): a click dispatched while the target
+// is still translating is rejected as "element not interactable" because the
+// click point shifts between the driver computing it and dispatching it. The
+// progressbar lives outside the keyed step, so its value advances the instant
+// the step changes, well before the new step has settled. Poll the element's
+// box until two consecutive reads agree.
+async function settle(browser, el, timeout = 8000) {
+	let prev = null;
+	await browser.waitUntil(
+		async () => {
+			const loc = await el.getLocation();
+			const stable = prev !== null && Math.abs(loc.x - prev.x) < 1 && Math.abs(loc.y - prev.y) < 1;
+			prev = loc;
+			return stable;
+		},
+		{ timeout, interval: 120, timeoutMsg: 'welcome control never settled (still animating)' },
+	);
+}
+
 export async function ensureDashboard(browser, devUrl) {
 	// Pin a large, fixed window before anything renders. Two reasons: (1) the
 	// dashboard's flex-height layout needs a definite viewport height or its
@@ -70,10 +91,23 @@ export async function ensureDashboard(browser, devUrl) {
 				// change event the Svelte binding listens to (a raw DOM click does
 				// not reliably); the surrounding label is the fallback. Confirm the
 				// box registered as checked before clicking the now-enabled button.
+				//
+				// Scope every selector to the Terms label: the prior step (News
+				// opt-in) also renders an `input[type="checkbox"]`, and during the
+				// step transition the out-fading prior step and the in-flying Terms
+				// step briefly coexist in the DOM, so an unscoped selector can toggle
+				// (and falsely read as accepted) the wrong box. Wait for the Terms
+				// step to settle before interacting, so the click never lands mid
+				// fly-in.
 				const isChecked = () =>
-					browser.execute(() => !!document.querySelector('input[type="checkbox"]:checked'));
-				const accept = await browser.$('input[type="checkbox"]');
-				if (await accept.isExisting()) {
+					browser.execute(
+						() => !!document.querySelector('label.accept input[type="checkbox"]:checked'),
+					);
+				const accept = await browser.$('label.accept input[type="checkbox"]');
+				await accept.waitForExist({ timeout: 10000 });
+				await settle(browser, accept);
+				await accept.waitForClickable({ timeout: 10000 });
+				if (!(await isChecked())) {
 					try {
 						await accept.click();
 					} catch {
@@ -85,8 +119,24 @@ export async function ensureDashboard(browser, devUrl) {
 					timeout: 5000,
 					timeoutMsg: 'Terms checkbox never registered as accepted',
 				});
+				// The button enables reactively once `tosAccepted` flips;
+				// waitForClickable covers enabled + visible + not-obscured. Confirm
+				// the click actually left /welcome, retrying once if a stray
+				// transition swallowed it.
 				const start = await browser.$('button*=Get started');
-				await start.click();
+				await start.waitForClickable({ timeout: 10000 });
+				for (let attempt = 0; attempt < 2; attempt += 1) {
+					await start.click();
+					try {
+						await browser.waitUntil(
+							async () => !(await browser.execute(() => location.pathname.startsWith('/welcome'))),
+							{ timeout: 4000 },
+						);
+						break;
+					} catch {
+						if (attempt === 1) throw new Error('"Get started" never advanced past /welcome');
+					}
+				}
 				break;
 			}
 			const cont = await browser.$('button*=Continue');

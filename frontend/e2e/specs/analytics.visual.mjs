@@ -35,6 +35,13 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// the donut + cumulative-P&L are SVGs, so wait for one to mount before the
 		// shot, or a half-onboarded / pre-hydration capture swings the diff wildly.
 		await area.$('svg').waitForExist({ timeout: 12000 });
+		// In parity with the ledger/activity shots, gate on hydrated content: the
+		// donut centre renders "return rate" only once the fixture data has
+		// populated the Overview, so a pre-hydration frame is never captured.
+		await browser.waitUntil(async () => (await area.getText()).includes('return rate'), {
+			timeout: 12000,
+			timeoutMsg: 'overview never hydrated the fixture data',
+		});
 		await browser.pause(700);
 		const mismatch = await browser.checkElement(area, 'analytics-overview', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);

@@ -447,8 +447,22 @@ jobs:
           ENTROPIAORME_BACKEND_PORT: '8424'
       - name: Run the native-shell e2e suite
         run: npm run test:e2e
-      - name: Run the dashboard visual regression
+      - name: Run the visual regression suite
         run: npm run test:visual
+      # On failure, publish the actual + diff PNGs the visual suite writes so a
+      # mismatch is inspectable: this suite cannot run locally (it needs
+      # tauri-driver + the WebView2 runtime + the built shell), and the diff is
+      # otherwise discarded with the runner. Path is repo-root relative;
+      # upload-artifact does not honour the job's working-directory default.
+      - name: Upload visual diff on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: frontend/e2e/.visual-output
+          retention-days: 14
+          if-no-files-found: ignore
 
   rust-policy:
     name: Rust workspace (fmt + audit + deny)

@@ -26,6 +26,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -75,12 +76,19 @@ class RecordingController:
         hotbar_listener: Any,
         spacebar_capture_listener: Any,
         corpus_root: Path,
+        db_snapshot_writer: Callable[[Path], None] | None = None,
     ) -> None:
         self._chatlog_watcher = chatlog_watcher
         self._skill_scan_manual = skill_scan_manual
         self._repair_ocr = repair_ocr
         self._hotbar_listener = hotbar_listener
         self._spacebar_capture_listener = spacebar_capture_listener
+        # Optional: snapshot the live DB into the bundle at session start
+        # (the pre-segment image) and stop (the post-session image), so the
+        # replay cross-check can replay from the starting snapshot. The
+        # writer owns the app DB lock; absent it (e.g. unit tests), DB capture
+        # is simply skipped and the bundle carries only the chatlog segment.
+        self._db_snapshot_writer = db_snapshot_writer
 
         self._corpus_root = corpus_root
         self._in_progress_dir = corpus_root / "recording_in_progress"
@@ -105,6 +113,10 @@ class RecordingController:
             self._clear_in_progress()
             self._recorder = Recorder(self._in_progress_dir)
             self._install_taps(self._recorder)
+            # Capture the pre-segment DB image before any tapped line lands, so
+            # the replay can start from the true starting state.
+            if self._db_snapshot_writer is not None:
+                self._db_snapshot_writer(self._in_progress_dir / "starting_db.sqlite")
             self._state = "recording"
             self._started_at = _utc_now_iso()
             log.info("Recording started -> %s", self._in_progress_dir)
@@ -141,6 +153,13 @@ class RecordingController:
             self._uninstall_taps()
             counts = recorder.status_counts()
             recorder.close()
+            # Capture the post-session DB image (capture has stopped, so the
+            # DB is at the segment's final state): the reference the
+            # cross-check diffs the offline replay against.
+            if self._db_snapshot_writer is not None:
+                self._db_snapshot_writer(
+                    self._in_progress_dir / "post_session_db.sqlite"
+                )
             self._write_metadata(self._in_progress_dir, scenario_name, metadata, counts)
             self._recorded_dir.mkdir(parents=True, exist_ok=True)
             os.replace(self._in_progress_dir, target)
@@ -237,6 +256,11 @@ class RecordingController:
             "flavour": "recorded",
             "description": metadata.get("description", ""),
             "recorded_at": _utc_now_iso(),
+            # The session's real instants (the replay clock schedule) and
+            # whether the starting/post-session DB images were captured.
+            "started_at": self._started_at,
+            "stopped_at": _utc_now_iso(),
+            "db_captured": self._db_snapshot_writer is not None,
             "surfaces": metadata.get("surfaces", []),
             "character_context": metadata.get("character_context", {}),
             "rare_event_flags": metadata.get("rare_event_flags", []),

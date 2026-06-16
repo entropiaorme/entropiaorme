@@ -402,7 +402,7 @@ The `frontend` CI job runs `npm run lint` on every change, and a pre-commit hook
 
 ### Frontend end-to-end tests (native shell)
 
-The end-to-end layer drives the **real desktop shell** (the Tauri WebView2 window), not a browser tab, through [WebdriverIO](https://webdriver.io) and [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/). Driving the real shell is the point: only there does the desktop IPC bridge (`window.__TAURI_INTERNALS__`) exist, so the suite can assert the panels render and the IPC surface is live across the boundary a browser-served harness is structurally blind to. The suite lives under `frontend/e2e/`.
+The end-to-end layer drives the **real desktop shell** (the Tauri WebView2 window), not a browser tab, through [WebdriverIO](https://webdriver.io) and [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/). Driving the real shell is the point: only there does the desktop IPC bridge (`window.__TAURI_INTERNALS__`) exist, so the suite can assert the panels render and the IPC surface is live across the boundary that a browser-served harness is structurally blind to. The suite lives under `frontend/e2e/`.
 
 ```sh
 cd frontend

@@ -217,8 +217,12 @@ def test_snapshot_folds_active_accumulator_and_holds_no_kill_defaults():
     tracker._active_hotbar_tool_name = "Opalo"
     now = datetime(2026, 1, 2, 3, 4, 5)
     # Two shots, no loot yet -> the accumulator is live, zero kills.
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 20.0, "timestamp": now})
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+    )
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 20.0, "timestamp": now}
+    )
     av = tracker.snapshot().active
     assert av is not None
     assert av.kill_count == 0
@@ -249,7 +253,9 @@ def test_snapshot_counts_globals_and_hofs():
     tracker.start_session()
     now = datetime(2026, 1, 2, 3, 4, 5)
     # A kill that earns a matching HoF global.
-    bus.publish(EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now})
+    bus.publish(
+        EVENT_COMBAT, {"type": "damage_dealt", "amount": 10.0, "timestamp": now}
+    )
     bus.publish(
         EVENT_LOOT_GROUP,
         {

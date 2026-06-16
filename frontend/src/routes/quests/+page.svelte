@@ -173,23 +173,10 @@
 	// pushed session frames rather than polling for session start/stop.
 	$effect(() => {
 		if (guideState.isActive) return;
-		let unlisten: (() => void) | undefined;
-		let disposed = false;
-		// Attach the listener BEFORE the first hydrate: a session frame landing
-		// between the hydrate GET and the listener attaching would otherwise be
-		// lost (the subscribe-then-hydrate ordering the scan and character views
-		// follow).
-		void subscribeTracking().then((fn) => {
-			if (disposed) {
-				fn();
-				return;
-			}
-			unlisten = fn;
-			void hydrate();
-		});
+		void hydrate();
+		const unlisten = subscribeTracking();
 		return () => {
-			disposed = true;
-			unlisten?.();
+			void unlisten.then((un) => un());
 		};
 	});
 

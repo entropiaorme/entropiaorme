@@ -418,16 +418,8 @@
 		void subscribeTracking().then((unlisten) => {
 			// Guard the unmount-before-resolve race: if teardown already ran,
 			// detach immediately rather than leaking the listener.
-			if (unmounted) {
-				unlisten();
-				return;
-			}
-			unsubscribeTracking = unlisten;
-			// Initial snapshot load, AFTER the listener is attached: a tracking
-			// frame landing between the snapshot GET and the listener attaching
-			// would otherwise be missed (the subscribe-then-hydrate ordering the
-			// scan and character views already follow).
-			void hydrate();
+			if (unmounted) unlisten();
+			else unsubscribeTracking = unlisten;
 		});
 		registerDemoApi('dashboard', {
 			setOverlayDemoVisible: (visible: boolean) => {
@@ -554,9 +546,6 @@
 	// waiting on the next 3-5s poll tick. Each dependency on guideState.isActive
 	// is a void-read for reactivity tracking; the fetches inherit the demoPath
 	// routing from $lib/api.ts and (for quests) loadQuests/loadPlaylists.
-	// Tracks the prior guide-active value so the $effect below re-hydrates only
-	// on an actual guide flip; the initial mount load is done in onMount.
-	let prevGuideActive: boolean | undefined;
 	$effect(() => {
 		const active = guideState.isActive;
 		// Snapshot the active playlist selection on guide-open so the
@@ -606,13 +595,9 @@
 		}
 		// Re-read the consolidated snapshot through the guide-aware client so the
 		// switch between real and demo data is immediate (the snapshot GET routes
-		// to the demo namespace automatically while the guide is active). The
-		// initial mount load is done in onMount (after the tracking listener
-		// attaches); re-hydrate here only when guide mode actually flips.
-		if (prevGuideActive !== undefined && prevGuideActive !== active) {
-			void hydrate();
-		}
-		prevGuideActive = active;
+		// to the demo namespace automatically while the guide is active). This is
+		// also the dashboard's initial load on mount.
+		void hydrate();
 		void (async () => {
 			try {
 				const [live, loadedQuests, loadedPlaylists] = await Promise.all([

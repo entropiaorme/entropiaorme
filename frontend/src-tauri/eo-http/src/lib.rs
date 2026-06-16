@@ -657,10 +657,10 @@ mod tests {
     }
 
     /// Driving a request through the built router records one HTTP-request
-    /// sample (the observe layer fires for "a request" per the round's
-    /// acceptance), and the response is unchanged: a 200 from the native
-    /// health handler. The native `/api/health` arm answers without a
-    /// sidecar, so the timing layer is exercised end to end here.
+    /// sample (the observe layer records one sample per request), and the
+    /// response is unchanged: a 200 from the native health handler. The native
+    /// `/api/health` arm answers without a sidecar, so the timing layer is
+    /// exercised end to end here.
     #[tokio::test]
     async fn a_served_request_records_one_http_sample_without_altering_the_response() {
         use axum::body::Body;

@@ -108,7 +108,7 @@ pub fn run() {
 
     // Start the periodic resource sampler feeding the drift gauges (the metrics
     // page reads them live; each sample is also logged so the rolling file
-    // carries the drift series the soak's drift gate reads).
+    // carries the resource-drift series for long-running-session leak detection).
     resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()

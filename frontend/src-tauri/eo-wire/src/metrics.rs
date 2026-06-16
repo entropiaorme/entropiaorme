@@ -4,8 +4,8 @@
 //! (event-bus publishes, OCR inferences, database queries, HTTP requests)
 //! and a periodic resource sampler (RSS / handle count). The registry is the
 //! aggregation sink the hidden devtools metrics page reads, and the source
-//! the rolling structured logs' drift samples derive from, so the soak's
-//! drift gates (RSS trend, handle count, per-event latencies) are measured
+//! the rolling structured logs' drift samples derive from, so resource and
+//! latency drift (RSS trend, handle count, per-event latencies) is measured
 //! from telemetry rather than eyeballed.
 //!
 //! Behaviour-neutral by construction: every record path is a single atomic
@@ -131,8 +131,8 @@ pub struct Metrics {
     http_request_latency: LatencyHistogram,
     // Drift gauges, set by the periodic resource sampler. `0` means
     // "not yet sampled" (the page renders a dash); resident-set bytes and
-    // the OS handle/descriptor count are the two monotonic-growth signals
-    // the soak's drift gate watches.
+    // the OS handle/descriptor count are the two monotonic-growth signals a
+    // resource leak surfaces in.
     rss_bytes: AtomicU64,
     handle_count: AtomicU64,
 }

@@ -3,8 +3,8 @@
 //! A background thread samples the process's resident-set size and OS handle
 //! count on a fixed cadence, records them into the in-process metrics registry
 //! (so the hidden metrics page shows them live), and emits each sample as a
-//! structured `tracing` event (so the rolling log file carries the drift series
-//! the soak's drift gate reads from a shipped, non-dev build). The two are the
+//! structured `tracing` event (so the rolling log file carries the
+//! resource-drift series even on a shipped, non-dev build). The two are the
 //! monotonic-growth signals a leak shows up in.
 //!
 //! Sampling is best-effort and never on a hot path: a detached thread that

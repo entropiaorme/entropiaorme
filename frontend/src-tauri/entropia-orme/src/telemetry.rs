@@ -5,9 +5,9 @@
 //! the workspace emits is captured from the first instant. The subscriber has
 //! three layers:
 //!
-//! * a fmt layer (human-readable diagnostics; stderr in this round, joined by
-//!   the rolling non-blocking file appender once it lands), filtered by an
-//!   env-filter (`ENTROPIAORME_LOG`, default `info`);
+//! * a fmt layer (human-readable diagnostics) writing to stderr and to a
+//!   rolling non-blocking file appender, filtered by an env-filter
+//!   (`ENTROPIAORME_LOG`, default `info`);
 //! * the [`MetricsLayer`], which turns the database driver's own per-query
 //!   `sqlx::query` events into database-latency samples in the in-process
 //!   [`eo_wire::metrics`] registry. Capturing the driver's events (rather than
@@ -37,10 +37,9 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-/// Held for the process lifetime by `run()`. In this round it carries no
-/// state (the subscriber writes to stderr, which needs no flush); the rolling
-/// non-blocking file appender's `WorkerGuard` moves in here when it lands, so
-/// dropping the guard at process exit flushes any buffered log lines.
+/// Held for the process lifetime by `run()`. It carries the rolling
+/// non-blocking file appender's `WorkerGuard`, so dropping the guard at process
+/// exit drains and flushes any buffered log lines.
 #[must_use = "dropping the telemetry guard flushes the rolling log appender"]
 pub struct TelemetryGuard {
     // The non-blocking appender's flush guard: dropping it (at process exit,
@@ -185,8 +184,8 @@ mod tests {
     use super::*;
 
     /// A real query under a metrics-only subscriber records a database-latency
-    /// sample, proving the driver-event capture path works end to end (the
-    /// instrumentation fires for "a DB query" per the round's acceptance).
+    /// sample, proving the driver-event capture path records a sample for a real
+    /// query end to end.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_database_query_records_a_latency_sample() {
         // A metrics-only global subscriber (no fmt noise). Installed globally

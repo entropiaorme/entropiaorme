@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
 	import { request, ApiError } from '$lib/api/client';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 
 	type Bucket = { bound_us: number | null; count: number };
 	type Histogram = { count: number; sum_us: number; buckets: Bucket[] };
@@ -20,8 +20,6 @@
 	let developerModeOff = $state(false);
 	let errorMessage = $state<string | null>(null);
 	let crashReporting = $state<boolean | null>(null);
-
-	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	async function refreshMetrics(): Promise<void> {
 		try {
@@ -60,16 +58,16 @@
 	}
 
 	function formatBytes(bytes: number): string {
-		if (bytes <= 0) return '—';
+		if (bytes <= 0) return '-';
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 	}
 
 	function formatGauge(value: number): string {
-		return value > 0 ? value.toLocaleString() : '—';
+		return value > 0 ? value.toLocaleString() : '-';
 	}
 
 	function meanMs(histogram: Histogram): string {
-		if (histogram.count === 0) return '—';
+		if (histogram.count === 0) return '-';
 		return `${(histogram.sum_us / histogram.count / 1000).toFixed(2)} ms`;
 	}
 
@@ -83,17 +81,13 @@
 		return histogram.buckets.reduce((max, bucket) => Math.max(max, bucket.count), 0);
 	}
 
-	onMount(() => {
-		void refreshMetrics();
+	$effect(() => {
+		// A one-shot crash-reporting read, then the visibility-gated metrics
+		// poll: useVisiblePoll runs an immediate tick, clears the timer while the
+		// tab is hidden, and fires a catch-up tick on resume. Its returned stop()
+		// is the effect teardown.
 		void refreshCrashReporting();
-		pollTimer = setInterval(() => {
-			if (typeof document !== 'undefined' && document.hidden) return;
-			void refreshMetrics();
-		}, POLL_INTERVAL_MS);
-	});
-
-	onDestroy(() => {
-		if (pollTimer) clearInterval(pollTimer);
+		return useVisiblePoll(refreshMetrics, { intervalMs: POLL_INTERVAL_MS });
 	});
 </script>
 

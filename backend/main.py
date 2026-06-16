@@ -163,6 +163,7 @@ from backend.testing.keystroke_source import (
     PynputKeystrokeSource,
 )
 from backend.testing.recording_controller import RecordingController
+from backend.testing.session_capture import snapshot_sqlite
 from backend.tracking.tracker import HuntTracker
 
 
@@ -568,6 +569,13 @@ async def lifespan(app: FastAPI):
 
     # Developer-only session recorder. Constructed unconditionally (cheap, no
     # I/O until start); its endpoints are gated server-side on developer mode.
+    def _capture_session_db(dest: Path) -> None:
+        # Online-backup the live DB under the app lock so the recorder's
+        # snapshot is a transactionally consistent image taken without racing
+        # the chatlog/tracker writers on the shared connection.
+        with app_db.lock:
+            snapshot_sqlite(app_db.conn, dest)
+
     recording_controller = RecordingController(
         chatlog_watcher=chatlog_watcher,
         skill_scan_manual=skill_scan_manual,
@@ -575,6 +583,7 @@ async def lifespan(app: FastAPI):
         hotbar_listener=hotbar_listener,
         spacebar_capture_listener=spacebar_capture_listener,
         corpus_root=Path(__file__).resolve().parent / "tests" / "e2e" / "corpus",
+        db_snapshot_writer=_capture_session_db,
     )
 
     services = Services(

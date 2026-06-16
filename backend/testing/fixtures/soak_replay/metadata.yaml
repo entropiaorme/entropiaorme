@@ -1,0 +1,13 @@
+name: soak_replay
+flavour: synthetic
+description: 'Synthetic soak-replay fixture: skill-gain segment over a seeded starting
+  DB, standing in for a real recorded session so the cross-check runs in CI
+  without real data.'
+clock:
+  start: '2026-06-01T12:00:00'
+  step_seconds: 1.0
+surfaces:
+- skill_gains
+- skill_calibrations
+- codex_claims
+- quest_claims

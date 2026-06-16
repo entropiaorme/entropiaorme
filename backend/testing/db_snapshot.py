@@ -189,6 +189,27 @@ CATALOGUE: tuple[TableSpec, ...] = (
 )
 
 
+# The db_state-silent skill-gain write table. Kept OUT of the default CATALOGUE
+# so the committed golden corpus stays byte-identical on regen (this addition
+# is behaviour-neutral); the silent-write cross-check opts into it explicitly
+# via SILENT_WRITE_CATALOGUE. The wall-clock ``created_at`` default stays out
+# of the column list (the catalogue's determinism doctrine); ``timestamp`` is
+# the chatlog-parsed event instant, which replays deterministically, and
+# ``session_id`` is a UUID the shared Normalizer symbolises.
+SKILL_GAINS_SPEC = TableSpec(
+    name="skill_gains",
+    query=(
+        "SELECT session_id, timestamp, skill_name, amount, ped_value FROM skill_gains"
+    ),
+    order_by=("timestamp", "rowid"),
+)
+
+# The catalogue the real-session replay cross-check captures over: the
+# canonical surface plus ``skill_gains``. Use this (not the default CATALOGUE)
+# wherever the codex/quest/skill silent-write surface must be observed in full.
+SILENT_WRITE_CATALOGUE: tuple[TableSpec, ...] = CATALOGUE + (SKILL_GAINS_SPEC,)
+
+
 def capture(
     db: sqlite3.Connection,
     normalizer: Normalizer | None = None,

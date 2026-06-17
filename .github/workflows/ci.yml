@@ -44,6 +44,16 @@ jobs:
       # only when every changed path is Markdown. On the merge queue the range is
       # the integrated commit's base..head (the queued change merged onto main),
       # so a documentation-only change skips the expensive jobs in the queue too.
+      #
+      # The gating LOGIC runs from the BASE commit's copy of the script, not the
+      # PR head's, so a fork pull request cannot rewrite classify_change_scope.py
+      # to emit code=false and skip the test gates. The trusted base script still
+      # classifies the head's actual diff (the changed-file list is data the fork
+      # cannot forge); only the docs-vs-code rules come from the base. The script
+      # is pure stdlib + git and accepts --repo-root, so it runs standalone over
+      # the checked-out head. If it is absent on the base (the commit that first
+      # introduced it, or any other non-gated event), the step falls back to
+      # code=true so the suite runs.
       - name: Classify the change scope
         id: classify
         env:
@@ -52,7 +62,21 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
-        run: python -m backend.scripts.classify_change_scope
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) base_sha="$PR_BASE_SHA" ;;
+            merge_group) base_sha="$MERGE_GROUP_BASE_SHA" ;;
+            *) base_sha="" ;;
+          esac
+          script="backend/scripts/classify_change_scope.py"
+          base_script="$RUNNER_TEMP/classify_change_scope.base.py"
+          if [ -n "$base_sha" ] && git show "$base_sha:$script" > "$base_script" 2>/dev/null; then
+            echo "Classifying from the base commit's script ($base_sha)."
+            python "$base_script" --repo-root "$GITHUB_WORKSPACE"
+          else
+            echo "Classifier absent on the base (or no gated range); code=true (run the jobs)."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
 
   backend:
     name: Backend (tests, Python ${{ matrix.python-version }})

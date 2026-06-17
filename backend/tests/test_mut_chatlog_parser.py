@@ -249,3 +249,32 @@ def test_parse_file_replaces_invalid_utf8_bytes(tmp_path):
     assert len(events) >= 1
     assert events[0].type == EventType.DAMAGE_DEALT
     assert events[0].data["amount"] == 42.3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# parse_file(): open(path, "r", encoding="utf-8", ...). The chat log is always
+# UTF-8, so the explicit encoding is load-bearing on any platform whose OS
+# default open() encoding is not UTF-8 (notably Windows, where the app ships and
+# the default is a legacy code page). This kills the "drop encoding='utf-8'"
+# mutant there. On a UTF-8-default platform (the nightly Linux campaign) that
+# mutant is equivalent and cannot be killed; this still guards the Windows decode
+# path, which is the one that matters in production.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_parse_file_decodes_multibyte_utf8(tmp_path):
+    log_file = tmp_path / "chat.log"
+    # "é" is the two UTF-8 bytes 0xC3 0xA9; decoded as cp1252 (the Windows
+    # default) they become the mojibake "Ã©". Written as UTF-8 so a dropped
+    # encoding="utf-8" misdecodes them under a non-UTF-8 default.
+    log_file.write_text(
+        "2026-03-24 15:00:00 [Globals] [] Café Hunter killed a creature "
+        "(Atrox Provider) with a value of 51 PED!\n",
+        encoding="utf-8",
+    )
+
+    events = parse_file(str(log_file))
+
+    assert len(events) == 1
+    assert events[0].type == EventType.GLOBAL_KILL
+    # The multi-byte "é" round-trips as UTF-8, not the cp1252 mojibake "Ã©".
+    assert events[0].data["player"] == "Café Hunter"
+    assert "Café Hunter" in events[0].raw_line

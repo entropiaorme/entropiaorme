@@ -173,10 +173,24 @@
 	// pushed session frames rather than polling for session start/stop.
 	$effect(() => {
 		if (guideState.isActive) return;
+		// Subscribe-then-hydrate (the canonical consumer discipline): attach the
+		// tracking listener first so a frame landing during the initial read is
+		// re-announced rather than lost. The hydrate stays independent of the
+		// listen() promise (which never resolves in the e2e shell), so the first
+		// read always runs; a frame arriving before the listener attaches is the
+		// only residual gap, far smaller than reading before subscribing at all.
+		let unsubscribe: (() => void) | undefined;
+		let stopped = false;
+		void subscribeTracking().then((un) => {
+			// Guard the teardown-before-resolve race: detach immediately if the
+			// effect already cleaned up rather than leaking the listener.
+			if (stopped) un();
+			else unsubscribe = un;
+		});
 		void hydrate();
-		const unlisten = subscribeTracking();
 		return () => {
-			void unlisten.then((un) => un());
+			stopped = true;
+			unsubscribe?.();
 		};
 	});
 

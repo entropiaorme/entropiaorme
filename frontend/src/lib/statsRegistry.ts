@@ -261,5 +261,10 @@ export const ALL_STAT_IDS: StatId[] = [
 ];
 
 export function getStatDef(id: string): StatDef | null {
+	// Own-property guard: without it, prototype-chain keys ('__proto__',
+	// 'constructor', ...) would resolve to inherited Object members typed as
+	// StatDef rather than null. Ids come from the fixed StatId union and prefs
+	// are sanitised against ALL_STAT_IDS, so this is defence in depth.
+	if (!Object.hasOwn(STAT_DEFS, id)) return null;
 	return (STAT_DEFS as Record<string, StatDef | undefined>)[id] ?? null;
 }

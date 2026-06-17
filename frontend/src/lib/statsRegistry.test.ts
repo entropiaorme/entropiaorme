@@ -342,19 +342,15 @@ describe('getStatDef', () => {
 		expect(getStatDef('does_not_exist')).toBeNull();
 	});
 
-	// CANDIDATE DEFECT: getStatDef has no own-property guard (no Object.hasOwn /
-	// hasOwnProperty check before indexing STAT_DEFS). It indexes the record
-	// directly, so prototype-chain keys resolve to inherited Object members
-	// instead of null. These assertions pin the ACTUAL (unhardened) behaviour;
-	// a hardened implementation would return null for both.
-	it("'__proto__' resolves to Object.prototype, NOT null (missing hasOwn guard)", () => {
-		expect(getStatDef('__proto__')).toBe(Object.prototype as unknown);
-		expect(getStatDef('__proto__')).not.toBeNull();
+	// getStatDef has an Object.hasOwn own-property guard, so prototype-chain
+	// keys resolve to null rather than the inherited Object members they would
+	// otherwise expose typed as StatDef.
+	it("'__proto__' -> null (own-property guard)", () => {
+		expect(getStatDef('__proto__')).toBeNull();
 	});
 
-	it("'constructor' resolves to Object, NOT null (missing hasOwn guard)", () => {
-		expect(getStatDef('constructor')).toBe(Object as unknown);
-		expect(getStatDef('constructor')).not.toBeNull();
+	it("'constructor' -> null (own-property guard)", () => {
+		expect(getStatDef('constructor')).toBeNull();
 	});
 });
 

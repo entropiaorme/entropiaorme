@@ -111,6 +111,8 @@ The consumer discipline is subscribe-then-hydrate: attach the Tauri listener fir
 
 Two window-event surfaces are deliberately **not** part of this spine: the overlay popup protocols (`overlay-menu:*`, `overlay-armour-cost:*`), which are directed window-to-window IPC for transient UI, and the shell-emitted `overlay-shown` event, which prompts the overlay to re-read configuration fields that no tracking frame announces (the overlay is a pre-spawned hidden window, so no visibility event fires on show).
 
+A further shell-emitted signal, `substrate:native-installed`, drives the relay rather than a window. On a first launch after an upgrade the substrate can hot-install the native service spine mid-session, moving production from the proxied sidecar to the native `/api/events` producer. The event relay's long-lived stream, opened before that swap, stays bound to the pre-handover producer (whose connection never errors, so the browser never auto-reconnects). The shell emits this event when the swap completes; the relay then force-cycles its stream onto the native producer, whose reconnect re-hydrates every window.
+
 ## The hydration surface
 
 ### The tracking snapshot

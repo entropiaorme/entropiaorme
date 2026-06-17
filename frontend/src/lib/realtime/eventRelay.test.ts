@@ -5,9 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // dynamic import() so relay state is order-independent.
 const emit = vi.fn();
 const getCurrentWindow = vi.fn();
+const listen = vi.fn();
+const handoverUnlisten = vi.fn();
+let handoverCallback: (() => void) | undefined;
 
 vi.mock('@tauri-apps/api/event', () => ({
 	emit: (...args: unknown[]) => emit(...args),
+	listen: (...args: unknown[]) => listen(...args),
 }));
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -68,6 +72,15 @@ function stubMainWindow(): void {
 beforeEach(() => {
 	emit.mockReset();
 	getCurrentWindow.mockReset();
+	listen.mockReset();
+	handoverUnlisten.mockReset();
+	handoverCallback = undefined;
+	// Capture the handover callback so a test can fire it; resolve with a spyable
+	// unlisten so teardown can be asserted.
+	listen.mockImplementation((_event: string, cb: () => void) => {
+		handoverCallback = cb;
+		return Promise.resolve(handoverUnlisten);
+	});
 	FakeEventSource.instances = [];
 });
 
@@ -177,6 +190,32 @@ describe('startEventRelay on the main window', () => {
 		FakeEventSource.instances[0].fire('scan.status.changed', 'not json{');
 		expect(emit).not.toHaveBeenCalled();
 	});
+
+	it('force-cycles the stream onto the native producer on the substrate handover', async () => {
+		stubMainWindow();
+		const { startEventRelay } = await loadModule();
+		startEventRelay();
+
+		expect(listen).toHaveBeenCalledWith('substrate:native-installed', expect.any(Function));
+		expect(FakeEventSource.instances).toHaveLength(1);
+		const firstStream = FakeEventSource.instances[0];
+
+		// The shell signals it has hot-installed the native service spine.
+		handoverCallback?.();
+
+		// The pre-handover stream is closed and a fresh one opened on the same URL.
+		expect(firstStream.closed).toBe(true);
+		expect(FakeEventSource.instances).toHaveLength(2);
+		expect(FakeEventSource.instances[1].url).toBe('http://127.0.0.1:8421/api/events');
+
+		// The reconnected stream re-hydrates every forwarded topic on open.
+		emit.mockClear();
+		FakeEventSource.instances[1].onopen?.();
+		expect(emit.mock.calls).toEqual([
+			['tracking:session:updated', {}],
+			['scan:status:changed', {}],
+		]);
+	});
 });
 
 describe('stopEventRelay', () => {
@@ -196,5 +235,16 @@ describe('stopEventRelay', () => {
 	it('is safe to call when no stream is open', async () => {
 		const { stopEventRelay } = await loadModule();
 		expect(() => stopEventRelay()).not.toThrow();
+	});
+
+	it('detaches the handover listener', async () => {
+		stubMainWindow();
+		const { startEventRelay, stopEventRelay } = await loadModule();
+		startEventRelay();
+		// Flush the listen() promise so the unlisten handle is stored.
+		await Promise.resolve();
+		await Promise.resolve();
+		stopEventRelay();
+		expect(handoverUnlisten).toHaveBeenCalledTimes(1);
 	});
 });

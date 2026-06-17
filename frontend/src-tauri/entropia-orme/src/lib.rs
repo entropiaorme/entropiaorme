@@ -531,6 +531,14 @@ fn install_native_services(
         spacebar: exit_spacebar,
         skill_scan: exit_skill_scan,
     });
+    // Signal the frontend that the native service spine is now live so its
+    // long-lived SSE relay can force-cycle onto the native `/api/events`
+    // producer. On a first launch after an upgrade the substrate starts
+    // proxy-only and installs the native spine mid-session; the relay opened
+    // before this swap stays bound to the pre-handover (proxied) producer, whose
+    // connection never errors, so the browser never auto-reconnects and the live
+    // view would silently freeze until a reload.
+    let _ = app.emit("substrate:native-installed", ());
 }
 
 /// Runtime per-route arm overrides: a persisted JSON map (path in

@@ -18,7 +18,7 @@
  * unchanged: the webview never learns the backend language changed.
  */
 
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 import { EVENTS_STREAM_URL } from '$lib/api';
@@ -28,12 +28,24 @@ import { EVENTS_STREAM_URL } from '$lib/api';
  * Tauri topic and covered by the reconnect nudge below. */
 const FORWARDED_TOPICS = ['tracking.session.updated', 'scan.status.changed'] as const;
 
+/**
+ * Substrate handover signal. On a first launch after an upgrade the shell starts
+ * proxy-only and hot-installs the native service spine mid-session: production
+ * moves from the proxied sidecar to the native `/api/events` producer, but this
+ * long-lived stream stays bound to the pre-handover producer and silently stops
+ * receiving frames (the old connection never errors, so the browser never
+ * auto-reconnects). The shell emits this when the swap completes so the relay can
+ * force-cycle the stream onto the native producer.
+ */
+const SUBSTRATE_NATIVE_INSTALLED_EVENT = 'substrate:native-installed';
+
 interface DomainEnvelope {
 	type?: string;
 	payload?: Record<string, unknown>;
 }
 
 let source: EventSource | null = null;
+let unlistenHandover: UnlistenFn | undefined;
 
 /**
  * Tauri event names admit only alphanumerics and `-`, `/`, `:`, `_` (no dots),
@@ -77,6 +89,25 @@ export function startEventRelay(): () => void {
 		return stopEventRelay;
 	}
 
+	openStream();
+
+	// The substrate may hot-install the native service spine mid-session; when it
+	// does, force-cycle the stream onto the native producer (its onopen
+	// re-hydrates). The listener attach stays independent of this promise.
+	void listen(SUBSTRATE_NATIVE_INSTALLED_EVENT, () => {
+		reopenStream();
+	}).then((unlisten) => {
+		// Detach immediately if the relay was already stopped before the listener
+		// attached (source is nulled on stop) rather than leaking it.
+		if (source === null) unlisten();
+		else unlistenHandover = unlisten;
+	});
+
+	return stopEventRelay;
+}
+
+/** Open the SSE stream and wire its open + per-topic handlers. */
+function openStream(): void {
 	const stream = new EventSource(EVENTS_STREAM_URL);
 	source = stream;
 
@@ -97,12 +128,27 @@ export function startEventRelay(): () => void {
 			forward(topic, (event as MessageEvent).data as string);
 		});
 	}
-
-	return stopEventRelay;
 }
 
-/** Close the relay stream if open. */
+/**
+ * Close the current stream and reconnect. Used after the substrate handover so
+ * the stream binds to the native `/api/events` producer; the new stream's onopen
+ * re-hydrates every window. A genuine network drop already self-heals via the
+ * browser's EventSource auto-reconnect, so this is only for the silent handover
+ * where the old connection never errors.
+ */
+function reopenStream(): void {
+	if (source !== null) {
+		source.close();
+		source = null;
+	}
+	openStream();
+}
+
+/** Close the relay stream and detach the handover listener if open. */
 export function stopEventRelay(): void {
+	unlistenHandover?.();
+	unlistenHandover = undefined;
 	if (source !== null) {
 		source.close();
 		source = null;

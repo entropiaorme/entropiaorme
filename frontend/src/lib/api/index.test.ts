@@ -381,16 +381,6 @@ describe('plain delegating wrappers map to the expected verb, path, and shape', 
 			'/api/settings',
 			{ body: { player_name: 'Mikel' } },
 		],
-		['startRecording', () => api.startRecording(), 'POST', '/api/recording/start'],
-		['getRecordingStatus', () => api.getRecordingStatus(), 'GET', '/api/recording/status'],
-		[
-			'stopRecording',
-			() => api.stopRecording({ scenario_name: 'baseline' }),
-			'POST',
-			'/api/recording/stop',
-			{ body: { scenario_name: 'baseline' } },
-		],
-		['abortRecording', () => api.abortRecording(), 'POST', '/api/recording/abort'],
 		['getOverlayPosition', () => api.getOverlayPosition(), 'GET', '/api/settings/overlay-position'],
 	];
 

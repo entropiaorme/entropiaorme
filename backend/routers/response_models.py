@@ -534,43 +534,6 @@ class OverlayPosition(_Loose):
 
 
 # ---------------------------------------------------------------------------
-# Recording (developer-only) (/recording)
-# ---------------------------------------------------------------------------
-
-
-class RecordingStatus(_Loose):
-    """Recording lifecycle state plus live capture counters."""
-
-    state: str
-    started_at: str | None = None
-    lines: int
-    captures: int
-    keystrokes: int
-
-
-class RecordingStopResult(_Loose):
-    """The outcome of finalising a recording.
-
-    Polymorphic: the success branch carries ``finalized_path`` + ``determinism``
-    (and ``diff`` only on a determinism leak); the failure branch carries
-    ``error`` + ``recovery_path``. Served with ``response_model_exclude_unset=True``
-    so each branch keeps its own keys rather than gaining a wall of nulls.
-    """
-
-    finalized_path: str | None = None
-    determinism: str | None = None
-    diff: str | None = None
-    error: str | None = None
-    recovery_path: str | None = None
-
-
-class RecordingAbortResult(_Loose):
-    """Acknowledgement that the in-flight recording was discarded."""
-
-    state: str
-
-
-# ---------------------------------------------------------------------------
 # Manual skill scan (/scan)
 # ---------------------------------------------------------------------------
 

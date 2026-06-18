@@ -125,7 +125,6 @@ from backend.routers import (
     events,
     health,
     quests,
-    recording,
     scan_manual,
     settings,
     testing,
@@ -162,8 +161,6 @@ from backend.testing.keystroke_source import (
     MockKeystrokeSource,
     PynputKeystrokeSource,
 )
-from backend.testing.recording_controller import RecordingController
-from backend.testing.session_capture import snapshot_sqlite
 from backend.tracking.tracker import HuntTracker
 
 
@@ -567,25 +564,6 @@ async def lifespan(app: FastAPI):
         keystroke_source=spacebar_keystroke_source,
     )
 
-    # Developer-only session recorder. Constructed unconditionally (cheap, no
-    # I/O until start); its endpoints are gated server-side on developer mode.
-    def _capture_session_db(dest: Path) -> None:
-        # Online-backup the live DB under the app lock so the recorder's
-        # snapshot is a transactionally consistent image taken without racing
-        # the chatlog/tracker writers on the shared connection.
-        with app_db.lock:
-            snapshot_sqlite(app_db.conn, dest)
-
-    recording_controller = RecordingController(
-        chatlog_watcher=chatlog_watcher,
-        skill_scan_manual=skill_scan_manual,
-        repair_ocr=repair_ocr,
-        hotbar_listener=hotbar_listener,
-        spacebar_capture_listener=spacebar_capture_listener,
-        corpus_root=Path(__file__).resolve().parent / "tests" / "e2e" / "corpus",
-        db_snapshot_writer=_capture_session_db,
-    )
-
     services = Services(
         app_db=app_db,
         game_data=game_data,
@@ -602,7 +580,6 @@ async def lifespan(app: FastAPI):
         hotbar_listener=hotbar_listener,
         repair_ocr=repair_ocr,
         spacebar_capture_listener=spacebar_capture_listener,
-        recording_controller=recording_controller,
         clock=clock,
         test_mode=test_mode,
         hotbar_keystroke_source=hotbar_keystroke_source,
@@ -621,11 +598,6 @@ async def lifespan(app: FastAPI):
     # Cleanup. Detach the SSE hub from the bus first so a producer's final
     # shutdown event cannot hop a frame onto the closing loop.
     event_stream_hub.close()
-    # Abort only an in-flight recording; is_recording is true for both
-    # the recording and finalising states, and aborting mid-finalise could
-    # discard or corrupt the bundle being committed.
-    if recording_controller.status().get("state") == "recording":
-        recording_controller.abort()
     spacebar_capture_listener.stop()
     hotbar_listener.stop()
     if tracker.is_tracking:
@@ -688,7 +660,6 @@ def create_app() -> FastAPI:
     app.include_router(codex.router, prefix="/api")
     app.include_router(quests.router, prefix="/api")
     app.include_router(demo.router, prefix="/api")
-    app.include_router(recording.router, prefix="/api")
     app.include_router(events.router, prefix="/api")
 
     # Test-only surface, registered only when the test-mode overlay is active

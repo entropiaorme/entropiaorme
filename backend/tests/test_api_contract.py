@@ -128,10 +128,9 @@ def contract_env(tmp_path_factory: pytest.TempPathFactory):
         # Entering the context runs the lifespan startup, which populates the
         # service container the handlers resolve through.
         with TestClient(app, base_url=BASE_URL) as client:
-            # The recording router is dev-gated (server-side 403 unless developer
-            # mode is on). Enable it for the contract run so GET
-            # /api/recording/status is exercised against its schema rather than
-            # answering the 403 the origin-guard assertion below is meant to catch.
+            # Enable developer mode for the contract run so any dev-gated surface
+            # is reached and exercised against its schema rather than
+            # short-circuiting at the server-side 403 gate.
             from backend.dependencies import get_services
 
             get_services().config_service.update({"developer_mode_enabled": True})
@@ -187,7 +186,7 @@ def test_get_endpoints_conform(case, contract_env):
 #
 # Schema conformance pins each response to its declared shape but never to a
 # computed value: a mutant that returns a structurally-valid but semantically
-# wrong body (health flipped to a different string, recording state frozen,
+# wrong body (health flipped to a different string,
 # demo bodies served all-zero from a wrong DB or a failed priming step) still
 # conforms and survives the schema-driven walk above. These tests assert the
 # concrete values alongside that walk so such a corruption is caught.
@@ -200,26 +199,6 @@ def test_health_body_is_ok(contract_env):
     response = client.get("/api/health", headers=REQUEST_HEADERS)
     assert response.status_code == 200, response.text
     assert response.json() == {"status": "ok"}
-
-
-def test_recording_status_is_idle_before_any_session(contract_env):
-    """Pre-session recording status pins the idle state and zeroed counters.
-
-    Developer mode is on for the contract run, so the handler is reached (not
-    a 403). No recording has been started, so the controller is in its initial
-    ``idle`` state with every live counter at zero and no start timestamp. A
-    mutant that hard-codes ``recording`` or freezes the counters conforms to
-    the schema but is caught here.
-    """
-    client = contract_env
-    response = client.get("/api/recording/status", headers=REQUEST_HEADERS)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["state"] == "idle"
-    assert body["started_at"] is None
-    assert body["lines"] == 0
-    assert body["captures"] == 0
-    assert body["keystrokes"] == 0
 
 
 def test_demo_analytics_overview_serves_seeded_non_zero_totals(contract_env):

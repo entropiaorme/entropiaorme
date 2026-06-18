@@ -587,6 +587,11 @@ fn install_native_services(
         spacebar_listener: composed.spacebar_listener.clone(),
         hotbar_listener: composed.producers.hotbar_handle(),
     });
+    // Forward the producer spine's domain events onto the Tauri event bus, the
+    // native replacement for the frontend's EventSource relay. Registered on the
+    // same SseHub that feeds `/api/events`, while the spine is still in hand (it
+    // moves into managed state just below).
+    spawn_domain_event_bridge(app, &composed.producers.sse_hub_handle());
     // Hand the producer spine to the exit seam so it stops the tail thread,
     // the hotbar listener, and ends any session on close.
     app.manage(Producers(Mutex::new(Some(composed.producers))));
@@ -608,6 +613,62 @@ fn install_native_services(
     // connection never errors, so the browser never auto-reconnects and the live
     // view would silently freeze until a reload.
     let _ = app.emit("substrate:native-installed", ());
+}
+
+/// Map a dotted domain wire topic to its colon-form Tauri event name (Tauri
+/// event names forbid dots). Mirrors the frontend's `toTauriEventName`.
+fn domain_topic_to_tauri_event(topic: &str) -> String {
+    topic.replace('.', ":")
+}
+
+/// Extract the `event:` topic and `data:` payload from one SSE frame
+/// (`id: N\nevent: <topic>\ndata: <json>\n\n`). The envelope JSON is in its
+/// compact wire form (no embedded newline), so a line scan recovers both
+/// fields exactly.
+fn parse_domain_frame(frame: &str) -> Option<(&str, &str)> {
+    let mut topic = None;
+    let mut data = None;
+    for line in frame.lines() {
+        if let Some(rest) = line.strip_prefix("event: ") {
+            topic = Some(rest);
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            data = Some(rest);
+        }
+    }
+    Some((topic?, data?))
+}
+
+/// Forward the producer spine's domain events onto the Tauri event bus: the
+/// native replacement for the frontend's `EventSource` relay. Registers a
+/// second consumer on the same `SseHub` that feeds the `/api/events` fan-out,
+/// drains its frames, and re-emits each typed envelope on the colon-form Tauri
+/// topic every window already subscribes to (`tracking:session:updated`,
+/// `scan:status:changed`). The webview sees the identical envelope it parsed off
+/// the SSE `data:` field, so the topic-aware consumers are unchanged. The
+/// hydrate nudge (a payload-less frame on connect/handover) stays
+/// frontend-owned: it must fire after the webview is listening, which an emit at
+/// install time cannot guarantee on a cold first load.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn spawn_domain_event_bridge(app: &tauri::AppHandle, hub: &std::sync::Arc<eo_wire::sse::SseHub>) {
+    let client = hub.register();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let frame = client.next_frame().await;
+            let Some((topic, data)) = parse_domain_frame(&frame) else {
+                continue;
+            };
+            match serde_json::from_str::<serde_json::Value>(data) {
+                Ok(value) => {
+                    let _ = app.emit(domain_topic_to_tauri_event(topic).as_str(), value);
+                }
+                Err(err) => tracing::warn!(
+                    target: "eo::substrate",
+                    "dropping a malformed domain frame: {err}"
+                ),
+            }
+        }
+    });
 }
 
 /// Runtime per-route arm overrides: a persisted JSON map (path in
@@ -872,7 +933,42 @@ mod windows_runtime_icons {
 
 #[cfg(test)]
 mod tests {
-    use super::{sidecar_spawn_env, SidecarSpawn};
+    use super::{domain_topic_to_tauri_event, parse_domain_frame, sidecar_spawn_env, SidecarSpawn};
+
+    #[test]
+    fn domain_topics_namespace_dots_to_colons_for_the_tauri_bus() {
+        assert_eq!(
+            domain_topic_to_tauri_event("tracking.session.updated"),
+            "tracking:session:updated"
+        );
+        assert_eq!(
+            domain_topic_to_tauri_event("scan.status.changed"),
+            "scan:status:changed"
+        );
+    }
+
+    #[test]
+    fn a_domain_frame_yields_its_topic_and_compact_envelope() {
+        // The exact shape the SseHub frames (see eo_wire::sse): the envelope is
+        // compact JSON on one line, so the data field is recovered whole.
+        let frame = concat!(
+            "id: 7\nevent: scan.status.changed\ndata: ",
+            "{\"type\":\"scan.status.changed\",\"event_version\":1,",
+            "\"occurred_at\":\"2024-12-31T21:20:00+00:00\",",
+            "\"payload\":{\"phase\":\"capturing\"}}\n\n"
+        );
+        let (topic, data) = parse_domain_frame(frame).expect("a well-formed frame parses");
+        assert_eq!(topic, "scan.status.changed");
+        let value: serde_json::Value = serde_json::from_str(data).expect("the data is JSON");
+        assert_eq!(value["type"], "scan.status.changed");
+        assert_eq!(value["payload"]["phase"], "capturing");
+    }
+
+    #[test]
+    fn a_frame_missing_a_field_does_not_parse() {
+        assert!(parse_domain_frame("id: 1\nevent: scan.status.changed\n\n").is_none());
+        assert!(parse_domain_frame(": ready\n\n").is_none());
+    }
 
     fn env_value<'a>(env: &'a [(&'static str, String)], key: &str) -> Option<&'a str> {
         env.iter()

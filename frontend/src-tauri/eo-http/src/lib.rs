@@ -604,6 +604,26 @@ pub struct InProcessResponse {
     pub body: Vec<u8>,
 }
 
+/// Build the in-process request from the IPC descriptor (method, path-and-query,
+/// headers, body). Extracted from [`dispatch_in_process`] so the transport's
+/// request construction is unit-testable without composing the router. An
+/// invalid method or URI surfaces as an `Err` string (the command reports it)
+/// rather than a panic.
+fn build_in_process_request(
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+) -> Result<http::Request<axum::body::Body>, String> {
+    let mut builder = http::Request::builder().method(method).uri(path_and_query);
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    builder
+        .body(axum::body::Body::from(body))
+        .map_err(|err| format!("malformed in-process request: {err}"))
+}
+
 /// Dispatch a request through the in-process router WITHOUT binding a socket:
 /// the server side of the Tauri-IPC transport that replaces the loopback HTTP
 /// hop. The request runs through the identical stack a client over the socket
@@ -621,13 +641,7 @@ pub async fn dispatch_in_process(
 ) -> Result<InProcessResponse, String> {
     use tower::ServiceExt as _;
 
-    let mut builder = http::Request::builder().method(method).uri(path_and_query);
-    for (name, value) in headers {
-        builder = builder.header(name.as_str(), value.as_str());
-    }
-    let request = builder
-        .body(axum::body::Body::from(body))
-        .map_err(|err| format!("malformed in-process request: {err}"))?;
+    let request = build_in_process_request(method, path_and_query, headers, body)?;
 
     // `Router::oneshot` is infallible (its `Error` is `Infallible`): the
     // dispatch itself never errors, so only request construction above can.
@@ -795,5 +809,50 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&response.body).expect("the health body is JSON");
         assert_eq!(body["status"], "ok");
+    }
+
+    /// The transport's request construction (the IPC-descriptor -> http::Request
+    /// half of the in-process dispatch) carries the method, path, query string,
+    /// headers, and body verbatim, so a re-pointed call site reaches the router
+    /// exactly as a loopback request would.
+    #[tokio::test]
+    async fn the_in_process_request_carries_method_path_query_headers_and_body() {
+        let request = build_in_process_request(
+            "POST",
+            "/api/settings?dry_run=1&scope=all",
+            &[("content-type".to_string(), "application/json".to_string())],
+            br#"{"player_name":"Mikel"}"#.to_vec(),
+        )
+        .expect("the request builds");
+        assert_eq!(request.method(), http::Method::POST);
+        assert_eq!(request.uri().path(), "/api/settings");
+        assert_eq!(request.uri().query(), Some("dry_run=1&scope=all"));
+        assert_eq!(
+            request
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+        );
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("the body collects");
+        assert_eq!(&body[..], br#"{"player_name":"Mikel"}"#);
+    }
+
+    #[test]
+    fn the_in_process_request_parses_each_standard_method() {
+        for method in ["GET", "POST", "PATCH", "DELETE", "PUT"] {
+            let request = build_in_process_request(method, "/api/x", &[], Vec::new())
+                .expect("a standard method builds");
+            assert_eq!(request.method().as_str(), method);
+        }
+    }
+
+    #[test]
+    fn a_malformed_in_process_request_is_a_clean_error_not_a_panic() {
+        // A method token with a space is not a valid HTTP method; the builder
+        // surfaces it as an Err the command reports, never a panic.
+        assert!(build_in_process_request("BAD METHOD", "/api/x", &[], Vec::new()).is_err());
     }
 }

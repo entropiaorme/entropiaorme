@@ -1,17 +1,11 @@
 [package]
 name = "eo-http"
 version.workspace = true
-description = "HTTP substrate for the EntropiaOrme backend: the in-process router and middleware that progressively take over routes from the Python sidecar."
+description = "HTTP substrate for the EntropiaOrme backend: the in-process router and middleware serving every backend route natively."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
-
-[features]
-# Integration tests that boot the real Python backend as the proxy upstream
-# (the proxy-fidelity self-check). Off by default so the hermetic CI legs
-# need no Python toolchain; the nightly equivalence job turns it on.
-cross-language = []
 
 [dependencies]
 axum.workspace = true

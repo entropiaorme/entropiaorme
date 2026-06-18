@@ -327,10 +327,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: frontend/src-tauri
-      # The full member test surface with the cross-language feature on: the
-      # hermetic tests plus the live differential fuzzes against the oracle,
-      # and the proxy-fidelity self-check that boots the real backend behind
-      # the substrate's reverse proxy and diffs the two arms.
+      # The eo-wire / eo-services member tests with the cross-language feature
+      # on: the hermetic tests plus the live differential fuzzes against the
+      # Python oracle (the Normalizer and cost-engine fuzzes). The eo-http
+      # arm-vs-sidecar A/B battery was retired at the Phase-9 crossing (the
+      # sidecar is gone; eo-http behaviour is pinned by its own hermetic suite).
       - name: Run the cross-language equivalence differentials
         working-directory: frontend/src-tauri
-        run: cargo test -p eo-wire -p eo-services -p eo-http --features cross-language
+        run: cargo test -p eo-wire -p eo-services --features cross-language

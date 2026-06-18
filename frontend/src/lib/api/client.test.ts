@@ -2,14 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The generated client and the legacy request() helper share one error
 // contract: any non-2xx throws ApiError(status, message), message preferring
-// the FastAPI `detail` string. Both run against a stubbed global fetch; the
-// vitest config inlines ENTROPIAORME_BACKEND_PORT=8421, so URLs are stable.
+// the FastAPI `detail` string. Both now run over the Tauri-IPC transport:
+// `tauriFetch` in client.ts routes every call through the `api_request`
+// command rather than a loopback `fetch`, so these tests stub `invoke` (the
+// command boundary) and return the command's wire response shape. The vitest
+// config inlines ENTROPIAORME_BACKEND_PORT=8421, so the URL builders stay
+// stable.
 //
-// openapi-fetch captures globalThis.fetch when createClient() runs at module
-// load (the same captured-at-import wrinkle as preferences.ts' inTauri), so
-// the stub must be in place BEFORE the module is imported: fresh import per
-// test via vi.resetModules() + dynamic import().
-const fetchMock = vi.fn();
+// `invoke` is captured at module load (client.ts imports it), so the mock must
+// be in place BEFORE the module is imported: a hoisted mock plus a fresh import
+// per test via vi.resetModules() + dynamic import().
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 type Mod = typeof import('./client');
 
@@ -19,19 +23,26 @@ async function loadModule(): Promise<Mod> {
 }
 
 beforeEach(() => {
-	fetchMock.mockReset();
-	vi.stubGlobal('fetch', fetchMock);
+	invokeMock.mockReset();
 });
 
 afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function jsonResponse(body: unknown, init?: ResponseInit): Response {
-	return new Response(JSON.stringify(body), {
-		headers: { 'Content-Type': 'application/json' },
-		...init,
-	});
+/** The `api_request` command's wire response (what `invoke` resolves to);
+ * `tauriFetch` rebuilds a `Response` from it. The status line's reason phrase
+ * rides `statusText` so the empty-body error fallback still has it. */
+function wire(
+	body: string,
+	init?: { status?: number; statusText?: string; headers?: [string, string][] },
+): { status: number; statusText: string; headers: [string, string][]; body: string } {
+	return {
+		status: init?.status ?? 200,
+		statusText: init?.statusText ?? '',
+		headers: init?.headers ?? [],
+		body,
+	};
 }
 
 describe('ApiError', () => {
@@ -57,21 +68,25 @@ describe('URL builders', () => {
 	});
 });
 
-describe('generated client error middleware', () => {
-	it('targets the loopback origin and sends Content-Type on every call', async () => {
+describe('generated client over the IPC transport', () => {
+	it('routes the call through the api_request command with method, path, and Content-Type', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({}));
+		invokeMock.mockResolvedValue(wire('{}'));
 		await client.GET('/api/settings');
 
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		const requestArg = fetchMock.mock.calls[0][0] as Request;
-		expect(requestArg.url).toBe('http://127.0.0.1:8421/api/settings');
-		expect(requestArg.headers.get('content-type')).toBe('application/json');
+		expect(invokeMock).toHaveBeenCalledTimes(1);
+		const [command, args] = invokeMock.mock.calls[0];
+		expect(command).toBe('api_request');
+		expect(args.request.method).toBe('GET');
+		expect(args.request.path).toBe('/api/settings');
+		expect(args.request.headers).toContainEqual(['content-type', 'application/json']);
 	});
 
 	it('prefers the FastAPI detail string on a non-2xx JSON body', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ detail: 'Settings unavailable' }, { status: 404 }));
+		invokeMock.mockResolvedValue(
+			wire(JSON.stringify({ detail: 'Settings unavailable' }), { status: 404 }),
+		);
 		await expect(client.GET('/api/settings')).rejects.toMatchObject({
 			name: 'ApiError',
 			status: 404,
@@ -81,7 +96,7 @@ describe('generated client error middleware', () => {
 
 	it('falls back to the raw body when detail is not a string', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ detail: 42 }, { status: 500 }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ detail: 42 }), { status: 500 }));
 		await expect(client.GET('/api/settings')).rejects.toMatchObject({
 			status: 500,
 			message: '{"detail":42}',
@@ -90,7 +105,7 @@ describe('generated client error middleware', () => {
 
 	it('falls back to the raw body when detail is blank', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ detail: '   ' }, { status: 400 }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ detail: '   ' }), { status: 400 }));
 		await expect(client.GET('/api/settings')).rejects.toMatchObject({
 			status: 400,
 			message: '{"detail":"   "}',
@@ -99,7 +114,7 @@ describe('generated client error middleware', () => {
 
 	it('uses a plain-text error body as the message', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(new Response('upstream down', { status: 503 }));
+		invokeMock.mockResolvedValue(wire('upstream down', { status: 503 }));
 		await expect(client.GET('/api/settings')).rejects.toMatchObject({
 			status: 503,
 			message: 'upstream down',
@@ -108,30 +123,16 @@ describe('generated client error middleware', () => {
 
 	it('falls back to statusText on an empty error body', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(new Response('', { status: 502, statusText: 'Bad Gateway' }));
+		invokeMock.mockResolvedValue(wire('', { status: 502, statusText: 'Bad Gateway' }));
 		await expect(client.GET('/api/settings')).rejects.toMatchObject({
 			status: 502,
 			message: 'Bad Gateway',
 		});
 	});
 
-	it('falls back to statusText when the body cannot be read', async () => {
-		const { client } = await loadModule();
-		fetchMock.mockResolvedValue({
-			ok: false,
-			status: 500,
-			statusText: 'Internal Server Error',
-			text: () => Promise.reject(new Error('stream aborted')),
-		});
-		await expect(client.GET('/api/settings')).rejects.toMatchObject({
-			status: 500,
-			message: 'Internal Server Error',
-		});
-	});
-
 	it('passes a 2xx response through untouched', async () => {
 		const { client } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ player_name: 'Mikel' }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ player_name: 'Mikel' })));
 		const { data } = await client.GET('/api/settings');
 		expect(data).toEqual({ player_name: 'Mikel' });
 	});
@@ -140,41 +141,46 @@ describe('generated client error middleware', () => {
 describe('unwrap', () => {
 	it('resolves to the payload as the declared type', async () => {
 		const { client, unwrap } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ player_name: 'Mikel' }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ player_name: 'Mikel' })));
 		const settings = await unwrap<{ player_name: string }>(client.GET('/api/settings'));
 		expect(settings).toEqual({ player_name: 'Mikel' });
 	});
 
 	it('propagates the middleware ApiError', async () => {
 		const { ApiError, client, unwrap } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ detail: 'nope' }, { status: 403 }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ detail: 'nope' }), { status: 403 }));
 		await expect(unwrap(client.GET('/api/settings'))).rejects.toBeInstanceOf(ApiError);
 	});
 });
 
 describe('legacy request()', () => {
-	it('fetches the api-prefixed path with a JSON Content-Type and returns the body', async () => {
+	it('routes the api-prefixed path through the command with a JSON Content-Type and returns the body', async () => {
 		const { request } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ ok: true })));
 		const result = await request<{ ok: boolean }>('/ping');
 
 		expect(result).toEqual({ ok: true });
-		expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8421/api/ping', {
-			headers: { 'Content-Type': 'application/json' },
-		});
+		const [command, args] = invokeMock.mock.calls[0];
+		expect(command).toBe('api_request');
+		expect(args.request.method).toBe('GET');
+		expect(args.request.path).toBe('/api/ping');
+		expect(args.request.headers).toContainEqual(['content-type', 'application/json']);
 	});
 
-	it('spreads caller options into the fetch init', async () => {
+	it('spreads caller options into the request', async () => {
 		const { request } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ ok: true })));
 		await request('/ping', { method: 'POST', body: '{}' });
 
-		expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', body: '{}' });
+		const args = invokeMock.mock.calls[0][1];
+		expect(args.request.method).toBe('POST');
+		expect(args.request.body).toBe('{}');
+		expect(args.request.path).toBe('/api/ping');
 	});
 
 	it('throws ApiError with the detail string on a non-2xx JSON body', async () => {
 		const { request } = await loadModule();
-		fetchMock.mockResolvedValue(jsonResponse({ detail: 'gone' }, { status: 410 }));
+		invokeMock.mockResolvedValue(wire(JSON.stringify({ detail: 'gone' }), { status: 410 }));
 		await expect(request('/ping')).rejects.toMatchObject({
 			name: 'ApiError',
 			status: 410,
@@ -184,27 +190,13 @@ describe('legacy request()', () => {
 
 	it('throws ApiError with the raw text on a non-JSON error body', async () => {
 		const { request } = await loadModule();
-		fetchMock.mockResolvedValue(new Response('boom', { status: 500 }));
+		invokeMock.mockResolvedValue(wire('boom', { status: 500 }));
 		await expect(request('/ping')).rejects.toMatchObject({ status: 500, message: 'boom' });
-	});
-
-	it('falls back to statusText when the error body cannot be read', async () => {
-		const { request } = await loadModule();
-		fetchMock.mockResolvedValue({
-			ok: false,
-			status: 500,
-			statusText: 'Internal Server Error',
-			text: () => Promise.reject(new Error('stream aborted')),
-		});
-		await expect(request('/ping')).rejects.toMatchObject({
-			status: 500,
-			message: 'Internal Server Error',
-		});
 	});
 
 	it('falls back to statusText on an empty error body', async () => {
 		const { request } = await loadModule();
-		fetchMock.mockResolvedValue(new Response('', { status: 502, statusText: 'Bad Gateway' }));
+		invokeMock.mockResolvedValue(wire('', { status: 502, statusText: 'Bad Gateway' }));
 		await expect(request('/ping')).rejects.toMatchObject({
 			status: 502,
 			message: 'Bad Gateway',

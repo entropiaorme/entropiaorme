@@ -596,6 +596,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// the Tauri command layer can return it without depending on axum/http types.
 pub struct InProcessResponse {
     pub status: u16,
+    /// The status line's canonical reason phrase, so the frontend's `Response`
+    /// keeps the `statusText` a loopback `fetch` would have carried (the error
+    /// contract falls back to it on an empty body).
+    pub status_text: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -633,6 +637,11 @@ pub async fn dispatch_in_process(
     };
 
     let status = response.status().as_u16();
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or_default()
+        .to_string();
     let headers = response
         .headers()
         .iter()
@@ -650,6 +659,7 @@ pub async fn dispatch_in_process(
 
     Ok(InProcessResponse {
         status,
+        status_text,
         headers,
         body,
     })

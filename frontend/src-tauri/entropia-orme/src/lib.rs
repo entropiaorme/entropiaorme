@@ -63,8 +63,10 @@ struct ApiRequest {
 /// The response the seam returns, mirroring an HTTP response so the frontend
 /// rebuilds a `Response` the existing openapi-fetch client consumes unchanged.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiResponse {
     status: u16,
+    status_text: String,
     headers: Vec<(String, String)>,
     body: String,
 }
@@ -92,6 +94,7 @@ async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiRe
     .await?;
     Ok(ApiResponse {
         status: response.status,
+        status_text: response.status_text,
         headers: response.headers,
         // The first slice carries JSON routes; the raw-bytes capture-PNG route
         // moves to its own base64-returning command in a later slice.

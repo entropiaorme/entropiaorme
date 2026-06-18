@@ -73,7 +73,12 @@ const throwApiError: Middleware = {
  * including bodyless GETs and POSTs, where openapi-fetch would otherwise
  * omit the header. No backend route reads it on a bodyless request, but
  * keeping the wire bytes identical costs one line. */
-type ApiResponseWire = { status: number; headers: [string, string][]; body: string };
+type ApiResponseWire = {
+	status: number;
+	statusText: string;
+	headers: [string, string][];
+	body: string;
+};
 
 /* The IPC transport that replaces the loopback HTTP hop. Every backend call
  * the openapi-fetch client (and the hand-rolled `request` below) makes is
@@ -102,6 +107,7 @@ export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): 
 	const nullBody = res.status === 204 || res.status === 304;
 	return new Response(nullBody ? null : res.body, {
 		status: res.status,
+		statusText: res.statusText,
 		headers: new Headers(res.headers),
 	});
 }

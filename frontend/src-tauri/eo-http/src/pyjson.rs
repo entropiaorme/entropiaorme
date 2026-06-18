@@ -82,6 +82,39 @@ impl PyValue {
             }
         }
     }
+
+    /// Convert to a `serde_json::Value` for a field carried verbatim into a
+    /// writer that re-normalises it (the settings PATCH carries `hotbar` and
+    /// `trifecta_presets` this way). Returns `None` for a value `serde_json`
+    /// cannot represent (a non-finite float, a beyond-`i64` integer, or a
+    /// lone-surrogate-tainted string); none of these can occur in the
+    /// carried container fields, so `None` means "reproduce the reference's
+    /// unrenderable-input reply" at the call site.
+    pub fn to_serde_value(&self) -> Option<serde_json::Value> {
+        use serde_json::Value;
+        Some(match self {
+            PyValue::Null => Value::Null,
+            PyValue::Bool(value) => Value::Bool(*value),
+            PyValue::Int(value) => Value::from(*value),
+            PyValue::BigInt(_) => return None,
+            PyValue::Float(value) => serde_json::Number::from_f64(*value).map(Value::Number)?,
+            PyValue::Str(value) => Value::String(value.clone()),
+            PyValue::TaintedStr { .. } => return None,
+            PyValue::List(items) => Value::Array(
+                items
+                    .iter()
+                    .map(PyValue::to_serde_value)
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            PyValue::Object(pairs) => {
+                let mut map = serde_json::Map::new();
+                for (key, value) in pairs {
+                    map.insert(key.clone(), value.to_serde_value()?);
+                }
+                Value::Object(map)
+            }
+        })
+    }
 }
 
 /// `repr`-faithful float rendering for echoes (the shared rule every

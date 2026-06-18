@@ -1,17 +1,14 @@
 //! HTTP substrate for the EntropiaOrme backend.
 //!
-//! The strangler-fig seam: an axum application that owns the public
-//! loopback address the frontend is wired to, serves natively-ported
-//! routes in-process, and reverse-proxies everything else (including the
-//! `/api/events` event stream) to the Python sidecar relocated onto a
-//! private port. A route flip is "register a native handler"; a source
-//! revert is "delete it"; and the runtime arm override ([`arms`]) steers
-//! any flipped route back to the live sidecar in an already-shipped build.
-//! The route-by-route takeover plan is documented in
+//! The single-binary in-process router: an axum application the frontend
+//! reaches through the `api_request` Tauri command (no socket), serving
+//! every backend route natively in-process. The Python sidecar and the
+//! reverse proxy were retired at the Phase-9 crossing, so there is no
+//! upstream and no per-route arm: a route is simply a registered native
+//! handler. The route map is documented in
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod analytics_routes;
-pub mod arms;
 pub mod body;
 pub mod character_routes;
 pub mod cors;
@@ -22,7 +19,6 @@ pub mod extract;
 pub mod hydration;
 pub mod native;
 pub mod producer_routes;
-pub mod proxy;
 pub mod pyjson;
 pub mod scan_routes;
 pub mod settings_routes;
@@ -35,28 +31,21 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State};
 use axum::response::Response;
-use axum::routing::{any, MethodFilter, MethodRouter};
+use axum::routing::{MethodFilter, MethodRouter};
 use axum::Router;
 
-use crate::arms::{Arm, ArmOverrides};
-use crate::proxy::ProxyClient;
-
-/// Shared router state: the pooled upstream client, the sidecar authority,
-/// the public-boundary Host allowlist, the hot-swappable arm-override map,
-/// and the composed native services. The native-service handles sit behind
-/// `RwLock`s so composition can install them after `serve` has already
-/// started: the substrate begins proxy-only and hot-upgrades to native the
-/// moment composition succeeds (see [`AppState::install_native`]). That is
-/// how a first launch after an upgrade recovers once the sidecar has
-/// migrated the database up to the adoptable baseline, without a restart.
+/// Shared router state: the public-boundary Host allowlist and the composed
+/// native services. The native-service handles sit behind `RwLock`s so the
+/// composition root can install them once the database has opened and the
+/// producer spine has stood up; the shell publishes this state to the
+/// `api_request` IPC command only after [`AppState::install_native`] has run,
+/// so by the time any request dispatches, every handle is present (see the
+/// shell's `compose_substrate`).
 pub struct AppState {
-    client: ProxyClient,
-    upstream: String,
     allowed_hosts: [String; 2],
-    overrides: RwLock<ArmOverrides>,
     hydration: RwLock<Option<Arc<crate::hydration::HydrationState>>>,
     tracker: RwLock<Option<Arc<eo_services::tracker::HuntTracker>>>,
-    sse_hub: RwLock<Option<Arc<eo_wire::sse::SseHub>>>,
+    chatlog_watcher: RwLock<Option<Arc<eo_services::chatlog_watcher::ChatlogWatcher>>>,
     config_service: RwLock<Option<Arc<Mutex<eo_services::config_service::ConfigService>>>>,
     skill_tracker: RwLock<Option<Arc<eo_services::skill_tracker::SkillTracker>>>,
     skill_scan: RwLock<Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>>,
@@ -88,7 +77,7 @@ pub struct AppState {
 pub struct NativeServices {
     pub hydration: Arc<crate::hydration::HydrationState>,
     pub tracker: Arc<eo_services::tracker::HuntTracker>,
-    pub sse_hub: Arc<eo_wire::sse::SseHub>,
+    pub chatlog_watcher: Arc<eo_services::chatlog_watcher::ChatlogWatcher>,
     pub config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
     pub skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
     pub skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
@@ -98,22 +87,20 @@ pub struct NativeServices {
 }
 
 impl AppState {
-    /// `upstream` is the sidecar's `host:port` authority; `public_port` is
-    /// the loopback port this router itself serves, from which the inbound
-    /// Host allowlist is derived (mirroring the backend's own guard, which
-    /// now sees only the rewritten private authority).
-    pub fn new(upstream: String, public_port: u16, overrides: ArmOverrides) -> Self {
+    /// `public_port` is the nominal loopback authority the inbound Host
+    /// allowlist is derived from, mirroring the backend's own origin guard.
+    /// An in-process IPC request carries no Host header (the guard admits
+    /// that, v0.1.0 parity), so the allowlist only bites a request that
+    /// presents an explicit Host, which the IPC transport never does.
+    pub fn new(public_port: u16) -> Self {
         Self {
-            client: proxy::build_client(),
-            upstream,
             allowed_hosts: [
                 format!("127.0.0.1:{public_port}"),
                 format!("localhost:{public_port}"),
             ],
-            overrides: RwLock::new(overrides),
             hydration: RwLock::new(None),
             tracker: RwLock::new(None),
-            sse_hub: RwLock::new(None),
+            chatlog_watcher: RwLock::new(None),
             config_service: RwLock::new(None),
             skill_tracker: RwLock::new(None),
             skill_scan: RwLock::new(None),
@@ -214,19 +201,26 @@ impl AppState {
         self.tracker.read().expect("tracker service lock").clone()
     }
 
-    /// Attach the live producer-spine SSE hub (the same `Arc<SseHub>` the
-    /// producer-bus bridge dispatches onto). Without it (a substrate built
-    /// before composition, or composition declined at startup) the
-    /// `/api/events` stream falls back to the proxy arm, exactly like the
-    /// read surface without [`with_hydration`].
-    pub fn with_sse_hub(mut self, sse_hub: Arc<eo_wire::sse::SseHub>) -> Self {
-        self.sse_hub = RwLock::new(Some(sse_hub));
+    /// Attach the live producer-spine chat-log watcher (the same
+    /// `Arc<ChatlogWatcher>` the producer spine holds). The settings-write
+    /// route restarts it when the watched `chatlog_path` changes (the watcher
+    /// captured its path at composition and does not re-read config live).
+    pub fn with_chatlog_watcher(
+        mut self,
+        chatlog_watcher: Arc<eo_services::chatlog_watcher::ChatlogWatcher>,
+    ) -> Self {
+        self.chatlog_watcher = RwLock::new(Some(chatlog_watcher));
         self
     }
 
-    /// The live producer-spine SSE hub, when composed.
-    pub(crate) fn sse_hub(&self) -> Option<Arc<eo_wire::sse::SseHub>> {
-        self.sse_hub.read().expect("sse hub service lock").clone()
+    /// The live producer-spine chat-log watcher, when composed.
+    pub(crate) fn chatlog_watcher(
+        &self,
+    ) -> Option<Arc<eo_services::chatlog_watcher::ChatlogWatcher>> {
+        self.chatlog_watcher
+            .read()
+            .expect("chatlog watcher service lock")
+            .clone()
     }
 
     /// Attach the settings writer (the same `Arc<Mutex<ConfigService>>` the
@@ -352,20 +346,19 @@ impl AppState {
             .clone()
     }
 
-    /// Install the composed native services after the substrate is already
-    /// serving. Composition runs in a background task off the startup path
-    /// (so the substrate answers proxy-only the instant it binds) and calls
-    /// this the moment it succeeds: each handle is written under its lock,
-    /// and the next request for a natively-registered route reads the
-    /// now-present service and runs its native arm instead of the proxy
-    /// fallback. A first launch that found the database below the adoptable
-    /// baseline (the sidecar had not yet migrated it) recovers here, without
-    /// a restart, the moment a retry of composition adopts the migrated
-    /// database.
+    /// Install the composed native services into the shared state. The
+    /// composition root calls this once, after the database has opened and
+    /// the producer spine has stood up, and the shell publishes the state to
+    /// the `api_request` IPC command only afterwards, so every handle is
+    /// present before the first request dispatches. Each handle is written
+    /// under its lock so the read accessors see the composed service.
     pub fn install_native(&self, services: NativeServices) {
         *self.hydration.write().expect("hydration service lock") = Some(services.hydration);
         *self.tracker.write().expect("tracker service lock") = Some(services.tracker);
-        *self.sse_hub.write().expect("sse hub service lock") = Some(services.sse_hub);
+        *self
+            .chatlog_watcher
+            .write()
+            .expect("chatlog watcher service lock") = Some(services.chatlog_watcher);
         *self.config_service.write().expect("config service lock") = Some(services.config_service);
         *self
             .skill_tracker
@@ -382,35 +375,33 @@ impl AppState {
             .write()
             .expect("hotbar listener service lock") = Some(services.hotbar_listener);
     }
-
-    pub fn upstream(&self) -> &str {
-        &self.upstream
-    }
-
-    /// The arm currently serving `route`.
-    pub fn arm_for(&self, route: &str) -> Arm {
-        self.overrides
-            .read()
-            .expect("arm override lock never poisoned")
-            .arm_for(route)
-    }
-
-    /// Replace the override map at runtime (a settings surface can swap
-    /// it without restarting the router).
-    pub fn set_overrides(&self, overrides: ArmOverrides) {
-        *self
-            .overrides
-            .write()
-            .expect("arm override lock never poisoned") = overrides;
-    }
-
-    pub(crate) async fn proxy(&self, req: Request) -> Response {
-        proxy::forward(&self.client, &self.upstream, req).await
-    }
 }
 
-async fn proxy_fallback(State(state): State<Arc<AppState>>, req: Request) -> Response {
-    state.proxy(req).await
+/// A 503 in the backend's `{"detail": ...}` rendering, returned by a native
+/// handler whose composed service is not yet present. The shell publishes the
+/// router only after composition installs every service, so this is a
+/// defensive floor (never reached on the normal startup path) rather than the
+/// retired proxy fallback: a request that somehow arrives mid-composition gets
+/// a clean, retryable 503 instead of a panic.
+pub(crate) fn service_unavailable() -> Response {
+    let body = serde_json::json!({ "detail": "backend services are initialising" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::SERVICE_UNAVAILABLE)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 503 response builds")
+}
+
+/// The framework 404 the router serves for an unmatched path, in the
+/// backend's `{"detail": "Not Found"}` rendering (the fallback that the
+/// reverse proxy used to occupy, now that nothing is forwarded upstream).
+async fn not_found() -> Response {
+    let body = serde_json::json!({ "detail": "Not Found" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::NOT_FOUND)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 404 response builds")
 }
 
 /// A 403 in the backend's `{"detail": ...}` rendering.
@@ -503,33 +494,42 @@ async fn cors_layer(
     response
 }
 
-/// A per-path registration whose every native method consults the arm
-/// override for `route` at request time (`Native` runs the handler,
-/// `Proxy` forwards to the sidecar), so the runtime kill-switch covers
-/// each registration by construction. Methods the registration does
-/// not carry still belong to the sidecar (an unported method on a
-/// natively-served path, the bare OPTIONS the backend answers itself):
-/// they fall back to the proxy rather than axum's empty 405. HEAD has
-/// its own explicit proxy leg because axum otherwise dispatches it
-/// into a GET handler with the body stripped, while the backend
-/// hard-405s HEAD on its GET routes.
+/// A 405 in the backend's `{"detail": ...}` rendering, returned for a method
+/// no native registration carries on a served path (the proxy used to forward
+/// these to the sidecar, which hard-405s an unported method).
+fn method_not_allowed() -> Response {
+    let body = serde_json::json!({ "detail": "Method Not Allowed" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::METHOD_NOT_ALLOWED)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 405 response builds")
+}
+
+/// A multi-method native registration. Each method runs its in-process
+/// handler; a method the registration does not carry gets the backend's
+/// `{"detail": "Method Not Allowed"}` 405 (set as the method fallback rather
+/// than axum's empty 405), and HEAD is bound to the same 405 explicitly so
+/// axum does not silently dispatch it into the GET handler with the body
+/// stripped (the backend hard-405s HEAD on its GET routes). A path no
+/// registration matches falls through to the router's framework 404.
+///
+/// The constructor still takes the route literal: the Phase-9 crossing
+/// retired the per-route proxy/native arm override this used to consult, so
+/// the path is no longer read here, but it is kept as the inline record of
+/// the registration's path (matching the adjacent `.route(...)` key) and the
+/// `arm_routed`/`at` names are retained so the route map in [`native`] reads
+/// unchanged. The leading underscore marks it deliberately unread.
 pub struct ArmRoutes {
-    route: &'static str,
     method_router: MethodRouter<Arc<AppState>>,
 }
 
 impl ArmRoutes {
-    pub fn at(route: &'static str) -> Self {
+    pub fn at(_route: &'static str) -> Self {
         Self {
-            route,
             method_router: MethodRouter::new()
-                .on(
-                    MethodFilter::HEAD,
-                    |State(state): State<Arc<AppState>>, req: Request| async move {
-                        state.proxy(req).await
-                    },
-                )
-                .fallback(proxy_fallback),
+                .on(MethodFilter::HEAD, || async { method_not_allowed() })
+                .fallback(|| async { method_not_allowed() }),
         }
     }
 
@@ -538,17 +538,11 @@ impl ArmRoutes {
         F: Fn(Arc<AppState>, Request) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        let route = self.route;
         self.method_router = self.method_router.on(
             filter,
             move |State(state): State<Arc<AppState>>, req: Request| {
                 let native = native.clone();
-                async move {
-                    match state.arm_for(route) {
-                        Arm::Native => native(state, req).await,
-                        Arm::Proxy => state.proxy(req).await,
-                    }
-                }
+                async move { native(state, req).await }
             },
         );
         self
@@ -602,13 +596,13 @@ async fn observe(req: Request, next: axum::middleware::Next) -> Response {
     response
 }
 
-/// The substrate router: natively-registered routes take precedence, the
-/// proxy fallback carries every other method and path to the sidecar, and
-/// the guard stack fronts both arms in the backend's own order (the
-/// observe layer outermost, then CORS, then the Host/origin guard).
+/// The in-process router: every backend route is a registered native
+/// handler, an unmatched path gets the backend's framework 404, and the
+/// guard stack fronts them in the backend's own order (the observe layer
+/// outermost, then CORS, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
-        .fallback(any(proxy_fallback))
+        .fallback(not_found)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             api_guard,
@@ -709,9 +703,8 @@ pub async fn dispatch_in_process(
     })
 }
 
-/// Native route registrations, in takeover order; each flip adds one
-/// `arm_routed` line (here or in [`native`]), and deleting a line is
-/// the source-level revert.
+/// Native route registrations. Each route is one `native_route` line (here
+/// or in [`native`]); the route map mirrors `PORT-READINESS.md`.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     let router = native::register(router.route(
         "/api/health",
@@ -759,18 +752,29 @@ pub async fn serve(listener: tokio::net::TcpListener, state: Arc<AppState>) -> s
 mod tests {
     use super::*;
 
-    #[test]
-    fn state_reports_its_upstream_authority_verbatim() {
-        let state = AppState::new("127.0.0.1:9421".into(), 8421, ArmOverrides::empty());
-        assert_eq!(state.upstream(), "127.0.0.1:9421");
-    }
+    /// An unmatched path gets the backend's framework 404 (the fallback the
+    /// retired reverse proxy used to occupy), not a proxy forward.
+    #[tokio::test]
+    async fn an_unmatched_path_is_the_framework_404() {
+        use axum::body::Body;
+        use tower::ServiceExt;
 
-    #[test]
-    fn state_arm_lookup_defaults_native_and_hot_swaps() {
-        let state = AppState::new("127.0.0.1:1".into(), 8421, ArmOverrides::empty());
-        assert_eq!(state.arm_for("/api/health"), Arm::Native);
-        state.set_overrides(ArmOverrides::parse_env_value("/api/health=proxy"));
-        assert_eq!(state.arm_for("/api/health"), Arm::Proxy);
+        let state = Arc::new(AppState::new(8421));
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/nonexistent")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body collects");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("404 body is JSON");
+        assert_eq!(value["detail"], "Not Found");
     }
 
     /// Driving a request through the built router records one HTTP-request
@@ -783,11 +787,7 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let state = Arc::new(AppState::new(
-            "127.0.0.1:1".into(),
-            8421,
-            ArmOverrides::empty(),
-        ));
+        let state = Arc::new(AppState::new(8421));
         let router = build_router(state);
 
         let before = eo_wire::metrics::metrics().snapshot().http_requests;
@@ -819,11 +819,7 @@ mod tests {
     /// path would be.
     #[tokio::test]
     async fn dispatch_in_process_routes_a_request_through_the_in_process_router() {
-        let state = Arc::new(AppState::new(
-            "127.0.0.1:1".into(),
-            8421,
-            ArmOverrides::empty(),
-        ));
+        let state = Arc::new(AppState::new(8421));
         let response = dispatch_in_process(state, "GET", "/api/health", &[], Vec::new())
             .await
             .expect("the in-process dispatch succeeds");
@@ -839,6 +835,29 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&response.body).expect("the health body is JSON");
         assert_eq!(body["status"], "ok");
+    }
+
+    /// The public-boundary Host guard still rejects a foreign Host. The IPC
+    /// transport never sends a Host header (the guard then admits the request,
+    /// v0.1.0 parity), but a request that presents a Host outside the loopback
+    /// allowlist is refused with the backend's 403, so the guard's coverage
+    /// survives the socket's removal.
+    #[tokio::test]
+    async fn the_host_guard_rejects_a_foreign_host_over_ipc() {
+        let state = Arc::new(AppState::new(8421));
+        let response = dispatch_in_process(
+            state,
+            "GET",
+            "/api/health",
+            &[("host".to_string(), "rebound.example:8421".to_string())],
+            Vec::new(),
+        )
+        .await
+        .expect("the dispatch succeeds");
+        assert_eq!(response.status, 403);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the 403 body is JSON");
+        assert_eq!(body["detail"], "Invalid Host header");
     }
 
     /// The transport's request construction (the IPC-descriptor -> http::Request

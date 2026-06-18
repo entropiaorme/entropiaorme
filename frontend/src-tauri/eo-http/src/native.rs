@@ -4,9 +4,10 @@
 //! Each adapter extracts its route's parameters through
 //! [`extract`](crate::extract) (reproducing the backend's validation
 //! envelopes), calls the corresponding handler, and returns its
-//! response. Adapters proxy to the sidecar when the native services are
-//! not composed (a substrate built without a database keeps serving
-//! every route through the proxy arm, exactly as before composition).
+//! response. The shell publishes the router only after composition has
+//! installed every service, so an adapter whose service is somehow absent
+//! returns a defensive [`service_unavailable`](crate::service_unavailable)
+//! 503 rather than the retired proxy fallback.
 
 use std::sync::Arc;
 
@@ -31,7 +32,7 @@ use crate::extract::{
 };
 use crate::hydration::{detail, error_response, internal_error};
 use crate::pyjson::PyValue;
-use crate::{arm_routed, AppState, ArmRoutes};
+use crate::{arm_routed, service_unavailable, AppState, ArmRoutes};
 
 /// `If-None-Match`, as the backend's middleware reads it (a non-UTF-8
 /// value reads as absent).
@@ -57,7 +58,7 @@ macro_rules! simple_get {
     ($fn_name:ident, $handler:ident) => {
         async fn $fn_name(state: Arc<AppState>, req: Request) -> Response<Body> {
             let Some(hydration) = state.hydration() else {
-                return state.proxy(req).await;
+                return service_unavailable();
             };
             let inm = if_none_match(&req);
             hydration.$handler(inm.as_deref()).await
@@ -78,7 +79,7 @@ simple_get!(codex_meta_attributes, codex_meta_attributes);
 /// decoded slash reproduces the backend's route-level 404.
 async fn codex_species_ranks(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let path = req.uri().path();
     let raw_name = path
@@ -99,7 +100,7 @@ async fn codex_species_ranks(state: Arc<AppState>, req: Request) -> Response<Bod
 /// 422 envelope.
 async fn codex_recommend(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -652,7 +653,7 @@ async fn standalone_body_value(req: Request) -> Result<body::BodyValue, Box<Resp
 /// POST /api/quests
 async fn quests_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -672,7 +673,7 @@ async fn quests_create(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// GET /api/quests/{quest_id}
 async fn quest_get(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let id = match path_id(quest_id_segment(req.uri().path(), ""), "quest_id") {
         PathId::Value(id) => id,
@@ -685,7 +686,7 @@ async fn quest_get(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// PUT /api/quests/{quest_id}
 async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let mut v = Validation::new();
     let path = match path_param(&mut v, quest_id_segment(req.uri().path(), ""), "quest_id") {
@@ -714,7 +715,7 @@ async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// DELETE /api/quests/{quest_id}
 async fn quest_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     match path_id(quest_id_segment(req.uri().path(), ""), "quest_id") {
         PathId::Value(id) => hydration.delete_quest(id).await,
@@ -725,7 +726,7 @@ async fn quest_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// POST /api/quests/{quest_id}/start | complete | cancel
 async fn quest_start(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     match path_id(quest_id_segment(req.uri().path(), "/start"), "quest_id") {
         PathId::Value(id) => hydration.start_quest(id).await,
@@ -735,7 +736,7 @@ async fn quest_start(state: Arc<AppState>, req: Request) -> Response<Body> {
 
 async fn quest_complete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     match path_id(quest_id_segment(req.uri().path(), "/complete"), "quest_id") {
         PathId::Value(id) => hydration.complete_quest(id).await,
@@ -745,7 +746,7 @@ async fn quest_complete(state: Arc<AppState>, req: Request) -> Response<Body> {
 
 async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let mut v = Validation::new();
     let path = match path_param(
@@ -778,7 +779,7 @@ async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// POST /api/quests/playlists
 async fn playlists_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -798,7 +799,7 @@ async fn playlists_create(state: Arc<AppState>, req: Request) -> Response<Body> 
 /// PUT /api/quests/playlists/{playlist_id}
 async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let mut v = Validation::new();
     let path = match path_param(&mut v, playlist_id_segment(req.uri().path()), "playlist_id") {
@@ -825,7 +826,7 @@ async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// DELETE /api/quests/playlists/{playlist_id}
 async fn playlist_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     match path_id(playlist_id_segment(req.uri().path()), "playlist_id") {
         PathId::Value(id) => hydration.delete_playlist(id).await,
@@ -836,7 +837,7 @@ async fn playlist_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// POST /api/codex/calibrate
 async fn codex_calibrate(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -908,7 +909,7 @@ async fn codex_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker), Some(skill_tracker)) =
         (state.hydration(), state.tracker(), state.skill_tracker())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -953,7 +954,7 @@ async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> 
     let (Some(hydration), Some(tracker), Some(skill_tracker)) =
         (state.hydration(), state.tracker(), state.skill_tracker())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -989,7 +990,7 @@ async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> 
 /// GET /api/scan/skills/status
 async fn scan_skills_status(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let inm = if_none_match(&req);
     crate::scan_routes::status(&scan, inm.as_deref())
@@ -1000,7 +1001,7 @@ async fn scan_skills_status(state: Arc<AppState>, req: Request) -> Response<Body
 /// service's 1..=30) rides the plain-200 body.
 async fn scan_skills_start(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -1012,49 +1013,49 @@ async fn scan_skills_start(state: Arc<AppState>, req: Request) -> Response<Body>
 }
 
 /// POST /api/scan/skills/capture
-async fn scan_skills_capture(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_capture(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::capture(&scan)
 }
 
 /// POST /api/scan/skills/cancel
-async fn scan_skills_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_cancel(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::cancel(&scan)
 }
 
 /// POST /api/scan/skills/undo
-async fn scan_skills_undo(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_undo(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::undo(&scan)
 }
 
 /// POST /api/scan/skills/process
-async fn scan_skills_process(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_process(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::process(&scan)
 }
 
 /// POST /api/scan/skills/accept
-async fn scan_skills_accept(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_accept(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::accept(&scan)
 }
 
 /// POST /api/scan/skills/reject
-async fn scan_skills_reject(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn scan_skills_reject(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     crate::scan_routes::reject(&scan)
 }
@@ -1062,7 +1063,7 @@ async fn scan_skills_reject(state: Arc<AppState>, req: Request) -> Response<Body
 /// GET /api/scan/skills/pending
 async fn scan_skills_pending(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let inm = if_none_match(&req);
     crate::scan_routes::pending(&scan, inm.as_deref())
@@ -1075,7 +1076,7 @@ async fn scan_skills_pending(state: Arc<AppState>, req: Request) -> Response<Bod
 /// as the reference's unbounded `int` indexes out of range to None).
 async fn scan_skills_capture_png(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(scan) = state.skill_scan() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1106,7 +1107,7 @@ async fn scan_skills_capture_png(state: Arc<AppState>, req: Request) -> Response
 /// `repair_ocr_enabled` config flag (400 when off).
 async fn tracking_repair_scan(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(repair), Some(config)) = (state.repair_ocr(), state.config_service()) else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     if let Err(reply) = string_path_id(session_id_segment(req.uri().path(), "/repair-scan")) {
         return *reply;
@@ -1125,7 +1126,7 @@ async fn tracking_repair_scan(state: Arc<AppState>, req: Request) -> Response<Bo
 /// backend's 422 bool_parsing, absent is its 422 missing.
 async fn scan_spacebar_capture(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(listener) = state.spacebar_listener() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -1138,10 +1139,13 @@ async fn scan_spacebar_capture(state: Arc<AppState>, req: Request) -> Response<B
 
 // ── Settings adapters ───────────────────────────────────────────────
 //
-// The reads serve natively; the overlay-position write serves natively
-// too (it has no producer side effects). PATCH /settings + POST
-// /settings/reset stay proxied until the input-listener composition
-// (they signal the hotbar listener), falling to each path's proxy arm.
+// The whole settings surface serves natively: the reads, the
+// overlay-position write, and (at the Phase-9 crossing) the monolithic
+// PATCH and the reset. The write adapters parse the body here and delegate
+// to the producer-spine handlers (`HydrationState::settings_update` /
+// `settings_reset` in `producer_routes`), which write through the single
+// native `ConfigService` and signal the live producers (watcher, hotbar
+// gate, tracker reload). With the sidecar gone there is no second writer.
 
 simple_get!(settings_get, settings);
 simple_get!(overlay_position_get, overlay_position);
@@ -1150,7 +1154,7 @@ simple_get!(overlay_position_get, overlay_position);
 /// coordinate is the backend's 422 int_parsing.
 async fn overlay_position_set(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(hydration), Some(config)) = (state.hydration(), state.config_service()) else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -1192,6 +1196,130 @@ fn body_int_or_max(value: BodyInt) -> i64 {
     }
 }
 
+/// `SettingsPatch.model_dump(exclude_unset=True)`: only the fields present in
+/// the body land in the map, validated in MODEL DECLARATION ORDER (the 422
+/// envelope lists issues in that order). The typed scalars and
+/// `loot_filter_blacklist` validate to the backend's 422 on a type mismatch;
+/// `hotbar` (`dict[str, int | None]`) and `trifecta_presets` (`list[dict]`)
+/// carry their raw value through to the `ConfigService` writer, which
+/// re-normalises them (a structurally-malformed container is coerced there
+/// rather than 422'd: the one fidelity gap vs the pydantic model, unreachable
+/// from the typed frontend; a value `serde_json` cannot represent is the
+/// reference's unrenderable-input 500).
+fn settings_patch_dump(v: &mut Validation, object: &BodyObject) -> Built<Value> {
+    enum Kind {
+        Str,
+        Bool,
+        StrList,
+        Raw,
+    }
+    const FIELDS: [(&str, Kind); 12] = [
+        ("chatlog_path", Kind::Str),
+        ("player_name", Kind::Str),
+        ("hotbar_hooks_enabled", Kind::Bool),
+        ("repair_ocr_enabled", Kind::Bool),
+        ("end_of_session_armour_reminder_enabled", Kind::Bool),
+        ("developer_mode_enabled", Kind::Bool),
+        ("mob_tracking_mode", Kind::Str),
+        ("mob_tracking_tag", Kind::Str),
+        ("hotbar", Kind::Raw),
+        ("active_trifecta_preset_id", Kind::Str),
+        ("trifecta_presets", Kind::Raw),
+        ("loot_filter_blacklist", Kind::StrList),
+    ];
+    let mut dump = Map::new();
+    let mut unrenderable = false;
+    for (field, kind) in FIELDS {
+        let Some(present) = object.get(field) else {
+            continue;
+        };
+        match kind {
+            Kind::Str => {
+                if let Some(value) = opt_str(v, object, field) {
+                    dump.insert(field.to_string(), str_value(value));
+                }
+            }
+            Kind::Bool => {
+                if let Some(value) = body::opt_bool(v, object, field) {
+                    dump.insert(
+                        field.to_string(),
+                        value.map(Value::Bool).unwrap_or(Value::Null),
+                    );
+                }
+            }
+            Kind::StrList => {
+                if let Some(value) = opt_list_of_str(v, object, field) {
+                    dump.insert(
+                        field.to_string(),
+                        value.map(|items| json!(items)).unwrap_or(Value::Null),
+                    );
+                }
+            }
+            Kind::Raw => match present.to_serde_value() {
+                Some(value) => {
+                    dump.insert(field.to_string(), value);
+                }
+                None => unrenderable = true,
+            },
+        }
+    }
+    if !v.is_ok() {
+        return Built::Invalid;
+    }
+    if v.binding_taint() || unrenderable {
+        return Built::Deferred500;
+    }
+    Built::Value(Value::Object(dump))
+}
+
+/// PATCH /api/settings: parse the SettingsPatch body, then delegate the write
+/// + producer-signalling to the producer-spine handler.
+async fn settings_update(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config), Some(tracker), Some(hotbar), Some(watcher)) = (
+        state.hydration(),
+        state.config_service(),
+        state.tracker(),
+        state.hotbar_listener(),
+        state.chatlog_watcher(),
+    ) else {
+        return service_unavailable();
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    match settings_patch_dump(&mut v, &object) {
+        Built::Invalid => v.into_response(),
+        Built::Deferred500 => internal_server_error(),
+        Built::Value(Value::Object(dump)) => {
+            hydration
+                .settings_update(&config, &tracker, &hotbar, &watcher, dump)
+                .await
+        }
+        Built::Value(_) => internal_server_error(),
+    }
+}
+
+/// POST /api/settings/reset: restore defaults and re-signal every producer.
+async fn settings_reset(state: Arc<AppState>, _req: Request) -> Response<Body> {
+    let (Some(hydration), Some(config), Some(tracker), Some(hotbar), Some(watcher)) = (
+        state.hydration(),
+        state.config_service(),
+        state.tracker(),
+        state.hotbar_listener(),
+        state.chatlog_watcher(),
+    ) else {
+        return service_unavailable();
+    };
+    hydration
+        .settings_reset(&config, &tracker, &hotbar, &watcher)
+        .await
+}
+
 // ── Character adapters ──────────────────────────────────────────────
 
 simple_get!(character_calibration, character_calibration);
@@ -1211,7 +1339,7 @@ simple_get!(analytics_activity, analytics_activity);
 /// `dict.get` miss), so no validation envelope applies.
 async fn analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let period = query.last("period").unwrap_or("all").to_string();
@@ -1228,7 +1356,7 @@ simple_get!(tracking_sessions, tracking_sessions);
 /// the handler, exactly as the codex-ranks adapter handles it).
 async fn tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1256,44 +1384,44 @@ async fn tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> 
 
 async fn demo_analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let period = query.last("period").unwrap_or("all").to_string();
     demo.analytics_overview(&period).await
 }
 
-async fn demo_analytics_activity(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_analytics_activity(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.analytics_activity().await
 }
 
-async fn demo_analytics_ledger(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_analytics_ledger(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.list_ledger().await
 }
 
-async fn demo_analytics_ledger_presets(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_analytics_ledger_presets(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.list_ledger_presets().await
 }
 
-async fn demo_analytics_inventory(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_analytics_inventory(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.list_inventory().await
 }
 
-async fn demo_tracking_sessions(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_tracking_sessions(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.list_sessions().await
 }
@@ -1302,7 +1430,7 @@ async fn demo_tracking_sessions(state: Arc<AppState>, req: Request) -> Response<
 /// route, decoded exactly as the live [`tracking_session`] adapter.
 async fn demo_tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1316,9 +1444,9 @@ async fn demo_tracking_session(state: Arc<AppState>, req: Request) -> Response<B
     demo.get_session(&session_id).await
 }
 
-async fn demo_tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn demo_tracking_snapshot(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(demo) = crate::demo::ensure_demo(&state).await else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     demo.tracking_snapshot().await
 }
@@ -1328,7 +1456,7 @@ async fn demo_tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<
 /// the handler). An unparseable `limit` is the backend's 422 int_parsing.
 async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let q = query.last("q").unwrap_or("").to_string();
@@ -1354,17 +1482,17 @@ async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Respons
 // `with_hydration`.
 
 /// POST /api/tracking/start
-async fn tracking_start(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn tracking_start(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.tracking_start(&tracker).await
 }
 
 /// POST /api/tracking/stop
-async fn tracking_stop(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn tracking_stop(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.tracking_stop(&tracker).await
 }
@@ -1375,7 +1503,7 @@ async fn tracking_stop(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// is the backend's 422 int_parsing.
 async fn tracking_manual_mob_suggestions(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker)) = (state.hydration(), state.tracker()) else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let q = query.last("q").unwrap_or("").to_string();
@@ -1391,11 +1519,11 @@ async fn tracking_manual_mob_suggestions(state: Arc<AppState>, req: Request) -> 
 }
 
 /// POST /api/tracking/release-mob: clear the locked mob or tag (empty body).
-async fn tracking_release_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn tracking_release_mob(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let (Some(hydration), Some(config), Some(tracker)) =
         (state.hydration(), state.config_service(), state.tracker())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.release_mob(&config, &tracker).await
 }
@@ -1405,7 +1533,7 @@ async fn tracking_manual_mob_lock(state: Arc<AppState>, req: Request) -> Respons
     let (Some(hydration), Some(config), Some(tracker)) =
         (state.hydration(), state.config_service(), state.tracker())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -1435,7 +1563,7 @@ async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body>
     let (Some(hydration), Some(config), Some(tracker)) =
         (state.hydration(), state.config_service(), state.tracker())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let (content_type, bytes) = match body_parts(req).await {
         Ok(parts) => parts,
@@ -1466,29 +1594,12 @@ async fn tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body>
     let (Some(hydration), Some(tracker), Some(hotbar)) =
         (state.hydration(), state.tracker(), state.hotbar_listener())
     else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let inm = if_none_match(&req);
     hydration
         .tracking_snapshot(&tracker, &hotbar, inm.as_deref())
         .await
-}
-
-// ── SSE event stream (producer-bus fan-out) ────────────────────────────
-//
-// `GET /api/events` is a long-lived `text/event-stream`. The native arm
-// serves it from the composed SSE hub (the producer-bus bridge forwards the
-// frontend-facing domain topics onto it); without a composed hub it proxies
-// to the sidecar, which streams the same contract. The route sits outside
-// the ETag hydration prefixes (an unbounded stream cannot be body-hashed)
-// and is OpenAPI-excluded, exactly as the sidecar's is.
-
-/// GET /api/events
-async fn events_stream(state: Arc<AppState>, req: Request) -> Response<Body> {
-    match state.sse_hub() {
-        Some(hub) => crate::sse::event_stream_response(hub),
-        None => state.proxy(req).await,
-    }
 }
 
 // ── Tracking session-edit write adapters ──────────────────────────────
@@ -1505,7 +1616,7 @@ fn session_id_segment<'p>(path: &'p str, suffix: &str) -> &'p str {
 /// POST /api/tracking/session/{session_id}/rename-mob
 async fn tracking_rename_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let session_id = match string_path_id(session_id_segment(req.uri().path(), "/rename-mob")) {
         Ok(id) => id,
@@ -1540,7 +1651,7 @@ async fn tracking_rename_mob(state: Arc<AppState>, req: Request) -> Response<Bod
 /// POST /api/tracking/session/{session_id}/restore-mob
 async fn tracking_restore_mob(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let session_id = match string_path_id(session_id_segment(req.uri().path(), "/restore-mob")) {
         Ok(id) => id,
@@ -1595,7 +1706,7 @@ fn loot_flip_segments(path: &str, suffix: &str) -> Option<(String, String)> {
 /// is the framework 404 (no FastAPI route would have matched it either).
 async fn tracking_loot_item_flip(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let path = req.uri().path();
     if let Some((session_id, item_name)) = loot_flip_segments(path, "/deactivate") {
@@ -1614,7 +1725,7 @@ async fn tracking_loot_item_flip(state: Arc<AppState>, req: Request) -> Response
 /// POST /api/tracking/session/{session_id}/armour-cost
 async fn tracking_armour_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let session_id = match string_path_id(session_id_segment(req.uri().path(), "/armour-cost")) {
         Ok(id) => id,
@@ -1646,7 +1757,7 @@ async fn tracking_armour_cost(state: Arc<AppState>, req: Request) -> Response<Bo
 /// 404), exactly as the other single-segment session routes.
 async fn tracking_quest_link_suggestion(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let session_id = match string_path_id(session_id_segment(
         req.uri().path(),
@@ -1667,7 +1778,7 @@ async fn tracking_quest_link_suggestion(state: Arc<AppState>, req: Request) -> R
 /// missing action is the 422 the framework raises before the handler's 404.
 async fn tracking_quest_link_decide(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let session_id = match string_path_id(session_id_segment(req.uri().path(), "/quest-link")) {
         Ok(id) => id,
@@ -1705,16 +1816,16 @@ fn string_path_id(raw_segment: &str) -> Result<String, Box<Response<Body>>> {
     Ok(decoded)
 }
 
-async fn ledger_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn ledger_list(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.list_ledger().await
 }
 
 async fn ledger_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -1748,7 +1859,7 @@ async fn ledger_create(state: Arc<AppState>, req: Request) -> Response<Body> {
 
 async fn ledger_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1762,16 +1873,16 @@ async fn ledger_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     hydration.delete_ledger_entry(&id).await
 }
 
-async fn presets_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn presets_list(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.list_ledger_presets().await
 }
 
 async fn presets_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -1805,7 +1916,7 @@ async fn presets_create(state: Arc<AppState>, req: Request) -> Response<Body> {
 
 async fn preset_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1819,16 +1930,16 @@ async fn preset_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     hydration.delete_ledger_preset(&id).await
 }
 
-async fn inventory_list(state: Arc<AppState>, req: Request) -> Response<Body> {
+async fn inventory_list(state: Arc<AppState>, _req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     hydration.list_inventory().await
 }
 
 async fn inventory_create(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -1864,7 +1975,7 @@ async fn inventory_create(state: Arc<AppState>, req: Request) -> Response<Body> 
 
 async fn inventory_patch(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1912,7 +2023,7 @@ async fn inventory_patch(state: Arc<AppState>, req: Request) -> Response<Body> {
 
 async fn inventory_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1928,7 +2039,7 @@ async fn inventory_delete(state: Arc<AppState>, req: Request) -> Response<Body> 
 
 async fn inventory_sell(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let raw = req
         .uri()
@@ -1974,7 +2085,7 @@ async fn inventory_sell(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// in code order.
 async fn character_prospect(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -2031,7 +2142,7 @@ async fn character_prospect(state: Arc<AppState>, req: Request) -> Response<Body
 /// GET /api/character/profession-optimizer.
 async fn character_profession_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -2049,7 +2160,7 @@ async fn character_profession_optimizer(state: Arc<AppState>, req: Request) -> R
 /// target_level / ped_budget after the envelope validation.
 async fn character_path_optimizer(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let mut validation = Validation::new();
@@ -2083,7 +2194,7 @@ simple_get!(equipment_library, equipment_library);
 /// GET /api/equipment/search.
 async fn equipment_search(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let query = QueryString::parse(req.uri().query());
     let q = query.last("q").unwrap_or("").to_string();
@@ -2229,7 +2340,7 @@ fn equipment_int(value: BodyInt) -> Option<i64> {
 /// POST /api/equipment/library.
 async fn equipment_add(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -2249,7 +2360,7 @@ async fn equipment_add(state: Arc<AppState>, req: Request) -> Response<Body> {
 /// PUT /api/equipment/library/{item_id}.
 async fn equipment_update(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let mut v = Validation::new();
     let path = match path_param(
@@ -2280,7 +2391,7 @@ async fn equipment_update(state: Arc<AppState>, req: Request) -> Response<Body> 
 /// DELETE /api/equipment/library/{item_id}.
 async fn equipment_delete(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let id = match path_id(equipment_id_segment(req.uri().path(), ""), "item_id") {
         PathId::Value(id) => id,
@@ -2292,7 +2403,7 @@ async fn equipment_delete(state: Arc<AppState>, req: Request) -> Response<Body> 
 /// GET /api/equipment/library/{item_id}/detail.
 async fn equipment_detail(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let id = match path_id(equipment_id_segment(req.uri().path(), "/detail"), "item_id") {
         PathId::Value(id) => id,
@@ -2305,7 +2416,7 @@ async fn equipment_detail(state: Arc<AppState>, req: Request) -> Response<Body> 
 /// POST /api/equipment/cost/calculate.
 async fn equipment_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
     let Some(hydration) = state.hydration() else {
-        return state.proxy(req).await;
+        return service_unavailable();
     };
     let body_value = match standalone_body_value(req).await {
         Ok(value) => value,
@@ -2789,7 +2900,14 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/settings",
-            arm_routed(MethodFilter::GET, "/api/settings", settings_get),
+            ArmRoutes::at("/api/settings")
+                .on(MethodFilter::GET, settings_get)
+                .on(MethodFilter::PATCH, settings_update)
+                .into_method_router(),
+        )
+        .route(
+            "/api/settings/reset",
+            arm_routed(MethodFilter::POST, "/api/settings/reset", settings_reset),
         )
         .route(
             "/api/settings/overlay-position",
@@ -2899,9 +3017,5 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 "/api/equipment/cost/calculate",
                 equipment_cost,
             ),
-        )
-        .route(
-            "/api/events",
-            arm_routed(MethodFilter::GET, "/api/events", events_stream),
         )
 }

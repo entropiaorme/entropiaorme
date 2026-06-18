@@ -276,7 +276,11 @@ fn init_ort_runtime(resource_dir: Option<&PathBuf>) {
 /// the watcher owns is torn down deterministically rather than left to
 /// process-exit teardown.
 pub struct ProducerState {
-    watcher: ChatlogWatcher,
+    // The chat-log watcher (tailing in its own thread). Held as an `Arc` so a
+    // clone reaches the HTTP layer: the settings-write route restarts it when
+    // the watched `chatlog_path` changes. The exit seam still stops it via
+    // [`ProducerState::stop`]; `restart`/`stop` take `&self`, so sharing is safe.
+    watcher: Arc<ChatlogWatcher>,
     tracker: Arc<HuntTracker>,
     // The SSE fan-out hub. The bus bridge (subscribed below) holds clones
     // of this through its subscriber closures, and the HTTP `/api/events`
@@ -333,7 +337,15 @@ impl ProducerState {
     /// The composed watcher, for tests driving a replay through it.
     #[cfg(test)]
     pub fn watcher(&self) -> &ChatlogWatcher {
-        &self.watcher
+        self.watcher.as_ref()
+    }
+
+    /// A handle to the composed chat-log watcher. The settings-write route
+    /// restarts it on a `chatlog_path` change; cloned into the app state at
+    /// the composition handoff so the route side and the producer-spine side
+    /// share one watcher.
+    pub fn watcher_handle(&self) -> Arc<ChatlogWatcher> {
+        self.watcher.clone()
     }
 
     /// The composed tracker, for tests asserting its readout.
@@ -433,28 +445,27 @@ pub struct Composed {
     pub spacebar_listener: Arc<SpacebarCaptureListener>,
 }
 
-/// The outcome of a composition attempt at the substrate's startup, which
-/// the orchestration acts on: install the services, retry shortly, or stay
-/// proxy-only for the session.
+/// The outcome of a composition attempt at the substrate's startup: the
+/// native services are built and ready to install, or composition declined
+/// with a logged reason. With the Python sidecar decommissioned at the
+/// Phase-9 crossing there is no proxy fallback and nothing to migrate an
+/// existing database forward, so a decline is terminal for the session (the
+/// backend cannot serve); there is no longer an interim "awaiting migration"
+/// state to retry.
 pub enum Composition {
     /// The native services are built and ready to install.
     Ready(Composed),
-    /// The existing database is below the adoptable baseline: the sidecar
-    /// has not finished migrating it forward yet (the first launch after an
-    /// upgrade). Retrying composition once it has will adopt it, so the
-    /// caller waits briefly and tries again rather than standing down.
-    AwaitingMigration,
-    /// A permanent decline (a missing/empty snapshot, a producer fault, or a
-    /// database fault unrelated to the migration race). The substrate stays
-    /// proxy-only for the rest of the session; retrying would not help.
+    /// A terminal decline (a missing/empty snapshot, a producer fault, or a
+    /// database that cannot be opened or adopted — including one whose schema
+    /// predates the supported baseline, which the retired sidecar used to
+    /// migrate forward). Logged loudly; the backend does not come up.
     Declined,
 }
 
-/// Compose the native services, or decline with a logged reason.
-/// Declining is always safe: the substrate then proxies every route to
-/// the sidecar. The ONNX Runtime dylib is pinned (once) before any
-/// composition step, so the engine constructed inside `compose_with`
-/// binds the bundled runtime, not a stray one off `PATH`.
+/// Compose the native services, or decline with a logged reason. The ONNX
+/// Runtime dylib is pinned (once) before any composition step, so the engine
+/// constructed inside `compose_with` binds the bundled runtime, not a stray
+/// one off `PATH`.
 pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     init_ort_runtime(resource_dir.as_ref());
     compose_with(
@@ -483,17 +494,23 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     let db = match Db::open_adopted(&db_path).await {
         Ok(db) => db,
         Err(err) if err.is_below_baseline() => {
-            // The existing database is still at the pre-upgrade schema: the
-            // sidecar has not finished migrating it up to the baseline this
-            // substrate adopts at. This is the first-launch-after-upgrade
-            // race, not a fault, so stand down only for now and let the
-            // caller retry once the sidecar has migrated it forward.
-            return Composition::AwaitingMigration;
+            // The existing database predates the supported baseline. The
+            // retired Python sidecar used to migrate it forward before the
+            // native arm adopted it; with the sidecar gone there is nothing
+            // to do so, so this is now a terminal decline rather than a
+            // first-launch-after-upgrade race. (Porting the pre-baseline
+            // upgrade chain natively is the separable v0.2.0-public obligation;
+            // the maintainer's dogfood database is already at the baseline.)
+            tracing::error!(
+                target: "eo::composition",
+                "{err}; the backend cannot serve until the database is at the supported baseline \
+                 (native pre-baseline migration is a future release)"
+            );
+            return Composition::Declined;
         }
         Err(err @ AdoptError::Quarantined { .. }) => {
             // An existing database we cannot adopt (for any other reason) is
-            // surfaced loudly and left untouched; the sidecar (whose own
-            // migration logic governs it as before) keeps serving.
+            // surfaced loudly and left untouched for diagnosis.
             tracing::error!(target: "eo::composition", "{err}");
             return Composition::Declined;
         }
@@ -861,7 +878,11 @@ fn compose_producers(
 
     let watched_chatlog = chatlog_override.unwrap_or_else(|| PathBuf::from(&config.chatlog_path));
     let quest_reward_filter = quest_reward_filter_adapter(quests.clone(), runtime.clone());
-    let watcher = ChatlogWatcher::new(bus.clone(), watched_chatlog, Some(quest_reward_filter));
+    let watcher = Arc::new(ChatlogWatcher::new(
+        bus.clone(),
+        watched_chatlog,
+        Some(quest_reward_filter),
+    ));
 
     let skill_tracker = SkillTracker::new(&bus, db.pool().clone(), runtime.clone(), clock.clone());
 

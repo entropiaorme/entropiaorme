@@ -161,7 +161,7 @@ impl HydrationState {
 /// backslash (a forward-slash env override still reads back in the
 /// native form, as the sidecar's `pathlib` normalisation does); other
 /// platforms keep the path as built.
-fn python_path_str(path: &Path) -> String {
+pub(crate) fn python_path_str(path: &Path) -> String {
     #[cfg(windows)]
     {
         use std::path::Component;

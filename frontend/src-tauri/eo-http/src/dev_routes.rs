@@ -111,7 +111,6 @@ fn json_response(status: http::StatusCode, body: String) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use crate::arms::ArmOverrides;
     use crate::{build_router, AppState};
     use axum::body::Body;
     use axum::extract::Request;
@@ -125,10 +124,7 @@ mod tests {
             format!(r#"{{"developer_mode_enabled":{enabled}}}"#),
         )
         .unwrap();
-        Arc::new(
-            AppState::new("127.0.0.1:1".into(), 8421, ArmOverrides::empty())
-                .with_data_dir(dir.to_path_buf()),
-        )
+        Arc::new(AppState::new(8421).with_data_dir(dir.to_path_buf()))
     }
 
     #[tokio::test]

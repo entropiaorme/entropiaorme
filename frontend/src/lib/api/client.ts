@@ -38,12 +38,14 @@ export class ApiError extends Error {
 	}
 }
 
-/** Direct URL for the manual-scan capture preview PNG. Consumed as an `<img>`
- * `src`, not fetched as JSON, so it stays a hand-built URL outside the
- * generated client (the route is deliberately excluded from the OpenAPI
- * schema: it returns raw image bytes). */
-export function manualSkillScanCapturePngUrl(page: number): string {
-	return `${API_BASE}/scan/skills/capture/${page}`;
+/** The manual-scan capture preview PNG for a page, as a base64 `data:` URL for
+ * an `<img>` `src`. The route returns raw image bytes (deliberately excluded
+ * from the OpenAPI schema), so it rides its own `capture_png` command rather
+ * than the JSON `api_request` envelope, dispatched through the same in-process
+ * router (no socket). */
+export async function manualSkillScanCapturePng(page: number): Promise<string> {
+	const encoded = await invoke<string>('capture_png', { page });
+	return `data:image/png;base64,${encoded}`;
 }
 
 /* Turns every non-2xx response into a thrown ApiError before openapi-fetch
@@ -86,10 +88,10 @@ type ApiResponseWire = {
  * in-process axum router with no socket. It is a drop-in for the global
  * `fetch` the client used: same Request in, same Response out, so the call
  * sites, the generated `paths` types, the error middleware, and `unwrap` are
- * all unchanged. (The `/api/events` SSE stream keeps its EventSource until the
- * SSE-to-Tauri-event slice; the capture-PNG `<img>` src likewise stays direct
- * until its own base64 slice. Both rely on the loopback listener, which is
- * removed only once every request route is on this transport.) */
+ * all unchanged. No frontend traffic remains on the loopback origin: the
+ * `/api/events` stream now rides native Tauri events, and the capture-PNG
+ * `<img>` src its own `capture_png` command. The loopback listener is removed
+ * once the socket has no remaining web tenant. */
 export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 	const req = input instanceof Request ? input : new Request(input, init);
 	const url = new URL(req.url);

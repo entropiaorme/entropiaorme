@@ -102,6 +102,29 @@ async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiRe
     })
 }
 
+/// GET the manual-scan capture preview PNG for `page`, base64-encoded for an
+/// `<img>` `data:` URL. The route returns raw image bytes and is excluded from
+/// the JSON IPC envelope (`api_request` carries text bodies), so it rides its
+/// own command, dispatched through the same in-process router (no socket).
+#[tauri::command]
+async fn capture_png(app: tauri::AppHandle, page: u32) -> Result<String, String> {
+    use base64::Engine as _;
+    let state = app
+        .try_state::<ApiSubstrate>()
+        .ok_or("backend substrate not ready")?
+        .0
+        .clone();
+    let path = format!("/api/scan/skills/capture/{page}");
+    let response = eo_http::dispatch_in_process(state, "GET", &path, &[], Vec::new()).await?;
+    if response.status != 200 {
+        return Err(format!(
+            "capture preview unavailable (status {})",
+            response.status
+        ));
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(&response.body))
+}
+
 // Holds the spawned Python backend so we can terminate it on app exit.
 // Default Windows process semantics leave the child running when the
 // parent exits; without this kill on RunEvent::Exit the sidecar would
@@ -180,7 +203,8 @@ pub fn run() {
             toggle_overlay,
             show_scan_overlay,
             hide_scan_overlay,
-            api_request
+            api_request,
+            capture_png
         ])
         .setup(|app| {
             // Both uses of `app` compile out on a non-Windows debug build

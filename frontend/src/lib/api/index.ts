@@ -11,7 +11,7 @@
  * unchanged from its hand-rolled predecessor.
  */
 
-export { ApiError, EVENTS_STREAM_URL, manualSkillScanCapturePngUrl, request } from './client';
+export { ApiError, EVENTS_STREAM_URL, manualSkillScanCapturePng, request } from './client';
 
 import { guideState } from '$lib/guide/state.svelte';
 import type { NotableEventCategory, NotableEventType } from '$lib/types/common';

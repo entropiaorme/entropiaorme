@@ -185,6 +185,10 @@ pub fn run() {
     resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()
+        // The shell plugin stays for its `open` API (external links route to
+        // the OS browser via `$lib/utils/openExternal`); the sidecar/execute
+        // usage was removed with the Python backend at the Phase-9 crossing.
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,

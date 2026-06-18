@@ -17,16 +17,6 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "store:default",
-    "shell:allow-open",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/entropiaorme-backend",
-          "sidecar": true,
-          "args": []
-        }
-      ]
-    }
+    "shell:allow-open"
   ]
 }

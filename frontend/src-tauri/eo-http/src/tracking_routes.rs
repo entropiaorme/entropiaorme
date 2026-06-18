@@ -140,7 +140,7 @@ fn duration_seconds(
 
 // ── list_sessions_impl ──
 
-async fn list_sessions_impl(pool: &SqlitePool, now: f64) -> Result<Value, sqlx::Error> {
+pub(crate) async fn list_sessions_impl(pool: &SqlitePool, now: f64) -> Result<Value, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, started_at, ended_at, is_active \
          FROM tracking_sessions ORDER BY started_at DESC LIMIT 20",
@@ -264,7 +264,7 @@ async fn string_column(
 
 // ── get_session_impl ──
 
-async fn get_session_impl(
+pub(crate) async fn get_session_impl(
     pool: &SqlitePool,
     session_id: &str,
     now: f64,

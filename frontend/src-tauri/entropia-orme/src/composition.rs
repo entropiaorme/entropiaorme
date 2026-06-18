@@ -145,6 +145,21 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     }
 }
 
+/// Where the bundled guide-mode demo database lives: the bundled resource
+/// directory in an installed build (`<resource_dir>/demo/entropia_orme.db`),
+/// the repository copy (`data/demo/entropia_orme.db`) in dev. The demo
+/// services copy it to a writable per-process file before opening, so the
+/// bundled file is never mutated.
+pub(crate) fn demo_db_path(resource_dir: Option<&PathBuf>) -> PathBuf {
+    match resource_dir {
+        Some(dir) if !cfg!(debug_assertions) => dir.join("demo").join("entropia_orme.db"),
+        _ => dev_project_root()
+            .join("data")
+            .join("demo")
+            .join("entropia_orme.db"),
+    }
+}
+
 /// The ABSOLUTE path to the bundled `onnxruntime.dll`: the installed
 /// resource dir (`<resource_dir>/ort/onnxruntime.dll`) in a release
 /// build, the committed repo copy

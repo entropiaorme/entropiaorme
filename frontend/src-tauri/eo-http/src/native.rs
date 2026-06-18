@@ -1245,6 +1245,84 @@ async fn tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> 
         .await
 }
 
+// ── Guide-mode demo adapters (`/api/demo/*`) ────────────────────────
+//
+// The demo serves a curated read-only dataset over a parallel hydration +
+// tracker built on a writable clone of the bundled demo DB (see [`crate::demo`]).
+// Each adapter resolves the lazily-built demo state, falling back to the proxy
+// arm when it is unavailable (no native composition, no bundled demo DB, or a
+// build failure). The demo prefix is outside the ETag middleware, so every
+// reply is a plain JSON 200 (the demo state's methods enforce that).
+
+async fn demo_analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    let query = QueryString::parse(req.uri().query());
+    let period = query.last("period").unwrap_or("all").to_string();
+    demo.analytics_overview(&period).await
+}
+
+async fn demo_analytics_activity(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.analytics_activity().await
+}
+
+async fn demo_analytics_ledger(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.list_ledger().await
+}
+
+async fn demo_analytics_ledger_presets(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.list_ledger_presets().await
+}
+
+async fn demo_analytics_inventory(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.list_inventory().await
+}
+
+async fn demo_tracking_sessions(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.list_sessions().await
+}
+
+/// GET /api/demo/tracking/session/{session_id}: the demo's one path-parameter
+/// route, decoded exactly as the live [`tracking_session`] adapter.
+async fn demo_tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    let raw = req
+        .uri()
+        .path()
+        .strip_prefix("/api/demo/tracking/session/")
+        .unwrap_or_default();
+    let session_id = match string_path_id(raw) {
+        Ok(id) => id,
+        Err(reply) => return *reply,
+    };
+    demo.get_session(&session_id).await
+}
+
+async fn demo_tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(demo) = crate::demo::ensure_demo(&state).await else {
+        return state.proxy(req).await;
+    };
+    demo.tracking_snapshot().await
+}
+
 /// GET /api/tracking/tag-suggestions?q=&limit=: `q` defaults to the empty
 /// string (short-circuiting to `[]`), `limit` to 10 (clamped to 1..=20 in
 /// the handler). An unparseable `limit` is the backend's 422 int_parsing.
@@ -2421,6 +2499,72 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 MethodFilter::GET,
                 "/api/tracking/snapshot",
                 tracking_snapshot,
+            ),
+        )
+        // Guide-mode demo read namespace (`backend/routers/demo.py`): the eight
+        // GETs the guide retargets analytics/tracking reads onto.
+        .route(
+            "/api/demo/analytics/overview",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/analytics/overview",
+                demo_analytics_overview,
+            ),
+        )
+        .route(
+            "/api/demo/analytics/activity",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/analytics/activity",
+                demo_analytics_activity,
+            ),
+        )
+        .route(
+            "/api/demo/analytics/ledger",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/analytics/ledger",
+                demo_analytics_ledger,
+            ),
+        )
+        .route(
+            "/api/demo/analytics/ledger/presets",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/analytics/ledger/presets",
+                demo_analytics_ledger_presets,
+            ),
+        )
+        .route(
+            "/api/demo/analytics/inventory",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/analytics/inventory",
+                demo_analytics_inventory,
+            ),
+        )
+        .route(
+            "/api/demo/tracking/sessions",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/tracking/sessions",
+                demo_tracking_sessions,
+            ),
+        )
+        .route(
+            "/api/demo/tracking/session/{session_id}",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/tracking/session/{session_id}",
+                demo_tracking_session,
+            ),
+        )
+        .route(
+            "/api/demo/tracking/snapshot",
+            arm_routed(
+                MethodFilter::GET,
+                "/api/demo/tracking/snapshot",
+                demo_tracking_snapshot,
             ),
         )
         .route(

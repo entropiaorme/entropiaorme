@@ -21,6 +21,9 @@ hyper-util.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
+# Typed deserialisation of the committed guide-mode demo fixture
+# (`resources/mid_hunt_fixture.json`).
+serde = { workspace = true, features = ["derive"] }
 eo-wire.workspace = true
 # The natively-served hydration handlers read through the ported
 # services (quests, codex) and their database handle.

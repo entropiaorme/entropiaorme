@@ -15,6 +15,7 @@ pub mod arms;
 pub mod body;
 pub mod character_routes;
 pub mod cors;
+pub mod demo;
 pub mod dev_routes;
 pub mod equipment_routes;
 pub mod extract;
@@ -69,6 +70,15 @@ pub struct AppState {
     // reads/writes the shell-owned `observability.json` there). `None` on a
     // substrate built without it: the dev routes then read as gate-off (404).
     data_dir: Option<PathBuf>,
+    // The bundled demo database path, for the guide-mode `/api/demo` surface.
+    // `None` on a substrate built without it: the demo routes fall back to the
+    // proxy arm (hybrid) or 503 (single-binary).
+    demo_db: Option<PathBuf>,
+    // The lazily-built demo services (a parallel hydration + tracker over a
+    // writable clone of the demo DB), stood up on first demo access. The inner
+    // `None` records a build that could not be served, so the routes degrade
+    // gracefully without retrying a hopeless build on every request.
+    demo: tokio::sync::OnceCell<Option<Arc<crate::demo::DemoState>>>,
 }
 
 /// The composed native services, handed to [`AppState::install_native`] to
@@ -112,6 +122,8 @@ impl AppState {
             hotbar_listener: RwLock::new(None),
             cors: None,
             data_dir: None,
+            demo_db: None,
+            demo: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -137,6 +149,24 @@ impl AppState {
     /// The resolved data directory, when set.
     pub(crate) fn data_dir(&self) -> Option<&Path> {
         self.data_dir.as_deref()
+    }
+
+    /// Attach the bundled demo database path, enabling the guide-mode
+    /// `/api/demo` surface. Without it those routes fall back to the proxy
+    /// arm (hybrid) or 503 (single-binary).
+    pub fn with_demo_db_path(mut self, demo_db: PathBuf) -> Self {
+        self.demo_db = Some(demo_db);
+        self
+    }
+
+    /// The bundled demo database path, when set.
+    pub(crate) fn demo_db_path(&self) -> Option<PathBuf> {
+        self.demo_db.clone()
+    }
+
+    /// The lazily-built demo-services cell (built once on first demo access).
+    pub(crate) fn demo_cell(&self) -> &tokio::sync::OnceCell<Option<Arc<crate::demo::DemoState>>> {
+        &self.demo
     }
 
     /// Whether developer mode is currently enabled, read FRESH from the

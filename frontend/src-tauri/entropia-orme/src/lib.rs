@@ -404,7 +404,10 @@ fn compose_substrate(
         .with_cors(eo_http::cors::CorsConfig::from_env())
         // The data dir powers the hidden dev-tools routes (the developer-mode
         // gate and the crash-reporting toggle).
-        .with_data_dir(composition::data_dir());
+        .with_data_dir(composition::data_dir())
+        // The bundled demo database powers the guide-mode `/api/demo` surface
+        // (a writable per-process clone, stood up lazily on first demo access).
+        .with_demo_db_path(composition::demo_db_path(resource_dir.as_ref()));
         let state = std::sync::Arc::new(app_state);
 
         // Hand the composed state to managed state so the `api_request` IPC

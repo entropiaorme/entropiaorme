@@ -65,6 +65,7 @@
       "../../../backend/data/snapshot/": "snapshot/",
       "../../../backend/data/panel_geometry.json": "panel_geometry.json",
       "../../../backend/assets/models/": "models/",
+      "../../../data/demo/entropia_orme.db": "demo/entropia_orme.db",
       "resources/ort/*.dll": "ort/"
     },
     "license": "MIT",

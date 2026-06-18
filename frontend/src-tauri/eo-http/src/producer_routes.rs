@@ -408,6 +408,26 @@ impl HydrationState {
         let Ok(config) = load_config_readonly(&self.data_dir) else {
             return internal_error();
         };
+        match self
+            .build_snapshot_value(tracker, &config, hotbar.is_running())
+            .await
+        {
+            Ok(value) => json_response(&value, if_none_match),
+            Err(_) => internal_error(),
+        }
+    }
+
+    /// Assemble the `TrackingSnapshot` projected value from a tracker readout,
+    /// a resolved config, and the hotbar listener's running state. Extracted
+    /// from [`Self::tracking_snapshot`] so the guide-mode demo snapshot can
+    /// reuse the identical assembly with a constructed demo config and a fixed
+    /// running state (`true`), keeping the two byte-for-byte aligned.
+    pub(crate) async fn build_snapshot_value(
+        &self,
+        tracker: &Arc<HuntTracker>,
+        config: &AppConfig,
+        hotbar_active: bool,
+    ) -> Result<Value, DbError> {
         // `_weapon_attribution`: trifecta unless the hotbar hooks are on.
         let weapon_attribution = if config.hotbar_hooks_enabled {
             "hotbar"
@@ -415,17 +435,11 @@ impl HydrationState {
             "trifecta"
         };
         let trifecta_attribution = if weapon_attribution == "trifecta" {
-            match self.trifecta_attribution_summary(&config).await {
-                Ok(summary) => summary,
-                Err(_) => return internal_error(),
-            }
+            self.trifecta_attribution_summary(config).await?
         } else {
             Value::Null
         };
-        let readout = match tracker.snapshot() {
-            Ok(readout) => readout,
-            Err(_) => return internal_error(),
-        };
+        let readout = tracker.snapshot()?;
         let current_tool = match &readout.current_tool {
             Some(tool) => Value::String(tool.clone()),
             None => Value::Null,
@@ -434,10 +448,10 @@ impl HydrationState {
         let value = match &readout.active {
             None => {
                 // The configured manual label hydrates an idle dashboard.
-                let (current_mob, mob_source) = configured_manual_label(&config);
+                let (current_mob, mob_source) = configured_manual_label(config);
                 json!({
                     "status": "idle",
-                    "hotbarListenerActive": hotbar.is_running(),
+                    "hotbarListenerActive": hotbar_active,
                     "weaponAttribution": weapon_attribution,
                     "repairOcrEnabled": config.repair_ocr_enabled,
                     "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
@@ -499,7 +513,7 @@ impl HydrationState {
                     "multiplierMax": active.multiplier_max,
                     "multiplierHistory": active.multiplier_history.clone(),
                     "cumulativeNetHistory": active.cumulative_net_history.clone(),
-                    "hotbarListenerActive": hotbar.is_running(),
+                    "hotbarListenerActive": hotbar_active,
                     "weaponAttribution": weapon_attribution,
                     "repairOcrEnabled": config.repair_ocr_enabled,
                     "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
@@ -513,7 +527,7 @@ impl HydrationState {
                 })
             }
         };
-        json_response(&project(&value, &SNAPSHOT_FIELDS), if_none_match)
+        Ok(project(&value, &SNAPSHOT_FIELDS))
     }
 
     /// `_trifecta_attribution_summary`: the active preset's bound weapon/heal

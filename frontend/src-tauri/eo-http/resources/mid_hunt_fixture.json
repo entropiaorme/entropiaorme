@@ -1,0 +1,2745 @@
+{
+  "_comment": "Curated mid-hunt demo session captured from the reference demo's mid_hunt prime; timestamps are offsets (seconds) from started_at. The native demo replays this into a writable demo-database clone, rebased onto the live clock, and primes a parallel tracker identically.",
+  "elapsed_seconds": 754.0,
+  "session": {
+    "id": "9ee7bda6-9e36-46af-8073-4c1bc30f5cfc",
+    "is_active": 0,
+    "armour_cost": 0.0,
+    "heal_cost": 0.0,
+    "dangling_cost": 0.0
+  },
+  "kills": [
+    {
+      "id": "69c3b48e-9f90-415c-9775-b5576e9bd23a",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 3.77,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.3301,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "a7af695b-d6ca-46e7-b1dc-c75aca294173",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 11.31,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.4775,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "1359cf10-571c-4077-9428-abbfc99967a3",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 18.85,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.6754,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "c2f2487b-26e6-47dd-aad3-f0771e9b23e7",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 26.39,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1924,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "44f90eb2-7838-4f6f-ba59-00cb9bd2a196",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 33.93,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.2439,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "a90c6394-ddaf-47b9-8ef2-6274217f5c11",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 41.47,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.7072,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "100538fc-73c4-4bbc-9012-5e955c5a715f",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 49.01,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.1183,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "35c88c69-c024-492c-a96d-f692f1c737b6",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 56.55,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1941,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "aa07b8f8-779b-46d7-9382-9dbd24d2eea5",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 64.09,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.3151,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "41047eab-9950-4f31-94aa-f0f80994c936",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 71.63,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.6755,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "335baa28-4d9b-47c6-af6f-d406916d1bb1",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 79.17,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.765,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5ca4233a-a6ba-45f4-825b-4d3c9502ed5a",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 86.71,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.465,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "3c1bc010-0deb-48cc-aa05-53e26abc12be",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 94.25,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 3.0026,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "37ef5df4-9752-458c-a860-33a8762af2ef",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 101.79,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.3429,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "78c5901f-e28f-4a27-a16c-6d275e155730",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 109.33,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.384,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f4b174d3-526d-4b9e-8a88-1800509c2ec7",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 116.87,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.7541,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "c0f3624a-876e-4a5a-9a15-681a96215394",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 124.41,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0026,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "51c90332-737f-4434-8df8-6acc0560b8ba",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 131.95,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.5683,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5a491134-b87a-4a95-ae02-eddf81275d2f",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 139.49,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.7594,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "d3d2deb9-4efb-495b-a320-6b987ef05c97",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 147.03,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.7816,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "bbb47585-a63b-4b55-9def-7b40b6fa71e0",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 154.57,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.798,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "32581d0e-32f3-42fe-9813-0d34d05b57b3",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 162.11,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.6193,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5e00c97f-7280-41ae-8818-11ec5d215407",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 169.65,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.6975,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "e718efbd-f255-40c4-a7e7-fef58e56d72a",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 177.19,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8704,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "8ad99bdc-10fe-4381-b6a5-daef09cf6d41",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 184.73,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2799,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "b980d9b6-c4c8-4c26-a4e4-e601f71ca477",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 192.27,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2639,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f9905c72-6305-4c9a-beab-5c7ba6952418",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 199.81,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.5664,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "63b2009d-9c05-4354-80dd-59c6259226ad",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 207.35,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.8186,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "08e83e4f-a907-4471-b6ae-3eb2a5bbf796",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 214.89,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0306,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "083e0d10-30f2-434e-a99c-da8190f6a2a3",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 222.43,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.974,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "bfa689bd-8792-43c3-8b9a-2d8869bdf381",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 229.97,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8946,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "692ddd29-a886-4c6e-b5b9-05b30e4aac9b",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 237.51,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.6794,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "4a788253-5a87-45f3-93b7-88d5b0844c72",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 245.05,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2153,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "7210e66e-2919-4201-b993-178c5bc98e7f",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 252.59,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.895,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f6112f74-e08b-4281-b680-ed99a781666d",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 260.13,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.9678,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "24b22b35-fdf3-4bae-af9d-1a478e06ab40",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 267.67,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1876,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "cde43d13-d743-45b0-b951-76304ef26848",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 275.21,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.5226,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f61dd4fb-f77f-42d4-bf54-fd4d216b420b",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 282.75,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.6837,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "efcd14df-2657-4303-9539-a11b2e9dfc90",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 290.29,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.5152,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "830bd483-38cc-418d-8d0b-8836e0db9997",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 297.83,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.5053,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "3e31e890-92e4-40fe-89f7-8f7f6cabf91c",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 305.37,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 3.0587,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "8bd7c9e6-7cf3-4257-b7e0-baac4ea8616c",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 312.91,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8302,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "c414ae53-6e6f-4d78-994e-05e7e4109df4",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 320.45,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.9673,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "aac212d4-b2ff-4dc4-b5f7-4d75fc97dd24",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 327.99,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.6647,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "000398d9-4cb6-47f7-afc8-04ddd2ab89fd",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 335.53,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1584,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f594662e-c1fc-49ca-869a-766fdebb53b7",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 343.07,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 3.0862,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "0707fe20-4cc8-410c-90a2-278b8ddec048",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 350.61,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.9139,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "db7cdf0a-3c86-4651-a63f-e53c1d8151f1",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 358.15,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 8.9,
+      "is_global": 1,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": [
+        {
+          "item_name": "Shrapnel",
+          "quantity": 51878,
+          "value_ped": 5.18,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Robot Filter",
+          "quantity": 77,
+          "value_ped": 2.77,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Animal Oil Residue",
+          "quantity": 48,
+          "value_ped": 0.48,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Animal Muscle Oil",
+          "quantity": 13,
+          "value_ped": 0.39,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Bone",
+          "quantity": 1,
+          "value_ped": 0.03,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Jagged Tooth",
+          "quantity": 1,
+          "value_ped": 0.02,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Lesser Claw",
+          "quantity": 1,
+          "value_ped": 0.02,
+          "is_enhancer_shrapnel": 0
+        },
+        {
+          "item_name": "Diluted Sweat",
+          "quantity": 1,
+          "value_ped": 0.01,
+          "is_enhancer_shrapnel": 0
+        }
+      ]
+    },
+    {
+      "id": "c8fc88f3-f33d-4829-a133-6330b93597ef",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 365.69,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.1764,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "0cc2bbfb-fd5b-4b5c-ab67-ac980eb25563",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 373.23,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8068,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "9144b2c6-4093-4f5c-9604-24bc1f1f5eba",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 380.77,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.2335,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "39e9fa03-c99f-45d0-8e12-39ff2f6bc46b",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 388.31,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.5126,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5df5571c-98dc-4298-8844-667d43d1aea9",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 395.85,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8204,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "65a78279-2367-4a72-ba98-7f3a113182af",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 403.39,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.6113,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "2230c6b8-0d14-4af6-8271-a81a1587bdbb",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 410.93,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.907,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "2bb515c7-d26f-47d4-8ba1-e7c7c4db8a10",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 418.47,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.9565,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "0279fed8-1bb1-4ceb-a456-d2813a299bf1",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 426.01,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0029,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "8891f777-f18c-4b1f-aee3-eeaeb62d83d2",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 433.55,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.0736,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "2fcc5557-d6fe-48a8-bae6-e1777470a815",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 441.09,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0958,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "fc23b27a-a235-490a-8941-80d255244e7b",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 448.63,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8232,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "d84b6a9f-d5ee-4d56-b5f8-6f741d18f462",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 456.17,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.7891,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "ac5de047-9d28-43fe-b45d-d86378795c85",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 463.71,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.6568,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "bf6dc955-8a53-49d4-a358-adc8c964f20a",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 471.25,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1318,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "3e2ed1fb-65f6-4724-ae3e-6df9aaac4aba",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 478.79,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.1651,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "02333642-66f3-44e2-8b9f-fd33b8fdbf86",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 486.33,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.765,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "e9b7292c-b762-44c8-a4f0-f15e401c437e",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 493.87,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.579,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "80b01f47-c94d-4fef-be94-58cd1e4a51fa",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 501.41,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 3.0533,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "ea68188f-e104-437c-b0c8-a4ed71428666",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 508.95,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0964,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "629e872b-af86-4718-a196-9490719c33c5",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 516.49,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.6397,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "36db8956-70c8-4a5c-a685-dc3e585c4255",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 524.03,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.416,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "27062760-40b0-4ba6-98c3-c68fb593b7f6",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 531.57,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.531,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f168214c-f679-4f4f-b1b7-1e4c0c3ad20d",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 539.11,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1451,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "19e398ba-685a-4494-a783-362f1e41b46b",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 546.65,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.6812,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "99fd9aee-feca-46ea-afd6-267694b2dc5b",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 554.19,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.3182,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "2ba03f62-33eb-410c-aaac-6ea3aed1ff63",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 561.73,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.1718,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "a6b67f32-47ef-4acb-a1c2-caf209f5c320",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 569.27,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0634,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "0c68613e-4f15-4099-9325-d967ec1448b4",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 576.81,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.1177,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5e566db3-8444-4ed0-8486-3b90126cb3f5",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 584.35,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.7327,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "1fd58bda-650d-4fa4-bdac-35bddb699cd2",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 591.89,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.6758,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "aae32824-1690-48b1-b178-9ddd5ba5cdf1",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 599.43,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.9796,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "d6681ae5-1da1-4846-aa7f-b236934fb71e",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 606.97,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.575,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "08c4be8b-f24b-45db-a552-9b19ee697ca9",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 614.51,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.82,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "5534732e-a3ad-45e7-b5c9-8b6274f31cb4",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 622.05,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.498,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "f7c939e6-4469-494b-955c-da3f70195ee3",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 629.59,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.5457,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "81f8bb8a-a47f-4d44-99ae-d1432cff86be",
+      "mob_name": "Caboria Young",
+      "mob_species": "Caboria",
+      "mob_maturity": "Young",
+      "ts_offset": 637.13,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.2611,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "575d88c3-f6ed-4d0c-ae57-694e53be7bab",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 644.67,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0999,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "6c20a18e-a39c-4bed-91bc-f6ddf43d91e3",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 652.21,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.5738,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "a23191ff-35e9-4269-8b04-b65f9323ef72",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 659.75,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2824,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "98a72104-fb76-4560-a5a4-a04695d861fe",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 667.29,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2313,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "7f806b71-9e2c-4176-8feb-96df0101dbac",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 674.83,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.2807,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "1c35a281-84f5-4cfc-8954-1c44307b16e6",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 682.37,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.5953,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "802cd39e-cd3e-43cd-8381-7c23fe46d791",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 689.91,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.6299,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "81865084-7a45-4adb-a777-7d50111cb9c9",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 697.45,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.7081,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "210a544b-043f-4bc4-a527-e7adcf02f010",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 704.99,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.5802,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "d7ceb59d-886f-485e-af15-5408c6b43ffd",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 712.53,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 3.0595,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "1e5c08ed-93a7-49cd-85c3-392cd8a3fcfb",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 720.07,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.695,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "bb865bea-6ad8-4c4d-8626-ce31a7c8885e",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 727.61,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.285,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "da2d0158-4dc2-4ed2-ba48-a36a70fc5ccf",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 735.15,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 1.0195,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "979abf78-2dcc-4891-86ee-6b24ac5edcc2",
+      "mob_name": "Caboria Mature",
+      "mob_species": "Caboria",
+      "mob_maturity": "Mature",
+      "ts_offset": 742.69,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 2.8912,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    },
+    {
+      "id": "40b796a9-d954-47da-8b11-3be08c597212",
+      "mob_name": "Caboria Old",
+      "mob_species": "Caboria",
+      "mob_maturity": "Old",
+      "ts_offset": 750.23,
+      "shots_fired": 4,
+      "damage_dealt": 485.6,
+      "damage_taken": 29.14,
+      "critical_hits": 0,
+      "cost_ped": 1.592,
+      "enhancer_cost": 0.0,
+      "loot_total_ped": 0.8,
+      "is_global": 0,
+      "is_hof": 0,
+      "tool_stats": [
+        {
+          "tool_name": "Korss H400",
+          "shots_fired": 4,
+          "damage_dealt": 485.6,
+          "critical_hits": 0,
+          "cost_per_shot": 0.398
+        }
+      ],
+      "loot_items": []
+    }
+  ],
+  "skill_gains": [
+    {
+      "ts_offset": 31.416667,
+      "skill_name": "Hit Ability",
+      "amount": 0.54609,
+      "ped_value": 0.2504
+    },
+    {
+      "ts_offset": 94.25,
+      "skill_name": "Damage Ability",
+      "amount": 1.27382,
+      "ped_value": 0.5319
+    },
+    {
+      "ts_offset": 157.083333,
+      "skill_name": "Combat Reflexes",
+      "amount": 0.58808,
+      "ped_value": 0.2568
+    },
+    {
+      "ts_offset": 219.916667,
+      "skill_name": "Combat Sense",
+      "amount": 1.63149,
+      "ped_value": 0.6985
+    },
+    {
+      "ts_offset": 282.75,
+      "skill_name": "Ranged Laser (Hit)",
+      "amount": 0.50369,
+      "ped_value": 0.2382
+    },
+    {
+      "ts_offset": 345.583333,
+      "skill_name": "Ranged Laser (Dmg)",
+      "amount": 1.3953,
+      "ped_value": 0.5944
+    },
+    {
+      "ts_offset": 408.416667,
+      "skill_name": "Aim",
+      "amount": 1.3433,
+      "ped_value": 0.6375
+    },
+    {
+      "ts_offset": 471.25,
+      "skill_name": "Anatomy",
+      "amount": 1.16617,
+      "ped_value": 0.5028
+    },
+    {
+      "ts_offset": 534.083333,
+      "skill_name": "Inflict Ranged Damage",
+      "amount": 0.72021,
+      "ped_value": 0.3353
+    },
+    {
+      "ts_offset": 596.916667,
+      "skill_name": "Wounded",
+      "amount": 0.59154,
+      "ped_value": 0.2504
+    },
+    {
+      "ts_offset": 659.75,
+      "skill_name": "Evade",
+      "amount": 1.20117,
+      "ped_value": 0.5059
+    },
+    {
+      "ts_offset": 722.583333,
+      "skill_name": "Athletics",
+      "amount": 0.89463,
+      "ped_value": 0.3877
+    }
+  ],
+  "notable_events": [
+    {
+      "kill_id": "db7cdf0a-3c86-4651-a63f-e53c1d8151f1",
+      "event_type": "global_kill",
+      "mob_or_item": "Caboria Old",
+      "value_ped": 60.5,
+      "ts_offset": 414.7
+    }
+  ]
+}

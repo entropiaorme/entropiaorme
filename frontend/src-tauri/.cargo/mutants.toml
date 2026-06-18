@@ -26,16 +26,16 @@ exclude_re = [
     # platform CI leg and the live scan.
     "screen_capture\\.rs.*platform",
     "screen_capture\\.rs.*replace (capture_region_png|capture_region_bgr) ->",
-    # The application entry point and the HTTP-substrate spawn: the Tauri
-    # event-loop runner and the task that binds the listener and serves
-    # the router. Both are integration glue exercised only by an actually
-    # running app (the packaged-build verification), never by the
-    # hermetic suite; the whole-function-deletion mutants here are
-    # vacuous. The wiring they perform (producer composition, teardown,
-    # provider construction) is covered by its own mutants in
-    # composition.rs, which stay in the campaign.
+    # The application entry point and the substrate composition spawn: the
+    # Tauri event-loop runner and the task that builds the AppState, publishes
+    # it to the IPC command, and composes the native spine. Both are
+    # integration glue exercised only by an actually running app (the
+    # packaged-build verification), never by the hermetic suite; the
+    # whole-function-deletion mutants here are vacuous. The wiring they perform
+    # (producer composition, teardown, provider construction) is covered by its
+    # own mutants in composition.rs, which stay in the campaign.
     "lib\\.rs.*replace run with \\(\\)",
-    "lib\\.rs.*replace spawn_http_substrate with \\(\\)",
+    "lib\\.rs.*replace compose_substrate with \\(\\)",
     # The composition root's OCR/ONNX-Runtime orchestration wrappers. Their
     # LOGIC is mutation-tested in the helpers they delegate to (the path
     # resolvers `ort_dylib_path`/`models_dir`, the dylib pin

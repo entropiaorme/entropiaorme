@@ -219,48 +219,35 @@ pub fn run() {
             // (os error 193); gating the spawn to release keeps that error
             // out of the dev console.
             //
-            // Topology: the native HTTP substrate owns the public loopback
-            // port the frontend is wired to; the sidecar relocates to a
-            // private port behind the reverse proxy. Every failure path
-            // degrades to the legacy direct topology (sidecar on the public
-            // port, no proxy) so a substrate fault never takes the app down.
+            // Topology: the frontend reaches the backend through the in-process
+            // IPC command (no inbound socket), so the substrate binds no public
+            // listener. The sidecar relocates to a private port the substrate
+            // proxies to for the not-yet-ported routes; its producers idle (the
+            // native spine owns production), and recovery respawns it producing
+            // if the native spine never composes, so a session is never left
+            // with no producer at all.
             #[cfg(not(debug_assertions))]
             {
-                let relocation = bind_substrate_listener()
-                    .and_then(|listener| allocate_private_port().map(|port| (listener, port)));
-                match relocation {
-                    Some((listener, sidecar_port)) => {
-                        spawn_backend_sidecar(
-                            app.handle(),
-                            SidecarSpawn::RelocatedIdle(sidecar_port),
-                        );
-                        spawn_http_substrate(
-                            app.handle().clone(),
-                            listener,
-                            sidecar_port,
-                            app.path().resource_dir().ok(),
-                            // The substrate owns production once it relocates
-                            // and idles the sidecar; if the native spine never
-                            // composes, recover by respawning that sidecar as
-                            // the producer so the session is never left with
-                            // no producer at all.
-                            true,
-                        );
-                    }
-                    None => spawn_backend_sidecar(app.handle(), SidecarSpawn::Legacy),
-                }
+                // An OS-allocated private port for the sidecar; if none is free
+                // it falls back to the public port (still unbound by us, since
+                // the frontend no longer dials it).
+                let sidecar_port = allocate_private_port().unwrap_or_else(public_backend_port);
+                spawn_backend_sidecar(app.handle(), SidecarSpawn::RelocatedIdle(sidecar_port));
+                compose_substrate(
+                    app.handle().clone(),
+                    sidecar_port,
+                    app.path().resource_dir().ok(),
+                    true,
+                );
             }
-            // Dev runs the backend from the dev launcher; the substrate
-            // joins in only when that launcher published the backend's
-            // private port, which keeps a plain unproxied dev stack working.
+            // Dev runs the backend from the dev launcher; the substrate composes
+            // the native spine and proxies the not-yet-ported routes to that
+            // launched backend on its published private port. Dev's backend is
+            // owned by the launcher, never idled by us, so there is no relocated
+            // sidecar for the substrate to recover.
             #[cfg(debug_assertions)]
             if let Some(sidecar_port) = dev_sidecar_port() {
-                if let Some(listener) = bind_substrate_listener() {
-                    // Dev's backend is launched (and owned) by the dev
-                    // launcher, never idled by us, so there is no relocated
-                    // sidecar for the substrate to recover.
-                    spawn_http_substrate(app.handle().clone(), listener, sidecar_port, None, false);
-                }
+                compose_substrate(app.handle().clone(), sidecar_port, None, false);
             }
             Ok(())
         })
@@ -366,26 +353,6 @@ fn public_backend_port() -> u16 {
         .unwrap_or(8421)
 }
 
-/// Bind the substrate's public listener up front so relocation only
-/// happens once the public port is actually ours.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn bind_substrate_listener() -> Option<std::net::TcpListener> {
-    let port = public_backend_port();
-    match std::net::TcpListener::bind(("127.0.0.1", port)) {
-        Ok(listener) => {
-            if let Err(err) = listener.set_nonblocking(true) {
-                tracing::warn!(target: "eo::substrate", "nonblocking mode failed: {err}");
-                return None;
-            }
-            Some(listener)
-        }
-        Err(err) => {
-            tracing::warn!(target: "eo::substrate", "public port {port} bind failed: {err}");
-            None
-        }
-    }
-}
-
 /// An OS-allocated free loopback port for the relocated sidecar.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 fn allocate_private_port() -> Option<u16> {
@@ -407,17 +374,19 @@ fn dev_sidecar_port() -> Option<u16> {
         .and_then(|raw| raw.parse().ok())
 }
 
-/// Serve the strangler router on the already-bound public listener,
-/// proxying not-yet-ported routes to the sidecar on `sidecar_port`. The
-/// substrate begins serving (proxy-only) the instant it binds; native
-/// services compose in the background and hot-install when ready, so a
-/// first launch after an upgrade (where the database is briefly below the
-/// adoptable baseline while the sidecar migrates it forward) upgrades to
-/// native without a restart, instead of standing down proxy-only for the
-/// whole session.
-fn spawn_http_substrate(
+/// Compose the native backend substrate and publish it to the IPC command.
+/// The frontend reaches the backend through the in-process `api_request`
+/// command (no socket), so this binds no listener: it builds the shared
+/// `AppState` (proxying the not-yet-ported routes to the sidecar on
+/// `sidecar_port`), hands it to managed state for the command to dispatch, and
+/// composes the native service spine off the startup path, hot-installing it
+/// when ready (a first launch after an upgrade, where the database is briefly
+/// below the adoptable baseline while the sidecar migrates it forward, upgrades
+/// to native without a restart). The natively registered routes fall back to
+/// the proxy arm while their service is absent, flipping to native on the next
+/// dispatch.
+fn compose_substrate(
     app: tauri::AppHandle,
-    listener: std::net::TcpListener,
     sidecar_port: u16,
     resource_dir: Option<std::path::PathBuf>,
     recover: bool,
@@ -439,37 +408,14 @@ fn spawn_http_substrate(
         let state = std::sync::Arc::new(app_state);
 
         // Hand the composed state to managed state so the `api_request` IPC
-        // command can dispatch the in-process router (no socket). Done before
-        // composition and serve so the seam is reachable as early as the
-        // socket would be.
+        // command can dispatch the in-process router.
         app.manage(ApiSubstrate(state.clone()));
 
-        // Compose the native services off the serve path and install them
-        // when ready, so the substrate answers (proxy-only) the instant it
-        // binds rather than blocking startup on composition. The natively
-        // registered routes each fall back to the proxy arm while their
-        // service is absent, so the install flips them to native on the next
-        // request with no re-registration and no restart.
-        compose_and_install(
-            app,
-            state.clone(),
-            resource_dir,
-            // Only the release relocated topology spawned an idled sidecar
-            // for the substrate to recover into a producer on a permanent
-            // decline; dev (and any non-relocated path) passes None.
-            recover.then_some(sidecar_port),
-        );
-
-        let listener = match tokio::net::TcpListener::from_std(listener) {
-            Ok(listener) => listener,
-            Err(err) => {
-                tracing::error!(target: "eo::substrate", "listener handoff failed: {err}");
-                return;
-            }
-        };
-        if let Err(err) = eo_http::serve(listener, state).await {
-            tracing::error!(target: "eo::substrate", "server exited: {err}");
-        }
+        // Compose the native services off the startup path and install them
+        // when ready; the natively registered routes fall back to the proxy
+        // arm while their service is absent, so the install flips them to
+        // native on the next dispatch, with no re-registration and no restart.
+        compose_and_install(app, state, resource_dir, recover.then_some(sidecar_port));
     });
 }
 
@@ -728,15 +674,10 @@ fn route_arm_overrides() -> eo_http::arms::ArmOverrides {
 /// first-launch-after-upgrade migration ceiling), the substrate stays
 /// proxy-only and an idled sidecar would leave the session with no producer
 /// at all. The recovery respawns the relocated sidecar PRODUCING
-/// (`RelocatedProducing`) so it resumes the producer role it holds in the
-/// legacy topology, with the substrate still proxying the public port to it.
-///
-/// The legacy spawn (`Legacy`, the only backend, on the public port) always
-/// produces.
+/// (`RelocatedProducing`) so the session is never left with no producer, with
+/// the substrate still proxying to it.
 #[cfg_attr(debug_assertions, allow(dead_code))]
 enum SidecarSpawn {
-    /// Legacy direct topology: the only backend, on the public port.
-    Legacy,
     /// Relocated behind the substrate proxy on a private port, producers idle
     /// (the substrate's native spine owns production).
     RelocatedIdle(u16),
@@ -745,13 +686,12 @@ enum SidecarSpawn {
     RelocatedProducing(u16),
 }
 
-/// The environment variables a sidecar spawn runs under. The relocated forms
-/// bind the private port the substrate proxies to; only `RelocatedIdle` gates
-/// the producers off. `Legacy` and `RelocatedProducing` both keep producing.
+/// The environment variables a sidecar spawn runs under. Both forms bind the
+/// private port the substrate proxies to; only `RelocatedIdle` gates the
+/// producers off (`RelocatedProducing`, the recovery, keeps producing).
 #[cfg_attr(debug_assertions, allow(dead_code))]
 fn sidecar_spawn_env(spawn: &SidecarSpawn) -> Vec<(&'static str, String)> {
     match spawn {
-        SidecarSpawn::Legacy => Vec::new(),
         SidecarSpawn::RelocatedIdle(port) => vec![
             ("ENTROPIAORME_BACKEND_PORT", port.to_string()),
             ("ENTROPIAORME_PRODUCERS_IDLE", "1".to_string()),
@@ -776,9 +716,9 @@ fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
     };
     // A relocated sidecar reads its bind port (and derives its own Host-header
     // guard) from `ENTROPIAORME_BACKEND_PORT`; the substrate's proxy arm
-    // rewrites Host to the private authority accordingly. `RelocatedIdle` also
-    // gates its producers off (the substrate owns production); `Legacy` and
-    // the `RelocatedProducing` recovery keep producing. See `SidecarSpawn`.
+    // rewrites Host to the private authority accordingly. `RelocatedIdle` gates
+    // its producers off (the substrate owns production); the
+    // `RelocatedProducing` recovery keeps producing. See `SidecarSpawn`.
     let sidecar = sidecar_spawn_env(&spawn)
         .into_iter()
         .fold(sidecar, |cmd, (key, value)| cmd.env(key, value));
@@ -1036,13 +976,34 @@ mod tests {
         );
     }
 
+    /// The frontend reaches the backend only through the in-process IPC command,
+    /// so the substrate binds no inbound listener (see `compose_substrate`) and
+    /// the security policy grants no loopback origin: the CSP carries no
+    /// `127.0.0.1`/`8421` in connect-src or img-src. The external news origin,
+    /// the IPC scheme, and the base64 image `data:` source survive.
     #[test]
-    fn a_legacy_sidecar_takes_no_relocation_env_and_produces() {
-        // The only backend, on the public port: no private bind, no idle gate.
-        let env = sidecar_spawn_env(&SidecarSpawn::Legacy);
+    fn the_security_policy_grants_no_loopback_origin() {
+        let conf = include_str!("../tauri.conf.json");
+        let after = conf
+            .split("\"csp\":")
+            .nth(1)
+            .expect("the security CSP is configured");
+        let csp = after
+            .split('"')
+            .nth(1)
+            .expect("the CSP is a string literal");
         assert!(
-            env.is_empty(),
-            "the legacy spawn carries no relocation env (no bind override, no idle gate)"
+            !csp.contains("127.0.0.1") && !csp.contains("8421"),
+            "the CSP must grant no loopback origin once the frontend is IPC-only: {csp}"
+        );
+        assert!(
+            csp.contains("https://entropiaorme.com"),
+            "the external news origin must survive the loopback strip: {csp}"
+        );
+        assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
+        assert!(
+            csp.contains("img-src 'self' data:"),
+            "img-src keeps data: for the base64 capture preview: {csp}"
         );
     }
 }

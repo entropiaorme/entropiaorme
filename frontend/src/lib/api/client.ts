@@ -17,15 +17,18 @@ import createClient, { type Middleware } from 'openapi-fetch';
 import { invoke } from '@tauri-apps/api/core';
 import type { paths } from './schema';
 
-/** Loopback origin the Python backend listens on. The generated paths carry
- * the `/api` prefix themselves, so the client's base URL is the bare origin. */
+/** The backend's nominal loopback base. The IPC facade (`tauriFetch`) parses
+ * these URLs for their path and query only; the origin is never dialled (the
+ * in-process command carries the request), so the port here is nominal. The
+ * generated paths carry the `/api` prefix themselves, so the base is the bare
+ * origin. */
 const API_ORIGIN = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT}`;
 
 const API_BASE = `${API_ORIGIN}/api`;
 
-/** Server-sent-events stream the main-window relay subscribes to (see
- * `$lib/realtime/eventRelay`). Lives on the same loopback origin as every other
- * `/api/*` call, so it needs no separate CSP `connect-src` entry. */
+/** The events-stream path. The frontend no longer subscribes over HTTP: domain
+ * events arrive as native Tauri events (see `$lib/realtime/eventRelay`).
+ * Retained alongside the `/api/events` route until that route is removed. */
 export const EVENTS_STREAM_URL = `${API_BASE}/events`;
 
 export class ApiError extends Error {

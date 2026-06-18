@@ -633,4 +633,26 @@ mod tests {
             "img-src keeps data: for the base64 capture preview: {csp}"
         );
     }
+
+    /// M4/M6: the bundle ships no Python sidecar. The packaging spec declares
+    /// no `externalBin`, and the shell `execute`/sidecar capability is gone
+    /// (only `open` survives, for external links), so the installed artefact
+    /// carries the single native binary alone.
+    #[test]
+    fn the_bundle_declares_no_sidecar_binary() {
+        let conf = include_str!("../tauri.conf.json");
+        assert!(
+            !conf.contains("externalBin"),
+            "the packaging spec must declare no externalBin once the sidecar is decommissioned"
+        );
+        let capabilities = include_str!("../capabilities/default.json");
+        assert!(
+            !capabilities.contains("shell:allow-execute"),
+            "the shell execute/sidecar capability must be gone: {capabilities}"
+        );
+        assert!(
+            capabilities.contains("shell:allow-open"),
+            "the shell open capability must survive for external links: {capabilities}"
+        );
+    }
 }

@@ -1279,11 +1279,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn awaits_migration_on_a_below_baseline_database() {
-        // Seed a database the backend created but has not yet migrated up to
-        // the baseline (the first-launch-after-upgrade state). Composition
-        // must report AwaitingMigration (retry once the sidecar migrates it)
-        // rather than Declined (give up proxy-only for the whole session).
+    async fn declines_on_a_below_baseline_database() {
+        // A database the backend created but never migrated up to the baseline
+        // (the pre-Phase-9 first-launch-after-upgrade state). The Python
+        // sidecar used to migrate it forward; with it decommissioned there is
+        // nothing to do so, so composition now declines cleanly rather than
+        // awaiting a migration that will never arrive.
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -1301,8 +1302,8 @@ mod tests {
         }
         let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
         assert!(
-            matches!(composed, Composition::AwaitingMigration),
-            "a below-baseline database awaits the sidecar's migration"
+            matches!(composed, Composition::Declined),
+            "a below-baseline database declines (nothing migrates it without the sidecar)"
         );
     }
 

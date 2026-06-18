@@ -1,17 +1,16 @@
-//! Hermetic router-level coverage for the native registrations: the
-//! substrate serves a composed (temp-database) hydration state with NO
-//! sidecar behind the proxy arm, so anything that reaches the fallback
-//! answers 502 while natively-served routes answer themselves. This
-//! pins registration, adapter extraction, route-level 404 semantics,
-//! and the runtime arm override without a Python toolchain; the
-//! cross-language battery proves the same surface byte-for-byte
-//! against the running backend.
+//! Hermetic router-level coverage for the native registrations. The test
+//! harness composes a temp-database hydration state and serves the router on
+//! a loopback socket (the production binary binds no socket and dispatches
+//! the same router in-process via the IPC command; here a socket is just the
+//! test transport). A registered route answers natively, an unmatched path is
+//! the framework 404, and an unported method the framework 405. This pins
+//! registration, adapter extraction, the validation envelopes, and the
+//! conditional-GET / CORS contracts without a Python toolchain.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use eo_http::arms::ArmOverrides;
 use eo_http::cors::CorsConfig;
 use eo_http::hydration::HydrationState;
 use eo_http::AppState;
@@ -19,9 +18,19 @@ use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use http_body_util::BodyExt;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+
+/// A plain HTTP client to drive requests at the test substrate's socket
+/// (replacing the retired proxy module's pooled client; the production
+/// substrate binds no socket, but this harness serves the router on one).
+fn test_client() -> Client<HttpConnector, Body> {
+    Client::builder(TokioExecutor::new()).build(HttpConnector::new())
+}
 
 async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -38,10 +47,8 @@ async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     listener.set_nonblocking(true).expect("nonblocking");
     let port = listener.local_addr().expect("addr").port();
-    // Port 9 (discard) on loopback: nothing listens; the proxy arm
-    // fails fast and visibly.
     let state = Arc::new(
-        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
+        AppState::new(port)
             .with_hydration(hydration)
             .with_cors(CorsConfig::new(5173, None)),
     );
@@ -121,7 +128,7 @@ async fn send(
     let request = builder
         .body(body.map(Body::from).unwrap_or_else(Body::empty))
         .unwrap();
-    let response = eo_http::proxy::build_client()
+    let response = test_client()
         .request(request)
         .await
         .expect("request succeeds");
@@ -494,80 +501,26 @@ async fn the_router_validates_through_the_extraction_layer() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unregistered_paths_and_proxied_arms_reach_the_fallback() {
-    let (port, state, _dir) = serve_substrate().await;
-    // An unregistered route falls back to the proxy: 502 against the
-    // dead upstream proves which arm answered. The tracking read surface
-    // stays with the sidecar, while the analytics surface serves natively.
-    let (status, _, _) = get(port, "/api/tracking/snapshot").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    // A registered path's unported method falls back too: the
-    // settings PATCH stays with the sidecar until the producer
-    // cutover, while its GET serves natively.
-    let (status, _, _) = send_json(port, "PATCH", "/api/settings", "{}").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    // An encoded slash that would decode into a registered path stays
-    // one raw segment here, so it reaches the fallback too.
-    let (status, _, _) = get(port, "/api/quests%2Fmobs").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    // HEAD belongs to the sidecar (the backend hard-405s HEAD on its
-    // GET routes); the explicit proxy leg keeps it off the native GET
-    // handler, proven by the dead upstream.
+async fn the_framework_404s_unmatched_paths_and_405s_unported_methods() {
+    let (port, _state, _dir) = serve_substrate().await;
+    // An encoded slash stays one raw segment, so it does not decode into the
+    // registered `/api/quests/mobs` path: the framework 404 (nothing forwards
+    // it upstream now).
+    let (status, _, body) = get(port, "/api/quests%2Fmobs").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Not Found\"}");
+    // An unmatched path under /api is likewise the framework 404.
+    let (status, _, _) = get(port, "/api/no-such-route").await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    // HEAD on a GET route is the framework 405: the backend hard-405s HEAD on
+    // its GET routes, and the native router does not auto-serve HEAD from the
+    // GET handler (it carries an explicit 405 method fallback).
     let (status, _, _) = request(port, "HEAD", "/api/quests", &[]).await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    // A present-but-empty Host passes the guard, as the backend's
-    // falsy check skips it (served natively: 200, not 403).
+    assert_eq!(status, http::StatusCode::METHOD_NOT_ALLOWED);
+    // A present-but-empty Host passes the guard (the backend's falsy check
+    // skips it), so the route serves natively.
     let (status, _, _) = request(port, "GET", "/api/quests", &[("host", "")]).await;
     assert_eq!(status, http::StatusCode::OK);
-    // The guard scopes to API paths and skips OPTIONS outright, as the
-    // backend's middleware does: a bad Host on a non-API path, or on a
-    // bare OPTIONS, reaches the proxy (502 here) instead of a 403.
-    let (status, _, _) = request(port, "GET", "/health", &[("host", "evil:1")]).await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    let (status, _, _) = request(port, "OPTIONS", "/api/quests", &[("host", "evil:1")]).await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    // The runtime arm override steers a registered route to the proxy
-    // and back without a rebuild.
-    let (status, _, _) = get(port, "/api/quests").await;
-    assert_eq!(status, http::StatusCode::OK);
-    state.set_overrides(ArmOverrides::parse_env_value("/api/quests=proxy"));
-    let (status, _, _) = get(port, "/api/quests").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-    state.set_overrides(ArmOverrides::empty());
-    let (status, _, _) = get(port, "/api/quests").await;
-    assert_eq!(status, http::StatusCode::OK);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_composed_services_registered_routes_fall_back() {
-    // A substrate with no hydration state (composition declined)
-    // proxies even its registered routes: the safe degraded mode.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let port = listener.local_addr().expect("addr").port();
-    let state = Arc::new(AppState::new(
-        "127.0.0.1:9".into(),
-        port,
-        ArmOverrides::empty(),
-    ));
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
-        eo_http::serve(listener, state).await.expect("serve");
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        // /api/health is served natively without composed services.
-        if get(port, "/api/health").await.0 == http::StatusCode::OK {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "substrate never came up"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let (status, _, _) = get(port, "/api/quests").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1215,8 +1168,9 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["literal_error"]);
 
-    // The unported settings write stays with the sidecar: the PUT
-    // falls to the path's proxy fallback (dead upstream → 502).
+    // The overlay-position write needs the composed config service, which the
+    // read-only harness does not compose, so it hits the defensive 503 floor
+    // here (the producer harness exercises the native success path).
     let (status, _, _) = send_json(
         port,
         "PUT",
@@ -1224,7 +1178,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         "{\"x\":1,\"y\":2}",
     )
     .await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
 }
 
 /// Path and body validation aggregate into one envelope (path issue
@@ -2027,7 +1981,7 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
     listener.set_nonblocking(true).expect("nonblocking");
     let port = listener.local_addr().expect("addr").port();
     let state = Arc::new(
-        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
+        AppState::new(port)
             .with_hydration(hydration)
             .with_tracker(tracker)
             .with_skill_tracker(skill_tracker)
@@ -2221,135 +2175,19 @@ async fn manual_mob_suggestions_tag_mode_409_precedes_the_empty_q_shortcut() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn producer_routes_fall_back_without_a_composed_tracker() {
-    // The read-only harness composes hydration but NO tracker, so the
-    // three producer routes fall to the proxy arm (dead upstream -> 502),
-    // proving the adapters require the live tracker.
+async fn producer_routes_answer_503_without_a_composed_tracker() {
+    // The read-only harness composes hydration but NO tracker, so the three
+    // producer routes hit the defensive service-unavailable floor (503),
+    // proving the adapters require the live tracker. The production binary
+    // publishes the router only once every service is composed, so this floor
+    // is unreached on the normal startup path.
     let (port, _state, _dir) = serve_substrate().await;
     let (status, _, _) = send_json(port, "POST", "/api/tracking/start", "").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
     let (status, _, _) = send_json(port, "POST", "/api/tracking/stop", "").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+    assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
     let (status, _, _) = get(port, "/api/tracking/manual-mob-suggestions?q=a").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn events_stream_falls_back_without_a_composed_hub() {
-    // The read-only harness composes NO SSE hub, so `/api/events` falls to
-    // the proxy arm (dead upstream -> 502), proving the route is registered
-    // and the no-hub branch proxies rather than serving an empty native
-    // stream. The hub-present branch is covered by the test below.
-    let (port, _state, _dir) = serve_substrate().await;
-    let (status, _, _) = get(port, "/api/events").await;
-    assert_eq!(status, http::StatusCode::BAD_GATEWAY);
-}
-
-/// Bring up the substrate with a composed SSE hub, returning the hub so the
-/// test can dispatch onto it. Mirrors [`serve_substrate`] but threads an
-/// `Arc<SseHub>` into the app state, so `/api/events` resolves to the native
-/// arm.
-async fn serve_substrate_with_sse() -> (u16, Arc<eo_wire::sse::SseHub>, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let db = Db::open(&dir.path().join("entropia_orme.db"))
-        .await
-        .expect("temp db opens");
-    let game_data = Arc::new(GameDataStore::new(&dir.path().join("empty")).expect("empty store"));
-    let hydration = Arc::new(HydrationState::new(
-        db,
-        game_data,
-        Arc::new(RealClock::new()),
-        dir.path().to_path_buf(),
-    ));
-    let hub = Arc::new(eo_wire::sse::SseHub::new(eo_wire::sse::DEFAULT_MAX_QUEUE));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let port = listener.local_addr().expect("addr").port();
-    let state = Arc::new(
-        AppState::new("127.0.0.1:9".into(), port, ArmOverrides::empty())
-            .with_hydration(hydration)
-            .with_sse_hub(hub.clone())
-            .with_cors(CorsConfig::new(5173, None)),
-    );
-    let serve_state = state.clone();
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
-        eo_http::serve(listener, serve_state).await.expect("serve");
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if get(port, "/api/health").await.0 == http::StatusCode::OK {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "substrate never came up"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    (port, hub, dir)
-}
-
-/// Read the next non-empty SSE data chunk off a streaming response body,
-/// bounded by a timeout so a missing frame fails fast rather than hanging.
-async fn next_sse_chunk(body: &mut hyper::body::Incoming) -> String {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match body.frame().await {
-                Some(Ok(frame)) => {
-                    if let Some(data) = frame.data_ref() {
-                        return String::from_utf8(data.to_vec()).expect("utf8 frame");
-                    }
-                }
-                other => panic!("stream ended unexpectedly: {other:?}"),
-            }
-        }
-    })
-    .await
-    .expect("an SSE chunk arrives within the timeout")
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn events_stream_serves_natively_from_the_composed_hub() {
-    use eo_wire::domain_events::{
-        DomainEvent, ScanPhase, ScanStatusChanged, ScanStatusChangedPayload, ScanStatusChangedTag,
-    };
-
-    let (port, hub, _dir) = serve_substrate_with_sse().await;
-
-    // Opening the stream returns the native `: ready` comment, proving the
-    // route resolves to the native arm (not the proxy fallback) when a hub
-    // is composed.
-    let authority = format!("127.0.0.1:{port}");
-    let request = http::Request::builder()
-        .method("GET")
-        .uri(format!("http://{authority}/api/events"))
-        .header("host", &authority)
-        .body(Body::empty())
-        .unwrap();
-    let mut body = eo_http::proxy::build_client()
-        .request(request)
-        .await
-        .expect("stream opens")
-        .into_body();
-    assert_eq!(next_sse_chunk(&mut body).await, ": ready\n\n");
-
-    // A domain event dispatched on the composed hub reaches this stream as a
-    // framed SSE event end-to-end through the native route.
-    let event = DomainEvent::ScanStatusChanged(ScanStatusChanged {
-        topic: ScanStatusChangedTag,
-        event_version: 1,
-        occurred_at: "t".into(),
-        payload: ScanStatusChangedPayload {
-            phase: ScanPhase::Capturing,
-        },
-    });
-    hub.dispatch(&event);
-    let frame = next_sse_chunk(&mut body).await;
-    assert!(
-        frame.starts_with("id: 1\nevent: scan.status.changed\n"),
-        "native stream carried the dispatched frame: {frame:?}"
-    );
+    assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
 }
 
 /// Read the substrate's `settings.json` (the config-write target) as JSON.

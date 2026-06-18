@@ -14,6 +14,7 @@
  */
 
 import createClient, { type Middleware } from 'openapi-fetch';
+import { invoke } from '@tauri-apps/api/core';
 import type { paths } from './schema';
 
 /** Loopback origin the Python backend listens on. The generated paths carry
@@ -72,9 +73,43 @@ const throwApiError: Middleware = {
  * including bodyless GETs and POSTs, where openapi-fetch would otherwise
  * omit the header. No backend route reads it on a bodyless request, but
  * keeping the wire bytes identical costs one line. */
+type ApiResponseWire = { status: number; headers: [string, string][]; body: string };
+
+/* The IPC transport that replaces the loopback HTTP hop. Every backend call
+ * the openapi-fetch client (and the hand-rolled `request` below) makes is
+ * routed through the `api_request` Tauri command, which dispatches the
+ * in-process axum router with no socket. It is a drop-in for the global
+ * `fetch` the client used: same Request in, same Response out, so the call
+ * sites, the generated `paths` types, the error middleware, and `unwrap` are
+ * all unchanged. (The `/api/events` SSE stream keeps its EventSource until the
+ * SSE-to-Tauri-event slice; the capture-PNG `<img>` src likewise stays direct
+ * until its own base64 slice. Both rely on the loopback listener, which is
+ * removed only once every request route is on this transport.) */
+export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	const req = input instanceof Request ? input : new Request(input, init);
+	const url = new URL(req.url);
+	const method = req.method.toUpperCase();
+	const headers: [string, string][] = [];
+	req.headers.forEach((value, key) => headers.push([key, value]));
+	const body = method === 'GET' || method === 'HEAD' ? undefined : await req.text();
+
+	const res = await invoke<ApiResponseWire>('api_request', {
+		request: { method, path: url.pathname + url.search, headers, body },
+	});
+
+	// A 204/304 must be constructed with a null body or the Response constructor
+	// throws; the ETag-bearing hydration GETs depend on the 304 path.
+	const nullBody = res.status === 204 || res.status === 304;
+	return new Response(nullBody ? null : res.body, {
+		status: res.status,
+		headers: new Headers(res.headers),
+	});
+}
+
 export const client = createClient<paths>({
 	baseUrl: API_ORIGIN,
 	headers: { 'Content-Type': 'application/json' },
+	fetch: tauriFetch,
 });
 client.use(throwApiError);
 
@@ -103,7 +138,7 @@ export async function unwrap<T>(call: Promise<{ data?: unknown }>): Promise<T> {
  * through the generated client. Throws the same `ApiError` on non-2xx. */
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	const url = `${API_BASE}${path}`;
-	const resp = await fetch(url, {
+	const resp = await tauriFetch(url, {
 		headers: { 'Content-Type': 'application/json' },
 		...options,
 	});

@@ -46,6 +46,59 @@ fn hide_scan_overlay(app: tauri::AppHandle) {
     }
 }
 
+/// The backend-call IPC seam: the typed request descriptor the frontend's
+/// `tauriFetch` sends in place of a loopback HTTP request. `path` carries the
+/// `/api/...` path plus any query string; `headers` round-trips the request
+/// headers (Content-Type, If-None-Match); `body` is the JSON request body.
+#[derive(serde::Deserialize)]
+struct ApiRequest {
+    method: String,
+    path: String,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// The response the seam returns, mirroring an HTTP response so the frontend
+/// rebuilds a `Response` the existing openapi-fetch client consumes unchanged.
+#[derive(serde::Serialize)]
+struct ApiResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+/// Dispatch a frontend backend call through the in-process router (no socket):
+/// the server side of the IPC transport that replaces the loopback HTTP hop.
+/// The substrate task hands the composed state to managed state; until it
+/// lands (a brief startup window) the command errors and the caller retries,
+/// exactly as an unbound socket would refuse a connection.
+#[tauri::command]
+async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiResponse, String> {
+    let state = app
+        .try_state::<ApiSubstrate>()
+        .ok_or("backend substrate not ready")?
+        .0
+        .clone();
+    let body = request.body.unwrap_or_default().into_bytes();
+    let response = eo_http::dispatch_in_process(
+        state,
+        &request.method,
+        &request.path,
+        &request.headers,
+        body,
+    )
+    .await?;
+    Ok(ApiResponse {
+        status: response.status,
+        headers: response.headers,
+        // The first slice carries JSON routes; the raw-bytes capture-PNG route
+        // moves to its own base64-returning command in a later slice.
+        body: String::from_utf8_lossy(&response.body).into_owned(),
+    })
+}
+
 // Holds the spawned Python backend so we can terminate it on app exit.
 // Default Windows process semantics leave the child running when the
 // parent exits; without this kill on RunEvent::Exit the sidecar would
@@ -90,6 +143,12 @@ struct ScanInput {
     skill_scan: std::sync::Arc<composition::SkillScanManual>,
 }
 
+// Holds the composed HTTP substrate state so the `api_request` IPC command can
+// dispatch the in-process router (the loopback-socket replacement). The
+// substrate task hands it here once the AppState is built; `api_request` reads
+// it per call and errors until then.
+struct ApiSubstrate(std::sync::Arc<eo_http::AppState>);
+
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
@@ -117,7 +176,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             show_scan_overlay,
-            hide_scan_overlay
+            hide_scan_overlay,
+            api_request
         ])
         .setup(|app| {
             // Both uses of `app` compile out on a non-Windows debug build
@@ -350,6 +410,12 @@ fn spawn_http_substrate(
         // gate and the crash-reporting toggle).
         .with_data_dir(composition::data_dir());
         let state = std::sync::Arc::new(app_state);
+
+        // Hand the composed state to managed state so the `api_request` IPC
+        // command can dispatch the in-process router (no socket). Done before
+        // composition and serve so the seam is reachable as early as the
+        // socket would be.
+        app.manage(ApiSubstrate(state.clone()));
 
         // Compose the native services off the serve path and install them
         // when ready, so the substrate answers (proxy-only) the instant it

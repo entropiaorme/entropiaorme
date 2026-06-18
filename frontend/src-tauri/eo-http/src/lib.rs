@@ -592,6 +592,69 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// The plain, transport-agnostic shape of an in-process dispatch result, so
+/// the Tauri command layer can return it without depending on axum/http types.
+pub struct InProcessResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Dispatch a request through the in-process router WITHOUT binding a socket:
+/// the server side of the Tauri-IPC transport that replaces the loopback HTTP
+/// hop. The request runs through the identical stack a client over the socket
+/// would hit (the native arms, the proxy fallback, the Host/origin guard,
+/// CORS, and the observe/metrics layer), so behaviour and instrumentation are
+/// unchanged; only the transport in front of the router differs. A
+/// same-process request carries no Origin/Host, which the guard admits
+/// (v0.1.0 parity) and CORS leaves undecorated, exactly as intended.
+pub async fn dispatch_in_process(
+    state: Arc<AppState>,
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+) -> Result<InProcessResponse, String> {
+    use tower::ServiceExt as _;
+
+    let mut builder = http::Request::builder().method(method).uri(path_and_query);
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let request = builder
+        .body(axum::body::Body::from(body))
+        .map_err(|err| format!("malformed in-process request: {err}"))?;
+
+    // `Router::oneshot` is infallible (its `Error` is `Infallible`): the
+    // dispatch itself never errors, so only request construction above can.
+    let response = match build_router(state).oneshot(request).await {
+        Ok(response) => response,
+        Err(infallible) => match infallible {},
+    };
+
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|err| format!("in-process response body read failed: {err}"))?
+        .to_vec();
+
+    Ok(InProcessResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
 /// Native route registrations, in takeover order; each flip adds one
 /// `arm_routed` line (here or in [`native`]), and deleting a line is
 /// the source-level revert.
@@ -689,5 +752,38 @@ mod tests {
             after > before,
             "the observe layer must record the served request (before={before}, after={after})"
         );
+    }
+
+    /// The in-process IPC dispatch (the loopback-socket replacement that the
+    /// frontend's `tauriFetch` calls) drives a request through the SAME router
+    /// an HTTP client would hit and returns the transport-agnostic response
+    /// shape. Proven end to end against the native `/api/health` arm (no
+    /// sidecar, no composition required): a 200 with the health JSON, the
+    /// handler's Content-Type carried back, the body collected. A same-process
+    /// request carries no Origin/Host, which the guard admits and CORS leaves
+    /// undecorated, so the dispatch path is exercised exactly as the socket
+    /// path would be.
+    #[tokio::test]
+    async fn dispatch_in_process_routes_a_request_through_the_in_process_router() {
+        let state = Arc::new(AppState::new(
+            "127.0.0.1:1".into(),
+            8421,
+            ArmOverrides::empty(),
+        ));
+        let response = dispatch_in_process(state, "GET", "/api/health", &[], Vec::new())
+            .await
+            .expect("the in-process dispatch succeeds");
+        assert_eq!(response.status, 200);
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| name == "content-type" && value.contains("application/json")),
+            "the native handler's Content-Type is carried back: {:?}",
+            response.headers
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the health body is JSON");
+        assert_eq!(body["status"], "ok");
     }
 }

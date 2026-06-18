@@ -26,11 +26,6 @@ const API_ORIGIN = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT
 
 const API_BASE = `${API_ORIGIN}/api`;
 
-/** The events-stream path. The frontend no longer subscribes over HTTP: domain
- * events arrive as native Tauri events (see `$lib/realtime/eventRelay`).
- * Retained alongside the `/api/events` route until that route is removed. */
-export const EVENTS_STREAM_URL = `${API_BASE}/events`;
-
 export class ApiError extends Error {
 	constructor(
 		public status: number,

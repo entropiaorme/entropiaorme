@@ -32,7 +32,6 @@ const { clientGet, clientPost, clientPut, clientPatch, clientDelete, FakeApiErro
 
 vi.mock('./client', () => ({
 	ApiError: FakeApiError,
-	EVENTS_STREAM_URL: 'http://127.0.0.1:8421/api/events',
 	manualSkillScanCapturePng: async (page: number) => `data:image/png;base64,page${page}`,
 	request: vi.fn(),
 	unwrap: async (call: Promise<{ data?: unknown }>) => (await call).data,
@@ -723,9 +722,8 @@ describe('getCharacterProspect', () => {
 });
 
 describe('re-exported client surface', () => {
-	it('forwards ApiError, request, and the asset/URL helpers from ./client', async () => {
+	it('forwards ApiError, request, and the asset helpers from ./client', async () => {
 		expect(api.ApiError).toBe(FakeApiError);
-		expect(api.EVENTS_STREAM_URL).toBe('http://127.0.0.1:8421/api/events');
 		expect(await api.manualSkillScanCapturePng(2)).toBe('data:image/png;base64,page2');
 		expect(typeof api.request).toBe('function');
 	});

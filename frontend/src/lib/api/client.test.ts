@@ -57,11 +57,6 @@ describe('ApiError', () => {
 });
 
 describe('URL builders', () => {
-	it('builds the events stream URL on the configured loopback origin', async () => {
-		const { EVENTS_STREAM_URL } = await loadModule();
-		expect(EVENTS_STREAM_URL).toBe('http://127.0.0.1:8421/api/events');
-	});
-
 	it('fetches the capture preview PNG over the capture_png command as a base64 data URL', async () => {
 		const { manualSkillScanCapturePng } = await loadModule();
 		invokeMock.mockResolvedValue('aGVsbG8=');

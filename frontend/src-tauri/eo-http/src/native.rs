@@ -6,7 +6,7 @@
 //! envelopes), calls the corresponding handler, and returns its
 //! response. The shell publishes the router only after composition has
 //! installed every service, so an adapter whose service is somehow absent
-//! returns a defensive [`service_unavailable`](crate::service_unavailable)
+//! returns a defensive `service_unavailable`
 //! 503 rather than the retired proxy fallback.
 
 use std::sync::Arc;
@@ -983,8 +983,9 @@ async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> 
 // The skill-scan state machine and the one-shot repair-cost read serve over
 // the composed `SkillScanManual` / `RepairOcrService` (always constructed;
 // off Windows the OCR runtime is absent, so they report "engine unavailable"
-// but the state machine still serves). They proxy only when composition was
-// declined. The verbs' projection-and-serialise logic lives in `scan_routes`;
+// but the state machine still serves). They answer the 503 service-unavailable
+// floor only when composition was declined. The verbs' projection-and-serialise
+// logic lives in `scan_routes`;
 // these adapters extract each route's parameters the backend's way.
 
 /// GET /api/scan/skills/status
@@ -1140,8 +1141,8 @@ async fn scan_spacebar_capture(state: Arc<AppState>, req: Request) -> Response<B
 // ── Settings adapters ───────────────────────────────────────────────
 //
 // The whole settings surface serves natively: the reads, the
-// overlay-position write, and (at the Phase-9 crossing) the monolithic
-// PATCH and the reset. The write adapters parse the body here and delegate
+// overlay-position write, and the monolithic PATCH and the reset. The
+// write adapters parse the body here and delegate
 // to the producer-spine handlers (`HydrationState::settings_update` /
 // `settings_reset` in `producer_routes`), which write through the single
 // native `ConfigService` and signal the live producers (watcher, hotbar
@@ -1377,9 +1378,10 @@ async fn tracking_session(state: Arc<AppState>, req: Request) -> Response<Body> 
 //
 // The demo serves a curated read-only dataset over a parallel hydration +
 // tracker built on a writable clone of the bundled demo DB (see [`crate::demo`]).
-// Each adapter resolves the lazily-built demo state, falling back to the proxy
-// arm when it is unavailable (no native composition, no bundled demo DB, or a
-// build failure). The demo prefix is outside the ETag middleware, so every
+// Each adapter resolves the lazily-built demo state, answering the 503
+// service-unavailable floor when it is unavailable (no native composition, no
+// bundled demo DB, or a build failure). The demo prefix is outside the ETag
+// middleware, so every
 // reply is a plain JSON 200 (the demo state's methods enforce that).
 
 async fn demo_analytics_overview(state: Arc<AppState>, req: Request) -> Response<Body> {
@@ -1476,10 +1478,10 @@ async fn tracking_tag_suggestions(state: Arc<AppState>, req: Request) -> Respons
 // These three reach a DIFFERENT dependency than the session-read
 // adapters above: the live `Arc<HuntTracker>` (start/stop, and the
 // manual-mob tag-mode gate) plus the bundled mobs catalogue (the
-// suggestions). They proxy unless BOTH the tracker and the read surface
-// are composed (the suggestions handler reads the catalogue through the
-// hydration state), exactly as the read surface proxies without
-// `with_hydration`.
+// suggestions). They answer the 503 service-unavailable floor unless BOTH the
+// tracker and the read surface are composed (the suggestions handler reads the
+// catalogue through the hydration state), exactly as the read surface answers
+// the floor without `with_hydration`.
 
 /// POST /api/tracking/start
 async fn tracking_start(state: Arc<AppState>, _req: Request) -> Response<Body> {
@@ -1588,8 +1590,9 @@ async fn tracking_tag_lock(state: Arc<AppState>, req: Request) -> Response<Body>
 }
 
 /// GET /api/tracking/snapshot: the consolidated dashboard hydration, over the
-/// live tracker, the config, and the hotbar listener's running state. Proxies
-/// unless all three are composed (the snapshot reads each).
+/// live tracker, the config, and the hotbar listener's running state. Answers
+/// the 503 service-unavailable floor unless all three are composed (the
+/// snapshot reads each).
 async fn tracking_snapshot(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker), Some(hotbar)) =
         (state.hydration(), state.tracker(), state.hotbar_listener())
@@ -2434,9 +2437,8 @@ async fn equipment_cost(state: Arc<AppState>, req: Request) -> Response<Body> {
 }
 
 /// Register the natively-served quests/codex hydration GETs; one
-/// `arm_routed` line per route, the registration order mirroring the
-/// takeover record. Each line is individually revertable, and the arm
-/// override covers every one at runtime.
+/// `arm_routed` line per route. Every route is served in-process; there is
+/// no runtime override left to consult.
 pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router
         .route(

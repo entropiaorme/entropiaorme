@@ -1,6 +1,6 @@
 //! Request-body extraction, byte-faithful to the backend's HTTP layer.
 //!
-//! Bodies parse through the reference-faithful reader ([`pyjson`]) and
+//! Bodies parse through the reference-faithful reader (`pyjson`) and
 //! validate field by field with the backend's lax coercions, pinned by
 //! live probes and re-proven by the conformance battery:
 //! - strings are strict (no coercion; null is a `string_type` error on

@@ -408,8 +408,8 @@ async fn the_analytics_write_routes_serve_natively() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_browser_surface_is_answered_at_the_substrate() {
     let (port, _state, _dir) = serve_substrate().await;
-    // A passing preflight short-circuits ahead of routing (the proxy
-    // arm is dead, so a forwarded preflight would 502).
+    // A passing preflight short-circuits ahead of routing (no upstream
+    // exists, so a forwarded preflight would 502).
     let (status, headers, body) = request(
         port,
         "OPTIONS",
@@ -467,8 +467,8 @@ async fn the_browser_surface_is_answered_at_the_substrate() {
     .await;
     assert_eq!(status, http::StatusCode::FORBIDDEN);
     assert_eq!(body, b"{\"detail\":\"Invalid Origin header\"}");
-    // Mutating methods require an allowed origin, enforced before the
-    // proxy arm (a forwarded request would 502, not 403).
+    // Mutating methods require an allowed origin, enforced before any
+    // upstream forward (a forwarded request would 502, not 403).
     let (status, _, body) = request(port, "POST", "/api/quests", &[]).await;
     assert_eq!(status, http::StatusCode::FORBIDDEN);
     assert_eq!(body, b"{\"detail\":\"Origin header required\"}");
@@ -1835,7 +1835,8 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 // These three reach the live `Arc<HuntTracker>` (and, for the
 // suggestions, the bundled mobs catalogue) rather than the read-only
 // database surface, so the hermetic harness above (no tracker) cannot
-// drive them: it composes hydration only, so they fall to the proxy.
+// drive them: it composes hydration only, so they answer the 503
+// service-unavailable floor.
 // This block boots a SEPARATE substrate that wires both the read surface
 // AND a live tracker over a shared single-owner pool, plus a temp data
 // dir carrying a `mobs.json` (the suggestions catalogue) and a

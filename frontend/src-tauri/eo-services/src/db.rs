@@ -101,12 +101,12 @@ impl std::error::Error for AdoptError {}
 
 impl AdoptError {
     /// True when the decline is "the existing database predates the
-    /// adoptable baseline" ([`DbError::UnsupportedSchemaVersion`]): the
-    /// transient state on a first launch after an upgrade, while the
-    /// co-bundled sidecar migrates the database forward to the baseline this
-    /// process adopts at. The composition root retries on this; every other
-    /// decline (a corrupt file, a driver fault) is final and the substrate
-    /// stays proxy-only for the session.
+    /// adoptable baseline" ([`DbError::UnsupportedSchemaVersion`]): in the
+    /// hybrid era this was a transient first-launch-after-upgrade state, while
+    /// the co-bundled sidecar migrated the database forward to the baseline
+    /// this process adopts at. With the sidecar gone nothing migrates it, so
+    /// the composition root now treats this as a terminal decline, exactly as
+    /// it treats every other decline (a corrupt file, a driver fault).
     pub fn is_below_baseline(&self) -> bool {
         matches!(
             self,
@@ -201,9 +201,8 @@ impl Db {
     /// Distinguishes failure on a PRE-EXISTING database from failure on
     /// a fresh path: an existing file that cannot be adopted or
     /// migrated is a quarantine signal, not a bare error. The file is
-    /// left exactly as found (it is the user's data, and the sidecar
-    /// may still serve it); the caller stands the native arm down and
-    /// surfaces the condition loudly.
+    /// left exactly as found (it is the user's data); the caller declines
+    /// composition and surfaces the condition loudly.
     pub async fn open_adopted(path: &Path) -> Result<Db, AdoptError> {
         let pre_existing = path.exists();
         match Db::open(path).await {

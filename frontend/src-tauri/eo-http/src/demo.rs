@@ -530,8 +530,8 @@ fn working_copy_path() -> PathBuf {
 
 /// Resolve the lazily-built demo state, building it once on first demo access.
 /// Returns `None` when the demo cannot be served (the native services are not
-/// composed, no demo DB is bundled, or the build failed); the caller then falls
-/// back to the proxy arm (hybrid) or a 503 (single-binary).
+/// composed, no demo DB is bundled, or the build failed); the caller then
+/// answers the 503 service-unavailable floor.
 pub(crate) async fn ensure_demo(state: &Arc<AppState>) -> Option<Arc<DemoState>> {
     let cell = state.demo_cell();
     cell.get_or_init(|| async {

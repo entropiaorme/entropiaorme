@@ -29,8 +29,8 @@ application data directory:
 
 Both databases run in write-ahead-logging (WAL) mode. The rationale for that
 choice (concurrent reads alongside a single writer, with the database opened
-once and shared across the request threadpool and background worker threads) is
-covered in [ADR 0007: SQLite in WAL mode](../adr/0007-sqlite-wal.md). The
+once and shared across the in-process request handlers and background worker
+threads) is covered in [ADR 0007: SQLite in WAL mode](../adr/0007-sqlite-wal.md). The
 services that own and query these databases are catalogued in the
 [service map](service-map.md).
 
@@ -56,7 +56,7 @@ connection is opened and before any migration runs:
 
 The connection is opened in `BaseDatabase.__init__` with
 `check_same_thread=False` and a `sqlite3.Row` row factory, and is shared across
-the FastAPI threadpool plus background worker threads. SQLite serialises
+the request handlers plus background worker threads. SQLite serialises
 individual `execute` calls internally, but Python-level multi-step patterns (an
 `execute` followed by a `fetchall`, or a batch of writes inside one
 transaction) need external serialisation to keep cursor state coherent across

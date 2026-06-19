@@ -6,7 +6,7 @@ Every record here describes a decision that has landed in the codebase, so each 
 
 | ADR | Decision |
 | --- | --- |
-| [ADR-0001](0001-strangler-fig-port.md) | Strangler-fig Python-to-Rust backend port |
+| [ADR-0001](0001-strangler-fig-port.md) | Strangler-fig Python-to-Rust backend port (superseded by ADR-0013) |
 | [ADR-0002](0002-event-spine.md) | Two-layer event spine: an in-process bus plus typed domain envelopes |
 | [ADR-0003](0003-injected-clock-seam.md) | An injected clock as the determinism seam for replay |
 | [ADR-0004](0004-test-mode-composition-root.md) | A separate test-mode composition root |
@@ -18,3 +18,4 @@ Every record here describes a decision that has landed in the codebase, so each 
 | [ADR-0010](0010-loose-response-models.md) | Descriptive read models, closed event envelopes |
 | [ADR-0011](0011-etag-conditional-requests.md) | Strong-ETag conditional requests on hydration reads |
 | [ADR-0012](0012-supervised-worker-threads.md) | Named, owned, supervised worker threads |
+| [ADR-0013](0013-in-process-collapse.md) | Collapse to a single in-process Rust binary |

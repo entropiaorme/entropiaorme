@@ -189,7 +189,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         // The shell plugin stays for its `open` API (external links route to
         // the OS browser via `$lib/utils/openExternal`); the sidecar/execute
-        // usage was removed with the Python backend at the Phase-9 crossing.
+        // usage was removed when the Python backend was decommissioned.
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -207,8 +207,8 @@ pub fn run() {
             install_runtime_window_icons(app.handle());
             // The single pure-Rust binary: the frontend reaches the backend
             // through the in-process IPC command (no inbound socket) and every
-            // route is served natively (the Python sidecar was decommissioned
-            // at the Phase-9 crossing). Startup composes the native spine off
+            // route is served natively (the Python sidecar has been
+            // decommissioned). Startup composes the native spine off
             // the setup path and publishes it to the IPC command when ready.
             // Dev and release compose identically; the resource dir (the
             // bundled snapshot / model / demo assets) resolves only in the

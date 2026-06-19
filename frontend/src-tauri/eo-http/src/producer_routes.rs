@@ -10,7 +10,7 @@
 //!
 //!   POST /api/tracking/start                  -> TrackingStartResult
 //!   POST /api/tracking/stop                   -> TrackingStopResult
-//!   GET  /api/tracking/manual-mob-suggestions -> list[ManualMobSuggestion]
+//!   GET  /api/tracking/manual-mob-suggestions -> `list[ManualMobSuggestion]`
 //!   POST /api/tracking/release-mob            -> ReleaseMobResult
 //!   POST /api/tracking/manual-mob-lock        -> ManualMobLockResult
 //!   POST /api/tracking/tag-lock               -> TagLockResult

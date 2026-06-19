@@ -3,9 +3,9 @@
 //! The single-binary in-process router: an axum application the frontend
 //! reaches through the `api_request` Tauri command (no socket), serving
 //! every backend route natively in-process. The Python sidecar and the
-//! reverse proxy were retired at the Phase-9 crossing, so there is no
-//! upstream and no per-route arm: a route is simply a registered native
-//! handler. The route map is documented in
+//! reverse proxy were retired when the backend collapsed into the shell
+//! process, so there is no upstream and no per-route arm: a route is simply
+//! a registered native handler. The route map is documented in
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod analytics_routes;
@@ -59,8 +59,8 @@ pub struct AppState {
     // substrate built without it: the dev routes then read as gate-off (404).
     data_dir: Option<PathBuf>,
     // The bundled demo database path, for the guide-mode `/api/demo` surface.
-    // `None` on a substrate built without it: the demo routes fall back to the
-    // proxy arm (hybrid) or 503 (single-binary).
+    // `None` on a substrate built without it: the demo routes answer the 503
+    // service-unavailable floor.
     demo_db: Option<PathBuf>,
     // The lazily-built demo services (a parallel hydration + tracker over a
     // writable clone of the demo DB), stood up on first demo access. The inner
@@ -70,9 +70,9 @@ pub struct AppState {
 }
 
 /// The composed native services, handed to [`AppState::install_native`] to
-/// flip the natively-registered routes off their proxy fallback. Every
-/// handle is present (composition either yields the full set or declines),
-/// so the bundle carries them by value rather than as options.
+/// bring the natively-registered routes up off the service-unavailable floor.
+/// Every handle is present (composition either yields the full set or
+/// declines), so the bundle carries them by value rather than as options.
 pub struct NativeServices {
     pub hydration: Arc<crate::hydration::HydrationState>,
     pub tracker: Arc<eo_services::tracker::HuntTracker>,
@@ -117,8 +117,8 @@ impl AppState {
     /// at the substrate, native responses decorated for allowed
     /// origins, and the origin guard enforced ahead of routing. Without
     /// it (substrates predating composition, and tests that do not
-    /// exercise the browser surface) preflights and origin rules flow
-    /// to the sidecar as before.
+    /// exercise the browser surface) no CORS contract is applied: the
+    /// browser surface is left undecorated and the origin guard inert.
     pub fn with_cors(mut self, cors: cors::CorsConfig) -> Self {
         self.cors = Some(cors);
         self
@@ -138,8 +138,8 @@ impl AppState {
     }
 
     /// Attach the bundled demo database path, enabling the guide-mode
-    /// `/api/demo` surface. Without it those routes fall back to the proxy
-    /// arm (hybrid) or 503 (single-binary).
+    /// `/api/demo` surface. Without it those routes answer the 503
+    /// service-unavailable floor.
     pub fn with_demo_db_path(mut self, demo_db: PathBuf) -> Self {
         self.demo_db = Some(demo_db);
         self
@@ -171,7 +171,8 @@ impl AppState {
 
     /// Attach the composed native services. Without this (a substrate
     /// built before composition, or composition declined at startup)
-    /// every natively-registered route falls back to the proxy arm.
+    /// every natively-registered route answers the 503 service-unavailable
+    /// floor.
     pub fn with_hydration(mut self, hydration: Arc<crate::hydration::HydrationState>) -> Self {
         self.hydration = RwLock::new(Some(hydration));
         self
@@ -188,8 +189,9 @@ impl AppState {
     /// Attach the live producer-spine tracker (the same `Arc<HuntTracker>`
     /// held by the Tauri-managed producer state). Without it (a substrate
     /// built before composition, or composition declined at startup) the
-    /// producer routes that need the live tracker fall back to the proxy
-    /// arm, exactly like the read surface without [`with_hydration`].
+    /// producer routes that need the live tracker answer the 503
+    /// service-unavailable floor, exactly like the read surface without
+    /// `with_hydration`.
     pub fn with_tracker(mut self, tracker: Arc<eo_services::tracker::HuntTracker>) -> Self {
         self.tracker = RwLock::new(Some(tracker));
         self
@@ -225,8 +227,8 @@ impl AppState {
     /// Attach the settings writer (the same `Arc<Mutex<ConfigService>>` the
     /// producer spine holds). Without it (a substrate built before
     /// composition, or composition declined at startup) the settings-write
-    /// routes fall back to the proxy arm, exactly like the read surface
-    /// without [`with_hydration`].
+    /// routes answer the 503 service-unavailable floor, exactly like the
+    /// read surface without `with_hydration`.
     pub fn with_config_service(
         mut self,
         config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
@@ -247,7 +249,7 @@ impl AppState {
 
     /// Attach the live producer-spine skill tracker (the same
     /// `Arc<SkillTracker>` held by the producer spine). Without it the codex
-    /// claim routes that arm `suppress_next` fall back to the proxy arm.
+    /// claim routes that arm `suppress_next` answer the 503 service-unavailable floor.
     pub fn with_skill_tracker(
         mut self,
         skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
@@ -267,7 +269,7 @@ impl AppState {
     /// Attach the composed manual skill-scan service (the OCR scan
     /// state machine). Without it (a substrate built before composition,
     /// composition declined, or the OCR runtime absent off Windows) the
-    /// scan routes fall back to the proxy arm.
+    /// scan routes answer the 503 service-unavailable floor.
     pub fn with_skill_scan(
         mut self,
         skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
@@ -287,7 +289,7 @@ impl AppState {
     }
 
     /// Attach the composed repair-OCR service. Without it the repair-scan
-    /// route falls back to the proxy arm.
+    /// route answers the 503 service-unavailable floor.
     pub fn with_repair_ocr(
         mut self,
         repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
@@ -305,7 +307,7 @@ impl AppState {
     }
 
     /// Attach the composed spacebar-capture listener. Without it the
-    /// spacebar-capture toggle route falls back to the proxy arm.
+    /// spacebar-capture toggle route answers the 503 service-unavailable floor.
     pub fn with_spacebar_listener(
         mut self,
         spacebar_listener: Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>,
@@ -325,8 +327,8 @@ impl AppState {
     }
 
     /// Attach the composed hotbar listener (the same `Arc<HotbarListener>` the
-    /// producer spine holds). Without it the snapshot route falls back to the
-    /// proxy arm (it reads the listener's running state).
+    /// producer spine holds). Without it the snapshot route answers the 503
+    /// service-unavailable floor (it reads the listener's running state).
     pub fn with_hotbar_listener(
         mut self,
         hotbar_listener: Arc<eo_services::hotbar_listener::HotbarListener>,
@@ -416,8 +418,7 @@ fn forbidden(detail: &str) -> Response {
 /// The public-boundary guard, mirroring the backend's own API-origin
 /// middleware clause for clause: OPTIONS and non-API paths pass
 /// untouched; a present Host header must name this router's loopback
-/// authority (the proxy's Host rewrite makes the sidecar's own check a
-/// no-op for proxied requests); and, when the CORS contract is
+/// authority; and, when the CORS contract is
 /// configured, mutating methods require an allowed Origin while reads
 /// reject a present-but-disallowed one. Each 403 body matches the
 /// backend's verbatim.
@@ -467,7 +468,7 @@ async fn api_guard(
 /// The outermost CORS layer, where the backend's stack also puts it: a
 /// preflight short-circuits everything (routing, the Host and origin
 /// guards) when the contract is configured, and every other response
-/// for an allowed Origin is decorated unless the sidecar already did.
+/// for an allowed Origin is decorated unless it already carries the header.
 async fn cors_layer(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -513,8 +514,9 @@ fn method_not_allowed() -> Response {
 /// stripped (the backend hard-405s HEAD on its GET routes). A path no
 /// registration matches falls through to the router's framework 404.
 ///
-/// The constructor still takes the route literal: the Phase-9 crossing
-/// retired the per-route proxy/native arm override this used to consult, so
+/// The constructor still takes the route literal: the collapse into the
+/// single-binary shell retired the per-route proxy/native arm override this
+/// used to consult, so
 /// the path is no longer read here, but it is kept as the inline record of
 /// the registration's path (matching the adjacent `.route(...)` key) and the
 /// `arm_routed`/`at` names are retained so the route map in [`native`] reads
@@ -570,8 +572,8 @@ where
 /// into the metrics registry, emitting a structured trace with method, path,
 /// and status. It is pure pass-through: it reads the request line and the
 /// response status but never mutates the request or the response (no body
-/// rewrite, no added header), so it is behaviour-neutral against the proxy
-/// and native goldens. The path is logged, never the query string, so no
+/// rewrite, no added header), so it is behaviour-neutral against the native
+/// goldens. The path is logged, never the query string, so no
 /// caller-supplied value reaches the logs.
 async fn observe(req: Request, next: axum::middleware::Next) -> Response {
     let method = req.method().clone();
@@ -650,8 +652,8 @@ fn build_in_process_request(
 /// Dispatch a request through the in-process router WITHOUT binding a socket:
 /// the server side of the Tauri-IPC transport that replaces the loopback HTTP
 /// hop. The request runs through the identical stack a client over the socket
-/// would hit (the native arms, the proxy fallback, the Host/origin guard,
-/// CORS, and the observe/metrics layer), so behaviour and instrumentation are
+/// would hit (the native arms, the Host/origin guard, CORS, and the
+/// observe/metrics layer), so behaviour and instrumentation are
 /// unchanged; only the transport in front of the router differs. A
 /// same-process request carries no Origin/Host, which the guard admits
 /// (v0.1.0 parity) and CORS leaves undecorated, exactly as intended.

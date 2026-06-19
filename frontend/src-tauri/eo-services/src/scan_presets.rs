@@ -64,7 +64,7 @@ impl PanelAnchor {
     /// per-cell pixel extents. Built from this merged anchor (the
     /// calibration file applied over the fallback), so an uncalibrated
     /// anchor yields `{"n_rows": null, "cells": {}}` and the reader returns
-    /// no rows, exactly as the sidecar skips extraction without calibration.
+    /// no rows, exactly as the Python reference skips extraction without calibration.
     pub fn to_geom_value(&self) -> Value {
         let mut cells = serde_json::Map::new();
         for (name, cell) in &self.cells {

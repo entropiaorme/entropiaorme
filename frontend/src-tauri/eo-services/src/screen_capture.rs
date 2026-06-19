@@ -6,7 +6,7 @@
 //!
 //! Windows-only: off Windows the captures return `None`, exactly as the
 //! OCR engine and the keystroke hook stand down, so the scan/repair
-//! routes degrade to their proxy arm rather than serving an empty capture.
+//! routes report "engine unavailable" rather than serving an empty capture.
 //! Capture is on-demand with no persistent handle (mirroring the Python
 //! capturer's per-call grab), so there is nothing to leak between scans.
 

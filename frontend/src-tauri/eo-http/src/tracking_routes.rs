@@ -13,7 +13,7 @@
 //! The fidelity cruxes:
 //! - `_ts_to_iso`: `datetime.fromtimestamp(ts, tz=UTC).isoformat()`, which
 //!   emits `+00:00` and 6-digit microseconds only when the fraction is
-//!   non-zero. [`ts_to_iso`] reproduces that exactly, splitting the fraction
+//!   non-zero. `ts_to_iso` reproduces that exactly, splitting the fraction
 //!   out (CPython's `modf`) before rounding so it does not inherit the
 //!   sub-microsecond precision loss of a whole-timestamp `* 1e6`.
 //! - pydantic coercion: a `float`-declared field coerces an engine-typed
@@ -21,7 +21,7 @@
 //!   integer. The `cost`/`returns`/`net`/`returnRate` columns are
 //!   `round(.., n)` over float-space sums, so they always carry a fraction;
 //!   the `level`/`ttValueGained`/`ttValue`/`damageDealt`/`costAttributed`
-//!   fields are float-declared and pass through [`float_field`].
+//!   fields are float-declared and pass through `float_field`.
 
 use std::collections::BTreeMap;
 

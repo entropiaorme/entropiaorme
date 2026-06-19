@@ -3,8 +3,9 @@
 //!
 //! Every route is self-gated on developer mode (404 when off), so they are off
 //! the equivalence-covered surface (no golden, no Python arm to diff against)
-//! and invisible to a default install. They are native-only: there is nothing
-//! to proxy to, so they bypass the arm system entirely. The metrics snapshot is
+//! and invisible to a default install. They are native-only: they have no
+//! counterpart in the Python reference, so they never had a route-override
+//! entry. The metrics snapshot is
 //! read straight from the process-global registry; the crash-reporting toggle
 //! reads and writes the shell-owned `observability.json` (NOT `settings.json`,
 //! which is the dual-arm equivalence surface).

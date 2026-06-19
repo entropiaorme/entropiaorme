@@ -13,8 +13,8 @@
  * callers never see openapi-fetch's `{ data, error }` split.
  */
 
-import createClient, { type Middleware } from 'openapi-fetch';
 import { invoke } from '@tauri-apps/api/core';
+import createClient, { type Middleware } from 'openapi-fetch';
 import type { paths } from './schema';
 
 /** The backend's nominal loopback base. The IPC facade (`tauriFetch`) parses
@@ -95,7 +95,9 @@ export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): 
 	const url = new URL(req.url);
 	const method = req.method.toUpperCase();
 	const headers: [string, string][] = [];
-	req.headers.forEach((value, key) => headers.push([key, value]));
+	req.headers.forEach((value, key) => {
+		headers.push([key, value]);
+	});
 	const body = method === 'GET' || method === 'HEAD' ? undefined : await req.text();
 
 	const res = await invoke<ApiResponseWire>('api_request', {

@@ -245,9 +245,10 @@ fn in_process_router_microbench() {
 
     // The replayed session's id, for the two session-scoped endpoints.
     let session_id = runtime.block_on(async {
-        let response = dispatch_in_process(state.clone(), "GET", "/api/tracking/sessions", &[], vec![])
-            .await
-            .expect("sessions dispatch");
+        let response =
+            dispatch_in_process(state.clone(), "GET", "/api/tracking/sessions", &[], vec![])
+                .await
+                .expect("sessions dispatch");
         assert_eq!(response.status, 200, "sessions list");
         let sessions: Value = serde_json::from_slice(&response.body).expect("sessions json");
         sessions
@@ -267,7 +268,10 @@ fn in_process_router_microbench() {
         ("GET_tracking_snapshot", "/api/tracking/snapshot"),
         ("GET_tracking_sessions", "/api/tracking/sessions"),
         ("GET_tracking_session_detail", detail.as_str()),
-        ("GET_tracking_session_quest_link_suggestion", suggestion.as_str()),
+        (
+            "GET_tracking_session_quest_link_suggestion",
+            suggestion.as_str(),
+        ),
         ("GET_quests", "/api/quests"),
         ("GET_quests_mobs", "/api/quests/mobs"),
         ("GET_quests_analytics", "/api/quests/analytics"),

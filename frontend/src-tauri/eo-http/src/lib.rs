@@ -649,14 +649,26 @@ fn build_in_process_request(
         .map_err(|err| format!("malformed in-process request: {err}"))
 }
 
+/// The webview's own origin, supplied to a same-process request that arrives
+/// without one so the origin guard admits it. Always present in the CORS
+/// allowlist (`cors::CorsConfig::new`), independent of the frontend port.
+const IN_PROCESS_ORIGIN: &str = "tauri://localhost";
+
 /// Dispatch a request through the in-process router WITHOUT binding a socket:
 /// the server side of the Tauri-IPC transport that replaces the loopback HTTP
 /// hop. The request runs through the identical stack a client over the socket
 /// would hit (the native arms, the Host/origin guard, CORS, and the
-/// observe/metrics layer), so behaviour and instrumentation are
-/// unchanged; only the transport in front of the router differs. A
-/// same-process request carries no Origin/Host, which the guard admits
-/// (v0.1.0 parity) and CORS leaves undecorated, exactly as intended.
+/// observe/metrics layer), so behaviour and instrumentation are unchanged;
+/// only the transport in front of the router differs.
+///
+/// A same-process request carries no Host, which the guard admits (an empty
+/// Host is the loopback caller). It also carries no Origin: `invoke` is not a
+/// network fetch, so unlike the loopback `fetch` it replaces, the browser does
+/// not attach one. The origin guard requires an allow-listed Origin on a
+/// mutating request, so the transport supplies the webview's own origin here;
+/// without it every POST/PATCH/DELETE would be refused with "Origin header
+/// required" before routing. A caller-supplied Origin is left untouched, so
+/// the guard still refuses an explicitly disallowed one.
 pub async fn dispatch_in_process(
     state: Arc<AppState>,
     method: &str,
@@ -666,7 +678,18 @@ pub async fn dispatch_in_process(
 ) -> Result<InProcessResponse, String> {
     use tower::ServiceExt as _;
 
-    let request = build_in_process_request(method, path_and_query, headers, body)?;
+    // Supply the webview's allow-listed Origin when the caller sent none, so
+    // the origin guard admits mutating IPC calls (see the doc comment above).
+    let request = if headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
+    {
+        build_in_process_request(method, path_and_query, headers, body)?
+    } else {
+        let mut headers = headers.to_vec();
+        headers.push(("origin".to_string(), IN_PROCESS_ORIGIN.to_string()));
+        build_in_process_request(method, path_and_query, &headers, body)?
+    };
 
     // `Router::oneshot` is infallible (its `Error` is `Infallible`): the
     // dispatch itself never errors, so only request construction above can.
@@ -814,10 +837,10 @@ mod tests {
     /// an HTTP client would hit and returns the transport-agnostic response
     /// shape. Proven end to end against the native `/api/health` arm (no
     /// sidecar, no composition required): a 200 with the health JSON, the
-    /// handler's Content-Type carried back, the body collected. A same-process
-    /// request carries no Origin/Host, which the guard admits and CORS leaves
-    /// undecorated, so the dispatch path is exercised exactly as the socket
-    /// path would be.
+    /// handler's Content-Type carried back, the body collected. The transport
+    /// supplies the webview's Origin and the request carries no Host (both
+    /// admitted), so the dispatch path is exercised exactly as the socket path
+    /// would be.
     #[tokio::test]
     async fn dispatch_in_process_routes_a_request_through_the_in_process_router() {
         let state = Arc::new(AppState::new(8421));
@@ -859,6 +882,52 @@ mod tests {
         let body: serde_json::Value =
             serde_json::from_slice(&response.body).expect("the 403 body is JSON");
         assert_eq!(body["detail"], "Invalid Host header");
+    }
+
+    /// A mutating in-process request that arrives without an Origin (every
+    /// `api_request`/`invoke` call: the webview attaches none) is admitted by
+    /// the origin guard, because the transport supplies the webview's own
+    /// allow-listed Origin. Without it the guard 403s every write before
+    /// routing; here the request reaches the router instead (a POST to the
+    /// GET-only health route is a 405, not a 403 "Origin header required").
+    /// Regression for the loopback-socket removal, which dropped the Origin the
+    /// browser used to attach to the equivalent `fetch`.
+    #[tokio::test]
+    async fn a_mutating_in_process_request_without_an_origin_is_admitted() {
+        let state =
+            Arc::new(AppState::new(8421).with_cors(crate::cors::CorsConfig::new(5173, None)));
+        let response = dispatch_in_process(state, "POST", "/api/health", &[], Vec::new())
+            .await
+            .expect("the dispatch succeeds");
+        assert_eq!(
+            response.status, 405,
+            "the mutating request passed the origin guard and reached the router \
+             (405 method-not-allowed), rather than being refused with a 403"
+        );
+    }
+
+    /// The supplied Origin is only a fallback for the gap the removed socket
+    /// left: a caller that DOES present an explicitly disallowed Origin on a
+    /// mutating request is still refused, so the guard's coverage is preserved
+    /// (the transport fills the absent-Origin case, it does not blanket-disable
+    /// the check).
+    #[tokio::test]
+    async fn an_explicit_disallowed_origin_on_a_mutating_request_is_refused() {
+        let state =
+            Arc::new(AppState::new(8421).with_cors(crate::cors::CorsConfig::new(5173, None)));
+        let response = dispatch_in_process(
+            state,
+            "POST",
+            "/api/health",
+            &[("origin".to_string(), "http://evil.example".to_string())],
+            Vec::new(),
+        )
+        .await
+        .expect("the dispatch succeeds");
+        assert_eq!(response.status, 403);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the 403 body is JSON");
+        assert_eq!(body["detail"], "Origin header required");
     }
 
     /// The transport's request construction (the IPC-descriptor -> http::Request

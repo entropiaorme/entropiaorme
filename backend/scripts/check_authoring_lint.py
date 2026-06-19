@@ -73,6 +73,12 @@ _EXEMPT_PATTERNS = (
     re.compile(r"(^|/)backend/tests/expected/openapi\.snapshot\.json$"),
     re.compile(r"(^|/)backend/testing/COVERAGE\.md$"),
     re.compile(r"(^|/)frontend/src/lib/api/schema\.d\.ts$"),
+    # Generated demo-output goldens: the curated demo endpoints' responses,
+    # pinned byte-for-byte from the oracle and embedded via include_str! in the
+    # demo golden test. They carry mock user-entered data (notes, descriptions)
+    # that deliberately mimics real input (em dashes and all), so they are
+    # captured fixtures, not hand-authored content.
+    re.compile(r"(^|/)frontend/src-tauri/eo-http/resources/demo_goldens/"),
 )
 
 # Prose file types whose every line is authored prose for the UK-spelling check.

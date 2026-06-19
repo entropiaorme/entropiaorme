@@ -457,7 +457,7 @@ pub enum Composition {
     /// The native services are built and ready to install.
     Ready(Composed),
     /// A terminal decline (a missing/empty snapshot, a producer fault, or a
-    /// database that cannot be opened or adopted — including one whose schema
+    /// database that cannot be opened or adopted, including one whose schema
     /// predates the supported baseline, which the retired sidecar used to
     /// migrate forward). Logged loudly; the backend does not come up.
     Declined,

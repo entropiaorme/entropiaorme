@@ -8,7 +8,7 @@
  * `listen()`. This module owns only the HYDRATE NUDGE: a payload-less frame on
  * each forwarded topic that prompts every window to re-read its current state,
  * so a window cannot show stale data after it first mounts or after the native
- * spine hot-installs mid-session.
+ * spine is installed at startup.
  *
  * Only the main window nudges. Every window inherits the root layout that starts
  * this, but the nudge is a global emit (one reaches every window), so the main
@@ -31,11 +31,11 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 const FORWARDED_TOPICS = ['tracking.session.updated', 'scan.status.changed'] as const;
 
 /**
- * Substrate handover signal. On a first launch after an upgrade the shell starts
- * proxy-only and hot-installs the native service spine mid-session; the native
- * producer's events only begin flowing once it installs. The shell emits this
- * when the swap completes so the relay can re-hydrate every window onto the
- * freshly-live native state.
+ * Substrate ready signal. The shell composes the native service spine at startup
+ * and publishes the backend substrate only once it is installed (the `api_request`
+ * command errors until then); the native producer's events begin flowing from that
+ * point. The shell emits this once composition completes so the relay can
+ * re-hydrate every window onto the freshly-live native state.
  */
 const SUBSTRATE_NATIVE_INSTALLED_EVENT = 'substrate:native-installed';
 

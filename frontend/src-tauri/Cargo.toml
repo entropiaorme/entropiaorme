@@ -1,13 +1,14 @@
 # Cargo workspace for the desktop application's Rust side.
 #
 # Members:
-#   - entropia-orme: the Tauri shell (window chrome, sidecar lifecycle). The
-#     only member coupled to the Tauri toolchain.
+#   - entropia-orme: the Tauri shell (window chrome, the api_request IPC
+#     dispatch, native-service composition). The only member coupled to the
+#     Tauri toolchain.
 #   - eo-http:     HTTP substrate for the native backend (router, middleware).
 #   - eo-services: domain services behind that HTTP surface.
 #   - eo-wire:     wire-format contracts (response/event types, serialisation).
 #
-# The eo-* members are the landing zone for the native backend port (see
+# The eo-* members are the native backend (see
 # backend/architecture/PORT-READINESS.md and PORTING-RULEBOOK.md). They are
 # deliberately Tauri-free: CI builds and tests them on a runner without the
 # Tauri toolchain's system stack, which structurally prevents a GUI dependency
@@ -25,9 +26,9 @@ license = "MIT"
 
 [workspace.dependencies]
 # Tauri is pinned to the 2.11 minor (the known-good release line when this
-# workspace was laid down). The backend port runs a long-lived hybrid inside
-# the shell process, and a mid-flight Tauri minor bump is a moving-target risk
-# the pin removes; re-evaluate only on a major release with material benefit.
+# workspace was laid down). The backend runs inside the shell process, and a
+# mid-flight Tauri minor bump is a moving-target risk the pin removes;
+# re-evaluate only on a major release with material benefit.
 # tauri-build rides its matching minor for the same reason. Review the
 # .cargo/audit.toml and deny.toml ignore lists together with any bump.
 tauri = { version = "~2.11", features = [] }
@@ -55,10 +56,10 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24", "directml"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows = "0.61"
-# The strangler-fig HTTP substrate: axum owns the public loopback address and
-# reverse-proxies not-yet-ported routes to the relocated Python sidecar.
-# axum is pinned to the 0.8 minor for the duration of the hybrid, mirroring
-# the Tauri pin above: the proxy seam is the one surface every route crosses.
+# The in-process HTTP substrate: axum serves every backend route natively
+# in-process, dispatched through the api_request IPC command (no socket).
+# axum is pinned to the 0.8 minor, mirroring the Tauri pin above: it is the
+# one surface every backend request crosses.
 axum = { version = "~0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "sync", "macros"] }
 hyper = { version = "1", default-features = false }

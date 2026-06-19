@@ -21,9 +21,9 @@
 //! The committed `backend/architecture/port_baseline.json` HTTP figures are a
 //! Linux, over-the-socket, Python capture: a different host, transport, and
 //! language, so they are a drift-only cross-reference, never a same-axis
-//! before/after. The headline pair is the same-host one the maintainer
-//! completes in the quiesced session (the installed v0.1.0 over its socket vs
-//! this binary), and is assembled there.
+//! before/after. The same-axis comparison is a same-host capture of the prior
+//! socket-based release against this in-process binary; these in-process
+//! figures are one half of that pair.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

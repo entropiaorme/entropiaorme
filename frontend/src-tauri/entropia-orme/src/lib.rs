@@ -310,8 +310,8 @@ fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::Path
                 // Answer the browser surface (preflights, origin rules,
                 // response decoration) from the same environment inputs.
                 .with_cors(eo_http::cors::CorsConfig::from_env())
-                // The data dir powers the hidden dev-tools routes (the
-                // developer-mode gate and the crash-reporting toggle).
+                // The data dir powers the developer-mode-gated dev-tools routes
+                // (the developer-mode gate and the crash-reporting toggle).
                 .with_data_dir(composition::data_dir())
                 // The bundled demo database powers the guide-mode `/api/demo`
                 // surface (a writable per-process clone, stood up lazily).

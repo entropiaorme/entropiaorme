@@ -330,7 +330,7 @@ jobs:
       # The eo-wire / eo-services member tests with the cross-language feature
       # on: the hermetic tests plus the live differential fuzzes against the
       # Python oracle (the Normalizer and cost-engine fuzzes). The eo-http
-      # arm-vs-sidecar A/B battery was retired at the Phase-9 crossing (the
+      # arm-vs-sidecar A/B battery was retired when the sidecar was removed (the
       # sidecar is gone; eo-http behaviour is pinned by its own hermetic suite).
       - name: Run the cross-language equivalence differentials
         working-directory: frontend/src-tauri

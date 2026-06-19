@@ -500,8 +500,7 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
             // native arm adopted it; with the sidecar gone there is nothing
             // to do so, so this is now a terminal decline rather than a
             // first-launch-after-upgrade race. (Porting the pre-baseline
-            // upgrade chain natively is the separable v0.2.0-public obligation;
-            // the maintainer's dogfood database is already at the baseline.)
+            // upgrade chain natively is deferred future work.)
             tracing::error!(
                 target: "eo::composition",
                 "{err}; the backend cannot serve until the database is at the supported baseline \

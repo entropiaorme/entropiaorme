@@ -637,7 +637,7 @@ mod tests {
         );
     }
 
-    /// M4/M6: the bundle ships no Python sidecar. The packaging spec declares
+    /// The bundle ships no Python sidecar. The packaging spec declares
     /// no `externalBin`, and the shell `execute`/sidecar capability is gone
     /// (only `open` survives, for external links), so the installed artefact
     /// carries the single native binary alone.

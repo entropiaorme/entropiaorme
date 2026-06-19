@@ -291,16 +291,17 @@ impl DemoState {
     }
 
     async fn ensure_primed(&self) -> Result<(), DemoError> {
-        // `OnceCell` runs the prime exactly once even under concurrent first
-        // snapshots; a failure is not cached, so a transient error can retry.
-        if self.primed.get().is_some() {
-            return Ok(());
-        }
-        let result = self.prime().await;
-        if result.is_ok() {
-            let _ = self.primed.set(());
-        }
-        result
+        // `get_or_try_init` runs the prime exactly once even under concurrent
+        // first snapshots: the losers await the winner's result rather than
+        // racing a second prime (the manual get-then-set this replaced left an
+        // await between the check and the set, so two callers could both prime
+        // and the second would hit the fixture's UNIQUE keys). A failed prime
+        // is not cached, so a transient error can still retry. Mirrors the
+        // reference demo's `_state_lock`-serialised prime and `ensure_demo`.
+        self.primed
+            .get_or_try_init(|| self.prime())
+            .await
+            .map(|_| ())
     }
 
     /// Write the mid-hunt session into the demo DB and prime the demo tracker,

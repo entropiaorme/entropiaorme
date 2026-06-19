@@ -68,9 +68,11 @@ struct ApiResponse {
 
 /// Dispatch a frontend backend call through the in-process router (no socket):
 /// the server side of the IPC transport that replaces the loopback HTTP hop.
-/// The substrate task hands the composed state to managed state; until it
-/// lands (a brief startup window) the command errors and the caller retries,
-/// exactly as an unbound socket would refuse a connection.
+/// The shell publishes the composed state to this command only once the native
+/// spine is installed; until then (a brief startup window, or permanently if
+/// composition declines) the command errors. The frontend's initial reads then
+/// fail and are re-driven by the `substrate:native-installed` event the shell
+/// emits the moment the spine is live (there is no transport-level retry).
 #[tauri::command]
 async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiResponse, String> {
     let state = app
@@ -295,11 +297,12 @@ fn public_backend_port() -> u16 {
 /// composes the native service spine off the setup path, and on success
 /// installs the services, publishes the state to the `api_request` command,
 /// and signals the frontend (see [`install_native_services`]). Until
-/// composition lands the command answers "not ready" and the caller retries
-/// (an unbound socket would likewise refuse a connection); a declined
-/// composition is logged and the backend does not come up for the session (an
-/// unopenable database, or one below the supported baseline the retired
-/// sidecar used to migrate forward).
+/// composition lands the `api_request` command errors; the frontend's initial
+/// reads are re-driven by the `substrate:native-installed` event the install
+/// emits (there is no transport-level retry). A declined composition is logged
+/// and the backend does not come up for the session (an unopenable database, or
+/// one below the supported baseline the retired sidecar used to migrate
+/// forward).
 fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::PathBuf>) {
     tauri::async_runtime::spawn(async move {
         let state = std::sync::Arc::new(
@@ -376,10 +379,10 @@ fn install_native_services(
         skill_scan: exit_skill_scan,
     });
     // Publish the composed state to the IPC command LAST: until now
-    // `api_request` answers "backend substrate not ready" and the frontend
-    // retries, so by the time any request dispatches every native service is
-    // present (there is no absent-service window to fall back from). Then
-    // signal the frontend that the backend is live so it (re-)hydrates its
+    // `api_request` errors with "backend substrate not ready", so by the time
+    // any request dispatches every native service is present (there is no
+    // absent-service window to fall back from). Then signal the frontend that
+    // the backend is live so it (re-)hydrates its
     // initial reads.
     app.manage(ApiSubstrate(state.clone()));
     let _ = app.emit("substrate:native-installed", ());

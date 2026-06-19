@@ -10,8 +10,6 @@ publish = false
 [dependencies]
 axum.workspace = true
 tokio.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
@@ -24,7 +22,6 @@ eo-wire.workspace = true
 eo-services.workspace = true
 sqlx.workspace = true
 sha2.workspace = true
-tokio-stream.workspace = true
 percent-encoding.workspace = true
 # Epoch-to-date arithmetic for the analytics period windows, mirroring the
 # router's datetime.fromtimestamp(...).strftime date math.
@@ -41,6 +38,10 @@ tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
 bytes.workspace = true
+# The native-router integration test drives the in-process router over a test
+# loopback socket with a plain HTTP client (the shipped binary binds none).
+hyper.workspace = true
+hyper-util.workspace = true
 tempfile.workspace = true
 # test-util powers the paused-clock keep-alive cadence test; dev-only so
 # the feature never reaches a shipped build.

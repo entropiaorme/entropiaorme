@@ -22,7 +22,6 @@ pub mod producer_routes;
 pub mod pyjson;
 pub mod scan_routes;
 pub mod settings_routes;
-pub mod sse;
 pub mod tracking_routes;
 
 use std::future::Future;

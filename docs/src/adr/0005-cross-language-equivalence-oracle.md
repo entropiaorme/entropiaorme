@@ -1,11 +1,11 @@
 # ADR-0005: Cross-language equivalence oracle
 
 - Status: Accepted
-- Context: reflects the landed implementation
+- Context: reflects the landed implementation; the port is now complete ([ADR-0013](0013-in-process-collapse.md): a single in-process Rust binary, superseding the strangler-fig topology of [ADR-0001](0001-strangler-fig-port.md)), and this oracle is retained as the cross-language equivalence test harness.
 
 ## Context and problem statement
 
-The backend is being ported from a Python FastAPI sidecar to a native Rust spine ([ADR-0001](0001-strangler-fig-port.md)) one service at a time, with both implementations expected to serve identical behaviour at every externally observable surface. Reviewing a port by eye does not scale to that bar: the observable surfaces (event-stream frames, persisted database rows, HTTP response bodies, the route document, and the domain-event envelopes) interlock, and the failure modes are subtle. The same response mixes snake_case and camelCase keys per field, value fields render as floats with a trailing decimal point while counts render bare, Python's `round` is round-half-to-even on the binary value, and Python's `float.__repr__` and `json.dumps` produce byte forms that a naive Rust serialiser does not reproduce. A claim of equivalence needs a mechanical judge, not a human one.
+The backend was ported from a Python FastAPI sidecar to a native Rust spine ([ADR-0001](0001-strangler-fig-port.md)) one service at a time, with both implementations expected to serve identical behaviour at every externally observable surface. Reviewing a port by eye does not scale to that bar: the observable surfaces (event-stream frames, persisted database rows, HTTP response bodies, the route document, and the domain-event envelopes) interlock, and the failure modes are subtle. The same response mixes snake_case and camelCase keys per field, value fields render as floats with a trailing decimal point while counts render bare, Python's `round` is round-half-to-even on the binary value, and Python's `float.__repr__` and `json.dumps` produce byte forms that a naive Rust serialiser does not reproduce. A claim of equivalence needs a mechanical judge, not a human one.
 
 The constraint that shapes the judge: equivalence must be decidable as **byte equality** of committed golden artefacts, so that a ported unit either reproduces the goldens exactly or fails visibly. That requires a single canonicalisation applied identically by both implementations, and a fixed projection of each surface that masks only genuine nondeterminism (identifiers, wall-clock instants, sub-precision float noise) and observes everything else verbatim.
 

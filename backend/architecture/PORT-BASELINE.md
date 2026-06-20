@@ -1,5 +1,7 @@
 # Port baseline: the Python backend's reference numbers
 
+> **Historical.** The native port is complete (PR #150). These are the point-in-time reference numbers captured before the port, retained as the baseline the port was graded against. The published before/after comparison was produced separately, as the closing paragraph notes.
+
 A point-in-time performance and coverage reference for the Python
 sidecar, captured before any route of the native (Rust) backend port
 went live. Port work is graded against these numbers in flight; the

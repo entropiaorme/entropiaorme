@@ -1,5 +1,7 @@
 # Port readiness
 
+> **Historical.** The native port is complete: the backend now runs as a single in-process Rust spine inside the Tauri shell (PR #150), and the Python implementation is retained only as the cross-language equivalence test oracle, not as a shipped runtime. This document is preserved as the port-readiness record (what mapped mechanically, what needed a deliberate decision, what was kept on purpose); it describes the analysis done ahead of the port, not pending work.
+
 The backend's architecture was deliberately shaped so that a native port of the sidecar is a translation exercise rather than a redesign: the patterns in [`README.md`](README.md) were chosen to have direct, idiomatic equivalents in a systems language. This file inventories that mapping honestly: what ports mechanically, what needs a deliberate decision, and which Python-specific choices were kept on purpose.
 
 "Port" here means a contemplated native rewrite of this Python sidecar (the working target sketch is Rust inside the Tauri shell, collapsing the two-runtime topology into one process). It does not mean operating-system portability. Nothing in this file commits to the rewrite; it records the readiness so the option stays cheap. The companion [`PORTING-RULEBOOK.md`](PORTING-RULEBOOK.md) turns this inventory into application-ready rules for an implementer.

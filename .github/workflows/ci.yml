@@ -435,21 +435,26 @@ jobs:
   ci-gate:
     name: CI gate
     runs-on: ubuntu-latest
-    # The required check on the default branch, in place of the individual
-    # backend-matrix and frontend contexts. It always runs (if: always()), so it
-    # always reports a status, and it is fail-closed: it passes only when the
-    # change is documentation-only (the gated jobs were legitimately skipped) or
-    # when every gated job succeeded. A detection that did not run cleanly, or a
-    # code change whose jobs did not pass, fails it, so a skip can never let an
-    # untested change merge. This lets a documentation-only pull request go green
-    # in seconds without deadlocking on a never-reported required job.
-    needs: [changes, frontend, frontend-e2e, rust-policy, rust, rust-members, rust-coverage]
+    # The SINGLE required check on the default branch: it subsumes every gating
+    # job (the frontend build, the Rust workspace, golden ratification, and the
+    # authoring lint) so branch protection requires only this one context and
+    # never drifts when an individual job is added, renamed, or removed. It
+    # always runs (if: always()), so it always reports a status, and it is
+    # fail-closed: it passes only when the change is documentation-only (the
+    # change-scope-gated jobs were legitimately skipped) or when every gated job
+    # succeeded. A detection that did not run cleanly, or a code change whose
+    # jobs did not pass, fails it, so a skip can never let an untested change
+    # merge. This lets a documentation-only pull request go green in seconds
+    # without deadlocking on a never-reported required job.
+    needs: [changes, golden-ratification, authoring-lint, frontend, frontend-e2e, rust-policy, rust, rust-members, rust-coverage]
     if: always()
     steps:
       - name: Require the gated jobs to have passed (or been documentation-only)
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
+          GOLDEN_RATIFICATION_RESULT: ${{ needs.golden-ratification.result }}
+          AUTHORING_LINT_RESULT: ${{ needs.authoring-lint.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           RUST_POLICY_RESULT: ${{ needs.rust-policy.result }}
@@ -463,9 +468,23 @@ jobs:
             exit 1
           fi
           # The Rust policy job is unconditional (it does not compile, so it is
-          # not gated on change scope) and must pass on every run.
+          # not gated on change scope) and must pass on every run, a push to main
+          # included.
           if [ "$RUST_POLICY_RESULT" != "success" ]; then
             echo "::error::The Rust workspace policy checks (fmt, audit, deny) did not pass (result: $RUST_POLICY_RESULT)."
+            exit 1
+          fi
+          # The golden ratification guard and the authoring lint run on pull
+          # requests and the merge queue (the gating events). They are skipped on
+          # a direct push to main, where the gate tolerates the skip because the
+          # gating already happened at the pull-request and merge-queue runs. A
+          # real failure on a gating event still fails the gate.
+          if [ "$GOLDEN_RATIFICATION_RESULT" != "success" ] && [ "$GOLDEN_RATIFICATION_RESULT" != "skipped" ]; then
+            echo "::error::The golden ratification guard did not pass (result: $GOLDEN_RATIFICATION_RESULT)."
+            exit 1
+          fi
+          if [ "$AUTHORING_LINT_RESULT" != "success" ] && [ "$AUTHORING_LINT_RESULT" != "skipped" ]; then
+            echo "::error::The authoring lint did not pass (result: $AUTHORING_LINT_RESULT)."
             exit 1
           fi
           if [ "$CODE" = "false" ]; then

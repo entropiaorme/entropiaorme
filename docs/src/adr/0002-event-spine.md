@@ -3,6 +3,8 @@
 - Status: Accepted
 - Context: reflects the landed implementation
 
+> **Transport update ([ADR-0013](0013-in-process-collapse.md)).** The two-layer spine, the typed `DomainEvent` envelopes, and the cross-language wire-equality pin below are unchanged. What moved is the frontend-facing transport: the old `GET /api/events` server-sent-event stream is gone, and the finished frames now reach the webview over an in-process Tauri event bridge (`spawn_domain_event_bridge` re-emits each frame onto the Tauri event system; the relay listens). Read "`GET /api/events` streams those frames ... the frontend relay opens one `EventSource`" below as that historical HTTP path; the envelope contract it carried is identical on the bridge.
+
 ## Context and problem statement
 
 Backend services share process memory and need to coordinate at a fine grain: a parsed combat line, a loot group, a skill gain, a settled parse tick. These are intra-backend wiring signals, string-typed and dict-shaped, at the wrong granularity to push to a webview. A frontend window does not want "a damage_dealt combat line"; it wants "the live session aggregates changed". The two concerns pull in opposite directions: in-process coordination wants an open, untyped, low-ceremony bus, whereas the push channel to the webview wants a closed, typed, versioned contract that survives the boundary and a future native re-emitter.

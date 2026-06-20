@@ -11,9 +11,8 @@ fingerprint-comparable.
 The composition root registers this router ONLY when the test-mode
 overlay is active (and never in frozen builds), so the surface does not
 exist in production: requests 404 at the routing layer. Every handler
-additionally re-checks the gate server-side, the recording router's
-defence-in-depth pattern, so even an accidental registration stays
-inert (403).
+additionally re-checks the gate server-side (defence in depth), so even
+an accidental registration stays inert (403).
 """
 
 import logging

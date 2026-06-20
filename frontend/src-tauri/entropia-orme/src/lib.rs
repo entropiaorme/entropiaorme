@@ -3,14 +3,9 @@ mod crash;
 mod resources;
 mod telemetry;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-use std::process::Command as StdCommand;
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
 
 #[tauri::command]
 fn toggle_overlay(app: tauri::AppHandle) {
@@ -46,20 +41,94 @@ fn hide_scan_overlay(app: tauri::AppHandle) {
     }
 }
 
-// Holds the spawned Python backend so we can terminate it on app exit.
-// Default Windows process semantics leave the child running when the
-// parent exits; without this kill on RunEvent::Exit the sidecar would
-// linger (and keep port 8421 bound) past app close.
-struct SidecarChild(Mutex<Option<CommandChild>>);
+/// The backend-call IPC seam: the typed request descriptor the frontend's
+/// `tauriFetch` sends in place of a loopback HTTP request. `path` carries the
+/// `/api/...` path plus any query string; `headers` round-trips the request
+/// headers (Content-Type, If-None-Match); `body` is the JSON request body.
+#[derive(serde::Deserialize)]
+struct ApiRequest {
+    method: String,
+    path: String,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// The response the seam returns, mirroring an HTTP response so the frontend
+/// rebuilds a `Response` the existing openapi-fetch client consumes unchanged.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiResponse {
+    status: u16,
+    status_text: String,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+/// Dispatch a frontend backend call through the in-process router (no socket):
+/// the server side of the IPC transport that replaces the loopback HTTP hop.
+/// The shell publishes the composed state to this command only once the native
+/// spine is installed; until then (a brief startup window, or permanently if
+/// composition declines) the command errors. The frontend's initial reads then
+/// fail and are re-driven by the `substrate:native-installed` event the shell
+/// emits the moment the spine is live (there is no transport-level retry).
+#[tauri::command]
+async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiResponse, String> {
+    let state = app
+        .try_state::<ApiSubstrate>()
+        .ok_or("backend substrate not ready")?
+        .0
+        .clone();
+    let body = request.body.unwrap_or_default().into_bytes();
+    let response = eo_http::dispatch_in_process(
+        state,
+        &request.method,
+        &request.path,
+        &request.headers,
+        body,
+    )
+    .await?;
+    Ok(ApiResponse {
+        status: response.status,
+        status_text: response.status_text,
+        headers: response.headers,
+        // The first slice carries JSON routes; the raw-bytes capture-PNG route
+        // moves to its own base64-returning command in a later slice.
+        body: String::from_utf8_lossy(&response.body).into_owned(),
+    })
+}
+
+/// GET the manual-scan capture preview PNG for `page`, base64-encoded for an
+/// `<img>` `data:` URL. The route returns raw image bytes and is excluded from
+/// the JSON IPC envelope (`api_request` carries text bodies), so it rides its
+/// own command, dispatched through the same in-process router (no socket).
+#[tauri::command]
+async fn capture_png(app: tauri::AppHandle, page: u32) -> Result<String, String> {
+    use base64::Engine as _;
+    let state = app
+        .try_state::<ApiSubstrate>()
+        .ok_or("backend substrate not ready")?
+        .0
+        .clone();
+    let path = format!("/api/scan/skills/capture/{page}");
+    let response = eo_http::dispatch_in_process(state, "GET", &path, &[], Vec::new()).await?;
+    if response.status != 200 {
+        return Err(format!(
+            "capture preview unavailable (status {})",
+            response.status
+        ));
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(&response.body))
+}
 
 // Holds the substrate's live producer spine so the Tauri exit seam can
 // stop it deterministically. The substrate task composes the producers
 // inside its own async context (after the database opens) and hands the
 // spine here; `RunEvent::Exit` then stops the chat-log tail thread and
 // ends any open session before the process tears down. There is no
-// graceful-shutdown signal into the substrate's serve loop, so this exit
-// seam is the producer teardown path (the same seam that kills the
-// sidecar child).
+// graceful-shutdown signal into the substrate's compose path, so this exit
+// seam is the producer teardown path.
 struct Producers(Mutex<Option<composition::ProducerState>>);
 
 // Holds the substrate's warmed OCR engine for the app's lifetime. The
@@ -90,6 +159,12 @@ struct ScanInput {
     skill_scan: std::sync::Arc<composition::SkillScanManual>,
 }
 
+// Holds the composed HTTP substrate state so the `api_request` IPC command can
+// dispatch the in-process router (the loopback-socket replacement). The
+// substrate task hands it here once the AppState is built; `api_request` reads
+// it per call and errors until then.
+struct ApiSubstrate(std::sync::Arc<eo_http::AppState>);
+
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 
@@ -112,69 +187,33 @@ pub fn run() {
     resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()
+        // The shell plugin stays for its `open` API (external links route to
+        // the OS browser via `$lib/utils/openExternal`); the sidecar/execute
+        // usage was removed when the Python backend was decommissioned.
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             show_scan_overlay,
-            hide_scan_overlay
+            hide_scan_overlay,
+            api_request,
+            capture_png
         ])
         .setup(|app| {
-            // Both uses of `app` compile out on a non-Windows debug build
-            // (icon install is Windows-only, the sidecar spawn is
-            // release-only); keep the binding alive for that combination.
+            // `app` is unused on a non-Windows debug build (the runtime icon
+            // install is Windows-only); keep the binding alive there.
             let _ = &app;
             #[cfg(windows)]
             install_runtime_window_icons(app.handle());
-            // Only the bundled release shell spawns the PyInstaller sidecar.
-            // Dev builds talk to a separately launched backend, and the dev
-            // sidecar slot holds a placeholder binary that Windows rejects
-            // (os error 193); gating the spawn to release keeps that error
-            // out of the dev console.
-            //
-            // Topology: the native HTTP substrate owns the public loopback
-            // port the frontend is wired to; the sidecar relocates to a
-            // private port behind the reverse proxy. Every failure path
-            // degrades to the legacy direct topology (sidecar on the public
-            // port, no proxy) so a substrate fault never takes the app down.
-            #[cfg(not(debug_assertions))]
-            {
-                let relocation = bind_substrate_listener()
-                    .and_then(|listener| allocate_private_port().map(|port| (listener, port)));
-                match relocation {
-                    Some((listener, sidecar_port)) => {
-                        spawn_backend_sidecar(
-                            app.handle(),
-                            SidecarSpawn::RelocatedIdle(sidecar_port),
-                        );
-                        spawn_http_substrate(
-                            app.handle().clone(),
-                            listener,
-                            sidecar_port,
-                            app.path().resource_dir().ok(),
-                            // The substrate owns production once it relocates
-                            // and idles the sidecar; if the native spine never
-                            // composes, recover by respawning that sidecar as
-                            // the producer so the session is never left with
-                            // no producer at all.
-                            true,
-                        );
-                    }
-                    None => spawn_backend_sidecar(app.handle(), SidecarSpawn::Legacy),
-                }
-            }
-            // Dev runs the backend from the dev launcher; the substrate
-            // joins in only when that launcher published the backend's
-            // private port, which keeps a plain unproxied dev stack working.
-            #[cfg(debug_assertions)]
-            if let Some(sidecar_port) = dev_sidecar_port() {
-                if let Some(listener) = bind_substrate_listener() {
-                    // Dev's backend is launched (and owned) by the dev
-                    // launcher, never idled by us, so there is no relocated
-                    // sidecar for the substrate to recover.
-                    spawn_http_substrate(app.handle().clone(), listener, sidecar_port, None, false);
-                }
-            }
+            // The single pure-Rust binary: the frontend reaches the backend
+            // through the in-process IPC command (no inbound socket) and every
+            // route is served natively (the Python sidecar has been
+            // decommissioned). Startup composes the native spine off
+            // the setup path and publishes it to the IPC command when ready.
+            // Dev and release compose identically; the resource dir (the
+            // bundled snapshot / model / demo assets) resolves only in the
+            // installed build, dev falling back to the repository copies.
+            compose_substrate(app.handle().clone(), app.path().resource_dir().ok());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -197,10 +236,10 @@ pub fn run() {
             #[cfg(windows)]
             destroy_runtime_window_icons(app);
 
-            // Stop the producer spine first (before the sidecar dies):
-            // end any open session so its stop events publish, then stop
-            // the chat-log tail thread. The substrate's serve task has no
-            // shutdown signal, so this is where the producers wind down.
+            // Stop the producer spine: end any open session so its stop
+            // events publish, then stop the chat-log tail thread. The
+            // substrate's compose task has no shutdown signal, so this is
+            // where the producers wind down.
             if let Some(state) = app.try_state::<Producers>() {
                 if let Ok(mut guard) = state.0.lock() {
                     if let Some(producers) = guard.take() {
@@ -214,18 +253,6 @@ pub fn run() {
             if let Some(state) = app.try_state::<ScanInput>() {
                 state.spacebar.stop();
                 state.skill_scan.shutdown();
-            }
-
-            if let Some(state) = app.try_state::<SidecarChild>() {
-                if let Ok(mut guard) = state.0.lock() {
-                    if let Some(child) = guard.take() {
-                        kill_sidecar_tree(&child);
-                        // Dropping the handle after taskkill /T /F has
-                        // already terminated the process; no extra
-                        // TerminateProcess needed.
-                        drop(child);
-                    }
-                }
             }
         }
     });
@@ -252,26 +279,11 @@ fn destroy_runtime_window_icons(app: &tauri::AppHandle) {
     }
 }
 
-fn kill_sidecar_tree(child: &CommandChild) {
-    // PyInstaller onefile launches a bootloader process that unpacks
-    // the bundle and spawns a child python interpreter. CommandChild::kill
-    // calls TerminateProcess on just the bootloader; the python child
-    // orphans (Windows does not cascade kills). Use taskkill /T /F to
-    // walk the process tree.
-    let pid = child.pid();
-    let mut cmd = StdCommand::new("taskkill");
-    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-    // GUI-subsystem parent spawning a console-subsystem child (taskkill)
-    // without window suppression allocates a conhost console that flashes
-    // briefly during the call. CREATE_NO_WINDOW = 0x08000000 keeps the
-    // cleanup invisible.
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
-    let _ = cmd.output();
-}
-
-/// The public loopback port the frontend dials (`client.ts` and the CSP
-/// are baked against it; 8421 unless the dev environment overrides).
+/// The nominal public loopback authority the inbound Host allowlist is
+/// derived from. The frontend reaches the backend over the in-process IPC
+/// command and sends no Host header, so this only bites a request presenting
+/// an explicit Host (which the IPC transport never does); 8421 unless the dev
+/// environment overrides it.
 fn public_backend_port() -> u16 {
     std::env::var("ENTROPIAORME_BACKEND_PORT")
         .ok()
@@ -279,219 +291,50 @@ fn public_backend_port() -> u16 {
         .unwrap_or(8421)
 }
 
-/// Bind the substrate's public listener up front so relocation only
-/// happens once the public port is actually ours.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn bind_substrate_listener() -> Option<std::net::TcpListener> {
-    let port = public_backend_port();
-    match std::net::TcpListener::bind(("127.0.0.1", port)) {
-        Ok(listener) => {
-            if let Err(err) = listener.set_nonblocking(true) {
-                tracing::warn!(target: "eo::substrate", "nonblocking mode failed: {err}");
-                return None;
-            }
-            Some(listener)
-        }
-        Err(err) => {
-            tracing::warn!(target: "eo::substrate", "public port {port} bind failed: {err}");
-            None
-        }
-    }
-}
-
-/// An OS-allocated free loopback port for the relocated sidecar.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn allocate_private_port() -> Option<u16> {
-    match std::net::TcpListener::bind("127.0.0.1:0") {
-        Ok(listener) => listener.local_addr().ok().map(|addr| addr.port()),
-        Err(err) => {
-            tracing::warn!(target: "eo::substrate", "private port allocation failed: {err}");
-            None
-        }
-    }
-}
-
-/// Dev launchers publish the externally-started backend's private port
-/// here when the dev stack should run through the substrate.
-#[cfg(debug_assertions)]
-fn dev_sidecar_port() -> Option<u16> {
-    std::env::var("ENTROPIAORME_SIDECAR_PORT")
-        .ok()
-        .and_then(|raw| raw.parse().ok())
-}
-
-/// Serve the strangler router on the already-bound public listener,
-/// proxying not-yet-ported routes to the sidecar on `sidecar_port`. The
-/// substrate begins serving (proxy-only) the instant it binds; native
-/// services compose in the background and hot-install when ready, so a
-/// first launch after an upgrade (where the database is briefly below the
-/// adoptable baseline while the sidecar migrates it forward) upgrades to
-/// native without a restart, instead of standing down proxy-only for the
-/// whole session.
-fn spawn_http_substrate(
-    app: tauri::AppHandle,
-    listener: std::net::TcpListener,
-    sidecar_port: u16,
-    resource_dir: Option<std::path::PathBuf>,
-    recover: bool,
-) {
-    let overrides = route_arm_overrides();
+/// Compose the native backend substrate and publish it to the IPC command.
+/// The single pure-Rust binary serves every route natively in-process: there
+/// is no socket, no sidecar, and no proxy. This builds the shared `AppState`,
+/// composes the native service spine off the setup path, and on success
+/// installs the services, publishes the state to the `api_request` command,
+/// and signals the frontend (see [`install_native_services`]). Until
+/// composition lands the `api_request` command errors; the frontend's initial
+/// reads are re-driven by the `substrate:native-installed` event the install
+/// emits (there is no transport-level retry). A declined composition is logged
+/// and the backend does not come up for the session (an unopenable database, or
+/// one below the supported baseline the retired sidecar used to migrate
+/// forward).
+fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::PathBuf>) {
     tauri::async_runtime::spawn(async move {
-        let app_state = eo_http::AppState::new(
-            format!("127.0.0.1:{sidecar_port}"),
-            public_backend_port(),
-            overrides,
-        )
-        // The substrate answers the browser surface (preflights, origin
-        // rules, response decoration) exactly as the sidecar's own
-        // middleware would, from the same environment inputs.
-        .with_cors(eo_http::cors::CorsConfig::from_env())
-        // The data dir powers the hidden dev-tools routes (the developer-mode
-        // gate and the crash-reporting toggle).
-        .with_data_dir(composition::data_dir());
-        let state = std::sync::Arc::new(app_state);
-
-        // Compose the native services off the serve path and install them
-        // when ready, so the substrate answers (proxy-only) the instant it
-        // binds rather than blocking startup on composition. The natively
-        // registered routes each fall back to the proxy arm while their
-        // service is absent, so the install flips them to native on the next
-        // request with no re-registration and no restart.
-        compose_and_install(
-            app,
-            state.clone(),
-            resource_dir,
-            // Only the release relocated topology spawned an idled sidecar
-            // for the substrate to recover into a producer on a permanent
-            // decline; dev (and any non-relocated path) passes None.
-            recover.then_some(sidecar_port),
+        let state = std::sync::Arc::new(
+            eo_http::AppState::new(public_backend_port())
+                // Answer the browser surface (preflights, origin rules,
+                // response decoration) from the same environment inputs.
+                .with_cors(eo_http::cors::CorsConfig::from_env())
+                // The data dir powers the developer-mode-gated dev-tools routes
+                // (the developer-mode gate and the crash-reporting toggle).
+                .with_data_dir(composition::data_dir())
+                // The bundled demo database powers the guide-mode `/api/demo`
+                // surface (a writable per-process clone, stood up lazily).
+                .with_demo_db_path(composition::demo_db_path(resource_dir.as_ref())),
         );
-
-        let listener = match tokio::net::TcpListener::from_std(listener) {
-            Ok(listener) => listener,
-            Err(err) => {
-                tracing::error!(target: "eo::substrate", "listener handoff failed: {err}");
-                return;
+        match composition::compose_native(resource_dir).await {
+            composition::Composition::Ready(composed) => {
+                install_native_services(&app, &state, composed);
             }
-        };
-        if let Err(err) = eo_http::serve(listener, state).await {
-            tracing::error!(target: "eo::substrate", "server exited: {err}");
-        }
-    });
-}
-
-/// How often the composition retry re-attempts adoption while the database
-/// is below the adoptable baseline.
-const COMPOSE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// The ceiling on that retry. A first launch after an upgrade waits while
-/// the co-bundled sidecar unpacks (a ~180 MB onefile, possibly under
-/// on-access scanning) and migrates the database forward; the ceiling is
-/// generous enough to cover a slow cold boot while still surrendering to
-/// proxy-only if the database never reaches the baseline (a dead sidecar),
-/// rather than spinning forever.
-const COMPOSE_RETRY_CEILING: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// Compose the native services off the serve path and install them into the
-/// already-serving `state` once ready. Retries ONLY while the database is
-/// below the adoptable baseline (the first-launch-after-upgrade race, where
-/// the sidecar is still migrating it forward).
-///
-/// A permanent decline, or the retry ceiling, leaves the substrate proxy-only
-/// for the session. In the relocated topology (`recovery_port` is `Some`) the
-/// sidecar was spawned idle in anticipation of a native producer spine, so a
-/// proxy-only outcome would leave the session with NO producer; recovery then
-/// respawns that sidecar as the producer (see [`recover_orphaned_production`]).
-/// `recovery_port` is `None` when there is no idled sidecar we own (dev, where
-/// the launcher owns the backend).
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn compose_and_install(
-    app: tauri::AppHandle,
-    state: std::sync::Arc<eo_http::AppState>,
-    resource_dir: Option<std::path::PathBuf>,
-    recovery_port: Option<u16>,
-) {
-    tauri::async_runtime::spawn(async move {
-        let mut waited = std::time::Duration::ZERO;
-        let mut announced = false;
-        loop {
-            match composition::compose_native(resource_dir.clone()).await {
-                composition::Composition::Ready(composed) => {
-                    install_native_services(&app, &state, composed);
-                    return;
-                }
-                composition::Composition::AwaitingMigration => {
-                    if !announced {
-                        tracing::info!(
-                            target: "eo::substrate",
-                            "database below the adoptable baseline; serving proxy-only while the \
-                             sidecar migrates it, then upgrading to native"
-                        );
-                        announced = true;
-                    }
-                    if waited >= COMPOSE_RETRY_CEILING {
-                        tracing::warn!(
-                            target: "eo::substrate",
-                            "database stayed below the adoptable baseline for {}s; serving \
-                             proxy-only for the session",
-                            COMPOSE_RETRY_CEILING.as_secs()
-                        );
-                        recover_orphaned_production(&app, recovery_port);
-                        return;
-                    }
-                    tokio::time::sleep(COMPOSE_RETRY_INTERVAL).await;
-                    waited += COMPOSE_RETRY_INTERVAL;
-                }
-                composition::Composition::Declined => {
-                    recover_orphaned_production(&app, recovery_port);
-                    return;
-                }
+            composition::Composition::Declined => {
+                tracing::error!(
+                    target: "eo::substrate",
+                    "native services did not compose; the backend is unavailable for this session"
+                );
             }
         }
     });
 }
 
-/// Recover production after the native spine failed to compose. In the
-/// relocated topology the sidecar was spawned idle (`RelocatedIdle`) because
-/// the substrate's native spine was expected to own production; if that spine
-/// never composes the substrate stays proxy-only, and an idled sidecar would
-/// leave the session with no chat-log tailer, no tracker, and no OS hooks
-/// (live tracking silently dead, while proxied reads keep serving stale
-/// state). Respawn the relocated sidecar PRODUCING so it resumes the producer
-/// role it holds in the legacy topology; the substrate keeps proxying the
-/// public port to it. A no-op when `recovery_port` is `None` (no idled sidecar
-/// we own: dev, or the legacy direct topology, where the sidecar already
-/// produces).
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn recover_orphaned_production(app: &tauri::AppHandle, recovery_port: Option<u16>) {
-    let Some(sidecar_port) = recovery_port else {
-        return;
-    };
-    tracing::warn!(
-        target: "eo::substrate",
-        "native services did not compose; respawning the sidecar as the producer so live \
-         tracking continues (serving proxy-only for the session)"
-    );
-    // Kill the idled relocated sidecar before rebinding its private port: the
-    // substrate's proxy authority is fixed at that port, so the producing
-    // respawn must reclaim it. The exit seam reads the same handle, so the
-    // kill and the re-store both go through the shared `SidecarChild` lock.
-    if let Some(state) = app.try_state::<SidecarChild>() {
-        if let Ok(mut guard) = state.0.lock() {
-            if let Some(child) = guard.take() {
-                kill_sidecar_tree(&child);
-                drop(child);
-            }
-        }
-    }
-    spawn_backend_sidecar(app, SidecarSpawn::RelocatedProducing(sidecar_port));
-}
-
-/// Install the composed services into the live, already-serving app state
-/// (flipping the native routes off their proxy fallback) and hand the
-/// stoppable handles to the Tauri-managed exit seam, exactly as the inline
-/// composition did before the retry moved it off the serve path.
-#[cfg_attr(debug_assertions, allow(dead_code))]
+/// Install the composed services into the app state and hand the stoppable
+/// handles to the Tauri-managed exit seam, then publish the state to the
+/// `api_request` IPC command (so the command answers only once every service
+/// is present) and signal the frontend that the backend is live.
 fn install_native_services(
     app: &tauri::AppHandle,
     state: &std::sync::Arc<eo_http::AppState>,
@@ -502,15 +345,14 @@ fn install_native_services(
     // the shared OS hook and the scan resets in-flight state on close.
     let exit_spacebar = composed.spacebar_listener.clone();
     let exit_skill_scan = composed.skill_scan.clone();
-    // The producer-spine handles (tracker, SSE hub, ...) are cloned out of
-    // the spine here, BEFORE it moves into the Tauri-managed holder below,
-    // so the producer routes serve over the same `Arc<HuntTracker>` the
-    // exit-seam teardown stops and the `/api/events` stream serves over the
-    // same `Arc<SseHub>` the producer-bus bridge feeds.
+    // The producer-spine handles are cloned out of the spine here, BEFORE it
+    // moves into the Tauri-managed holder below, so the HTTP routes serve over
+    // the same handles the exit-seam teardown stops, and the settings-write
+    // route restarts the same `Arc<ChatlogWatcher>` the spine tails on.
     state.install_native(eo_http::NativeServices {
         hydration: composed.hydration,
         tracker: composed.producers.tracker_handle(),
-        sse_hub: composed.producers.sse_hub_handle(),
+        chatlog_watcher: composed.producers.watcher_handle(),
         config_service: composed.producers.config_service_handle(),
         skill_tracker: composed.producers.skill_tracker_handle(),
         skill_scan: composed.skill_scan.clone(),
@@ -518,6 +360,11 @@ fn install_native_services(
         spacebar_listener: composed.spacebar_listener.clone(),
         hotbar_listener: composed.producers.hotbar_handle(),
     });
+    // Forward the producer spine's domain events onto the Tauri event bus, the
+    // native replacement for the frontend's old EventSource relay. Registers a
+    // consumer on the producer spine's SseHub while the spine is still in hand
+    // (it moves into managed state just below).
+    spawn_domain_event_bridge(app, &composed.producers.sse_hub_handle());
     // Hand the producer spine to the exit seam so it stops the tail thread,
     // the hotbar listener, and ends any session on close.
     app.manage(Producers(Mutex::new(Some(composed.producers))));
@@ -531,149 +378,68 @@ fn install_native_services(
         spacebar: exit_spacebar,
         skill_scan: exit_skill_scan,
     });
-    // Signal the frontend that the native service spine is now live so its
-    // long-lived SSE relay can force-cycle onto the native `/api/events`
-    // producer. On a first launch after an upgrade the substrate starts
-    // proxy-only and installs the native spine mid-session; the relay opened
-    // before this swap stays bound to the pre-handover (proxied) producer, whose
-    // connection never errors, so the browser never auto-reconnects and the live
-    // view would silently freeze until a reload.
+    // Publish the composed state to the IPC command LAST: until now
+    // `api_request` errors with "backend substrate not ready", so by the time
+    // any request dispatches every native service is present (there is no
+    // absent-service window to fall back from). Then signal the frontend that
+    // the backend is live so it (re-)hydrates its
+    // initial reads.
+    app.manage(ApiSubstrate(state.clone()));
     let _ = app.emit("substrate:native-installed", ());
 }
 
-/// Runtime per-route arm overrides: a persisted JSON map (path in
-/// `ENTROPIAORME_ROUTE_ARMS_FILE`) overlaid by the inline
-/// `ENTROPIAORME_ROUTE_ARMS` list. The kill-switch for a misbehaving
-/// native route in a shipped build.
-fn route_arm_overrides() -> eo_http::arms::ArmOverrides {
-    let mut overrides = eo_http::arms::ArmOverrides::empty();
-    if let Ok(path) = std::env::var("ENTROPIAORME_ROUTE_ARMS_FILE") {
-        overrides = overrides.overlaid(eo_http::arms::ArmOverrides::from_json_file(
-            std::path::Path::new(&path),
-        ));
-    }
-    if let Ok(inline) = std::env::var("ENTROPIAORME_ROUTE_ARMS") {
-        overrides = overrides.overlaid(eo_http::arms::ArmOverrides::parse_env_value(&inline));
-    }
-    overrides
+/// Map a dotted domain wire topic to its colon-form Tauri event name (Tauri
+/// event names forbid dots). Mirrors the frontend's `toTauriEventName`.
+fn domain_topic_to_tauri_event(topic: &str) -> String {
+    topic.replace('.', ":")
 }
 
-/// How a sidecar process is spawned, which fixes its environment and so its
-/// role.
-///
-/// When the substrate relocates the sidecar it has taken the public port and
-/// owns production: its composed native spine is the sole chat-log tailer,
-/// tracker, and OS-hook owner, so the relocated sidecar must serve proxied
-/// reads WITHOUT running its own producers (`RelocatedIdle`). Two producers
-/// writing the shared database would double-count loot and cost, and two OS
-/// keyboard hooks would conflict (the backend's `_producers_idle` documents
-/// the same invariant).
-///
-/// But idling is correct only while the substrate actually produces. If the
-/// native spine never composes (a permanent decline, or the
-/// first-launch-after-upgrade migration ceiling), the substrate stays
-/// proxy-only and an idled sidecar would leave the session with no producer
-/// at all. The recovery respawns the relocated sidecar PRODUCING
-/// (`RelocatedProducing`) so it resumes the producer role it holds in the
-/// legacy topology, with the substrate still proxying the public port to it.
-///
-/// The legacy spawn (`Legacy`, the only backend, on the public port) always
-/// produces.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-enum SidecarSpawn {
-    /// Legacy direct topology: the only backend, on the public port.
-    Legacy,
-    /// Relocated behind the substrate proxy on a private port, producers idle
-    /// (the substrate's native spine owns production).
-    RelocatedIdle(u16),
-    /// Relocated behind the substrate proxy on a private port, but producing:
-    /// the recovery for when the native spine never composed.
-    RelocatedProducing(u16),
-}
-
-/// The environment variables a sidecar spawn runs under. The relocated forms
-/// bind the private port the substrate proxies to; only `RelocatedIdle` gates
-/// the producers off. `Legacy` and `RelocatedProducing` both keep producing.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn sidecar_spawn_env(spawn: &SidecarSpawn) -> Vec<(&'static str, String)> {
-    match spawn {
-        SidecarSpawn::Legacy => Vec::new(),
-        SidecarSpawn::RelocatedIdle(port) => vec![
-            ("ENTROPIAORME_BACKEND_PORT", port.to_string()),
-            ("ENTROPIAORME_PRODUCERS_IDLE", "1".to_string()),
-        ],
-        SidecarSpawn::RelocatedProducing(port) => {
-            vec![("ENTROPIAORME_BACKEND_PORT", port.to_string())]
+/// Extract the `event:` topic and `data:` payload from one SSE frame
+/// (`id: N\nevent: <topic>\ndata: <json>\n\n`). The envelope JSON is in its
+/// compact wire form (no embedded newline), so a line scan recovers both
+/// fields exactly.
+fn parse_domain_frame(frame: &str) -> Option<(&str, &str)> {
+    let mut topic = None;
+    let mut data = None;
+    for line in frame.lines() {
+        if let Some(rest) = line.strip_prefix("event: ") {
+            topic = Some(rest);
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            data = Some(rest);
         }
     }
+    Some((topic?, data?))
 }
 
-// In debug builds the call site above is compiled out (dev uses a separately
-// launched backend), leaving this function without a caller; silence the
-// resulting dead-code lint rather than drop the release-only definition.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn spawn_backend_sidecar(app: &tauri::AppHandle, spawn: SidecarSpawn) {
-    let sidecar = match app.shell().sidecar("entropiaorme-backend") {
-        Ok(cmd) => cmd,
-        Err(err) => {
-            tracing::error!(target: "eo::sidecar", "sidecar resolve failed: {err}");
-            return;
-        }
-    };
-    // A relocated sidecar reads its bind port (and derives its own Host-header
-    // guard) from `ENTROPIAORME_BACKEND_PORT`; the substrate's proxy arm
-    // rewrites Host to the private authority accordingly. `RelocatedIdle` also
-    // gates its producers off (the substrate owns production); `Legacy` and
-    // the `RelocatedProducing` recovery keep producing. See `SidecarSpawn`.
-    let sidecar = sidecar_spawn_env(&spawn)
-        .into_iter()
-        .fold(sidecar, |cmd, (key, value)| cmd.env(key, value));
-
-    let (mut rx, child) = match sidecar.spawn() {
-        Ok(pair) => pair,
-        Err(err) => {
-            tracing::error!(target: "eo::sidecar", "sidecar spawn failed: {err}");
-            return;
-        }
-    };
-
-    store_sidecar_child(app, child);
-
-    // Drain stdout/stderr — Windows pipe buffers are ~4 KB and an unread
-    // pipe stalls the child's logging once it fills.
+/// Forward the producer spine's domain events onto the Tauri event bus: the
+/// native replacement for the frontend's old `EventSource` relay. Registers a
+/// consumer on the producer spine's `SseHub`, drains its frames, and re-emits
+/// each typed envelope on the colon-form Tauri topic every window subscribes
+/// to (`tracking:session:updated`, `scan:status:changed`). The webview sees
+/// the identical envelope it parsed off the SSE `data:` field, so the
+/// topic-aware consumers are unchanged. The hydrate nudge (a payload-less
+/// frame on start) stays frontend-owned: it must fire after the webview is
+/// listening, which an emit at install time cannot guarantee on a cold load.
+fn spawn_domain_event_bridge(app: &tauri::AppHandle, hub: &std::sync::Arc<eo_wire::sse::SseHub>) {
+    let client = hub.register();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                    if let Ok(s) = std::str::from_utf8(&line) {
-                        // Forward the sidecar's own (already-sanitised)
-                        // diagnostic output into the structured logs.
-                        tracing::info!(
-                            target: "eo::sidecar",
-                            "{}",
-                            s.trim_end_matches(['\r', '\n'])
-                        );
-                    }
+        loop {
+            let frame = client.next_frame().await;
+            let Some((topic, data)) = parse_domain_frame(&frame) else {
+                continue;
+            };
+            match serde_json::from_str::<serde_json::Value>(data) {
+                Ok(value) => {
+                    let _ = app.emit(domain_topic_to_tauri_event(topic).as_str(), value);
                 }
-                _ => {}
+                Err(err) => tracing::warn!(
+                    target: "eo::substrate",
+                    "dropping a malformed domain frame: {err}"
+                ),
             }
         }
     });
-}
-
-/// Hold the spawned sidecar for the exit seam. The first spawn manages the
-/// holder; a recovery respawn swaps the new child into the existing holder
-/// (its idled predecessor was already taken out and killed under the same
-/// lock), so the exit seam always kills whichever sidecar is live.
-#[cfg_attr(debug_assertions, allow(dead_code))]
-fn store_sidecar_child(app: &tauri::AppHandle, child: CommandChild) {
-    if let Some(state) = app.try_state::<SidecarChild>() {
-        if let Ok(mut guard) = state.0.lock() {
-            *guard = Some(child);
-        }
-    } else {
-        app.manage(SidecarChild(Mutex::new(Some(child))));
-    }
 }
 
 #[cfg(windows)]
@@ -803,57 +569,93 @@ mod windows_runtime_icons {
 
 #[cfg(test)]
 mod tests {
-    use super::{sidecar_spawn_env, SidecarSpawn};
-
-    fn env_value<'a>(env: &'a [(&'static str, String)], key: &str) -> Option<&'a str> {
-        env.iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, value)| value.as_str())
-    }
+    use super::{domain_topic_to_tauri_event, parse_domain_frame};
 
     #[test]
-    fn a_relocated_idle_sidecar_binds_its_port_and_idles_its_producers() {
-        // The substrate owns production once it relocates the sidecar, so the
-        // sidecar must serve proxied reads WITHOUT running its own producers,
-        // or two chat-log tailers would double-count into the shared database.
-        let env = sidecar_spawn_env(&SidecarSpawn::RelocatedIdle(18421));
+    fn domain_topics_namespace_dots_to_colons_for_the_tauri_bus() {
         assert_eq!(
-            env_value(&env, "ENTROPIAORME_BACKEND_PORT"),
-            Some("18421"),
-            "the relocated sidecar binds its private port"
+            domain_topic_to_tauri_event("tracking.session.updated"),
+            "tracking:session:updated"
         );
         assert_eq!(
-            env_value(&env, "ENTROPIAORME_PRODUCERS_IDLE"),
-            Some("1"),
-            "and idles its producers"
+            domain_topic_to_tauri_event("scan.status.changed"),
+            "scan:status:changed"
         );
     }
 
     #[test]
-    fn a_relocated_producing_sidecar_binds_its_port_but_keeps_producing() {
-        // The recovery for when the native spine never composes: the substrate
-        // stays proxy-only, so the relocated sidecar must resume production (no
-        // idle gate) or the session would have no producer at all.
-        let env = sidecar_spawn_env(&SidecarSpawn::RelocatedProducing(18421));
-        assert_eq!(
-            env_value(&env, "ENTROPIAORME_BACKEND_PORT"),
-            Some("18421"),
-            "the recovery sidecar binds the same private port the proxy targets"
+    fn a_domain_frame_yields_its_topic_and_compact_envelope() {
+        // The exact shape the SseHub frames (see eo_wire::sse): the envelope is
+        // compact JSON on one line, so the data field is recovered whole.
+        let frame = concat!(
+            "id: 7\nevent: scan.status.changed\ndata: ",
+            "{\"type\":\"scan.status.changed\",\"event_version\":1,",
+            "\"occurred_at\":\"2024-12-31T21:20:00+00:00\",",
+            "\"payload\":{\"phase\":\"capturing\"}}\n\n"
         );
-        assert_eq!(
-            env_value(&env, "ENTROPIAORME_PRODUCERS_IDLE"),
-            None,
-            "the recovery sidecar must NOT idle: it is the sole producer"
-        );
+        let (topic, data) = parse_domain_frame(frame).expect("a well-formed frame parses");
+        assert_eq!(topic, "scan.status.changed");
+        let value: serde_json::Value = serde_json::from_str(data).expect("the data is JSON");
+        assert_eq!(value["type"], "scan.status.changed");
+        assert_eq!(value["payload"]["phase"], "capturing");
     }
 
     #[test]
-    fn a_legacy_sidecar_takes_no_relocation_env_and_produces() {
-        // The only backend, on the public port: no private bind, no idle gate.
-        let env = sidecar_spawn_env(&SidecarSpawn::Legacy);
+    fn a_frame_missing_a_field_does_not_parse() {
+        assert!(parse_domain_frame("id: 1\nevent: scan.status.changed\n\n").is_none());
+        assert!(parse_domain_frame(": ready\n\n").is_none());
+    }
+
+    /// The frontend reaches the backend only through the in-process IPC command,
+    /// so the substrate binds no inbound listener (see `compose_substrate`) and
+    /// the security policy grants no loopback origin: the CSP carries no
+    /// `127.0.0.1`/`8421` in connect-src or img-src. The external news origin,
+    /// the IPC scheme, and the base64 image `data:` source survive.
+    #[test]
+    fn the_security_policy_grants_no_loopback_origin() {
+        let conf = include_str!("../tauri.conf.json");
+        let after = conf
+            .split("\"csp\":")
+            .nth(1)
+            .expect("the security CSP is configured");
+        let csp = after
+            .split('"')
+            .nth(1)
+            .expect("the CSP is a string literal");
         assert!(
-            env.is_empty(),
-            "the legacy spawn carries no relocation env (no bind override, no idle gate)"
+            !csp.contains("127.0.0.1") && !csp.contains("8421"),
+            "the CSP must grant no loopback origin once the frontend is IPC-only: {csp}"
+        );
+        assert!(
+            csp.contains("https://entropiaorme.com"),
+            "the external news origin must survive the loopback strip: {csp}"
+        );
+        assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
+        assert!(
+            csp.contains("img-src 'self' data:"),
+            "img-src keeps data: for the base64 capture preview: {csp}"
+        );
+    }
+
+    /// The bundle ships no Python sidecar. The packaging spec declares
+    /// no `externalBin`, and the shell `execute`/sidecar capability is gone
+    /// (only `open` survives, for external links), so the installed artefact
+    /// carries the single native binary alone.
+    #[test]
+    fn the_bundle_declares_no_sidecar_binary() {
+        let conf = include_str!("../tauri.conf.json");
+        assert!(
+            !conf.contains("externalBin"),
+            "the packaging spec must declare no externalBin once the sidecar is decommissioned"
+        );
+        let capabilities = include_str!("../capabilities/default.json");
+        assert!(
+            !capabilities.contains("shell:allow-execute"),
+            "the shell execute/sidecar capability must be gone: {capabilities}"
+        );
+        assert!(
+            capabilities.contains("shell:allow-open"),
+            "the shell open capability must survive for external links: {capabilities}"
         );
     }
 }

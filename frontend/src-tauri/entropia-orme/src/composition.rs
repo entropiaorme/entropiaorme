@@ -3,15 +3,15 @@
 //! Mirrors the backend's own startup composition (`backend/main.py`):
 //! resolve the data directory, open the application database, load the
 //! game-data snapshot, and construct the ported services over the real
-//! clock. The substrate serves natively-registered routes through the
-//! state composed here; when any step declines, the substrate runs
-//! proxy-only and the sidecar serves everything, exactly as before the
-//! first flip.
+//! clock. The substrate serves every route natively through the state
+//! composed here; when any step declines, composition is terminal and the
+//! backend does not come up for the session (there is no upstream to fall
+//! back to).
 //!
-//! Composition grows with the takeover: this skeleton carries the
-//! hydration read surface and the producer spine; the OCR recogniser
-//! with its ONNX Runtime obligations joins it here, ahead of the scan
-//! routes that consume it (those flip later).
+//! Composition assembles the full native surface: the hydration read
+//! surface, the producer spine, and the OCR recogniser with its ONNX
+//! Runtime obligations, all built here ahead of the routes that consume
+//! them.
 //!
 //! ## The ONNX Runtime obligations
 //!
@@ -145,6 +145,21 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     }
 }
 
+/// Where the bundled guide-mode demo database lives: the bundled resource
+/// directory in an installed build (`<resource_dir>/demo/entropia_orme.db`),
+/// the repository copy (`data/demo/entropia_orme.db`) in dev. The demo
+/// services copy it to a writable per-process file before opening, so the
+/// bundled file is never mutated.
+pub(crate) fn demo_db_path(resource_dir: Option<&PathBuf>) -> PathBuf {
+    match resource_dir {
+        Some(dir) if !cfg!(debug_assertions) => dir.join("demo").join("entropia_orme.db"),
+        _ => dev_project_root()
+            .join("data")
+            .join("demo")
+            .join("entropia_orme.db"),
+    }
+}
+
 /// The ABSOLUTE path to the bundled `onnxruntime.dll`: the installed
 /// resource dir (`<resource_dir>/ort/onnxruntime.dll`) in a release
 /// build, the committed repo copy
@@ -261,7 +276,11 @@ fn init_ort_runtime(resource_dir: Option<&PathBuf>) {
 /// the watcher owns is torn down deterministically rather than left to
 /// process-exit teardown.
 pub struct ProducerState {
-    watcher: ChatlogWatcher,
+    // The chat-log watcher (tailing in its own thread). Held as an `Arc` so a
+    // clone reaches the HTTP layer: the settings-write route restarts it when
+    // the watched `chatlog_path` changes. The exit seam still stops it via
+    // [`ProducerState::stop`]; `restart`/`stop` take `&self`, so sharing is safe.
+    watcher: Arc<ChatlogWatcher>,
     tracker: Arc<HuntTracker>,
     // The SSE fan-out hub. The bus bridge (subscribed below) holds clones
     // of this through its subscriber closures, and the HTTP `/api/events`
@@ -318,7 +337,15 @@ impl ProducerState {
     /// The composed watcher, for tests driving a replay through it.
     #[cfg(test)]
     pub fn watcher(&self) -> &ChatlogWatcher {
-        &self.watcher
+        self.watcher.as_ref()
+    }
+
+    /// A handle to the composed chat-log watcher. The settings-write route
+    /// restarts it on a `chatlog_path` change; cloned into the app state at
+    /// the composition handoff so the route side and the producer-spine side
+    /// share one watcher.
+    pub fn watcher_handle(&self) -> Arc<ChatlogWatcher> {
+        self.watcher.clone()
     }
 
     /// The composed tracker, for tests asserting its readout.
@@ -407,7 +434,7 @@ pub struct Composed {
     /// `scan.status.changed` envelopes reach the SSE stream) over the OCR
     /// extraction providers. Always constructed so the scan routes serve;
     /// its capture and extraction seams stand down to "engine unavailable"
-    /// when the OCR runtime is absent, exactly as the sidecar reports.
+    /// when the OCR runtime is absent, exactly as the Python reference reports.
     pub skill_scan: Arc<SkillScanManual>,
     /// The one-shot repair-cost OCR service, composed over the same capture
     /// and recogniser seams.
@@ -418,28 +445,28 @@ pub struct Composed {
     pub spacebar_listener: Arc<SpacebarCaptureListener>,
 }
 
-/// The outcome of a composition attempt at the substrate's startup, which
-/// the orchestration acts on: install the services, retry shortly, or stay
-/// proxy-only for the session.
+/// The outcome of a composition attempt at the substrate's startup: the
+/// native services are built and ready to install, or composition declined
+/// with a logged reason. With the Python sidecar decommissioned (the
+/// backend now collapsed into the shell process) there is no proxy fallback
+/// and nothing to migrate an
+/// existing database forward, so a decline is terminal for the session (the
+/// backend cannot serve); there is no longer an interim "awaiting migration"
+/// state to retry.
 pub enum Composition {
     /// The native services are built and ready to install.
     Ready(Composed),
-    /// The existing database is below the adoptable baseline: the sidecar
-    /// has not finished migrating it forward yet (the first launch after an
-    /// upgrade). Retrying composition once it has will adopt it, so the
-    /// caller waits briefly and tries again rather than standing down.
-    AwaitingMigration,
-    /// A permanent decline (a missing/empty snapshot, a producer fault, or a
-    /// database fault unrelated to the migration race). The substrate stays
-    /// proxy-only for the rest of the session; retrying would not help.
+    /// A terminal decline (a missing/empty snapshot, a producer fault, or a
+    /// database that cannot be opened or adopted, including one whose schema
+    /// predates the supported baseline, which the retired sidecar used to
+    /// migrate forward). Logged loudly; the backend does not come up.
     Declined,
 }
 
-/// Compose the native services, or decline with a logged reason.
-/// Declining is always safe: the substrate then proxies every route to
-/// the sidecar. The ONNX Runtime dylib is pinned (once) before any
-/// composition step, so the engine constructed inside `compose_with`
-/// binds the bundled runtime, not a stray one off `PATH`.
+/// Compose the native services, or decline with a logged reason. The ONNX
+/// Runtime dylib is pinned (once) before any composition step, so the engine
+/// constructed inside `compose_with` binds the bundled runtime, not a stray
+/// one off `PATH`.
 pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     init_ort_runtime(resource_dir.as_ref());
     compose_with(
@@ -468,17 +495,22 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     let db = match Db::open_adopted(&db_path).await {
         Ok(db) => db,
         Err(err) if err.is_below_baseline() => {
-            // The existing database is still at the pre-upgrade schema: the
-            // sidecar has not finished migrating it up to the baseline this
-            // substrate adopts at. This is the first-launch-after-upgrade
-            // race, not a fault, so stand down only for now and let the
-            // caller retry once the sidecar has migrated it forward.
-            return Composition::AwaitingMigration;
+            // The existing database predates the supported baseline. The
+            // retired Python sidecar used to migrate it forward before the
+            // native arm adopted it; with the sidecar gone there is nothing
+            // to do so, so this is now a terminal decline rather than a
+            // first-launch-after-upgrade race. (Porting the pre-baseline
+            // upgrade chain natively is deferred future work.)
+            tracing::error!(
+                target: "eo::composition",
+                "{err}; the backend cannot serve until the database is at the supported baseline \
+                 (native pre-baseline migration is a future release)"
+            );
+            return Composition::Declined;
         }
         Err(err @ AdoptError::Quarantined { .. }) => {
             // An existing database we cannot adopt (for any other reason) is
-            // surfaced loudly and left untouched; the sidecar (whose own
-            // migration logic governs it as before) keeps serving.
+            // surfaced loudly and left untouched for diagnosis.
             tracing::error!(target: "eo::composition", "{err}");
             return Composition::Declined;
         }
@@ -505,8 +537,8 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     // warn-and-continue, sensible for its own embedded copy), but an
     // empty store here means the bundled resources are absent or
     // broken: serving game-data-derived responses from it would
-    // silently diverge from the sidecar's embedded copy. Stand down
-    // and let the proxy serve instead.
+    // silently diverge from the reference's embedded copy. Stand down
+    // (a terminal decline) rather than serve divergent data.
     if game_data.total_entities() == 0 {
         tracing::error!(
             target: "eo::composition",
@@ -637,8 +669,8 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
 /// through the shared `pool`, and hydrates its resting status from the
 /// same. When the OCR runtime is absent the providers stand down to
 /// "engine unavailable" rather than declining composition, so the routes
-/// still serve (the scan reports offline), exactly as the sidecar does
-/// without a loadable engine. Both services are always constructed.
+/// still serve (the scan reports offline), exactly as the Python reference
+/// does without a loadable engine. Both services are always constructed.
 async fn compose_scan_services(
     bus: Arc<EventBus>,
     ocr_engine: Option<Arc<OcrEngine>>,
@@ -702,7 +734,7 @@ async fn compose_scan_services(
     };
 
     // Hydrate the resting status from the persisted calibration history,
-    // exactly as the sidecar seeds initial scan time and skill count.
+    // exactly as the Python reference seeds initial scan time and skill count.
     let (initial_scan_time, initial_skills_count) =
         hydrate_skill_scan_state(&pool).await.unwrap_or((None, 0));
 
@@ -717,7 +749,7 @@ async fn compose_scan_services(
     // The completion callback persists accepted calibrations through the
     // shared pool, bridging onto the runtime from the scan's worker thread
     // the same dual way the tracker's providers do; a persist error
-    // surfaces on the scan status, exactly as the sidecar's caught
+    // surfaces on the scan status, exactly as the Python reference's caught
     // exception does.
     let completion_pool = pool;
     let completion_clock = clock.clone();
@@ -797,7 +829,8 @@ fn read_skill_page_levels(
 /// Build and start the producer spine over the shared pool and clock.
 /// The providers are wired faithfully to the backend's own composition
 /// (`backend/main.py`): every lookup the tracker consults reads through
-/// the same database or the same config read-through the sidecar wrote.
+/// the same database or the same config read-through the native
+/// `ConfigService` writes.
 fn compose_producers(
     db: Db,
     clock: Arc<dyn Clock>,
@@ -806,14 +839,14 @@ fn compose_producers(
 ) -> Result<ProducerState, eo_services::db::DbError> {
     // The producers run on the substrate's tokio runtime; the trackers
     // bridge their database work onto this handle from their own
-    // (non-runtime) producer threads, exactly as the sidecar's tracker
-    // bridges onto its event loop.
+    // (non-runtime) producer threads, exactly as the Python reference's
+    // tracker bridges onto its event loop.
     let runtime = tokio::runtime::Handle::current();
     let bus = Arc::new(EventBus::new());
 
     // The SSE bridge: forward the frontend-facing domain topics off the
     // in-process bus to the `/api/events` fan-out hub, mirroring the
-    // sidecar's `EventStreamHub`. Subscribed here, before the watcher's
+    // Python reference's `EventStreamHub`. Subscribed here, before the watcher's
     // tail thread starts, so an event published the instant a producer
     // ticks is never raced away from a connected stream. The hub is held
     // in `ProducerState` (and through these subscriber closures), and a
@@ -822,15 +855,15 @@ fn compose_producers(
     subscribe_sse_bridge(&bus, &sse_hub);
 
     // The config read-through: producers read the live config the same
-    // way the read surface does (`settings.json` stays sidecar-written
-    // until a later cutover), so a wrong default never silently
+    // way the read surface does (`settings.json`, now written solely by
+    // the native `ConfigService`), so a wrong default never silently
     // corrupts tracker DB state. A read failure falls back to the typed
     // defaults, exactly as the backend's loader does.
     let config = load_config_readonly(data_dir).unwrap_or_default();
 
     // The settings writer the write routes serve over. A corrupt or
-    // wrong-shape settings file fails composition loudly (declining native
-    // composition so the surface proxies), exactly as the sidecar's loader
+    // wrong-shape settings file fails composition loudly (a terminal
+    // decline), exactly as the reference's loader
     // would crash rather than silently reset user settings.
     let config_service = Arc::new(Mutex::new(
         ConfigService::new(data_dir)
@@ -840,13 +873,17 @@ fn compose_producers(
     // The quest service is bus-subscribed (session tracking + mission
     // auto-start) and supplies the watcher's quest-reward filter, so a
     // mission completion can suppress its reward echo just as the
-    // sidecar's does.
+    // Python reference's does.
     let quests = Arc::new(QuestService::new(db.pool().clone(), clock.clone()));
     quests.subscribe(&bus, runtime.clone());
 
     let watched_chatlog = chatlog_override.unwrap_or_else(|| PathBuf::from(&config.chatlog_path));
     let quest_reward_filter = quest_reward_filter_adapter(quests.clone(), runtime.clone());
-    let watcher = ChatlogWatcher::new(bus.clone(), watched_chatlog, Some(quest_reward_filter));
+    let watcher = Arc::new(ChatlogWatcher::new(
+        bus.clone(),
+        watched_chatlog,
+        Some(quest_reward_filter),
+    ));
 
     let skill_tracker = SkillTracker::new(&bus, db.pool().clone(), runtime.clone(), clock.clone());
 
@@ -975,8 +1012,8 @@ fn heal_cost_from_props(properties_json: &str) -> (f64, f64) {
 }
 
 /// Bridge the producer bus's frontend-facing domain topics onto the SSE
-/// fan-out hub, mirroring the sidecar's `EventStreamHub`: the same two
-/// topics, the same drop-non-domain-payload contract. Each publish carries
+/// fan-out hub, mirroring the Python reference's `EventStreamHub`: the same
+/// two topics, the same drop-non-domain-payload contract. Each publish carries
 /// the full `DomainEvent` serialised to a `Value` (see the tracker and
 /// skill-scan publish sites); the bridge deserialises it back and hands the
 /// typed envelope to the hub, which assigns the shared sequence number and
@@ -1036,7 +1073,7 @@ fn quest_reward_filter_adapter(
 /// composition uses. Lookups that read the equipment library bridge
 /// onto the runtime from inside the (synchronous) provider callback;
 /// config-derived providers read the live config read-through so they
-/// follow sidecar writes. `enhancer_tt_lookup` is intentionally absent:
+/// follow settings writes. `enhancer_tt_lookup` is intentionally absent:
 /// the Rust tracker never reads it (see `tracker.rs`).
 fn build_providers(
     db: Db,
@@ -1080,7 +1117,7 @@ fn build_providers(
     );
 
     // The config-derived providers read the live read-through so they
-    // follow the sidecar's writes between sessions.
+    // follow settings writes between sessions.
     let mode_dir = data_dir.clone();
     let mob_tracking_mode: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(move || {
         load_config_readonly(&mode_dir)
@@ -1243,11 +1280,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn awaits_migration_on_a_below_baseline_database() {
-        // Seed a database the backend created but has not yet migrated up to
-        // the baseline (the first-launch-after-upgrade state). Composition
-        // must report AwaitingMigration (retry once the sidecar migrates it)
-        // rather than Declined (give up proxy-only for the whole session).
+    async fn declines_on_a_below_baseline_database() {
+        // A database the backend created but never migrated up to the baseline
+        // (the hybrid-era first-launch-after-upgrade state). The Python
+        // sidecar used to migrate it forward; with it decommissioned there is
+        // nothing to do so, so composition now declines cleanly rather than
+        // awaiting a migration that will never arrive.
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -1265,8 +1303,8 @@ mod tests {
         }
         let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
         assert!(
-            matches!(composed, Composition::AwaitingMigration),
-            "a below-baseline database awaits the sidecar's migration"
+            matches!(composed, Composition::Declined),
+            "a below-baseline database declines (nothing migrates it without the sidecar)"
         );
     }
 

@@ -1,31 +1,27 @@
 //! HTTP substrate for the EntropiaOrme backend.
 //!
-//! The strangler-fig seam: an axum application that owns the public
-//! loopback address the frontend is wired to, serves natively-ported
-//! routes in-process, and reverse-proxies everything else (including the
-//! `/api/events` event stream) to the Python sidecar relocated onto a
-//! private port. A route flip is "register a native handler"; a source
-//! revert is "delete it"; and the runtime arm override ([`arms`]) steers
-//! any flipped route back to the live sidecar in an already-shipped build.
-//! The route-by-route takeover plan is documented in
+//! The single-binary in-process router: an axum application the frontend
+//! reaches through the `api_request` Tauri command (no socket), serving
+//! every backend route natively in-process. The Python sidecar and the
+//! reverse proxy were retired when the backend collapsed into the shell
+//! process, so there is no upstream and no per-route arm: a route is simply
+//! a registered native handler. The route map is documented in
 //! `backend/architecture/PORT-READINESS.md`.
 
 pub mod analytics_routes;
-pub mod arms;
 pub mod body;
 pub mod character_routes;
 pub mod cors;
+pub mod demo;
 pub mod dev_routes;
 pub mod equipment_routes;
 pub mod extract;
 pub mod hydration;
 pub mod native;
 pub mod producer_routes;
-pub mod proxy;
 pub mod pyjson;
 pub mod scan_routes;
 pub mod settings_routes;
-pub mod sse;
 pub mod tracking_routes;
 
 use std::future::Future;
@@ -34,28 +30,21 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use axum::extract::{Request, State};
 use axum::response::Response;
-use axum::routing::{any, MethodFilter, MethodRouter};
+use axum::routing::{MethodFilter, MethodRouter};
 use axum::Router;
 
-use crate::arms::{Arm, ArmOverrides};
-use crate::proxy::ProxyClient;
-
-/// Shared router state: the pooled upstream client, the sidecar authority,
-/// the public-boundary Host allowlist, the hot-swappable arm-override map,
-/// and the composed native services. The native-service handles sit behind
-/// `RwLock`s so composition can install them after `serve` has already
-/// started: the substrate begins proxy-only and hot-upgrades to native the
-/// moment composition succeeds (see [`AppState::install_native`]). That is
-/// how a first launch after an upgrade recovers once the sidecar has
-/// migrated the database up to the adoptable baseline, without a restart.
+/// Shared router state: the public-boundary Host allowlist and the composed
+/// native services. The native-service handles sit behind `RwLock`s so the
+/// composition root can install them once the database has opened and the
+/// producer spine has stood up; the shell publishes this state to the
+/// `api_request` IPC command only after [`AppState::install_native`] has run,
+/// so by the time any request dispatches, every handle is present (see the
+/// shell's `compose_substrate`).
 pub struct AppState {
-    client: ProxyClient,
-    upstream: String,
     allowed_hosts: [String; 2],
-    overrides: RwLock<ArmOverrides>,
     hydration: RwLock<Option<Arc<crate::hydration::HydrationState>>>,
     tracker: RwLock<Option<Arc<eo_services::tracker::HuntTracker>>>,
-    sse_hub: RwLock<Option<Arc<eo_wire::sse::SseHub>>>,
+    chatlog_watcher: RwLock<Option<Arc<eo_services::chatlog_watcher::ChatlogWatcher>>>,
     config_service: RwLock<Option<Arc<Mutex<eo_services::config_service::ConfigService>>>>,
     skill_tracker: RwLock<Option<Arc<eo_services::skill_tracker::SkillTracker>>>,
     skill_scan: RwLock<Option<Arc<eo_services::skill_scan_manual::SkillScanManual>>>,
@@ -69,16 +58,25 @@ pub struct AppState {
     // reads/writes the shell-owned `observability.json` there). `None` on a
     // substrate built without it: the dev routes then read as gate-off (404).
     data_dir: Option<PathBuf>,
+    // The bundled demo database path, for the guide-mode `/api/demo` surface.
+    // `None` on a substrate built without it: the demo routes answer the 503
+    // service-unavailable floor.
+    demo_db: Option<PathBuf>,
+    // The lazily-built demo services (a parallel hydration + tracker over a
+    // writable clone of the demo DB), stood up on first demo access. The inner
+    // `None` records a build that could not be served, so the routes degrade
+    // gracefully without retrying a hopeless build on every request.
+    demo: tokio::sync::OnceCell<Option<Arc<crate::demo::DemoState>>>,
 }
 
 /// The composed native services, handed to [`AppState::install_native`] to
-/// flip the natively-registered routes off their proxy fallback. Every
-/// handle is present (composition either yields the full set or declines),
-/// so the bundle carries them by value rather than as options.
+/// bring the natively-registered routes up off the service-unavailable floor.
+/// Every handle is present (composition either yields the full set or
+/// declines), so the bundle carries them by value rather than as options.
 pub struct NativeServices {
     pub hydration: Arc<crate::hydration::HydrationState>,
     pub tracker: Arc<eo_services::tracker::HuntTracker>,
-    pub sse_hub: Arc<eo_wire::sse::SseHub>,
+    pub chatlog_watcher: Arc<eo_services::chatlog_watcher::ChatlogWatcher>,
     pub config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
     pub skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
     pub skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
@@ -88,22 +86,20 @@ pub struct NativeServices {
 }
 
 impl AppState {
-    /// `upstream` is the sidecar's `host:port` authority; `public_port` is
-    /// the loopback port this router itself serves, from which the inbound
-    /// Host allowlist is derived (mirroring the backend's own guard, which
-    /// now sees only the rewritten private authority).
-    pub fn new(upstream: String, public_port: u16, overrides: ArmOverrides) -> Self {
+    /// `public_port` is the nominal loopback authority the inbound Host
+    /// allowlist is derived from, mirroring the backend's own origin guard.
+    /// An in-process IPC request carries no Host header (the guard admits
+    /// that, v0.1.0 parity), so the allowlist only bites a request that
+    /// presents an explicit Host, which the IPC transport never does.
+    pub fn new(public_port: u16) -> Self {
         Self {
-            client: proxy::build_client(),
-            upstream,
             allowed_hosts: [
                 format!("127.0.0.1:{public_port}"),
                 format!("localhost:{public_port}"),
             ],
-            overrides: RwLock::new(overrides),
             hydration: RwLock::new(None),
             tracker: RwLock::new(None),
-            sse_hub: RwLock::new(None),
+            chatlog_watcher: RwLock::new(None),
             config_service: RwLock::new(None),
             skill_tracker: RwLock::new(None),
             skill_scan: RwLock::new(None),
@@ -112,6 +108,8 @@ impl AppState {
             hotbar_listener: RwLock::new(None),
             cors: None,
             data_dir: None,
+            demo_db: None,
+            demo: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -119,8 +117,8 @@ impl AppState {
     /// at the substrate, native responses decorated for allowed
     /// origins, and the origin guard enforced ahead of routing. Without
     /// it (substrates predating composition, and tests that do not
-    /// exercise the browser surface) preflights and origin rules flow
-    /// to the sidecar as before.
+    /// exercise the browser surface) no CORS contract is applied: the
+    /// browser surface is left undecorated and the origin guard inert.
     pub fn with_cors(mut self, cors: cors::CorsConfig) -> Self {
         self.cors = Some(cors);
         self
@@ -139,6 +137,24 @@ impl AppState {
         self.data_dir.as_deref()
     }
 
+    /// Attach the bundled demo database path, enabling the guide-mode
+    /// `/api/demo` surface. Without it those routes answer the 503
+    /// service-unavailable floor.
+    pub fn with_demo_db_path(mut self, demo_db: PathBuf) -> Self {
+        self.demo_db = Some(demo_db);
+        self
+    }
+
+    /// The bundled demo database path, when set.
+    pub(crate) fn demo_db_path(&self) -> Option<PathBuf> {
+        self.demo_db.clone()
+    }
+
+    /// The lazily-built demo-services cell (built once on first demo access).
+    pub(crate) fn demo_cell(&self) -> &tokio::sync::OnceCell<Option<Arc<crate::demo::DemoState>>> {
+        &self.demo
+    }
+
     /// Whether developer mode is currently enabled, read FRESH from the
     /// settings file on each call (never cached), so the hidden dev-tools gate
     /// reflects a toggle without a restart. The gate for every dev route: when
@@ -155,7 +171,8 @@ impl AppState {
 
     /// Attach the composed native services. Without this (a substrate
     /// built before composition, or composition declined at startup)
-    /// every natively-registered route falls back to the proxy arm.
+    /// every natively-registered route answers the 503 service-unavailable
+    /// floor.
     pub fn with_hydration(mut self, hydration: Arc<crate::hydration::HydrationState>) -> Self {
         self.hydration = RwLock::new(Some(hydration));
         self
@@ -172,8 +189,9 @@ impl AppState {
     /// Attach the live producer-spine tracker (the same `Arc<HuntTracker>`
     /// held by the Tauri-managed producer state). Without it (a substrate
     /// built before composition, or composition declined at startup) the
-    /// producer routes that need the live tracker fall back to the proxy
-    /// arm, exactly like the read surface without [`with_hydration`].
+    /// producer routes that need the live tracker answer the 503
+    /// service-unavailable floor, exactly like the read surface without
+    /// `with_hydration`.
     pub fn with_tracker(mut self, tracker: Arc<eo_services::tracker::HuntTracker>) -> Self {
         self.tracker = RwLock::new(Some(tracker));
         self
@@ -184,26 +202,33 @@ impl AppState {
         self.tracker.read().expect("tracker service lock").clone()
     }
 
-    /// Attach the live producer-spine SSE hub (the same `Arc<SseHub>` the
-    /// producer-bus bridge dispatches onto). Without it (a substrate built
-    /// before composition, or composition declined at startup) the
-    /// `/api/events` stream falls back to the proxy arm, exactly like the
-    /// read surface without [`with_hydration`].
-    pub fn with_sse_hub(mut self, sse_hub: Arc<eo_wire::sse::SseHub>) -> Self {
-        self.sse_hub = RwLock::new(Some(sse_hub));
+    /// Attach the live producer-spine chat-log watcher (the same
+    /// `Arc<ChatlogWatcher>` the producer spine holds). The settings-write
+    /// route restarts it when the watched `chatlog_path` changes (the watcher
+    /// captured its path at composition and does not re-read config live).
+    pub fn with_chatlog_watcher(
+        mut self,
+        chatlog_watcher: Arc<eo_services::chatlog_watcher::ChatlogWatcher>,
+    ) -> Self {
+        self.chatlog_watcher = RwLock::new(Some(chatlog_watcher));
         self
     }
 
-    /// The live producer-spine SSE hub, when composed.
-    pub(crate) fn sse_hub(&self) -> Option<Arc<eo_wire::sse::SseHub>> {
-        self.sse_hub.read().expect("sse hub service lock").clone()
+    /// The live producer-spine chat-log watcher, when composed.
+    pub(crate) fn chatlog_watcher(
+        &self,
+    ) -> Option<Arc<eo_services::chatlog_watcher::ChatlogWatcher>> {
+        self.chatlog_watcher
+            .read()
+            .expect("chatlog watcher service lock")
+            .clone()
     }
 
     /// Attach the settings writer (the same `Arc<Mutex<ConfigService>>` the
     /// producer spine holds). Without it (a substrate built before
     /// composition, or composition declined at startup) the settings-write
-    /// routes fall back to the proxy arm, exactly like the read surface
-    /// without [`with_hydration`].
+    /// routes answer the 503 service-unavailable floor, exactly like the
+    /// read surface without `with_hydration`.
     pub fn with_config_service(
         mut self,
         config_service: Arc<Mutex<eo_services::config_service::ConfigService>>,
@@ -224,7 +249,7 @@ impl AppState {
 
     /// Attach the live producer-spine skill tracker (the same
     /// `Arc<SkillTracker>` held by the producer spine). Without it the codex
-    /// claim routes that arm `suppress_next` fall back to the proxy arm.
+    /// claim routes that arm `suppress_next` answer the 503 service-unavailable floor.
     pub fn with_skill_tracker(
         mut self,
         skill_tracker: Arc<eo_services::skill_tracker::SkillTracker>,
@@ -244,7 +269,7 @@ impl AppState {
     /// Attach the composed manual skill-scan service (the OCR scan
     /// state machine). Without it (a substrate built before composition,
     /// composition declined, or the OCR runtime absent off Windows) the
-    /// scan routes fall back to the proxy arm.
+    /// scan routes answer the 503 service-unavailable floor.
     pub fn with_skill_scan(
         mut self,
         skill_scan: Arc<eo_services::skill_scan_manual::SkillScanManual>,
@@ -264,7 +289,7 @@ impl AppState {
     }
 
     /// Attach the composed repair-OCR service. Without it the repair-scan
-    /// route falls back to the proxy arm.
+    /// route answers the 503 service-unavailable floor.
     pub fn with_repair_ocr(
         mut self,
         repair_ocr: Arc<eo_services::repair_ocr::RepairOcrService>,
@@ -282,7 +307,7 @@ impl AppState {
     }
 
     /// Attach the composed spacebar-capture listener. Without it the
-    /// spacebar-capture toggle route falls back to the proxy arm.
+    /// spacebar-capture toggle route answers the 503 service-unavailable floor.
     pub fn with_spacebar_listener(
         mut self,
         spacebar_listener: Arc<eo_services::spacebar_capture_listener::SpacebarCaptureListener>,
@@ -302,8 +327,8 @@ impl AppState {
     }
 
     /// Attach the composed hotbar listener (the same `Arc<HotbarListener>` the
-    /// producer spine holds). Without it the snapshot route falls back to the
-    /// proxy arm (it reads the listener's running state).
+    /// producer spine holds). Without it the snapshot route answers the 503
+    /// service-unavailable floor (it reads the listener's running state).
     pub fn with_hotbar_listener(
         mut self,
         hotbar_listener: Arc<eo_services::hotbar_listener::HotbarListener>,
@@ -322,20 +347,19 @@ impl AppState {
             .clone()
     }
 
-    /// Install the composed native services after the substrate is already
-    /// serving. Composition runs in a background task off the startup path
-    /// (so the substrate answers proxy-only the instant it binds) and calls
-    /// this the moment it succeeds: each handle is written under its lock,
-    /// and the next request for a natively-registered route reads the
-    /// now-present service and runs its native arm instead of the proxy
-    /// fallback. A first launch that found the database below the adoptable
-    /// baseline (the sidecar had not yet migrated it) recovers here, without
-    /// a restart, the moment a retry of composition adopts the migrated
-    /// database.
+    /// Install the composed native services into the shared state. The
+    /// composition root calls this once, after the database has opened and
+    /// the producer spine has stood up, and the shell publishes the state to
+    /// the `api_request` IPC command only afterwards, so every handle is
+    /// present before the first request dispatches. Each handle is written
+    /// under its lock so the read accessors see the composed service.
     pub fn install_native(&self, services: NativeServices) {
         *self.hydration.write().expect("hydration service lock") = Some(services.hydration);
         *self.tracker.write().expect("tracker service lock") = Some(services.tracker);
-        *self.sse_hub.write().expect("sse hub service lock") = Some(services.sse_hub);
+        *self
+            .chatlog_watcher
+            .write()
+            .expect("chatlog watcher service lock") = Some(services.chatlog_watcher);
         *self.config_service.write().expect("config service lock") = Some(services.config_service);
         *self
             .skill_tracker
@@ -352,35 +376,33 @@ impl AppState {
             .write()
             .expect("hotbar listener service lock") = Some(services.hotbar_listener);
     }
-
-    pub fn upstream(&self) -> &str {
-        &self.upstream
-    }
-
-    /// The arm currently serving `route`.
-    pub fn arm_for(&self, route: &str) -> Arm {
-        self.overrides
-            .read()
-            .expect("arm override lock never poisoned")
-            .arm_for(route)
-    }
-
-    /// Replace the override map at runtime (a settings surface can swap
-    /// it without restarting the router).
-    pub fn set_overrides(&self, overrides: ArmOverrides) {
-        *self
-            .overrides
-            .write()
-            .expect("arm override lock never poisoned") = overrides;
-    }
-
-    pub(crate) async fn proxy(&self, req: Request) -> Response {
-        proxy::forward(&self.client, &self.upstream, req).await
-    }
 }
 
-async fn proxy_fallback(State(state): State<Arc<AppState>>, req: Request) -> Response {
-    state.proxy(req).await
+/// A 503 in the backend's `{"detail": ...}` rendering, returned by a native
+/// handler whose composed service is not yet present. The shell publishes the
+/// router only after composition installs every service, so this is a
+/// defensive floor (never reached on the normal startup path) rather than the
+/// retired proxy fallback: a request that somehow arrives mid-composition gets
+/// a clean, retryable 503 instead of a panic.
+pub(crate) fn service_unavailable() -> Response {
+    let body = serde_json::json!({ "detail": "backend services are initialising" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::SERVICE_UNAVAILABLE)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 503 response builds")
+}
+
+/// The framework 404 the router serves for an unmatched path, in the
+/// backend's `{"detail": "Not Found"}` rendering (the fallback that the
+/// reverse proxy used to occupy, now that nothing is forwarded upstream).
+async fn not_found() -> Response {
+    let body = serde_json::json!({ "detail": "Not Found" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::NOT_FOUND)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 404 response builds")
 }
 
 /// A 403 in the backend's `{"detail": ...}` rendering.
@@ -396,8 +418,7 @@ fn forbidden(detail: &str) -> Response {
 /// The public-boundary guard, mirroring the backend's own API-origin
 /// middleware clause for clause: OPTIONS and non-API paths pass
 /// untouched; a present Host header must name this router's loopback
-/// authority (the proxy's Host rewrite makes the sidecar's own check a
-/// no-op for proxied requests); and, when the CORS contract is
+/// authority; and, when the CORS contract is
 /// configured, mutating methods require an allowed Origin while reads
 /// reject a present-but-disallowed one. Each 403 body matches the
 /// backend's verbatim.
@@ -447,7 +468,7 @@ async fn api_guard(
 /// The outermost CORS layer, where the backend's stack also puts it: a
 /// preflight short-circuits everything (routing, the Host and origin
 /// guards) when the contract is configured, and every other response
-/// for an allowed Origin is decorated unless the sidecar already did.
+/// for an allowed Origin is decorated unless it already carries the header.
 async fn cors_layer(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -473,33 +494,43 @@ async fn cors_layer(
     response
 }
 
-/// A per-path registration whose every native method consults the arm
-/// override for `route` at request time (`Native` runs the handler,
-/// `Proxy` forwards to the sidecar), so the runtime kill-switch covers
-/// each registration by construction. Methods the registration does
-/// not carry still belong to the sidecar (an unported method on a
-/// natively-served path, the bare OPTIONS the backend answers itself):
-/// they fall back to the proxy rather than axum's empty 405. HEAD has
-/// its own explicit proxy leg because axum otherwise dispatches it
-/// into a GET handler with the body stripped, while the backend
-/// hard-405s HEAD on its GET routes.
+/// A 405 in the backend's `{"detail": ...}` rendering, returned for a method
+/// no native registration carries on a served path (the proxy used to forward
+/// these to the sidecar, which hard-405s an unported method).
+fn method_not_allowed() -> Response {
+    let body = serde_json::json!({ "detail": "Method Not Allowed" }).to_string();
+    Response::builder()
+        .status(http::StatusCode::METHOD_NOT_ALLOWED)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .expect("static 405 response builds")
+}
+
+/// A multi-method native registration. Each method runs its in-process
+/// handler; a method the registration does not carry gets the backend's
+/// `{"detail": "Method Not Allowed"}` 405 (set as the method fallback rather
+/// than axum's empty 405), and HEAD is bound to the same 405 explicitly so
+/// axum does not silently dispatch it into the GET handler with the body
+/// stripped (the backend hard-405s HEAD on its GET routes). A path no
+/// registration matches falls through to the router's framework 404.
+///
+/// The constructor still takes the route literal: the collapse into the
+/// single-binary shell retired the per-route proxy/native arm override this
+/// used to consult, so
+/// the path is no longer read here, but it is kept as the inline record of
+/// the registration's path (matching the adjacent `.route(...)` key) and the
+/// `arm_routed`/`at` names are retained so the route map in [`native`] reads
+/// unchanged. The leading underscore marks it deliberately unread.
 pub struct ArmRoutes {
-    route: &'static str,
     method_router: MethodRouter<Arc<AppState>>,
 }
 
 impl ArmRoutes {
-    pub fn at(route: &'static str) -> Self {
+    pub fn at(_route: &'static str) -> Self {
         Self {
-            route,
             method_router: MethodRouter::new()
-                .on(
-                    MethodFilter::HEAD,
-                    |State(state): State<Arc<AppState>>, req: Request| async move {
-                        state.proxy(req).await
-                    },
-                )
-                .fallback(proxy_fallback),
+                .on(MethodFilter::HEAD, || async { method_not_allowed() })
+                .fallback(|| async { method_not_allowed() }),
         }
     }
 
@@ -508,17 +539,11 @@ impl ArmRoutes {
         F: Fn(Arc<AppState>, Request) -> Fut + Clone + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        let route = self.route;
         self.method_router = self.method_router.on(
             filter,
             move |State(state): State<Arc<AppState>>, req: Request| {
                 let native = native.clone();
-                async move {
-                    match state.arm_for(route) {
-                        Arm::Native => native(state, req).await,
-                        Arm::Proxy => state.proxy(req).await,
-                    }
-                }
+                async move { native(state, req).await }
             },
         );
         self
@@ -547,8 +572,8 @@ where
 /// into the metrics registry, emitting a structured trace with method, path,
 /// and status. It is pure pass-through: it reads the request line and the
 /// response status but never mutates the request or the response (no body
-/// rewrite, no added header), so it is behaviour-neutral against the proxy
-/// and native goldens. The path is logged, never the query string, so no
+/// rewrite, no added header), so it is behaviour-neutral against the native
+/// goldens. The path is logged, never the query string, so no
 /// caller-supplied value reaches the logs.
 async fn observe(req: Request, next: axum::middleware::Next) -> Response {
     let method = req.method().clone();
@@ -572,13 +597,13 @@ async fn observe(req: Request, next: axum::middleware::Next) -> Response {
     response
 }
 
-/// The substrate router: natively-registered routes take precedence, the
-/// proxy fallback carries every other method and path to the sidecar, and
-/// the guard stack fronts both arms in the backend's own order (the
-/// observe layer outermost, then CORS, then the Host/origin guard).
+/// The in-process router: every backend route is a registered native
+/// handler, an unmatched path gets the backend's framework 404, and the
+/// guard stack fronts them in the backend's own order (the observe layer
+/// outermost, then CORS, then the Host/origin guard).
 pub fn build_router(state: Arc<AppState>) -> Router {
     native_routes(Router::new())
-        .fallback(any(proxy_fallback))
+        .fallback(not_found)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             api_guard,
@@ -592,9 +617,118 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-/// Native route registrations, in takeover order; each flip adds one
-/// `arm_routed` line (here or in [`native`]), and deleting a line is
-/// the source-level revert.
+/// The plain, transport-agnostic shape of an in-process dispatch result, so
+/// the Tauri command layer can return it without depending on axum/http types.
+pub struct InProcessResponse {
+    pub status: u16,
+    /// The status line's canonical reason phrase, so the frontend's `Response`
+    /// keeps the `statusText` a loopback `fetch` would have carried (the error
+    /// contract falls back to it on an empty body).
+    pub status_text: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// Build the in-process request from the IPC descriptor (method, path-and-query,
+/// headers, body). Extracted from [`dispatch_in_process`] so the transport's
+/// request construction is unit-testable without composing the router. An
+/// invalid method or URI surfaces as an `Err` string (the command reports it)
+/// rather than a panic.
+fn build_in_process_request(
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+) -> Result<http::Request<axum::body::Body>, String> {
+    let mut builder = http::Request::builder().method(method).uri(path_and_query);
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    builder
+        .body(axum::body::Body::from(body))
+        .map_err(|err| format!("malformed in-process request: {err}"))
+}
+
+/// The webview's own origin, supplied to a same-process request that arrives
+/// without one so the origin guard admits it. Always present in the CORS
+/// allowlist (`cors::CorsConfig::new`), independent of the frontend port.
+const IN_PROCESS_ORIGIN: &str = "tauri://localhost";
+
+/// Dispatch a request through the in-process router WITHOUT binding a socket:
+/// the server side of the Tauri-IPC transport that replaces the loopback HTTP
+/// hop. The request runs through the identical stack a client over the socket
+/// would hit (the native arms, the Host/origin guard, CORS, and the
+/// observe/metrics layer), so behaviour and instrumentation are unchanged;
+/// only the transport in front of the router differs.
+///
+/// A same-process request carries no Host, which the guard admits (an empty
+/// Host is the loopback caller). It also carries no Origin: `invoke` is not a
+/// network fetch, so unlike the loopback `fetch` it replaces, the browser does
+/// not attach one. The origin guard requires an allow-listed Origin on a
+/// mutating request, so the transport supplies the webview's own origin here;
+/// without it every POST/PATCH/DELETE would be refused with "Origin header
+/// required" before routing. A caller-supplied Origin is left untouched, so
+/// the guard still refuses an explicitly disallowed one.
+pub async fn dispatch_in_process(
+    state: Arc<AppState>,
+    method: &str,
+    path_and_query: &str,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+) -> Result<InProcessResponse, String> {
+    use tower::ServiceExt as _;
+
+    // Supply the webview's allow-listed Origin when the caller sent none, so
+    // the origin guard admits mutating IPC calls (see the doc comment above).
+    let request = if headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
+    {
+        build_in_process_request(method, path_and_query, headers, body)?
+    } else {
+        let mut headers = headers.to_vec();
+        headers.push(("origin".to_string(), IN_PROCESS_ORIGIN.to_string()));
+        build_in_process_request(method, path_and_query, &headers, body)?
+    };
+
+    // `Router::oneshot` is infallible (its `Error` is `Infallible`): the
+    // dispatch itself never errors, so only request construction above can.
+    let response = match build_router(state).oneshot(request).await {
+        Ok(response) => response,
+        Err(infallible) => match infallible {},
+    };
+
+    let status = response.status().as_u16();
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or_default()
+        .to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|err| format!("in-process response body read failed: {err}"))?
+        .to_vec();
+
+    Ok(InProcessResponse {
+        status,
+        status_text,
+        headers,
+        body,
+    })
+}
+
+/// Native route registrations. Each route is one `native_route` line (here
+/// or in [`native`]); the route map mirrors `PORT-READINESS.md`.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     let router = native::register(router.route(
         "/api/health",
@@ -642,18 +776,29 @@ pub async fn serve(listener: tokio::net::TcpListener, state: Arc<AppState>) -> s
 mod tests {
     use super::*;
 
-    #[test]
-    fn state_reports_its_upstream_authority_verbatim() {
-        let state = AppState::new("127.0.0.1:9421".into(), 8421, ArmOverrides::empty());
-        assert_eq!(state.upstream(), "127.0.0.1:9421");
-    }
+    /// An unmatched path gets the backend's framework 404 (the fallback the
+    /// retired reverse proxy used to occupy), not a proxy forward.
+    #[tokio::test]
+    async fn an_unmatched_path_is_the_framework_404() {
+        use axum::body::Body;
+        use tower::ServiceExt;
 
-    #[test]
-    fn state_arm_lookup_defaults_native_and_hot_swaps() {
-        let state = AppState::new("127.0.0.1:1".into(), 8421, ArmOverrides::empty());
-        assert_eq!(state.arm_for("/api/health"), Arm::Native);
-        state.set_overrides(ArmOverrides::parse_env_value("/api/health=proxy"));
-        assert_eq!(state.arm_for("/api/health"), Arm::Proxy);
+        let state = Arc::new(AppState::new(8421));
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/nonexistent")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body collects");
+        let value: serde_json::Value = serde_json::from_slice(&body).expect("404 body is JSON");
+        assert_eq!(value["detail"], "Not Found");
     }
 
     /// Driving a request through the built router records one HTTP-request
@@ -666,11 +811,7 @@ mod tests {
         use axum::body::Body;
         use tower::ServiceExt;
 
-        let state = Arc::new(AppState::new(
-            "127.0.0.1:1".into(),
-            8421,
-            ArmOverrides::empty(),
-        ));
+        let state = Arc::new(AppState::new(8421));
         let router = build_router(state);
 
         let before = eo_wire::metrics::metrics().snapshot().http_requests;
@@ -689,5 +830,148 @@ mod tests {
             after > before,
             "the observe layer must record the served request (before={before}, after={after})"
         );
+    }
+
+    /// The in-process IPC dispatch (the loopback-socket replacement that the
+    /// frontend's `tauriFetch` calls) drives a request through the SAME router
+    /// an HTTP client would hit and returns the transport-agnostic response
+    /// shape. Proven end to end against the native `/api/health` arm (no
+    /// sidecar, no composition required): a 200 with the health JSON, the
+    /// handler's Content-Type carried back, the body collected. The transport
+    /// supplies the webview's Origin and the request carries no Host (both
+    /// admitted), so the dispatch path is exercised exactly as the socket path
+    /// would be.
+    #[tokio::test]
+    async fn dispatch_in_process_routes_a_request_through_the_in_process_router() {
+        let state = Arc::new(AppState::new(8421));
+        let response = dispatch_in_process(state, "GET", "/api/health", &[], Vec::new())
+            .await
+            .expect("the in-process dispatch succeeds");
+        assert_eq!(response.status, 200);
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| name == "content-type" && value.contains("application/json")),
+            "the native handler's Content-Type is carried back: {:?}",
+            response.headers
+        );
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the health body is JSON");
+        assert_eq!(body["status"], "ok");
+    }
+
+    /// The public-boundary Host guard still rejects a foreign Host. The IPC
+    /// transport never sends a Host header (the guard then admits the request,
+    /// v0.1.0 parity), but a request that presents a Host outside the loopback
+    /// allowlist is refused with the backend's 403, so the guard's coverage
+    /// survives the socket's removal.
+    #[tokio::test]
+    async fn the_host_guard_rejects_a_foreign_host_over_ipc() {
+        let state = Arc::new(AppState::new(8421));
+        let response = dispatch_in_process(
+            state,
+            "GET",
+            "/api/health",
+            &[("host".to_string(), "rebound.example:8421".to_string())],
+            Vec::new(),
+        )
+        .await
+        .expect("the dispatch succeeds");
+        assert_eq!(response.status, 403);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the 403 body is JSON");
+        assert_eq!(body["detail"], "Invalid Host header");
+    }
+
+    /// A mutating in-process request that arrives without an Origin (every
+    /// `api_request`/`invoke` call: the webview attaches none) is admitted by
+    /// the origin guard, because the transport supplies the webview's own
+    /// allow-listed Origin. Without it the guard 403s every write before
+    /// routing; here the request reaches the router instead (a POST to the
+    /// GET-only health route is a 405, not a 403 "Origin header required").
+    /// Regression for the loopback-socket removal, which dropped the Origin the
+    /// browser used to attach to the equivalent `fetch`.
+    #[tokio::test]
+    async fn a_mutating_in_process_request_without_an_origin_is_admitted() {
+        let state =
+            Arc::new(AppState::new(8421).with_cors(crate::cors::CorsConfig::new(5173, None)));
+        let response = dispatch_in_process(state, "POST", "/api/health", &[], Vec::new())
+            .await
+            .expect("the dispatch succeeds");
+        assert_eq!(
+            response.status, 405,
+            "the mutating request passed the origin guard and reached the router \
+             (405 method-not-allowed), rather than being refused with a 403"
+        );
+    }
+
+    /// The supplied Origin is only a fallback for the gap the removed socket
+    /// left: a caller that DOES present an explicitly disallowed Origin on a
+    /// mutating request is still refused, so the guard's coverage is preserved
+    /// (the transport fills the absent-Origin case, it does not blanket-disable
+    /// the check).
+    #[tokio::test]
+    async fn an_explicit_disallowed_origin_on_a_mutating_request_is_refused() {
+        let state =
+            Arc::new(AppState::new(8421).with_cors(crate::cors::CorsConfig::new(5173, None)));
+        let response = dispatch_in_process(
+            state,
+            "POST",
+            "/api/health",
+            &[("origin".to_string(), "http://evil.example".to_string())],
+            Vec::new(),
+        )
+        .await
+        .expect("the dispatch succeeds");
+        assert_eq!(response.status, 403);
+        let body: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the 403 body is JSON");
+        assert_eq!(body["detail"], "Origin header required");
+    }
+
+    /// The transport's request construction (the IPC-descriptor -> http::Request
+    /// half of the in-process dispatch) carries the method, path, query string,
+    /// headers, and body verbatim, so a re-pointed call site reaches the router
+    /// exactly as a loopback request would.
+    #[tokio::test]
+    async fn the_in_process_request_carries_method_path_query_headers_and_body() {
+        let request = build_in_process_request(
+            "POST",
+            "/api/settings?dry_run=1&scope=all",
+            &[("content-type".to_string(), "application/json".to_string())],
+            br#"{"player_name":"Mikel"}"#.to_vec(),
+        )
+        .expect("the request builds");
+        assert_eq!(request.method(), http::Method::POST);
+        assert_eq!(request.uri().path(), "/api/settings");
+        assert_eq!(request.uri().query(), Some("dry_run=1&scope=all"));
+        assert_eq!(
+            request
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+        );
+        let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+            .await
+            .expect("the body collects");
+        assert_eq!(&body[..], br#"{"player_name":"Mikel"}"#);
+    }
+
+    #[test]
+    fn the_in_process_request_parses_each_standard_method() {
+        for method in ["GET", "POST", "PATCH", "DELETE", "PUT"] {
+            let request = build_in_process_request(method, "/api/x", &[], Vec::new())
+                .expect("a standard method builds");
+            assert_eq!(request.method().as_str(), method);
+        }
+    }
+
+    #[test]
+    fn a_malformed_in_process_request_is_a_clean_error_not_a_panic() {
+        // A method token with a space is not a valid HTTP method; the builder
+        // surfaces it as an Err the command reports, never a panic.
+        assert!(build_in_process_request("BAD METHOD", "/api/x", &[], Vec::new()).is_err());
     }
 }

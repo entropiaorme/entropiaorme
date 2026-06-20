@@ -55,7 +55,6 @@ _STATIC_GETS = (
     "/api/settings/overlay-position",
     "/api/scan/skills/status",
     "/api/scan/skills/pending",
-    "/api/recording/status",
     # Demo surface mirrors tracking / analytics against the seeded demo DB.
     "/api/demo/tracking/snapshot",
     "/api/demo/tracking/sessions",
@@ -187,13 +186,6 @@ def test_read_surface_with_seeded_state(e2e_http_pipeline):
     assert scan["has_pending_result"] is False
     # No held result exists in the idle seeded state.
     assert client.get("/api/scan/skills/pending").status_code == 404
-
-    # ── Recording status (developer mode is on in the pipeline). ──
-    recording = client.get("/api/recording/status")
-    assert recording.status_code == 200
-    rec = recording.json()
-    assert {"state", "lines", "captures", "keystrokes"} <= set(rec)
-    assert rec["state"] in {"idle", "recording"}
 
     # ── Codex species: a non-empty catalogue with the per-row cost contract. ──
     codex_species = client.get("/api/codex/species")

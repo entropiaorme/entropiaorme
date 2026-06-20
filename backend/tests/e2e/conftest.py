@@ -198,8 +198,8 @@ def make_e2e_http_pipeline(
     tails the temp file the scenario will write into; the demo router's
     DB resolver is pointed at a seeded throwaway, so ``/api/demo/*``
     GETs are reachable during the contract substrate. Developer mode is
-    enabled on the live config so the recording router's dev-gated
-    surface is exercised in the same shape the contract suite sees.
+    enabled on the live config so the dev-gated surface is exercised in
+    the same shape the contract suite sees.
 
     Called with a ``scenario_dir``, the factory additionally exports the
     scenario's committed clock plan through the composition root's

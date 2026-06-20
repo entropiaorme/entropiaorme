@@ -32,9 +32,7 @@ const { clientGet, clientPost, clientPut, clientPatch, clientDelete, FakeApiErro
 
 vi.mock('./client', () => ({
 	ApiError: FakeApiError,
-	EVENTS_STREAM_URL: 'http://127.0.0.1:8421/api/events',
-	manualSkillScanCapturePngUrl: (page: number) =>
-		`http://127.0.0.1:8421/api/scan/skills/capture/${page}`,
+	manualSkillScanCapturePng: async (page: number) => `data:image/png;base64,page${page}`,
 	request: vi.fn(),
 	unwrap: async (call: Promise<{ data?: unknown }>) => (await call).data,
 	client: {
@@ -382,16 +380,6 @@ describe('plain delegating wrappers map to the expected verb, path, and shape', 
 			'/api/settings',
 			{ body: { player_name: 'Mikel' } },
 		],
-		['startRecording', () => api.startRecording(), 'POST', '/api/recording/start'],
-		['getRecordingStatus', () => api.getRecordingStatus(), 'GET', '/api/recording/status'],
-		[
-			'stopRecording',
-			() => api.stopRecording({ scenario_name: 'baseline' }),
-			'POST',
-			'/api/recording/stop',
-			{ body: { scenario_name: 'baseline' } },
-		],
-		['abortRecording', () => api.abortRecording(), 'POST', '/api/recording/abort'],
 		['getOverlayPosition', () => api.getOverlayPosition(), 'GET', '/api/settings/overlay-position'],
 	];
 
@@ -734,12 +722,9 @@ describe('getCharacterProspect', () => {
 });
 
 describe('re-exported client surface', () => {
-	it('forwards ApiError, request, and the URL helpers from ./client', () => {
+	it('forwards ApiError, request, and the asset helpers from ./client', async () => {
 		expect(api.ApiError).toBe(FakeApiError);
-		expect(api.EVENTS_STREAM_URL).toBe('http://127.0.0.1:8421/api/events');
-		expect(api.manualSkillScanCapturePngUrl(2)).toBe(
-			'http://127.0.0.1:8421/api/scan/skills/capture/2',
-		);
+		expect(await api.manualSkillScanCapturePng(2)).toBe('data:image/png;base64,page2');
 		expect(typeof api.request).toBe('function');
 	});
 });

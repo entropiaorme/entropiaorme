@@ -1064,6 +1064,7 @@ dependencies = [
 name = "entropia-orme"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "eo-http",
  "eo-services",
@@ -1098,12 +1099,12 @@ dependencies = [
  "hyper",
  "hyper-util",
  "percent-encoding",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tower",
  "tracing",
  "uuid",

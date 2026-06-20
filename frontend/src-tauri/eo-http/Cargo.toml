@@ -1,33 +1,27 @@
 [package]
 name = "eo-http"
 version.workspace = true
-description = "HTTP substrate for the EntropiaOrme backend: the in-process router and middleware that progressively take over routes from the Python sidecar."
+description = "HTTP substrate for the EntropiaOrme backend: the in-process router and middleware serving every backend route natively."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
-[features]
-# Integration tests that boot the real Python backend as the proxy upstream
-# (the proxy-fidelity self-check). Off by default so the hermetic CI legs
-# need no Python toolchain; the nightly equivalence job turns it on.
-cross-language = []
-
 [dependencies]
 axum.workspace = true
 tokio.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 serde_json.workspace = true
+# Typed deserialisation of the committed guide-mode demo fixture
+# (`resources/mid_hunt_fixture.json`).
+serde = { workspace = true, features = ["derive"] }
 eo-wire.workspace = true
 # The natively-served hydration handlers read through the ported
 # services (quests, codex) and their database handle.
 eo-services.workspace = true
 sqlx.workspace = true
 sha2.workspace = true
-tokio-stream.workspace = true
 percent-encoding.workspace = true
 # Epoch-to-date arithmetic for the analytics period windows, mirroring the
 # router's datetime.fromtimestamp(...).strftime date math.
@@ -37,14 +31,18 @@ chrono.workspace = true
 uuid.workspace = true
 # Per-request observe-only span + latency timing in the middleware stack.
 tracing.workspace = true
+# Drives a request straight through the built router (ServiceExt::oneshot):
+# the in-process IPC dispatch that replaces the loopback-socket hop, and the
+# observe-layer test. axum 0.8 rides this tower minor.
+tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
 bytes.workspace = true
+# The native-router integration test drives the in-process router over a test
+# loopback socket with a plain HTTP client (the shipped binary binds none).
+hyper.workspace = true
+hyper-util.workspace = true
 tempfile.workspace = true
-# Drives a request straight through the built router (ServiceExt::oneshot) in
-# the observe-layer test, without binding a port. axum 0.8 rides this tower
-# minor.
-tower = { version = "0.5", features = ["util"] }
 # test-util powers the paused-clock keep-alive cadence test; dev-only so
 # the feature never reaches a shipped build.
 tokio = { workspace = true, features = ["test-util"] }

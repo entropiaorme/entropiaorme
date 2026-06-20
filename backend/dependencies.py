@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from backend.testing.clock import Clock
     from backend.testing.config import TestModeConfig
     from backend.testing.keystroke_source import KeystrokeSource
-    from backend.testing.recording_controller import RecordingController
     from backend.tracking.tracker import HuntTracker
 
 
@@ -46,7 +45,6 @@ class Services:
     hotbar_listener: HotbarListener
     repair_ocr: RepairOcrService
     spacebar_capture_listener: SpacebarCaptureListener
-    recording_controller: RecordingController
     # The process-wide time source (the same instance every service above was
     # constructed with), exposed so the stateless router layer reads time
     # through it instead of the ambient stdlib clock.

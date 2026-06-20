@@ -7,10 +7,9 @@
 //! the body, `Cache-Control: no-cache`, and `304 Not Modified` with an
 //! empty body when `If-None-Match` already names the representation.
 //!
-//! The handlers live here proof-first: each is exercised against the
-//! running backend over a shared database before any route registers
-//! natively (registration in `native_routes` is the cutover, one line
-//! per route, with the runtime arm override as the rollback).
+//! The handlers were each proven against the Python reference over a
+//! shared database before its route registered natively (one line per
+//! route in `native_routes`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,8 +36,8 @@ pub struct HydrationState {
     pub(crate) game_data: Arc<GameDataStore>,
     pub(crate) clock: Arc<dyn Clock>,
     /// The data directory the substrate serves: the config read-through
-    /// (`settings.json` stays sidecar-written until the producer
-    /// cutover) and the `dbPath` settings field both render from it.
+    /// (`settings.json`, now written solely by the native `ConfigService`)
+    /// and the `dbPath` settings field both render from it.
     pub(crate) data_dir: PathBuf,
 }
 

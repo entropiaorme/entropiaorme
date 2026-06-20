@@ -3,8 +3,9 @@
 //!
 //! Every route is self-gated on developer mode (404 when off), so they are off
 //! the equivalence-covered surface (no golden, no Python arm to diff against)
-//! and invisible to a default install. They are native-only: there is nothing
-//! to proxy to, so they bypass the arm system entirely. The metrics snapshot is
+//! and invisible to a default install. They are native-only: they have no
+//! counterpart in the Python reference, so they never had a route-override
+//! entry. The metrics snapshot is
 //! read straight from the process-global registry; the crash-reporting toggle
 //! reads and writes the shell-owned `observability.json` (NOT `settings.json`,
 //! which is the dual-arm equivalence surface).
@@ -111,7 +112,6 @@ fn json_response(status: http::StatusCode, body: String) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use crate::arms::ArmOverrides;
     use crate::{build_router, AppState};
     use axum::body::Body;
     use axum::extract::Request;
@@ -125,10 +125,7 @@ mod tests {
             format!(r#"{{"developer_mode_enabled":{enabled}}}"#),
         )
         .unwrap();
-        Arc::new(
-            AppState::new("127.0.0.1:1".into(), 8421, ArmOverrides::empty())
-                .with_data_dir(dir.to_path_buf()),
-        )
+        Arc::new(AppState::new(8421).with_data_dir(dir.to_path_buf()))
     }
 
     #[tokio::test]

@@ -3,6 +3,8 @@
 - Status: Accepted
 - Context: reflects the landed implementation
 
+> **Transport update ([ADR-0013](0013-in-process-collapse.md)).** The invalidation model below is unchanged, and the collapse made it the only model: a frame is still a minimal signal and the window still re-reads full state from a hydration GET. Two transport details beneath it moved. Change notifications no longer arrive on a `GET /api/events` HTTP stream but over an in-process Tauri event bridge, and the hydration reads no longer cross a loopback socket but dispatch in-process through the `api_request` IPC command. The reconnect-safe re-hydrate is now expressed as the frontend re-reading on the `substrate:native-installed` event the shell emits once the native services compose.
+
 ## Context and problem statement
 
 The desktop frontend renders live hunting-session state that the backend mutates continuously from a chat-log tail loop. The frontend reaches the backend two ways: request/response HTTP for state reads and mutations, and a one-way server-sent-events stream (`GET /api/events`) for change notifications. Two designs were available for the streaming half.

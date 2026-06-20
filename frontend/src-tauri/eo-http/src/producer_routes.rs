@@ -10,7 +10,7 @@
 //!
 //!   POST /api/tracking/start                  -> TrackingStartResult
 //!   POST /api/tracking/stop                   -> TrackingStopResult
-//!   GET  /api/tracking/manual-mob-suggestions -> list[ManualMobSuggestion]
+//!   GET  /api/tracking/manual-mob-suggestions -> `list[ManualMobSuggestion]`
 //!   POST /api/tracking/release-mob            -> ReleaseMobResult
 //!   POST /api/tracking/manual-mob-lock        -> ManualMobLockResult
 //!   POST /api/tracking/tag-lock               -> TagLockResult
@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
+use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::config_service::{
     active_trifecta_preset, load_config_readonly, AppConfig, ConfigService,
 };
@@ -49,6 +50,54 @@ use crate::hydration::{
     detail, error_response, internal_error, json_response, plain_json_response,
 };
 use crate::scan_routes::project;
+
+/// Mirror the backend's `_validate_chatlog_path`: a non-empty path whose
+/// basename is `chat.log` (case-insensitive) and which is an existing file.
+/// Returns the expanduser-normalised `str(Path(...))` on success (so the
+/// stored value and the watcher restart both use the canonical form), or the
+/// 400 reply to return verbatim.
+fn validate_chatlog_path(value: &str) -> Result<String, Box<Response<Body>>> {
+    if value.is_empty() {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            &detail("chat.log path is required"),
+        )));
+    }
+    let expanded = expanduser(value);
+    let path = std::path::Path::new(&expanded);
+    let basename_is_chatlog = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("chat.log"));
+    if !basename_is_chatlog {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            &detail("chat.log path must point to a chat.log file"),
+        )));
+    }
+    if !path.is_file() {
+        return Err(Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            &detail("chat.log path does not exist"),
+        )));
+    }
+    Ok(crate::settings_routes::python_path_str(path))
+}
+
+/// Expand a leading `~` to the user's home directory, mirroring
+/// `pathlib.Path.expanduser` for the case the path picker produces (a bare
+/// `~` or a `~/...` / `~\...` prefix). Other forms pass through unchanged.
+fn expanduser(value: &str) -> String {
+    if let Some(rest) = value.strip_prefix('~') {
+        if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') {
+            if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+            {
+                return format!("{}{}", home.to_string_lossy(), rest);
+            }
+        }
+    }
+    value.to_string()
+}
 
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape, served `exclude_unset`). The snake-case status
@@ -390,6 +439,109 @@ impl HydrationState {
         plain_json_response(&json!({ "tag": tag }))
     }
 
+    /// PATCH /api/settings: the monolithic partial settings update, mirroring
+    /// the backend's `update_settings`. `updates` carries ONLY the fields
+    /// present in the request body (the `exclude_unset` dump the native
+    /// adapter builds). Validate-then-write the present fields, signal the
+    /// producers in the backend's order (the watcher on a `chatlog_path`
+    /// change, the hotbar gate on a `hotbar_hooks_enabled` change, the tracker
+    /// unconditionally so an in-flight session re-reads its config), and reply
+    /// with the full assembled settings (the GET /api/settings body). With the
+    /// sidecar gone the native `ConfigService` is the sole writer, so the
+    /// hybrid dual-writer split-brain is structurally impossible here.
+    pub async fn settings_update(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        tracker: &Arc<HuntTracker>,
+        hotbar: &Arc<HotbarListener>,
+        watcher: &Arc<ChatlogWatcher>,
+        mut updates: Map<String, Value>,
+    ) -> Response<Body> {
+        // An empty patch is the backend's 400 (nothing to update).
+        if updates.is_empty() {
+            return error_response(StatusCode::BAD_REQUEST, &detail("No fields to update"));
+        }
+        // Lock, validate, and write inside a block so the (non-`Send`)
+        // `MutexGuard` is gone before any `.await` below (the producer signals
+        // and the response assembly). The early returns inside span no await.
+        let (validated_chatlog, hooks_present, hooks_value) = {
+            let Ok(mut guard) = config.lock() else {
+                return internal_error();
+            };
+            // The candidate validates without mutating live state (the
+            // backend's `clone_with_updates`); used for the mob-mode gate.
+            let candidate = guard.clone_with_updates(&updates);
+            // chatlog_path first (the backend's order): the 400 chain, then the
+            // validated/expanduser-normalised path replaces the submitted one
+            // so the write and the watcher restart use the canonical form.
+            let validated_chatlog = if updates.contains_key("chatlog_path") {
+                let raw = updates
+                    .get("chatlog_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                match validate_chatlog_path(raw) {
+                    Ok(normalised) => {
+                        updates.insert("chatlog_path".into(), Value::String(normalised.clone()));
+                        Some(normalised)
+                    }
+                    Err(reply) => return *reply,
+                }
+            } else {
+                None
+            };
+            if candidate.mob_tracking_mode != "mob" && candidate.mob_tracking_mode != "tag" {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    &detail("Unknown mob tracking mode"),
+                );
+            }
+            let hooks_present = updates.contains_key("hotbar_hooks_enabled");
+            if guard.update(&updates).is_err() {
+                return internal_error();
+            }
+            (
+                validated_chatlog,
+                hooks_present,
+                guard.get().hotbar_hooks_enabled,
+            )
+        };
+
+        if let Some(path) = validated_chatlog {
+            watcher.restart(path);
+        }
+        if hooks_present {
+            hotbar.set_hotbar_hooks_enabled(hooks_value);
+        }
+        tracker.reload_config();
+        self.settings(None).await
+    }
+
+    /// POST /api/settings/reset: restore defaults and re-signal every producer
+    /// unconditionally, mirroring the backend's `reset_settings`. Replies with
+    /// the full assembled settings.
+    pub async fn settings_reset(
+        &self,
+        config: &Arc<Mutex<ConfigService>>,
+        tracker: &Arc<HuntTracker>,
+        hotbar: &Arc<HotbarListener>,
+        watcher: &Arc<ChatlogWatcher>,
+    ) -> Response<Body> {
+        let (chatlog_path, hooks_value) = {
+            let Ok(mut guard) = config.lock() else {
+                return internal_error();
+            };
+            if guard.reset().is_err() {
+                return internal_error();
+            }
+            let cfg = guard.get();
+            (cfg.chatlog_path.clone(), cfg.hotbar_hooks_enabled)
+        };
+        watcher.restart(chatlog_path);
+        hotbar.set_hotbar_hooks_enabled(hooks_value);
+        tracker.reload_config();
+        self.settings(None).await
+    }
+
     /// GET /api/tracking/snapshot: the consolidated dashboard hydration. The
     /// union of the live tracker readout, the configuration- and
     /// runtime-derived envelope (attribution mode, the repair-OCR flag, the
@@ -408,6 +560,26 @@ impl HydrationState {
         let Ok(config) = load_config_readonly(&self.data_dir) else {
             return internal_error();
         };
+        match self
+            .build_snapshot_value(tracker, &config, hotbar.is_running())
+            .await
+        {
+            Ok(value) => json_response(&value, if_none_match),
+            Err(_) => internal_error(),
+        }
+    }
+
+    /// Assemble the `TrackingSnapshot` projected value from a tracker readout,
+    /// a resolved config, and the hotbar listener's running state. Extracted
+    /// from [`Self::tracking_snapshot`] so the guide-mode demo snapshot can
+    /// reuse the identical assembly with a constructed demo config and a fixed
+    /// running state (`true`), keeping the two byte-for-byte aligned.
+    pub(crate) async fn build_snapshot_value(
+        &self,
+        tracker: &Arc<HuntTracker>,
+        config: &AppConfig,
+        hotbar_active: bool,
+    ) -> Result<Value, DbError> {
         // `_weapon_attribution`: trifecta unless the hotbar hooks are on.
         let weapon_attribution = if config.hotbar_hooks_enabled {
             "hotbar"
@@ -415,17 +587,11 @@ impl HydrationState {
             "trifecta"
         };
         let trifecta_attribution = if weapon_attribution == "trifecta" {
-            match self.trifecta_attribution_summary(&config).await {
-                Ok(summary) => summary,
-                Err(_) => return internal_error(),
-            }
+            self.trifecta_attribution_summary(config).await?
         } else {
             Value::Null
         };
-        let readout = match tracker.snapshot() {
-            Ok(readout) => readout,
-            Err(_) => return internal_error(),
-        };
+        let readout = tracker.snapshot()?;
         let current_tool = match &readout.current_tool {
             Some(tool) => Value::String(tool.clone()),
             None => Value::Null,
@@ -434,10 +600,10 @@ impl HydrationState {
         let value = match &readout.active {
             None => {
                 // The configured manual label hydrates an idle dashboard.
-                let (current_mob, mob_source) = configured_manual_label(&config);
+                let (current_mob, mob_source) = configured_manual_label(config);
                 json!({
                     "status": "idle",
-                    "hotbarListenerActive": hotbar.is_running(),
+                    "hotbarListenerActive": hotbar_active,
                     "weaponAttribution": weapon_attribution,
                     "repairOcrEnabled": config.repair_ocr_enabled,
                     "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
@@ -499,7 +665,7 @@ impl HydrationState {
                     "multiplierMax": active.multiplier_max,
                     "multiplierHistory": active.multiplier_history.clone(),
                     "cumulativeNetHistory": active.cumulative_net_history.clone(),
-                    "hotbarListenerActive": hotbar.is_running(),
+                    "hotbarListenerActive": hotbar_active,
                     "weaponAttribution": weapon_attribution,
                     "repairOcrEnabled": config.repair_ocr_enabled,
                     "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
@@ -513,7 +679,7 @@ impl HydrationState {
                 })
             }
         };
-        json_response(&project(&value, &SNAPSHOT_FIELDS), if_none_match)
+        Ok(project(&value, &SNAPSHOT_FIELDS))
     }
 
     /// `_trifecta_attribution_summary`: the active preset's bound weapon/heal

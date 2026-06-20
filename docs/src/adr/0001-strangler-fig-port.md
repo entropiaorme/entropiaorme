@@ -1,7 +1,9 @@
 # ADR-0001: Strangler-fig Python-to-Rust backend port
 
-- Status: Accepted
-- Context: reflects the landed implementation
+- Status: Superseded by [ADR-0013](0013-in-process-collapse.md)
+- Context: a historical record of the migration seam, now collapsed
+
+> **Superseded.** This record describes the strangler-fig hybrid that carried the backend from Python to Rust one route at a time. The migration is complete: every route is served natively and the sidecar, the reverse proxy, the loopback socket, and the per-route arm overrides have been removed. The application is now a single in-process Rust binary; see [ADR-0013](0013-in-process-collapse.md). The text below is preserved unchanged as the record of why the seam existed.
 
 ## Context and problem statement
 

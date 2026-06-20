@@ -144,8 +144,8 @@ pub fn is_preflight(method: &http::Method, headers: &HeaderMap) -> bool {
 /// Decorate a natively-served response for an allowed origin, exactly
 /// as the backend's middleware decorates every response: the specific
 /// origin echoed, `Origin` appended to `Vary`. Responses that already
-/// carry an allow-origin header (the proxied arm, decorated upstream)
-/// are left untouched.
+/// carry an allow-origin header (the reverse proxy used to decorate
+/// proxied responses upstream) are left untouched.
 pub fn decorate(response: &mut Response<Body>, origin: &HeaderValue) {
     if response
         .headers()

@@ -132,8 +132,8 @@ jobs:
     # queue's integrated commit (the exact lines about to land), mirroring the
     # golden-ratification guard above. A plain push to main is excluded: that
     # state already cleared this on its PR and in the queue. The version-stamp
-    # parity check is whole-tree rather than diff-scoped, so it rides the
-    # pre-commit job instead of here.
+    # parity check is whole-tree rather than diff-scoped, so it runs as its own
+    # step below (and locally via the pre-commit hook).
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -156,6 +156,13 @@ jobs:
           RANGE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
           RANGE_HEAD: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
         run: python -m backend.scripts.check_authoring_lint --range "$RANGE_BASE..$RANGE_HEAD"
+
+      - name: Check version-stamp parity
+        # Whole-tree, not diff-scoped: the three version stamps (frontend
+        # package.json, the Cargo workspace package, tauri.conf.json) must agree.
+        # authoring-lint is a required input of the ci-gate aggregator, so this
+        # binds the parity check at PR and merge-queue time, not just locally.
+        run: python -m backend.scripts.check_version_stamps
 
   frontend:
     name: Frontend (build + check + test)
@@ -269,7 +276,7 @@ jobs:
       - name: Upload visual diff on failure
         if: failure()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: visual-diff-${{ github.run_id }}-${{ github.run_attempt }}
           path: frontend/e2e/.visual-output

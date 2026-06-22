@@ -1,5 +1,5 @@
 import { $, browser, expect } from '@wdio/globals';
-import { ensureDashboard } from '../helpers/onboarding.mjs';
+import { animationsFinished, ensureDashboard, settleSize } from '../helpers/onboarding.mjs';
 import { DEV_URL } from '../wdio.conf.mjs';
 
 // Dashboard visual regression against committed baselines, captured in the real
@@ -20,7 +20,6 @@ const BUDGET = 1.5; // small budget for sub-pixel AA noise; a real change is far
 describe('dashboard visual regression (native Tauri shell)', () => {
 	before(async () => {
 		await ensureDashboard(browser, DEV_URL);
-		await browser.pause(1200); // let the dashboard settle its fixed-value layout
 	});
 
 	it('matches the committed stat-cell baseline', async () => {
@@ -34,14 +33,17 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 			timeout: 12000,
 			timeoutMsg: 'stat grid never reached the loaded (non-em-dash) state',
 		});
-		await browser.pause(500);
 		// Capture a single fixed-width stat cell (the first: "Cycled"), not the
 		// whole grid: the grid's auto-fill columns reflow as the chart widgets
-		// below it load and the scrollbar toggles, which makes a grid-wide shot
-		// non-deterministic. A cell-scoped shot captures the cell's own content
-		// (a fixed fixture value), immune to that reflow.
+		// below it load, which makes a grid-wide shot non-deterministic. A
+		// cell-scoped shot captures the cell's own fixed fixture value.
 		const cell = await $('[data-stat-cell="0"]');
 		await cell.waitForExist({ timeout: 10000 });
+		// Settle the WAAPI stat-grid FLIP and the cell's own box before the shot:
+		// the prior "visually identical yet 32%" diff was a sub-pixel transform
+		// captured mid-flip (disableCSSAnimations cannot reach a Web Animation).
+		await animationsFinished(browser);
+		await settleSize(browser, cell, { min: 40 });
 		const mismatch = await browser.checkElement(cell, 'dashboard-stat-cell', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});
@@ -51,11 +53,19 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		// stable dashboard surface to broaden onto.
 		const events = await $('[data-guide-anchor="dashboard-recent-events"]');
 		await events.waitForExist({ timeout: 10000 });
-		await browser.waitUntil(async () => (await events.getText()).includes('HOF'), {
-			timeout: 12000,
-			timeoutMsg: 'recent-events never hydrated the fixture rows',
-		});
-		await browser.pause(300);
+		// Gate on the COMPLETE fixture, not just the first row to mention 'HOF':
+		// require all three painted rows incl. the last ('Atrox Old'), so a
+		// mid-hydration 1-of-3-rows capture cannot pass the gate.
+		await browser.waitUntil(
+			async () => {
+				const rows = await events.$$('li');
+				const text = await events.getText();
+				return rows.length === 3 && text.includes('HOF') && text.includes('Atrox Old');
+			},
+			{ timeout: 12000, timeoutMsg: 'recent-events never hydrated all 3 fixture rows' },
+		);
+		await animationsFinished(browser);
+		await settleSize(browser, events, { min: 90 });
 		const mismatch = await browser.checkElement(events, 'dashboard-recent-events', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});
@@ -66,8 +76,16 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		// settled end-state rather than a mid-rescale frame.
 		const widgets = await $('[data-guide-anchor="dashboard-widgets-area"]');
 		await widgets.waitForExist({ timeout: 10000 });
-		await widgets.$('svg').waitForExist({ timeout: 10000 });
-		await browser.pause(900); // let the width-driven chart geometry settle
+		// Gate on the real DATA chart, not just any svg: the empty-state
+		// placeholder is an aria-hidden svg with no aria-label, so `svg` alone
+		// passes pre-hydration. The data sparkline carries this aria-label.
+		await widgets
+			.$('svg[aria-label^="Per-kill multiplier sparkline"]')
+			.waitForExist({ timeout: 12000 });
+		await animationsFinished(browser);
+		// The panel must have reached its full (non-collapsed) height: the prior
+		// 88% diff was the flex-1 widgets area squeezed to the tab strip mid-reflow.
+		await settleSize(browser, widgets, { min: 500 });
 		const mismatch = await browser.checkElement(widgets, 'dashboard-loot-pulse', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});
@@ -76,16 +94,22 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		const widgets = await $('[data-guide-anchor="dashboard-widgets-area"]');
 		await widgets.scrollIntoView({ block: 'center' });
 		const lootTab = await widgets.$('[data-tab-id="loot"]');
-		await lootTab.waitForExist({ timeout: 10000 });
+		await lootTab.waitForClickable({ timeout: 10000 });
 		await lootTab.click();
-		await browser.pause(1000); // mount + first session-detail fetch
-		// Hydrates from the session-detail fixture; gate on a known loot row
-		// rather than the loading placeholder.
+		// Hydrates from the session-detail fixture (fetched once the snapshot's
+		// session_id is known); gate on a known loot row AND the full ranked list
+		// (5 fixture rows), not a fixed pause, so a pre-fetch / collapsed capture
+		// cannot pass.
 		await browser.waitUntil(async () => (await widgets.getText()).includes('Animal Oil Residue'), {
 			timeout: 12000,
 			timeoutMsg: 'loot composition never hydrated the fixture loot rows',
 		});
-		await browser.pause(500);
+		await browser.waitUntil(async () => (await widgets.$$('ul li')).length >= 5, {
+			timeout: 12000,
+			timeoutMsg: 'loot composition never rendered all ranked rows',
+		});
+		await animationsFinished(browser);
+		await settleSize(browser, widgets, { min: 500 });
 		const mismatch = await browser.checkElement(widgets, 'dashboard-loot-composition', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});

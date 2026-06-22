@@ -1,69 +1,75 @@
 /**
- * Backend to webview event relay.
+ * Backend to webview hydrate nudge.
  *
- * The backend pushes coarse domain events over a server-sent-events stream
- * (`GET /api/events`). This relay, running in the always-alive main window,
- * opens that stream once and re-emits each frame onto the Tauri event bus, so
- * every window (including the hidden overlays) receives backend state changes
- * by subscription rather than by polling.
+ * Real-time backend domain events reach every window over the Tauri event bus:
+ * the native producer spine emits each typed envelope directly on its colon-form
+ * Tauri topic (see `spawn_domain_event_bridge` in the shell), and the topic-aware
+ * consumers (the tracking and scan stores, the overlay) subscribe through
+ * `listen()`. This module owns only the HYDRATE NUDGE: a payload-less frame on
+ * each forwarded topic that prompts every window to re-read its current state,
+ * so a window cannot show stale data after it first mounts or after the native
+ * spine is installed at startup.
  *
- * Only the main window relays. Every window inherits the root layout that
- * starts this, but a relay in each would open a duplicate stream and re-emit
- * every event several times over; the main window is the one guaranteed alive
- * for the app's lifetime (closing it exits the app), so it owns the single
- * relay.
+ * Only the main window nudges. Every window inherits the root layout that starts
+ * this, but the nudge is a global emit (one reaches every window), so the main
+ * window (guaranteed alive for the app's lifetime; closing it exits the app)
+ * owns the single emitter.
  *
- * This is the frontend half of the event spine. At Rust-port time the backend
- * SSE producer is replaced wholesale, but the stream contract and this relay are
- * unchanged: the webview never learns the backend language changed.
+ * History: the real-event transport was once an `EventSource` over
+ * `GET /api/events` relayed onto the bus. The Rust-native collapse moved that
+ * transport into the shell (events are emitted natively), leaving this module the
+ * hydrate half of the event spine; the webview never learns the transport changed.
  */
 
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-import { EVENTS_STREAM_URL } from '$lib/api';
-
-/** Wire topics forwarded from the SSE stream onto the Tauri bus. Grows as more
- * domain topics are added (quests, ...). Each is re-emitted on its colon-form
- * Tauri topic and covered by the reconnect nudge below. */
+/** Wire topics whose colon-form Tauri events the windows subscribe to. The
+ * hydrate nudge fires a payload-less frame on each. Grows as more domain topics
+ * are added (quests, ...); the Rust bridge forwards the live events on the same
+ * topics. */
 const FORWARDED_TOPICS = ['tracking.session.updated', 'scan.status.changed'] as const;
 
-interface DomainEnvelope {
-	type?: string;
-	payload?: Record<string, unknown>;
-}
+/**
+ * Substrate ready signal. The shell composes the native service spine at startup
+ * and publishes the backend substrate only once it is installed (the `api_request`
+ * command errors until then); the native producer's events begin flowing from that
+ * point. The shell emits this once composition completes so the relay can
+ * re-hydrate every window onto the freshly-live native state.
+ */
+const SUBSTRATE_NATIVE_INSTALLED_EVENT = 'substrate:native-installed';
 
-let source: EventSource | null = null;
+let started = false;
+let unlistenHandover: UnlistenFn | undefined;
 
 /**
  * Tauri event names admit only alphanumerics and `-`, `/`, `:`, `_` (no dots),
- * so the dotted wire topic is namespaced with colons for the Tauri bus. The SSE
- * wire contract keeps the dotted form; this is the relay's only transform.
+ * so the dotted wire topic is namespaced with colons for the Tauri bus. The Rust
+ * bridge applies the same transform on the emit side.
  */
 function toTauriEventName(topic: string): string {
 	return topic.replaceAll('.', ':');
 }
 
-function forward(topic: string, raw: string): void {
-	let envelope: DomainEnvelope;
-	try {
-		envelope = JSON.parse(raw) as DomainEnvelope;
-	} catch {
-		return;
+/**
+ * Prompt every window to re-read its current state. A payload-less typed frame on
+ * each forwarded topic drives the topic-aware consumers (the tracking and scan
+ * stores, the overlay): each subscribes through its typed topic, so a
+ * payload-less frame reads as "re-hydrate" rather than as an idle session.
+ */
+function hydrate(): void {
+	for (const topic of FORWARDED_TOPICS) {
+		void emit(toTauriEventName(topic), {});
 	}
-	// Re-emit the whole typed envelope onto the Tauri bus, so a topic-aware
-	// consumer sees the full contract (type, event_version, occurred_at,
-	// payload), not just the payload.
-	void emit(toTauriEventName(topic), envelope);
 }
 
 /**
- * Start the single backend to webview relay. No-op outside the main window or
- * outside a Tauri webview. Idempotent. Returns a stop function (the layout hands
- * it back to Svelte for teardown on window close).
+ * Start the single backend to webview hydrate nudge. No-op outside the main
+ * window or outside a Tauri webview. Idempotent. Returns a stop function (the
+ * layout hands it back to Svelte for teardown on window close).
  */
 export function startEventRelay(): () => void {
-	if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
+	if (typeof window === 'undefined') {
 		return () => {};
 	}
 	let label: string;
@@ -73,38 +79,34 @@ export function startEventRelay(): () => void {
 		// Not running inside a Tauri webview (e.g. a plain browser preview).
 		return () => {};
 	}
-	if (label !== 'main' || source !== null) {
+	if (label !== 'main' || started) {
 		return stopEventRelay;
 	}
+	started = true;
 
-	const stream = new EventSource(EVENTS_STREAM_URL);
-	source = stream;
+	// Initial hydrate. The consumers mount and `listen()` before this layout-level
+	// start runs (children mount before the parent layout's onMount), so this first
+	// nudge cannot race ahead of their subscriptions.
+	hydrate();
 
-	stream.onopen = () => {
-		// Hydrate on (re)connect: prompt every window to re-read its current
-		// state, so an EventSource auto-reconnect cannot leave a window showing
-		// stale data. A payload-less typed frame on each forwarded topic drives
-		// the topic-aware consumers (the tracking and scan stores, the overlay):
-		// each subscribes through its typed topic, so a reconnect re-reads through
-		// it too, and a payload-less frame reads as "re-hydrate" rather than as an
-		// idle session.
-		for (const topic of FORWARDED_TOPICS) {
-			void emit(toTauriEventName(topic), {});
-		}
-	};
-	for (const topic of FORWARDED_TOPICS) {
-		stream.addEventListener(topic, (event) => {
-			forward(topic, (event as MessageEvent).data as string);
-		});
-	}
+	// The substrate may hot-install the native service spine mid-session; when it
+	// does, re-hydrate every window onto the now-live native state. The listener
+	// attach stays independent of this promise.
+	void listen(SUBSTRATE_NATIVE_INSTALLED_EVENT, () => {
+		hydrate();
+	}).then((unlisten) => {
+		// Detach immediately if the relay was already stopped before the listener
+		// attached (started is cleared on stop) rather than leaking it.
+		if (!started) unlisten();
+		else unlistenHandover = unlisten;
+	});
 
 	return stopEventRelay;
 }
 
-/** Close the relay stream if open. */
+/** Stop the relay: detach the handover listener if open. */
 export function stopEventRelay(): void {
-	if (source !== null) {
-		source.close();
-		source = null;
-	}
+	unlistenHandover?.();
+	unlistenHandover = undefined;
+	started = false;
 }

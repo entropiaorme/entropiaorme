@@ -25,8 +25,12 @@ export const DEFAULT_OVERLAY_PREFS: StatPref[] = ALL_STAT_IDS.map((id) => ({
 export const dashboardStats: Writable<StatPref[]> = writable(DEFAULT_STAT_PREFS);
 export const overlayStats: Writable<StatPref[]> = writable(DEFAULT_OVERLAY_PREFS);
 
-function sanitise(prefs: unknown): StatPref[] {
-	if (!Array.isArray(prefs)) return DEFAULT_STAT_PREFS;
+// `fallback` is the surface-appropriate default returned when the stored value
+// is unusable (not an array): DEFAULT_STAT_PREFS for the dashboard,
+// DEFAULT_OVERLAY_PREFS for the overlay. A corrupt overlay pref must recover to
+// the overlay defaults, not the dashboard's enabled flags.
+function sanitise(prefs: unknown, fallback: StatPref[]): StatPref[] {
+	if (!Array.isArray(prefs)) return fallback;
 	const seen = new Set<string>();
 	const cleaned: StatPref[] = [];
 	for (const item of prefs) {
@@ -65,22 +69,26 @@ export async function initStatsCustomisation(): Promise<void> {
 		getPreference<unknown>(KEY_DASHBOARD, DEFAULT_STAT_PREFS),
 		getPreference<unknown>(KEY_OVERLAY, DEFAULT_OVERLAY_PREFS),
 	]);
-	const dashboard = sanitise(d);
+	const dashboard = sanitise(d, DEFAULT_STAT_PREFS);
 	dashboardStats.set(dashboard);
 	const overlay = reorderToMatch(
-		sanitise(o),
+		sanitise(o, DEFAULT_OVERLAY_PREFS),
 		dashboard.map((p) => p.id),
 	);
 	overlayStats.set(overlay);
 }
 
 export async function setDashboardStats(value: StatPref[]): Promise<void> {
-	dashboardStats.set(value);
-	await setPreference(KEY_DASHBOARD, value);
+	// Normalise to the canonical 19-stat list (dedupe ids, drop unknowns, append
+	// missing as disabled) so the stored shape matches what initStatsCustomisation
+	// produces on load and a caller-supplied duplicate cannot propagate.
+	const clean = sanitise(value, DEFAULT_STAT_PREFS);
+	dashboardStats.set(clean);
+	await setPreference(KEY_DASHBOARD, clean);
 	// Slave overlay's order to the new dashboard order; preserve its enabled flags.
 	const reorderedOverlay = reorderToMatch(
 		get(overlayStats),
-		value.map((p) => p.id),
+		clean.map((p) => p.id),
 	);
 	overlayStats.set(reorderedOverlay);
 	await setPreference(KEY_OVERLAY, reorderedOverlay);

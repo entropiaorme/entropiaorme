@@ -13,19 +13,18 @@
  * callers never see openapi-fetch's `{ data, error }` split.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import createClient, { type Middleware } from 'openapi-fetch';
 import type { paths } from './schema';
 
-/** Loopback origin the Python backend listens on. The generated paths carry
- * the `/api` prefix themselves, so the client's base URL is the bare origin. */
+/** The backend's nominal loopback base. The IPC facade (`tauriFetch`) parses
+ * these URLs for their path and query only; the origin is never dialled (the
+ * in-process command carries the request), so the port here is nominal. The
+ * generated paths carry the `/api` prefix themselves, so the base is the bare
+ * origin. */
 const API_ORIGIN = `http://127.0.0.1:${import.meta.env.ENTROPIAORME_BACKEND_PORT}`;
 
 const API_BASE = `${API_ORIGIN}/api`;
-
-/** Server-sent-events stream the main-window relay subscribes to (see
- * `$lib/realtime/eventRelay`). Lives on the same loopback origin as every other
- * `/api/*` call, so it needs no separate CSP `connect-src` entry. */
-export const EVENTS_STREAM_URL = `${API_BASE}/events`;
 
 export class ApiError extends Error {
 	constructor(
@@ -37,12 +36,14 @@ export class ApiError extends Error {
 	}
 }
 
-/** Direct URL for the manual-scan capture preview PNG. Consumed as an `<img>`
- * `src`, not fetched as JSON, so it stays a hand-built URL outside the
- * generated client (the route is deliberately excluded from the OpenAPI
- * schema: it returns raw image bytes). */
-export function manualSkillScanCapturePngUrl(page: number): string {
-	return `${API_BASE}/scan/skills/capture/${page}`;
+/** The manual-scan capture preview PNG for a page, as a base64 `data:` URL for
+ * an `<img>` `src`. The route returns raw image bytes (deliberately excluded
+ * from the OpenAPI schema), so it rides its own `capture_png` command rather
+ * than the JSON `api_request` envelope, dispatched through the same in-process
+ * router (no socket). */
+export async function manualSkillScanCapturePng(page: number): Promise<string> {
+	const encoded = await invoke<string>('capture_png', { page });
+	return `data:image/png;base64,${encoded}`;
 }
 
 /* Turns every non-2xx response into a thrown ApiError before openapi-fetch
@@ -72,9 +73,51 @@ const throwApiError: Middleware = {
  * including bodyless GETs and POSTs, where openapi-fetch would otherwise
  * omit the header. No backend route reads it on a bodyless request, but
  * keeping the wire bytes identical costs one line. */
+type ApiResponseWire = {
+	status: number;
+	statusText: string;
+	headers: [string, string][];
+	body: string;
+};
+
+/* The IPC transport that replaces the loopback HTTP hop. Every backend call
+ * the openapi-fetch client (and the hand-rolled `request` below) makes is
+ * routed through the `api_request` Tauri command, which dispatches the
+ * in-process axum router with no socket. It is a drop-in for the global
+ * `fetch` the client used: same Request in, same Response out, so the call
+ * sites, the generated `paths` types, the error middleware, and `unwrap` are
+ * all unchanged. No frontend traffic remains on the loopback origin: the
+ * `/api/events` stream now rides native Tauri events, and the capture-PNG
+ * `<img>` src its own `capture_png` command. The loopback listener is removed
+ * once the socket has no remaining web tenant. */
+export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	const req = input instanceof Request ? input : new Request(input, init);
+	const url = new URL(req.url);
+	const method = req.method.toUpperCase();
+	const headers: [string, string][] = [];
+	req.headers.forEach((value, key) => {
+		headers.push([key, value]);
+	});
+	const body = method === 'GET' || method === 'HEAD' ? undefined : await req.text();
+
+	const res = await invoke<ApiResponseWire>('api_request', {
+		request: { method, path: url.pathname + url.search, headers, body },
+	});
+
+	// A 204/304 must be constructed with a null body or the Response constructor
+	// throws; the ETag-bearing hydration GETs depend on the 304 path.
+	const nullBody = res.status === 204 || res.status === 304;
+	return new Response(nullBody ? null : res.body, {
+		status: res.status,
+		statusText: res.statusText,
+		headers: new Headers(res.headers),
+	});
+}
+
 export const client = createClient<paths>({
 	baseUrl: API_ORIGIN,
 	headers: { 'Content-Type': 'application/json' },
+	fetch: tauriFetch,
 });
 client.use(throwApiError);
 
@@ -103,7 +146,7 @@ export async function unwrap<T>(call: Promise<{ data?: unknown }>): Promise<T> {
  * through the generated client. Throws the same `ApiError` on non-2xx. */
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	const url = `${API_BASE}${path}`;
-	const resp = await fetch(url, {
+	const resp = await tauriFetch(url, {
 		headers: { 'Content-Type': 'application/json' },
 		...options,
 	});

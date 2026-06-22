@@ -133,7 +133,7 @@
 		/>
 		<div class="flex flex-col flex-1 overflow-hidden">
 			<Titlebar />
-			<main class="flex-1 overflow-y-auto">
+			<main class="flex-1 min-h-0 overflow-y-auto">
 				{@render children()}
 			</main>
 		</div>

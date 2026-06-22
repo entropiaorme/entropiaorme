@@ -11,7 +11,7 @@
  * unchanged from its hand-rolled predecessor.
  */
 
-export { ApiError, EVENTS_STREAM_URL, manualSkillScanCapturePngUrl, request } from './client';
+export { ApiError, manualSkillScanCapturePng, request } from './client';
 
 import { guideState } from '$lib/guide/state.svelte';
 import type { NotableEventCategory, NotableEventType } from '$lib/types/common';
@@ -907,49 +907,6 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function updateSettings(updates: SettingsUpdate): Promise<AppSettings> {
 	return unwrap(client.PATCH('/api/settings', { body: updates }));
-}
-
-// --- Recording (developer-only) ---
-
-export interface RecordingStatus {
-	state: 'idle' | 'recording' | 'finalising';
-	started_at: string | null;
-	lines: number;
-	captures: number;
-	keystrokes: number;
-}
-
-export interface StopRecordingMeta {
-	scenario_name: string;
-	description?: string;
-	surfaces?: string[];
-	character_context?: Record<string, string>;
-	rare_event_flags?: string[];
-	notes?: string;
-}
-
-export interface StopRecordingResult {
-	finalized_path?: string;
-	determinism?: 'ok' | 'leak';
-	diff?: string;
-	error?: string;
-	recovery_path?: string;
-}
-
-export async function startRecording(): Promise<RecordingStatus> {
-	return unwrap(client.POST('/api/recording/start'));
-}
-
-export async function getRecordingStatus(): Promise<RecordingStatus> {
-	return unwrap(client.GET('/api/recording/status'));
-}
-
-export async function stopRecording(meta: StopRecordingMeta): Promise<StopRecordingResult> {
-	return unwrap(client.POST('/api/recording/stop', { body: meta }));
-}
-
-export async function abortRecording(): Promise<{ state: string }> {
-	return unwrap(client.POST('/api/recording/abort'));
 }
 
 // --- Overlay ---

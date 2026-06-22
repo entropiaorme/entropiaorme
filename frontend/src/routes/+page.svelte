@@ -15,6 +15,7 @@
 	import type { CooldownStatus } from '$lib/types/common';
 	import { invoke } from '@tauri-apps/api/core';
 	import { flip } from 'svelte/animate';
+	import { shouldSettleInstantly } from '$lib/motion/testMotion';
 	import { quintOut } from 'svelte/easing';
 	import { get } from 'svelte/store';
 	import DashboardWidgets from '$lib/components/dashboard/DashboardWidgets.svelte';
@@ -632,7 +633,7 @@
 <div class="px-6 pb-6 flex flex-col gap-4 h-full" data-guide-anchor="dashboard-area">
 
 	<!-- Page header -->
-	<div class="flex items-center justify-between">
+	<div class="flex items-center justify-between flex-shrink-0">
 		<header class="flex flex-col gap-1.5">
 			<h1 class="text-xl font-semibold text-text tracking-tight">Dashboard</h1>
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
@@ -701,7 +702,7 @@
 				{@const r = def ? def.render(status) : { value: '—', color: 'text-text-tertiary' }}
 				{@const isDragged = dragFilteredIndex === i}
 				<div
-					animate:flip={{ duration: 240, easing: quintOut }}
+					animate:flip={{ duration: shouldSettleInstantly() ? 0 : 240, easing: quintOut }}
 					data-stat-cell={i}
 					role="group"
 					aria-label={def?.label ?? pref.id}

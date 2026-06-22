@@ -10,7 +10,13 @@ from pathlib import Path
 
 from backend.db.app_database import AppDatabase
 from backend.routers.analytics import overview_impl
+from backend.testing.clock import MockClock
 from backend.tracking.schema import init_tracking_tables
+
+# A fixed instant so the overview trend block's recent-30d/prior-30d windows
+# are deterministic across UTC dates (the real clock made the measured trend
+# branches drift run to run). The seeded data sits in the past relative to it.
+_FIXED_CLOCK = MockClock(start=datetime(2026, 7, 1, 0, 0, 0, tzinfo=UTC))
 
 
 def _epoch(year: int, month: int, day: int) -> float:
@@ -60,7 +66,7 @@ _EXPECTED_TRACKING_COST = 9.5
 
 def test_headline_tracking_cost_includes_all_components(tmp_path):
     conn = _seed_conn(tmp_path)
-    result = overview_impl(conn, "all")
+    result = overview_impl(conn, "all", clock=_FIXED_CLOCK)
     assert result["lossesBreakdown"]["trackingCost"] == _EXPECTED_TRACKING_COST
 
 
@@ -68,7 +74,7 @@ def test_timeline_tracking_cost_reconciles_with_headline(tmp_path):
     """Daily trackingCost bars must sum to the headline (regression: the
     daily series previously omitted dangling cost)."""
     conn = _seed_conn(tmp_path)
-    result = overview_impl(conn, "all")
+    result = overview_impl(conn, "all", clock=_FIXED_CLOCK)
     headline = result["lossesBreakdown"]["trackingCost"]
     timeline_total = sum(day["trackingCost"] for day in result["timeline"])
     assert round(timeline_total, 4) == round(headline, 4)
@@ -78,7 +84,7 @@ def test_monthly_tracking_cost_reconciles_with_headline(tmp_path):
     """Monthly trackingCost bars must sum to the headline (regression: the
     monthly series previously omitted dangling cost)."""
     conn = _seed_conn(tmp_path)
-    result = overview_impl(conn, "all")
+    result = overview_impl(conn, "all", clock=_FIXED_CLOCK)
     headline = result["lossesBreakdown"]["trackingCost"]
     monthly_total = sum(m["trackingCost"] for m in result["monthlyBreakdown"])
     assert round(monthly_total, 4) == round(headline, 4)

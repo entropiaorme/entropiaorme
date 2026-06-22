@@ -19,11 +19,16 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// the real shell.
 		await ensureDashboard(browser, DEV_URL);
 		await browser.url(`${DEV_URL}analytics`);
+		// Log the capture-context viewport: the baselines are captured at a fixed
+		// window size, so a reflowed (wrong-size) layout here is the most likely
+		// cause of a whole-tab diff and must be visible in the run output.
+		const vp = await browser.execute(() => ({ w: window.innerWidth, h: window.innerHeight }));
+		console.log(`[analytics] viewport after load: ${vp.w}x${vp.h}`);
 	});
 
 	async function selectTab(id) {
 		const tab = await $(`[role="tablist"] [data-tab-id="${id}"]`);
-		await tab.waitForExist({ timeout: 10000 });
+		await tab.waitForClickable({ timeout: 10000 });
 		await tab.click();
 	}
 
@@ -31,6 +36,17 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// Overview is the default tab; the area renders only once data has loaded.
 		const area = await $('[data-guide-anchor="analytics-overview-area"]');
 		await area.waitForExist({ timeout: 15000 });
+		// Gate on the charts actually rendering, not just the container existing:
+		// the donut + cumulative-P&L are SVGs, so wait for one to mount before the
+		// shot, or a half-onboarded / pre-hydration capture swings the diff wildly.
+		await area.$('svg').waitForExist({ timeout: 12000 });
+		// In parity with the ledger/activity shots, gate on hydrated content: the
+		// donut centre renders "return rate" only once the fixture data has
+		// populated the Overview, so a pre-hydration frame is never captured.
+		await browser.waitUntil(async () => (await area.getText()).includes('return rate'), {
+			timeout: 12000,
+			timeoutMsg: 'overview never hydrated the fixture data',
+		});
 		await browser.pause(700);
 		const mismatch = await browser.checkElement(area, 'analytics-overview', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);

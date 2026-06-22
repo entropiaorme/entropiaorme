@@ -2,8 +2,8 @@
  * Visibility-gated polling: the single sanctioned home for `setInterval`.
  *
  * Some state is genuinely time-driven and cannot be pushed over the event spine
- * (a wall-clock cooldown tick, a dev recording-status read, a quest-status poll
- * with no backend push topic yet). Those survivors poll through this helper
+ * (a wall-clock cooldown tick, a quest-status poll with no backend push topic
+ * yet). Those survivors poll through this helper
  * instead of a bare `setInterval`, so a backgrounded window does zero work: while
  * the visibility source reports hidden the timer is cleared (not merely skipped),
  * and on resume it re-arms and fires one catch-up tick.

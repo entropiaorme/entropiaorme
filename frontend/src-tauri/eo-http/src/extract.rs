@@ -286,7 +286,7 @@ pub(crate) fn render_expected(allowed: &[&str]) -> String {
 ///   `"4.000000001"`, and exponent or hex forms do not parse).
 /// - Magnitudes beyond i64 still "parse" for bound-checking purposes
 ///   (the backend's integers are arbitrary-precision); they resolve by
-///   sign in [`BoundedInt`].
+///   sign in `BoundedInt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaxInt {
     Value(i64),

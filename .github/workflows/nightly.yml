@@ -265,7 +265,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
+      - uses: dtolnay/rust-toolchain@6190aa5fb88a88ee71c12769924bbe63a9ab152e # 1.96.0 (branch SHA; dtolnay has no semver release tags)
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: frontend/src-tauri
@@ -326,17 +326,18 @@ jobs:
       # the runtime + dev requirements as the other Python jobs do.
       - name: Install dependencies
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
+      - uses: dtolnay/rust-toolchain@6190aa5fb88a88ee71c12769924bbe63a9ab152e # 1.96.0 (branch SHA; dtolnay has no semver release tags)
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: frontend/src-tauri
           # Restrict cache writes to the trusted main timeline; PR and merge-queue
           # runs restore read-only so a branch cannot seed or poison the cache.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The full member test surface with the cross-language feature on: the
-      # hermetic tests plus the live differential fuzzes against the oracle,
-      # and the proxy-fidelity self-check that boots the real backend behind
-      # the substrate's reverse proxy and diffs the two arms.
+      # The eo-wire / eo-services member tests with the cross-language feature
+      # on: the hermetic tests plus the live differential fuzzes against the
+      # Python oracle (the Normalizer and cost-engine fuzzes). The eo-http
+      # arm-vs-sidecar A/B battery was retired when the sidecar was removed (the
+      # sidecar is gone; eo-http behaviour is pinned by its own hermetic suite).
       - name: Run the cross-language equivalence differentials
         working-directory: frontend/src-tauri
-        run: cargo test -p eo-wire -p eo-services -p eo-http --features cross-language
+        run: cargo test -p eo-wire -p eo-services --features cross-language

@@ -1,5 +1,7 @@
 # Port baseline: the Python backend's reference numbers
 
+> **Historical.** The native port is complete (PR #150). These are the point-in-time reference numbers captured before the port, retained as the baseline the port was graded against. The published before/after comparison was produced separately, as the closing paragraph notes.
+
 A point-in-time performance and coverage reference for the Python
 sidecar, captured before any route of the native (Rust) backend port
 went live. Port work is graded against these numbers in flight; the
@@ -157,18 +159,6 @@ needs coverage work before its behaviour can be locked by tests. The
 generated coverage matrix (`backend/testing/COVERAGE.md`) is a
 presence map; this table carries the figures.
 
-One known measurement wrinkle, found and then sharpened by review:
-the `backend/routers/analytics.py` row is measurement-unstable by
-roughly one branch (about one percentage point) and is excluded from
-the exactness claim below. Independent re-runs showed two
-contributors: property-based test data reaching data-dependent guards
-run to run (a zero-shot session guard in the activity loader), and
-the overview trend block's real-clock 30/60-day windows shifting
-which trend branches execute across UTC dates. Treat that row at
-whole-percent granularity; making the analytics measurement
-deterministic (seeded generation plus an injected clock in those
-tests) is tracked as its own follow-up and un-caveats the row.
-
 <!-- BEGIN GENERATED: coverage -->
 | Module | statements | branches | branch % | overall % |
 | --- | --- | --- | --- | --- |
@@ -272,9 +262,7 @@ from the committed JSON (`port_baseline.json`).
 Expected run-to-run variance on an otherwise idle host: timing medians
 (process, HTTP, hot paths, OCR) within roughly ±25%; RSS within ±10%;
 artefact sizes exact at the table's rounding; the coverage table exact
-for the same commit and dependency set, except the
-`backend/routers/analytics.py` row, which is measurement-unstable by
-about a branch (see the caveat above). Two sharpenings from review: the
+for the same commit and dependency set. Two sharpenings from review: the
 sub-millisecond legs (HTTP medians, hot-path microseconds) are
 sensitive to execution context inside a long full-pipeline run on a
 hybrid-core CPU, so verify them with standalone leg re-runs (the skip

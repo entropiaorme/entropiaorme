@@ -19,16 +19,6 @@
     "store:default",
     "updater:default",
     "process:default",
-    "shell:allow-open",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/entropiaorme-backend",
-          "sidecar": true,
-          "args": []
-        }
-      ]
-    }
+    "shell:allow-open"
   ]
 }

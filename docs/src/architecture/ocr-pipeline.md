@@ -5,11 +5,11 @@ panel: the user captures the panel page by page, the application recognises
 the text in each cell, and the recognised values are resolved into a map of
 canonical skill name to level. This page traces that journey stage by stage.
 
-The pipeline exists in two implementations. The original was written in Python
-and runs inside the FastAPI sidecar; the native implementation was ported to
-Rust as part of the move from the Python sidecar to a native Rust HTTP spine.
-The two are held to behave identically on the same inputs, and the recogniser
-in particular is pinned against a recorded ground-truth corpus (see
+The pipeline was ported from Python to Rust and now runs in-process in the
+native Rust spine; the original Python implementation stays in the repository
+as the testing oracle rather than shipping. The native code and the oracle are
+held to behave identically on the same inputs, and the recogniser in particular
+is pinned against a recorded ground-truth corpus (see
 [Equivalence and the ground-truth bench](#equivalence-and-the-ground-truth-bench)).
 For the wider context of the port, see the
 [System overview](overview.md) and the

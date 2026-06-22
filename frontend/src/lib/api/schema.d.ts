@@ -1057,86 +1057,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/recording/abort": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Abort Recording
-         * @description Discard the in-flight recording without finalising.
-         */
-        post: operations["abort_recording_api_recording_abort_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/recording/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Recording
-         * @description Begin a recording session.
-         */
-        post: operations["start_recording_api_recording_start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/recording/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Recording Status
-         * @description Current recording state plus live capture counters.
-         */
-        get: operations["recording_status_api_recording_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/recording/stop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Stop Recording
-         * @description Finalise the recording into the recorded-scenario corpus.
-         */
-        post: operations["stop_recording_api_recording_stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/scan/skills/accept": {
         parameters: {
             query?: never;
@@ -3269,57 +3189,6 @@ export interface components {
             waypoint?: string | null;
         };
         /**
-         * RecordingAbortResult
-         * @description Acknowledgement that the in-flight recording was discarded.
-         */
-        RecordingAbortResult: {
-            /** State */
-            state: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * RecordingStatus
-         * @description Recording lifecycle state plus live capture counters.
-         */
-        RecordingStatus: {
-            /** Captures */
-            captures: number;
-            /** Keystrokes */
-            keystrokes: number;
-            /** Lines */
-            lines: number;
-            /** Started At */
-            started_at?: string | null;
-            /** State */
-            state: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * RecordingStopResult
-         * @description The outcome of finalising a recording.
-         *
-         *     Polymorphic: the success branch carries ``finalized_path`` + ``determinism``
-         *     (and ``diff`` only on a determinism leak); the failure branch carries
-         *     ``error`` + ``recovery_path``. Served with ``response_model_exclude_unset=True``
-         *     so each branch keeps its own keys rather than gaining a wall of nulls.
-         */
-        RecordingStopResult: {
-            /** Determinism */
-            determinism?: string | null;
-            /** Diff */
-            diff?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Finalized Path */
-            finalized_path?: string | null;
-            /** Recovery Path */
-            recovery_path?: string | null;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
          * ReleaseMobResult
          * @description The released mob/tag label, or null if nothing was locked.
          */
@@ -3716,29 +3585,6 @@ export interface components {
             ok: boolean;
         } & {
             [key: string]: unknown;
-        };
-        /** StopRecordingBody */
-        StopRecordingBody: {
-            /** Character Context */
-            character_context?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Notes
-             * @default
-             */
-            notes?: string;
-            /** Rare Event Flags */
-            rare_event_flags?: string[];
-            /** Scenario Name */
-            scenario_name: string;
-            /** Surfaces */
-            surfaces?: string[];
         };
         /**
          * TagComparison
@@ -5756,99 +5602,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Quest"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    abort_recording_api_recording_abort_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecordingAbortResult"];
-                };
-            };
-        };
-    };
-    start_recording_api_recording_start_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecordingStatus"];
-                };
-            };
-        };
-    };
-    recording_status_api_recording_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecordingStatus"];
-                };
-            };
-        };
-    };
-    stop_recording_api_recording_stop_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StopRecordingBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecordingStopResult"];
                 };
             };
             /** @description Validation Error */

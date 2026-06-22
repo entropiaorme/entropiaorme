@@ -684,18 +684,29 @@ mod tests {
             .iter()
             .map(|(phase, _)| phase.clone())
             .collect();
-        // The three capture-side frames and the two settled tail
-        // frames are deterministic; the worker's progress frames
-        // between them coalesce differently depending on how fast it
-        // runs relative to the kickoff publish (the original shares
-        // the race), so the middle asserts shape, not count.
+        // The three capture-side frames are deterministic. After them the
+        // worker's progress frames (`processing`) and the two settled frames
+        // (`awaiting_review`, `idle`) coalesce in a jitter-dependent count, and
+        // under scheduler jitter a trailing `processing` frame can land after
+        // `awaiting_review` (observed on the Linux nextest leg). So assert the
+        // invariants, not exact positions: `idle` is the terminal frame,
+        // `awaiting_review` appears before it, and every other post-capture
+        // frame is `processing`.
         assert_eq!(observed[..3], ["capturing", "capturing", "capturing"]);
-        assert_eq!(observed[observed.len() - 2..], ["awaiting_review", "idle"]);
+        assert_eq!(
+            observed.last().map(String::as_str),
+            Some("idle"),
+            "the terminal frame is idle: {observed:?}"
+        );
+        let tail = &observed[3..observed.len() - 1];
         assert!(
-            observed[3..observed.len() - 2]
-                .iter()
-                .all(|phase| phase == "processing"),
-            "only processing frames sit between capture and review: {observed:?}"
+            tail.iter().any(|phase| phase == "awaiting_review"),
+            "awaiting_review appears before the terminal idle: {observed:?}"
+        );
+        assert!(
+            tail.iter()
+                .all(|phase| phase == "processing" || phase == "awaiting_review"),
+            "only processing / awaiting_review frames sit between capture and idle: {observed:?}"
         );
         // The envelope is the typed wire shape.
         let (_, first_frame) = &phases.lock().unwrap()[0];

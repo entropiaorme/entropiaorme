@@ -1,4 +1,4 @@
-# ADR-0013: Bespoke installer, signed auto-update, and a provenance-bearing release pipeline
+# ADR-0014: Bespoke installer, signed auto-update, and a provenance-bearing release pipeline
 
 - Status: Accepted
 - Context: the decision is locked; the client-side updater plumbing, the tag-to-release pipeline, and the repo-wide action pinning have landed, while the bespoke installer chrome and code-signing activation are in progress

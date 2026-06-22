@@ -3,19 +3,9 @@
 	import { Button, Divider, Toggle, Input, SegmentedControl } from '$lib/components';
 	import { theme, setTheme, type Theme } from '$lib/theme';
 	import { newsOptIn, setNewsOptIn } from '$lib/news';
-	import {
-		getSettings,
-		updateSettings,
-		startRecording,
-		getRecordingStatus,
-		stopRecording,
-		abortRecording,
-		type RecordingStatus,
-		type StopRecordingResult
-	} from '$lib/api';
+	import { getSettings, updateSettings } from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
-	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -64,7 +54,6 @@
 		(async () => {
 			try {
 				await refreshSettingsState();
-				if (isDev && settings?.developerModeEnabled) await refreshRecordingStatus();
 			} catch (e) {
 				loadError = e instanceof Error ? e.message : 'Failed to load settings';
 			} finally {
@@ -159,84 +148,10 @@
 		try {
 			settings = await updateSettings({ developer_mode_enabled: checked });
 			flashSaved('developerMode');
-			if (checked) await refreshRecordingStatus();
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : 'Failed to update developer mode';
 		} finally {
 			savingField = null;
-		}
-	}
-
-	// Session recording (developer-only)
-	let recording = $state<RecordingStatus | null>(null);
-	let recordingError: string | null = $state(null);
-	let recordingResult = $state<StopRecordingResult | null>(null);
-	let showStopForm = $state(false);
-	let stopScenarioName = $state('');
-	let stopDescription = $state('');
-	let stopNotes = $state('');
-	async function refreshRecordingStatus() {
-		try {
-			recording = await getRecordingStatus();
-			recordingError = null;
-		} catch (e) {
-			recordingError = e instanceof Error ? e.message : 'Failed to refresh recording status';
-			// Keep last-good state on a transient failure.
-		}
-	}
-
-	// Poll recording status once a second while a recording is in progress. The
-	// poll lifecycle is driven entirely by the recording state: starting a
-	// recording flips it on; stopping, aborting, or a status read that resolves
-	// to a non-recording state flips it off. Key the effect on the derived
-	// boolean, not the `recording` object: refreshRecordingStatus reassigns
-	// `recording` wholesale each tick, so reading it directly would re-run the
-	// effect every poll and collapse the 1 Hz cadence into a refetch-as-fast-as-
-	// the-round-trip loop. useVisiblePoll pauses the poll while the settings
-	// window is hidden, and its stop() is the effect teardown.
-	const isRecording = $derived(recording?.state === 'recording');
-	$effect(() => {
-		if (!isRecording) return;
-		return useVisiblePoll(refreshRecordingStatus, { intervalMs: 1000, immediate: false });
-	});
-
-	async function handleStartRecording() {
-		recordingError = null;
-		recordingResult = null;
-		try {
-			recording = await startRecording();
-		} catch (e) {
-			recordingError = e instanceof Error ? e.message : 'Failed to start recording';
-		}
-	}
-
-	async function handleStopRecording() {
-		if (!stopScenarioName.trim()) return;
-		recordingError = null;
-		try {
-			recordingResult = await stopRecording({
-				scenario_name: stopScenarioName.trim(),
-				description: stopDescription.trim(),
-				notes: stopNotes.trim()
-			});
-			showStopForm = false;
-			stopScenarioName = '';
-			stopDescription = '';
-			stopNotes = '';
-			await refreshRecordingStatus();
-		} catch (e) {
-			recordingError = e instanceof Error ? e.message : 'Failed to stop recording';
-		}
-	}
-
-	async function handleAbortRecording() {
-		recordingError = null;
-		try {
-			await abortRecording();
-			showStopForm = false;
-			await refreshRecordingStatus();
-		} catch (e) {
-			recordingError = e instanceof Error ? e.message : 'Failed to abort recording';
 		}
 	}
 
@@ -503,7 +418,7 @@
 					<div>
 						<p class="text-sm text-text">Developer mode</p>
 						<p class="text-xs text-text-tertiary mt-0.5">
-							Surfaces developer-only tooling such as session recording. Off by default.
+							Surfaces developer-only diagnostics. Off by default.
 						</p>
 						{#if savedIndicator === 'developerMode'}
 							<p class="text-xs text-success mt-1">Saved</p>
@@ -516,79 +431,6 @@
 						label="Enable developer mode"
 					/>
 				</div>
-
-				{#if settings.developerModeEnabled}
-					<Divider />
-
-					<!-- Session recording -->
-					<div class="py-5 space-y-3">
-						<div>
-							<p class="text-sm text-text">Session recording</p>
-							<p class="text-xs text-text-tertiary mt-0.5">
-								Captures the live chat.log, scan captures, and hotbar/spacebar
-								keystrokes into a replayable scenario bundle. Stop to name it and
-								run the determinism check; recorded scenarios become regression
-								fixtures. Only chat events are replay-verified for now.
-							</p>
-						</div>
-
-						{#if recording?.state === 'recording'}
-							<div class="flex items-center gap-3 text-xs text-text-secondary">
-								<span class="inline-flex items-center gap-1.5">
-									<span class="w-2 h-2 rounded-full bg-error animate-pulse"></span>
-									Recording
-								</span>
-								<span class="tabular-nums">{recording.lines} lines</span>
-								<span class="tabular-nums">{recording.captures} captures</span>
-								<span class="tabular-nums">{recording.keystrokes} keystrokes</span>
-							</div>
-
-							{#if showStopForm}
-								<div class="space-y-2">
-									<Input type="text" bind:value={stopScenarioName} placeholder="scenario_name (lowercase_slug)" />
-									<Input type="text" bind:value={stopDescription} placeholder="Description (optional)" />
-									<Input type="text" bind:value={stopNotes} placeholder="Notes (optional)" />
-									<div class="flex items-center gap-2">
-										<Button variant="primary" size="sm" onclick={handleStopRecording} disabled={!stopScenarioName.trim()}>
-											Finalise scenario
-										</Button>
-										<Button variant="secondary" size="sm" onclick={() => (showStopForm = false)}>Cancel</Button>
-									</div>
-								</div>
-							{:else}
-								<div class="flex items-center gap-2">
-									<Button variant="primary" size="sm" onclick={() => (showStopForm = true)}>Stop & name scenario</Button>
-									<Button variant="secondary" size="sm" onclick={handleAbortRecording}>Discard</Button>
-								</div>
-							{/if}
-						{:else}
-							<div class="flex items-center gap-2">
-								<Button variant="primary" size="sm" onclick={handleStartRecording}>Start recording</Button>
-							</div>
-						{/if}
-
-						{#if recordingResult?.determinism === 'ok'}
-							<p class="text-xs text-success">
-								Saved {recordingResult.finalized_path}. Determinism check passed.
-							</p>
-						{:else if recordingResult?.determinism === 'leak'}
-							<div class="text-xs text-warning space-y-1">
-								<p>Saved {recordingResult.finalized_path}, but a determinism leak was detected:</p>
-								<pre class="whitespace-pre-wrap text-[11px] text-text-tertiary">{recordingResult.diff}</pre>
-							</div>
-						{:else if recordingResult?.error}
-							<p class="text-xs text-error">
-								{recordingResult.error}{recordingResult.recovery_path
-									? ` (recover from ${recordingResult.recovery_path})`
-									: ''}
-							</p>
-						{/if}
-
-						{#if recordingError}
-							<p class="text-xs text-error">{recordingError}</p>
-						{/if}
-					</div>
-				{/if}
 			</div>
 		</section>
 	{/if}

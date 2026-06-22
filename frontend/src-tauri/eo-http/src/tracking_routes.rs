@@ -13,7 +13,7 @@
 //! The fidelity cruxes:
 //! - `_ts_to_iso`: `datetime.fromtimestamp(ts, tz=UTC).isoformat()`, which
 //!   emits `+00:00` and 6-digit microseconds only when the fraction is
-//!   non-zero. [`ts_to_iso`] reproduces that exactly, splitting the fraction
+//!   non-zero. `ts_to_iso` reproduces that exactly, splitting the fraction
 //!   out (CPython's `modf`) before rounding so it does not inherit the
 //!   sub-microsecond precision loss of a whole-timestamp `* 1e6`.
 //! - pydantic coercion: a `float`-declared field coerces an engine-typed
@@ -21,7 +21,7 @@
 //!   integer. The `cost`/`returns`/`net`/`returnRate` columns are
 //!   `round(.., n)` over float-space sums, so they always carry a fraction;
 //!   the `level`/`ttValueGained`/`ttValue`/`damageDealt`/`costAttributed`
-//!   fields are float-declared and pass through [`float_field`].
+//!   fields are float-declared and pass through `float_field`.
 
 use std::collections::BTreeMap;
 
@@ -140,7 +140,7 @@ fn duration_seconds(
 
 // ── list_sessions_impl ──
 
-async fn list_sessions_impl(pool: &SqlitePool, now: f64) -> Result<Value, sqlx::Error> {
+pub(crate) async fn list_sessions_impl(pool: &SqlitePool, now: f64) -> Result<Value, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, started_at, ended_at, is_active \
          FROM tracking_sessions ORDER BY started_at DESC LIMIT 20",
@@ -264,7 +264,7 @@ async fn string_column(
 
 // ── get_session_impl ──
 
-async fn get_session_impl(
+pub(crate) async fn get_session_impl(
     pool: &SqlitePool,
     session_id: &str,
     now: f64,

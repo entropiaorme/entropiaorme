@@ -31,9 +31,16 @@ mss>=9.0.0
 # plain package, and a newer plain `__init__` over the older directml capi
 # fails at import (`OrtDeviceVendorId`, plain 1.26.0 over directml 1.24.4), so
 # the Windows shadow pins to the directml release line.
+#
+# The plain CPU `onnxruntime` is pinned (on every OS) to that same 1.24.4
+# release: it is the version the OCR ground-truth goldens (test_ocr_equivalence)
+# reproduce and the API level the Rust `ort` binding loads at runtime (`api-24`,
+# load-dynamic), so a fresh venv on any platform resolves the runtime the
+# goldens and the shipped backend both use. A previously unpinned non-Windows
+# install could drift to a newer release; the goldens are ONNX-version-sensitive,
+# so bumping this pin requires re-validating them.
 onnxruntime-directml==1.24.4; platform_system == "Windows"
-onnxruntime==1.24.4; platform_system == "Windows"
-onnxruntime; platform_system != "Windows"
+onnxruntime==1.24.4
 rapidfuzz>=3.0
 
 # Local OCR for skill / profession panel scans

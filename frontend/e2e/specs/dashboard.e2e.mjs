@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { $, $$, browser, expect } from '@wdio/globals';
 import { ensureDashboard } from '../helpers/onboarding.mjs';
 import { DEV_URL } from '../wdio.conf.mjs';
@@ -22,17 +21,21 @@ describe('dashboard (native Tauri shell)', () => {
 
 	it('reflects the deterministic fixture (active session + recent events)', async () => {
 		// The fixture pins an active session, so the island shows the live state.
-		const island = await $('[data-guide-anchor="dashboard-area"]').getText();
-		assert.ok(
-			island.includes('Tracking active'),
-			`expected the active-session island; got: ${island.slice(0, 120)}`,
-		);
+		// Wait for the snapshot to hydrate (the island flips from "No active
+		// session" to the live state) rather than racing the subscribe-then-
+		// hydrate sequence: the read is otherwise non-deterministic on a slow
+		// shell start.
+		const area = await $('[data-guide-anchor="dashboard-area"]');
+		await browser.waitUntil(async () => (await area.getText()).includes('Tracking active'), {
+			timeout: 12000,
+			timeoutMsg: 'dashboard never hydrated the active-session fixture',
+		});
 		// And the recent-events island shows the fixture's HOF event.
-		const events = await $('[data-guide-anchor="dashboard-recent-events"]').getText();
-		assert.ok(
-			events.includes('HOF'),
-			`expected the fixture HOF event; got: ${events.slice(0, 160)}`,
-		);
+		const events = await $('[data-guide-anchor="dashboard-recent-events"]');
+		await browser.waitUntil(async () => (await events.getText()).includes('HOF'), {
+			timeout: 12000,
+			timeoutMsg: 'recent-events never showed the fixture HOF event',
+		});
 	});
 
 	it('exposes the Tauri IPC surface a browser cannot replicate', async () => {
@@ -66,6 +69,7 @@ describe('dashboard (native Tauri shell)', () => {
 	it('drives the overlay button over the real IPC boundary', async () => {
 		const overlayBtn = await $('[data-guide-anchor="dashboard-overlay-btn"] button');
 		await expect(overlayBtn).toBeExisting();
+		await overlayBtn.waitForClickable({ timeout: 10000 });
 		await overlayBtn.click(); // wired to the app's invoke('toggle_overlay')
 		await browser.pause(500);
 		// Shell still responsive on the dashboard after the IPC-wired interaction.

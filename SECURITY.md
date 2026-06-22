@@ -19,12 +19,12 @@ Please do not file public GitHub issues for security reports.
 
 ## Supply chain security
 
-Dependencies and bundled build inputs are held under automated review on every change:
+The shipped application is a single Rust binary and bundles no Python runtime. Its dependencies and bundled build inputs are held under automated review:
 
-- **Python dependencies** are version-constrained in `backend/requirements.txt` and `backend/requirements-dev.txt`, with known-vulnerable releases excluded explicitly. The continuous-integration dependency-audit job runs `pip-audit --strict` against both files, so a newly disclosed advisory fails the build.
-- **Rust dependencies** are pinned by the committed `Cargo.lock`. The Rust policy job runs `cargo audit -D warnings` against the RustSec advisory database and `cargo deny check` against the policy in `frontend/src-tauri/deny.toml` (advisories, licences, and source allow-lists), so an advisory or a disallowed licence fails the build.
+- **Rust dependencies** are pinned by the committed `Cargo.lock`. The continuous-integration policy job runs `cargo audit -D warnings` against the RustSec advisory database and `cargo deny check` against the policy in `frontend/src-tauri/deny.toml` (advisories, licences, and source allow-lists) on every change, so an advisory or a disallowed licence fails the build.
 - **Frontend dependencies** are pinned by the committed `package-lock.json` and installed with `npm ci`, which refuses to deviate from the lockfile.
-- **Bundled binary assets** (the optical-character-recognition model and its character dictionary) are recorded in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) with their SHA-256 hashes, so a shipped asset can be verified against the published notice.
+- **Bundled binary assets** are recorded in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md): the optical-character-recognition model and its character dictionary with their SHA-256 hashes, so a shipped model can be verified against the published notice, and the ONNX Runtime libraries with their upstream source and licence.
+- **The Python test oracle.** The Python implementation is retained only as the cross-language test oracle and is not shipped. Its dependencies are version-constrained in `backend/requirements.txt` and `backend/requirements-dev.txt`, with known-vulnerable releases excluded explicitly, and the nightly dependency-audit job runs `pip-audit --strict` against both files so a newly disclosed advisory surfaces.
 
 Release artefacts are produced by a tag-driven release pipeline (`.github/workflows/release.yml`). It generates a [CycloneDX](https://cyclonedx.org/) software bill of materials for the shipped shell (via `cargo-cyclonedx`), computes a SHA-256 checksum for every published asset, and records a SLSA-style build-provenance attestation (via GitHub's attestation action), attaching all three to the drafted GitHub Release. Every GitHub Action across the workflows is pinned to a commit SHA and kept current by Dependabot, so the build steps themselves are fixed inputs.
 

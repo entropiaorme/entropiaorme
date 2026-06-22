@@ -3,14 +3,13 @@
 //! (config fields, live chat-log validation, per-preset trifecta
 //! readiness) and the overlay position.
 //!
-//! Only the reads serve natively this round. The sidecar's
-//! configuration service caches the whole config in memory and saves
-//! whole-file from that cache, so a second writer to `settings.json`
-//! would lose updates; the settings writes also signal live sidecar
-//! producers (watcher restart, hotbar listener, tracker reload). All
-//! three write routes therefore stay proxied until the producer
-//! cutover, and these handlers read the file fresh per request: the
-//! sidecar saves before it responds, so a read-through is coherent.
+//! These are the read handlers; the write routes are served natively
+//! alongside them (see the producer-spine handlers in `producer_routes`).
+//! The native `ConfigService` is the sole writer to `settings.json`: it
+//! caches the whole config in memory and saves whole-file from that cache,
+//! so there is no second writer to lose updates, and a write completes its
+//! save before responding. These handlers read the file fresh per request,
+//! so a read after a write is coherent.
 
 use std::path::Path;
 
@@ -159,9 +158,9 @@ impl HydrationState {
 /// `str(pathlib.Path(...))` over the absolute forms the data-dir
 /// resolution produces: Windows renders every separator as a
 /// backslash (a forward-slash env override still reads back in the
-/// native form, as the sidecar's `pathlib` normalisation does); other
+/// native form, as the Python reference's `pathlib` normalisation does); other
 /// platforms keep the path as built.
-fn python_path_str(path: &Path) -> String {
+pub(crate) fn python_path_str(path: &Path) -> String {
     #[cfg(windows)]
     {
         use std::path::Component;

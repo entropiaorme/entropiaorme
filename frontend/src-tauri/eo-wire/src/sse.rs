@@ -14,8 +14,7 @@
 //!
 //! The 15-second keep-alive and the `: ready` opening comment are
 //! transport-loop concerns and live with the HTTP handler that drains a
-//! client (the route itself stays proxied to the Python backend for the
-//! whole hybrid; this hub takes over when the stream moves natively).
+//! client; this hub owns the fan-out behind it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

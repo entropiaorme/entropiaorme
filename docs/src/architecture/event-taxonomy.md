@@ -154,9 +154,9 @@ Each connection gets its own bounded queue, sized `DEFAULT_MAX_QUEUE = 256` fram
 
 The hub does **not** run an app-lifetime background task. Each connection's drain is owned by its own request lifecycle (the Starlette / uvicorn response). On shutdown, `close()` unsubscribes from the bus and drops all connections so a late publish cannot hop a frame onto a closing loop.
 
-### The endpoint: `GET /api/events`
+### The endpoint: `GET /api/events` (the oracle's transport)
 
-`backend/routers/events.py` exposes the stream at `GET /api/events` as a long-lived `text/event-stream`. The frame generator:
+In the shipped native application, domain frames reach the frontend over the in-process Tauri event bridge described under [The bridge and the frontend relay](#the-bridge-and-the-frontend-relay), not over HTTP. The `GET /api/events` endpoint described here is the Python oracle's transport, retained as the reference the native bridge reproduces. `backend/routers/events.py` exposes the stream at `GET /api/events` as a long-lived `text/event-stream`. The frame generator:
 
 1. Registers its queue with the hub *before* the response begins streaming, so an event published the instant after the stream opens is delivered rather than raced away.
 2. Yields an opening comment `: ready\n\n` on connect. This flushes the response headers and signals that the connection is registered.
@@ -171,7 +171,7 @@ The endpoint sits **outside** the ETag hydration prefixes by design: the ETag mi
 
 The native backend keeps the same observable contract but tightens the internal shape. `frontend/src-tauri/eo-wire/src/bus.rs` defines a `DomainBus` whose typed `DomainEvent` envelopes travel on a dedicated `tokio::sync::broadcast` channel, so "a typed event on a domain topic" is a compiler-checked invariant on the producer side rather than a convention. Like the Python bus, it supports full-stream taps that run synchronously on the publishing thread before subscriber delivery, and a panicking tap is isolated per invocation so it neither takes the bus down nor blocks delivery.
 
-The native hub in `frontend/src-tauri/eo-wire/src/sse.rs` reproduces the Python hub's observable semantics exactly: one bounded queue per client (default 256 frames) with drop-oldest on overflow, a process-monotonic sequence number assigned at dispatch and shared across every client's copy of a frame, and the identical frame format `id: N\nevent: <topic>\ndata: <json>\n\n` with the envelope JSON byte-identical to the Python `model_dump_json()`. The 15-second keep-alive and the `: ready` opening comment are transport-loop concerns and live with the HTTP handler that drains a client.
+The native hub in `frontend/src-tauri/eo-wire/src/sse.rs` reproduces the Python hub's observable semantics exactly: one bounded queue per client (default 256 frames) with drop-oldest on overflow, a process-monotonic sequence number assigned at dispatch and shared across every client's copy of a frame, and the identical frame format `id: N\nevent: <topic>\ndata: <json>\n\n` with the envelope JSON byte-identical to the Python `model_dump_json()`. The 15-second keep-alive and the `: ready` opening comment are SSE-transport concerns: they live with the Python oracle's HTTP handler, and in the shipped native application, where the hub is drained by an in-process bridge rather than served over HTTP, they do not apply.
 
 ## Producers and coalescing
 
@@ -197,16 +197,12 @@ The payload carries only the coarse `phase`. Per-page capture / OCR progress liv
 
 Both producers follow the **push-to-pull** model (see [ADR 0009](../adr/0009-push-to-pull-invalidation.md)). A payload is a minimal invalidation signal (which session, active versus idle, why; or which scan phase), and the window re-hydrates the full shape via the matching snapshot GET. This keeps the ETag / 304 snapshot as the single source of shape, minimises the serialisation surface, and is exactly what makes drop-oldest queue overflow safe.
 
-## The frontend relay
+## The bridge and the frontend relay
 
-The frontend half of the spine is `frontend/src/lib/realtime/eventRelay.ts`. It opens **one** `EventSource` on `GET /api/events` and re-emits each frame onto the Tauri event bus, so every window (including hidden overlays) receives backend state changes by subscription rather than by polling.
+In the shipped application the producer spine's frames are forwarded onto the Tauri event bus **in-process** by the shell's domain-event bridge (`spawn_domain_event_bridge` in `frontend/src-tauri/entropia-orme/src/lib.rs`), the native replacement for the frontend's former `EventSource` relay. The bridge registers a consumer on the producer spine's hub, drains its frames, and applies the same two transforms the old relay did before re-emitting onto the bus, so every window (including hidden overlays) receives backend state changes by subscription rather than by polling.
 
-- **Single relay.** Only the main window relays. Every window inherits the root layout that starts the relay, but the relay no-ops unless the current window's label is `main`, and it is idempotent (a non-null `source` short-circuits). A relay in each window would open duplicate streams and re-emit every event several times. The main window is the one guaranteed alive for the app's lifetime (closing it exits the app), so it owns the single relay. The relay also no-ops outside a Tauri webview (a plain browser preview), where `getCurrentWindow()` throws.
+- **The dot-to-colon rename.** Tauri event names admit only alphanumerics and `-`, `/`, `:`, `_` (no dots), so `domain_topic_to_tauri_event` namespaces the dotted wire topic with colons: `tracking.session.updated` is re-emitted as `tracking:session:updated`, and `scan.status.changed` as `scan:status:changed`. This is the **only** topic transform; the wire contract keeps the dotted form throughout.
 
-- **The dot-to-colon rename.** Tauri event names admit only alphanumerics and `-`, `/`, `:`, `_` (no dots), so the relay's `toTauriEventName` namespaces the dotted wire topic with colons: `tracking.session.updated` is re-emitted as `tracking:session:updated`, and `scan.status.changed` as `scan:status:changed`. This `replaceAll('.', ':')` is the relay's **only** transform; the SSE wire contract keeps the dotted form throughout.
+- **Whole-envelope forwarding.** For each frame the bridge parses the `data` JSON and re-emits the **whole** typed envelope (`type`, `event_version`, `occurred_at`, `payload`) onto the colon-form Tauri topic, not just the payload, so a topic-aware consumer sees the full contract. A frame whose JSON fails to parse is logged and dropped.
 
-- **Whole-envelope forwarding.** For each forwarded topic, the relay adds an `EventSource` listener that parses the frame's `data` JSON and re-emits the **whole** typed envelope (`type`, `event_version`, `occurred_at`, `payload`) onto the colon-form Tauri topic, not just the payload, so a topic-aware consumer sees the full contract. A frame whose JSON fails to parse is dropped.
-
-- **Reconnect hydration.** On `onopen` (every connect and auto-reconnect), the relay emits a payload-less frame (`{}`) on each forwarded topic. Each topic-aware consumer (the tracking and scan stores, the overlay) subscribes through its typed topic, so a reconnect re-reads through it too; a payload-less frame reads as "re-hydrate" rather than as an idle session. This stops an `EventSource` auto-reconnect from leaving a window showing stale data.
-
-The relay returns a stop function that the layout hands back to Svelte for teardown on window close; `stopEventRelay` closes the stream and clears the singleton.
+The frontend half (`frontend/src/lib/realtime/eventRelay.ts`) now owns only the **re-hydrate nudge**. It listens for the `substrate:native-installed` event the shell emits once the native services compose, and fires a payload-less re-hydrate on each consumer's topic. Each topic-aware consumer (the tracking and scan stores, the overlay) subscribes through its typed topic and re-reads rather than reduces, so a payload-less frame reads as "re-hydrate" rather than as an idle session; this keeps a freshly live (or re-composed) backend from leaving a window showing stale data. The nudge stays frontend-owned because it must fire after the webview is listening, which an emit at install time cannot guarantee on a cold load. The relay returns a stop function the layout hands back to Svelte for teardown on window close.

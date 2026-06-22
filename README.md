@@ -16,9 +16,9 @@ The rest of this README is for developers building from source. Windows-only for
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11+: for the test suite and the cross-language equivalence oracle (the shipped application is a single Rust binary and bundles no Python)
 - Node.js ≥ 20.19
-- Rust (`rustup`): for the Tauri shell
+- Rust (`rustup`): for the Tauri shell and the native backend
 - Visual Studio Build Tools (MSVC C++ workload): required by Tauri on Windows
 - Windows Terminal (`wt.exe`): used by the launcher
 - [`just`](https://just.systems/) ≥ 1.34: task runner driving `just dev` etc. (Windows: `scoop install just`).
@@ -31,7 +31,7 @@ From the repo root:
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r backend/requirements.txt
-pip install -r backend/requirements-dev.txt   # pytest (`just test-backend`) and pyinstaller (`backend/build_app.py`)
+pip install -r backend/requirements-dev.txt   # pytest (`just test-backend`) and the cross-language equivalence oracle
 
 cd frontend
 npm install
@@ -46,21 +46,18 @@ pre-commit install   # local hooks mirroring the CI gates (see TESTING.md)
 just dev
 ```
 
-Opens two Windows Terminal tabs: FastAPI backend + Tauri dev shell.
+Opens two Windows Terminal tabs: a Python backend and the Tauri dev shell. Release builds embed the backend in the shell process and run it in-process; the standalone Python backend is a development affordance and is not part of a shipped build.
 
 Run `just --list` to see other recipes (`just check` for frontend type-check + build, `just test-backend` for the pytest suite).
 
 ### Build installer
 
 ```bash
-.venv\Scripts\python.exe backend\build_app.py
+cd frontend
+npm run tauri:build
 ```
 
-Produces (at `frontend/src-tauri/target/release/`):
-
-- `bundle/nsis/entropiaorme-<version>-x64-setup.exe`: NSIS installer (sidecar bundled inside).
-- `entropiaorme-<version>-x64-portable.zip`: portable bundle (Tauri shell + sidecar + README.txt).
-- Matching `.sha256` sidecar files for both artefacts (single-line `<hash>  <filename>`, `sha256sum -c` compatible).
+Produces the NSIS installer at `frontend/src-tauri/target/release/bundle/nsis/`. The bundle is the single Rust binary together with its data, model, and ONNX Runtime assets; there is no separate backend process inside it.
 
 Installer chrome assets (header / sidebar BMPs + plain-text MIT licence) live under `frontend/src-tauri/entropia-orme/installer/` and are wired through `bundle.windows.nsis` in `frontend/src-tauri/entropia-orme/tauri.conf.json`.
 
@@ -83,7 +80,7 @@ Revert with `Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.loc
 ## Further documentation
 
 - The [architecture handbook](docs/): an mdBook covering the system overview, the service and crate map, the event taxonomy, the OCR pipeline, and the database schema reference, with the [architecture decision records](docs/src/adr/) alongside. It is published to GitHub Pages from `main`, tracking the latest landed state, together with the generated `cargo doc` API reference. Build it locally with `mdbook build docs`.
-- [`backend/architecture/README.md`](backend/architecture/README.md): how the backend is put together (the event spine, the hydration HTTP surface, the service and worker conventions, and the tests that enforce them), with a companion [`PORT-READINESS.md`](backend/architecture/PORT-READINESS.md) on how those shapes map onto a contemplated native port.
+- [`backend/architecture/README.md`](backend/architecture/README.md): how the backend is put together (the event spine, the hydration HTTP surface, the service and worker conventions, and the tests that enforce them), with a companion [`PORT-READINESS.md`](backend/architecture/PORT-READINESS.md) analysing how those shapes mapped onto the native port.
 - [`TESTING.md`](TESTING.md): the test suite, runtime tiers, and CI gates.
 - [`SECURITY.md`](SECURITY.md): the security policy, including the supply-chain review gates over dependencies and bundled assets, and the SBOM, checksums, and build-provenance attestation the release pipeline attaches to each release.
 

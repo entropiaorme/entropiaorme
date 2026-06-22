@@ -108,6 +108,7 @@ backend/tests/e2e/corpus/recorded/*
 backend/tests/e2e/test_ocr_equivalence/
 
 # Local dev scratch dirs
+/.scratch/
 /agents/
 /.venv-*/
 .claude/

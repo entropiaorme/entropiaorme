@@ -1,7 +1,9 @@
 # ADR-0006: Tauri 2 and Svelte 5 frontend
 
 - Status: Accepted
-- Context: reflects the landed frontend and shell implementation; the backend migration to Rust is in progress
+- Context: reflects the landed frontend and shell implementation; the backend migration to Rust has since completed (see [ADR-0013](0013-in-process-collapse.md))
+
+> **Transport update ([ADR-0013](0013-in-process-collapse.md)).** The frontend decision below is unchanged, and its central bet was vindicated: the contract was stable enough that the backend changed underneath it without the frontend noticing. The context's "the backend is being migrated ... proxying the remainder" is now history; the migration is complete, the sidecar and proxy are gone, and the frontend reaches the now-native backend through the in-process `api_request` Tauri command rather than over HTTP. Read the present-tense migration prose below as the situation at the time of the decision.
 
 ## Context and problem statement
 

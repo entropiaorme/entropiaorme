@@ -655,6 +655,36 @@ impl HuntTracker {
         })
     }
 
+    /// Prime the tracker with a fully-formed demo session, bypassing the
+    /// normal `start_session` lifecycle. This mirrors the Python demo's
+    /// `_prime_mid_hunt` direct field assignment (it pokes the same
+    /// lock-guarded state, so the "every write to the owned state holds the
+    /// lock" invariant has no exception); `_last_kill` needs no field here
+    /// because this port derives it from `session.kills.last()`. It exists
+    /// solely for guide-mode demo playback over a throwaway database and
+    /// must never run on the live tracker. Called once at demo-state
+    /// construction, before any producer thread exists, so it cannot race.
+    pub fn prime_demo(
+        &self,
+        session: TrackingSession,
+        confirmed_mob: (String, String, String),
+        mob_source: &'static str,
+        mob_tracking_mode: &str,
+    ) {
+        let (name, species, maturity) = confirmed_mob;
+        let mut state = self.lock_state();
+        state.session = Some(session);
+        state.accumulator = None;
+        state.session_heal_cost = 0.0;
+        state.session_warnings = Vec::new();
+        state.confirmed_mob_name = name;
+        state.confirmed_mob_species = species;
+        state.confirmed_mob_maturity = maturity;
+        state.mob_source = Some(mob_source);
+        state.session_mob_tracking_mode = mob_tracking_mode.to_string();
+        state.session_mob_tracking_tag = String::new();
+    }
+
     /// Refresh trifecta-attribution state after config changes. The
     /// trifecta is resolved (a DB read) before the lock so only the
     /// in-memory load runs under it; there is no DB write or publish.

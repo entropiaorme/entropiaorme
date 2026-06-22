@@ -20,8 +20,6 @@ mutants/
 mutants.out/
 mutants.out.old/
 dist/
-# PyInstaller working dir (sibling of dist/ at repo root for the backend sidecar build)
-/build/
 
 # Node/Frontend
 node_modules/
@@ -79,9 +77,9 @@ Thumbs.db
 data/*
 !backend/data/
 
-# Bundled curated demo DB — committed so PyInstaller datas can include it for
-# the v0.1.0 frozen build's guide-mode playback (the /demo/* router reads it
-# read-only and clones into in-memory before any tracker priming). Everything
+# Bundled curated demo DB: committed so the Tauri bundle (bundle.resources in
+# tauri.conf.json) can ship it for guide-mode playback (the /demo/* router reads
+# it read-only and clones into memory before any tracker priming). Everything
 # else under data/demo/ stays ignored (transient SQLite -wal/-shm, settings).
 !data/demo/
 data/demo/*

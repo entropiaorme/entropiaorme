@@ -99,12 +99,13 @@ fn default_env_filter() -> EnvFilter {
 /// path; the returned [`WorkerGuard`] flushes the channel on drop (the shell
 /// holds it for the whole process, so it flushes at exit).
 ///
-/// PII boundary: the file layer EXCLUDES the `eo::sidecar` target. That target
-/// carries the relocated sidecar's own forwarded sub-process output, which the
-/// shell does not control and so must never commit to a persistent file (it
-/// still reaches the dev console via stderr). Every other target is the native
-/// spine's own structured events, which carry only durations, counts, paths,
-/// and error text, never chat-log content.
+/// PII boundary: the file layer EXCLUDES the `eo::sidecar` target as a
+/// defensive belt. Nothing emits to it now the backend runs in-process (the
+/// forwarded sub-process output it once guarded went with the sidecar); the
+/// directive is kept so any future forwarded sub-process output cannot silently
+/// land in a persistent file. Every other target is the native spine's own
+/// structured events, which carry only durations, counts, paths, and error
+/// text, never chat-log content.
 fn build_file_layer<S>(
     log_dir: &Path,
 ) -> Result<(impl Layer<S>, WorkerGuard), Box<dyn std::error::Error>>

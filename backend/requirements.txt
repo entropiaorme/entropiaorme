@@ -26,7 +26,6 @@ mss>=9.0.0
 # plain `onnxruntime` shadowing directml. To restore DirectML provider visibility
 # on Windows, run after install:
 #     pip install --force-reinstall --no-deps onnxruntime-directml
-# `backend/build_app.py` performs this automatically before PyInstaller-freeze.
 # The shadow pair must also stay VERSION-COHERENT: directml releases lag the
 # plain package, and a newer plain `__init__` over the older directml capi
 # fails at import (`OrtDeviceVendorId`, plain 1.26.0 over directml 1.24.4), so

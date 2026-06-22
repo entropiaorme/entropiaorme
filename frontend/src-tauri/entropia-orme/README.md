@@ -20,7 +20,7 @@ So that:
 - The dev server (Vite) and the dev backend (FastAPI sidecar) can be reached from the webview during local development, whether directly on a port or through the reverse proxy over HTTPS.
 - Vite's HMR websocket can connect.
 
-The release build retains the strict CSP because the production webview talks only to the bundled sidecar over IPC, never to arbitrary localhost ports.
+The release build retains the strict CSP because the production webview talks only to the in-process native backend over Tauri IPC, never to arbitrary localhost ports.
 
 ## When to edit
 

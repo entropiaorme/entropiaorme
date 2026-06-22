@@ -1,5 +1,5 @@
-# Build-time / dev-only dependencies (not bundled into the runtime sidecar).
-pyinstaller>=6.20.0
+# Dev/test-only tooling for the Python test oracle (never shipped; the app is a
+# single pure-Rust binary).
 
 # Test runner for backend/tests/.
 pytest>=8.0.0

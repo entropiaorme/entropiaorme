@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EntropiaOrme installer copy. Neutral and professional (project-meta voice,
+     not the community voice). Per-user aware: no administrator prompt. -->
+<WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Caption" Value="[WixBundleName] Setup" />
+  <String Id="Title" Value="[WixBundleName]" />
+
+  <String Id="InstallHeader" Value="Welcome" />
+  <String Id="InstallMessage" Value="This installs [WixBundleName] for your account only (no administrator rights needed), into your local application data. Click Install to continue, or Close to exit." />
+  <String Id="InstallVersion" Value="Version [WixBundleVersion]" />
+  <String Id="InstallLicenseLinkText" Value="[WixBundleName] is released under the &lt;a href=&quot;#&quot;&gt;MIT licence&lt;/a&gt;." />
+  <String Id="InstallAcceptCheckbox" Value="I &amp;agree to the licence terms" />
+  <String Id="InstallOptionsButton" Value="&amp;Options" />
+  <String Id="InstallInstallButton" Value="&amp;Install" />
+  <String Id="InstallCloseButton" Value="&amp;Close" />
+
+  <String Id="OptionsHeader" Value="Install options" />
+  <String Id="OptionsLocationLabel" Value="Install location:" />
+  <String Id="OptionsBrowseButton" Value="&amp;Browse" />
+  <String Id="OptionsOkButton" Value="&amp;OK" />
+  <String Id="OptionsCancelButton" Value="&amp;Cancel" />
+
+  <String Id="ProgressHeader" Value="Installing" />
+  <String Id="ProgressLabel" Value="Status:" />
+  <String Id="OverallProgressPackageText" Value="Preparing..." />
+  <String Id="ProgressCancelButton" Value="&amp;Cancel" />
+
+  <String Id="ModifyHeader" Value="Change your installation" />
+  <String Id="ModifyRepairButton" Value="&amp;Repair" />
+  <String Id="ModifyUninstallButton" Value="&amp;Uninstall" />
+  <String Id="ModifyCloseButton" Value="&amp;Close" />
+
+  <String Id="SuccessHeader" Value="Setup complete" />
+  <String Id="SuccessInstallHeader" Value="EntropiaOrme is installed" />
+  <String Id="SuccessRepairHeader" Value="Repair complete" />
+  <String Id="SuccessUninstallHeader" Value="EntropiaOrme has been removed" />
+  <String Id="SuccessLaunchButton" Value="&amp;Launch" />
+  <String Id="SuccessRestartText" Value="Restart your computer to finish updating the software." />
+  <String Id="SuccessRestartButton" Value="&amp;Restart" />
+  <String Id="SuccessCloseButton" Value="&amp;Close" />
+
+  <String Id="FailureHeader" Value="Setup did not finish" />
+  <String Id="FailureInstallHeader" Value="Setup did not finish" />
+  <String Id="FailureUninstallHeader" Value="Uninstall did not finish" />
+  <String Id="FailureRepairHeader" Value="Repair did not finish" />
+  <String Id="FailureHyperlinkLogText" Value="One or more issues stopped setup from finishing. See the &lt;a href=&quot;#&quot;&gt;log file&lt;/a&gt; for details, then try again." />
+  <String Id="FailureRestartText" Value="Restart your computer to complete the rollback." />
+  <String Id="FailureRestartButton" Value="&amp;Restart" />
+  <String Id="FailureCloseButton" Value="&amp;Close" />
+
+  <String Id="HelpHeader" Value="Setup help" />
+  <String Id="HelpText" Value="/install | /repair | /uninstall | /layout [directory] : install, repair, uninstall, or stage a local copy. Install is the default.&#10;/passive | /quiet : minimal or no UI.&#10;/norestart : suppress restart attempts.&#10;/log log.txt : write a log to a specific file." />
+  <String Id="HelpCloseButton" Value="&amp;Close" />
+
+  <String Id="FilesInUseHeader" Value="Files in use" />
+  <String Id="FilesInUseLabel" Value="These applications are using files that setup needs to update:" />
+  <String Id="FilesInUseCloseRadioButton" Value="Close the &amp;applications and attempt to restart them." />
+  <String Id="FilesInUseDontCloseRadioButton" Value="&amp;Do not close applications (a reboot will be required)." />
+  <String Id="FilesInUseOkButton" Value="&amp;OK" />
+  <String Id="FilesInUseCancelButton" Value="&amp;Cancel" />
+</WixLocalization>

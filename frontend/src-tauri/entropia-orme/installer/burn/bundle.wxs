@@ -19,8 +19,22 @@
     <BootstrapperApplication>
       <bal:WixStandardBootstrapperApplication
           Theme="hyperlinkSidebarLicense"
+          ThemeFile="theme.thm"
+          LocalizationFile="theme.wxl"
           SuppressOptionsUI="yes"
           LicenseUrl="" />
+      <!-- Theme images referenced by theme.thm. These must be added explicitly:
+           the ThemeFile/LocalizationFile attributes auto-include only the .thm
+           and .wxl, not the images the theme references. -->
+      <Payload SourceFile="eo-background.png" />
+      <Payload SourceFile="eo-logoside.png" />
+      <Payload SourceFile="eo-logo.png" />
+      <Payload SourceFile="eo-btn-pri.png" />
+      <Payload SourceFile="eo-btn-pri-hover.png" />
+      <Payload SourceFile="eo-btn-pri-press.png" />
+      <Payload SourceFile="eo-btn-sec.png" />
+      <Payload SourceFile="eo-btn-sec-hover.png" />
+      <Payload SourceFile="eo-btn-sec-press.png" />
     </BootstrapperApplication>
 
     <Chain>

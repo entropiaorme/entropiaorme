@@ -83,8 +83,7 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<String>, String> 
     let endpoints = endpoints_for_channel(channel)
         .into_iter()
         .map(|raw| {
-            tauri::Url::parse(&raw)
-                .map_err(|err| format!("invalid updater endpoint {raw}: {err}"))
+            tauri::Url::parse(&raw).map_err(|err| format!("invalid updater endpoint {raw}: {err}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -145,7 +144,10 @@ mod tests {
             beta,
             vec!["https://entropiaorme.com/updates/beta/latest.json"]
         );
-        assert_ne!(stable, beta, "the channel must change which manifest is read");
+        assert_ne!(
+            stable, beta,
+            "the channel must change which manifest is read"
+        );
     }
 
     #[test]

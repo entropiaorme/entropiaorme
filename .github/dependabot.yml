@@ -1,0 +1,24 @@
+# Keep the SHA-pinned GitHub Actions current. Dependabot bumps each pinned
+# commit SHA to the latest release tag's commit and updates the trailing
+# version comment, so the pins do not silently rot. Grouped into a single
+# weekly pull request to keep the noise down.
+#
+# Note: dtolnay/rust-toolchain is intentionally NOT auto-bumpable here. It
+# publishes no semantic-version tags (its refs are toolchain channels:
+# stable / nightly / 1.xx.0), so it is pinned to a channel branch's commit
+# SHA and bumped by hand. Every other action is tag-versioned and tracked.
+#
+# Scope is GitHub Actions only; the npm / pip / cargo ecosystems keep their
+# own committed lockfiles and are out of scope here.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"

@@ -14,7 +14,6 @@ reviews:
     drafts: false
     base_branches:
       - main
-      - "^lane-.+$"
   path_filters:
     - "!**/*.lock"
     - "!**/package-lock.json"
@@ -26,7 +25,6 @@ reviews:
     - "!assets/**"
     - "!frontend/static/**"
     - "!frontend/src-tauri/entropia-orme/icons/**"
-    - "!frontend/src-tauri/entropia-orme/installer/*.bmp"
     - "!THIRD-PARTY-NOTICES.md"
   path_instructions:
     - path: "frontend/src/**/*.{svelte,ts}"
@@ -74,8 +72,6 @@ reviews:
 
         Process / subprocess safety:
         - Any std::process::Command shelling out on Windows must set creation_flags(CREATE_NO_WINDOW = 0x08000000) under #[cfg(windows)] to avoid conhost-window flashes from a GUI-subsystem parent.
-        - Sidecar lifecycle paths (spawn / drain / kill) must walk the PID tree (PyInstaller onefile spawns a bootloader + python child; TerminateProcess on the bootloader orphans the child).
-        - Async tasks reading from a sidecar's pipes must drain continuously; Windows pipe buffers are ~4 KB and a stalled drain blocks the child's logging.
 
     - path: "frontend/src-tauri/entropia-orme/tauri.conf.json"
       instructions: |
@@ -88,13 +84,6 @@ reviews:
         Capability scoping:
         - Prefer scope-restricted permission variants (with `validate` regex / URL allowlists) over blanket grants where the upstream schema supports it.
         - Plugin-shell permissions in particular: `shell:allow-open` should carry an explicit `validate` regex bounding the URLs it can open in the OS browser.
-
-    - path: "backend/build_sidecar.spec"
-      instructions: |
-        PyInstaller spec changes:
-        - The sidecar is never user-facing; build as console=False (GUI subsystem) so no conhost window can surface.
-        - New `datas` entries that bundle third-party content must be reflected in THIRD-PARTY-NOTICES.md.
-        - `excludes` carry rationale comments where they're load-bearing (e.g. preventing ML-framework bloat).
 
     - path: "**/*.md"
       instructions: |

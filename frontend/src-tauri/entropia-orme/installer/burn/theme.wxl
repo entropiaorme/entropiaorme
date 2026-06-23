@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- EntropiaOrme installer copy: neutral and professional, per-user aware
+     (no administrator prompt). -->
+<WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String Id="Caption" Value="[WixBundleName] Setup" />
+  <String Id="Title" Value="[WixBundleName]" />
+  <String Id="ConfirmCancelMessage" Value="Are you sure you want to cancel?" />
+
+  <String Id="InstallHeader" Value="Welcome" />
+  <String Id="InstallLocationLabel" Value="[WixBundleName] will be installed in:" />
+  <String Id="InstallLocationPath" Value="%LOCALAPPDATA%\Programs\[WixBundleName]" />
+  <String Id="InstallSize" Value="~80 MB" />
+  <String Id="InstallVersion" Value="Version [WixBundleVersion]" />
+  <String Id="InstallLicenseLinkText" Value="[WixBundleName] is released under the &lt;a href=&quot;#&quot;&gt;MIT licence&lt;/a&gt;." />
+  <String Id="InstallAcceptCheckbox" Value="I agree to the licence terms" />
+  <String Id="InstallOptionsButton" Value="Options" />
+  <String Id="InstallInstallButton" Value="Install" />
+  <String Id="InstallCloseButton" Value="Close" />
+
+  <String Id="OptionsHeader" Value="Install options" />
+  <String Id="OptionsLocationLabel" Value="Install location:" />
+  <String Id="OptionsBrowseButton" Value="Browse" />
+  <String Id="OptionsOkButton" Value="OK" />
+  <String Id="OptionsCancelButton" Value="Cancel" />
+
+  <String Id="ProgressHeader" Value="Installing" />
+  <String Id="ProgressUninstallHeader" Value="Uninstalling" />
+  <String Id="ProgressRepairHeader" Value="Repairing" />
+  <String Id="ProgressLabel" Value="Status:" />
+  <String Id="OverallProgressPackageText" Value="Preparing..." />
+  <String Id="ProgressCancelButton" Value="Cancel" />
+
+  <String Id="ModifyHeader" Value="Change your installation" />
+  <String Id="ModifyMessage" Value="[WixBundleName] is already installed for your account. Repair reinstalls any missing or changed files; Uninstall removes it. Choose an action below, or Close to exit." />
+  <String Id="ModifyRepairButton" Value="Repair" />
+  <String Id="ModifyUninstallButton" Value="Uninstall" />
+  <String Id="ModifyCloseButton" Value="Close" />
+
+  <String Id="SuccessHeader" Value="Setup complete" />
+  <String Id="SuccessInstallHeader" Value="Installation complete" />
+  <String Id="SuccessRepairHeader" Value="Repair complete" />
+  <String Id="SuccessUninstallHeader" Value="Uninstall complete" />
+  <String Id="SuccessLaunchButton" Value="Launch" />
+  <String Id="SuccessRestartText" Value="Restart your computer to finish updating [WixBundleName]." />
+  <String Id="SuccessRestartButton" Value="Restart" />
+  <String Id="SuccessCloseButton" Value="Close" />
+
+  <String Id="FailureHeader" Value="Setup did not finish" />
+  <String Id="FailureInstallHeader" Value="Setup did not finish" />
+  <String Id="FailureUninstallHeader" Value="Uninstall did not finish" />
+  <String Id="FailureRepairHeader" Value="Repair did not finish" />
+  <String Id="FailureHyperlinkLogText" Value="One or more issues stopped setup from finishing. See the &lt;a href=&quot;#&quot;&gt;log file&lt;/a&gt; for details, then try again." />
+  <String Id="FailureRestartText" Value="Restart your computer to complete the rollback." />
+  <String Id="FailureRestartButton" Value="Restart" />
+  <String Id="FailureCloseButton" Value="Close" />
+
+  <String Id="HelpHeader" Value="Setup help" />
+  <String Id="HelpText" Value="/install | /repair | /uninstall | /layout [directory] : install, repair, uninstall, or stage a local copy. Install is the default.&#10;/passive | /quiet : minimal or no UI.&#10;/norestart : suppress restart attempts.&#10;/log log.txt : write a log to a specific file." />
+  <String Id="HelpCloseButton" Value="Close" />
+
+  <String Id="FilesInUseHeader" Value="Files in use" />
+  <String Id="FilesInUseLabel" Value="These applications are using files that setup needs to update:" />
+  <String Id="FilesInUseCloseRadioButton" Value="Close the applications and attempt to restart them." />
+  <String Id="FilesInUseDontCloseRadioButton" Value="Do not close applications (a reboot will be required)." />
+  <String Id="FilesInUseOkButton" Value="OK" />
+  <String Id="FilesInUseCancelButton" Value="Cancel" />
+</WixLocalization>

@@ -1,11 +1,10 @@
 # Tool configuration for the EntropiaOrme Python backend.
 #
-# Tool config only: runtime dependencies live in backend/requirements.txt (the
-# manifest the PyInstaller freeze consumes) and dev/test tooling in
-# backend/requirements-dev.txt. There is intentionally no [project] or
-# [build-system] table: the backend ships as a PyInstaller-frozen sidecar, not
-# an installable wheel, so adding packaging metadata would only risk confusing
-# that pipeline.
+# Tool config only: runtime dependencies live in backend/requirements.txt and
+# dev/test tooling in backend/requirements-dev.txt. The Python tree is retained
+# solely as the cross-language test oracle (it is never shipped: the app is a
+# single pure-Rust binary), so there is intentionally no [project] or
+# [build-system] table; the oracle is not packaged as a wheel.
 
 [tool.ruff]
 line-length = 88
@@ -74,7 +73,6 @@ omit = [
     # Maintainer measurement utility: runs whole-process benchmarks at
     # deliberate baseline milestones, never under pytest.
     "backend/scripts/capture_port_baseline.py",
-    "backend/build_app.py",
     "backend/ocr/capturer.py",
     "backend/services/eu_window.py",
     "backend/services/hotbar_listener.py",

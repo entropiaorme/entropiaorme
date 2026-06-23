@@ -53,13 +53,12 @@ Run `just --list` to see other recipes (`just check` for frontend type-check + b
 ### Build installer
 
 ```bash
-cd frontend
-npm run tauri:build
+just installer
 ```
 
-Produces the NSIS installer at `frontend/src-tauri/target/release/bundle/nsis/`. The bundle is the single Rust binary together with its data, model, and ONNX Runtime assets; there is no separate backend process inside it.
+Builds the bespoke WiX Burn installer end to end (the per-user MSI payload, the native x86 bootstrapper helper, and the themed Burn bundle) and writes `EntropiaOrme-<version>-x64-setup.exe` to `frontend/src-tauri/target/release/bundle/burn/`. This is equivalent to running `scripts/build-installer.ps1` directly, and needs WiX 6 (the `wix` dotnet tool), the MSVC x86 toolset, and the Tauri build chain. The installer wraps the single Rust binary together with its data, model, and ONNX Runtime assets; there is no separate backend process inside it.
 
-Installer chrome assets (header / sidebar BMPs + plain-text MIT licence) live under `frontend/src-tauri/entropia-orme/installer/` and are wired through `bundle.windows.nsis` in `frontend/src-tauri/entropia-orme/tauri.conf.json`.
+Installer sources (the WiX template, the Burn bundle, the themed bootstrapper, and the native helper) live under `frontend/src-tauri/entropia-orme/installer/`; the branded art is generated from the app icon and design tokens by `installer/burn/compose-art.py`.
 
 ## Optional dev environment
 
@@ -82,7 +81,7 @@ Revert with `Get-DnsClientNrptRule | Where-Object { $_.Namespace -contains '.loc
 - The [architecture handbook](docs/): an mdBook covering the system overview, the service and crate map, the event taxonomy, the OCR pipeline, and the database schema reference, with the [architecture decision records](docs/src/adr/) alongside. It is published to GitHub Pages from `main`, tracking the latest landed state, together with the generated `cargo doc` API reference. Build it locally with `mdbook build docs`.
 - [`backend/architecture/README.md`](backend/architecture/README.md): how the backend is put together (the event spine, the hydration HTTP surface, the service and worker conventions, and the tests that enforce them), with a companion [`PORT-READINESS.md`](backend/architecture/PORT-READINESS.md) analysing how those shapes mapped onto the native port.
 - [`TESTING.md`](TESTING.md): the test suite, runtime tiers, and CI gates.
-- [`SECURITY.md`](SECURITY.md): the security policy, including the supply-chain review gates over dependencies and bundled assets.
+- [`SECURITY.md`](SECURITY.md): the security policy, including the supply-chain review gates over dependencies and bundled assets, and the SBOM, checksums, and build-provenance attestation the release pipeline attaches to each release.
 
 ## License
 

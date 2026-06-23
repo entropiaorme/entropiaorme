@@ -2,6 +2,7 @@ mod composition;
 mod crash;
 mod resources;
 mod telemetry;
+mod updater;
 
 use std::sync::Mutex;
 
@@ -192,12 +193,17 @@ pub fn run() {
         // usage was removed when the Python backend was decommissioned.
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             toggle_overlay,
             show_scan_overlay,
             hide_scan_overlay,
             api_request,
-            capture_png
+            capture_png,
+            updater::check_for_update,
+            updater::get_update_channel,
+            updater::set_update_channel
         ])
         .setup(|app| {
             // `app` is unused on a non-Windows debug build (the runtime icon

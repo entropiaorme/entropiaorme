@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EntropiaOrme installer theme (WiX 6 thmutil). A dark, branded restyle of the
+  WixStdBA sidebar theme in the app's design language: base navy #0a0e17, cyan
+  accent #38bdf8, slate text #e2e8f0, Segoe UI. The page/control contract
+  matches WixStdBA (control Names are load-bearing); only geometry, fonts,
+  colours, and imagery are ours. background.png is a shared full-window backdrop;
+  logoside.png is the full-bleed sidebar (welcome-style pages); logo.png is the
+  small mark (utility pages).
+-->
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil" ImageFile="eo-background.png">
+  <!-- Colours are BGR (thmutil feeds the hex straight into a Win32 COLORREF):
+       e2e8f0->f0e8e2 slate, 38bdf8->f8bd38 cyan, 0a0e17->170e0a navy,
+       94a3b8->b8a394 muted, 1e2a3a->3a2a1e raised.
+       0 body, 1 title, 2 header (cyan), 3 secondary, 4 hyperlink,
+       5 primary-button text (dark on cyan), 6 secondary-button text (slate on raised). -->
+  <Font Id="0" Height="-12" Weight="500" Foreground="f0e8e2" Background="170e0a">Segoe UI</Font>
+  <Font Id="1" Height="-32" Weight="300" Foreground="f0e8e2" Background="170e0a">Segoe UI</Font>
+  <Font Id="2" Height="-30" Weight="300" Foreground="f8bd38" Background="170e0a">Segoe UI</Font>
+  <Font Id="3" Height="-13" Weight="400" Foreground="b8a394" Background="170e0a">Segoe UI</Font>
+  <Font Id="4" Height="-13" Weight="400" Foreground="f8bd38" Background="170e0a" Underline="yes">Segoe UI</Font>
+  <Font Id="5" Height="-13" Weight="500" Foreground="170e0a" Background="f8bd38">Segoe UI</Font>
+  <Font Id="6" Height="-13" Weight="500" Foreground="f0e8e2" Background="261913">Segoe UI</Font>
+
+  <Window Width="600" Height="450" HexStyle="100a0000" FontId="0" IconFile="eo-icon.ico" Caption="#(loc.Caption)">
+    <Page Name="Help">
+      <ImageControl X="24" Y="24" Width="48" Height="48" ImageFile="eo-logo.png"/>
+      <Label X="84" Y="32" Width="-24" Height="36" FontId="1" DisablePrefix="yes">#(loc.Title)</Label>
+      <Label X="24" Y="92" Width="-24" Height="40" FontId="2" DisablePrefix="yes">#(loc.HelpHeader)</Label>
+      <Label X="24" Y="132" Width="-24" Height="-50" FontId="3" DisablePrefix="yes">#(loc.HelpText)</Label>
+      <Button Name="HelpCloseButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.HelpCloseButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/><CloseWindowAction /></Button>
+    </Page>
+
+    <Page Name="Install">
+      <ImageControl X="0" Y="0" Width="185" Height="450" ImageFile="eo-logoside.png"/>
+      <Label Name="InstallVersion" X="20" Y="-30" Width="145" Height="17" FontId="3" DisablePrefix="yes" HideWhenDisabled="yes">#(loc.InstallVersion)</Label>
+      <Label X="208" Y="44" Width="-24" Height="40" FontId="2" DisablePrefix="yes">#(loc.InstallHeader)</Label>
+      <Label X="208" Y="104" Width="-24" Height="18" FontId="0" DisablePrefix="yes">#(loc.InstallLocationLabel)</Label>
+      <ImageControl X="208" Y="130" Width="280" Height="26" ImageFile="eo-field.png"/>
+      <Label X="216" Y="136" Width="264" Height="16" FontId="0" DisablePrefix="yes">#(loc.InstallLocationPath)</Label>
+      <Label X="496" Y="136" Width="-24" Height="16" FontId="3" DisablePrefix="yes">#(loc.InstallSize)</Label>
+      <Hypertext Name="EulaHyperlink" X="208" Y="-118" Width="-24" Height="17" TabStop="yes" FontId="4" HideWhenDisabled="yes">#(loc.InstallLicenseLinkText)</Hypertext>
+      <Checkbox Name="EulaAcceptCheckbox" X="208" Y="-56" Width="-24" Height="17" TabStop="yes" FontId="3" HideWhenDisabled="yes">#(loc.InstallAcceptCheckbox)</Checkbox>
+      <!-- No Options button: this is a deliberate one-decision, fixed-location
+           per-user install (SuppressOptionsUI in bundle.wxs). The only action is
+           Install (or Close). -->
+      <Button Name="InstallButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5">
+        <Text>#(loc.InstallInstallButton)</Text>
+        <ButtonImage ImageFile="eo-btn-pri.png"/>
+        <ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/>
+        <ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/>
+      </Button>
+      <Button Name="InstallCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6">
+        <Text>#(loc.InstallCloseButton)</Text>
+        <ButtonImage ImageFile="eo-btn-sec.png"/>
+        <ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/>
+        <ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/>
+        <CloseWindowAction />
+      </Button>
+    </Page>
+
+    <Page Name="Options">
+      <ImageControl X="24" Y="24" Width="48" Height="48" ImageFile="eo-logo.png"/>
+      <Label X="84" Y="32" Width="-24" Height="36" FontId="1" DisablePrefix="yes">#(loc.Title)</Label>
+      <Label X="24" Y="92" Width="-24" Height="40" FontId="2" DisablePrefix="yes">#(loc.OptionsHeader)</Label>
+      <Label X="24" Y="138" Width="-24" Height="17" FontId="3">#(loc.OptionsLocationLabel)</Label>
+      <Editbox Name="InstallFolder" X="24" Y="160" Width="-116" Height="23" TabStop="yes" FontId="3" FileSystemAutoComplete="yes" />
+      <Button Name="BrowseButton" X="-24" Y="159" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.OptionsBrowseButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/></Button>
+      <Button Name="OptionsOkButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5"><Text>#(loc.OptionsOkButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <Button Name="OptionsCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.OptionsCancelButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/></Button>
+    </Page>
+
+    <Page Name="FilesInUse">
+      <ImageControl X="24" Y="24" Width="48" Height="48" ImageFile="eo-logo.png"/>
+      <Label X="84" Y="32" Width="-24" Height="36" FontId="1" DisablePrefix="yes">#(loc.Title)</Label>
+      <Label X="24" Y="92" Width="-24" Height="40" FontId="2" DisablePrefix="yes">#(loc.FilesInUseHeader)</Label>
+      <Label X="24" Y="132" Width="-24" Height="34" FontId="3" DisablePrefix="yes">#(loc.FilesInUseLabel)</Label>
+      <Label Name="FilesInUseText" X="24" Y="170" Width="-24" Height="-96" FontId="3" DisablePrefix="yes" HexStyle="0x0000000C"></Label>
+      <Button Name="FilesInUseCloseRadioButton" X="24" Y="-66" Width="-24" Height="23" TabStop="yes" FontId="0" HideWhenDisabled="yes" HexStyle="0x000009">#(loc.FilesInUseCloseRadioButton)</Button>
+      <Button Name="FilesInUseDontCloseRadioButton" X="24" Y="-42" Width="-24" Height="23" TabStop="yes" FontId="0" HideWhenDisabled="yes" HexStyle="0x000009">#(loc.FilesInUseDontCloseRadioButton)</Button>
+      <Button Name="FilesInUseOkButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5" HideWhenDisabled="yes"><Text>#(loc.FilesInUseOkButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <Button Name="FilesInUseCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.FilesInUseCancelButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/></Button>
+    </Page>
+
+    <Page Name="Progress">
+      <ImageControl X="24" Y="24" Width="48" Height="48" ImageFile="eo-mark.png"/>
+      <ImageControl X="84" Y="26" Width="132" Height="44" ImageFile="eo-wordmark.png"/>
+      <Label X="24" Y="92" Width="-24" Height="40" FontId="2" DisablePrefix="yes">
+        <Text>#(loc.ProgressHeader)</Text>
+        <Text Condition="WixBundleAction = 4">#(loc.ProgressUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 8">#(loc.ProgressRepairHeader)</Text>
+      </Label>
+      <Label X="24" Y="156" Width="84" Height="17" FontId="3" DisablePrefix="yes">#(loc.ProgressLabel)</Label>
+      <Label Name="OverallProgressPackageText" X="110" Y="156" Width="-24" Height="17" FontId="3" DisablePrefix="yes">#(loc.OverallProgressPackageText)</Label>
+      <Progressbar Name="OverallCalculatedProgressbar" X="24" Y="182" Width="-24" Height="16"><ProgressbarImage ImageFile="eo-progress.png"/></Progressbar>
+      <Button Name="ProgressCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.ProgressCancelButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/></Button>
+    </Page>
+
+    <Page Name="Modify">
+      <ImageControl X="0" Y="0" Width="185" Height="450" ImageFile="eo-logoside.png"/>
+      <Label X="208" Y="44" Width="-24" Height="40" FontId="2" DisablePrefix="yes">#(loc.ModifyHeader)</Label>
+      <Label X="208" Y="92" Width="-24" Height="120" FontId="3" DisablePrefix="yes">#(loc.ModifyMessage)</Label>
+      <Button Name="RepairButton" X="-220" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5" HideWhenDisabled="yes"><Text>#(loc.ModifyRepairButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <Button Name="UninstallButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.ModifyUninstallButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/></Button>
+      <Button Name="ModifyCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.ModifyCloseButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/><CloseWindowAction /></Button>
+    </Page>
+
+    <Page Name="Success">
+      <ImageControl X="0" Y="0" Width="185" Height="450" ImageFile="eo-logoside.png"/>
+      <!-- One header label; the running action selects the line
+           (WixBundleAction: 4=uninstall, 6=install, 8=repair), with the plain
+           header as the fallback. WixStdBA does NOT wire per-action header
+           controls by name, so four separately-named labels would all draw at
+           once and the last declared would win regardless of action; the
+           conditional-Text form is the authoritative pattern. -->
+      <Label X="208" Y="44" Width="-24" Height="40" FontId="2" DisablePrefix="yes">
+        <Text>#(loc.SuccessHeader)</Text>
+        <Text Condition="WixBundleAction = 4">#(loc.SuccessUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 6">#(loc.SuccessInstallHeader)</Text>
+        <Text Condition="WixBundleAction = 8">#(loc.SuccessRepairHeader)</Text>
+      </Label>
+      <Button Name="LaunchButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5" HideWhenDisabled="yes"><Text>#(loc.SuccessLaunchButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <!-- Restart prompt: shown only when a restart is genuinely pending.
+           WixStdBA manages the restart BUTTON by name but not the text label, so
+           the text must be gated by the WixStdBARestartRequired variable (it is
+           never set for this per-user, REBOOT=ReallySuppress payload), not by a
+           name + HideWhenDisabled (which nothing would ever disable). -->
+      <Label X="208" Y="-56" Width="-24" Height="34" FontId="3" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.SuccessRestartText)</Label>
+      <Button Name="SuccessRestartButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5" HideWhenDisabled="yes"><Text>#(loc.SuccessRestartButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <Button Name="SuccessCloseButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.SuccessCloseButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/><CloseWindowAction /></Button>
+    </Page>
+
+    <Page Name="Failure">
+      <ImageControl X="0" Y="0" Width="185" Height="450" ImageFile="eo-logoside.png"/>
+      <!-- Action-selected header (see the Success page note for why a single
+           conditional-Text label is correct and four named labels are not). -->
+      <Label X="208" Y="44" Width="-24" Height="40" FontId="2" DisablePrefix="yes">
+        <Text>#(loc.FailureHeader)</Text>
+        <Text Condition="WixBundleAction = 4">#(loc.FailureUninstallHeader)</Text>
+        <Text Condition="WixBundleAction = 6">#(loc.FailureInstallHeader)</Text>
+        <Text Condition="WixBundleAction = 8">#(loc.FailureRepairHeader)</Text>
+      </Label>
+      <Hypertext Name="FailureLogFileLink" X="208" Y="121" Width="-24" Height="68" FontId="4" TabStop="yes" HideWhenDisabled="yes">#(loc.FailureHyperlinkLogText)</Hypertext>
+      <Hypertext Name="FailureMessageText" X="208" Y="-118" Width="-24" Height="80" FontId="3" TabStop="yes" HideWhenDisabled="yes" />
+      <!-- Gated like the Success restart text (see that note). -->
+      <Label X="208" Y="-58" Width="-24" Height="80" FontId="3" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.FailureRestartText)</Label>
+      <Button Name="FailureRestartButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5" HideWhenDisabled="yes"><Text>#(loc.FailureRestartButton)</Text><ButtonImage ImageFile="eo-btn-pri.png"/><ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-pri-press.png"/></Button>
+      <Button Name="FailureCloseButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6"><Text>#(loc.FailureCloseButton)</Text><ButtonImage ImageFile="eo-btn-sec.png"/><ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/><ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/><CloseWindowAction /></Button>
+    </Page>
+  </Window>
+</Theme>

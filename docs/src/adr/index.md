@@ -19,3 +19,4 @@ Every record here describes a decision that has landed in the codebase, so each 
 | [ADR-0011](0011-etag-conditional-requests.md) | Strong-ETag conditional requests on hydration reads |
 | [ADR-0012](0012-supervised-worker-threads.md) | Named, owned, supervised worker threads |
 | [ADR-0013](0013-in-process-collapse.md) | Collapse to a single in-process Rust binary |
+| [ADR-0014](0014-release-engineering.md) | Bespoke installer, signed auto-update, and a provenance-bearing release pipeline |

@@ -84,6 +84,7 @@ _MODULE_TIERS = {
     "test_ambient_time_guard": "fast",  # pure stdlib + git, no app
     "test_classify_change_scope": "fast",  # pure stdlib + git, no app
     "test_version_stamps": "fast",  # pure stdlib, reads tracked manifests
+    "test_bump_version": "fast",  # pure stdlib, rewrites synthetic manifests in tmp_path
     "test_analytics": "standard",  # AppDatabase-backed + SQL aggregation
     "test_analytics_activity": "standard",
     # full tier: the slowest suites. Runs post-merge (push to main) and

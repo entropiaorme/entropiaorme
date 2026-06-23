@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EntropiaOrme bespoke installer: a WiX Burn bootstrapper that wraps the
+  per-user MSI payload (built by scripts/build-msi.ps1) and presents the
+  branded install experience. The MSI runs silently underneath; all UI is the
+  bootstrapper's, so there is a single themed flow and one Add/Remove entry.
+
+  Version and the MSI path are injected at build time (-d Version=, -d MsiPath=).
+  This is the minimal, correct skeleton; the custom theme (branded full-bleed
+  chrome) is layered on top via ThemeFile/LocalizationFile next.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="EntropiaOrme"
+          Manufacturer="EntropiaOrme"
+          Version="$(Version)"
+          IconSourceFile="../../icons/icon.ico"
+          UpgradeCode="94501295-55d4-4d3a-aa8d-ffce925f5a25">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkSidebarLicense"
+          ThemeFile="theme.thm"
+          LocalizationFile="theme.wxl"
+          SuppressOptionsUI="yes"
+          LicenseUrl="" />
+      <!-- Theme images referenced by theme.thm. These must be added explicitly:
+           the ThemeFile/LocalizationFile attributes auto-include only the .thm
+           and .wxl, not the images the theme references. -->
+      <Payload SourceFile="eo-background.png" />
+      <Payload SourceFile="eo-logoside.png" />
+      <Payload SourceFile="eo-logo.png" />
+      <Payload SourceFile="eo-btn-pri.png" />
+      <Payload SourceFile="eo-btn-pri-hover.png" />
+      <Payload SourceFile="eo-btn-pri-press.png" />
+      <Payload SourceFile="eo-btn-sec.png" />
+      <Payload SourceFile="eo-btn-sec-hover.png" />
+      <Payload SourceFile="eo-btn-sec-press.png" />
+      <Payload SourceFile="eo-progress.png" />
+      <Payload SourceFile="eo-field.png" />
+      <Payload SourceFile="eo-mark.png" />
+      <Payload SourceFile="eo-wordmark.png" />
+      <!-- The app icon, laid out next to theme.thm at runtime so thmutil's
+           Window/@IconFile can load it for the window class icon (the running
+           installer's titlebar + Windows taskbar/alt-tab entry). Separate from
+           Bundle/@IconSourceFile, which stamps the setup.exe's own file icon. -->
+      <Payload Name="eo-icon.ico" SourceFile="../../icons/icon.ico" />
+      <!-- Native BA-functions helper: flips the title bar to DWM dark mode
+           (thmutil cannot touch the OS frame). No .NET runtime. -->
+      <Payload SourceFile="bafunctions.dll" bal:BAFunctions="yes" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <!-- The per-user MSI payload. Compressed into the setup.exe (single
+           self-contained download); the MSI's internal UI is suppressed by
+           default so all UI is the bootstrapper's; only the bundle (not also
+           the MSI) shows in Add/Remove Programs. -->
+      <MsiPackage SourceFile="$(MsiPath)"
+                  Compressed="yes"
+                  Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

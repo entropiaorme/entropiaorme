@@ -83,6 +83,18 @@ check:
     npm --prefix frontend run check
     npm --prefix frontend run build
 
+# Build the bespoke WiX Burn installer end to end (per-user MSI -> native x86
+# bafunctions helper -> themed Burn bundle). Windows-only: needs WiX 6, the MSVC
+# x86 toolset, and the Tauri build chain. Mirrors the release pipeline's build.
+[windows]
+installer:
+    powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\build-installer.ps1"
+
+[unix]
+installer:
+    @echo "just installer: the Windows installer build requires Windows (WiX + MSVC x86)."
+    @exit 1
+
 # Headless smoke verification of the dev launch. Not yet implemented.
 smoke:
     @echo "just smoke: headless smoke verification is not yet implemented."

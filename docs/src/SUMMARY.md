@@ -26,3 +26,4 @@
   - [ADR-0011: Strong-ETag conditional requests](adr/0011-etag-conditional-requests.md)
   - [ADR-0012: Supervised worker threads](adr/0012-supervised-worker-threads.md)
   - [ADR-0013: Collapse to a single in-process Rust binary](adr/0013-in-process-collapse.md)
+  - [ADR-0014: Release engineering](adr/0014-release-engineering.md)

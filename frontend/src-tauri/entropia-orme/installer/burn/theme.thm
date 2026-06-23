@@ -38,13 +38,13 @@
       <Hypertext Name="EulaHyperlink" X="208" Y="-118" Width="-24" Height="17" TabStop="yes" FontId="4" HideWhenDisabled="yes">#(loc.InstallLicenseLinkText)</Hypertext>
       <Label Name="InstallVersion" X="208" Y="-88" Width="-24" Height="17" FontId="3" DisablePrefix="yes" HideWhenDisabled="yes">#(loc.InstallVersion)</Label>
       <Checkbox Name="EulaAcceptCheckbox" X="208" Y="-56" Width="-24" Height="17" TabStop="yes" FontId="3" HideWhenDisabled="yes">#(loc.InstallAcceptCheckbox)</Checkbox>
-      <Button Name="OptionsButton" X="-188" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6" HideWhenDisabled="yes">
+      <Button Name="OptionsButton" X="-220" Y="-18" Width="86" Height="26" TabStop="yes" FontId="6" HideWhenDisabled="yes">
         <Text>#(loc.InstallOptionsButton)</Text>
         <ButtonImage ImageFile="eo-btn-sec.png"/>
         <ButtonHoverImage ImageFile="eo-btn-sec-hover.png"/>
         <ButtonSelectedImage ImageFile="eo-btn-sec-press.png"/>
       </Button>
-      <Button Name="InstallButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5">
+      <Button Name="InstallButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="5">
         <Text>#(loc.InstallInstallButton)</Text>
         <ButtonImage ImageFile="eo-btn-pri.png"/>
         <ButtonHoverImage ImageFile="eo-btn-pri-hover.png"/>
@@ -65,7 +65,7 @@
       <Label X="24" Y="138" Width="-24" Height="17" FontId="3">#(loc.OptionsLocationLabel)</Label>
       <Editbox Name="FolderEditbox" X="24" Y="160" Width="-116" Height="23" TabStop="yes" FontId="3" FileSystemAutoComplete="yes" />
       <Button Name="BrowseButton" X="-24" Y="159" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.OptionsBrowseButton)</Button>
-      <Button Name="OptionsOkButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.OptionsOkButton)</Button>
+      <Button Name="OptionsOkButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.OptionsOkButton)</Button>
       <Button Name="OptionsCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.OptionsCancelButton)</Button>
     </Page>
 
@@ -77,7 +77,7 @@
       <Label Name="FilesInUseText" X="24" Y="170" Width="-24" Height="-96" FontId="3" DisablePrefix="yes" HexStyle="0x0000000C"></Label>
       <Button Name="FilesInUseCloseRadioButton" X="24" Y="-66" Width="-24" Height="23" TabStop="yes" FontId="0" HideWhenDisabled="yes" HexStyle="0x000009">#(loc.FilesInUseCloseRadioButton)</Button>
       <Button Name="FilesInUseDontCloseRadioButton" X="24" Y="-42" Width="-24" Height="23" TabStop="yes" FontId="0" HideWhenDisabled="yes" HexStyle="0x000009">#(loc.FilesInUseDontCloseRadioButton)</Button>
-      <Button Name="FilesInUseOkButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.FilesInUseOkButton)</Button>
+      <Button Name="FilesInUseOkButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.FilesInUseOkButton)</Button>
       <Button Name="FilesInUseCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.FilesInUseCancelButton)</Button>
     </Page>
 
@@ -94,8 +94,8 @@
     <Page Name="Modify">
       <ImageControl X="0" Y="0" Width="185" Height="450" ImageFile="eo-logoside.png"/>
       <Label X="208" Y="44" Width="-24" Height="30" FontId="2" DisablePrefix="yes">#(loc.ModifyHeader)</Label>
-      <Button Name="RepairButton" X="-188" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.ModifyRepairButton)</Button>
-      <Button Name="UninstallButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.ModifyUninstallButton)</Button>
+      <Button Name="RepairButton" X="-220" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.ModifyRepairButton)</Button>
+      <Button Name="UninstallButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.ModifyUninstallButton)</Button>
       <Button Name="ModifyCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.ModifyCloseButton)</Button>
     </Page>
 
@@ -105,9 +105,9 @@
       <Label Name="SuccessInstallHeader" X="208" Y="44" Width="-24" Height="100" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessInstallHeader)</Label>
       <Label Name="SuccessRepairHeader" X="208" Y="44" Width="-24" Height="100" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessRepairHeader)</Label>
       <Label Name="SuccessUninstallHeader" X="208" Y="44" Width="-24" Height="30" FontId="2" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessUninstallHeader)</Label>
-      <Button Name="LaunchButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.SuccessLaunchButton)</Button>
+      <Button Name="LaunchButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.SuccessLaunchButton)</Button>
       <Label Name="SuccessRestartText" X="208" Y="-56" Width="-24" Height="34" FontId="3" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.SuccessRestartText)</Label>
-      <Button Name="SuccessRestartButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.SuccessRestartButton)</Button>
+      <Button Name="SuccessRestartButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.SuccessRestartButton)</Button>
       <Button Name="SuccessCancelButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.SuccessCloseButton)</Button>
     </Page>
 
@@ -120,7 +120,7 @@
       <Hypertext Name="FailureLogFileLink" X="208" Y="121" Width="-24" Height="68" FontId="4" TabStop="yes" HideWhenDisabled="yes">#(loc.FailureHyperlinkLogText)</Hypertext>
       <Hypertext Name="FailureMessageText" X="208" Y="-118" Width="-24" Height="80" FontId="3" TabStop="yes" HideWhenDisabled="yes" />
       <Label Name="FailureRestartText" X="208" Y="-58" Width="-24" Height="80" FontId="3" HideWhenDisabled="yes" DisablePrefix="yes">#(loc.FailureRestartText)</Label>
-      <Button Name="FailureRestartButton" X="-98" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.FailureRestartButton)</Button>
+      <Button Name="FailureRestartButton" X="-122" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0" HideWhenDisabled="yes">#(loc.FailureRestartButton)</Button>
       <Button Name="FailureCloseButton" X="-24" Y="-18" Width="86" Height="26" TabStop="yes" FontId="0">#(loc.FailureCloseButton)</Button>
     </Page>
   </Window>

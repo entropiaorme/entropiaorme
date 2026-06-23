@@ -212,6 +212,22 @@ def make_logo():
     img.save(HERE / "eo-logo.png")
 
 
+# ----------------------------------------------- bare mark + wordmark (progress)
+def make_mark():
+    # The emblem on its own (no halo, no added backdrop) for the progress header.
+    box = 48
+    img = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+    img.alpha_composite(load_ibex(box), (0, 0))
+    img.save(HERE / "eo-mark.png")
+
+
+def make_wordmark():
+    # The bespoke wordmark lockup sized for the progress header, beside the mark.
+    # 132x44 preserves the source 3:1 aspect, so the ImageControl maps it 1:1.
+    wm = Image.open(STATIC / "wordmark-on-dark.png").convert("RGBA").resize((132, 44), Image.LANCZOS)
+    wm.save(HERE / "eo-wordmark.png")
+
+
 # ---------------------------------------------------------------- buttons
 def _btn(fill, outline, name):
     """A flat, rounded button face (text is drawn over it by thmutil)."""
@@ -265,6 +281,8 @@ if __name__ == "__main__":
     make_background()
     make_sidebar()
     make_logo()
+    make_mark()
+    make_wordmark()
     make_buttons()
     make_progress()
     make_field()

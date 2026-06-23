@@ -38,6 +38,8 @@
       <Payload SourceFile="eo-btn-sec-press.png" />
       <Payload SourceFile="eo-progress.png" />
       <Payload SourceFile="eo-field.png" />
+      <Payload SourceFile="eo-mark.png" />
+      <Payload SourceFile="eo-wordmark.png" />
       <!-- The app icon, laid out next to theme.thm at runtime so thmutil's
            Window/@IconFile can load it for the window class icon (the running
            installer's titlebar + Windows taskbar/alt-tab entry). Separate from

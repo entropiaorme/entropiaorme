@@ -24,6 +24,8 @@
   <String Id="OptionsCancelButton" Value="Cancel" />
 
   <String Id="ProgressHeader" Value="Installing" />
+  <String Id="ProgressUninstallHeader" Value="Uninstalling" />
+  <String Id="ProgressRepairHeader" Value="Repairing" />
   <String Id="ProgressLabel" Value="Status:" />
   <String Id="OverallProgressPackageText" Value="Preparing..." />
   <String Id="ProgressCancelButton" Value="Cancel" />

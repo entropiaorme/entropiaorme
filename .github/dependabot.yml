@@ -9,7 +9,7 @@
 # SHA and bumped by hand. Every other action is tag-versioned and tracked.
 #
 # Scope is GitHub Actions only; the npm / pip / cargo ecosystems keep their
-# own committed lockfiles and are out of this round's scope.
+# own committed lockfiles and are out of scope here.
 version: 2
 updates:
   - package-ecosystem: "github-actions"

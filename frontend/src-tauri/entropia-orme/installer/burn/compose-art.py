@@ -1,14 +1,17 @@
 """Compose the WiX Burn installer's brand art from the app's design tokens.
 
-Generates three PNGs the theme references, all in the EntropiaOrme design
+Generates the PNGs the theme references, all in the EntropiaOrme design
 language (base navy #0a0e17, cyan accent #38bdf8, slate text #e2e8f0, the ibex
-emblem, four-point sparkles):
+emblem):
 
-  background.png  600x450  full-window dark backdrop (gradient + glow + sparkles)
-  logoside.png    185x450  full-bleed sidebar: ibex, wordmark, tagline
-  logo.png         48x48   small ibex mark for the non-sidebar pages
-  progress.png      4x16   progress bar (left/used/unused/right column strip)
-  field.png       280x26   read-only install-path box
+  eo-background.png  600x450  full-window backdrop (glows + dot grid + watermark)
+  eo-logoside.png    185x450  full-bleed sidebar: ibex emblem + wordmark lockup
+  eo-logo.png         48x48   small haloed ibex for the utility pages
+  eo-mark.png         48x48   bare ibex (no halo) for the progress header
+  eo-wordmark.png    132x44   wordmark lockup for the progress header
+  eo-progress.png      4x16   progress bar (left/used/unused/right column strip)
+  eo-field.png       280x26   read-only install-path box
+  eo-btn-*.png        86x26   primary/secondary button faces (rest/hover/press)
 
 Run from anywhere; writes next to this script. Re-run after a brand/icon change.
 """

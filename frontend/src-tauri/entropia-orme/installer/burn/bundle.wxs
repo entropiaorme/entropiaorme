@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  EntropiaOrme bespoke installer: a WiX Burn bootstrapper that wraps the
+  per-user MSI payload (built by scripts/build-msi.ps1) and presents the
+  branded install experience. The MSI runs silently underneath; all UI is the
+  bootstrapper's, so there is a single themed flow and one Add/Remove entry.
+
+  Version and the MSI path are injected at build time (-d Version=, -d MsiPath=).
+  This is the minimal, correct skeleton; the custom theme (branded full-bleed
+  chrome) is layered on top via ThemeFile/LocalizationFile next.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="EntropiaOrme"
+          Manufacturer="entropiaorme"
+          Version="$(Version)"
+          UpgradeCode="94501295-55d4-4d3a-aa8d-ffce925f5a25">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkSidebarLicense"
+          SuppressOptionsUI="yes"
+          LicenseUrl="" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <!-- The per-user MSI payload. Compressed into the setup.exe (single
+           self-contained download); the MSI's internal UI is suppressed by
+           default so all UI is the bootstrapper's; only the bundle (not also
+           the MSI) shows in Add/Remove Programs. -->
+      <MsiPackage SourceFile="$(MsiPath)"
+                  Compressed="yes"
+                  Visible="no" />
+    </Chain>
+  </Bundle>
+</Wix>

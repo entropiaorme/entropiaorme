@@ -15,10 +15,12 @@ Run from anywhere; writes next to this script. Re-run after a brand/icon change.
 from __future__ import annotations
 import math
 from pathlib import Path
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 HERE = Path(__file__).resolve().parent
 ICONS = HERE.parent.parent / "icons"
+STATIC = HERE.parents[3] / "static"   # frontend/static: the bespoke brand lockups
 FONTS = Path("C:/Windows/Fonts")
 
 # --- EntropiaOrme design tokens (from frontend/src/app.css) ---
@@ -26,7 +28,8 @@ BASE = (10, 14, 23)          # #0a0e17
 SURFACE = (19, 25, 38)       # #131926
 RAISED = (30, 42, 58)        # #1e2a3a
 ACCENT = (56, 189, 248)      # #38bdf8
-ACCENT_DIM = (12, 74, 110)   # #0c4a6e
+ACCENT_DIM = (12, 74, 110)   # #0c4a6e  (== --color-accent-muted)
+BORDER_BRIGHT = (42, 58, 78)   # #2a3a4e: the dot-grid stipple colour
 TEXT = (226, 232, 240)       # #e2e8f0
 TEXT_2 = (148, 163, 184)     # #94a3b8
 SURFACE_HOVER = (26, 34, 53)   # #1a2235
@@ -110,15 +113,61 @@ def starfield(d, w, h, seed=7):
 
 
 # ---------------------------------------------------------------- background
+def _ellipse_field(w, h, cx, cy, rx, ry):
+    """Normalised elliptical distance: 0 at the centre, 1 on the rx/ry ellipse."""
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    return np.sqrt(((xs - cx) / rx) ** 2 + ((ys - cy) / ry) ** 2)
+
+
+def _radial_light(w, h, cx, cy, rx, ry, colour, strength):
+    """Additive coloured glow: strength*colour at the centre, linear to 0 at the edge."""
+    a = np.clip(1.0 - _ellipse_field(w, h, cx, cy, rx, ry), 0.0, 1.0) * strength
+    return a[..., None] * np.array(colour, np.float32)
+
+
 def make_background():
+    """The full-window backdrop, mirroring the app's onboarding atmosphere
+    (frontend/src/routes/welcome): base navy, a vignette-masked dot grid, two
+    radial glows (cyan upper-right, muted-cyan lower-left), the suited-ibex
+    watermark bled off the lower-right, and a faint accent rule along the top.
+    Baked to a static raster (no live CSS), which is all thmutil renders behind
+    the page controls."""
     w, h = 600, 450
-    img = vgrad(w, h, BASE, (13, 19, 32)).convert("RGBA")
-    img.alpha_composite(glow((w, h), (90, 70), 260, ACCENT, 0.10))
-    img.alpha_composite(glow((w, h), (560, 430), 220, ACCENT_DIM, 0.16))
-    ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    starfield(ImageDraw.Draw(ov), w, h)
-    img.alpha_composite(ov)
-    img.save(HERE / "eo-background.png")  # keep RGBA: thmutil's loader requires 32-bit
+    img = np.tile(np.array(BASE, np.float32), (h, w, 1))
+
+    # two radial glows (welcome .bg-glow): the CSS ellipse radii scaled by each
+    # gradient's transparent-stop fraction give the additive falloff radius.
+    img += _radial_light(w, h, 0.78 * w, 0.18 * h, 0.60 * 0.55 * w, 0.60 * 0.45 * h, ACCENT, 0.22)
+    img += _radial_light(w, h, 0.12 * w, 0.92 * h, 0.55 * 0.60 * w, 0.55 * 0.50 * h, ACCENT_DIM, 0.70)
+
+    # dot grid (welcome .bg-grid): a 28px stipple, vignette-masked to fade at the
+    # edges, in the bright-border colour at the layer*color-mix opacity.
+    grid = np.zeros((h, w), np.float32)
+    grid[1::28, 1::28] = 1.0
+    vmask = np.clip((0.85 - _ellipse_field(w, h, 0.50 * w, 0.45 * h, 0.70 * w, 0.80 * h)) / (0.85 - 0.30), 0.0, 1.0)
+    grid *= vmask * (0.55 * 0.65)
+    img += grid[..., None] * np.array(BORDER_BRIGHT, np.float32)
+
+    # faint accent rule across the very top (welcome .top-rule)
+    xs = np.arange(w, dtype=np.float32)
+    rule = (1.0 - np.abs(xs - w / 2.0) / (w / 2.0)) * (0.55 * 0.55)
+    img[0] += rule[:, None] * np.array(ACCENT, np.float32)
+
+    bg = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
+
+    # the suited-ibex watermark, mirrored and bled off the lower-right corner
+    # (welcome .bg-mascot: right:-7% bottom:-10%, scaleX(-1), near-transparent),
+    # on a soft cyan halo standing in for its CSS drop-shadow.
+    mark = Image.open(STATIC / "watermark.png").convert("RGBA").transpose(Image.FLIP_LEFT_RIGHT)
+    mw = 320
+    mh = round(mw * mark.height / mark.width)
+    mark = mark.resize((mw, mh), Image.LANCZOS)
+    left, top = round(1.07 * w - mw), round(1.10 * h - mh)
+    bg.alpha_composite(glow((w, h), (left + mw // 2, top + mh // 2), 150, ACCENT, 0.10))
+    mark.putalpha(mark.getchannel("A").point(lambda a: int(a * 0.10)))
+    bg.alpha_composite(mark, (left, top))
+
+    bg.save(HERE / "eo-background.png")  # keep RGBA: thmutil's loader requires 32-bit
 
 
 # ---------------------------------------------------------------- sidebar
@@ -130,9 +179,6 @@ def make_sidebar():
     ov = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(ov)
     starfield(sd, w, h, seed=23)
-    sparkle(sd, 38, 96, 8, ACCENT, 200)
-    sparkle(sd, 150, 250, 6, ACCENT, 150)
-    sparkle(sd, 30, 300, 5, TEXT, 120)
     img.alpha_composite(ov)
     # ibex emblem, centred upper third, on a tight cyan halo so the dark badge
     # reads as a glowing emblem rather than a dark disc punched into the backdrop
@@ -141,15 +187,14 @@ def make_sidebar():
     ibex = load_ibex(116)
     img.alpha_composite(ibex, ((w - 116) // 2, 78))
     d = ImageDraw.Draw(img)
-    # wordmark
-    wm = font("segoeuib.ttf", 26)
-    tw = d.textlength("EntropiaOrme", font=wm)
-    d.text(((w - tw) / 2, 214), "EntropiaOrme", font=wm, fill=TEXT)
-    # tracked tagline
-    tag = font("segoeui.ttf", 11)
-    label = "GAMEPLAY ANALYTICS"
-    lw = text_w(d, label, tag, track=2)
-    tracked(d, ((w - lw) / 2, 250), label, tag, ACCENT, track=2)
+    # bespoke wordmark lockup: the app's two-tone wordmark-on-dark PNG, scaled to
+    # the sidebar width with side margins (replaces the former Segoe-bold draw).
+    wm = Image.open(STATIC / "wordmark-on-dark.png").convert("RGBA")
+    ww = 150
+    wh = round(ww * wm.height / wm.width)
+    wm = wm.resize((ww, wh), Image.LANCZOS)
+    wy = 210
+    img.alpha_composite(wm, ((w - ww) // 2, wy))
     # right-edge cyan accent rule (divider from content)
     d.line([(w - 1, 0), (w - 1, h)], fill=ACCENT + (255,), width=2)
     img.save(HERE / "eo-logoside.png")  # keep RGBA: thmutil's loader requires 32-bit

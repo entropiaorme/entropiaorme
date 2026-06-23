@@ -14,6 +14,7 @@
   <Bundle Name="EntropiaOrme"
           Manufacturer="EntropiaOrme"
           Version="$(Version)"
+          IconSourceFile="../../icons/icon.ico"
           UpgradeCode="94501295-55d4-4d3a-aa8d-ffce925f5a25">
 
     <BootstrapperApplication>
@@ -37,6 +38,11 @@
       <Payload SourceFile="eo-btn-sec-press.png" />
       <Payload SourceFile="eo-progress.png" />
       <Payload SourceFile="eo-field.png" />
+      <!-- The app icon, laid out next to theme.thm at runtime so thmutil's
+           Window/@IconFile can load it for the window class icon (the running
+           installer's titlebar + Windows taskbar/alt-tab entry). Separate from
+           Bundle/@IconSourceFile, which stamps the setup.exe's own file icon. -->
+      <Payload Name="eo-icon.ico" SourceFile="../../icons/icon.ico" />
       <!-- Native BA-functions helper: flips the title bar to DWM dark mode
            (thmutil cannot touch the OS frame). No .NET runtime. -->
       <Payload SourceFile="bafunctions.dll" bal:BAFunctions="yes" />

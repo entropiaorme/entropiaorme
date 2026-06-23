@@ -22,7 +22,7 @@
   <Font Id="5" Height="-13" Weight="500" Foreground="170e0a" Background="f8bd38">Segoe UI</Font>
   <Font Id="6" Height="-13" Weight="500" Foreground="f0e8e2" Background="261913">Segoe UI</Font>
 
-  <Window Width="600" Height="450" HexStyle="100a0000" FontId="0" Caption="#(loc.Caption)">
+  <Window Width="600" Height="450" HexStyle="100a0000" FontId="0" IconFile="eo-icon.ico" Caption="#(loc.Caption)">
     <Page Name="Help">
       <ImageControl X="24" Y="24" Width="48" Height="48" ImageFile="eo-logo.png"/>
       <Label X="84" Y="32" Width="-24" Height="36" FontId="1" DisablePrefix="yes">#(loc.Title)</Label>

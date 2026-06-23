@@ -64,6 +64,8 @@
   },
   "bundle": {
     "targets": ["nsis"],
+    "publisher": "EntropiaOrme",
+    "homepage": "https://entropiaorme.com",
     "resources": {
       "../../../backend/data/snapshot/": "snapshot/",
       "../../../backend/data/panel_geometry.json": "panel_geometry.json",

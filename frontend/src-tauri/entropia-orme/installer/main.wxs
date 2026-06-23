@@ -16,11 +16,14 @@
   template (synced from tauri-cli-v2.10.1). Consumed via the
   bundle.windows.wix.template config. The MSI is the payload the WiX Burn
   bootstrapper wraps; an unambiguous per-user scope keeps Burn from elevating.
-  Two deliberate deltas from upstream, both for a no-admin per-user install:
+  Deliberate deltas from upstream, for a no-admin per-user install:
     1. Package InstallScope is perUser, not perMachine.
     2. The install directory is %LOCALAPPDATA%\Programs\<product>, not Program Files.
+    3. Deep-link protocols register under HKCU\Software\Classes, not HKLM (which would need admin).
+    4. No Desktop shortcut: a per-user app should not drop a desktop icon by default (the upstream template creates one).
+    5. REBOOT=ReallySuppress: a per-user app never needs a reboot.
   When bumping Tauri, re-sync this file from the matching upstream template and
-  re-apply these two deltas.
+  re-apply these deltas.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
     <Product
@@ -42,6 +45,11 @@
         <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
         <!-- reinstall all files; rewrite all registry entries; reinstall all shortcuts -->
         <Property Id="REINSTALLMODE" Value="amus" />
+
+        <!-- Per-user delta: a per-user app never needs a reboot, so never schedule
+             or prompt for one (e.g. when the app is running during uninstall, the
+             locked exe would otherwise request a restart). -->
+        <Property Id="REBOOT" Value="ReallySuppress" />
 
         <!-- Auto launch app after installation, useful for passive mode which usually used in updates -->
         <Property Id="AUTOLAUNCHAPP" Secure="yes" />
@@ -122,13 +130,6 @@
         <UIRef Id="WixUI_InstallDir" />
 
         <Directory Id="TARGETDIR" Name="SourceDir">
-            <Directory Id="DesktopFolder" Name="Desktop">
-                <Component Id="ApplicationShortcutDesktop" Guid="*">
-                    <Shortcut Id="ApplicationDesktopShortcut" Name="{{product_name}}" Description="Runs {{product_name}}" Target="[!Path]" WorkingDirectory="INSTALLDIR" />
-                    <RemoveFolder Id="DesktopFolder" On="uninstall" />
-                    <RegistryValue Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}" Name="Desktop Shortcut" Type="integer" Value="1" KeyPath="yes" />
-                </Component>
-            </Directory>
             <Directory Id="LocalAppDataFolder">
                 <Directory Id="ProgramsFolder" Name="Programs">
                     <Directory Id="INSTALLDIR" Name="{{product_name}}"/>
@@ -144,9 +145,9 @@
                 <RegistryKey Root="HKCU" Key="Software\\{{manufacturer}}\\{{product_name}}">
                     <RegistryValue Name="InstallDir" Type="string" Value="[INSTALLDIR]" KeyPath="yes" />
                 </RegistryKey>
-                <!-- Change the Root to HKCU for perUser installations -->
+                <!-- Per-user delta: deep-link protocols register under HKCU\Software\Classes (upstream defaults to HKLM, which would require admin and break the no-admin perUser install). -->
                 {{#each deep_link_protocols as |protocol| ~}}
-                <RegistryKey Root="HKLM" Key="Software\Classes\\{{protocol}}">
+                <RegistryKey Root="HKCU" Key="Software\Classes\\{{protocol}}">
                     <RegistryValue Type="string" Name="URL Protocol" Value=""/>
                     <RegistryValue Type="string" Value="URL:{{bundle_id}} protocol"/>
                     <RegistryKey Key="DefaultIcon">
@@ -260,7 +261,6 @@
                 <ComponentRef Id="Path"/>
                 <ComponentRef Id="CMP_UninstallShortcut" />
                 <ComponentRef Id="ApplicationShortcut" />
-                <ComponentRef Id="ApplicationShortcutDesktop" />
             </Feature>
 
             <Feature

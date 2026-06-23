@@ -5,8 +5,10 @@ language (base navy #0a0e17, cyan accent #38bdf8, slate text #e2e8f0, the ibex
 emblem, four-point sparkles):
 
   background.png  600x450  full-window dark backdrop (gradient + glow + sparkles)
-  logoside.png    185x450  full-bleed sidebar: ibex, wordmark, tagline, version
+  logoside.png    185x450  full-bleed sidebar: ibex, wordmark, tagline
   logo.png         48x48   small ibex mark for the non-sidebar pages
+  progress.png      4x16   progress bar (left/used/unused/right column strip)
+  field.png       280x26   read-only install-path box
 
 Run from anywhere; writes next to this script. Re-run after a brand/icon change.
 """
@@ -28,6 +30,7 @@ ACCENT_DIM = (12, 74, 110)   # #0c4a6e
 TEXT = (226, 232, 240)       # #e2e8f0
 TEXT_2 = (148, 163, 184)     # #94a3b8
 SURFACE_HOVER = (26, 34, 53)   # #1a2235
+SURFACE_PRESS = (15, 22, 38)   # #0f1626: secondary-button pressed fill, a step below SURFACE
 ACCENT_HOVER = (125, 211, 252)  # #7dd3fc
 ACCENT_PRESS = (14, 165, 233)   # deeper cyan
 
@@ -131,7 +134,10 @@ def make_sidebar():
     sparkle(sd, 150, 250, 6, ACCENT, 150)
     sparkle(sd, 30, 300, 5, TEXT, 120)
     img.alpha_composite(ov)
-    # ibex emblem, centred upper third
+    # ibex emblem, centred upper third, on a tight cyan halo so the dark badge
+    # reads as a glowing emblem rather than a dark disc punched into the backdrop
+    ex, ey = w // 2, 78 + 58
+    img.alpha_composite(glow((w, h), (ex, ey), 72, ACCENT, 0.38))
     ibex = load_ibex(116)
     img.alpha_composite(ibex, ((w - 116) // 2, 78))
     d = ImageDraw.Draw(img)
@@ -144,10 +150,6 @@ def make_sidebar():
     label = "GAMEPLAY ANALYTICS"
     lw = text_w(d, label, tag, track=2)
     tracked(d, ((w - lw) / 2, 250), label, tag, ACCENT, track=2)
-    # bottom: version + hairline
-    d.line([(20, h - 52), (w - 20, h - 52)], fill=RAISED + (255,), width=1)
-    ver = font("segoeui.ttf", 12)
-    d.text((20, h - 40), "Version 0.1.0", font=ver, fill=TEXT_2)
     # right-edge cyan accent rule (divider from content)
     d.line([(w - 1, 0), (w - 1, h)], fill=ACCENT + (255,), width=2)
     img.save(HERE / "eo-logoside.png")  # keep RGBA: thmutil's loader requires 32-bit
@@ -155,9 +157,13 @@ def make_sidebar():
 
 # ---------------------------------------------------------------- small logo
 def make_logo():
+    # The lone mark on the utility pages (e.g. Progress). A soft cyan halo gives
+    # the dark badge a luminous edge so it reads against the dark window.
     box = 48
+    inner = 38
     img = Image.new("RGBA", (box, box), (0, 0, 0, 0))
-    img.alpha_composite(load_ibex(box))
+    img.alpha_composite(glow((box, box), (box // 2, box // 2), box // 2, ACCENT, 0.6))
+    img.alpha_composite(load_ibex(inner), ((box - inner) // 2, (box - inner) // 2))
     img.save(HERE / "eo-logo.png")
 
 
@@ -173,14 +179,41 @@ def _btn(fill, outline, name):
 
 
 def make_buttons():
-    # Primary (cyan fill) — the affirmative action.
+    # Primary (cyan fill): the affirmative action.
     _btn(ACCENT, None, "eo-btn-pri.png")
     _btn(ACCENT_HOVER, None, "eo-btn-pri-hover.png")
     _btn(ACCENT_PRESS, None, "eo-btn-pri-press.png")
-    # Secondary (dark surface + cyan hairline) — neutral actions.
-    _btn(RAISED, ACCENT_DIM, "eo-btn-sec.png")
+    # Secondary (dark surface + cyan hairline): neutral actions. Rests at
+    # SURFACE and brightens on hover (matching the app's secondary button),
+    # then settles just below SURFACE on press (never down to black).
+    _btn(SURFACE, ACCENT_DIM, "eo-btn-sec.png")
     _btn(SURFACE_HOVER, ACCENT, "eo-btn-sec-hover.png")
-    _btn(BASE, ACCENT_DIM, "eo-btn-sec-press.png")
+    _btn(SURFACE_PRESS, ACCENT_DIM, "eo-btn-sec-press.png")
+
+
+# ---------------------------------------------------------------- progress bar
+def make_progress():
+    # WiX 6 DrawProgressBar samples a 4px-wide, full-height strip as four 1px
+    # columns at srcX 0/1/2/3: left edge, used fill, unused fill, right edge.
+    img = Image.new("RGBA", (4, 16), (0, 0, 0, 0))
+    px = img.load()
+    cols = [ACCENT, ACCENT, RAISED, RAISED]  # left, used, unused, right
+    for x, c in enumerate(cols):
+        for y in range(16):
+            px[x, y] = c + (255,)
+    img.save(HERE / "eo-progress.png")
+
+
+# ---------------------------------------------------------------- path field
+def make_field():
+    # A read-only path field: a bordered box in the dark theme. Filled with BASE so
+    # the path Label (FontId 0, BASE text background) sits flush; the border-bright
+    # outline delineates the box.
+    w, h, r = 280, 26, 4
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([0, 0, w - 1, h - 1], radius=r, fill=BASE, outline=(42, 58, 78), width=1)
+    img.save(HERE / "eo-field.png")
 
 
 if __name__ == "__main__":
@@ -188,4 +221,6 @@ if __name__ == "__main__":
     make_sidebar()
     make_logo()
     make_buttons()
+    make_progress()
+    make_field()
     print("composed art + buttons")

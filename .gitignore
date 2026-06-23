@@ -110,3 +110,9 @@ backend/tests/e2e/test_ocr_equivalence/
 /agents/
 /.venv-*/
 .claude/
+
+# WiX Burn installer: the native bafunctions DLL and its build inputs are
+# produced from source by installer/burn/bafunctions/ (source + recipe tracked),
+# not committed.
+frontend/src-tauri/entropia-orme/installer/burn/bafunctions.dll
+frontend/src-tauri/entropia-orme/installer/burn/bafunctions/.build/

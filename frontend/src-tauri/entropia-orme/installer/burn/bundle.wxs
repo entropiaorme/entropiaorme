@@ -35,6 +35,9 @@
       <Payload SourceFile="eo-btn-sec.png" />
       <Payload SourceFile="eo-btn-sec-hover.png" />
       <Payload SourceFile="eo-btn-sec-press.png" />
+      <!-- Native BA-functions helper: flips the title bar to DWM dark mode
+           (thmutil cannot touch the OS frame). No .NET runtime. -->
+      <Payload SourceFile="bafunctions.dll" bal:BAFunctions="yes" />
     </BootstrapperApplication>
 
     <Chain>

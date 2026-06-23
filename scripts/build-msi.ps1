@@ -22,16 +22,18 @@ $conf = Join-Path $repoRoot "frontend\src-tauri\entropia-orme\tauri.conf.json"
 #    fails the per-user ICEs; its exit code is deliberately ignored here, and the
 #    compiled object is verified below instead.
 Write-Host "==> tauri build --bundles msi (its light step is expected to fail the per-user ICEs)"
+$buildStartUtc = [DateTime]::UtcNow
 Push-Location $frontend
 & npx tauri build --bundles msi
 Pop-Location
 
-# 2. Verify candle produced a fresh object. If it did not, the build failed
-#    before compiling the installer (a real error, not the expected ICE failure).
+# 2. Verify candle produced a fresh object *this run*. If it did not, the build
+#    failed before compiling the installer (a real error, not the expected ICE
+#    failure). Comparing against this run's start (not main.wxs mtime) so a stale
+#    object left by a prior run can never be relinked into a new MSI.
 $wixobj = Join-Path $wixDir "main.wixobj"
-$wxs = Join-Path $wixDir "main.wxs"
 if (-not (Test-Path $wixobj)) { throw "WiX object not produced ($wixobj): the Tauri build failed before compiling the installer." }
-if ((Get-Item $wixobj).LastWriteTime -lt (Get-Item $wxs).LastWriteTime) { throw "WiX object is stale: the Tauri build did not recompile the installer." }
+if ((Get-Item $wixobj).LastWriteTimeUtc -lt $buildStartUtc) { throw "WiX object is stale: this run did not recompile the installer." }
 
 # 3. Resolve Tauri's auto-downloaded WiX 3 toolset.
 $light = Get-ChildItem (Join-Path $env:LOCALAPPDATA "tauri\WixTools*\light.exe") -ErrorAction SilentlyContinue | Select-Object -First 1

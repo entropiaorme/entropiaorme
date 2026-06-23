@@ -34,7 +34,7 @@ Inputs, all pinned to WiX **6.0.2** (match the `wix` tool in
 
 Compile with the MSVC x86 toolset (`vcvarsamd64_x86`):
 
-```
+```text
 cl /nologo /LD /MT /EHsc /I<baapi-inc> /I<dutil-inc> /I<wixstdfn-inc> ^
    bafunctions.cpp BalBaseBAFunctionsProc.cpp ^
    /Fe:..\bafunctions.dll ^

@@ -36,8 +36,11 @@ from backend.scripts.check_version_stamps import (
     evaluate,
 )
 
-# Semver core with optional pre-release / build metadata.
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+# Semver core with optional pre-release / build metadata. Numeric core parts
+# reject leading zeros (01.2.3 is not valid semver), per the spec.
+SEMVER_RE = re.compile(
+    r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
+)
 
 # The top-level "version": "..." token. count=1 in the substitution binds it to
 # the first occurrence, which is the top-level object key in both manifests.

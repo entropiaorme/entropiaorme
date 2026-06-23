@@ -29,13 +29,6 @@ jobs:
       attestations: write # record the build-provenance attestation
     env:
       SQLX_OFFLINE: "true"
-      # The updater signing key is provisioned out of band as a repository
-      # secret. While it is absent (the current state) the build produces an
-      # unsigned installer and no updater artefacts; once it is present the same
-      # build signs the updater manifest. Mapping it to an env keeps it
-      # inert-by-default rather than a hard dependency of the pipeline.
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -92,7 +85,15 @@ jobs:
         # Python, no sidecar freeze. Unsigned while the signing key is absent
         # (see the job env). Uses the runner's bundled .NET (WiX 6 tool) and MSVC
         # x86 toolset, parity with the runner-provided Rust/Node above.
+        #
+        # The updater signing key is provisioned out of band as a repository
+        # secret and scoped to this step, the only consumer. Absent today: the
+        # build produces an unsigned installer and no updater artefacts; once
+        # present the same build signs the updater manifest, inert-by-default.
         shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: ./scripts/build-installer.ps1
 
       - name: Stage release assets

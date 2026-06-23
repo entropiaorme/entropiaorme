@@ -49,6 +49,8 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: frontend/src-tauri
+          # Restrict cache writes to the trusted main timeline (parity with ci.yml / release.yml).
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install mdBook and the link checker
         uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11

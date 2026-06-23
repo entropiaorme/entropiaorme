@@ -27,6 +27,11 @@ static DWORD WINAPI EoDarkenTitleBar(__in LPVOID /*pv*/)
             ::DwmSetWindowAttribute(hWnd, 20, &fDark, sizeof(fDark)); // DWMWA_USE_IMMERSIVE_DARK_MODE (20H1+)
             ::DwmSetWindowAttribute(hWnd, 19, &fDark, sizeof(fDark)); // pre-20H1 attribute id
             ::SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            // Hide keyboard-focus rectangles and accelerator underlines: this is a
+            // click-driven installer, so the dotted focus outline and the mnemonic
+            // underline are visual noise. UIS_SET on the top-level window
+            // propagates to existing and future child controls.
+            ::SendMessageW(hWnd, WM_CHANGEUISTATE, MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS | UISF_HIDEACCEL), 0);
             return 0;
         }
         ::Sleep(50);

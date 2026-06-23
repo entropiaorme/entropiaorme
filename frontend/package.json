@@ -20,7 +20,7 @@
 		"gen:api:check": "npm run gen:api && git diff --exit-code -- src/lib/api/schema.d.ts",
 		"tauri": "tauri",
 		"tauri:dev": "node src-tauri/entropia-orme/build-dev-config.mjs && tauri dev --config src-tauri/entropia-orme/tauri.dev.conf.json --config src-tauri/entropia-orme/tauri.dev.local.json",
-		"tauri:build": "tauri build --bundles nsis",
+		"tauri:build": "tauri build --no-bundle",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:coverage": "vitest run --coverage",

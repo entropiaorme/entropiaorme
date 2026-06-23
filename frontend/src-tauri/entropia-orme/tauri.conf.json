@@ -63,7 +63,7 @@
     }
   },
   "bundle": {
-    "targets": ["nsis"],
+    "targets": ["msi"],
     "publisher": "EntropiaOrme",
     "homepage": "https://entropiaorme.com",
     "resources": {
@@ -86,14 +86,6 @@
       "wix": {
         "template": "installer/main.wxs",
         "upgradeCode": "cc05019b-a2f6-5531-8ea4-f51fc625cb5a"
-      },
-      "nsis": {
-        "installerIcon": "icons/icon.ico",
-        "headerImage": "installer/header.bmp",
-        "sidebarImage": "installer/sidebar.bmp",
-        "installMode": "currentUser",
-        "languages": ["English"],
-        "displayLanguageSelector": false
       }
     }
   }

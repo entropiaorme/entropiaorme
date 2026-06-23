@@ -83,14 +83,17 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Build the single-binary release
-        # Pure Rust plus frontend: tauri build compiles the application and
-        # bundles the NSIS installer (the only bundle target today; the bespoke
-        # installer is a future target). There is no Python and no sidecar
-        # freeze: the application is one binary. Unsigned while the signing key
-        # is absent (see the job env).
-        run: npm run tauri:build
-        working-directory: frontend
+      - name: Build the bespoke installer
+        # build-installer.ps1 produces the per-user MSI payload, the native x86
+        # bafunctions helper (built from source), and the themed WiX Burn bundle,
+        # wrapping them into one branded setup.exe. The release binary and its
+        # bundled resources are produced under target/release as a side effect,
+        # which the portable ZIP is staged from. Pure Rust plus frontend: no
+        # Python, no sidecar freeze. Unsigned while the signing key is absent
+        # (see the job env). Uses the runner's bundled .NET (WiX 6 tool) and MSVC
+        # x86 toolset, parity with the runner-provided Rust/Node above.
+        shell: pwsh
+        run: ./scripts/build-installer.ps1
 
       - name: Stage release assets
         # Rename the bundler output to the brand-canonical artefact names and
@@ -106,8 +109,8 @@ jobs:
           release="frontend/src-tauri/target/release"
           mkdir -p dist
 
-          # Installer: rename the PascalCase/underscore bundler output to the brand form.
-          cp "$release/bundle/nsis/EntropiaOrme_${version}_x64-setup.exe" \
+          # Installer: the bespoke WiX Burn bundle, renamed to the brand form.
+          cp "$release/bundle/burn/EntropiaOrme-${version}-x64-setup.exe" \
              "dist/entropiaorme-${version}-x64-setup.exe"
 
           # Portable: the binary plus exactly its bundled resources, in the layout

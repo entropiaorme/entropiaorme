@@ -11,6 +11,12 @@ It is referenced from `../bundle.wxs` as
 
 ## Build
 
+Run `build.ps1` (from anywhere): it restores the inputs below into `./.build`
+(gitignored), compiles with the MSVC x86 cross toolset, writes
+`../bafunctions.dll`, and verifies the output is x86. `scripts/build-installer.ps1`
+and the release pipeline call it before the Burn bundle build. The rest of this
+section documents what the script does.
+
 The output **must be x86**: the Burn BA host is x86 (the universal engine), even
 though the MSI payload is x64. Building x64 yields `ERROR_BAD_EXE_FORMAT` at load.
 
@@ -40,10 +46,10 @@ cl /nologo /LD /MT /EHsc /I<baapi-inc> /I<dutil-inc> /I<wixstdfn-inc> ^
 
 Output: `../bafunctions.dll` (x86; verify `dumpbin /headers` shows `14C machine`).
 
-## Productionisation (pending)
+## Notes
 
-This is currently built by hand and the DLL is gitignored. The release pipeline
-should restore the two NuGets, fetch the four pinned `wixstdfn` headers + the
-proc source, and run the compile above as a step before the Burn bundle build.
-The window caption is currently hard-coded (`EntropiaOrme Setup`); if the bundle
-name ever changes, update the `FindWindowW` call in `bafunctions.cpp`.
+The DLL is gitignored and built from source by `build.ps1` (restores the two
+NuGets, fetches the four pinned `wixstdfn` headers + the proc source, runs the
+compile above), which the release pipeline runs before the Burn bundle build.
+The window caption is hard-coded (`EntropiaOrme Setup`); if the bundle name ever
+changes, update the `FindWindowW` call in `bafunctions.cpp`.

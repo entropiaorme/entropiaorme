@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- EntropiaOrme installer copy. Neutral and professional (project-meta voice,
-     not the community voice). Per-user aware: no administrator prompt. -->
+<!-- EntropiaOrme installer copy: neutral and professional, per-user aware
+     (no administrator prompt). -->
 <WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl">
   <String Id="Caption" Value="[WixBundleName] Setup" />
   <String Id="Title" Value="[WixBundleName]" />

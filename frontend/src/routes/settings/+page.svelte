@@ -475,7 +475,7 @@
 				<Toggle
 					checked={$newsOptIn}
 					onchange={setNewsOptIn}
-					label="Enable News &amp; Updates"
+					label="Enable News"
 				/>
 			</div>
 

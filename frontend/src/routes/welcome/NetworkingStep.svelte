@@ -1,10 +1,9 @@
 <script lang="ts">
-	// The networking & privacy onboarding panel. Both features are ON by
-	// default; the user opts out here. The bold promise is about USER DATA
-	// (which never leaves the machine), worded so it stays true even though the
-	// app does make two narrow outbound calls (news + update checks) that send
-	// nothing about the user. Copy is placeholder-grade pending a community-voice
-	// pass; the structure and defaults are the load-bearing part.
+	// The networking and privacy onboarding panel. Both features are on by
+	// default; the user opts out here. The promise is about user data (which
+	// never leaves the machine), worded so it stays true even though the app
+	// makes two narrow outbound calls (the news and update checks) that send
+	// nothing about the user.
 	let { news = $bindable(true), autoUpdate = $bindable(true) } = $props<{
 		news?: boolean;
 		autoUpdate?: boolean;

@@ -2,16 +2,29 @@
 	import { goto } from '$app/navigation';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
+	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
-	import { markNewsOptInSeen, setNewsOptIn } from '$lib/news';
-	import { setAutoUpdateEnabled } from '$lib/updater';
+	import { getPreference } from '$lib/preferences';
+	import { markNewsOptInSeen, NEWS_PREFERENCE_KEYS, setNewsOptIn } from '$lib/news';
+	import { AUTO_UPDATE_PREFERENCE_KEY, setAutoUpdateEnabled } from '$lib/updater';
 	import { refreshNews } from '$lib/newsFetch';
 	import NetworkingStep from '../NetworkingStep.svelte';
 
-	// Re-prompt for users who onboarded before these features existed; both
-	// default ON (opt-out), matching the first-run networking step.
+	// Re-prompt for users who onboarded before these features existed. Default ON
+	// (opt-out, matching the first-run step) only when a preference is genuinely
+	// unset; hydrate any saved choice first so re-opening this page never flips an
+	// existing opt-out back on.
 	let newsOptedIn = $state(true);
 	let autoUpdateOptedIn = $state(true);
+
+	onMount(async () => {
+		const [savedNews, savedAuto] = await Promise.all([
+			getPreference<boolean | null>(NEWS_PREFERENCE_KEYS.optIn, null),
+			getPreference<boolean | null>(AUTO_UPDATE_PREFERENCE_KEY, null),
+		]);
+		newsOptedIn = savedNews ?? true;
+		autoUpdateOptedIn = savedAuto ?? true;
+	});
 	let exiting = $state(false);
 
 	async function complete() {

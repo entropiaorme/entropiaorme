@@ -17,10 +17,12 @@ import { derived, get, type Readable, type Writable, writable } from 'svelte/sto
 
 import { getPreference, setPreference } from './preferences';
 
-/// The opt-out preference key. Default ON: a fresh profile auto-checks.
+/// The auto-update preference key. The runtime default is OFF until the user
+/// has made the choice; the opt-out posture (auto-update on by default, opted
+/// out in onboarding) is carried by the onboarding panel's default-on toggle and
+/// the saved preference, so the launch check never fires before consent.
 const KEY_AUTO_UPDATE_ENABLED = 'auto_update_enabled';
 export const AUTO_UPDATE_PREFERENCE_KEY = KEY_AUTO_UPDATE_ENABLED;
-export const DEFAULT_AUTO_UPDATE_ENABLED = true;
 
 /// The download-progress event the Rust side emits (colon-form, matching the bus).
 const DOWNLOAD_PROGRESS_EVENT = 'updater:download-progress';
@@ -50,7 +52,7 @@ export type UpdatePhase =
 	| 'installing'
 	| 'error';
 
-export const autoUpdateEnabled: Writable<boolean> = writable(DEFAULT_AUTO_UPDATE_ENABLED);
+export const autoUpdateEnabled: Writable<boolean> = writable(false);
 export const updatePhase: Writable<UpdatePhase> = writable('idle');
 export const availableUpdate: Writable<UpdateInfo | null> = writable(null);
 export const downloadProgress: Writable<DownloadProgress | null> = writable(null);
@@ -82,10 +84,7 @@ let unlistenProgress: UnlistenFn | null = null;
 
 /// Hydrate the opt-out preference from the store. Call once on app start.
 export async function initUpdater(): Promise<void> {
-	const enabled = await getPreference<boolean>(
-		KEY_AUTO_UPDATE_ENABLED,
-		DEFAULT_AUTO_UPDATE_ENABLED,
-	);
+	const enabled = await getPreference<boolean>(KEY_AUTO_UPDATE_ENABLED, false);
 	autoUpdateEnabled.set(enabled);
 }
 
@@ -96,10 +95,10 @@ export async function setAutoUpdateEnabled(value: boolean): Promise<void> {
 }
 
 /// Check the active channel's manifest for a newer release.
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
+export async function checkForUpdate(silent = false): Promise<UpdateInfo | null> {
 	if (!isTauri()) return null;
 	updateError.set(null);
-	updatePhase.set('checking');
+	if (!silent) updatePhase.set('checking');
 	try {
 		const info = await invoke<UpdateInfo | null>('check_for_update');
 		if (info) {
@@ -108,12 +107,21 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 			updateToastDismissed.set(false);
 		} else {
 			availableUpdate.set(null);
-			updatePhase.set('up-to-date');
+			// A silent launch check leaves no trace when up to date; a manual
+			// check reports it.
+			updatePhase.set(silent ? 'idle' : 'up-to-date');
 		}
 		return info;
 	} catch (err) {
-		updateError.set(String(err));
-		updatePhase.set('error');
+		// A silent launch check must not surface a transport failure: an offline
+		// launch would otherwise open /updates in an error state the user never
+		// asked for. Only a user-initiated check reports the error.
+		if (silent) {
+			updatePhase.set('idle');
+		} else {
+			updateError.set(String(err));
+			updatePhase.set('error');
+		}
 		return null;
 	}
 }
@@ -175,5 +183,5 @@ export function dismissUpdateToast(): void {
 export async function maybeCheckOnLaunch(): Promise<void> {
 	if (!isTauri()) return;
 	if (!get(autoUpdateEnabled)) return;
-	await checkForUpdate();
+	await checkForUpdate(true);
 }

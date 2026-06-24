@@ -6,7 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { fly } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
-	import { availableUpdate, dismissUpdateToast, showUpdateToast } from '$lib/updater';
+	import { availableUpdate, dismissUpdateToast, showUpdateToast, updatePhase } from '$lib/updater';
 
 	function openUpdates() {
 		dismissUpdateToast();
@@ -38,8 +38,7 @@
 			<span class="copy">
 				<span class="title">New update for EntropiaOrme available</span>
 				<span class="sub">
-					{#if $availableUpdate}Version {$availableUpdate.version} is ready to install.{:else}
-						A newer version is ready.{/if}
+					{#if $updatePhase === 'ready' && $availableUpdate}Version {$availableUpdate.version} is ready to install.{:else if $updatePhase === 'downloading' && $availableUpdate}Downloading version {$availableUpdate.version}…{:else if $availableUpdate}Version {$availableUpdate.version} is available.{:else}A newer version is available.{/if}
 				</span>
 			</span>
 			<span class="cta" aria-hidden="true">View</span>

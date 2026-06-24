@@ -42,11 +42,13 @@ const KEY_OPT_IN_SEEN = 'news_opt_in_seen';
 const KEY_CACHE = 'news_cache';
 const KEY_LAST_VIEWED_AT = 'news_last_viewed_at';
 
-// Default ON (opt-out): the networking posture is that the news + update
-// fetches are enabled by default and the user opts out in onboarding. The
-// fetches send no user data, so the privacy promise ("your data never leaves
-// your machine") holds; what is on by default is a plain outbound GET.
-export const newsOptIn: Writable<boolean> = writable(true);
+// Runtime default OFF until the user has made the choice. The opt-out posture
+// (news on by default, the user opts out in onboarding) is carried by the
+// onboarding panel's default-on toggle and the saved preference, NOT by this
+// runtime default: the store stays off until the choice is saved, so no news
+// request fires before the user has seen the choice (a not-yet-onboarded
+// profile must not phone home before consent).
+export const newsOptIn: Writable<boolean> = writable(false);
 export const newsOptInSeen: Writable<boolean> = writable(false);
 export const newsCache: Writable<NewsCache | null> = writable(null);
 // Cursor for the unread-dot derivation: the highest article date the user
@@ -67,7 +69,7 @@ function isCache(value: unknown): value is NewsCache {
 
 export async function initNews(): Promise<void> {
 	const [optIn, seen, rawCache, lastViewed] = await Promise.all([
-		getPreference<boolean>(KEY_OPT_IN, true),
+		getPreference<boolean>(KEY_OPT_IN, false),
 		getPreference<boolean>(KEY_OPT_IN_SEEN, false),
 		getPreference<unknown>(KEY_CACHE, null),
 		getPreference<string | null>(KEY_LAST_VIEWED_AT, null),

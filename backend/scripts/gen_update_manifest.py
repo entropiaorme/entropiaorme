@@ -114,6 +114,12 @@ def main(argv: list[str] | None = None) -> int:
 
     notes = args.notes
     if args.notes_file is not None:
+        if not args.notes_file.is_file():
+            print(
+                f"gen-update-manifest: notes file not found: {args.notes_file}",
+                file=sys.stderr,
+            )
+            return 2
         notes = args.notes_file.read_text(encoding="utf-8")
 
     try:

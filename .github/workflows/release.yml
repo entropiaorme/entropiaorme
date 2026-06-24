@@ -160,7 +160,7 @@ jobs:
           # never carries sha256sum's binary-mode asterisk. The MSI is included
           # only when present (signed build); the `|| true` keeps a non-matching
           # glob from tripping `set -e`.
-          ( cd dist && for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi 2>/dev/null || true); do
+          ( cd dist && for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi entropiaorme-*-x64.msi.sig latest.json 2>/dev/null || true); do
               printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f" > "$f.sha256"
             done )
           ls -la dist/
@@ -182,7 +182,7 @@ jobs:
           set -euo pipefail
           # The MSI is included only on a signed build; `|| true` keeps a
           # non-matching glob from tripping `set -e`.
-          for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi SBOM.json 2>/dev/null || true); do
+          for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi entropiaorme-*-x64.msi.sig latest.json SBOM.json 2>/dev/null || true); do
             printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
           done > SHA256SUMS.txt
 

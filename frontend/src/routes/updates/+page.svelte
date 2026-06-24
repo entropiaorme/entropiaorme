@@ -142,7 +142,7 @@
 					</div>
 				</div>
 				<div class="actions">
-					<Button variant="secondary" onclick={checkForUpdate}>Try again</Button>
+					<Button variant="secondary" onclick={() => checkForUpdate()}>Try again</Button>
 				</div>
 			{:else if $updatePhase === 'up-to-date'}
 				<div class="status-head">
@@ -150,14 +150,14 @@
 					<p class="status-title">You're on the latest version.</p>
 				</div>
 				<div class="actions">
-					<Button variant="secondary" onclick={checkForUpdate}>Check again</Button>
+					<Button variant="secondary" onclick={() => checkForUpdate()}>Check again</Button>
 				</div>
 			{:else}
 				<div class="status-head">
 					<p class="status-title">Check whether a newer version is available.</p>
 				</div>
 				<div class="actions">
-					<Button variant="primary" onclick={checkForUpdate}>Check for updates</Button>
+					<Button variant="primary" onclick={() => checkForUpdate()}>Check for updates</Button>
 				</div>
 			{/if}
 		</div>

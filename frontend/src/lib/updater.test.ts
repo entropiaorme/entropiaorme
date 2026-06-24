@@ -19,7 +19,6 @@ import {
 	autoUpdateEnabled,
 	availableUpdate,
 	checkForUpdate,
-	DEFAULT_AUTO_UPDATE_ENABLED,
 	downloadUpdate,
 	initUpdater,
 	maybeCheckOnLaunch,
@@ -46,7 +45,7 @@ function withoutTauri(): void {
 const sampleUpdate: UpdateInfo = { version: '0.2.0', currentVersion: '0.1.0', notes: 'Fixes.' };
 
 beforeEach(() => {
-	autoUpdateEnabled.set(DEFAULT_AUTO_UPDATE_ENABLED);
+	autoUpdateEnabled.set(false);
 	updatePhase.set('idle');
 	availableUpdate.set(null);
 	updateToastDismissed.set(false);
@@ -65,16 +64,18 @@ afterEach(() => {
 });
 
 describe('initUpdater', () => {
-	it('loads auto-update as enabled (default-on) when the preference is unset', async () => {
-		// A fresh profile must default to auto-update ON: the opt-out posture.
+	it('loads auto-update OFF at runtime until chosen (the opt-out posture is panel-driven)', async () => {
+		// The runtime store stays OFF until the user has made the choice, so the
+		// launch check never fires before consent; the opt-out "on by default"
+		// lives in the onboarding panel and the saved preference.
 		getPreferenceMock.mockImplementation(
 			async (_key: string, defaultValue: unknown) => defaultValue,
 		);
 
 		await initUpdater();
 
-		expect(getPreferenceMock).toHaveBeenCalledWith(AUTO_UPDATE_PREFERENCE_KEY, true);
-		expect(get(autoUpdateEnabled)).toBe(true);
+		expect(getPreferenceMock).toHaveBeenCalledWith(AUTO_UPDATE_PREFERENCE_KEY, false);
+		expect(get(autoUpdateEnabled)).toBe(false);
 	});
 
 	it('honours a persisted opt-out', async () => {
@@ -173,6 +174,16 @@ describe('maybeCheckOnLaunch', () => {
 		await maybeCheckOnLaunch();
 
 		expect(invokeMock).not.toHaveBeenCalled();
+	});
+
+	it('stays silent on failure (no error phase) for the launch check', async () => {
+		autoUpdateEnabled.set(true);
+		invokeMock.mockRejectedValue('offline');
+
+		await maybeCheckOnLaunch();
+
+		// A failed launch check must not leave /updates in an error state.
+		expect(get(updatePhase)).toBe('idle');
 	});
 });
 

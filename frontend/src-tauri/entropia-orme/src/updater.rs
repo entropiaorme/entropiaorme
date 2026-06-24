@@ -226,23 +226,30 @@ pub async fn download_update(app: AppHandle) -> Result<UpdateInfo, String> {
 /// downloaded.
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
-    let pending = {
-        let state = app
-            .try_state::<PendingUpdate>()
-            .ok_or("updater state not ready")?;
-        let mut guard = state
-            .0
-            .lock()
-            .map_err(|_| "pending update lock poisoned".to_string())?;
-        guard
-            .take()
-            .ok_or_else(|| "no downloaded update to install".to_string())?
-    };
-    pending
-        .update
-        .install(&pending.bytes)
-        .map_err(|err| err.to_string())?;
-    app.restart()
+    let state = app
+        .try_state::<PendingUpdate>()
+        .ok_or("updater state not ready")?;
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "pending update lock poisoned".to_string())?;
+    let pending = guard
+        .take()
+        .ok_or_else(|| "no downloaded update to install".to_string())?;
+    match pending.update.install(&pending.bytes) {
+        // On Windows install runs the per-user MSI and exits the process before
+        // returning; on other platforms it returns control, so relaunch into the
+        // new version. The payload is consumed only on this success path.
+        Ok(()) => {
+            drop(guard);
+            app.restart()
+        }
+        // Put the downloaded payload back so a retry need not re-download it.
+        Err(err) => {
+            *guard = Some(pending);
+            Err(err.to_string())
+        }
+    }
 }
 
 /// The currently-selected update channel (`"stable"` or `"beta"`).

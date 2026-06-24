@@ -465,7 +465,7 @@
 			<!-- News & Updates -->
 			<div class="py-5 flex items-start justify-between gap-6">
 				<div>
-					<p class="text-sm text-text">News &amp; Updates</p>
+					<p class="text-sm text-text">News</p>
 					<p class="text-xs text-text-tertiary mt-0.5">
 						On by default. The app fetches a small list of articles and release notices from the
 						project website (<code>entropiaorme.com</code>). Download-only, sends none of your data,

@@ -102,7 +102,7 @@
 							<h2 class="step-title">Designed as a half-screen companion.</h2>
 						</header>
 						<p class="layout-body">
-							EntropiaOrme is optimised for the half of a second 16:9 monitor closest to your main display. Other sizes and single-monitor setups still work, and an overlay is available too.
+							EntropiaOrme's layout is intended to be displayed as a half-screen window.
 						</p>
 						<svg
 							class="layout-visual"

@@ -14,29 +14,21 @@
 <div class="block">
 	<header class="step-header">
 		<span class="eyebrow">Privacy &amp; networking</span>
-		<h2 class="step-title">Your data never leaves your machine.</h2>
+		<h2 class="step-title">EntropiaOrme works offline, and your data is never shared.</h2>
 	</header>
-	<p class="body">
-		EntropiaOrme keeps everything about your gameplay on your computer. Your chat logs, loot,
-		skills, and analytics are never uploaded, shared, or sent anywhere.
-	</p>
-	<p class="body">
-		The app reaches out to <code>entropiaorme.com</code> for two things only: project news and app
-		updates. Neither sends any of your data; they only fetch. Both are on by default, and you can turn
-		either off here or later in Settings.
-	</p>
+	<p class="body">The following are optional online features:</p>
 	<label class="toggle">
 		<input type="checkbox" bind:checked={news} />
 		<span class="toggle-copy">
-			<span class="toggle-title">News &amp; Updates</span>
-			<span class="toggle-sub">Pull project articles and release notices from entropiaorme.com.</span>
+			<span class="toggle-title">News</span>
+			<span class="toggle-sub">Project articles and announcements from entropiaorme.com.</span>
 		</span>
 	</label>
 	<label class="toggle">
 		<input type="checkbox" bind:checked={autoUpdate} />
 		<span class="toggle-copy">
 			<span class="toggle-title">Automatic updates</span>
-			<span class="toggle-sub">Check for new versions of EntropiaOrme and install them with your go-ahead.</span>
+			<span class="toggle-sub">Check for new updates and install them with your permission.</span>
 		</span>
 	</label>
 	<span class="footnote">Change either of these any time from Settings.</span>
@@ -73,15 +65,6 @@
 		line-height: 1.6;
 		color: var(--color-text-secondary);
 		max-width: 48ch;
-	}
-	.body :global(code) {
-		font-family: var(--font-mono, ui-monospace, 'Cascadia Code', monospace);
-		font-size: 0.85em;
-		padding: 0.05rem 0.3rem;
-		border-radius: var(--radius-sm, 4px);
-		background: color-mix(in oklab, var(--color-surface) 60%, transparent);
-		border: 1px solid color-mix(in oklab, var(--color-border) 60%, transparent);
-		color: var(--color-text);
 	}
 	.toggle {
 		display: flex;

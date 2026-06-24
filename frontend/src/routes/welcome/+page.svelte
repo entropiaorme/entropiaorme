@@ -7,14 +7,18 @@
 	import { CURRENT_TOS_VERSION, setAcceptedTosVersion } from '$lib/tos';
 	import { theme, setTheme, type Theme } from '$lib/theme';
 	import { markNewsOptInSeen, setNewsOptIn } from '$lib/news';
+	import { setAutoUpdateEnabled } from '$lib/updater';
 	import { refreshNews } from '$lib/newsFetch';
-	import NewsOptInStep from './NewsOptInStep.svelte';
+	import NetworkingStep from './NetworkingStep.svelte';
 	import TermsStep from './TermsStep.svelte';
 	import { externalLinks } from '$lib/utils/openExternal';
 
 	let step = $state(1);
 	let tosAccepted = $state(false);
-	let newsOptedIn = $state(false);
+	// Networking features default ON (opt-out posture): the user unchecks to
+	// opt out on the networking step, not in.
+	let newsOptedIn = $state(true);
+	let autoUpdateOptedIn = $state(true);
 	let exiting = $state(false);
 	const totalSteps = 6;
 
@@ -36,6 +40,7 @@
 		if (exiting) return;
 		await markNewsOptInSeen();
 		await setNewsOptIn(newsOptedIn);
+		await setAutoUpdateEnabled(autoUpdateOptedIn);
 		await setAcceptedTosVersion(CURRENT_TOS_VERSION);
 		await setOnboardingComplete(true);
 		if (newsOptedIn) {
@@ -264,7 +269,7 @@
 						</a>
 					</div>
 				{:else if step === 5}
-					<NewsOptInStep bind:optedIn={newsOptedIn} />
+					<NetworkingStep bind:news={newsOptedIn} bind:autoUpdate={autoUpdateOptedIn} />
 				{:else if step === 6}
 					<TermsStep bind:accepted={tosAccepted} />
 				{/if}

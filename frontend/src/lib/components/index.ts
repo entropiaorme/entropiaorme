@@ -13,3 +13,4 @@ export { default as StatDisplay } from './StatDisplay.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as Titlebar } from './Titlebar.svelte';
 export { default as Toggle } from './Toggle.svelte';
+export { default as UpdateToast } from './UpdateToast.svelte';

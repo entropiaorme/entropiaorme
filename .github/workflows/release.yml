@@ -134,10 +134,33 @@ jobs:
             > "$stage/README.txt"
           ( cd portable && 7z a -tzip "../dist/entropiaorme-${version}-x64-portable.zip" "entropiaorme-${version}-x64" >/dev/null )
 
+          # Updater artefacts, only when the build signed the MSI: the bare
+          # per-user MSI is what the updater downloads and runs via msiexec for an
+          # in-place upgrade (not the Burn setup.exe used for first install), plus
+          # its detached .sig and the generated latest.json manifest pointing at
+          # the MSI's Release asset URL. Absent on an unsigned build (no key), so
+          # an unsigned release ships only the installer + portable ZIP.
+          msi="$release/bundle/msi/EntropiaOrme_${version}_x64_en-US.msi"
+          if [ -f "$msi.sig" ]; then
+            cp "$msi" "dist/entropiaorme-${version}-x64.msi"
+            cp "$msi.sig" "dist/entropiaorme-${version}-x64.msi.sig"
+            python backend/scripts/gen_update_manifest.py \
+              --version "$version" \
+              --signature-file "dist/entropiaorme-${version}-x64.msi.sig" \
+              --url "https://github.com/entropiaorme/entropiaorme/releases/download/v${version}/entropiaorme-${version}-x64.msi" \
+              --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --output "dist/latest.json"
+            echo "updater artefacts staged: signed MSI + .sig + latest.json"
+          else
+            echo "no updater signature present; shipping installer + portable only (unsigned build)"
+          fi
+
           # Per-artefact .sha256 sidecars: single-line "<hash>  <name>" (two
           # spaces, sha256sum -c compatible), formatted explicitly so the output
-          # never carries sha256sum's binary-mode asterisk.
-          ( cd dist && for f in entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip; do
+          # never carries sha256sum's binary-mode asterisk. The MSI is included
+          # only when present (signed build); the `|| true` keeps a non-matching
+          # glob from tripping `set -e`.
+          ( cd dist && for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi 2>/dev/null || true); do
               printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f" > "$f.sha256"
             done )
           ls -la dist/
@@ -157,7 +180,9 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          for f in entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip SBOM.json; do
+          # The MSI is included only on a signed build; `|| true` keeps a
+          # non-matching glob from tripping `set -e`.
+          for f in $(ls entropiaorme-*-x64-setup.exe entropiaorme-*-x64-portable.zip entropiaorme-*-x64.msi SBOM.json 2>/dev/null || true); do
             printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$f"
           done > SHA256SUMS.txt
 

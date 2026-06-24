@@ -124,12 +124,15 @@ describe('initNews', () => {
 		expect(setPreferenceMock).not.toHaveBeenCalled();
 	});
 
-	it('loads opt-in / seen / lastViewed defaults when preferences are unset', async () => {
+	it('loads opt-in default-ON (opt-out posture) and the other defaults when preferences are unset', async () => {
 		stubPreferences({});
 
 		await initNews();
 
-		expect(get(newsOptIn)).toBe(false);
+		// A fresh profile defaults to news ON: the user opts out in onboarding,
+		// not in. initNews reads the opt-in with a `true` default.
+		expect(getPreferenceMock).toHaveBeenCalledWith(NEWS_PREFERENCE_KEYS.optIn, true);
+		expect(get(newsOptIn)).toBe(true);
 		expect(get(newsOptInSeen)).toBe(false);
 		expect(get(newsLastViewedAt)).toBeNull();
 		expect(get(newsCache)).toBeNull();

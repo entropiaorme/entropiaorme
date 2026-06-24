@@ -42,7 +42,11 @@ const KEY_OPT_IN_SEEN = 'news_opt_in_seen';
 const KEY_CACHE = 'news_cache';
 const KEY_LAST_VIEWED_AT = 'news_last_viewed_at';
 
-export const newsOptIn: Writable<boolean> = writable(false);
+// Default ON (opt-out): the networking posture is that the news + update
+// fetches are enabled by default and the user opts out in onboarding. The
+// fetches send no user data, so the privacy promise ("your data never leaves
+// your machine") holds; what is on by default is a plain outbound GET.
+export const newsOptIn: Writable<boolean> = writable(true);
 export const newsOptInSeen: Writable<boolean> = writable(false);
 export const newsCache: Writable<NewsCache | null> = writable(null);
 // Cursor for the unread-dot derivation: the highest article date the user
@@ -63,7 +67,7 @@ function isCache(value: unknown): value is NewsCache {
 
 export async function initNews(): Promise<void> {
 	const [optIn, seen, rawCache, lastViewed] = await Promise.all([
-		getPreference<boolean>(KEY_OPT_IN, false),
+		getPreference<boolean>(KEY_OPT_IN, true),
 		getPreference<boolean>(KEY_OPT_IN_SEEN, false),
 		getPreference<unknown>(KEY_CACHE, null),
 		getPreference<string | null>(KEY_LAST_VIEWED_AT, null),

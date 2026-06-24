@@ -4,17 +4,22 @@
 	import { quintOut } from 'svelte/easing';
 	import Button from '$lib/components/Button.svelte';
 	import { markNewsOptInSeen, setNewsOptIn } from '$lib/news';
+	import { setAutoUpdateEnabled } from '$lib/updater';
 	import { refreshNews } from '$lib/newsFetch';
-	import NewsOptInStep from '../NewsOptInStep.svelte';
+	import NetworkingStep from '../NetworkingStep.svelte';
 
-	let optedIn = $state(false);
+	// Re-prompt for users who onboarded before these features existed; both
+	// default ON (opt-out), matching the first-run networking step.
+	let newsOptedIn = $state(true);
+	let autoUpdateOptedIn = $state(true);
 	let exiting = $state(false);
 
 	async function complete() {
 		if (exiting) return;
 		await markNewsOptInSeen();
-		await setNewsOptIn(optedIn);
-		if (optedIn) {
+		await setNewsOptIn(newsOptedIn);
+		await setAutoUpdateEnabled(autoUpdateOptedIn);
+		if (newsOptedIn) {
 			void refreshNews();
 		}
 		if (typeof sessionStorage !== 'undefined') {
@@ -48,8 +53,8 @@
 			in:fly={{ y: 14, duration: 520, easing: quintOut, delay: 110 }}
 			out:fade={{ duration: 160 }}
 		>
-			<div class="reprompt-eyebrow eyebrow">New optional feature</div>
-			<NewsOptInStep bind:optedIn />
+			<div class="reprompt-eyebrow eyebrow">News &amp; updates</div>
+			<NetworkingStep bind:news={newsOptedIn} bind:autoUpdate={autoUpdateOptedIn} />
 		</section>
 	</main>
 

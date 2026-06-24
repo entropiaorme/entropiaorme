@@ -59,7 +59,7 @@
     },
     "updater": {
       "endpoints": ["https://entropiaorme.com/updates/stable/latest.json"],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDMjdENUVCQkYzOUZGMEEKUldRSy96bS82OVVuUEVCMzRyMmlOeWxSbllpUjMxK3UyejcwSjBEL3BsaU5pZjExUi85V0tVZUUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3QTkyRDE1NzVEQTM4ODMKUldTRE9OcDFGUzJwbDlUekhUZlVZRVNiQmdZVkltMFgxbXJHc2ZCYjJBcTFiaUd2QmVESVBkeHgK",
       "windows": {
         "installMode": "passive"
       }

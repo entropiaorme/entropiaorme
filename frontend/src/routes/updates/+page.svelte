@@ -61,7 +61,7 @@
 		<div class="panel-row">
 			<div class="meta">
 				<span class="meta-label">Installed version</span>
-				<span class="meta-value">{currentVersion || '—'}</span>
+				<span class="meta-value">{currentVersion || '-'}</span>
 			</div>
 			<div class="meta">
 				<span class="meta-label">Channel</span>

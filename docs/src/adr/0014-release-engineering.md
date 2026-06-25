@@ -1,17 +1,17 @@
 # ADR-0014: Bespoke installer, signed auto-update, and a provenance-bearing release pipeline
 
 - Status: Accepted
-- Context: the decision is locked; the bespoke WiX Burn installer, the client-side updater plumbing, the in-app update experience (apply flow + UI + opt-out networking posture), the MSI signing and `latest.json` generator, the production update-signing key, the tag-to-release pipeline, and the repo-wide action pinning have landed, while the cross-repo manifest hosting and Authenticode code-signing activation remain
+- Context: the bespoke WiX Burn installer, the client-side updater plumbing, the in-app update experience (apply flow + UI + opt-out networking posture), the MSI signing and `latest.json` generator, the production update-signing key, the tag-to-release pipeline, and the repo-wide action pinning have landed, while the cross-repo manifest hosting and Authenticode code-signing activation remain
 
 ## Context and problem statement
 
-EntropiaOrme needed an industry-grade way to ship. The release was a manual local build that produced an unsigned NSIS installer and a portable ZIP, with no automatic updates and no supply-chain artefacts. Three gaps followed from that. The installer was the stock `tauri-bundler` NSIS chrome, which does not read as a curated product. Updates were notify-only: a user downloaded and ran each new installer by hand. And the distribution layer carried no software bill of materials, no build-provenance attestation, and no commit-pinned CI actions, so nothing attested how a release was built.
+EntropiaOrme's release path needed to mature from a manual local build into a repeatable, signed pipeline. The release was a manual local build that produced an unsigned NSIS installer and a portable ZIP, with no automatic updates and no supply-chain artefacts. Three gaps followed from that. The installer was the stock `tauri-bundler` NSIS chrome, which does not read as a curated product. Updates were notify-only: a user downloaded and ran each new installer by hand. And the distribution layer carried no software bill of materials, no build-provenance attestation, and no commit-pinned CI actions, so nothing attested how a release was built.
 
 Two constraints shaped the response. The application is Windows-only because Entropia Universe is, so the effort leans into Windows-native distribution rather than a portability story. And Authenticode code signing is gated on an external certificate that no code change can advance, so every artefact has to remain installable through the unsigned window (an NSIS or WiX installer runs after a SmartScreen click-through; an MSIX, by contrast, is effectively uninstallable unsigned).
 
 ## Decision
 
-The distribution layer graduates to a maximalist, signing-ready shape in three parts.
+The distribution layer graduates to a fuller, signing-ready shape in three parts.
 
 **Installer.** A hand-authored WiX Burn bootstrapper is the centrepiece: a branded, themed install experience rather than stock chrome. The portable ZIP stays for the no-install audience. MSIX is planned as a secondary, modern track (clean uninstall, OS-channel updates) that becomes the primary installer once a certificate exists. NSIS, the stock starting point, is retired now that the Burn installer supersedes it. The curated experience deliberately rides WiX Burn rather than MSIX, because MSIX chrome is standardised (not bespoke) and is uninstallable while unsigned, whereas the Burn vehicle is both the bespoke one and the unsigned-installable one. Product onboarding stays in the application's first-run experience, not the installer; conflating the two is the stock-installer mistake.
 

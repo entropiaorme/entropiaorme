@@ -31,7 +31,7 @@
 	const MAX_VISIBLE = 80;
 	const FALLBACK_WIDTH = 600; // until the bind:clientWidth lands
 
-	// Dot colour bands (per spec). Multipliers below 1× use the same orange
+	// Dot colour bands. Multipliers below 1× use the same orange
 	// the dashboard's Net stat uses for negative values (color-negative).
 	function dotColour(m: number): string {
 		if (m < 1) return 'var(--color-negative)';

@@ -32,7 +32,7 @@ struct Gate {
     source_running: AtomicBool,
     // One-shot per start episode: whether the "first keystroke delivered"
     // breadcrumb has been logged. Lets the rolling logfile show whether the
-    // OS hook actually delivered after attaching (the #1a watch signal).
+    // OS hook actually delivered after attaching.
     first_delivery_logged: AtomicBool,
 }
 
@@ -190,7 +190,7 @@ impl HotbarListener {
         let attached = source.start();
         self.gate.source_running.store(attached, Ordering::SeqCst);
         // Reset the delivery breadcrumb for this episode and record the
-        // attach outcome so a non-attaching hook (the #1a symptom) is
+        // attach outcome so a non-attaching hook is
         // visible in the rolling logfile of the packaged build.
         self.gate
             .first_delivery_logged
@@ -214,7 +214,7 @@ impl HotbarListener {
             return;
         }
         // One-shot per start: confirm the hook is actually delivering
-        // keystrokes (the #1a watch breadcrumb). Non-content: no key value.
+        // keystrokes. Non-content: no key value.
         if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
             tracing::info!(
                 target: "eo::input",

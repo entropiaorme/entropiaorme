@@ -12,11 +12,6 @@ import type { NewsEntry, SlotId } from './news';
  * Render order in the strip follows `order`; rendering itself skips
  * vacant slots so the grid collapses to N columns where N = count of
  * populated slots (0/1/2/3 all render correctly without empty cells).
- *
- * Editorial policy (voice per slot, major-launch two-piece pattern) is
- * canonical in entropia-orme-site/AUTHORING.md "Editorial role per pin
- * slot" and "Major launches: the two-piece pattern". This file is the
- * code-side wiring; AUTHORING.md is the editorial source of truth.
  */
 export type SlotDefaults = {
 	label: string;

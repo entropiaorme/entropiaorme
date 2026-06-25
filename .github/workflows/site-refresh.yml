@@ -30,5 +30,6 @@ jobs:
             exit 0
           fi
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --connect-timeout 10 --max-time 60 \
             --retry 3 --retry-connrefused -X POST "$DEPLOY_HOOK_URL"
           echo "Site rebuild triggered."

@@ -9,18 +9,12 @@
 
 ## Why a separate dev CSP
 
-The base `tauri.conf.json` ships a strict Content Security Policy appropriate for the production webview. The dev overlay broadens `connect-src` and `img-src` beyond the base policy:
+The base `tauri.conf.json` ships a strict Content Security Policy appropriate for the production webview. Dev and release both talk to the in-process native backend over Tauri IPC (never to a localhost port), so the dev overlay broadens `connect-src` and `img-src` only for what serving the frontend from a live Vite dev server actually needs:
 
-- `http://127.0.0.1:*` and `http://localhost:*` for direct access to the dev server and backend.
-- `ws://127.0.0.1:*` and `ws://localhost:*` for Vite's HMR websocket.
-- `https://*.localhost` and `wss://*.localhost` for access through the local reverse proxy over HTTPS.
+- `ws://127.0.0.1:*` and `ws://localhost:*` for Vite's HMR websocket (plain-localhost dev URL).
+- `https://*.localhost` and `wss://*.localhost` for the dev URL and HMR websocket when served through the local Caddy reverse proxy over HTTPS.
 
-So that:
-
-- The dev server (Vite) and the dev backend (FastAPI sidecar) can be reached from the webview during local development, whether directly on a port or through the reverse proxy over HTTPS.
-- Vite's HMR websocket can connect.
-
-The release build retains the strict CSP because the production webview talks only to the in-process native backend over Tauri IPC, never to arbitrary localhost ports.
+The release build retains the strict CSP because the production webview loads its own bundled assets and reaches the backend only over IPC: there is no dev server and no HMR websocket.
 
 ## When to edit
 

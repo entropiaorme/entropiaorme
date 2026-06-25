@@ -1577,59 +1577,88 @@ impl HuntTracker {
     /// Handle hotbar-driven weapon tool change: merges any 'Unknown'
     /// tool stats into the real tool when first detected.
     fn on_tool_changed(&self, data: &Value) {
-        let mut state = self.lock_state();
-        if (self.providers.weapon_attribution_trifecta)() {
-            return;
-        }
-        let Some(tool_name) = data
-            .get("tool_name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string)
-        else {
-            return;
-        };
-        state.active_hotbar_tool_name = Some(tool_name.clone());
-        if state.accumulator.is_none() {
-            return;
-        }
+        let nudge_session_id = {
+            let mut state = self.lock_state();
+            if (self.providers.weapon_attribution_trifecta)() {
+                return;
+            }
+            let Some(tool_name) = data
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+            else {
+                return;
+            };
+            let tool_changed =
+                state.active_hotbar_tool_name.as_deref() != Some(tool_name.as_str());
+            state.active_hotbar_tool_name = Some(tool_name.clone());
 
-        let current_cost = self.current_cost_for_tool(&mut state, &tool_name, 0.0);
+            // The "Unknown"-stats merge only applies once a session
+            // accumulator exists; the nudge below is independent of it.
+            if state.accumulator.is_some() {
+                let current_cost = self.current_cost_for_tool(&mut state, &tool_name, 0.0);
 
-        // Merge "Unknown" stats into the real tool on first
-        // identification.
-        let unknown = {
-            let accumulator = state.accumulator.as_mut().expect("checked above");
-            accumulator
-                .tool_stats
-                .iter()
-                .position(|(key, _)| key == "Unknown")
-                .map(|index| accumulator.tool_stats.remove(index).1)
-        };
-        if let Some(unknown) = unknown {
-            let real: &mut ToolStats = if current_cost > 0.0 {
-                Self::tool_stats_for_phase(&mut state, &tool_name, current_cost)
-            } else {
-                let accumulator = state.accumulator.as_mut().expect("checked above");
-                if !accumulator
-                    .tool_stats
-                    .iter()
-                    .any(|(key, _)| key == &tool_name)
-                {
+                // Merge "Unknown" stats into the real tool on first
+                // identification.
+                let unknown = {
+                    let accumulator = state.accumulator.as_mut().expect("checked above");
                     accumulator
                         .tool_stats
-                        .push((tool_name.clone(), ToolStats::new(&tool_name, 0.0)));
+                        .iter()
+                        .position(|(key, _)| key == "Unknown")
+                        .map(|index| accumulator.tool_stats.remove(index).1)
+                };
+                if let Some(unknown) = unknown {
+                    let real: &mut ToolStats = if current_cost > 0.0 {
+                        Self::tool_stats_for_phase(&mut state, &tool_name, current_cost)
+                    } else {
+                        let accumulator = state.accumulator.as_mut().expect("checked above");
+                        if !accumulator
+                            .tool_stats
+                            .iter()
+                            .any(|(key, _)| key == &tool_name)
+                        {
+                            accumulator
+                                .tool_stats
+                                .push((tool_name.clone(), ToolStats::new(&tool_name, 0.0)));
+                        }
+                        let index = accumulator
+                            .tool_stats
+                            .iter()
+                            .position(|(key, _)| key == &tool_name)
+                            .expect("just ensured");
+                        &mut accumulator.tool_stats[index].1
+                    };
+                    real.shots_fired += unknown.shots_fired;
+                    real.damage_dealt += unknown.damage_dealt;
+                    real.critical_hits += unknown.critical_hits;
                 }
-                let index = accumulator
-                    .tool_stats
-                    .iter()
-                    .position(|(key, _)| key == &tool_name)
-                    .expect("just ensured");
-                &mut accumulator.tool_stats[index].1
-            };
-            real.shots_fired += unknown.shots_fired;
-            real.damage_dealt += unknown.damage_dealt;
-            real.critical_hits += unknown.critical_hits;
+            }
+
+            // A hotbar weapon-switch changes the overlay's active-weapon
+            // readout. The coalesced session-update tick only flushes on
+            // chat-log activity (the first attack), so a switch with no
+            // combat would leave the overlay stale; emit a re-hydrate
+            // nudge directly when the weapon actually changed during an
+            // active session. The active tool is already in the snapshot,
+            // so no new event or payload is needed. ActiveToolChanged
+            // carries no instant, so the nudge is stamped from the
+            // injected clock (matching the tick handler's fallback).
+            if tool_changed {
+                state.session.as_ref().map(|session| session.id.clone())
+            } else {
+                None
+            }
+        };
+
+        if let Some(session_id) = nudge_session_id {
+            self.emit_session_event(
+                TrackingReason::Updated,
+                TrackingStatus::Active,
+                naive_to_epoch(self.clock.now()),
+                Some(&session_id),
+            );
         }
     }
 
@@ -1651,13 +1680,32 @@ impl HuntTracker {
             .and_then(Value::as_f64)
             .unwrap_or(2.5);
 
-        let mut state = self.lock_state();
-        state.active_heal_tool_name = name;
-        state.heal_cost_per_use_ped = cost;
-        state.heal_reload_seconds = reload_seconds;
-        state.heal_amount_min = None;
-        state.heal_amount_max = None;
-        state.heal_warning_emitted = false;
+        let nudge_session_id = {
+            let mut state = self.lock_state();
+            let heal_tool_changed = state.active_heal_tool_name != name;
+            state.active_heal_tool_name = name;
+            state.heal_cost_per_use_ped = cost;
+            state.heal_reload_seconds = reload_seconds;
+            state.heal_amount_min = None;
+            state.heal_amount_max = None;
+            state.heal_warning_emitted = false;
+            // Equipping a different heal tool changes the overlay readout;
+            // emit a direct re-hydrate nudge (mirrors the weapon path).
+            if heal_tool_changed {
+                state.session.as_ref().map(|session| session.id.clone())
+            } else {
+                None
+            }
+        };
+
+        if let Some(session_id) = nudge_session_id {
+            self.emit_session_event(
+                TrackingReason::Updated,
+                TrackingStatus::Active,
+                naive_to_epoch(self.clock.now()),
+                Some(&session_id),
+            );
+        }
     }
 
     /// Handle a global/HoF event from chat.log: tags the most
@@ -2393,15 +2441,20 @@ mod tests {
         );
         assert_eq!(rig.scalar_i64("SELECT COUNT(*) FROM kills", &[]), 1);
 
-        // The lifecycle's domain events: started then stopped.
+        // The lifecycle's domain events: started, the hotbar weapon-switch
+        // re-hydrate nudge (emitted directly, stamped at the switch's
+        // instant), then stopped.
         let updated = updated_events(&captured);
-        assert_eq!(updated.len(), 1 + 1);
+        assert_eq!(updated.len(), 3);
         assert_eq!(updated[0]["payload"]["reason"], "started");
         assert_eq!(updated[0]["payload"]["status"], "active");
         assert_eq!(updated[0]["occurred_at"], to_iso_utc(start_ts));
-        assert_eq!(updated[1]["payload"]["reason"], "stopped");
-        assert_eq!(updated[1]["payload"]["status"], "idle");
-        assert_eq!(updated[1]["occurred_at"], to_iso_utc(end_ts));
+        assert_eq!(updated[1]["payload"]["reason"], "updated");
+        assert_eq!(updated[1]["payload"]["status"], "active");
+        assert_eq!(updated[1]["occurred_at"], to_iso_utc(start_ts));
+        assert_eq!(updated[2]["payload"]["reason"], "stopped");
+        assert_eq!(updated[2]["payload"]["status"], "idle");
+        assert_eq!(updated[2]["occurred_at"], to_iso_utc(end_ts));
     }
 
     #[test]
@@ -3526,6 +3579,46 @@ mod tests {
             .publish(Topic::TickFlushed, &json!({"timestamp": "1735680000.5"}));
         let events = updated_events(&captured);
         assert_eq!(events[4]["occurred_at"], "2024-12-31T21:20:00.500000+00:00");
+    }
+
+    #[test]
+    fn tool_change_emits_a_direct_overlay_nudge() {
+        let rig = rig();
+        let tracker = rig.tracker(Providers::default());
+        let captured = rig.capture();
+        let _session = tracker.start_session().unwrap();
+        assert_eq!(updated_events(&captured).len(), 1, "only the start event");
+
+        // A hotbar weapon-switch emits one re-hydrate nudge immediately,
+        // WITHOUT waiting for a chat-log tick: the coalesced tick only
+        // flushes on combat, so the overlay must be nudged directly or it
+        // stays stale until the first attack.
+        rig.bus
+            .publish(Topic::ActiveToolChanged, &json!({"tool_name": "Rifle"}));
+        let events = updated_events(&captured);
+        assert_eq!(events.len(), 2, "the weapon-switch nudged immediately");
+        assert_eq!(events[1]["payload"]["reason"], "updated");
+        assert_eq!(events[1]["payload"]["status"], "active");
+
+        // Re-equipping the same weapon changes nothing: no nudge.
+        rig.bus
+            .publish(Topic::ActiveToolChanged, &json!({"tool_name": "Rifle"}));
+        assert_eq!(
+            updated_events(&captured).len(),
+            2,
+            "an unchanged tool re-equip emits nothing"
+        );
+
+        // A heal-tool equip nudges on the same direct path.
+        rig.bus.publish(
+            Topic::ActiveHealToolChanged,
+            &json!({"tool_name": "FAP-5", "cost_per_use_ped": 0.5, "reload_seconds": 2.5}),
+        );
+        assert_eq!(
+            updated_events(&captured).len(),
+            3,
+            "the heal-tool equip nudged immediately"
+        );
     }
 
     #[test]

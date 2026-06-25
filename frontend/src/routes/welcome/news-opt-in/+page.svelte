@@ -2,19 +2,37 @@
 	import { goto } from '$app/navigation';
 	import { fly, fade } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
+	import { onMount } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
-	import { markNewsOptInSeen, setNewsOptIn } from '$lib/news';
+	import { getPreference } from '$lib/preferences';
+	import { markNewsOptInSeen, NEWS_PREFERENCE_KEYS, setNewsOptIn } from '$lib/news';
+	import { AUTO_UPDATE_PREFERENCE_KEY, setAutoUpdateEnabled } from '$lib/updater';
 	import { refreshNews } from '$lib/newsFetch';
-	import NewsOptInStep from '../NewsOptInStep.svelte';
+	import NetworkingStep from '../NetworkingStep.svelte';
 
-	let optedIn = $state(false);
+	// Re-prompt for users who onboarded before these features existed. Default ON
+	// (opt-out, matching the first-run step) only when a preference is genuinely
+	// unset; hydrate any saved choice first so re-opening this page never flips an
+	// existing opt-out back on.
+	let newsOptedIn = $state(true);
+	let autoUpdateOptedIn = $state(true);
+
+	onMount(async () => {
+		const [savedNews, savedAuto] = await Promise.all([
+			getPreference<boolean | null>(NEWS_PREFERENCE_KEYS.optIn, null),
+			getPreference<boolean | null>(AUTO_UPDATE_PREFERENCE_KEY, null),
+		]);
+		newsOptedIn = savedNews ?? true;
+		autoUpdateOptedIn = savedAuto ?? true;
+	});
 	let exiting = $state(false);
 
 	async function complete() {
 		if (exiting) return;
 		await markNewsOptInSeen();
-		await setNewsOptIn(optedIn);
-		if (optedIn) {
+		await setNewsOptIn(newsOptedIn);
+		await setAutoUpdateEnabled(autoUpdateOptedIn);
+		if (newsOptedIn) {
 			void refreshNews();
 		}
 		if (typeof sessionStorage !== 'undefined') {
@@ -48,8 +66,8 @@
 			in:fly={{ y: 14, duration: 520, easing: quintOut, delay: 110 }}
 			out:fade={{ duration: 160 }}
 		>
-			<div class="reprompt-eyebrow eyebrow">New optional feature</div>
-			<NewsOptInStep bind:optedIn />
+			<div class="reprompt-eyebrow eyebrow">News &amp; updates</div>
+			<NetworkingStep bind:news={newsOptedIn} bind:autoUpdate={autoUpdateOptedIn} />
 		</section>
 	</main>
 

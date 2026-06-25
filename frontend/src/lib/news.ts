@@ -42,6 +42,12 @@ const KEY_OPT_IN_SEEN = 'news_opt_in_seen';
 const KEY_CACHE = 'news_cache';
 const KEY_LAST_VIEWED_AT = 'news_last_viewed_at';
 
+// Runtime default OFF until the user has made the choice. The opt-out posture
+// (news on by default, the user opts out in onboarding) is carried by the
+// onboarding panel's default-on toggle and the saved preference, NOT by this
+// runtime default: the store stays off until the choice is saved, so no news
+// request fires before the user has seen the choice (a not-yet-onboarded
+// profile must not phone home before consent).
 export const newsOptIn: Writable<boolean> = writable(false);
 export const newsOptInSeen: Writable<boolean> = writable(false);
 export const newsCache: Writable<NewsCache | null> = writable(null);

@@ -3,6 +3,8 @@
 	import { Button, Divider, Toggle, Input, SegmentedControl } from '$lib/components';
 	import { theme, setTheme, type Theme } from '$lib/theme';
 	import { newsOptIn, setNewsOptIn } from '$lib/news';
+	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater';
+	import { goto } from '$app/navigation';
 	import { getSettings, updateSettings } from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
@@ -463,17 +465,37 @@
 			<!-- News & Updates -->
 			<div class="py-5 flex items-start justify-between gap-6">
 				<div>
-					<p class="text-sm text-text">News &amp; Updates</p>
+					<p class="text-sm text-text">News</p>
 					<p class="text-xs text-text-tertiary mt-0.5">
-						Off by default. When enabled, the app fetches a small list of articles and release
-						notices from the project website (<code>entropiaorme.com</code>). Download-only. No
-						background polling, no telemetry.
+						On by default. The app fetches a small list of articles and release notices from the
+						project website (<code>entropiaorme.com</code>). Download-only, sends none of your data,
+						no background polling, no telemetry. Turn it off to make no news requests at all.
 					</p>
 				</div>
 				<Toggle
 					checked={$newsOptIn}
 					onchange={setNewsOptIn}
-					label="Enable News &amp; Updates"
+					label="Enable News"
+				/>
+			</div>
+
+			<Divider />
+
+			<!-- Automatic updates -->
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Automatic updates</p>
+					<p class="text-xs text-text-tertiary mt-0.5">
+						On by default. On launch the app checks <code>entropiaorme.com</code> for a newer
+						version and offers to install it; updates are signed and verified, and you confirm every
+						install. The check sends none of your data.
+						<button class="linklet" type="button" onclick={() => goto('/updates')}>Open updates</button>
+					</p>
+				</div>
+				<Toggle
+					checked={$autoUpdateEnabled}
+					onchange={setAutoUpdateEnabled}
+					label="Enable automatic updates"
 				/>
 			</div>
 		</div>

@@ -202,6 +202,8 @@ pub fn run() {
             api_request,
             capture_png,
             updater::check_for_update,
+            updater::download_update,
+            updater::install_update,
             updater::get_update_channel,
             updater::set_update_channel
         ])
@@ -209,6 +211,10 @@ pub fn run() {
             // `app` is unused on a non-Windows debug build (the runtime icon
             // install is Windows-only); keep the binding alive there.
             let _ = &app;
+            // Hold the downloaded-but-not-yet-installed update between the
+            // updater's download and install commands (the deferred-install
+            // split). Registered before any command can run.
+            app.manage(updater::PendingUpdate::default());
             #[cfg(windows)]
             install_runtime_window_icons(app.handle());
             // The single pure-Rust binary: the frontend reaches the backend
@@ -239,29 +245,38 @@ pub fn run() {
 
     app.run(|app, event| {
         if let RunEvent::Exit = event {
-            #[cfg(windows)]
-            destroy_runtime_window_icons(app);
-
-            // Stop the producer spine: end any open session so its stop
-            // events publish, then stop the chat-log tail thread. The
-            // substrate's compose task has no shutdown signal, so this is
-            // where the producers wind down.
-            if let Some(state) = app.try_state::<Producers>() {
-                if let Ok(mut guard) = state.0.lock() {
-                    if let Some(producers) = guard.take() {
-                        producers.stop();
-                    }
-                }
-            }
-
-            // Tear down the scan input listener and reset the scan: the
-            // spacebar listener detaches its share of the shared OS hook.
-            if let Some(state) = app.try_state::<ScanInput>() {
-                state.spacebar.stop();
-                state.skill_scan.shutdown();
-            }
+            run_exit_teardown(app);
         }
     });
+}
+
+/// Wind the app's live faculties down deterministically before the process
+/// ends. Driven from two paths: the Tauri `RunEvent::Exit` seam (a normal
+/// quit), and the updater's `on_before_exit` hook (an updater install calls
+/// `std::process::exit`, which bypasses the event loop, so that path must run
+/// this itself). Idempotent: the producer handle is taken out under its lock,
+/// so a second call is a no-op.
+pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
+    #[cfg(windows)]
+    destroy_runtime_window_icons(app);
+
+    // Stop the producer spine: end any open session so its stop events
+    // publish, then stop the chat-log tail thread. The substrate's compose
+    // task has no shutdown signal, so this is where the producers wind down.
+    if let Some(state) = app.try_state::<Producers>() {
+        if let Ok(mut guard) = state.0.lock() {
+            if let Some(producers) = guard.take() {
+                producers.stop();
+            }
+        }
+    }
+
+    // Tear down the scan input listener and reset the scan: the spacebar
+    // listener detaches its share of the shared OS hook.
+    if let Some(state) = app.try_state::<ScanInput>() {
+        state.spacebar.stop();
+        state.skill_scan.shutdown();
+    }
 }
 
 #[cfg(windows)]

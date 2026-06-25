@@ -46,7 +46,7 @@ pre-commit install   # local hooks mirroring the CI gates (see TESTING.md)
 just dev
 ```
 
-Opens two Windows Terminal tabs: a Python backend and the Tauri dev shell. Release builds embed the backend in the shell process and run it in-process; the standalone Python backend is a development affordance and is not part of a shipped build.
+`just dev` builds the frontend with hot reload and launches the Tauri dev shell. The backend is a native Rust service composed into the shell and served in-process, exactly as in a release build; there is no backend HTTP server to run separately. Python is the test and equivalence-oracle runtime only (see Prerequisites) and is part of no shipped build.
 
 Run `just --list` to see other recipes (`just check` for frontend type-check + build, `just test-backend` for the pytest suite).
 
@@ -66,7 +66,7 @@ Beyond the core `just dev` flow, two optional capabilities are available: stable
 
 - [`caddy`](https://caddyserver.com/): reverse proxy fronting the dev stack on a stable `https://entropiaorme.localhost` hostname instead of a port number. Run `caddy trust` once after install (elevated on Windows, `sudo` on macOS/Linux) to install Caddy's local CA root into the OS trust store. Start via `just proxy-up`. (Windows: `winget install CaddyServer.Caddy`.)
 - [`coredns`](https://coredns.io/) (pairs with `caddy`): local DNS resolver answering `*.localhost` → `127.0.0.1`. CoreDNS only answers queries that reach it, and Windows does not route `.localhost` lookups to a configured resolver by default, so the hostname path also needs a one-time Name Resolution Policy rule (below) to direct the `.localhost` namespace at CoreDNS. Start via `just dns-up`. (Windows: `scoop install coredns`.)
-- [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`python -m backend.main`, `pytest`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
+- [`direnv`](https://direnv.net/): activates env vars from `.env.local` on `cd`-in so ad-hoc shell commands (`pytest`, `just test-equivalence`, `npm run ...`) honour the local env. (Windows: `scoop install direnv`; run `direnv allow .` once per checkout to whitelist the `.envrc`.)
 
 Once per machine, route the `.localhost` namespace to CoreDNS with a Name Resolution Policy Table (NRPT) rule (elevated PowerShell). This is namespace-scoped: only `.localhost` names resolve through CoreDNS, so all other resolution stays on your normal adapter resolvers.
 

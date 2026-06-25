@@ -35,4 +35,4 @@ This record supersedes the earlier conservative posture (a single NSIS target, n
 - `frontend/src-tauri/entropia-orme/tauri.conf.json`
 - `frontend/src-tauri/entropia-orme/capabilities/default.json`
 - `frontend/src/lib/updater.ts`, `frontend/src/lib/components/UpdateToast.svelte`, `frontend/src/routes/updates/+page.svelte`, `frontend/src/routes/welcome/NetworkingStep.svelte`
-- `backend/scripts/bump_version.py`, `backend/scripts/gen_update_manifest.py`
+- `backend/scripts/bump_version.py`

@@ -144,12 +144,18 @@ jobs:
           if [ -f "$msi.sig" ]; then
             cp "$msi" "dist/entropiaorme-${version}-x64.msi"
             cp "$msi.sig" "dist/entropiaorme-${version}-x64.msi.sig"
-            python backend/scripts/gen_update_manifest.py \
-              --version "$version" \
-              --signature-file "dist/entropiaorme-${version}-x64.msi.sig" \
-              --url "https://github.com/entropiaorme/entropiaorme/releases/download/v${version}/entropiaorme-${version}-x64.msi" \
-              --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --output "dist/latest.json"
+            # latest.json: the Tauri updater manifest. The updater verifies the
+            # embedded minisign signature (the full .sig contents) over the
+            # downloaded MSI against the app's bundled public key before running
+            # it, so the manifest itself is unsigned. --rawfile embeds the .sig
+            # verbatim; `tr -d '\r'` keeps the output LF on the Windows runner.
+            jq -n \
+              --arg version "$version" \
+              --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --rawfile signature "dist/entropiaorme-${version}-x64.msi.sig" \
+              --arg url "https://github.com/entropiaorme/entropiaorme/releases/download/v${version}/entropiaorme-${version}-x64.msi" \
+              '{version: $version, pub_date: $pub_date, platforms: {"windows-x86_64": {signature: $signature, url: $url}}}' \
+              | tr -d '\r' > "dist/latest.json"
             echo "updater artefacts staged: signed MSI + .sig + latest.json"
           else
             echo "no updater signature present; shipping installer + portable only (unsigned build)"

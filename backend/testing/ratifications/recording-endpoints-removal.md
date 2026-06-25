@@ -51,8 +51,8 @@ change's author; this audit is from the evidence in the tree.
 - **Housekeeping (out of scope).** Stale documentation references to the deleted
   modules survive in `PORT-BASELINE.md`, `port_baseline.json`,
   `backend/testing/README.md`, and the `recorder.py` docstring. These carry no
-  runtime or oracle impact and sit outside this gate; they are folded into the
-  branch's standing stale-reference follow-ups.
+  runtime or oracle impact and sit outside this gate; they are tracked
+  separately.
 
 ## Verdict
 

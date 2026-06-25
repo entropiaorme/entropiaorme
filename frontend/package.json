@@ -1,7 +1,7 @@
 {
 	"name": "entropia-orme-frontend",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Tauri shell + Svelte frontend for EntropiaOrme, an analytical desktop tool for Entropia Universe.",
 	"type": "module",
 	"license": "MIT",

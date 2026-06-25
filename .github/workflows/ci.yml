@@ -197,11 +197,16 @@ jobs:
   frontend-e2e:
     name: Frontend e2e + visual (native shell, Windows)
     runs-on: windows-latest
+    # Runs for signal only and must never fail the overall `ci` run conclusion:
+    # the required gate is the ci-gate job, which does not list this job in its
+    # needs. continue-on-error keeps the public commit status green (so a release
+    # tag commit is not a red X) while the residual viewport / post-collapse
+    # IPC-harness instability below is fixed separately.
+    continue-on-error: true
     # Drives the REAL Tauri WebView2 shell through tauri-driver (not a browser),
-    # so it runs on Windows, the app's platform, and compiles the shell. This is
-    # the entry net for the planned fetch-to-invoke command collapse: only the
-    # native shell exposes the IPC surface that change rewrites. Gated on change
-    # scope like the backend matrix.
+    # so it runs on Windows, the app's platform, and compiles the shell. It is
+    # the only surface that exercises the native IPC command boundary end to
+    # end. Gated on change scope like the backend matrix.
     #
     # NON-BLOCKING (runs for signal, does not gate the merge; see the ci-gate
     # job): tauri-driver / WebView2 intermittently collapses the captured

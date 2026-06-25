@@ -1,0 +1,35 @@
+name: Refresh the site after a release
+
+# When a GitHub Release is published, ping the marketing site's deploy hook so
+# it rebuilds and re-derives the download metadata and the signed update
+# manifest (latest.json) from this release. Keeping the site's published view
+# in lock-step with the canonical release without any per-release manual edit.
+#
+# The deploy hook is a trigger-only, instantly-revocable webhook: it can start a
+# site build and nothing else (no repository, code, or data access). It is the
+# smallest credential that achieves the refresh, and the job no-ops cleanly when
+# the secret is absent, so it never blocks a release before the hook is wired.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-site:
+    name: Trigger the marketing-site rebuild
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.CLOUDFLARE_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::warning::CLOUDFLARE_DEPLOY_HOOK_URL is not set; skipping the site rebuild trigger."
+            exit 0
+          fi
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --connect-timeout 10 --max-time 60 \
+            --retry 3 --retry-connrefused -X POST "$DEPLOY_HOOK_URL"
+          echo "Site rebuild triggered."

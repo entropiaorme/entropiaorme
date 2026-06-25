@@ -1426,32 +1426,51 @@ class HuntTracker:
         ``_accumulator.tool_stats`` dict the chat-log thread mutates and the
         readers iterate, so the whole body holds the lock.
         """
+        nudge_session_id: str | None = None
         with self._lock:
             if self._is_weapon_attribution_trifecta():
                 return
             tool_name = data.get("tool_name")
             if not tool_name:
                 return
+            tool_changed = self._active_hotbar_tool_name != tool_name
             self._active_hotbar_tool_name = tool_name
-            if not self._accumulator:
-                return
 
-            current_cost = self._current_cost_for_tool(tool_name)
+            # The "Unknown"-stats merge only applies once a session
+            # accumulator exists; the nudge below is independent of it.
+            if self._accumulator:
+                current_cost = self._current_cost_for_tool(tool_name)
 
-            # Merge "Unknown" stats into the real tool on first identification
-            unknown = self._accumulator.tool_stats.pop("Unknown", None)
-            if unknown:
-                if current_cost > 0:
-                    real = self._tool_stats_for_phase(tool_name, current_cost)
-                else:
-                    if tool_name not in self._accumulator.tool_stats:
-                        self._accumulator.tool_stats[tool_name] = ToolStats(
-                            tool_name=tool_name
-                        )
-                    real = self._accumulator.tool_stats[tool_name]
-                real.shots_fired += unknown.shots_fired
-                real.damage_dealt += unknown.damage_dealt
-                real.critical_hits += unknown.critical_hits
+                # Merge "Unknown" stats into the real tool on first identification
+                unknown = self._accumulator.tool_stats.pop("Unknown", None)
+                if unknown:
+                    if current_cost > 0:
+                        real = self._tool_stats_for_phase(tool_name, current_cost)
+                    else:
+                        if tool_name not in self._accumulator.tool_stats:
+                            self._accumulator.tool_stats[tool_name] = ToolStats(
+                                tool_name=tool_name
+                            )
+                        real = self._accumulator.tool_stats[tool_name]
+                    real.shots_fired += unknown.shots_fired
+                    real.damage_dealt += unknown.damage_dealt
+                    real.critical_hits += unknown.critical_hits
+
+            # A hotbar weapon-switch changes the overlay's active-weapon
+            # readout. The coalesced session-update tick only flushes on
+            # chat-log activity (the first attack), so emit a re-hydrate
+            # nudge directly when the weapon actually changed during an
+            # active session, rather than leaving the overlay stale. The
+            # active tool is already in the snapshot, so no new event or
+            # payload is needed; ActiveToolChanged carries no instant, so
+            # the nudge is stamped from the injected clock.
+            if tool_changed and self._session is not None:
+                nudge_session_id = self._session.id
+
+        if nudge_session_id is not None:
+            self._emit_session_event(
+                "updated", "active", self._clock.now().timestamp(), nudge_session_id
+            )
 
     def _on_heal_tool_changed(self, data: dict) -> None:
         """Handle hotbar-driven heal tool equip.
@@ -1465,13 +1484,24 @@ class HuntTracker:
         cost = data.get("cost_per_use_ped", 0.0)
         reload_s = data.get("reload_seconds", 2.5)
 
+        nudge_session_id: str | None = None
         with self._lock:
+            heal_tool_changed = self._active_heal_tool_name != name
             self._active_heal_tool_name = name
             self._heal_cost_per_use_ped = cost
             self._heal_reload_seconds = reload_s
             self._heal_amount_min = None
             self._heal_amount_max = None
             self._heal_warning_emitted = False
+            # Equipping a different heal tool changes the overlay readout;
+            # emit a direct re-hydrate nudge (mirrors the weapon path).
+            if heal_tool_changed and self._session is not None:
+                nudge_session_id = self._session.id
+
+        if nudge_session_id is not None:
+            self._emit_session_event(
+                "updated", "active", self._clock.now().timestamp(), nudge_session_id
+            )
 
         log.info(
             "Heal tool equipped: %s (cost=%.4f PED, reload=%.1fs)",

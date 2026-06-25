@@ -30,6 +30,10 @@ struct Gate {
     hooks_enabled: AtomicBool,
     session_active: AtomicBool,
     source_running: AtomicBool,
+    // One-shot per start episode: whether the "first keystroke delivered"
+    // breadcrumb has been logged. Lets the rolling logfile show whether the
+    // OS hook actually delivered after attaching.
+    first_delivery_logged: AtomicBool,
 }
 
 pub struct HotbarListener {
@@ -54,6 +58,7 @@ impl HotbarListener {
             hooks_enabled: AtomicBool::new(false),
             session_active: AtomicBool::new(false),
             source_running: AtomicBool::new(false),
+            first_delivery_logged: AtomicBool::new(false),
         });
         let key_tap: Arc<Mutex<Option<KeyTap>>> = Arc::new(Mutex::new(None));
 
@@ -184,6 +189,13 @@ impl HotbarListener {
         // attached; running honestly reflects whether events will come.
         let attached = source.start();
         self.gate.source_running.store(attached, Ordering::SeqCst);
+        // Reset the delivery breadcrumb for this episode and record the
+        // attach outcome so a non-attaching hook is
+        // visible in the rolling logfile of the packaged build.
+        self.gate
+            .first_delivery_logged
+            .store(false, Ordering::SeqCst);
+        tracing::info!(target: "eo::input", attached, "hotbar keystroke source start requested");
     }
 
     fn stop_source(&self) {
@@ -200,6 +212,14 @@ impl HotbarListener {
     fn on_keystroke(&self, event: &KeystrokeEvent) {
         if !self.gate.source_running.load(Ordering::SeqCst) {
             return;
+        }
+        // One-shot per start: confirm the hook is actually delivering
+        // keystrokes. Non-content: no key value.
+        if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
+            tracing::info!(
+                target: "eo::input",
+                "hotbar listener received its first keystroke since start"
+            );
         }
         if event.kind != KeystrokeKind::Press {
             return;

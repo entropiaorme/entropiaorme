@@ -1,9 +1,9 @@
-//! Hidden developer-tools routes: an in-process metrics snapshot and the
+//! Developer-mode routes: an in-process metrics snapshot and the
 //! crash-reporting opt-in toggle.
 //!
 //! Every route is self-gated on developer mode (404 when off), so they are off
 //! the equivalence-covered surface (no golden, no Python arm to diff against)
-//! and invisible to a default install. They are native-only: they have no
+//! and absent from a default install. They are native-only: they have no
 //! counterpart in the Python reference, so they never had a route-override
 //! entry. The metrics snapshot is
 //! read straight from the process-global registry; the crash-reporting toggle

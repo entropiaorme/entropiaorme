@@ -370,11 +370,13 @@ mod windows_hook {
             .spawn(move || unsafe {
                 let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0);
                 let Ok(hook) = hook else {
+                    tracing::warn!(target: "eo::input", "keystroke hook failed to install");
                     let _ = ready_sender.send(None);
                     *active().lock().unwrap_or_else(|e| e.into_inner()) = None;
                     return;
                 };
                 let thread_id = windows::Win32::System::Threading::GetCurrentThreadId();
+                tracing::info!(target: "eo::input", thread_id, "keystroke hook installed");
                 let _ = ready_sender.send(Some(thread_id));
                 let mut message = MSG::default();
                 while GetMessageW(&mut message, None, 0, 0).into() {
@@ -382,6 +384,7 @@ mod windows_hook {
                     DispatchMessageW(&message);
                 }
                 let _ = UnhookWindowsHookEx(hook);
+                tracing::info!(target: "eo::input", "keystroke hook removed");
                 *active().lock().unwrap_or_else(|e| e.into_inner()) = None;
             }) {
             Ok(pump) => pump,

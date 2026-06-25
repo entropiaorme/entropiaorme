@@ -4,11 +4,11 @@
 #
 # Env vars from .env.local (if present) are loaded automatically before
 # each recipe via `set dotenv-load` below. Recognised keys:
-# ENTROPIAORME_BACKEND_PORT, ENTROPIAORME_FRONTEND_PORT,
-# ENTROPIAORME_DATA_DIR, ENTROPIAORME_HOSTNAME. Absence of the file
-# falls through to runtime defaults; absence of ENTROPIAORME_HOSTNAME
-# specifically falls through to the port-based devUrl in
-# build-dev-config.mjs (i.e. Caddy and CoreDNS are both optional).
+# ENTROPIAORME_FRONTEND_PORT, ENTROPIAORME_DATA_DIR,
+# ENTROPIAORME_HOSTNAME. Absence of the file falls through to runtime
+# defaults; absence of ENTROPIAORME_HOSTNAME specifically falls through to
+# the port-based devUrl in build-dev-config.mjs (i.e. Caddy and CoreDNS are
+# both optional).
 
 set dotenv-load
 set dotenv-filename := ".env.local"
@@ -30,7 +30,8 @@ venv_python := if os_family() == "windows" { ".venv/Scripts/python.exe" } else {
 default:
     @just --list
 
-# Boot the full dev stack: backend (Python) + Tauri webview (which spawns Vite).
+# Boot the dev stack: the single Tauri dev process (backend in-process) which
+# spawns and tails Vite for the frontend.
 [windows]
 dev:
     powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\dev-launch.ps1"

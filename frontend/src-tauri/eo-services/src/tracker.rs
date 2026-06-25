@@ -1590,8 +1590,7 @@ impl HuntTracker {
             else {
                 return;
             };
-            let tool_changed =
-                state.active_hotbar_tool_name.as_deref() != Some(tool_name.as_str());
+            let tool_changed = state.active_hotbar_tool_name.as_deref() != Some(tool_name.as_str());
             state.active_hotbar_tool_name = Some(tool_name.clone());
 
             // The "Unknown"-stats merge only applies once a session

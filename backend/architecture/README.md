@@ -146,7 +146,7 @@ Four interlocking gates pin the HTTP contract end to end:
 | The generated TypeScript client matches the snapshot | `npm run gen:api:check` in the frontend CI job (`openapi-typescript` over the committed snapshot, then a clean-diff check) |
 | Live 2xx bodies conform to their declared schemas | the schemathesis contract suite (`backend/tests/test_api_contract.py`), full tier |
 
-The frontend client is generated from the committed snapshot, never from a running server, so the same file is simultaneously the drift-test fixture and the codegen input: a backend contract change must regenerate the golden (a reviewed, ratified event; CI enforces a commit marker plus an independent ratification record) and regenerate the client, or one of the gates fails.
+The frontend client is generated from the committed snapshot, never from a running server, so the same file is simultaneously the drift-test fixture and the codegen input: a backend contract change must regenerate the golden (a reviewed, ratified event; CI enforces a commit marker plus a recorded adversarial ratification verdict) and regenerate the client, or one of the gates fails.
 
 ## Actor-shaped services
 

@@ -1,6 +1,6 @@
 # Ratification: typed API response models
 
-Independent review of the testing-oracle output that accompanies declaring
+Adversarial review of the testing-oracle output that accompanies declaring
 OpenAPI response schemas across the previously-untyped API read surface
 (FastAPI `response_model=` added to ~94 routes; the response models authored in
 `backend/routers/response_models.py`).

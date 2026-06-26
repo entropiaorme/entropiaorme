@@ -1,6 +1,6 @@
 # Ratification: hydration-only tracking surface
 
-Independent review of the testing-oracle output that accompanies consolidating
+Adversarial review of the testing-oracle output that accompanies consolidating
 the tracking read surface onto the single `/api/tracking/snapshot` hydration
 endpoint and removing the three superseded readouts it replaced.
 

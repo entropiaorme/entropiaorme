@@ -1,6 +1,6 @@
 # Ratification: codex unclaim route (OpenAPI contract)
 
-Independent review of the OpenAPI snapshot golden change that accompanies the
+Adversarial review of the OpenAPI snapshot golden change that accompanies the
 new codex "unclaim" endpoint. The review re-derives the verdict against the
 current tree rather than accepting the change author's rationale, because a
 self-approved golden move carries a structural conflict of interest.
@@ -24,7 +24,7 @@ The only changed golden in this range is
 pre-existing path, schema, field, ordering, or count was mutated or dropped, and
 `CodexClaimResult` is unchanged.
 
-## Independent review findings
+## Adversarial review findings
 
 - **Delta accountability.** Every added element maps to wired code: the
   `UnclaimRequest` schema mirrors the Pydantic model field-for-field; the path is

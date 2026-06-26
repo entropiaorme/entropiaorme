@@ -1,8 +1,10 @@
 # Ratification: recording-endpoints removal from the OpenAPI snapshot
 
-Independent review of the OpenAPI spec snapshot regeneration that follows the
-deliberate removal of the `/api/recording/*` surface. The reviewer is not the
-change's author; this audit is from the evidence in the tree.
+Adversarial review of the OpenAPI spec snapshot regeneration that follows the
+deliberate removal of the `/api/recording/*` surface. This is a recorded
+self-review under the ratification discipline, not a second person's sign-off:
+the verdict is re-derived from the evidence in the tree rather than resting on
+the author's intent.
 
 ## Range and goldens under review
 

@@ -1,6 +1,6 @@
 # Oracle ratification: event-stream fingerprint scenarios
 
-Independent ratification of eight scenario golden sets whose
+Adversarial ratification of eight scenario golden sets whose
 `expected/fingerprint.jsonl` and `expected/db_state.json` changed inside the
 audited range. Audited adversarially against the current tree, the production
 code under test, and each scenario's source event stream; the author's

@@ -1,6 +1,6 @@
 # Ratification: global_item and hof_kill corpus coverage
 
-Independent review of the first-pinned testing-oracle goldens that accompany
+Adversarial review of the first-pinned testing-oracle goldens that accompany
 closing the last two uncovered `EventType` branches in the cross-language
 chatlog differential. The review re-derives the verdict against the current
 tree rather than accepting the change author's rationale, because a
@@ -47,12 +47,11 @@ the two new goldens are byte-identical in structure to their proven-green
 siblings (`global_kill_correlated`, `hof_item_drop`), differing only where the
 `build.py` DSL intends.
 
-## Independent review findings
+## Adversarial review findings
 
-An independent review (not by the change's author) re-derived every load-bearing
-value from `backend/tracking/tracker.py` `_on_global` (lines 1544-1591) rather
-than accepting that the pinned output is correct because it is what the pipeline
-emitted:
+The review re-derived every load-bearing value from `backend/tracking/tracker.py`
+`_on_global` (lines 1544-1591) rather than accepting that the pinned output is
+correct because it is what the pipeline emitted:
 
 - **Kill HoF-tagging.** `global_item_drop` pins the lone kill `is_global=1,
   is_hof=0`; `hof_kill_correlated` pins `is_global=1, is_hof=1`. Confirmed

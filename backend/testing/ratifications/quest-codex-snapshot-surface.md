@@ -1,9 +1,10 @@
 # Ratification: quest/codex snapshot-surface extension
 
-Independent review of the DB-state snapshot catalogue's extension across the
+Adversarial review of the DB-state snapshot catalogue's extension across the
 quest/codex write surface and the resulting first-pin growth of every corpus
-`db_state.json` golden. The reviewer is not the change's author; this audit is
-from the evidence in the tree.
+`db_state.json` golden. This is a recorded self-review under the ratification
+discipline, not a second person's sign-off: the verdict is re-derived from the
+evidence in the tree rather than resting on the author's intent.
 
 ## Range and goldens under review
 

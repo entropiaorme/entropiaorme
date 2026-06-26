@@ -1,6 +1,6 @@
 # Ratification artefacts
 
-This directory holds the recorded independent-review verdicts that accompany
+This directory holds the recorded adversarial-review verdicts that accompany
 changes to the testing oracle's expected output (a regenerated golden, or the
 first pin of a newly emitted one).
 
@@ -20,7 +20,7 @@ VERDICT: ratification-sound | regression-suspected | needs-user-judgement
 
 The gate passes only on `VERDICT: ratification-sound`, only when the `goldens:`
 field names every changed set, and only when the report was not left stale by a
-later same-range golden edit. See the "Independent ratification"
+later same-range golden edit. See the "Adversarial ratification"
 and "Ratification guard" sections of `TESTING.md` for the full flow and the
 rationale (the structural conflict of interest a self-approved golden move
 carries, and why a committed report is required over a bare commit trailer).

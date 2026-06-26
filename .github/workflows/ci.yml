@@ -14,8 +14,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Read-only: no job writes to the repository (the retired Python backend
-# coverage-badge job was the only writer).
+# Read-only by default; only the main-only publish-coverage-badge job widens to
+# contents: write, to publish the Rust coverage badge to the badges branch. Every
+# other job, including the coverage measurement that builds pull-request code,
+# stays read-only.
 permissions:
   contents: read
 
@@ -463,8 +465,58 @@ jobs:
       - uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
         with:
           tool: cargo-llvm-cov,cargo-nextest
+      # Run the tests once and collect coverage without rendering a report, so
+      # the human summary and the badge JSON below both read the same single run
+      # rather than re-executing the suite.
       - name: Measure branch coverage (cargo-llvm-cov)
-        run: cargo llvm-cov nextest --branch -p eo-wire -p eo-http -p eo-services
+        run: cargo llvm-cov nextest --branch --no-report -p eo-wire -p eo-http -p eo-services
+      - name: Summarise branch coverage
+        run: cargo llvm-cov report --branch --summary-only -p eo-wire -p eo-http -p eo-services
+      # Reduce the measured coverage to the shields.io endpoint document the
+      # README's Coverage badge points at. Built on every run so the pipeline is
+      # exercised in review; published (next step) only from main so the figure
+      # tracks the trunk, matching the mutation badge's main-only publish.
+      - name: Build coverage badge
+        run: |
+          cargo llvm-cov report --branch --json -p eo-wire -p eo-http -p eo-services --output-path coverage-llvm.json
+          bash ../../.github/scripts/coverage-badge.sh coverage-llvm.json coverage.json
+      # Hand the badge to the main-only publish job as an artifact rather than
+      # pushing here: this job builds pull-request-author code (tests, build
+      # scripts, proc-macros), so it must never carry a write-scoped token. The
+      # badge is only published from the trunk, so it is only uploaded there.
+      - name: Upload coverage badge
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-badge
+          # Repo-root relative: upload-artifact ignores the job's working-directory.
+          path: frontend/src-tauri/coverage.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Publish the coverage badge to the badges branch, from the trunk only. Kept
+  # separate from the measurement job so the write-scoped token never attaches
+  # to a run that builds pull-request code: this job runs no PR-author code, it
+  # only downloads the badge artifact and pushes it. Not a gating check (it is a
+  # main-only side effect), so it is absent from ci-gate's needs.
+  publish-coverage-badge:
+    name: Publish coverage badge
+    runs-on: ubuntu-latest
+    needs: [rust-coverage]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
+        with:
+          name: coverage-badge
+      - name: Publish coverage badge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/publish-badge.sh coverage.json
 
   ci-gate:
     name: CI gate

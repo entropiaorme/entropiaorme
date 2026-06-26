@@ -62,9 +62,12 @@ def _colour(score: float) -> str:
 
 
 def _badge(score: float) -> dict[str, object]:
+    # The mutation campaign runs against the Python equivalence oracle, not the
+    # shipped Rust product, so the label says so: a reader must not mistake this
+    # for the product's mutation score (the coverage badge is the Rust product).
     return {
         "schemaVersion": 1,
-        "label": "mutation",
+        "label": "mutation (Python oracle)",
         "message": f"{score:.1f}%",
         "color": _colour(score),
     }

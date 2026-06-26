@@ -216,6 +216,69 @@ class CodexService:
             "pedValue": ped_value,
         }
 
+    # ── Unclaim (revert the most recent rank claim) ────────────────────────
+
+    def unclaim_rank(self, species_name: str) -> dict:
+        """Revert the most recent rank claim for a species.
+
+        Steps the rank back one, deletes the claim record, and removes the
+        codex-sourced calibration that claim wrote. Only the current rank is
+        cleanly reversible (claims advance sequentially), and the reward must
+        have been claimed, not reached by manual calibration. The calibration
+        is matched on the claim instant the two inserts share, so an
+        uncalibrated-skill claim (which wrote none) removes nothing there.
+
+        A forward feature with no migration-era original; mirrored here so the
+        OpenAPI contract carries the route, but not driven by the differential.
+        """
+        now = self._clock.now().timestamp()
+        with self._app_db.lock:
+            row = self._app_db.conn.execute(
+                "SELECT current_rank FROM codex_progress WHERE species_name = ?",
+                (species_name,),
+            ).fetchone()
+            current_rank = row["current_rank"] if row else 0
+            if current_rank < 1:
+                raise ValueError(f"No claimed rank to unclaim for '{species_name}'")
+            rank = current_rank
+
+            claim = self._app_db.conn.execute(
+                "SELECT skill_name, ped_value, claimed_at FROM codex_claims "
+                "WHERE species_name = ? AND rank = ? AND kind = 'rank'",
+                (species_name, rank),
+            ).fetchone()
+            if claim is None:
+                raise ValueError(f"Rank {rank} for '{species_name}' was not claimed")
+
+            self._app_db.conn.execute(
+                "UPDATE codex_progress SET current_rank = ?, updated_at = ? "
+                "WHERE species_name = ?",
+                (rank - 1, now, species_name),
+            )
+            # Remove the codex-sourced calibration this claim wrote, matched on
+            # the shared claim instant; the id-subquery removes at most one row.
+            self._app_db.conn.execute(
+                "DELETE FROM skill_calibrations WHERE id = ("
+                "SELECT id FROM skill_calibrations "
+                "WHERE skill_name = ? AND source = 'codex' AND scanned_at = ? "
+                "ORDER BY id DESC LIMIT 1)",
+                (claim["skill_name"], claim["claimed_at"]),
+            )
+            self._app_db.conn.execute(
+                "DELETE FROM codex_claims "
+                "WHERE species_name = ? AND rank = ? AND kind = 'rank'",
+                (species_name, rank),
+            )
+            self._app_db.conn.commit()
+
+        log.info("Codex unclaim: %s rank %d → %s", species_name, rank, claim["skill_name"])
+        return {
+            "speciesName": species_name,
+            "rank": rank,
+            "skillName": claim["skill_name"],
+            "pedValue": claim["ped_value"],
+        }
+
     # ── Calibrate (direct rank set) ────────────────────────────────────────
 
     def calibrate(self, species_name: str, rank: int) -> dict:

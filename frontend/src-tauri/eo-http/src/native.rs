@@ -956,6 +956,32 @@ async fn codex_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
         .await
 }
 
+/// POST /api/codex/unclaim: `{species_name}`. Reverts the species' most
+/// recent rank claim. Mirrors `unclaim_rank`: a "nothing to unclaim"
+/// condition maps to a 400; a surrogate-tainted species reaches the lookup
+/// before any gate and surfaces a 500, as the claim path does.
+async fn codex_unclaim(state: Arc<AppState>, req: Request) -> Response<Body> {
+    let Some(hydration) = state.hydration() else {
+        return service_unavailable();
+    };
+    let (content_type, bytes) = match body_parts(req).await {
+        Ok(parts) => parts,
+        Err(reply) => return *reply,
+    };
+    let mut v = Validation::new();
+    let Some(object) = body::read_object(content_type.as_deref(), &bytes, &mut v) else {
+        return v.into_response();
+    };
+    let species = body::required_str(&mut v, &object, "species_name");
+    if !v.is_ok() {
+        return v.into_response();
+    }
+    if v.binding_taint() {
+        return internal_error();
+    }
+    hydration.codex_unclaim(&species.expect("validated")).await
+}
+
 /// POST /api/codex/meta/claim: `{attribute_name}`. Mirrors `meta_claim`.
 async fn codex_meta_claim(state: Arc<AppState>, req: Request) -> Response<Body> {
     let (Some(hydration), Some(tracker), Some(skill_tracker)) =
@@ -2541,6 +2567,10 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
         .route(
             "/api/codex/claim",
             arm_routed(MethodFilter::POST, "/api/codex/claim", codex_claim),
+        )
+        .route(
+            "/api/codex/unclaim",
+            arm_routed(MethodFilter::POST, "/api/codex/unclaim", codex_unclaim),
         )
         .route(
             "/api/codex/meta/claim",

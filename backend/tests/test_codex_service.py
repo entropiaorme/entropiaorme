@@ -229,6 +229,69 @@ def test_claim_rank_updates_skill_calibration(service, app_db):
     assert rows[0]["level"] > 500.0
 
 
+# ── unclaim_rank ──────────────────────────────────────────────────────────────
+
+
+def test_unclaim_rank_reverts_progress_claim_and_calibration(service, app_db):
+    """Unclaim steps the rank back, deletes the claim, and removes the
+    codex calibration that claim wrote, leaving the scanned level."""
+    app_db.conn.execute(
+        "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) VALUES (?, ?, 'scan', ?)",
+        ("Aim", 500.0, 1000.0),
+    )
+    app_db.conn.commit()
+    service.claim_rank("Atrox", 1, "Aim")
+
+    result = service.unclaim_rank("Atrox")
+    assert result == {
+        "speciesName": "Atrox",
+        "rank": 1,
+        "skillName": "Aim",
+        "pedValue": 0.5,
+    }
+
+    species = service.get_all_species()
+    atrox = next(s for s in species if s["name"] == "Atrox")
+    assert atrox["currentRank"] == 0
+
+    claims = app_db.conn.execute("SELECT COUNT(*) AS n FROM codex_claims").fetchone()
+    assert claims["n"] == 0
+
+    rows = app_db.conn.execute(
+        "SELECT level, source FROM skill_calibrations WHERE skill_name = 'Aim'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "scan"
+    assert rows[0]["level"] == 500.0
+
+
+def test_unclaim_rank_uncalibrated_skill_removes_only_claim(service, app_db):
+    """A claim for an uncalibrated skill wrote no calibration (the silent
+    skip); unclaiming it removes the claim and touches no calibration."""
+    service.claim_rank("Atrox", 1, "Aim")  # Aim has no calibration history
+
+    service.unclaim_rank("Atrox")
+
+    species = service.get_all_species()
+    atrox = next(s for s in species if s["name"] == "Atrox")
+    assert atrox["currentRank"] == 0
+    claims = app_db.conn.execute("SELECT COUNT(*) AS n FROM codex_claims").fetchone()
+    assert claims["n"] == 0
+    cal = app_db.conn.execute("SELECT COUNT(*) AS n FROM skill_calibrations").fetchone()
+    assert cal["n"] == 0
+
+
+def test_unclaim_rank_requires_claimed_latest_rank(service):
+    """Unclaim refuses when nothing is claimed, and when the latest rank
+    was reached by manual calibration rather than a claim."""
+    with pytest.raises(ValueError, match="No claimed rank to unclaim for 'Atrox'"):
+        service.unclaim_rank("Atrox")
+
+    service.calibrate("Atrox", 3)
+    with pytest.raises(ValueError, match="Rank 3 for 'Atrox' was not claimed"):
+        service.unclaim_rank("Atrox")
+
+
 # ── calibrate ───────────────────────────────────────────────────────────────
 
 

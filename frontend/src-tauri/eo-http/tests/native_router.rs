@@ -2342,6 +2342,21 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
     )
     .await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    // unclaim over a species with no claimed rank: the service's
+    // nothing-to-unclaim ValueError is the 400 (exercises the route's
+    // registration and error mapping).
+    let (status, _, body) = send_json(
+        port,
+        "POST",
+        "/api/codex/unclaim",
+        r#"{"species_name": "Notaspecies"}"#,
+    )
+    .await;
+    assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(&body)["detail"],
+        "No claimed rank to unclaim for 'Notaspecies'"
+    );
     let (status, _, _) = send_json(
         port,
         "POST",

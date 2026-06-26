@@ -49,13 +49,14 @@ def test_recommend_rejects_out_of_domain_rank(rank):
 # ── Handler-translation tests (direct call through the service-locator seam) ──
 
 
-def _codex_services(*, claim=None, calibrate=None, meta=None, is_tracking=False):
+def _codex_services(*, claim=None, calibrate=None, meta=None, unclaim=None, is_tracking=False):
     suppressed: list[str] = []
     svc = SimpleNamespace(
         codex_service=SimpleNamespace(
             claim_rank=claim or (lambda *a: {"ok": True}),
             calibrate=calibrate or (lambda *a: {"ok": True}),
             meta_claim=meta or (lambda *a: {"ok": True}),
+            unclaim_rank=unclaim or (lambda *a: {"ok": True}),
         ),
         tracker=SimpleNamespace(is_tracking=is_tracking),
         skill_tracker=SimpleNamespace(suppress_next=suppressed.append),
@@ -121,6 +122,41 @@ def test_calibrate_maps_value_error_to_400(monkeypatch):
         codex.calibrate(codex.CalibrateRequest(species_name="Atrox", rank=10))
 
     assert exc.value.status_code == 400
+
+
+def test_unclaim_rank_returns_service_result(monkeypatch):
+    svc, _ = _codex_services(
+        unclaim=lambda s: {
+            "speciesName": s,
+            "rank": 3,
+            "skillName": "Handgun",
+            "pedValue": 0.25,
+        }
+    )
+    monkeypatch.setattr(codex, "get_services", lambda: svc)
+
+    result = codex.unclaim_rank(codex.UnclaimRequest(species_name="Atrox"))
+
+    assert result == {
+        "speciesName": "Atrox",
+        "rank": 3,
+        "skillName": "Handgun",
+        "pedValue": 0.25,
+    }
+
+
+def test_unclaim_rank_maps_value_error_to_400(monkeypatch):
+    def boom(*_a):
+        raise ValueError("No claimed rank to unclaim for 'Atrox'")
+
+    svc, _ = _codex_services(unclaim=boom)
+    monkeypatch.setattr(codex, "get_services", lambda: svc)
+
+    with pytest.raises(HTTPException) as exc:
+        codex.unclaim_rank(codex.UnclaimRequest(species_name="Atrox"))
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "No claimed rank to unclaim for 'Atrox'"
 
 
 def test_meta_claim_suppresses_attribute_gain_while_tracking(monkeypatch):

@@ -5885,6 +5885,19 @@
         "title": "TrifectaSettings",
         "type": "object"
       },
+      "UnclaimRequest": {
+        "properties": {
+          "species_name": {
+            "title": "Species Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "species_name"
+        ],
+        "title": "UnclaimRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -7202,6 +7215,48 @@
           }
         },
         "summary": "Species Ranks",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/codex/unclaim": {
+      "post": {
+        "description": "Revert a species' most recent rank claim.",
+        "operationId": "unclaim_rank_api_codex_unclaim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnclaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexClaimResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unclaim Rank",
         "tags": [
           "codex"
         ]

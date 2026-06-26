@@ -28,6 +28,10 @@ class ClaimRequest(BaseModel):
     skill_name: str
 
 
+class UnclaimRequest(BaseModel):
+    species_name: str
+
+
 class CalibrateRequest(BaseModel):
     species_name: str
     rank: int
@@ -73,6 +77,16 @@ def claim_rank(req: ClaimRequest):
         svc.skill_tracker.suppress_next(req.skill_name)
 
     return result
+
+
+@router.post("/unclaim", response_model=CodexClaimResult)
+def unclaim_rank(req: UnclaimRequest):
+    """Revert a species' most recent rank claim."""
+    svc = get_services()
+    try:
+        return svc.codex_service.unclaim_rank(req.species_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.post("/calibrate", response_model=CodexCalibrateResult)

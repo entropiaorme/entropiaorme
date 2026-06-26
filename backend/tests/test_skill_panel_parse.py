@@ -192,6 +192,22 @@ def test_fuzzy_resolve_empty_vocab_is_unresolved():
     assert sp.fuzzy_resolve("anything", []) == (None, 0.0, [])
 
 
+def test_fuzzy_resolve_floors_unknown_names_to_none():
+    """A read resembling no known skill scores below the floor and is left
+    unresolved, rather than force-matched to its nearest vocab entry."""
+    canonical, score, cands = sp.fuzzy_resolve("qzxwv", VOCAB)
+    assert canonical is None, "below-floor garbage is not force-matched"
+    assert score < sp._FUZZY_SCORE_FLOOR
+    # The candidate list is still surfaced even though the top is rejected.
+    assert cands
+
+    # A genuine typo of a PRESENT skill stays above the floor and resolves
+    # (the floor does not discard real reads).
+    canonical, score, _ = sp.fuzzy_resolve("Whp", VOCAB)
+    assert canonical == "Whip"
+    assert score >= sp._FUZZY_SCORE_FLOOR
+
+
 # ── slice_panel_cells ────────────────────────────────────────────────────────
 
 

@@ -27,6 +27,13 @@ _LEVEL_RE = re.compile(r"\d+")
 # Fuzzy lookup tunables: the top-N candidates to return and the WRatio scorer.
 _FUZZ_TOP_N = 3
 _FUZZ_SCORER = fuzz.WRatio
+# The minimum WRatio a fuzzy candidate must score to be accepted. 60 is the
+# empirically-observed lower bound of a legitimate match (a single-transposition
+# typo of a PRESENT skill scores ~60); below it the read resembles no known
+# skill and is far likelier OCR garbage, so it is dropped rather than
+# force-matched to a confident wrong label. MUST stay byte-identical with the
+# Rust parser's FUZZY_SCORE_FLOOR.
+_FUZZY_SCORE_FLOOR = 60.0
 
 
 # eq=False: the image field is an ndarray, whose element-wise ``==`` and
@@ -94,7 +101,9 @@ def fuzzy_resolve(
     1. Exact match.
     2. Case + whitespace insensitive match (covers ``whip`` vs ``Whip``,
        ``FoodTechnology`` vs ``Food Technology``).
-    3. rapidfuzz WRatio top-1 against the vocab.
+    3. rapidfuzz WRatio top-1 against the vocab, if it scores at or above
+       ``_FUZZY_SCORE_FLOOR``; a below-floor read is left unresolved
+       rather than force-matched to its nearest entry.
 
     Returns ``(canonical_or_None, top1_score, top_n_candidates)``. The
     canonical is what gets persisted; the OCR text is a lookup key, not
@@ -116,7 +125,13 @@ def fuzzy_resolve(
     cands = [(canon, float(score)) for canon, score, _ in results]
     if not cands:
         return None, 0.0, []
-    return cands[0][0], cands[0][1], cands
+    top_name, top_score = cands[0]
+    if top_score < _FUZZY_SCORE_FLOOR:
+        # Below the floor the read resembles no known skill, so leave it
+        # unresolved (the caller drops a None canonical) rather than
+        # force-match its nearest entry to a confident wrong label.
+        return None, top_score, cands
+    return top_name, top_score, cands
 
 
 def slice_panel_cells(panel_bgr: np.ndarray, geom: dict) -> list[CellCrop]:

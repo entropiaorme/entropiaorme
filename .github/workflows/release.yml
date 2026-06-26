@@ -202,17 +202,39 @@ jobs:
 
       - name: Draft the GitHub Release
         # Draft + Pre-release for the 0.x window: a human reviews and publishes.
+        # The body is a curated grouped-changelog skeleton, not GitHub's per-PR
+        # auto-list: a human fills the sections and the compare link from the
+        # release range before publishing the draft.
         shell: bash
+        # GitHub context reaches the script through env, never interpolated into
+        # the run body: a tag name is attacker-influenced input, and inlining it
+        # would let `v1$(...)` execute as shell in this privileged (id-token /
+        # attestations) job.
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${{ github.ref_name }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
+            printf '%s\n' \
+              '_Draft notes: replace with the curated grouped changelog before publishing._' \
+              '' \
+              '## New Features' \
+              '' \
+              '## Bug Fixes' \
+              '' \
+              '## Chores' \
+              '' \
+              "**Full changelog:** https://github.com/entropiaorme/entropiaorme/compare/PREVIOUS_TAG...$TAG" \
+              > release-notes.md
             gh release create "$TAG" --draft --prerelease \
-              --title "EntropiaOrme $TAG" --generate-notes dist/*
+              --title "EntropiaOrme $TAG" --notes-file release-notes.md dist/*
           else
-            TAG="dry-run-${{ github.run_id }}"
-            gh release create "$TAG" --target "${{ github.sha }}" --draft --prerelease \
+            TAG="dry-run-$RUN_ID"
+            gh release create "$TAG" --target "$COMMIT_SHA" --draft --prerelease \
               --title "Dry run $TAG" \
               --notes "Dry-run build for pipeline inspection; delete after review." dist/*
           fi

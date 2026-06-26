@@ -573,6 +573,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/codex/unclaim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unclaim Rank
+         * @description Revert a species' most recent rank claim.
+         */
+        post: operations["unclaim_rank_api_codex_unclaim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/demo/analytics/activity": {
         parameters: {
             query?: never;
@@ -3886,6 +3906,11 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** UnclaimRequest */
+        UnclaimRequest: {
+            /** Species Name */
+            species_name: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -4759,6 +4784,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CodexRankBreakdown"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unclaim_rank_api_codex_unclaim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnclaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexClaimResult"];
                 };
             };
             /** @description Validation Error */

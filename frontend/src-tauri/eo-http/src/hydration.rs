@@ -704,6 +704,21 @@ impl HydrationState {
         }
     }
 
+    /// POST /api/codex/unclaim: revert a species' most recent rank
+    /// claim. Mirrors `unclaim_rank`: a "nothing to unclaim" condition
+    /// maps to a 400 with the message; on success the reverted claim is
+    /// returned. No session suppression: unclaim removes a calibration
+    /// rather than producing a skill gain.
+    pub async fn codex_unclaim(&self, species_name: &str) -> Response<Body> {
+        match self.codex.unclaim_rank(species_name).await {
+            Ok(result) => plain_json_response(&result),
+            Err(CodexError::Invalid(message)) => {
+                error_response(StatusCode::BAD_REQUEST, &detail(&message))
+            }
+            Err(CodexError::Db(_)) => internal_error(),
+        }
+    }
+
     /// POST /api/codex/claim: claim a codex rank reward. Mirrors
     /// `claim_rank`: the service's invalid-input errors map to a 400 with
     /// the message; on success, an active session suppresses the upcoming

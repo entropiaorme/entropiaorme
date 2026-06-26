@@ -11,6 +11,7 @@
 		getCodexSpecies,
 		getCodexSpeciesRanks,
 		claimCodexRank,
+		unclaimCodexRank,
 		calibrateCodex,
 		getCodexRecommendation,
 		getCharacterProfessions,
@@ -246,6 +247,28 @@
 			rankBreakdown = await getCodexSpeciesRanks(selectedSpecies);
 			species = await getCodexSpecies();
 			// Load new next rank options
+			const newNext = rankBreakdown?.ranks.find(r => r.isNext);
+			if (newNext) {
+				await loadRecommendations(selectedSpecies, newNext.rank);
+			} else {
+				skillOptions = [];
+			}
+		} catch (err: any) {
+			claimMessage = `Error: ${err.message}`;
+		}
+	}
+
+	// ── Unclaim (undo the most recent claim) ─────────────────────────────────────
+
+	async function handleUnclaim() {
+		if (guideState.isActive) return;
+		if (!selectedSpecies) return;
+		try {
+			const result = await unclaimCodexRank(selectedSpecies);
+			claimMessage = `Undid rank ${result.rank}: ${result.skillName}`;
+			// Refresh
+			rankBreakdown = await getCodexSpeciesRanks(selectedSpecies);
+			species = await getCodexSpecies();
 			const newNext = rankBreakdown?.ranks.find(r => r.isNext);
 			if (newNext) {
 				await loadRecommendations(selectedSpecies, newNext.rank);
@@ -562,6 +585,14 @@
 										<span class="text-text-secondary tabular-nums">{r.rank}.</span>
 										<span class="text-text">{r.claimedSkill}</span>
 										<span class="text-text-tertiary tabular-nums">{formatPed(r.claimedPed ?? 0)}</span>
+										{#if r.rank === rankBreakdown.currentRank}
+											<button
+												class="ml-0.5 leading-none text-text-tertiary hover:text-negative transition-colors cursor-pointer"
+												title="Undo this claim"
+												aria-label="Undo rank {r.rank} claim"
+												onclick={handleUnclaim}
+											>&times;</button>
+										{/if}
 									</div>
 								{/each}
 							</div>

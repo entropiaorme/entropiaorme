@@ -144,6 +144,13 @@ describe('plain delegating wrappers map to the expected verb, path, and shape', 
 			{ body: { species_name: 'Atrox', rank: 3, skill_name: 'Laser Sniper' } },
 		],
 		[
+			'unclaimCodexRank',
+			() => api.unclaimCodexRank('Atrox'),
+			'POST',
+			'/api/codex/unclaim',
+			{ body: { species_name: 'Atrox' } },
+		],
+		[
 			'calibrateCodex',
 			() => api.calibrateCodex('Atrox', 3),
 			'POST',

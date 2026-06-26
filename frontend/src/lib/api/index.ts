@@ -223,6 +223,10 @@ export async function claimCodexRank(
 	);
 }
 
+export async function unclaimCodexRank(speciesName: string): Promise<CodexClaimResult> {
+	return unwrap(client.POST('/api/codex/unclaim', { body: { species_name: speciesName } }));
+}
+
 export async function calibrateCodex(
 	speciesName: string,
 	rank: number,

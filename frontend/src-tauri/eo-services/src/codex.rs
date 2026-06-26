@@ -359,6 +359,115 @@ impl CodexService {
         }))
     }
 
+    /// Revert the most recent rank claim for a species: step the rank
+    /// back one, delete the claim record, and remove the codex-sourced
+    /// calibration that claim wrote.
+    ///
+    /// Only the current rank is cleanly reversible: claims advance
+    /// sequentially (the claimable rank is always `current_rank + 1`),
+    /// so the latest claim is the one at `current_rank`, and reverting a
+    /// lower rank would leave a gap. The reward must have been *claimed*
+    /// (not reached by manual `calibrate`) for there to be anything to
+    /// undo. The calibration row is matched on the claim instant the two
+    /// inserts share, so an uncalibrated-skill claim (which wrote none)
+    /// simply removes nothing there.
+    ///
+    /// A forward feature with no Python-era original; it is mirrored in
+    /// the oracle so the OpenAPI contract carries the route, but the
+    /// cross-language differential does not drive it.
+    pub async fn unclaim_rank(&self, species_name: &str) -> Result<Value, CodexError> {
+        let now = naive_to_epoch(self.clock.now());
+        let mut tx = self.pool.begin().await.map_err(CodexError::Db)?;
+
+        let current_rank =
+            sqlx::query("SELECT current_rank FROM codex_progress WHERE species_name = ?")
+                .bind(species_name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(CodexError::Db)?
+                .map(|row| row.get::<i64, _>(0))
+                .unwrap_or(0);
+        if current_rank < 1 {
+            return Err(CodexError::Invalid(format!(
+                "No claimed rank to unclaim for '{species_name}'"
+            )));
+        }
+        let rank = current_rank;
+
+        let claim = sqlx::query(
+            "SELECT skill_name, ped_value, claimed_at FROM codex_claims \
+             WHERE species_name = ? AND rank = ? AND kind = 'rank'",
+        )
+        .bind(species_name)
+        .bind(rank)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(CodexError::Db)?;
+        let Some(claim) = claim else {
+            return Err(CodexError::Invalid(format!(
+                "Rank {rank} for '{species_name}' was not claimed"
+            )));
+        };
+        let skill_name: String = claim.get(0);
+        let ped_value: f64 = claim.get(1);
+        let claimed_at: f64 = claim.get(2);
+
+        // Step the rank back, gated on it still being `rank`, so of two
+        // racing unclaims exactly one steps it and the loser aborts
+        // before deleting anything (the mirror of claim_rank's guard).
+        let stepped = sqlx::query(
+            "UPDATE codex_progress SET current_rank = ?, updated_at = ? \
+             WHERE species_name = ? AND current_rank = ?",
+        )
+        .bind(rank - 1)
+        .bind(now)
+        .bind(species_name)
+        .bind(rank)
+        .execute(&mut *tx)
+        .await
+        .map_err(CodexError::Db)?
+        .rows_affected();
+        if stepped == 0 {
+            return Err(CodexError::Invalid(format!(
+                "Rank {rank} for '{species_name}' was already unclaimed"
+            )));
+        }
+
+        // Remove the codex-sourced calibration this claim wrote, matched
+        // on the instant the claim and calibration inserts share; the
+        // id-subquery removes at most one row, and an uncalibrated-skill
+        // claim (which wrote none) removes nothing here.
+        sqlx::query(
+            "DELETE FROM skill_calibrations WHERE id = ( \
+                SELECT id FROM skill_calibrations \
+                WHERE skill_name = ? AND source = 'codex' AND scanned_at = ? \
+                ORDER BY id DESC LIMIT 1)",
+        )
+        .bind(&skill_name)
+        .bind(claimed_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(CodexError::Db)?;
+
+        sqlx::query(
+            "DELETE FROM codex_claims WHERE species_name = ? AND rank = ? AND kind = 'rank'",
+        )
+        .bind(species_name)
+        .bind(rank)
+        .execute(&mut *tx)
+        .await
+        .map_err(CodexError::Db)?;
+
+        tx.commit().await.map_err(CodexError::Db)?;
+
+        Ok(json!({
+            "speciesName": species_name,
+            "rank": rank,
+            "skillName": skill_name,
+            "pedValue": ped_value,
+        }))
+    }
+
     /// Set the codex rank directly, no side effects (manual
     /// calibration).
     pub async fn calibrate(&self, species_name: &str, rank: i64) -> Result<Value, CodexError> {
@@ -1290,6 +1399,134 @@ mod tests {
                     .unwrap()
                     .get(0);
             assert_eq!(progress, 1, "progress advances exactly once");
+        }
+    }
+
+    #[tokio::test]
+    async fn unclaim_reverts_progress_claim_and_calibration() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        seed_calibrations(&pool).await;
+
+        // A claim advances to rank 1, records the claim, and writes a
+        // codex calibration on top of Rifle's newest level (100).
+        svc.claim_rank("Boar", 1, "Rifle").await.unwrap();
+        assert_eq!(svc.current_rank("Boar").await.unwrap(), 1);
+        assert_eq!(svc.skill_level("Rifle").await.unwrap(), Some(217.745));
+
+        let reverted = svc.unclaim_rank("Boar").await.unwrap();
+        assert_eq!(
+            reverted,
+            json!({"speciesName": "Boar", "rank": 1, "skillName": "Rifle", "pedValue": 0.1875})
+        );
+
+        // Rank steps back, the claim row is gone, and the codex
+        // calibration is removed so Rifle reverts to its scanned 100;
+        // the five seed rows are untouched.
+        assert_eq!(svc.current_rank("Boar").await.unwrap(), 0);
+        let claims: i64 = sqlx::query("SELECT COUNT(*) FROM codex_claims")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(claims, 0);
+        let codex_rows: i64 =
+            sqlx::query("SELECT COUNT(*) FROM skill_calibrations WHERE source = 'codex'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(codex_rows, 0);
+        let total: i64 = sqlx::query("SELECT COUNT(*) FROM skill_calibrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(total, 5, "the scan-seeded calibrations are untouched");
+        assert_eq!(svc.skill_level("Rifle").await.unwrap(), Some(100.0));
+    }
+
+    #[tokio::test]
+    async fn unclaim_of_an_uncalibrated_skill_claim_removes_only_the_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, pool) = service(dir.path()).await;
+        seed_calibrations(&pool).await;
+
+        // Anatomy has no calibration history, so its claim wrote none
+        // (the documented silent skip); unclaiming it must not touch
+        // Rifle's codex calibration from the earlier rank.
+        svc.claim_rank("Boar", 1, "Rifle").await.unwrap();
+        svc.claim_rank("Boar", 2, "Anatomy").await.unwrap();
+
+        svc.unclaim_rank("Boar").await.unwrap();
+
+        assert_eq!(svc.current_rank("Boar").await.unwrap(), 1);
+        let claims: i64 = sqlx::query("SELECT COUNT(*) FROM codex_claims")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(claims, 1, "only the Anatomy claim is removed");
+        let codex_rows: i64 =
+            sqlx::query("SELECT COUNT(*) FROM skill_calibrations WHERE source = 'codex'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get(0);
+        assert_eq!(codex_rows, 1, "Rifle's codex calibration survives");
+    }
+
+    #[tokio::test]
+    async fn unclaim_requires_a_claimed_latest_rank() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _pool) = service(dir.path()).await;
+
+        // Nothing claimed at all.
+        let error = svc.unclaim_rank("Boar").await.unwrap_err();
+        assert_eq!(invalid(error), "No claimed rank to unclaim for 'Boar'");
+
+        // A rank reached by manual calibration carries no claim to
+        // revert; unclaim refuses rather than silently stepping back.
+        svc.calibrate("Boar", 3).await.unwrap();
+        let error = svc.unclaim_rank("Boar").await.unwrap_err();
+        assert_eq!(invalid(error), "Rank 3 for 'Boar' was not claimed");
+        assert_eq!(svc.current_rank("Boar").await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_unclaims_revert_only_once() {
+        // Two concurrent unclaims of the same claimed rank must not both
+        // succeed: the conditional rank step-back fires for exactly one,
+        // the loser aborts before deleting, so the claim is reverted
+        // once and never double-stepped.
+        for _ in 0..32 {
+            let dir = tempfile::tempdir().unwrap();
+            let (svc, pool) = service(dir.path()).await;
+            seed_calibrations(&pool).await;
+            svc.claim_rank("Boar", 1, "Rifle").await.unwrap();
+
+            let (a, b) = tokio::join!(svc.unclaim_rank("Boar"), svc.unclaim_rank("Boar"));
+            assert!(
+                a.is_ok() ^ b.is_ok(),
+                "exactly one unclaim must win: a={a:?} b={b:?}"
+            );
+
+            let claims: i64 = sqlx::query(
+                "SELECT COUNT(*) FROM codex_claims WHERE species_name = 'Boar' AND rank = 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+            assert_eq!(claims, 0, "the single claim is reverted exactly once");
+
+            let progress: i64 =
+                sqlx::query("SELECT current_rank FROM codex_progress WHERE species_name = 'Boar'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    .get(0);
+            assert_eq!(progress, 0, "rank steps back exactly once");
         }
     }
 }

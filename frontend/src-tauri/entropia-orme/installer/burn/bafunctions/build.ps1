@@ -11,15 +11,24 @@
   Inputs, all pinned to WiX 6.0.2 (matching .config/dotnet-tools.json):
     - NuGet WixToolset.BootstrapperApplicationApi -> BA API + balutil headers/lib
     - NuGet WixToolset.DUtil                      -> dutil headers/lib
-    - wixstdfn base headers + BalBaseBAFunctionsProc.cpp from wixtoolset/wix,
-      at the matching vX.Y.Z tag.
+    - wixstdfn base headers + BalBaseBAFunctionsProc.cpp, vendored in-tree under
+      ./vendor/wixstdfn (no build-time network fetch; see that directory's
+      PROVENANCE.md for the source tag, licence, and per-file SHA-256).
+
+  The build is hermetic by content: the only network inputs are the two NuGets,
+  and each is verified against a recorded SHA-256 and fails closed on mismatch,
+  so a tampered or substituted package aborts the build rather than compiling
+  into the shipped DLL.
 
   Downloads land in ./.build (gitignored); re-runs reuse the cached NuGets.
   Output: ../bafunctions.dll (overwrites). Requires the MSVC x86 cross toolset
   (Visual Studio / Build Tools with "VC.Tools.x86.x64").
 
 .PARAMETER WixVersion
-  The WiX release to pin inputs to. Defaults to 6.0.2.
+  The WiX release to pin inputs to. Defaults to 6.0.2. The vendored wixstdfn
+  sources and the asserted NuGet SHA-256 digests below are pinned to this
+  version; bumping it requires refreshing both (see vendor/wixstdfn/PROVENANCE.md
+  and README.md), or the SHA-256 assertion fails closed by design.
 
 .PARAMETER Clean
   Discard the cached .build directory first.
@@ -37,23 +46,42 @@ $ProgressPreference = "SilentlyContinue"   # the IWR progress bar is slow on lar
 $here  = $PSScriptRoot
 $build = Join-Path $here ".build"
 $pkgDir = Join-Path $build "pkg"
-$fnDir  = Join-Path $build "wixstdfn"
+$fnDir  = Join-Path $here "vendor\wixstdfn"   # vendored in-tree (see vendor/wixstdfn/PROVENANCE.md)
 $fnInc  = Join-Path $fnDir "inc"
 $outDll = Join-Path (Split-Path $here -Parent) "bafunctions.dll"   # installer/burn/bafunctions.dll
 
 if ($Clean -and (Test-Path $build)) { Remove-Item -Recurse -Force $build }
-New-Item -ItemType Directory -Force -Path $pkgDir, $fnInc | Out-Null
+New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-# --- NuGet native packages (.nupkg is a zip): download once, extract, cache ---
+# Expected SHA-256 of each NuGet (.nupkg), pinned to WixVersion. A NuGet package
+# at a fixed id+version is immutable on nuget.org, so these digests are stable;
+# asserting them makes a tampered or substituted package fail the build instead
+# of compiling into the shipped DLL. Refresh both when bumping WixVersion
+# (see README.md "Refreshing the vendored inputs"). Keyed by lowercased id.
+$NupkgSha256 = @{
+    "wixtoolset.bootstrapperapplicationapi" = "899a3d88db31098d87fbb24c2e72fa1d2dbacf9b38af73a91dae762b0653e6f5"
+    "wixtoolset.dutil"                      = "3428929aec192370ae17ac834e05f8b9b423b5346141e277c4f216094830c9de"
+}
+
+# --- NuGet native packages (.nupkg is a zip): download once, verify, extract, cache ---
 function Get-Nupkg([string] $id, [string] $version) {
     $dest = Join-Path $pkgDir $id
     if (Test-Path (Join-Path $dest ".done")) { return $dest }
     $low = $id.ToLowerInvariant()
+    $expected = $NupkgSha256[$low]
+    if (-not $expected) { throw "no pinned SHA-256 for NuGet '$id'; add it to `$NupkgSha256 before building." }
     $url = "https://api.nuget.org/v3-flatcontainer/$low/$version/$low.$version.nupkg"
     $tmp = Join-Path $build "$id.zip"
     Write-Host "==> download $id $version"
     Invoke-WebRequest -Uri $url -OutFile $tmp
+    # Fail closed: a digest mismatch means the bytes are not the pinned package.
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLowerInvariant()
+    if ($actual -ne $expected.ToLowerInvariant()) {
+        Remove-Item -Force $tmp
+        throw "SHA-256 mismatch for $id $version`n  expected $expected`n  actual   $actual`nRefusing to build from an unverified package."
+    }
+    Write-Host "    verified SHA-256 $actual"
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
     [System.IO.Compression.ZipFile]::ExtractToDirectory($tmp, $dest)
     Remove-Item $tmp
@@ -72,13 +100,16 @@ foreach ($p in @($baInc, $baLib, $duInc, $duLib)) {
     if (-not (Test-Path $p)) { throw "expected NuGet payload missing: $p (package layout changed?)" }
 }
 
-# --- wixstdfn base headers + the proc implementation, at the pinned tag ---
-$raw = "https://raw.githubusercontent.com/wixtoolset/wix/v$WixVersion/src/ext/Bal/wixstdfn"
-foreach ($h in @("BAFunctions.h", "IBAFunctions.h", "BalBaseBAFunctions.h", "BalBaseBAFunctionsProc.h")) {
-    Invoke-WebRequest -Uri "$raw/inc/$h" -OutFile (Join-Path $fnInc $h)
-}
+# --- wixstdfn base headers + the proc implementation, vendored in-tree ---
+# No build-time fetch: these are committed under vendor/wixstdfn (provenance and
+# per-file SHA-256 recorded there). Assert they are present so a partial checkout
+# fails with a clear message rather than an opaque compiler error.
 $procCpp = Join-Path $fnDir "BalBaseBAFunctionsProc.cpp"
-Invoke-WebRequest -Uri "$raw/BalBaseBAFunctionsProc.cpp" -OutFile $procCpp
+$vendored = @($procCpp) + @("BAFunctions.h", "IBAFunctions.h", "BalBaseBAFunctions.h", "BalBaseBAFunctionsProc.h" |
+    ForEach-Object { Join-Path $fnInc $_ })
+foreach ($f in $vendored) {
+    if (-not (Test-Path $f)) { throw "vendored wixstdfn source missing: $f (see vendor/wixstdfn/PROVENANCE.md)." }
+}
 
 # --- locate the MSVC x86 cross toolset ---
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"

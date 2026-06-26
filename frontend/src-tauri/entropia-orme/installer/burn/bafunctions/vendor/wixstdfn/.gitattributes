@@ -1,0 +1,4 @@
+# Vendored third-party sources: store and check out verbatim, with no end-of-line
+# conversion, so the bytes always match the SHA-256 digests recorded in
+# PROVENANCE.md on every platform and checkout. (-text keeps readable diffs.)
+* -text

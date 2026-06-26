@@ -341,6 +341,13 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
             .fetch_optional(pool)
             .await?;
     let version: i64 = version.and_then(|raw| raw.parse().ok()).unwrap_or_default();
+
+    // Upgrade-and-adopt as one transaction: the in-place bridge (below) and the
+    // baseline stamp commit together or not at all. A failure in either rolls
+    // back the file to exactly as it was found, honouring the `open_adopted`
+    // "left untouched on a decline" contract; without this, a stamp failure
+    // after the bridge mutated the file would leave a half-upgraded database.
+    let mut tx = pool.begin().await?;
     if version < BASELINE_SCHEMA_VERSION {
         // A below-baseline database the backend process now owns: the
         // co-bundled Python sidecar that used to migrate it forward to the
@@ -348,7 +355,7 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
         // upgrade runs natively here, in place, before the baseline is
         // stamped. Only the single rung an in-the-wild v0.1.0-lineage
         // database occupies is bridged; older schemas stay a refusal.
-        upgrade_to_baseline(pool, version).await?;
+        upgrade_to_baseline(&mut tx, version).await?;
     }
 
     // The ledger row sqlx's own runner would have written had it created
@@ -365,7 +372,7 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
          success BOOLEAN NOT NULL, checksum BLOB NOT NULL, \
          execution_time BIGINT NOT NULL)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
@@ -374,8 +381,9 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
     .bind(baseline.version)
     .bind(baseline.description.as_ref())
     .bind(baseline.checksum.as_ref())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -396,7 +404,13 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
 /// occupies those versions, so the earlier rungs are deliberately not ported;
 /// pinning the bridge to v32 (rather than `BASELINE_SCHEMA_VERSION - 1`) keeps
 /// the rung's DDL coupled to the concrete v32 -> v33 delta it actually applies.
-async fn upgrade_to_baseline(pool: &SqlitePool, version: i64) -> Result<(), DbError> {
+/// Runs inside [`adopt_or_refuse`]'s adopt transaction, so the bridge and the
+/// subsequent baseline stamp share one commit boundary (a failure leaves the
+/// file untouched).
+async fn upgrade_to_baseline(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    version: i64,
+) -> Result<(), DbError> {
     /// The one below-baseline schema version with a native upgrade path.
     const BRIDGEABLE_VERSION: i64 = 32;
     if version != BRIDGEABLE_VERSION {
@@ -407,11 +421,11 @@ async fn upgrade_to_baseline(pool: &SqlitePool, version: i64) -> Result<(), DbEr
     }
     // v33 rung: drop the retired write-only observations table.
     sqlx::query("DROP TABLE IF EXISTS tt_curve_observations")
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     sqlx::query("UPDATE db_metadata SET value = ? WHERE key = 'version'")
         .bind(BASELINE_SCHEMA_VERSION.to_string())
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(())
 }
@@ -816,7 +830,9 @@ mod tests {
         // The retired table is gone, and the version row now matches a fresh
         // v33 database.
         assert!(
-            !table_exists(&db.pool, "tt_curve_observations").await.unwrap(),
+            !table_exists(&db.pool, "tt_curve_observations")
+                .await
+                .unwrap(),
             "the v33 rung drops tt_curve_observations"
         );
         let version: String =
@@ -824,7 +840,10 @@ mod tests {
                 .fetch_one(&db.pool)
                 .await
                 .unwrap();
-        assert_eq!(version, "33", "the upgrade bumps the version row to the baseline");
+        assert_eq!(
+            version, "33",
+            "the upgrade bumps the version row to the baseline"
+        );
         let ledger: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
             .fetch_one(&db.pool)
             .await

@@ -53945,7 +53945,7 @@
     "name": "Holly ECO R41 (L)",
     "economy": {
       "decay": 2.162,
-      "ammo_burn": null
+      "ammo_burn": 1944
     },
     "damage": {
       "impact": 22,
@@ -54002,7 +54002,7 @@
     "name": "Holly ECO R64 (L)",
     "economy": {
       "decay": 2.792,
-      "ammo_burn": null
+      "ammo_burn": 2512
     },
     "damage": {
       "impact": 28,
@@ -54021,7 +54021,7 @@
     "name": "Holly ECO R72 (L)",
     "economy": {
       "decay": 3.007,
-      "ammo_burn": null
+      "ammo_burn": 2709
     },
     "damage": {
       "impact": 31,
@@ -54040,7 +54040,7 @@
     "name": "Holly ECO R80 (L)",
     "economy": {
       "decay": 3.277,
-      "ammo_burn": null
+      "ammo_burn": 2949
     },
     "damage": {
       "impact": 33,
@@ -54059,7 +54059,7 @@
     "name": "Holly ECO P35 (L)",
     "economy": {
       "decay": 1.43,
-      "ammo_burn": null
+      "ammo_burn": 1289
     },
     "damage": {
       "impact": 14,
@@ -54990,7 +54990,7 @@
     "name": "Vincent DPS LP16 (L)",
     "economy": {
       "decay": 0.857,
-      "ammo_burn": null
+      "ammo_burn": 770
     },
     "damage": {
       "impact": 0,
@@ -55009,7 +55009,7 @@
     "name": "Vincent DPS LP20 (L)",
     "economy": {
       "decay": 1.004,
-      "ammo_burn": null
+      "ammo_burn": 902
     },
     "damage": {
       "impact": 0,
@@ -55161,7 +55161,7 @@
     "name": "Vincent DPS R32 (L)",
     "economy": {
       "decay": 1.678,
-      "ammo_burn": null
+      "ammo_burn": 1507
     },
     "damage": {
       "impact": 18,
@@ -56168,7 +56168,7 @@
     "name": "Vincent DPS R43 (L)",
     "economy": {
       "decay": 2.017,
-      "ammo_burn": null
+      "ammo_burn": 1818
     },
     "damage": {
       "impact": 22,
@@ -57213,7 +57213,7 @@
     "name": "Holly ECO P72 (L)",
     "economy": {
       "decay": 2.253,
-      "ammo_burn": null
+      "ammo_burn": 2032
     },
     "damage": {
       "impact": 23,
@@ -57992,7 +57992,7 @@
     "name": "Holly ECO P56 (L)",
     "economy": {
       "decay": 1.869,
-      "ammo_burn": null
+      "ammo_burn": 1682
     },
     "damage": {
       "impact": 19,
@@ -58752,7 +58752,7 @@
     "name": "Vincent DPS P32 (L)",
     "economy": {
       "decay": 1.278,
-      "ammo_burn": null
+      "ammo_burn": 1153
     },
     "damage": {
       "impact": 26,
@@ -58790,7 +58790,7 @@
     "name": "Vincent DPS P43 (L)",
     "economy": {
       "decay": 1.573,
-      "ammo_burn": null
+      "ammo_burn": 1419
     },
     "damage": {
       "impact": 31,

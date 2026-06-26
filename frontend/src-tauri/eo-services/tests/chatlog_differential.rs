@@ -158,6 +158,10 @@ fn curated_edge_lines_parse_identically() {
     let edges = [
         "2026-05-19 10:00:07 [System] [] You received Brown &amp; Gold Paint Value: 0.30 PED",
         "2026-05-19 10:00:07 [System] [] You received Tier &lt;2&gt; Component x (3) Value: 1.50 PED",
+        // 0 / leading-zero counts are not real stack sizes: both arms keep
+        // the literal name with quantity 1 rather than splitting the count.
+        "2026-05-19 10:00:07 [System] [] You received Token x (0) Value: 1.00 PED",
+        "2026-05-19 10:00:07 [System] [] You received Token x (007) Value: 1.00 PED",
         "2026-05-19 10:00:06 [Globals] [] Lucky Finder has found a rare item (Holy Grail) with a value of 90 PED! A record has been added to the Hall of Fame!",
         "2026-05-19 10:00:06 [Globals] [] Lucky Finder has found a rare item (Holy Grail) with a value of 90 PED!",
         "2026-05-19 10:00:06 [Globals] [] Someone killed a creature (Atrox Prowler) with a value of 1500 PED! A record has been added to the Hall of Fame!",

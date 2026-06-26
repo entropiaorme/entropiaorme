@@ -64,7 +64,10 @@ class _Rule:
 
 
 LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.+)$")
-QUANTITY_RE = re.compile(r"^(.+?)\s+x\s+\((\d+)\)$")
+# A real stacked-item count is >= 1 with no leading zeros; ``[1-9]\d*``
+# rejects ``x (0)`` and ``x (007)`` forms, which then keep their literal
+# name with quantity 1. Kept in lockstep with the Rust quantity_re.
+QUANTITY_RE = re.compile(r"^(.+?)\s+x\s+\(([1-9]\d*)\)$")
 
 SYSTEM_MARKER = "[System] []"
 GLOBALS_MARKER = "[Globals]"

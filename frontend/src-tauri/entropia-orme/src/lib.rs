@@ -4,6 +4,9 @@ mod resources;
 mod telemetry;
 mod updater;
 
+#[cfg(feature = "e2e-stub")]
+mod e2e_stub;
+
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
@@ -50,9 +53,15 @@ fn hide_scan_overlay(app: tauri::AppHandle) {
 struct ApiRequest {
     method: String,
     path: String,
+    // Under `e2e-stub` the in-process fixture stub dispatches on method + path
+    // only, so these two are deserialized but unread; the live dispatch below
+    // reads both. Scope the allow to the feature so the live build still flags a
+    // genuinely-unread field.
     #[serde(default)]
+    #[cfg_attr(feature = "e2e-stub", allow(dead_code))]
     headers: Vec<(String, String)>,
     #[serde(default)]
+    #[cfg_attr(feature = "e2e-stub", allow(dead_code))]
     body: Option<String>,
 }
 
@@ -76,28 +85,41 @@ struct ApiResponse {
 /// emits the moment the spine is live (there is no transport-level retry).
 #[tauri::command]
 async fn api_request(app: tauri::AppHandle, request: ApiRequest) -> Result<ApiResponse, String> {
-    let state = app
-        .try_state::<ApiSubstrate>()
-        .ok_or("backend substrate not ready")?
-        .0
-        .clone();
-    let body = request.body.unwrap_or_default().into_bytes();
-    let response = eo_http::dispatch_in_process(
-        state,
-        &request.method,
-        &request.path,
-        &request.headers,
-        body,
-    )
-    .await?;
-    Ok(ApiResponse {
-        status: response.status,
-        status_text: response.status_text,
-        headers: response.headers,
-        // The first slice carries JSON routes; the raw-bytes capture-PNG route
-        // moves to its own base64-returning command in a later slice.
-        body: String::from_utf8_lossy(&response.body).into_owned(),
-    })
+    // The native-shell e2e build serves the suite's committed fixtures from the
+    // in-process stub instead of dispatching the live router, so the real
+    // `invoke('api_request')` transport is exercised against deterministic data
+    // (WebDriver cannot intercept `invoke`). Compiled in only under `e2e-stub`;
+    // dev and release dispatch the live router below.
+    #[cfg(feature = "e2e-stub")]
+    {
+        let _ = &app;
+        Ok(e2e_stub::serve(&request.method, &request.path))
+    }
+    #[cfg(not(feature = "e2e-stub"))]
+    {
+        let state = app
+            .try_state::<ApiSubstrate>()
+            .ok_or("backend substrate not ready")?
+            .0
+            .clone();
+        let body = request.body.unwrap_or_default().into_bytes();
+        let response = eo_http::dispatch_in_process(
+            state,
+            &request.method,
+            &request.path,
+            &request.headers,
+            body,
+        )
+        .await?;
+        Ok(ApiResponse {
+            status: response.status,
+            status_text: response.status_text,
+            headers: response.headers,
+            // The first slice carries JSON routes; the raw-bytes capture-PNG route
+            // moves to its own base64-returning command in a later slice.
+            body: String::from_utf8_lossy(&response.body).into_owned(),
+        })
+    }
 }
 
 /// GET the manual-scan capture preview PNG for `page`, base64-encoded for an

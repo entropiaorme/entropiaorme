@@ -8,8 +8,11 @@
 // onPrepare brings up the full hermetic stack and onComplete tears it down:
 //   * Vite dev server at the shell's dev origin (the debug shell loads its
 //     frontend from the dev URL; the suite navigates the webview there).
-//   * the deterministic stub backend (WebDriver has no request interception),
 //   * tauri-driver bridging WebdriverIO to the matched msedgedriver.
+// The deterministic backend is served in-process by the shell's `e2e-stub`
+// feature (the committed fixtures over the real `api_request` IPC handler), not
+// a separate process: `invoke` cannot be intercepted from the test the way the
+// old loopback `fetch` could not be.
 import { execSync, spawn } from 'node:child_process';
 import http from 'node:http';
 import { homedir } from 'node:os';
@@ -22,12 +25,19 @@ const FRONTEND_DIR = dirname(E2E_DIR);
 
 // Ports: kept off the project anchor pair so a stray app/dev server does not
 // collide with the suite. FRONTEND_PORT is the shell's dev origin (the suite
-// navigates the webview here); BACKEND_PORT is where the stub backend serves.
+// navigates the webview here). BACKEND_PORT is nominal only: the frontend bakes
+// it into the never-dialled API origin so tauriFetch has a valid URL to parse
+// for its path; every call dispatches in-process over invoke.
 const FRONTEND_PORT = process.env.E2E_FRONTEND_PORT || '5173';
 const BACKEND_PORT = process.env.E2E_BACKEND_PORT || '8424';
 const TAURI_DRIVER_PORT = 4444;
 
-export const DEV_URL = `http://localhost:${FRONTEND_PORT}/`;
+// The app's own origin. The e2e shell embeds the frontend (frontendDist) and
+// serves it at tauri://localhost, where IPC is native (exactly as the shipped
+// app), so the suite drives it there rather than a remote dev origin (which
+// Tauri denies IPC). The frontend is built into the shell with E2E_FREEZE_TWEENS
+// for visual determinism; the Vite dev server is no longer the frontend source.
+export const DEV_URL = 'http://tauri.localhost/';
 
 const APP_BINARY = join(FRONTEND_DIR, 'src-tauri', 'target', 'debug', 'entropia-orme.exe');
 const MSEDGEDRIVER = join(E2E_DIR, '.drivers', 'msedgedriver.exe');
@@ -140,7 +150,8 @@ export const config = {
 
 	onPrepare: async () => {
 		// 1. Vite dev server at the shell's dev origin. The frontend bakes the
-		//    backend port from the env, so it dials the stub below.
+		//    nominal backend port from the env (the URL tauriFetch parses for its
+		//    path); every call dispatches in-process over invoke, not to a socket.
 		spawnProc('vite', 'npm', ['run', 'dev'], {
 			cwd: FRONTEND_DIR,
 			shell: true,
@@ -153,21 +164,15 @@ export const config = {
 				E2E_FREEZE_TWEENS: '1',
 			},
 		});
-		// 2. Deterministic stub backend (hermetic data; WebDriver cannot mock).
-		//    Inherit stdio so its loud "UNMATCHED <route>" fall-through warnings
-		//    surface in the run output: a surface under test whose endpoint is not
-		//    modelled is then visible rather than silently baked into a baseline.
-		spawnProc('stub', 'node', [join(E2E_DIR, 'stub-backend.mjs')], {
-			cwd: FRONTEND_DIR,
-			env: { ...process.env, STUB_PORT: BACKEND_PORT, STUB_HOST: '127.0.0.1' },
-			stdio: 'inherit',
-		});
-		// 3. tauri-driver bridging to the matched msedgedriver.
+		// 2. tauri-driver bridging to the matched msedgedriver. The deterministic
+		//    backend is no longer a separate HTTP process: the e2e shell is built
+		//    with the `e2e-stub` feature, which serves the committed fixtures from
+		//    the in-process `api_request` IPC handler (WebDriver cannot intercept
+		//    `invoke`, so the stub lives in the shell, not the harness).
 		spawnProc('tauri-driver', TAURI_DRIVER, ['--native-driver', MSEDGEDRIVER]);
 
 		await Promise.all([
 			waitForHttp('vite', `http://localhost:${FRONTEND_PORT}/`),
-			waitForHttp('stub', `http://127.0.0.1:${BACKEND_PORT}/api/tracking/snapshot`),
 			waitForHttp('tauri-driver', `http://127.0.0.1:${TAURI_DRIVER_PORT}/status`),
 		]);
 	},

@@ -11,6 +11,15 @@ publish = false
 name = "entropia_orme_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
+# `e2e-stub` compiles in the native-shell e2e suite's deterministic backend stub
+# at the `api_request` IPC boundary (see src/e2e_stub.rs). The e2e build embeds
+# the frontend and drives it at the app's own tauri:// origin, which has native
+# IPC, so no remote-origin grant is needed. Enabled ONLY by the e2e build
+# (`tauri build --features e2e-stub`); dev and release never enable it, so the
+# shipped binary is byte-for-byte unaffected.
+[features]
+e2e-stub = []
+
 [build-dependencies]
 tauri-build = { workspace = true }
 

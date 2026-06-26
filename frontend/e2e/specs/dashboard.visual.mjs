@@ -1,5 +1,10 @@
 import { $, browser, expect } from '@wdio/globals';
-import { animationsFinished, ensureDashboard, settleSize } from '../helpers/onboarding.mjs';
+import {
+	animationsFinished,
+	ensureDashboard,
+	ensureViewport,
+	settleSize,
+} from '../helpers/onboarding.mjs';
 import { DEV_URL } from '../wdio.conf.mjs';
 
 // Dashboard visual regression against committed baselines, captured in the real
@@ -20,6 +25,7 @@ const BUDGET = 1.5; // small budget for sub-pixel AA noise; a real change is far
 describe('dashboard visual regression (native Tauri shell)', () => {
 	before(async () => {
 		await ensureDashboard(browser, DEV_URL);
+		await ensureViewport(browser);
 	});
 
 	it('matches the committed stat-cell baseline', async () => {
@@ -42,6 +48,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		// Settle the WAAPI stat-grid FLIP and the cell's own box before the shot:
 		// the prior "visually identical yet 32%" diff was a sub-pixel transform
 		// captured mid-flip (disableCSSAnimations cannot reach a Web Animation).
+		await ensureViewport(browser);
 		await animationsFinished(browser);
 		await settleSize(browser, cell, { min: 40 });
 		const mismatch = await browser.checkElement(cell, 'dashboard-stat-cell', VISUAL_OPTS);
@@ -64,6 +71,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 			},
 			{ timeout: 12000, timeoutMsg: 'recent-events never hydrated all 3 fixture rows' },
 		);
+		await ensureViewport(browser);
 		await animationsFinished(browser);
 		await settleSize(browser, events, { min: 90 });
 		const mismatch = await browser.checkElement(events, 'dashboard-recent-events', VISUAL_OPTS);
@@ -82,6 +90,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		await widgets
 			.$('svg[aria-label^="Per-kill multiplier sparkline"]')
 			.waitForExist({ timeout: 12000 });
+		await ensureViewport(browser);
 		await animationsFinished(browser);
 		// The panel must have reached its full (non-collapsed) height: the prior
 		// 88% diff was the flex-1 widgets area squeezed to the tab strip mid-reflow.
@@ -108,6 +117,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 			timeout: 12000,
 			timeoutMsg: 'loot composition never rendered all ranked rows',
 		});
+		await ensureViewport(browser);
 		await animationsFinished(browser);
 		await settleSize(browser, widgets, { min: 500 });
 		const mismatch = await browser.checkElement(widgets, 'dashboard-loot-composition', VISUAL_OPTS);

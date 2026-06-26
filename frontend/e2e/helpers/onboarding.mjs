@@ -84,6 +84,59 @@ export async function animationsFinished(browser) {
 	});
 }
 
+// Re-assert the capture window size and poll the INNER content viewport until it
+// reaches target, recovering the WebView2 inner-viewport collapse before a shot.
+//
+// The collapse is an INNER glitch, not an outer resize: tauri-driver / WebView2
+// intermittently shrinks the webview's content viewport (observed inner ~340x242
+// / ~780x106) while the OUTER window stays 1600x1000. So setWindowSize alone is a
+// no-op (the outer is already at target) and only a relayout nudge (resize +2px
+// then back, a net no-op that forces WebView2 to recompute the content viewport)
+// frees the inner area. Every visual baseline is captured at 1600x1000, so a shot
+// taken while the inner viewport is collapsed reflows the whole layout and swings
+// the diff; this gates every capture on a recovered inner viewport and throws
+// loud if it cannot be cleared, so a collapsed frame fails with a clear message
+// rather than being baked into a baseline. Call before every visual capture and
+// after any navigation / reload, not only at onboarding.
+export async function ensureViewport(browser, { timeout = 8000 } = {}) {
+	const TARGET_W = 1600;
+	const TARGET_H = 1000;
+	// The e2e window is decoration-less, so the inner viewport tracks the outer
+	// size closely; a small tolerance absorbs scrollbar / rounding deltas.
+	const TOL = 40;
+	const readInner = () => browser.execute(() => ({ w: window.innerWidth, h: window.innerHeight }));
+	const onTarget = (vp) => Math.abs(vp.w - TARGET_W) <= TOL && Math.abs(vp.h - TARGET_H) <= TOL;
+
+	let inner = await readInner();
+	if (onTarget(inner)) return inner;
+
+	console.log(
+		`[onboarding] ensureViewport: detected inner-viewport collapse ${inner.w}x${inner.h}, recovering`,
+	);
+	const deadline = Date.now() + timeout;
+	while (Date.now() < deadline) {
+		try {
+			await browser.setWindowSize(TARGET_W, TARGET_H);
+			// Relayout nudge: a net no-op (+2px then back) that forces WebView2 to
+			// recompute the content viewport even though the outer size is unchanged.
+			await browser.setWindowSize(TARGET_W + 2, TARGET_H + 2);
+			await browser.setWindowSize(TARGET_W, TARGET_H);
+		} catch {
+			// Outer resize rejected on this attempt; re-read in case the nudge took.
+		}
+		inner = await readInner();
+		if (onTarget(inner)) {
+			console.log(`[onboarding] ensureViewport: recovered inner viewport to ${inner.w}x${inner.h}`);
+			return inner;
+		}
+		await browser.pause(150);
+	}
+	throw new Error(
+		`inner viewport never recovered to ${TARGET_W}x${TARGET_H} (last ${inner.w}x${inner.h}); ` +
+			'the WebView2 content-viewport collapse could not be cleared',
+	);
+}
+
 export async function ensureDashboard(browser, devUrl) {
 	// Pin a large, fixed window before anything renders. Two reasons: (1) the
 	// dashboard's flex-height layout needs a definite viewport height or its
@@ -125,9 +178,12 @@ export async function ensureDashboard(browser, devUrl) {
 		await browser.pause(250);
 	}
 
-	// The debug shell launches at about:blank (the dev URL is injected by the
-	// `tauri dev` CLI, absent when tauri-driver launches the binary directly),
-	// so navigate the real webview to the dev origin ourselves.
+	// Navigate the attached webview to the app's own origin (devUrl). The e2e
+	// shell embeds the frontend and serves it at tauri://localhost, which has
+	// native IPC (exactly as the shipped app), so the suite drives the real
+	// invoke('api_request') transport there rather than a remote dev origin
+	// (which Tauri denies IPC). tauri-driver attaches to an arbitrary one of the
+	// app's webviews, so this navigation to the main route is explicit.
 	await browser.url(devUrl);
 
 	// Let the app settle: the layout's onMount runs an async init and only THEN

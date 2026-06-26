@@ -7,21 +7,23 @@
 //! progress and claims live in the application database; claim and
 //! calibration timestamps stamp from the injected clock.
 //!
-//! Two original behaviours are reproduced deliberately rather than
+//! One original behaviour is reproduced deliberately rather than
 //! repaired, so the port stays equivalence-comparable:
 //!
-//! - **Check-then-act claim validation.** `claim_rank` reads
-//!   `current_rank` and validates before the write group starts (the
-//!   original validates before taking its database lock), so two
-//!   racing claims for the same species can both observe the same
-//!   rank and both record. The write group itself is atomic (the
-//!   original's re-entrant lock plus single commit maps to one
-//!   transaction here), but the validation window stays open.
 //! - **Silent calibration skip.** A claimed reward only lands in
 //!   `skill_calibrations` when the skill already has a calibration
 //!   history; a first-ever claim for an uncalibrated skill records
 //!   the claim and updates progress but writes no calibration row,
 //!   so the reward's levels never reach the skill curve.
+//!
+//! The original's check-then-act claim validation (it read
+//! `current_rank` and validated before taking its database lock, so
+//! two racing claims for the same rank could both observe it and both
+//! record a reward) is NOT reproduced: `claim_rank` advances progress
+//! with a conditional upsert gated on the prior rank, so of two racing
+//! claims exactly one advances and the loser aborts. In serial use the
+//! guard always holds, so single-threaded behaviour (and the
+//! cross-language differential) is identical while the race is closed.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -232,9 +234,11 @@ impl CodexService {
             ))
         })?;
 
-        // Validation reads run before the write transaction opens (the
-        // original validates before taking its lock); see the module
-        // doc for the check-then-act window this preserves.
+        // A fast-path pre-check for the friendly "expected rank N"
+        // error. It is advisory only: the authoritative, race-free rank
+        // guard is the conditional progress upsert inside the
+        // transaction below, so this read outside the lock cannot admit
+        // a double claim.
         let current_rank = self.current_rank(species_name).await?;
         if rank != current_rank + 1 {
             return Err(CodexError::Invalid(format!(
@@ -270,9 +274,42 @@ impl CodexService {
 
         let now = naive_to_epoch(self.clock.now());
 
-        // The original's re-entrant lock plus single commit groups the
-        // writes; one transaction reproduces that atomicity.
+        // One transaction groups the writes. Progress advances FIRST,
+        // through a conditional upsert gated on the prior rank, so the
+        // check-then-act window is closed: the stored rank equals
+        // rank-1 only until the first racer advances it, so of two
+        // racing claims for the same rank the upsert fires for exactly
+        // one. The loser sees zero rows affected and aborts before any
+        // claim or calibration is written. In serial use the guard
+        // always holds, so behaviour (and the differential) is
+        // unchanged. (For the new-species rank-1 claim there is no row
+        // yet, so the plain INSERT path applies and a racing second
+        // INSERT conflicts onto the now-false guard.)
         let mut tx = self.pool.begin().await.map_err(CodexError::Db)?;
+        let advanced = sqlx::query(
+            "INSERT INTO codex_progress (species_name, current_rank, updated_at) VALUES (?, ?, ?) \
+             ON CONFLICT(species_name) DO UPDATE SET current_rank = ?, updated_at = ? \
+             WHERE codex_progress.current_rank = ? - 1",
+        )
+        .bind(species_name)
+        .bind(rank)
+        .bind(now)
+        .bind(rank)
+        .bind(now)
+        .bind(rank)
+        .execute(&mut *tx)
+        .await
+        .map_err(CodexError::Db)?
+        .rows_affected();
+        if advanced == 0 {
+            // Another claim advanced this species' rank between our
+            // validation read and this write; abort as the race loser
+            // (the transaction rolls back on drop, so nothing lands).
+            return Err(CodexError::Invalid(format!(
+                "Rank {rank} for '{species_name}' was already claimed"
+            )));
+        }
+
         sqlx::query(
             "INSERT INTO codex_claims (species_name, rank, skill_name, ped_value, claimed_at, kind) \
              VALUES (?, ?, ?, ?, ?, 'rank')",
@@ -281,19 +318,6 @@ impl CodexService {
         .bind(rank)
         .bind(skill_name)
         .bind(ped_value)
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(CodexError::Db)?;
-
-        sqlx::query(
-            "INSERT INTO codex_progress (species_name, current_rank, updated_at) VALUES (?, ?, ?) \
-             ON CONFLICT(species_name) DO UPDATE SET current_rank = ?, updated_at = ?",
-        )
-        .bind(species_name)
-        .bind(rank)
-        .bind(now)
-        .bind(rank)
         .bind(now)
         .execute(&mut *tx)
         .await
@@ -1225,5 +1249,47 @@ mod tests {
         assert!(options[2..]
             .iter()
             .all(|option| option["recommendRank"] == Value::Null));
+    }
+
+    #[tokio::test]
+    async fn concurrent_claims_record_only_one_rank() {
+        // Two concurrent claims for the same next rank must not both
+        // succeed: the conditional progress upsert advances exactly one
+        // and the loser aborts, so no rank is double-credited. The race
+        // runs over many fresh databases; tokio::join! interleaves the
+        // two claims' validation reads before either writes (the precise
+        // check-then-act window), so the pre-fix unconditional upsert
+        // double-records and this invariant fails.
+        for _ in 0..32 {
+            let dir = tempfile::tempdir().unwrap();
+            let (svc, pool) = service(dir.path()).await;
+            seed_calibrations(&pool).await;
+
+            let (a, b) = tokio::join!(
+                svc.claim_rank("Boar", 1, "Rifle"),
+                svc.claim_rank("Boar", 1, "Rifle"),
+            );
+            assert!(
+                a.is_ok() ^ b.is_ok(),
+                "exactly one claim must win: a={a:?} b={b:?}"
+            );
+
+            let claims: i64 = sqlx::query(
+                "SELECT COUNT(*) FROM codex_claims WHERE species_name = 'Boar' AND rank = 1",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .get(0);
+            assert_eq!(claims, 1, "exactly one claim row may be recorded");
+
+            let progress: i64 =
+                sqlx::query("SELECT current_rank FROM codex_progress WHERE species_name = 'Boar'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                    .get(0);
+            assert_eq!(progress, 1, "progress advances exactly once");
+        }
     }
 }

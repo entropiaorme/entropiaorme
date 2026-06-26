@@ -20,3 +20,4 @@ Every record here describes a decision that has landed in the codebase, so each 
 | [ADR-0012](0012-supervised-worker-threads.md) | Named, owned, supervised worker threads |
 | [ADR-0013](0013-in-process-collapse.md) | Collapse to a single in-process Rust binary |
 | [ADR-0014](0014-release-engineering.md) | Bespoke installer, signed auto-update, and a provenance-bearing release pipeline |
+| [ADR-0015](0015-candle-ocr-backend-not-adopted.md) | Native candle OCR backend evaluated and not adopted; ONNX Runtime kept as the sole recogniser |

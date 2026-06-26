@@ -419,7 +419,13 @@ class SkillScanManual:
             except Exception as exc:
                 log.error("Manual skill scan: page %d error: %s", page_num, exc)
                 levels = {}
-            all_skills.update(levels)
+            # Order-independent merge: a duplicate skill name keeps the
+            # MAXIMUM level seen across pages (a lower reading is an OCR
+            # underread), while first-seen key position is preserved so the
+            # output order stays stable. Mirrors the Rust extract_levels.
+            for name, level in levels.items():
+                prev = all_skills.get(name)
+                all_skills[name] = level if prev is None else max(prev, level)
             with self._lock:
                 done, total = self._processing_progress
                 self._processing_progress = (done + 1, total)

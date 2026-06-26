@@ -890,7 +890,9 @@ pub fn opt_list_of_int(
 }
 
 /// The backend's unhandled-exception reply, for the legs that
-/// reproduce it deliberately (an integer beyond the storage range).
+/// reproduce it deliberately (a beyond-i64 integer in the request
+/// BODY, or a surrogate-tainted binding). Out-of-range path ids no
+/// longer land here: they answer a clean 404 (a missing resource).
 pub fn internal_server_error() -> Response<Body> {
     Response::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)

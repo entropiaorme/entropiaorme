@@ -710,11 +710,56 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
         "",
     )
     .await;
-    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(body, b"Internal Server Error");
+    // A beyond-i64 path id can never name a stored quest, so it is a
+    // clean 404 (a missing resource), like the decoded-slash case below.
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(body, b"{\"detail\":\"Not Found\"}");
     let (status, _, body) = send_json(port, "POST", "/api/quests/A%2FB/start", "").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Not Found\"}");
+}
+
+/// A5: an integer path id beyond i64 names no stored row, so every
+/// int-id route answers a clean 404 (a missing resource) rather than
+/// the old unhandled-overflow 500. The body-carrying routes resolve
+/// the 404 only after the body validates clean (a deferred 404).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn out_of_range_path_id_is_not_found() {
+    let (port, _state, _dir) = serve_substrate().await;
+    let big = "99999999999999999999999999"; // > i64::MAX
+
+    // No-body int-id routes (via `path_id`): every method answers the
+    // framework 404, like the decoded-slash case.
+    let no_body: [(&str, String); 6] = [
+        ("DELETE", format!("/api/quests/{big}")),
+        ("POST", format!("/api/quests/{big}/start")),
+        ("POST", format!("/api/quests/{big}/complete")),
+        ("DELETE", format!("/api/quests/playlists/{big}")),
+        ("GET", format!("/api/equipment/library/{big}/detail")),
+        ("DELETE", format!("/api/equipment/library/{big}")),
+    ];
+    for (method, path) in &no_body {
+        let (status, _, body) = send_json(port, method, path, "").await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
+        assert_eq!(body, b"{\"detail\":\"Not Found\"}", "{method} {path}");
+    }
+
+    // Body-carrying int-id routes (via `path_param`): an overflow id on
+    // an otherwise-clean body resolves to the deferred 404.
+    let clean_body: [(&str, String, &str); 4] = [
+        ("PUT", format!("/api/quests/{big}"), "{\"name\": \"X\"}"),
+        ("POST", format!("/api/quests/{big}/cancel"), ""),
+        ("PUT", format!("/api/quests/playlists/{big}"), "{\"name\": \"X\"}"),
+        (
+            "PUT",
+            format!("/api/equipment/library/{big}"),
+            "{\"type\":\"weapon\",\"catalog_id\":\"x\"}",
+        ),
+    ];
+    for (method, path, body) in &clean_body {
+        let (status, _, _) = send_json(port, method, path, body).await;
+        assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1234,8 +1279,8 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing", "missing"]);
 
-    // Beyond-i64 path ids validate (Python's int is unbounded) and
-    // crash at the handler's first binding AFTER the envelope.
+    // A beyond-i64 path id carries no validation issue, so a bad body
+    // still renders its 422 envelope first (aggregation preserved)...
     let (status, _, body) = send_json(
         port,
         "PUT",
@@ -1245,6 +1290,8 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["float_parsing"]);
+    // ...and on an otherwise-clean request it resolves to a clean 404
+    // (the id can never name a stored row), a deferred 404.
     let (status, _, _) = send_json(
         port,
         "PUT",
@@ -1252,7 +1299,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
         "{\"name\": \"X\"}",
     )
     .await;
-    assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
 
     // Beyond-i64 BODY integers answer the deferred 500 across the
     // dump builders (quest update field, playlist quest_ids, playlist

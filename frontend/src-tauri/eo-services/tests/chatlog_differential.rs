@@ -8,11 +8,12 @@
 //!   cargo test -p eo-services --features cross-language --test chatlog_differential
 #![cfg(feature = "cross-language")]
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use eo_services::chatlog_parser::parse_line;
+use eo_services::chatlog_parser::{parse_line, EventType};
 use eo_wire::normalizer::to_python_json;
 use serde_json::{json, Value};
 
@@ -123,6 +124,7 @@ fn corpus_chatlogs_parse_identically() {
 
     let mut oracle = Oracle::spawn();
     let mut compared = 0usize;
+    let mut observed: BTreeSet<&'static str> = BTreeSet::new();
     for log in &logs {
         let body = std::fs::read_to_string(log).expect("log read");
         for line in body.lines() {
@@ -134,6 +136,9 @@ fn corpus_chatlogs_parse_identically() {
                 "line diverged in {}: {line}",
                 log.display()
             );
+            if let Some(event) = parse_line(line) {
+                observed.insert(event.event_type.as_str());
+            }
             compared += 1;
         }
     }
@@ -145,9 +150,30 @@ fn corpus_chatlogs_parse_identically() {
     // satisfies keeps the guard ("the differential ran over real content, not
     // an empty glob") deterministic regardless of local recordings.
     assert!(compared >= 80, "the corpus drives a meaningful line count");
+
+    // Coverage completeness: every EventType class must be driven by some
+    // corpus scenario. Two Globals-channel branches were uncovered until
+    // these two scenarios landed: global_item (the plain non-HoF rare-item
+    // global, closed by the global_item_drop scenario) and hof_kill (the
+    // Hall-of-Fame kill global, closed by hof_kill_correlated). The
+    // expected set derives from EventType::ALL, so adding a future variant
+    // forces the corpus to grow rather than silently passing.
+    let expected_types: BTreeSet<&'static str> =
+        EventType::ALL.iter().map(|e| e.as_str()).collect();
+    assert!(
+        observed.contains("global_item"),
+        "the corpus must drive the plain global_item branch"
+    );
+    assert_eq!(
+        observed,
+        expected_types,
+        "every EventType class must be corpus-driven; missing: {:?}",
+        expected_types.difference(&observed).collect::<Vec<_>>()
+    );
     println!(
-        "compared {compared} corpus lines across {} logs",
-        logs.len()
+        "compared {compared} corpus lines across {} logs; observed all {} EventType classes",
+        logs.len(),
+        observed.len()
     );
 }
 

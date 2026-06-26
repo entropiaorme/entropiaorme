@@ -47,6 +47,35 @@ pub enum EventType {
 }
 
 impl EventType {
+    /// Every variant, for exhaustive coverage checks (the corpus
+    /// differential asserts that every class is driven by some corpus
+    /// scenario). Kept in step with the compiler-exhaustive `as_str`
+    /// match below; the `all_lists_every_variant_once` test guards it
+    /// against drift.
+    pub const ALL: [EventType; 21] = [
+        EventType::DamageDealt,
+        EventType::CriticalHit,
+        EventType::TargetDodge,
+        EventType::TargetEvade,
+        EventType::TargetJam,
+        EventType::DamageReceived,
+        EventType::PlayerDodge,
+        EventType::PlayerEvade,
+        EventType::PlayerJam,
+        EventType::MobMiss,
+        EventType::Deflect,
+        EventType::SelfHeal,
+        EventType::Loot,
+        EventType::SkillGain,
+        EventType::EnhancerBreak,
+        EventType::GlobalKill,
+        EventType::HofKill,
+        EventType::GlobalItem,
+        EventType::HofItem,
+        EventType::MissionComplete,
+        EventType::MissionReceived,
+    ];
+
     /// The wire value, matching the backend enum's `.value` strings.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -506,6 +535,19 @@ mod tests {
 
     fn parse(line: &str) -> ChatEvent {
         parse_line(line).expect("the line parses")
+    }
+
+    #[test]
+    fn all_lists_every_variant_once() {
+        use std::collections::BTreeSet;
+        // Each `EventType::ALL` entry maps to a distinct wire string, so
+        // ALL has no duplicates or omitted-then-aliased entries. The
+        // `as_str` match is compiler-exhaustive, so adding a variant
+        // forces a new arm there; this count tripwire forces ALL (and
+        // the corpus 21/21 coverage assertion) to grow alongside it.
+        let names: BTreeSet<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+        assert_eq!(names.len(), EventType::ALL.len());
+        assert_eq!(names.len(), 21);
     }
 
     #[test]

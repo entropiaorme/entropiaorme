@@ -570,8 +570,10 @@ proptest! {
         );
     }
 
+    // `from` ranges past the curve ceiling (20000) so the differential
+    // exercises the above-ceiling floor rather than staying blind to it.
     #[test]
-    fn levels_for_tt_value_matches(from in 0.0f64..20000.0, ped in -10.0f64..5000.0) {
+    fn levels_for_tt_value_matches(from in 0.0f64..21000.0, ped in -10.0f64..5000.0) {
         let reply = oracle().lock().unwrap().ask(
             &json!({"op": "levels_for_tt_value", "from_level": from, "ped_value": ped}),
         );

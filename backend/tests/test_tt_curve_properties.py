@@ -99,3 +99,19 @@ def test_levels_for_tt_value_is_monotone_in_ped(frm, p1, p2):
 def test_levels_saturates_at_the_curve_ceiling():
     frm = 100.0
     assert levels_for_tt_value(frm, 1e12) == pytest.approx(_MAX - frm)
+
+
+@given(
+    st.floats(
+        min_value=_MAX + 0.01,
+        max_value=_MAX + 5000.0,
+        allow_nan=False,
+        allow_infinity=False,
+    ),
+    _PED,
+)
+def test_levels_for_tt_value_never_negative_above_the_ceiling(frm, ped):
+    # A skill calibrated above the curve ceiling must not lose levels to
+    # a codex reward: the buy floors at zero, never negative (mirrors the
+    # Rust guard so the cross-language differential stays honest).
+    assert levels_for_tt_value(frm, ped) >= 0.0

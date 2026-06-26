@@ -320,6 +320,16 @@ fn hof_item_drop_matches_the_goldens() {
 }
 
 #[test]
+fn global_item_drop_matches_the_goldens() {
+    replay_against_goldens("scripted", "global_item_drop", "TestPlayer");
+}
+
+#[test]
+fn hof_kill_correlated_matches_the_goldens() {
+    replay_against_goldens("scripted", "hof_kill_correlated", "TestPlayer");
+}
+
+#[test]
 fn placeholder_recorded_hunt_matches_the_goldens() {
     replay_against_goldens("recorded", "placeholder_recorded_hunt", "");
 }

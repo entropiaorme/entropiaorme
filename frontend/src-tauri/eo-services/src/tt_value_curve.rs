@@ -93,7 +93,9 @@ pub fn tt_value_of_gain(from_level: f64, to_level: f64) -> f64 {
 
 /// How many skill levels `ped_value` PED of TT buys starting from
 /// `from_level`: the same 64-iteration bisection as the backend, so the
-/// returned fraction is bit-identical.
+/// returned fraction is bit-identical. Never negative: a `from_level`
+/// past the curve ceiling buys zero levels, not a negative span (skill
+/// progress is monotonic non-decreasing).
 pub fn levels_for_tt_value(from_level: f64, ped_value: f64) -> f64 {
     let curve = curve();
     if ped_value <= 0.0 {
@@ -103,7 +105,11 @@ pub fn levels_for_tt_value(from_level: f64, ped_value: f64) -> f64 {
     let mut lo = from_level;
     let mut hi = *curve.levels.last().expect("non-empty curve") as f64;
     if target_tt >= *curve.tt_values.last().expect("non-empty curve") {
-        return hi - from_level;
+        // Floor at zero: a skill calibrated above the curve ceiling
+        // (from_level > the top anchor) would otherwise yield a
+        // negative buy, which a codex reward applies as a calibration
+        // DECREASE. A non-positive buy is zero.
+        return (hi - from_level).max(0.0);
     }
     for _ in 0..64 {
         let mid = (lo + hi) / 2.0;
@@ -155,6 +161,18 @@ mod tests {
         let max_level = max_tt_curve_level() as f64;
         let everything = tt_value_at(max_level) + 1000.0;
         assert_eq!(levels_for_tt_value(5.0, everything), max_level - 5.0);
+    }
+
+    #[test]
+    fn beyond_curve_ceiling_never_returns_negative() {
+        // A skill calibrated above the curve ceiling must not lose
+        // levels to a codex reward: the buy floors at zero rather than
+        // going negative (which would decrease the calibration).
+        let max_level = max_tt_curve_level() as f64;
+        assert_eq!(levels_for_tt_value(max_level, 5.0), 0.0);
+        assert_eq!(levels_for_tt_value(max_level + 1.0, 5.0), 0.0);
+        assert_eq!(levels_for_tt_value(max_level + 5000.0, 1000.0), 0.0);
+        assert!(levels_for_tt_value(max_level + 5000.0, 1000.0) >= 0.0);
     }
 
     proptest! {

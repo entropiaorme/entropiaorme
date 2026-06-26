@@ -4,12 +4,14 @@
 //! the integer level parse, the bar fill-ratio estimate, and the
 //! fuzzy name resolution against the canonical vocabulary.
 //!
-//! `fuzzy_resolve` deliberately reproduces the original's resolution
-//! exactly, including its known defect: the fuzzy fallback has no
-//! score floor, so a name absent from the vocabulary force-matches
-//! its nearest entry. The committed reference outputs pin that
-//! behaviour; the fix lands in both implementations together after
-//! the cutover.
+//! `fuzzy_resolve` applies a minimum-score floor (`FUZZY_SCORE_FLOOR`):
+//! below it the OCR text resembles no known skill, so it is left
+//! unresolved rather than force-matched to its nearest entry (a
+//! confident wrong label would silently corrupt skill tracking, whereas
+//! a drop is recoverable by re-scanning). The floor is kept
+//! byte-identical with the Python parser. It deliberately does not chase
+//! same-band cross-skill matches of a skill ABSENT from the vocabulary
+//! (a vocabulary-completeness matter, not a floor one).
 //!
 //! The text recogniser arrives as an injected reader, so this module
 //! stays hermetically testable and the engine wiring lives with the
@@ -140,10 +142,22 @@ fn norm_name(s: &str) -> String {
         .collect()
 }
 
-/// Resolve an OCR name to its canonical vocabulary entry: exact
-/// match, then the whitespace/case-collapsed match, then the fuzzy
-/// top-1 WITHOUT a score floor (the reproduced defect: an absent
-/// name force-matches its nearest entry).
+/// The minimum rapidfuzz WRatio a fuzzy candidate must score to be
+/// accepted. 60 is the empirically-observed lower bound of a legitimate
+/// match (a single-transposition typo of a PRESENT skill scores ~60);
+/// below it the read resembles no known skill and is far likelier OCR
+/// garbage than a real skill, so it is dropped rather than force-matched
+/// to a confident wrong label. The floor is deliberately not raised to
+/// chase same-band cross-skill force-matches of an ABSENT skill: a
+/// global floor cannot separate those from legitimate typos, so they
+/// belong to vocabulary completeness, not to discarding real reads.
+/// MUST stay byte-identical with the Python parser's `_FUZZY_SCORE_FLOOR`.
+const FUZZY_SCORE_FLOOR: f64 = 60.0;
+
+/// Resolve an OCR name to its canonical vocabulary entry: exact match,
+/// then the whitespace/case-collapsed match, then the fuzzy top-1 if it
+/// scores at or above `FUZZY_SCORE_FLOOR` (a below-floor read is left
+/// unresolved rather than force-matched to its nearest entry).
 pub fn fuzzy_resolve(
     ocr_text: &str,
     vocab: &[String],
@@ -170,7 +184,13 @@ pub fn fuzzy_resolve(
         .map(|(entry, score)| (entry.to_string(), score))
         .collect();
     match candidates.first() {
-        Some((top, score)) => (Some(top.clone()), *score, candidates.clone()),
+        Some((top, score)) if *score >= FUZZY_SCORE_FLOOR => {
+            (Some(top.clone()), *score, candidates.clone())
+        }
+        // Below the floor: the read resembles no known skill, so leave it
+        // unresolved (downstream drops None-name rows) rather than
+        // force-match its nearest entry to a confident wrong label.
+        Some((_, score)) => (None, *score, candidates.clone()),
         None => (None, 0.0, Vec::new()),
     }
 }
@@ -368,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn names_resolve_exact_collapsed_then_fuzzy_without_a_floor() {
+    fn names_resolve_exact_collapsed_then_fuzzy_with_a_floor() {
         let vocab: Vec<String> = ["Whip", "Food Technology", "Combat Reflexes"]
             .iter()
             .map(|s| s.to_string())
@@ -390,18 +410,19 @@ mod tests {
         assert!(score > 90.0);
         assert_eq!(candidates.len(), 3);
 
-        // THE REPRODUCED DEFECT: no score floor, so a name absent
-        // from the vocabulary force-matches its nearest entry.
+        // Above the floor, a high-scoring cross-skill match still
+        // resolves: "Food Technology" shares the "Technology" token with
+        // "Wood Technology" (WRatio 93.33). A global floor cannot
+        // separate this from a legitimate typo; it is a
+        // vocabulary-completeness residual (the real skill is absent from
+        // this gappy vocab), addressed by refreshing the vocabulary, not
+        // by the floor.
         let gappy: Vec<String> = ["Wood Technology", "Whip"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let (name, score, _) = fuzzy_resolve("Food Technology", &gappy);
-        assert_eq!(
-            name.as_deref(),
-            Some("Wood Technology"),
-            "the vocabulary gap force-matches"
-        );
+        assert_eq!(name.as_deref(), Some("Wood Technology"));
         assert!((score - 93.33333333333333).abs() < 1e-9);
 
         // Blank input resolves to nothing.
@@ -411,6 +432,32 @@ mod tests {
         assert!(candidates.is_empty());
         let (name, _, _) = fuzzy_resolve("x", &[]);
         assert_eq!(name, None);
+    }
+
+    #[test]
+    fn fuzzy_resolve_floors_unknown_names_to_none() {
+        // A read that resembles no known skill scores below the floor and
+        // is left unresolved, rather than force-matched to its nearest
+        // vocabulary entry. Downstream drops the None-name row.
+        let vocab: Vec<String> = ["Wood Technology", "Whip", "Combat Reflexes"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (name, score, candidates) = fuzzy_resolve("qzxwv", &vocab);
+        assert_eq!(name, None, "below-floor garbage is not force-matched");
+        assert!(
+            score < super::FUZZY_SCORE_FLOOR,
+            "the rejected candidate scored {score}, expected below the floor"
+        );
+        // The candidate list is still surfaced (callers may inspect it),
+        // even though the top scored below the floor.
+        assert!(!candidates.is_empty());
+
+        // A genuine typo of a PRESENT skill stays above the floor and
+        // still resolves (the floor does not discard real reads).
+        let (name, score, _) = fuzzy_resolve("Combat Reflexs", &vocab);
+        assert_eq!(name.as_deref(), Some("Combat Reflexes"));
+        assert!(score >= super::FUZZY_SCORE_FLOOR);
     }
 
     fn panel() -> BgrImage {

@@ -331,6 +331,82 @@ mod tests {
         }
     }
 
+    /// Captures the message + `attached` field of each `eo::input` event,
+    /// so the input breadcrumbs can be asserted in-process.
+    #[derive(Default, Debug)]
+    struct EventCapture {
+        message: String,
+        attached: Option<bool>,
+    }
+
+    impl tracing::field::Visit for EventCapture {
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            if field.name() == "attached" {
+                self.attached = Some(value);
+            }
+        }
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.message = format!("{value:?}");
+            }
+        }
+    }
+
+    struct CaptureLayer(Arc<Mutex<Vec<(String, EventCapture)>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CaptureLayer {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut capture = EventCapture::default();
+            event.record(&mut capture);
+            self.0
+                .lock()
+                .unwrap()
+                .push((event.metadata().target().to_string(), capture));
+        }
+    }
+
+    #[test]
+    fn the_eo_input_breadcrumbs_fire_on_attach_and_first_delivery() {
+        use tracing_subscriber::layer::SubscriberExt;
+        // Operators diagnose the shared keyboard hook by reading the
+        // eo::input attach/first-delivery breadcrumbs from the rolling
+        // logfile; this test guards that those breadcrumbs fire. Drive the
+        // listener through the gate (toggle + session) and a first injected
+        // keystroke, and assert the attach + first-delivery breadcrumbs
+        // fire at the right points.
+        let captured: Arc<Mutex<Vec<(String, EventCapture)>>> = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            let rig = rig(Some(standard_resolver()));
+            rig.listener.set_hotbar_hooks_enabled(true);
+            rig.bus.publish(Topic::SessionStarted, &Value::Null);
+            rig.source.inject("1", now(), KeystrokeKind::Press);
+            drain_resolutions(&rig);
+            rig.listener.stop();
+        });
+        let events = captured.lock().unwrap();
+        let input: Vec<&(String, EventCapture)> = events
+            .iter()
+            .filter(|(target, _)| target == "eo::input")
+            .collect();
+        assert!(
+            input
+                .iter()
+                .any(|(_, e)| e.message.contains("start requested") && e.attached == Some(true)),
+            "the attach breadcrumb fires with attached=true: {input:?}"
+        );
+        assert!(
+            input
+                .iter()
+                .any(|(_, e)| e.message.contains("first keystroke since start")),
+            "the first-keystroke breadcrumb fires: {input:?}"
+        );
+    }
+
     #[test]
     fn the_gate_needs_both_the_toggle_and_an_active_session() {
         let rig = rig(Some(standard_resolver()));

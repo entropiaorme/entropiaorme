@@ -528,8 +528,10 @@ impl SkillScanManual {
 
     /// Run extraction per page serially (the engine is
     /// single-threaded), advancing the progress and publishing one
-    /// frame per page; pages merge in page order, later pages
-    /// overwriting duplicate names.
+    /// frame per page. Pages merge order-independently: a duplicate skill
+    /// name keeps the MAXIMUM level seen across pages (a lower duplicate
+    /// is taken to be an OCR underread of a partially-filled bar), while
+    /// first-seen positions are kept so the output order stays stable.
     fn extract_levels(&self, captures: &[Option<Vec<u8>>]) -> Result<Vec<(String, f64)>, String> {
         let valid: Vec<&Vec<u8>> = captures.iter().flatten().collect();
         if valid.is_empty() {
@@ -544,7 +546,9 @@ impl SkillScanManual {
             let levels = (self.providers.extract_page_levels)(png);
             for (name, level) in levels {
                 if let Some(entry) = all_skills.iter_mut().find(|(seen, _)| *seen == name) {
-                    entry.1 = level;
+                    // Order-independent: keep the max level for a duplicate
+                    // name (a lower reading is an OCR underread).
+                    entry.1 = entry.1.max(level);
                 } else {
                     all_skills.push((name, level));
                 }
@@ -628,8 +632,11 @@ mod tests {
     #[test]
     fn the_happy_path_scans_reviews_and_persists() {
         let pages = vec![
-            vec![("Anatomy".to_string(), 40.0), ("Rifle".to_string(), 100.0)],
-            vec![("Rifle".to_string(), 100.5), ("Sweat".to_string(), 10.0)],
+            // The EARLIER page carries the higher "Rifle" reading, so the
+            // assertion below distinguishes the max-merge from the old
+            // last-page-wins (which would yield 100.0).
+            vec![("Anatomy".to_string(), 40.0), ("Rifle".to_string(), 100.5)],
+            vec![("Rifle".to_string(), 100.0), ("Sweat".to_string(), 10.0)],
         ];
         let (scan, bus, _clock) = rig(providers(pages));
         let phases = capture_phases(&bus);
@@ -652,8 +659,8 @@ mod tests {
         let status = scan.process();
         assert_eq!(status["error"], Value::Null, "process kicks off: {status}");
         scan.join_worker();
-        // Page order merges with later pages overwriting duplicates,
-        // first-seen positions kept.
+        // Duplicate "Rifle" keeps the MAX (100.5 from the earlier page),
+        // not the last-seen (100.0); first-seen positions kept.
         assert_eq!(
             scan.get_pending_result(),
             Some(vec![
@@ -716,6 +723,32 @@ mod tests {
             .as_str()
             .unwrap()
             .ends_with("+00:00"));
+    }
+
+    #[test]
+    fn multipage_merge_is_order_independent() {
+        // The same duplicate skill read on two pages (one higher, one
+        // lower) resolves to the MAX regardless of page order, so the merge
+        // no longer depends on which page came last. The old last-page-wins
+        // would yield 100.0 for the high-then-low order.
+        fn rifle_level(pages: Vec<Vec<(String, f64)>>) -> f64 {
+            let (scan, _bus, _clock) = rig(providers(pages));
+            scan.start(Some(2));
+            scan.capture_current_page();
+            scan.capture_current_page();
+            scan.process();
+            scan.join_worker();
+            scan.get_pending_result()
+                .expect("a pending result")
+                .into_iter()
+                .find(|(name, _)| name == "Rifle")
+                .expect("Rifle is present")
+                .1
+        }
+        let high = vec![("Rifle".to_string(), 100.5)];
+        let low = vec![("Rifle".to_string(), 100.0)];
+        assert_eq!(rifle_level(vec![high.clone(), low.clone()]), 100.5);
+        assert_eq!(rifle_level(vec![low, high]), 100.5);
     }
 
     #[test]

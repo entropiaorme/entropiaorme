@@ -47,6 +47,35 @@ pub enum EventType {
 }
 
 impl EventType {
+    /// Every variant, for exhaustive coverage checks (the corpus
+    /// differential asserts that every class is driven by some corpus
+    /// scenario). Kept in step with the compiler-exhaustive `as_str`
+    /// match below; the `all_lists_every_variant_once` test guards it
+    /// against drift.
+    pub const ALL: [EventType; 21] = [
+        EventType::DamageDealt,
+        EventType::CriticalHit,
+        EventType::TargetDodge,
+        EventType::TargetEvade,
+        EventType::TargetJam,
+        EventType::DamageReceived,
+        EventType::PlayerDodge,
+        EventType::PlayerEvade,
+        EventType::PlayerJam,
+        EventType::MobMiss,
+        EventType::Deflect,
+        EventType::SelfHeal,
+        EventType::Loot,
+        EventType::SkillGain,
+        EventType::EnhancerBreak,
+        EventType::GlobalKill,
+        EventType::HofKill,
+        EventType::GlobalItem,
+        EventType::HofItem,
+        EventType::MissionComplete,
+        EventType::MissionReceived,
+    ];
+
     /// The wire value, matching the backend enum's `.value` strings.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -377,7 +406,11 @@ fn line_re() -> &'static Regex {
 
 fn quantity_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| regex(r"^(.+?)\s+x\s+\((\d+)\)$"))
+    // A real stacked-item count is >= 1 with no leading zeros; `[1-9]\d*`
+    // rejects `x (0)` and `x (007)` forms, which then keep their literal
+    // name with quantity 1 rather than splitting to a 0 / leading-zero
+    // count. Kept in lockstep with the Python QUANTITY_RE.
+    RE.get_or_init(|| regex(r"^(.+?)\s+x\s+\(([1-9]\d*)\)$"))
 }
 
 fn loot_re() -> &'static Regex {
@@ -505,6 +538,19 @@ mod tests {
     }
 
     #[test]
+    fn all_lists_every_variant_once() {
+        use std::collections::BTreeSet;
+        // Each `EventType::ALL` entry maps to a distinct wire string, so
+        // ALL has no duplicates or omitted-then-aliased entries. The
+        // `as_str` match is compiler-exhaustive, so adding a variant
+        // forces a new arm there; this count tripwire forces ALL (and
+        // the corpus 21/21 coverage assertion) to grow alongside it.
+        let names: BTreeSet<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+        assert_eq!(names.len(), EventType::ALL.len());
+        assert_eq!(names.len(), 21);
+    }
+
+    #[test]
     fn combat_lines_carry_amounts_and_flavours() {
         let event = parse("2026-05-19 10:00:00 [System] [] You inflicted 10.5 points of damage");
         assert_eq!(event.event_type, EventType::DamageDealt);
@@ -557,6 +603,29 @@ mod tests {
         assert_eq!(event.data["quantity"], 1);
         let keys: Vec<&String> = event.data.keys().collect();
         assert_eq!(keys, ["item_name", "quantity", "value"]);
+    }
+
+    #[test]
+    fn zero_and_leading_zero_quantities_keep_literal_name() {
+        // A 0 / leading-zero count is not a real stack size; the line
+        // keeps its literal item name with quantity 1 rather than
+        // splitting "x (0)" / "x (007)" into a 0 / 7 count.
+        let event =
+            parse("2026-05-19 10:00:02 [System] [] You received Token x (0) Value: 1.00 PED");
+        assert_eq!(event.event_type, EventType::Loot);
+        assert_eq!(event.data["item_name"], "Token x (0)");
+        assert_eq!(event.data["quantity"], 1);
+
+        let event =
+            parse("2026-05-19 10:00:02 [System] [] You received Token x (007) Value: 1.00 PED");
+        assert_eq!(event.data["item_name"], "Token x (007)");
+        assert_eq!(event.data["quantity"], 1);
+
+        // A genuine count (>= 1, no leading zero) still splits.
+        let event =
+            parse("2026-05-19 10:00:02 [System] [] You received Token x (12) Value: 1.00 PED");
+        assert_eq!(event.data["item_name"], "Token");
+        assert_eq!(event.data["quantity"], 12);
     }
 
     #[test]

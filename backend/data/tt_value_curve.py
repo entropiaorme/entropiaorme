@@ -49,14 +49,19 @@ def tt_value_of_gain(from_level: float, to_level: float) -> float:
 def levels_for_tt_value(from_level: float, ped_value: float) -> float:
     """How many skill levels does ped_value PED of TT buy starting from from_level?
 
-    Uses binary search on the TT curve. Returns fractional levels gained.
+    Uses binary search on the TT curve. Returns fractional levels gained,
+    never negative: a from_level past the curve ceiling buys zero levels,
+    not a negative span (skill progress is monotonic non-decreasing).
     """
     if ped_value <= 0:
         return 0.0
     target_tt = tt_value_at(from_level) + ped_value
     lo, hi = from_level, float(_LEVELS[-1])
     if target_tt >= _TT_VALUES[-1]:
-        return hi - from_level
+        # Floor at zero: a from_level above the curve ceiling would
+        # otherwise yield a negative buy, which a codex reward applies
+        # as a calibration decrease. A non-positive buy is zero.
+        return max(0.0, hi - from_level)
     for _ in range(64):
         mid = (lo + hi) / 2
         if tt_value_at(mid) < target_tt:

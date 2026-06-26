@@ -42,6 +42,8 @@ windows = { workspace = true, features = [
 criterion = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
+# Test-only: a capturing layer for the eo::input breadcrumb instrument test.
+tracing-subscriber = { workspace = true }
 
 [features]
 # Tests that shell out to the Python oracle at runtime (the cost-engine

@@ -146,10 +146,11 @@ async fn body_parts(req: Request) -> Result<(Option<String>, Vec<u8>), Box<Respo
     }
 }
 
-/// The outcome of reading an integer path parameter the backend's way:
-/// percent-decode, route-level 404 on a decoded slash, the validation
-/// envelope on unparseable text, and the backend's unhandled-overflow
-/// 500 beyond its storage range.
+/// The outcome of reading an integer path parameter: percent-decode,
+/// route-level 404 on a decoded slash, the validation envelope on
+/// unparseable text, and a clean 404 beyond i64 (an id past the
+/// storage range can never name a stored row, so it is a missing
+/// resource, not a server error).
 enum PathId {
     Value(i64),
     Reply(Response<Body>),
@@ -162,7 +163,9 @@ fn path_id(raw_segment: &str, name: &'static str) -> PathId {
     }
     match parse_int_lax(&decoded) {
         Some(LaxInt::Value(value)) => PathId::Value(value),
-        Some(_) => PathId::Reply(internal_server_error()),
+        // Beyond i64: the id cannot name a stored row, so it is a
+        // clean 404 (a missing resource), not a server error.
+        Some(_) => PathId::Reply(router_not_found()),
         None => {
             let mut validation = Validation::new();
             validation.int_parsing("path", name, &decoded);
@@ -171,13 +174,14 @@ fn path_id(raw_segment: &str, name: &'static str) -> PathId {
     }
 }
 
-/// A path parameter on a BODY-CARRYING route. The backend validates
-/// path and body parameters together: an unparsable id records its
-/// issue and the body still validates, one aggregated envelope with
-/// the path issue first. A decoded slash stays the route-level 404
-/// (matching precedes validation), and a beyond-i64 id VALIDATES
-/// (Python's int is unbounded) and crashes at the handler's first
-/// parameter binding, the deliberate 500, after the envelope resolves.
+/// A path parameter on a BODY-CARRYING route. Path and body parameters
+/// validate together: an unparsable id records its issue and the body
+/// still validates, one aggregated envelope with the path issue first.
+/// A decoded slash stays the route-level 404 (matching precedes
+/// validation). A beyond-i64 id carries no validation issue (it is
+/// well-formed, just too large to name a row), so the body envelope
+/// resolves first and an otherwise-clean request answers a clean 404
+/// (a deferred 404: the id cannot name a stored resource).
 enum PathParam {
     NotFound,
     Invalid,
@@ -705,9 +709,10 @@ async fn quest_update(state: Arc<AppState>, req: Request) -> Response<Body> {
         Built::Deferred500 => internal_server_error(),
         Built::Value(dump) => match path {
             PathParam::Value(id) => hydration.update_quest(id, &dump).await,
-            // The unbounded path int validated; it crashes at the
-            // handler's first parameter binding.
-            _ => internal_server_error(),
+            // The beyond-i64 path id validated but can never name a
+            // stored row; resolve it to a clean 404 (deferred, so a
+            // bad body still renders its 422 envelope first).
+            _ => router_not_found(),
         },
     }
 }
@@ -772,7 +777,8 @@ async fn quest_cancel(state: Arc<AppState>, req: Request) -> Response<Body> {
     let undo_reward = undo_reward.unwrap_or(false);
     match path {
         PathParam::Value(id) => hydration.cancel_quest(id, undo_reward).await,
-        _ => internal_server_error(),
+        // Beyond-i64 id: a clean 404 (deferred past the body envelope).
+        _ => router_not_found(),
     }
 }
 
@@ -818,7 +824,8 @@ async fn playlist_update(state: Arc<AppState>, req: Request) -> Response<Body> {
         Built::Deferred500 => internal_server_error(),
         Built::Value(dump) => match path {
             PathParam::Value(id) => hydration.update_playlist(id, &dump).await,
-            _ => internal_server_error(),
+            // Beyond-i64 id: a clean 404 (deferred past the body envelope).
+            _ => router_not_found(),
         },
     }
 }
@@ -2386,7 +2393,8 @@ async fn equipment_update(state: Arc<AppState>, req: Request) -> Response<Body> 
         Built::Deferred500 => internal_server_error(),
         Built::Value(request) => match path {
             PathParam::Value(id) => hydration.equipment_update(id, &request).await,
-            _ => internal_server_error(),
+            // Beyond-i64 id: a clean 404 (deferred past the body envelope).
+            _ => router_not_found(),
         },
     }
 }

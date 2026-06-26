@@ -64,28 +64,34 @@ $NupkgSha256 = @{
     "wixtoolset.dutil"                      = "3428929aec192370ae17ac834e05f8b9b423b5346141e277c4f216094830c9de"
 }
 
-# --- NuGet native packages (.nupkg is a zip): download once, verify, extract, cache ---
+# --- NuGet native packages (.nupkg is a zip): the download is cached, but the
+# verification and extraction run on every call so each build is fail-closed ---
 function Get-Nupkg([string] $id, [string] $version) {
-    $dest = Join-Path $pkgDir $id
-    if (Test-Path (Join-Path $dest ".done")) { return $dest }
     $low = $id.ToLowerInvariant()
     $expected = $NupkgSha256[$low]
     if (-not $expected) { throw "no pinned SHA-256 for NuGet '$id'; add it to `$NupkgSha256 before building." }
-    $url = "https://api.nuget.org/v3-flatcontainer/$low/$version/$low.$version.nupkg"
-    $tmp = Join-Path $build "$id.zip"
-    Write-Host "==> download $id $version"
-    Invoke-WebRequest -Uri $url -OutFile $tmp
-    # Fail closed: a digest mismatch means the bytes are not the pinned package.
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLowerInvariant()
+    # Key the cache by id AND version, so a WixVersion bump can never reuse a
+    # previous version's bytes: only the download is cached, never the trust.
+    $nupkg = Join-Path $pkgDir "$id.$version.nupkg"
+    $dest  = Join-Path $pkgDir "$id.$version"
+    if (-not (Test-Path $nupkg)) {
+        $url = "https://api.nuget.org/v3-flatcontainer/$low/$version/$low.$version.nupkg"
+        Write-Host "==> download $id $version"
+        Invoke-WebRequest -Uri $url -OutFile $nupkg
+    }
+    # Verify on every call, a cache hit included, so the SHA-256 gates every
+    # build and not just the first. Fail closed: a mismatch means the bytes are
+    # not the pinned package.
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $nupkg).Hash.ToLowerInvariant()
     if ($actual -ne $expected.ToLowerInvariant()) {
-        Remove-Item -Force $tmp
+        Remove-Item -Force $nupkg
         throw "SHA-256 mismatch for $id $version`n  expected $expected`n  actual   $actual`nRefusing to build from an unverified package."
     }
     Write-Host "    verified SHA-256 $actual"
+    # Re-extract from the just-verified package every run, so a stale or locally
+    # modified extraction can never reach the compiler.
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($tmp, $dest)
-    Remove-Item $tmp
-    New-Item -ItemType File -Path (Join-Path $dest ".done") | Out-Null
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($nupkg, $dest)
     return $dest
 }
 

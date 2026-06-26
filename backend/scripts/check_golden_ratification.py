@@ -9,21 +9,21 @@ crept into the production code can be locked in as the new "expected" output
 simply by running the regeneration workflow and committing the result.
 
 This guard makes such a ratification deliberate rather than accidental, and in
-range mode (the pull-request gate) also tied to an independent sign-off:
+range mode (the pull-request gate) also tied to a recorded adversarial verdict:
 
 - The goldens-regeneration commit-message marker (the ``test: regenerate
   goldens`` subject prefix documented in ``TESTING.md``) must appear on the
   relevant commit(s). This proves the ratification was *conscious*.
-- In range mode it additionally requires a recorded independent-review verdict:
+- In range mode it additionally requires a recorded adversarial-review verdict:
   a report committed to ``backend/testing/ratifications/<slug>.md`` in the same
   range, carrying an ``ORACLE-RATIFICATION`` block whose ``VERDICT`` is
   ``ratification-sound``. This supplies the judgement the marker cannot: that an
-  independent party (not the change's author) confirmed the diff is a genuine
-  behaviour change rather than a swept regression. The artefact must be added or
-  modified *in the same range*, so a sound verdict from a prior regeneration
-  cannot bless a fresh golden change. As an additional cross-check, the verdict's
-  ``goldens:`` field must name every changed golden set, so a verdict recorded
-  for one set cannot bless another.
+  adversarial review (a recorded verdict the discipline can be held to)
+  confirmed the diff is a genuine behaviour change rather than a swept
+  regression. The artefact must be added or modified *in the same range*, so a
+  sound verdict from a prior regeneration cannot bless a fresh golden change. As
+  an additional cross-check, the verdict's ``goldens:`` field must name every
+  changed golden set, so a verdict recorded for one set cannot bless another.
 
 The marker alone proves consciousness, not correctness; the recorded verdict is
 the missing correctness sign-off. The artefact lives deliberately outside any
@@ -35,7 +35,7 @@ advisory: there is no committed verdict to inspect yet, so it surfaces the
 golden diff for review rather than blocking on a verdict it cannot see. The
 range-mode pull-request gate is where the verdict requirement bites.
 
-CI cannot prove the independent review actually happened; it can only
+CI cannot prove the adversarial review actually happened; it can only
 presence-check and parse the committed verdict. That residual gap is closed by
 the report being reviewer-visible (CodeRabbit / a human) and by the human merge
 to ``main``, not by this guard.
@@ -99,7 +99,7 @@ def is_golden_path(path: str) -> bool:
     return posix == "backend/testing/COVERAGE.md"
 
 
-# Where the author commits the independent ratification report alongside a
+# Where the author commits the adversarial ratification report alongside a
 # golden change. Deliberately NOT under any ``expected/`` directory, so
 # ``is_golden_path`` never classifies a report as a golden (which would make the
 # guard demand a ratification artefact for its own ratification artefact).
@@ -591,11 +591,11 @@ def main(argv: list[str] | None = None) -> int:
     elif not result.has_sound_verdict:
         print(
             "check-golden-ratification: golden files changed with the "
-            "'test: regenerate goldens' marker, but no independent "
-            "'ratification-sound' verdict was recorded in this range.\n\n"
+            "'test: regenerate goldens' marker, but no recorded "
+            "'ratification-sound' verdict was present in this range.\n\n"
             "The marker proves the regeneration was conscious; it cannot prove "
-            "the diff is correct. An independent reviewer (not the change's "
-            "author) must review the golden diff, and the resulting report "
+            "the diff is correct. An adversarial review of the golden diff must "
+            "be recorded, and the resulting report "
             "(carrying the ORACLE-RATIFICATION ... VERDICT: ratification-sound "
             "block) must be committed to backend/testing/ratifications/<slug>.md "
             "in the same range as the golden change. A verdict artefact from a "
@@ -610,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
             "present, but a golden was changed later in this range than the "
             "verdict was recorded.\n\n"
             "The verdict reviewed the earlier golden state, not the final one, so "
-            "it cannot bless the later edit. Re-run the independent review against "
+            "it cannot bless the later edit. Re-run the adversarial review against "
             "the current diff and re-commit the report (carrying a fresh "
             "ORACLE-RATIFICATION ... VERDICT: ratification-sound block) so the "
             "verdict is no earlier than the last golden change in the range.\n\n"

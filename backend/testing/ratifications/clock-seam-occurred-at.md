@@ -1,6 +1,6 @@
 # Ratification: clock seam and required `occurred_at`
 
-Independent review of the testing-oracle output that accompanies making the
+Adversarial review of the testing-oracle output that accompanies making the
 domain event `occurred_at` a required, non-null field and routing every backend
 time read through an injected clock. The review re-derives the verdict against
 the current tree rather than accepting the change author's rationale, because a

@@ -55,7 +55,7 @@ def _write(repo: Path, rel: str, content: str) -> None:
 
 
 # The fixture's golden (a basic_hunt scenario DB-state snapshot) and the path the
-# matching independent ratification report is committed to.
+# matching adversarial ratification report is committed to.
 _GOLDEN = "backend/tests/e2e/corpus/scripted/basic_hunt/expected/db_state.json"
 _ARTIFACT = "backend/testing/ratifications/basic-hunt-totals.md"
 
@@ -66,7 +66,7 @@ def _ratification(
     goldens: str = "basic_hunt fingerprint.jsonl, db_state.json",
     rng: str = "HEAD~1..HEAD",
 ) -> str:
-    """The text of an independent ratification report carrying a verdict block.
+    """The text of an adversarial ratification report carrying a verdict block.
 
     Only the trailing fenced ``ORACLE-RATIFICATION`` block is load-bearing for
     the guard; the preamble stands in for the report's findings narrative.

@@ -1,10 +1,11 @@
 # Ratification: event-stream bridge goldens (PR #50, #55, #66)
 
-Independent review of two testing-oracle golden sets whose in-range deltas had
+Adversarial review of two testing-oracle golden sets whose in-range deltas had
 no committed ratification record naming them, undertaken so the range-mode
-golden-ratification gate has the conscious external judgement it requires. The
-reviewer is not the author of these changes; this audit is from the evidence in
-the tree.
+golden-ratification gate has the conscious, recorded judgement it requires. This
+is a recorded self-review under the ratification discipline, not a second
+person's sign-off: the verdict is re-derived from the evidence in the tree
+rather than resting on the author's intent.
 
 ## Range and goldens under review
 

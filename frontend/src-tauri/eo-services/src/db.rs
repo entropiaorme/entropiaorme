@@ -100,13 +100,14 @@ impl std::fmt::Display for AdoptError {
 impl std::error::Error for AdoptError {}
 
 impl AdoptError {
-    /// True when the decline is "the existing database predates the
-    /// adoptable baseline" ([`DbError::UnsupportedSchemaVersion`]): in the
-    /// hybrid era this was a transient first-launch-after-upgrade state, while
-    /// the co-bundled sidecar migrated the database forward to the baseline
-    /// this process adopts at. With the sidecar gone nothing migrates it, so
-    /// the composition root now treats this as a terminal decline, exactly as
-    /// it treats every other decline (a corrupt file, a driver fault).
+    /// True when the decline is "the existing database is below the adoptable
+    /// baseline and below the rung the native upgrade bridges"
+    /// ([`DbError::UnsupportedSchemaVersion`]). The native first-launch upgrade
+    /// ([`upgrade_to_baseline`]) carries the one in-the-wild rung (v32 -> v33),
+    /// so a v32 database adopts cleanly and never surfaces here; only older
+    /// schemas, which no database in the wild occupies, reach this. The
+    /// composition root treats it as a terminal decline, exactly as it treats
+    /// every other decline (a corrupt file, a driver fault).
     pub fn is_below_baseline(&self) -> bool {
         matches!(
             self,
@@ -340,11 +341,21 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
             .fetch_optional(pool)
             .await?;
     let version: i64 = version.and_then(|raw| raw.parse().ok()).unwrap_or_default();
+
+    // Upgrade-and-adopt as one transaction: the in-place bridge (below) and the
+    // baseline stamp commit together or not at all. A failure in either rolls
+    // back the file to exactly as it was found, honouring the `open_adopted`
+    // "left untouched on a decline" contract; without this, a stamp failure
+    // after the bridge mutated the file would leave a half-upgraded database.
+    let mut tx = pool.begin().await?;
     if version < BASELINE_SCHEMA_VERSION {
-        return Err(DbError::UnsupportedSchemaVersion {
-            found: version,
-            supported: BASELINE_SCHEMA_VERSION,
-        });
+        // A below-baseline database the backend process now owns: the
+        // co-bundled Python sidecar that used to migrate it forward to the
+        // baseline on the first launch after an upgrade is gone, so the
+        // upgrade runs natively here, in place, before the baseline is
+        // stamped. Only the single rung an in-the-wild v0.1.0-lineage
+        // database occupies is bridged; older schemas stay a refusal.
+        upgrade_to_baseline(&mut tx, version).await?;
     }
 
     // The ledger row sqlx's own runner would have written had it created
@@ -361,7 +372,7 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
          success BOOLEAN NOT NULL, checksum BLOB NOT NULL, \
          execution_time BIGINT NOT NULL)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
@@ -370,8 +381,52 @@ async fn adopt_or_refuse(pool: &SqlitePool) -> Result<(), DbError> {
     .bind(baseline.version)
     .bind(baseline.description.as_ref())
     .bind(baseline.checksum.as_ref())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Upgrade a below-baseline database up to the adoptable baseline in place,
+/// then return so [`adopt_or_refuse`] stamps the baseline ledger row over the
+/// now-current schema.
+///
+/// Only the rung the real v0.1.0-lineage database occupies is implemented:
+///
+/// - **v32 -> v33**: drop the unused `tt_curve_observations` table. It was
+///   write-only in the v32 surface (the skill tracker wrote a row on every
+///   suppressed codex skill gain, but no read path ever consumed it), so the
+///   drop is lossless. This mirrors the Python ladder's v33 step, and leaves
+///   the database where a freshly-created v33 one sits: no
+///   `tt_curve_observations`, `db_metadata.version = 33`.
+///
+/// Anything below v32 is refused exactly as before. No database in the wild
+/// occupies those versions, so the earlier rungs are deliberately not ported;
+/// pinning the bridge to v32 (rather than `BASELINE_SCHEMA_VERSION - 1`) keeps
+/// the rung's DDL coupled to the concrete v32 -> v33 delta it actually applies.
+/// Runs inside [`adopt_or_refuse`]'s adopt transaction, so the bridge and the
+/// subsequent baseline stamp share one commit boundary (a failure leaves the
+/// file untouched).
+async fn upgrade_to_baseline(
+    conn: &mut sqlx::sqlite::SqliteConnection,
+    version: i64,
+) -> Result<(), DbError> {
+    /// The one below-baseline schema version with a native upgrade path.
+    const BRIDGEABLE_VERSION: i64 = 32;
+    if version != BRIDGEABLE_VERSION {
+        return Err(DbError::UnsupportedSchemaVersion {
+            found: version,
+            supported: BASELINE_SCHEMA_VERSION,
+        });
+    }
+    // v33 rung: drop the retired write-only observations table.
+    sqlx::query("DROP TABLE IF EXISTS tt_curve_observations")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("UPDATE db_metadata SET value = ? WHERE key = 'version'")
+        .bind(BASELINE_SCHEMA_VERSION.to_string())
+        .execute(&mut *conn)
+        .await?;
     Ok(())
 }
 
@@ -729,6 +784,105 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(version, "28", "the stamp is left for the upgrade owner");
+    }
+
+    #[tokio::test]
+    async fn below_baseline_v32_database_upgrades_to_the_baseline_with_data_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entropia_orme.db");
+        // Synthesise the real in-the-wild surface: a v0.1.0-lineage database
+        // last owned by the Python backend at version 32. Start from a fresh
+        // baseline, then walk it back to v32: re-create the table v33 dropped
+        // (with a row, to prove the drop is the only loss), stamp the version
+        // row back to 32, and remove the sqlx ledger so the open path sees an
+        // unadopted below-baseline database.
+        {
+            let db = Db::open(&path).await.unwrap();
+            sqlx::query(
+                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES ('keep-me', '2026-01-01', 'markup', 'survives upgrade', 4.2, 'manual')",
+            )
+            .execute(&db.pool)
+            .await
+            .unwrap();
+            sqlx::query("CREATE TABLE tt_curve_observations (id INTEGER PRIMARY KEY, value REAL)")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO tt_curve_observations (value) VALUES (1.0)")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE db_metadata SET value = '32' WHERE key = 'version'")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("DROP TABLE _sqlx_migrations")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        // Re-open: the v32 rung runs, then adoption stamps the baseline and the
+        // post-adoption migrator validates the ledger. No refusal.
+        let db = Db::open(&path).await.unwrap();
+
+        // The retired table is gone, and the version row now matches a fresh
+        // v33 database.
+        assert!(
+            !table_exists(&db.pool, "tt_curve_observations")
+                .await
+                .unwrap(),
+            "the v33 rung drops tt_curve_observations"
+        );
+        let version: String =
+            sqlx::query_scalar("SELECT value FROM db_metadata WHERE key = 'version'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            version, "33",
+            "the upgrade bumps the version row to the baseline"
+        );
+        let ledger: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(ledger, 1, "the baseline is stamped exactly once");
+
+        // The user's data survives the upgrade untouched.
+        let (description, amount): (String, f64) =
+            sqlx::query_as("SELECT description, amount FROM ledger_entries WHERE id = 'keep-me'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!((description.as_str(), amount), ("survives upgrade", 4.2));
+    }
+
+    #[tokio::test]
+    async fn schema_versions_below_the_v32_bridge_are_still_refused() {
+        // The bridge is the single v32 rung; v31 (and anything older) remains a
+        // terminal refusal, with the user's rows left untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entropia_orme.db");
+        {
+            let db = Db::open(&path).await.unwrap();
+            sqlx::query("UPDATE db_metadata SET value = '31' WHERE key = 'version'")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            sqlx::query("DROP TABLE _sqlx_migrations")
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let err = Db::open(&path).await.unwrap_err();
+        match err {
+            DbError::UnsupportedSchemaVersion { found, supported } => {
+                assert_eq!((found, supported), (31, 33));
+            }
+            other => panic!("expected a schema-version refusal, got {other}"),
+        }
     }
 
     #[tokio::test]

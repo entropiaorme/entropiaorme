@@ -26,6 +26,10 @@ struct Flags {
     enabled: AtomicBool,
     source_running: AtomicBool,
     space_down: AtomicBool,
+    // One-shot per start episode: whether the "first keystroke delivered"
+    // breadcrumb has fired, so the spacebar faculty has a positive
+    // delivery signal in the rolling logfile (mirrors the hotbar listener).
+    first_delivery_logged: AtomicBool,
 }
 
 pub struct SpacebarCaptureListener {
@@ -54,6 +58,7 @@ impl SpacebarCaptureListener {
                 enabled: AtomicBool::new(false),
                 source_running: AtomicBool::new(false),
                 space_down: AtomicBool::new(false),
+                first_delivery_logged: AtomicBool::new(false),
             },
             key_tap: Mutex::new(None),
         });
@@ -123,6 +128,14 @@ impl SpacebarCaptureListener {
         // attached; running honestly reflects whether events will come.
         let attached = source.start();
         self.flags.source_running.store(attached, Ordering::SeqCst);
+        // Reset the delivery breadcrumb for this episode and record the
+        // attach outcome so a non-attaching hook is visible in the rolling
+        // logfile of the packaged build. The spacebar faculty otherwise
+        // has no positive delivery signal (only the shared install line).
+        self.flags
+            .first_delivery_logged
+            .store(false, Ordering::SeqCst);
+        tracing::info!(target: "eo::input", attached, "spacebar capture source start requested");
     }
 
     fn stop_source(&self) {
@@ -144,6 +157,14 @@ impl SpacebarCaptureListener {
     fn on_keystroke(&self, event: &KeystrokeEvent) {
         if !self.flags.source_running.load(Ordering::SeqCst) {
             return;
+        }
+        // One-shot per start: confirm the shared hook is delivering
+        // keystrokes to the spacebar faculty. Non-content: no key value.
+        if !self.flags.first_delivery_logged.swap(true, Ordering::SeqCst) {
+            tracing::info!(
+                target: "eo::input",
+                "spacebar capture listener received its first keystroke since start"
+            );
         }
         if event.key != "space" {
             return;

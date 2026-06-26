@@ -389,8 +389,10 @@ mod tests {
             rig.listener.stop();
         });
         let events = captured.lock().unwrap();
-        let input: Vec<&(String, EventCapture)> =
-            events.iter().filter(|(target, _)| target == "eo::input").collect();
+        let input: Vec<&(String, EventCapture)> = events
+            .iter()
+            .filter(|(target, _)| target == "eo::input")
+            .collect();
         assert!(
             input
                 .iter()

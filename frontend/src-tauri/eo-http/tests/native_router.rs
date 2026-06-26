@@ -749,7 +749,11 @@ async fn out_of_range_path_id_is_not_found() {
     let clean_body: [(&str, String, &str); 4] = [
         ("PUT", format!("/api/quests/{big}"), "{\"name\": \"X\"}"),
         ("POST", format!("/api/quests/{big}/cancel"), ""),
-        ("PUT", format!("/api/quests/playlists/{big}"), "{\"name\": \"X\"}"),
+        (
+            "PUT",
+            format!("/api/quests/playlists/{big}"),
+            "{\"name\": \"X\"}",
+        ),
         (
             "PUT",
             format!("/api/equipment/library/{big}"),

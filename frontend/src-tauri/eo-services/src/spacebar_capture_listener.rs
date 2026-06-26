@@ -160,7 +160,11 @@ impl SpacebarCaptureListener {
         }
         // One-shot per start: confirm the shared hook is delivering
         // keystrokes to the spacebar faculty. Non-content: no key value.
-        if !self.flags.first_delivery_logged.swap(true, Ordering::SeqCst) {
+        if !self
+            .flags
+            .first_delivery_logged
+            .swap(true, Ordering::SeqCst)
+        {
             tracing::info!(
                 target: "eo::input",
                 "spacebar capture listener received its first keystroke since start"

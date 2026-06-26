@@ -197,27 +197,17 @@ jobs:
   frontend-e2e:
     name: Frontend e2e + visual (native shell, Windows)
     runs-on: windows-latest
-    # Runs for signal only and must never fail the overall `ci` run conclusion:
-    # the required gate is the ci-gate job, which does not list this job in its
-    # needs. continue-on-error keeps the public commit status green (so a release
-    # tag commit is not a red X) while the residual viewport / post-collapse
-    # IPC-harness instability below is fixed separately.
-    continue-on-error: true
     # Drives the REAL Tauri WebView2 shell through tauri-driver (not a browser),
     # so it runs on Windows, the app's platform, and compiles the shell. It is
-    # the only surface that exercises the native IPC command boundary end to
-    # end. Gated on change scope like the backend matrix.
+    # the only surface that exercises the native IPC command boundary end to end.
+    # Gated on change scope like the backend matrix.
     #
-    # NON-BLOCKING (runs for signal, does not gate the merge; see the ci-gate
-    # job): tauri-driver / WebView2 intermittently collapses the captured
-    # viewport on the hosted runner (a window/inner-viewport shrink that recurs
-    # after a navigation and cannot yet be fully stabilised from the test side),
-    # which would otherwise jam the merge queue on an environment flake rather
-    # than a real regression. The suite has been substantially hardened
-    # (onboarding interaction, capture window size, dashboard layout) and a
-    # failure uploads the actual + diff PNGs for inspection, but the residual
-    # viewport collapse is tracked for a proper fix before it returns to the
-    # required set.
+    # BLOCKING (a required input of the ci-gate aggregator): the suite drives the
+    # app at its own tauri:// origin (native IPC) with the deterministic in-process
+    # api_request stub, and every visual capture is gated on a recovered inner
+    # viewport (ensureViewport), so the WebView2 inner-viewport collapse is
+    # absorbed rather than flaking the gate. A failure uploads the actual + diff
+    # PNGs for inspection.
     needs: [changes]
     if: needs.changes.outputs.code == 'true'
     env:
@@ -260,21 +250,22 @@ jobs:
           New-Item -ItemType Directory -Force -Path e2e/.drivers | Out-Null
           Invoke-WebRequest "https://msedgedriver.microsoft.com/$pv/edgedriver_win64.zip" -OutFile "$env:RUNNER_TEMP\edgedriver.zip"
           Expand-Archive "$env:RUNNER_TEMP\edgedriver.zip" -DestinationPath e2e/.drivers -Force
-      # The debug profile keeps the bundled backend out of the e2e build, so the
-      # suite's stub backend owns the data; tauri.e2e.conf.json is an e2e-only
-      # CSP overlay (broadened connect-src for the stub) that never ships.
+      # The e2e build embeds the frontend and serves it at the app's own tauri://
+      # origin (native IPC), built with the `e2e-stub` feature (the in-process
+      # api_request fixture stub) and E2E_FREEZE_TWEENS (chart-tween determinism
+      # for the visual baselines). tauri.e2e.conf.json is an e2e-only overlay
+      # (capture window size + CSP) that never ships.
       - name: Build the e2e shell
-        run: npx tauri build --debug --no-bundle --config src-tauri/entropia-orme/tauri.e2e.conf.json
+        run: npx tauri build --debug --no-bundle --features e2e-stub --config src-tauri/entropia-orme/tauri.e2e.conf.json
         env:
-          ENTROPIAORME_BACKEND_PORT: '8424'
+          E2E_FREEZE_TWEENS: '1'
       - name: Run the native-shell e2e suite
         run: npm run test:e2e
       - name: Run the visual regression suite
         run: npm run test:visual
       # On failure, publish the actual + diff PNGs the visual suite writes so a
-      # mismatch is inspectable: this suite cannot run locally (it needs
-      # tauri-driver + the WebView2 runtime + the built shell), and the diff is
-      # otherwise discarded with the runner. Path is repo-root relative;
+      # mismatch is inspectable: the diff is otherwise discarded with the runner.
+      # Path is repo-root relative;
       # upload-artifact does not honour the job's working-directory default.
       # include-hidden-files is required: the output dir starts with a dot, and
       # v4 excludes hidden paths by default (which would upload nothing).
@@ -521,17 +512,14 @@ jobs:
             echo "Documentation-only change; the frontend build and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          # The native-shell visual job (frontend-e2e) is intentionally
-          # NON-BLOCKING: it runs for signal but does not gate the merge.
-          # tauri-driver / WebView2 intermittently collapses the captured viewport
-          # on the hosted runner, which the visual suite cannot fully stabilise
-          # yet, so requiring it would jam the merge queue on an environment flake
-          # rather than a real regression. Its result is reported here, not
-          # enforced, and it is tracked for a proper fix.
-          echo "Native-shell visual job result (non-blocking): $FRONTEND_E2E_RESULT"
-          if [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ]; then
-            echo "Frontend build and Rust workspace jobs passed. Gate satisfied."
+          # The native-shell e2e + visual job (frontend-e2e) is a REQUIRED input:
+          # it drives the app at its tauri:// origin (native IPC) with the
+          # deterministic in-process api_request stub, and every visual capture is
+          # gated on a recovered inner viewport (ensureViewport), so a failure is a
+          # real regression rather than the old environment flake.
+          if [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ] && [ "$FRONTEND_E2E_RESULT" = "success" ]; then
+            echo "Frontend build, Rust workspace, and native-shell e2e jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the frontend build and the Rust workspace jobs (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT). The native-shell visual job is non-blocking (result: $FRONTEND_E2E_RESULT)."
+          echo "::error::A code change must pass the frontend build, the Rust workspace jobs, and the native-shell e2e suite (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT, e2e: $FRONTEND_E2E_RESULT)."
           exit 1

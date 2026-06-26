@@ -3,10 +3,10 @@ import { ensureDashboard } from '../helpers/onboarding.mjs';
 import { DEV_URL } from '../wdio.conf.mjs';
 
 // Functional panel-flow coverage against the REAL Tauri shell. The deterministic
-// stub backend (e2e/stub-backend.mjs) pins the dashboard's reads, so these
-// assertions are reproducible run-to-run. The IPC checks are the migration hedge:
-// they exercise window.__TAURI_INTERNALS__, which only the native shell exposes
-// (a browser-only e2e is structurally blind to it).
+// backend stub (the e2e-stub feature's in-process api_request handler) pins the
+// dashboard's reads, so these assertions are reproducible run-to-run. The IPC
+// checks are the migration hedge: they exercise window.__TAURI_INTERNALS__, which
+// only the native shell exposes (a browser-only e2e is structurally blind to it).
 describe('dashboard (native Tauri shell)', () => {
 	before(async () => {
 		await ensureDashboard(browser, DEV_URL);
@@ -48,22 +48,9 @@ describe('dashboard (native Tauri shell)', () => {
 		}));
 		expect(surface.hasInternals).toBe(true);
 		expect(surface.invokeIsFn).toBe(true);
-
-		// Attempt a real command round-trip for signal (logged, not asserted: a
-		// raw internals.invoke from the navigated dev origin can hit a Tauri 2
-		// invoke-key nuance the app's own @tauri-apps/api path handles; the UI
-		// flow below exercises that real path).
-		const roundTrip = await browser.executeAsync((done) => {
-			try {
-				window.__TAURI_INTERNALS__
-					.invoke('toggle_overlay', {})
-					.then(() => done('ok'))
-					.catch((e) => done(`invoke-error:${String(e)}`));
-			} catch (e) {
-				done(`throw:${String(e)}`);
-			}
-		});
-		console.log('[e2e] raw toggle_overlay invoke:', roundTrip);
+		// The real command round-trip is exercised by the hydration test (the
+		// dashboard's reads flow over invoke('api_request')) and the overlay-button
+		// test below, both over the app's native IPC at the tauri:// origin.
 	});
 
 	it('drives the overlay button over the real IPC boundary', async () => {

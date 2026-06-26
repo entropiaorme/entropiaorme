@@ -1,5 +1,5 @@
 import { $, browser, expect } from '@wdio/globals';
-import { ensureDashboard } from '../helpers/onboarding.mjs';
+import { ensureDashboard, ensureViewport } from '../helpers/onboarding.mjs';
 import { DEV_URL } from '../wdio.conf.mjs';
 
 // Analytics visual regression, captured in the real shell. Analytics is the
@@ -19,6 +19,9 @@ describe('analytics visual regression (native Tauri shell)', () => {
 		// the real shell.
 		await ensureDashboard(browser, DEV_URL);
 		await browser.url(`${DEV_URL}analytics`);
+		// The route navigation is the clearest inner-viewport-collapse trigger, so
+		// recover the viewport before the tab captures below.
+		await ensureViewport(browser);
 		// Log the capture-context viewport: the baselines are captured at a fixed
 		// window size, so a reflowed (wrong-size) layout here is the most likely
 		// cause of a whole-tab diff and must be visible in the run output.
@@ -48,6 +51,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 			timeoutMsg: 'overview never hydrated the fixture data',
 		});
 		await browser.pause(700);
+		await ensureViewport(browser);
 		const mismatch = await browser.checkElement(area, 'analytics-overview', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});
@@ -61,6 +65,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 			timeoutMsg: 'ledger never hydrated the fixture entries',
 		});
 		await browser.pause(500);
+		await ensureViewport(browser);
 		const mismatch = await browser.checkElement(area, 'analytics-ledger', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});
@@ -74,6 +79,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 			timeoutMsg: 'activity never hydrated the fixture comparisons',
 		});
 		await browser.pause(500);
+		await ensureViewport(browser);
 		const mismatch = await browser.checkElement(area, 'analytics-activity', VISUAL_OPTS);
 		expect(mismatch).toBeLessThanOrEqual(BUDGET);
 	});

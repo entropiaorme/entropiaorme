@@ -33,8 +33,11 @@ export default defineConfig({
 		},
 		// `src/**` covers the app suites; the `src-tauri` entry pulls in the
 		// dev-tooling build-script tests (e.g. build-dev-config), which live
-		// beside the script they exercise rather than under `src/`.
-		include: ['src/**/*.test.ts', 'src-tauri/entropia-orme/*.test.ts'],
+		// beside the script they exercise rather than under `src/`; the `e2e`
+		// entry covers the native-shell harness helpers' own unit tests (e.g.
+		// ensureViewport's inner-viewport recovery logic), which live beside the
+		// helper they exercise.
+		include: ['src/**/*.test.ts', 'src-tauri/entropia-orme/*.test.ts', 'e2e/helpers/*.test.mjs'],
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'html'],

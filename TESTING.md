@@ -308,7 +308,7 @@ The regeneration may sit in its own commit alongside the behaviour-change commit
 
 ### Ratification guard
 
-Neither the marker nor the independent verdict is merely a courtesy to reviewers: both are enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked, unscrutinised golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate *and* independently signed off, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
+Neither the marker nor the recorded verdict is merely a courtesy to reviewers: both are enforced. Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked, unscrutinised golden change can silently lock in a regression (the expected output simply moves to match the regressed code, and every assertion passes again). To make that ratification deliberate *and* adversarially reviewed, `backend/scripts/check_golden_ratification.py` runs as a lightweight pull-request job (`golden-ratification` in `.github/workflows/ci.yml`).
 
 The guard inspects the pull request's diff against its base. A golden file is anything under a `backend/tests` `expected/` directory (the per-scenario `fingerprint.jsonl` and `db_state.json`, the HTTP-response goldens), the OpenAPI snapshot at `backend/tests/expected/openapi.snapshot.json`, the `pytest-regressions` consistency goldens beside the `test_consistency_*` modules, or the generated `backend/testing/COVERAGE.md` matrix. If any commit modifies a golden, the job requires **both**:
 

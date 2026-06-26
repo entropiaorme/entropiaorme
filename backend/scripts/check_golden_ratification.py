@@ -547,7 +547,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.range_mode:
             print(
                 "check-golden-ratification: golden change carries the "
-                "'test: regenerate goldens' marker and a recorded independent "
+                "'test: regenerate goldens' marker and a recorded adversarial "
                 "'ratification-sound' verdict naming the changed sets; "
                 "ratification is deliberate and signed off."
             )
@@ -561,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "check-golden-ratification: golden change carries the "
                 "'test: regenerate goldens' marker; ratification is deliberate "
-                "(staged / working-tree mode is marker-only; the independent "
+                "(staged / working-tree mode is marker-only; the adversarial "
                 "ratification verdict is enforced by the pull-request gate). "
                 "Files:"
             )

@@ -360,8 +360,21 @@ jobs:
       # build present.
       - name: Compile check
         run: cargo build
+      # Prebuilt binary, same rationale as the members job. nextest applies the
+      # committed per-test terminating timeout (.config/nextest.toml), so an
+      # intermittent hook-lifecycle hang is killed at 120s instead of stalling
+      # the job to the runner ceiling.
+      - uses: taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595 # v2.81.11
+        with:
+          tool: cargo-nextest
       - name: Run workspace tests
-        run: cargo test --workspace
+        timeout-minutes: 20
+        run: cargo nextest run --workspace
+      # nextest does NOT run doctests; keep them on a dedicated cargo-test leg so
+      # doctest coverage is not silently dropped by the migration.
+      - name: Run workspace doctests
+        timeout-minutes: 10
+        run: cargo test --workspace --doc
 
   rust-members:
     name: Rust backend members (nextest, Linux)

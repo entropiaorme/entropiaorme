@@ -1,0 +1,19 @@
+# cargo-nextest configuration for the desktop application's Rust workspace.
+#
+# Primary purpose: a terminating per-test timeout. A subset of the heavy
+# substrate-composition tests stand up the full native spine, which installs
+# the single shared OS keyboard hook; that hook's attach/detach lifecycle can
+# intermittently block forever in some headless/local contexts, and the
+# Windows CI test step has no per-test guard of its own. Without a terminating
+# timeout, one bad roll wedges the run until the host (or the GitHub Actions
+# 360-minute ceiling) kills it.
+#
+# `period` marks a test "slow" in the output; `terminate-after` is the number
+# of periods after which nextest kills the test process and reports it as a
+# timeout. 60s x 2 = a hard 120s ceiling per test: well above any legitimate
+# test here (the heaviest, an OCR warm-engine composition, completes well
+# under a minute; the rest run in well under a second) and far below the run
+# stalls a hung hook produces.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }

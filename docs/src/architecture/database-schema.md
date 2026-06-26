@@ -1,9 +1,9 @@
 # Database schema reference
 
-This page documents the on-disk persistence layer: the two SQLite databases the
-application uses, the storage configuration applied to each connection, the
-tables in both databases, the forward-only migration mechanism, and the bundled
-game-data snapshot that lives outside SQLite entirely.
+This page documents the on-disk persistence layer: the application's SQLite
+database, the storage configuration applied to its connections, its tables, the
+forward-only migration mechanism, and the bundled game-data snapshot that lives
+outside SQLite entirely.
 
 The authoritative schema definitions live in three Python modules:
 
@@ -19,24 +19,23 @@ table set is the one the source modules define.
 
 ## Overview
 
-The application persists to two SQLite databases, both kept under the
-application data directory:
+The application persists user-owned data to a single SQLite database, kept under
+the application data directory:
 
 | Database | File | Role |
 | --- | --- | --- |
 | Application database | `entropia_orme.db` | Long-lived, user-owned data: equipment, calibrations, the ledger, codex and quest tracking, recorded hunting sessions, and the derived analytics caches. |
-| Game-data cache | `nexus_cache.db` | A regenerable runtime cache of fetched game-fact and market data. It holds no user-authored data and is rebuilt from its upstream sources. |
 
-Both databases run in write-ahead-logging (WAL) mode. The rationale for that
+The database runs in write-ahead-logging (WAL) mode. The rationale for that
 choice (concurrent reads alongside a single writer, with the database opened
 once and shared across the in-process request handlers and background worker
 threads) is covered in [ADR 0007: SQLite in WAL mode](../adr/0007-sqlite-wal.md). The
-services that own and query these databases are catalogued in the
+services that own and query the database are catalogued in the
 [service map](service-map.md).
 
-The bundled game-data snapshot that ships with the application (weapons, mobs,
-skills, professions, and so on) is **not** stored in either SQLite database. It
-is loaded from per-endpoint JSON files; see
+The game-fact data the application reasons over (weapons, mobs, skills,
+professions, and so on) is **not** stored in SQLite. It ships as a bundled,
+read-only snapshot loaded from per-endpoint JSON files; see
 [Bundled game-data snapshot](#bundled-game-data-snapshot) below.
 
 ## Storage configuration
@@ -84,7 +83,7 @@ caller leaves it `NULL`, that is noted.
 
 Key/value store for the schema version counter. Created by
 `BaseDatabase._ensure_meta_table`; shared with the migration mechanism described
-later. The same table shape exists in both databases.
+later.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -459,59 +458,10 @@ and is lazily rebuilt on read if missing.
 | `dominant_weapon` | TEXT | Optional. |
 | `computed_at` | REAL | Not null; defaults to `unixepoch('now')`. |
 
-## Game-data cache (`nexus_cache.db`)
-
-`nexus_cache.db` is a regenerable runtime cache of fetched game-fact and market
-data. It holds no user-authored data and can be rebuilt from its upstream
-sources. Its schema is not defined in the source modules listed at the top of
-this page; the structure below is documented as it appears in the cache database
-itself. The cache carries a `db_metadata` version table (a fresh cache reports
-version 1) and runs in the same write-ahead-logging mode as the application
-database.
-
-#### `cache_items`
-
-Cached entities, one row per item per endpoint, with the full payload stored as
-JSON.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | INTEGER | Primary key, autoincrement. |
-| `endpoint` | TEXT | Not null; the source endpoint the item belongs to. |
-| `item_id` | TEXT | Optional item identifier. |
-| `item_name` | TEXT | Optional display name. |
-| `data_json` | TEXT | Not null; the cached payload serialised as JSON. |
-
-#### `cache_meta`
-
-Freshness bookkeeping per endpoint: when it was last fetched and how many items
-it held.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `endpoint` | TEXT | Primary key. |
-| `fetched_at` | REAL | Not null; last-fetch timestamp. |
-| `item_count` | INTEGER | Not null; defaults to 0. |
-
-#### `market_cache`
-
-Cached market data keyed by item, with its own freshness timestamp.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `item_key` | TEXT | Primary key; the item name or identifier. |
-| `data_json` | TEXT | Not null; the cached market payload serialised as JSON. |
-| `fetched_at` | REAL | Not null; last-fetch timestamp. |
-
-#### `db_metadata`
-
-Same key/value version-counter table as in the application database (see
-[Metadata](#metadata)).
-
 ## Migration mechanism
 
-Schema evolution is handled by a forward-only version counter shared by both
-databases, implemented in `BaseDatabase` (`backend/db/base.py`).
+Schema evolution is handled by a forward-only version counter in `BaseDatabase`
+(`backend/db/base.py`).
 
 ### How the counter works
 
@@ -592,5 +542,5 @@ The bundled snapshot files are:
 | `weapons.json` | `weapons` |
 
 This JSON snapshot is the read-only, in-memory source of truth for game facts.
-It is distinct from `nexus_cache.db`, which caches fetched game-fact and market
-data at runtime; neither stores user-authored data.
+It is a maintained static asset that ships with the build and holds no
+user-authored data.

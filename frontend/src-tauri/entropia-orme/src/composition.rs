@@ -469,10 +469,25 @@ pub enum Composition {
 /// one off `PATH`.
 pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     init_ort_runtime(resource_dir.as_ref());
+    // The single shared OS keyboard hook, built at this production site and
+    // injected down the compose chain. The allowlist filters at the hook
+    // boundary to the hotbar digit keys and the space key, so out-of-scope
+    // keystrokes never enter the event stream. Tests inject a hook-free
+    // `MockKeystrokeSource` through the same parameter instead, so a generic
+    // test run never installs the OS hook (whose attach/detach lifecycle can
+    // intermittently wedge a headless run).
+    let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
+        .iter()
+        .map(|key| key.to_string())
+        .chain(std::iter::once("space".to_string()))
+        .collect();
+    let keystroke_source: Arc<dyn KeystrokeSource> =
+        Arc::new(HookKeystrokeSource::new(Some(allowlist)));
     compose_with(
         data_dir(),
         snapshot_dir(resource_dir.as_ref()),
         models_dir(resource_dir.as_ref()),
+        keystroke_source,
     )
     .await
 }
@@ -482,7 +497,12 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
 /// `models` is the recogniser's model+dict directory; the engine is
 /// constructed and warmed from it, but a failed engine load never
 /// declines composition (OCR is optional).
-async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> Composition {
+async fn compose_with(
+    data_dir: PathBuf,
+    snapshot: PathBuf,
+    models: PathBuf,
+    keystroke_source: Arc<dyn KeystrokeSource>,
+) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         tracing::error!(
             target: "eo::composition",
@@ -558,7 +578,13 @@ async fn compose_with(data_dir: PathBuf, snapshot: PathBuf, models: PathBuf) -> 
     // share one connection (one owner, serialised access) rather than
     // opening a second.
     let producer_db = Db::from_pool(db.pool().clone());
-    let producers = match compose_producers(producer_db, clock.clone(), &data_dir, None) {
+    let producers = match compose_producers(
+        producer_db,
+        clock.clone(),
+        &data_dir,
+        None,
+        keystroke_source,
+    ) {
         Ok(producers) => producers,
         Err(err) => {
             tracing::error!(
@@ -836,6 +862,7 @@ fn compose_producers(
     clock: Arc<dyn Clock>,
     data_dir: &std::path::Path,
     chatlog_override: Option<PathBuf>,
+    keystroke_source: Arc<dyn KeystrokeSource>,
 ) -> Result<ProducerState, eo_services::db::DbError> {
     // The producers run on the substrate's tokio runtime; the trackers
     // bridge their database work onto this handle from their own
@@ -887,21 +914,18 @@ fn compose_producers(
 
     let skill_tracker = SkillTracker::new(&bus, db.pool().clone(), runtime.clone(), clock.clone());
 
-    // The input listeners share ONE OS keyboard hook (it is single-instance):
-    // a ref-counted source wraps the low-level hook, filtered at its boundary
-    // to the hotbar digit keys and the space key. The hotbar listener is a
-    // producer (it publishes tool-change events on the bus), gated on the
-    // hotbar-hooks toggle AND an active session; the spacebar listener is
-    // composed alongside the scan services over this same source. Off Windows
-    // (or in a headless run) the hook is inert, so both listeners never run.
-    let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
-        .iter()
-        .map(|key| key.to_string())
-        .chain(std::iter::once("space".to_string()))
-        .collect();
-    let keystroke_source: Arc<dyn KeystrokeSource> = Arc::new(SharedKeystrokeSource::new(
-        Arc::new(HookKeystrokeSource::new(Some(allowlist))),
-    ));
+    // The input listeners share ONE keyboard source (the OS hook is
+    // single-instance): a ref-counted wrapper makes the injected source
+    // shareable. The hotbar listener is a producer (it publishes tool-change
+    // events on the bus), gated on the hotbar-hooks toggle AND an active
+    // session; the spacebar listener is composed alongside the scan services
+    // over this same source. The underlying source is injected by the caller
+    // (`compose_native` builds the real boundary-filtered OS hook; tests pass a
+    // hook-free mock), so a generic test run cannot wedge on the hook's
+    // attach/detach lifecycle. Off Windows (or in a headless run) the real hook
+    // is inert, so both listeners never run.
+    let keystroke_source: Arc<dyn KeystrokeSource> =
+        Arc::new(SharedKeystrokeSource::new(keystroke_source));
     let hotbar = HotbarListener::new(
         bus.clone(),
         Some(keystroke_source.clone()),
@@ -1222,6 +1246,10 @@ fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The hook-free keystroke source every compose test injects in place of the
+    // real OS hook, so a generic test run never installs the shared hook (whose
+    // attach/detach lifecycle can intermittently wedge a headless run).
+    use eo_services::keystroke_source::MockKeystrokeSource;
 
     /// Serialises the tests that mutate process-global, not-thread-safe
     /// state: `ORT_DYLIB_PATH` (the env var ORT reads via `getenv`) and the
@@ -1249,9 +1277,21 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_over_a_fresh_data_dir_and_the_repo_snapshot() {
+        let _ort = ORT_TEST_LOCK.lock().await;
+        let dylib = ort_dylib_path(None);
+        if dylib.is_file() {
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", &dylib);
+            }
+        }
         let dir = tempfile::tempdir().unwrap();
-        let Composition::Ready(composed) =
-            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        let Composition::Ready(composed) = compose_with(
+            dir.path().join("data"),
+            repo_snapshot(),
+            repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .await
         else {
             panic!("fresh-dir composition succeeds");
         };
@@ -1271,7 +1311,13 @@ mod tests {
         std::fs::create_dir_all(&data_dir).unwrap();
         let db_path = data_dir.join(DB_FILE_NAME);
         std::fs::write(&db_path, b"not a database").unwrap();
-        let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
+        let composed = compose_with(
+            data_dir,
+            repo_snapshot(),
+            repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .await;
         assert!(
             matches!(composed, Composition::Declined),
             "quarantine declines composition"
@@ -1301,7 +1347,13 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let composed = compose_with(data_dir, repo_snapshot(), repo_models()).await;
+        let composed = compose_with(
+            data_dir,
+            repo_snapshot(),
+            repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .await;
         assert!(
             matches!(composed, Composition::Declined),
             "a below-baseline database declines (nothing migrates it without the sidecar)"
@@ -1315,6 +1367,7 @@ mod tests {
             dir.path().join("data"),
             dir.path().join("no-such-snapshot"),
             repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
         )
         .await;
         assert!(
@@ -1482,8 +1535,13 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().unwrap();
-        let Composition::Ready(composed) =
-            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        let Composition::Ready(composed) = compose_with(
+            dir.path().join("data"),
+            repo_snapshot(),
+            repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .await
         else {
             panic!("composition succeeds regardless of OCR availability");
         };
@@ -1535,8 +1593,13 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let Composition::Ready(composed) =
-            compose_with(dir.path().join("data"), repo_snapshot(), repo_models()).await
+        let Composition::Ready(composed) = compose_with(
+            dir.path().join("data"),
+            repo_snapshot(),
+            repo_models(),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .await
         else {
             panic!("composition succeeds");
         };
@@ -1577,7 +1640,14 @@ mod tests {
         data_dir: &std::path::Path,
         chatlog: PathBuf,
     ) -> ProducerState {
-        compose_producers(db, clock, data_dir, Some(chatlog)).expect("producer spine composes")
+        compose_producers(
+            db,
+            clock,
+            data_dir,
+            Some(chatlog),
+            Arc::new(MockKeystrokeSource::new()),
+        )
+        .expect("producer spine composes")
     }
 
     /// A composed-spine replay: feed a recorded-shape chat-log through

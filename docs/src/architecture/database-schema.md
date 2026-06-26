@@ -515,6 +515,27 @@ described above. This is why migrations that add columns to `kills`,
 `kill_loot_items`, and `tracking_sessions` live in `app_database.py` rather than
 in `tracking/schema.py`.
 
+### Shipped adoption model (the native runtime)
+
+The ladder above is the testing oracle's. The shipped application is the single
+Rust binary, whose persistence layer (`eo-services/src/db.rs`) does not re-run
+the historical ladder. It instead pins a single **baseline schema at version
+33** (the migration under `eo-services/migrations/`), reproduced statement for
+statement so a freshly created database is identical to the schema the ladder
+produces at version 33. On open it takes one of three paths:
+
+- **Fresh:** an empty database is created directly at the version-33 baseline.
+- **Adoption:** a database already at version 33 is adopted in place, marking the
+  baseline applied without re-running any DDL.
+- **Native first-launch upgrade:** a database at **version 32**, the version
+  every installed v0.1.0-lineage database occupies, is upgraded in place to the
+  version-33 baseline (dropping the retired write-only `tt_curve_observations`
+  table) and then adopted, exactly as a fresh version-33 database is.
+
+A database older than version 32 is declined rather than upgraded: no installed
+database occupies those versions, so the earlier ladder steps are deliberately
+not reproduced natively. The user's file is left untouched on a decline.
+
 ## Bundled game-data snapshot
 
 The game-fact data the application reasons over (weapons, mobs, skills,

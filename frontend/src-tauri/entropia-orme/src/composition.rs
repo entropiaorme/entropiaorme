@@ -515,16 +515,16 @@ async fn compose_with(
     let db = match Db::open_adopted(&db_path).await {
         Ok(db) => db,
         Err(err) if err.is_below_baseline() => {
-            // The existing database predates the supported baseline. The
-            // retired Python sidecar used to migrate it forward before the
-            // native arm adopted it; with the sidecar gone there is nothing
-            // to do so, so this is now a terminal decline rather than a
-            // first-launch-after-upgrade race. (Porting the pre-baseline
-            // upgrade chain natively is deferred future work.)
+            // The existing database is below the supported baseline AND below
+            // the single rung the native first-launch upgrade bridges
+            // (v32 -> v33, the version every in-the-wild v0.1.0-lineage
+            // database sits at). A v32 database is upgraded in place and
+            // adopted; only older schemas reach here, and none exist in the
+            // wild, so this is a deliberate terminal decline, not a missing
+            // capability.
             tracing::error!(
                 target: "eo::composition",
-                "{err}; the backend cannot serve until the database is at the supported baseline \
-                 (native pre-baseline migration is a future release)"
+                "{err}; the backend cannot serve until the database is at the supported baseline"
             );
             return Composition::Declined;
         }

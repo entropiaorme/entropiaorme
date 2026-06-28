@@ -506,7 +506,7 @@ mod tests {
     fn repo_model_paths() -> (PathBuf, PathBuf) {
         let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../..")
-            .join("backend/assets/models");
+            .join("frontend/src-tauri/entropia-orme/resources/models");
         (
             assets.join("svtrv2_rec.onnx"),
             assets.join("ppocr_keys_v1.txt"),

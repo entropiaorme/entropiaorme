@@ -1,21 +1,21 @@
-//! Rust leg of the cross-language Normalizer conformance table.
+//! Frozen Normalizer conformance table.
 //!
 //! Reads the committed fixture
-//! `backend/testing/equivalence/normalizer_conformance.json` (the same one the
-//! Python leg asserts against) and checks the native normaliser reproduces
-//! every `expected` byte-for-byte. This test is hermetic: it needs only the
-//! committed fixture, no Python at runtime, so it runs on every Rust CI job.
+//! `eo-wire/tests/fixtures/normalizer_conformance.json` and checks the native
+//! normaliser reproduces every `expected` byte-for-byte. This is the frozen
+//! equivalence evidence for the Normalizer: a fixed input/output table banked
+//! when the byte-identical port was proven, asserted on every Rust CI job.
 
 use std::path::PathBuf;
 
 use eo_wire::normalizer::Normalizer;
 use serde_json::Value;
 
-/// Resolve the repo-root-relative fixture path from this crate's manifest dir
-/// (`frontend/src-tauri/eo-wire` -> three levels up is the repo root).
+/// Resolve the committed conformance fixture from this crate's manifest dir
+/// (`frontend/src-tauri/eo-wire/tests/fixtures/`).
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../backend/testing/equivalence/normalizer_conformance.json")
+        .join("tests/fixtures/normalizer_conformance.json")
 }
 
 #[test]

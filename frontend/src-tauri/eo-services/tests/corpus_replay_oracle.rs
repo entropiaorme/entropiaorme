@@ -9,11 +9,12 @@
 //! - the catalogue database snapshot (`expected/db_state.json`),
 //!   produced by the tracker's real persistence writes.
 //!
-//! The goldens are the cross-implementation contract: the backend's
-//! replay suite proves the Python pipeline against them in CI, so a
-//! byte-identical native replay proves end-to-end equivalence without
-//! spawning the other implementation. The two serialisations share
-//! one normaliser, in fingerprint-then-snapshot order, exactly as the
+//! The goldens are the frozen end-to-end equivalence evidence: banked
+//! when the native pipeline was proven byte-identical to the reference
+//! implementation, they pin that behaviour permanently, so a
+//! byte-identical native replay proves equivalence on every CI run with
+//! no second implementation present. The two serialisations share one
+//! normaliser, in fingerprint-then-snapshot order, exactly as the
 //! golden harness assigns its encounter-order symbols.
 //!
 //! The replay protocol mirrors the harness: a frozen, driver-advanced
@@ -45,7 +46,7 @@ fn repo_root() -> PathBuf {
 
 fn scenario_dir(family: &str, name: &str) -> PathBuf {
     repo_root()
-        .join("backend/tests/e2e/corpus")
+        .join("frontend/src-tauri/fixtures/corpus")
         .join(family)
         .join(name)
 }

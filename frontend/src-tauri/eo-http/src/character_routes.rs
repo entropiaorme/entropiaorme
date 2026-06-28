@@ -1097,8 +1097,8 @@ fn path_projection(data: Value) -> Value {
 
 // The prospect helpers are pure functions over the summary shapes;
 // these pins hold their arithmetic, ordering, and early returns
-// hermetically (the cross-language battery holds the same surface
-// byte-for-byte against the running backend).
+// hermetically (the retired cross-language oracle proved this surface
+// byte-for-byte; the committed goldens now hold it).
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

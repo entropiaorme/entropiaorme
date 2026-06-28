@@ -1,4 +1,5 @@
-//! Port of `backend/scripts/check_golden_ratification.py` (range mode).
+//! The golden-ratification guard (range mode), reimplementing the former Python
+//! guard of the same name.
 //!
 //! Guards against silently ratifying a regression through the goldens workflow.
 //! A committed change to a golden file re-ratifies whatever the pipeline
@@ -15,8 +16,8 @@
 //! original are deliberately not ported: CI invokes range mode exclusively, and
 //! the guard must fail-closed, never pass vacuously.
 //!
-//! Path note: the goldens and ratification reports moved out of `backend/` in
-//! this lane. The detected golden paths are now under
+//! Path note: the goldens and ratification reports were relocated out of the
+//! retired Python tree. The detected golden paths are now under
 //! `frontend/src-tauri/contracts/`, `frontend/src-tauri/fixtures/corpus/`, and
 //! `frontend/src-tauri/eo-wire/tests/fixtures/`; the reports live at
 //! `frontend/src-tauri/ratifications/<slug>.md`.
@@ -443,7 +444,7 @@ The marker proves the regeneration was conscious; it cannot prove \
 the diff is correct. An adversarial review of the golden diff must \
 be recorded, and the resulting report \
 (carrying the ORACLE-RATIFICATION ... VERDICT: ratification-sound \
-block) must be committed to backend/testing/ratifications/<slug>.md \
+block) must be committed to frontend/src-tauri/ratifications/<slug>.md \
 in the same range as the golden change. A verdict artefact from a \
 prior regeneration does not count: it must be added or modified in \
 this range.\n\n\

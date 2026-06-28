@@ -1,13 +1,11 @@
 //! Domain services for the EntropiaOrme backend.
 //!
-//! Skeleton member: this crate will carry the backend's service layer
-//! (cost accounting, tracking, scans, quests, and the rest) as each
-//! service is ported from the Python implementation. Porting rules and
-//! the per-service equivalence obligations are documented in the
-//! porting rulebook's byte-exact reproduction rules.
+//! This crate carries the backend's service layer (cost accounting,
+//! tracking, scans, quests, and the rest), each a byte-exact port of its
+//! original Python service.
 //!
-//! First ported service: [`cost_engine`], the pure-arithmetic leaf the
-//! equivalence runner proves its per-unit `cargo test` loop on.
+//! [`cost_engine`] is the pure-arithmetic leaf its per-unit `cargo test`
+//! loop runs on.
 
 pub mod character_calc;
 pub mod chatlog_parser;

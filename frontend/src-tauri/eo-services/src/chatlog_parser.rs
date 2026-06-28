@@ -12,8 +12,8 @@
 //! Timestamps or numeric captures whose conversions differ from the
 //! original's (impossible dates, malformed or Unicode-digit numbers
 //! inside shape-matching lines, exotic HTML entities) yield no event
-//! or decode narrowly instead; the divergence register covers the
-//! classes, none of which a client-written line produces.
+//! or decode narrowly instead; these are deliberate divergences from the
+//! original, none of which a client-written line produces.
 
 use std::sync::OnceLock;
 

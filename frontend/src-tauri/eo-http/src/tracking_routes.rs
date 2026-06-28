@@ -1100,9 +1100,9 @@ impl HydrationState {
     }
 }
 
-// The expected values in these tests are the backend's own outputs, held
-// byte-for-byte by the cross-language A/B battery; these hermetic pins guard
-// the same surface without a live backend.
+// The expected values in these tests are the original backend's own outputs,
+// frozen as committed goldens; these hermetic pins guard the same surface
+// with no second implementation present.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1452,8 +1452,8 @@ mod tests {
     // ── Session-edit hermetic pins ──
     //
     // These exercise the edit impls directly against an in-memory pool;
-    // the cross-language A/B battery holds the same surface byte-for-byte
-    // against the live backend.
+    // the committed goldens hold the same surface byte-for-byte (the
+    // cross-language oracle that first proved it has been retired).
 
     /// An ended session with three kills (two `Atrox`, one `Foul`), one
     /// of the Atrox already renamed from `Daikiba`, plus active loot

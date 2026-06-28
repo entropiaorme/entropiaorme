@@ -25,7 +25,7 @@ notes: >
   announcement's player field for correlation to fire.
 
 # The committed clock plan: the frozen, driver-advanced instant schedule a
-# replay of this scenario runs on (see backend/testing/clock_plan.py). The
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
 # start instant is chosen away from the scenario's chat-log instants so a
 # plan-stamped timestamp never collides with a domain timestamp.
 clock:

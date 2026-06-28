@@ -11,10 +11,9 @@
 //! Validation responses carry no ETag or Cache-Control header; the
 //! conditional-GET middleware applies to handler responses only.
 //!
-//! Every behaviour here is pinned against the running backend by the
-//! cross-language extraction-conformance battery
-//! (`tests/extraction_conformance.rs`); the unit tests carry the
-//! hand-verified forms those probes grounded.
+//! Every behaviour here is pinned by the committed goldens, asserted by
+//! the hermetic tests; the unit tests below carry the hand-verified
+//! forms those goldens froze.
 
 use axum::body::Body;
 use axum::http::{header, Response, StatusCode};
@@ -631,8 +630,9 @@ mod tests {
 
     #[test]
     fn lax_int_accepts_the_probed_acceptance_grid() {
-        // Each pin hand-verified against the running backend (see the
-        // module doc); the conformance battery re-proves them live.
+        // Each pin hand-verified against the original backend (see the
+        // module doc) and frozen as a committed golden the hermetic
+        // tests re-assert.
         assert_eq!(parse_int_lax("4"), Some(LaxInt::Value(4)));
         assert_eq!(parse_int_lax("05"), Some(LaxInt::Value(5)));
         assert_eq!(parse_int_lax("+5"), Some(LaxInt::Value(5)));

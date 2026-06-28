@@ -16,7 +16,8 @@
 //! surface yet). The file is an optional calibration artefact, unlike
 //! the snapshot catalogue whose absence is a hard fault, and a
 //! wrong-shape payload also falls back where the backend would crash
-//! at import: the divergence register covers the strict typed reads.
+//! at import: this is a deliberate divergence from the original's strict
+//! typed reads.
 
 use std::path::Path;
 

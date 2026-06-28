@@ -123,9 +123,8 @@ fn exempt_patterns() -> &'static [Regex] {
             r"(^|/)package-lock\.json$",
             r"(^|/)Cargo\.lock$",
             r"(?i)\.db$",
-            r"(^|/)backend/assets/models/",
-            r"(^|/)backend/tests/expected/openapi\.snapshot\.json$",
-            r"(^|/)backend/testing/COVERAGE\.md$",
+            r"(^|/)frontend/src-tauri/entropia-orme/resources/models/",
+            r"(^|/)frontend/src-tauri/contracts/[^/]+\.snapshot\.json$",
             r"(^|/)frontend/src/lib/api/schema\.d\.ts$",
             r"(^|/)frontend/src-tauri/eo-http/resources/demo_goldens/",
         ]

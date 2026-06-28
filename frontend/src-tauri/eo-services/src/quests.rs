@@ -108,9 +108,8 @@ pub struct QuestService {
     /// The active tracking session, fed by the bus handlers.
     current_session_id: Mutex<Option<String>>,
     /// The identifier source for ledger rows and session-less
-    /// completion keys (random by default; injected by the tests and
-    /// the cross-language differential so both sides stamp the same
-    /// identifiers).
+    /// completion keys (random by default; injected by the tests so the
+    /// committed goldens stamp the same identifiers).
     id_source: Mutex<Arc<dyn Fn() -> String + Send + Sync>>,
     /// The runtime the bus handlers bridge their database work onto,
     /// set when the service subscribes.

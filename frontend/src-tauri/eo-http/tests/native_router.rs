@@ -248,7 +248,7 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
 
 /// The analytics write adapters serve natively over the composed state:
 /// the success paths, the validation envelopes (exercising required_f64),
-/// and the handler error legs, all without the cross-language battery.
+/// and the handler error legs, all hermetically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_analytics_write_routes_serve_natively() {
     let (state, _dir) = serve_substrate().await;
@@ -608,8 +608,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     let playlist: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(playlist["estimatedMinutes"], 45);
     // Provided items supersede the plain id list: the playlist's quest
-    // set derives from them (the cross-language battery pins the same
-    // shape on both arms).
+    // set derives from them (the committed golden pins the same shape).
     assert_eq!(playlist["questIds"], serde_json::json!(["3"]));
     assert_eq!(playlist["items"][0]["groupType"], "long_horizon");
     let (status, _, body) = send_json(
@@ -1390,9 +1389,9 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
 // ── Tracking session-edit write adapters, end-to-end and hermetic ──────
 //
 // The five edit adapters (`native.rs`) and the HydrationState method
-// wrappers (`tracking_routes.rs`) are only driven end-to-end by the
-// feature-gated cross-language battery, so the hermetic mutation
-// campaign never exercises them. This test seeds an ended + an active
+// wrappers (`tracking_routes.rs`) were once driven end-to-end only by
+// the now-retired cross-language battery, so the hermetic mutation
+// campaign never exercised them. This test seeds an ended + an active
 // session straight into the substrate's database and drives every edit
 // through the public port, asserting the RESPONSE BODY fields (not just
 // the status) so an adapter/wrapper degraded to `Default::default()`
@@ -1834,9 +1833,9 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 // dir carrying a `mobs.json` (the suggestions catalogue) and a
 // `settings.json` (the attribution gate's config read), then drives the
 // full leg set through the public port asserting RESPONSE BODY fields so
-// a wrapper degraded to an empty `Response` is caught. The
-// cross-language battery proves the same surface byte-identical against
-// the running backend.
+// a wrapper degraded to an empty `Response` is caught. The retired
+// cross-language oracle proved this surface byte-identical; the
+// committed goldens now hold it.
 
 /// A substrate composed with BOTH the read surface and a live tracker
 /// over a shared pool. `config_json` seeds `settings.json` (the

@@ -22,8 +22,9 @@
 //! record a reward) is NOT reproduced: `claim_rank` advances progress
 //! with a conditional upsert gated on the prior rank, so of two racing
 //! claims exactly one advances and the loser aborts. In serial use the
-//! guard always holds, so single-threaded behaviour (and the
-//! cross-language differential) is identical while the race is closed.
+//! guard always holds, so single-threaded behaviour is identical to the
+//! original (as the retired cross-language differential confirmed) while
+//! the race is closed.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -372,9 +373,9 @@ impl CodexService {
     /// inserts share, so an uncalibrated-skill claim (which wrote none)
     /// simply removes nothing there.
     ///
-    /// A forward feature with no Python-era original; it is mirrored in
-    /// the oracle so the OpenAPI contract carries the route, but the
-    /// cross-language differential does not drive it.
+    /// A forward feature with no Python-era original; it was mirrored in
+    /// the retired oracle so the OpenAPI contract carries the route, but the
+    /// cross-language differential never drove it.
     pub async fn unclaim_rank(&self, species_name: &str) -> Result<Value, CodexError> {
         let now = naive_to_epoch(self.clock.now());
         let mut tx = self.pool.begin().await.map_err(CodexError::Db)?;

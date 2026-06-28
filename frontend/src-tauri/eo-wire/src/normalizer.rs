@@ -1,6 +1,6 @@
 //! Byte-exact Rust port of the equivalence oracle's shared normaliser.
 //!
-//! The Python testing oracle canonicalises
+//! The Python testing oracle canonicalised
 //! every bus payload, DB row, and HTTP body before golden comparison: UUIDs
 //! become sequential `<UUID_N>` symbols, timestamps become `<TS_N>` symbols,
 //! floats round to four decimal places, and dict keys sort lexically. The same
@@ -8,14 +8,15 @@
 //! HTTP surfaces so a UUID seen first on the bus and later in a DB column
 //! resolves to the same symbol everywhere.
 //!
-//! This is the Rust half of the cross-language equivalence runner: a native
-//! backend that produces the same logical values must, after normalisation,
-//! emit goldens byte-identical to the Python ones. "Byte-identical" is literal:
+//! This is the normaliser implementation: a native backend that produces the
+//! same logical values must, after normalisation, emit goldens byte-identical
+//! to the committed Python ones. "Byte-identical" is literal:
 //! the normalised value is serialised through [`to_python_json`], a faithful
 //! reimplementation of `json.dumps(..., sort_keys=True, ensure_ascii=False)`
 //! including Python's `float.__repr__` formatting, because the goldens are
 //! compared as bytes and `ryu`'s default float rendering diverges from
-//! Python's (the divergence the differential fuzz exists to catch).
+//! Python's. The conformance table is the frozen pin on this (the retired
+//! differential fuzz first ranged over it).
 //!
 //! ## Domain scope
 //!
@@ -26,8 +27,8 @@
 //! already its `model_dump(mode="json")` dict, and a `tuple` is already a JSON
 //! array. This port therefore operates on the JSON value domain
 //! (`serde_json::Value`), which is exactly the wire domain the equivalence
-//! check ranges over; the conformance table and differential fuzz range over
-//! the same domain.
+//! check ranges over; the conformance table ranges over the same domain (as
+//! did the retired differential fuzz).
 //!
 //! One numeric boundary belongs to the same scoping. Python's `json.loads`
 //! parses an integer literal into an arbitrary-precision `int`; serde_json
@@ -90,9 +91,8 @@ impl Normalizer {
     }
 
     /// Pre-load raw-to-symbol assignments captured from another
-    /// normaliser (the backend dumps its tables so a cross-language
-    /// harness reproduces the same numbering when the event stream has
-    /// already consumed early symbols). Timestamp keys arrive as the
+    /// normaliser (so the same numbering is reproduced when the event
+    /// stream has already consumed early symbols). Timestamp keys arrive as the
     /// backend's string form of the raw value: a parseable number seeds
     /// the epoch-keyed entry, anything else the string-keyed one.
     pub fn seed_symbols(&mut self, uuids: &Map<String, Value>, timestamps: &Map<String, Value>) {
@@ -237,8 +237,8 @@ fn is_uuid(s: &str) -> bool {
 ///
 /// Python's bare `\d` also matches non-ASCII Unicode decimal digits; the wire
 /// domain this port targets only ever carries ASCII timestamps, so the
-/// differential fuzz keeps generated strings in the ASCII domain and this
-/// check uses `[0-9]`. The boundary is a domain choice, not an ignored
+/// retired differential fuzz kept generated strings in the ASCII domain and
+/// this check uses `[0-9]`. The boundary is a domain choice, not an ignored
 /// divergence: no ASCII payload disagrees with Python here.
 fn is_iso_prefix(s: &str) -> bool {
     let b = s.as_bytes();
@@ -579,7 +579,8 @@ pub fn python_repr_f64(value: f64) -> String {
     // string plus a decimal-point position, then reformat under Python's rules
     // (which differ from ryu's in threshold, the `+`/zero-padded exponent, and
     // the integer `.0`). Decoupling from ryu's own formatting is the whole
-    // point: this is what the differential fuzz proves byte-equal.
+    // point: this is what the committed goldens pin byte-equal (the retired
+    // differential fuzz first proved it).
     let mut buffer = ryu::Buffer::new();
     let ryu_str = buffer.format_finite(magnitude);
     let (digits, decpt) = parse_ryu(ryu_str);

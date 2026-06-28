@@ -8,8 +8,8 @@
 //! every check passes and `400 Disallowed CORS ...` when one fails;
 //! every other response on a request with an allowed `Origin` is
 //! decorated with `Access-Control-Allow-Origin` plus `Vary: Origin`.
-//! All forms here are pinned by the cross-language battery against the
-//! running backend.
+//! All forms here are pinned by the committed golden, asserted by a
+//! hermetic test.
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};

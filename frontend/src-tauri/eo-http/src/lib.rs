@@ -5,8 +5,8 @@
 //! every backend route natively in-process. The Python sidecar and the
 //! reverse proxy were retired when the backend collapsed into the shell
 //! process, so there is no upstream and no per-route arm: a route is simply
-//! a registered native handler. The route map is documented in the
-//! port-readiness criteria.
+//! a registered native handler. The route map is the set of
+//! `native_route` registrations in [`native_routes`].
 
 pub mod analytics_routes;
 pub mod body;
@@ -728,7 +728,7 @@ pub async fn dispatch_in_process(
 }
 
 /// Native route registrations. Each route is one `native_route` line (here
-/// or in [`native`]); the route map mirrors `PORT-READINESS.md`.
+/// or in [`native`]); together they are the complete route map.
 fn native_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     let router = native::register(router.route(
         "/api/health",

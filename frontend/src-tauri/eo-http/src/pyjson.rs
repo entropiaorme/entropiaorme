@@ -9,8 +9,8 @@
 //! `ctx.error`). This module ports that scanner: the value tree it
 //! produces mirrors what `json.loads` yields, and its errors carry the
 //! reference's message text and position. Every message form and
-//! position here is pinned by probes against the running backend in
-//! the conformance battery.
+//! position here is pinned by a committed golden, asserted by the
+//! hermetic conformance tests.
 
 use std::collections::BTreeMap;
 

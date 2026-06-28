@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
 [![Branch coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/coverage.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
-[![Mutation score (Python oracle)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/nightly.yml)
+[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/nightly.yml)
 
 An analytical desktop tool for Entropia Universe.
 

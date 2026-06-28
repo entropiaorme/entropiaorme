@@ -16,7 +16,7 @@
 
 [workspace]
 resolver = "2"
-members = ["entropia-orme", "eo-http", "eo-services", "eo-wire"]
+members = ["entropia-orme", "eo-http", "eo-services", "eo-wire", "xtask"]
 
 [workspace.package]
 version = "0.2.0"

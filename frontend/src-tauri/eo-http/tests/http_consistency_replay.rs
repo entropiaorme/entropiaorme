@@ -8,9 +8,10 @@
 //! drives each scenario's chat-log segments through the real watcher ->
 //! bus -> tracker -> database pipeline, stops the session (the "midpoint"
 //! name notwithstanding, the goldens capture the end-of-scenario, idle
-//! hydration shape), then serves the read + producer surface over a
-//! loopback socket and fingerprints ten endpoints through the same
-//! `eo_wire::http_fingerprint` emitter the goldens were banked with.
+//! hydration shape), then drives the read + producer surface in-memory
+//! through `build_router(state).oneshot` and fingerprints ten endpoints
+//! through the same `eo_wire::http_fingerprint` emitter the goldens were
+//! banked with.
 //!
 //! The goldens are frozen evidence: this test only READS and ASSERTS
 //! them. It does not regenerate or modify any golden file.
@@ -20,8 +21,8 @@
 //! one flush per timestamp tick so the tail never observes end-of-file
 //! inside a tick; a drain barrier on the cumulative line count after each
 //! segment; one plan step before the session stops. The transport mirrors
-//! `eo-http/tests/native_router.rs` (bind a loopback socket, spawn
-//! `eo_http::serve`, probe `/api/health`), and the capture half mirrors
+//! `eo-http/tests/native_router.rs` (the router driven in-memory via
+//! `build_router(state).oneshot`, no socket), and the capture half mirrors
 //! `eo-wire/tests/emitters_proof.rs` (one shared `Normalizer` walked over
 //! the fixed endpoint order, `serialize_capture(capture(..))` per response).
 
@@ -46,11 +47,9 @@ use eo_services::tracker::{HuntTracker, Providers};
 use eo_wire::http_fingerprint::{self, RawResponse};
 use eo_wire::normalizer::Normalizer;
 use http_body_util::BodyExt;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use serde_json::{Map, Value};
 use sqlx::Row;
+use tower::ServiceExt;
 
 /// The scripted-corpus base, a sibling of this crate (`eo-http`) under
 /// `frontend/src-tauri`, exactly as the sibling `eo-wire` test resolves it.
@@ -146,25 +145,21 @@ fn first_divergence(expected: &str, actual: &str) -> String {
     )
 }
 
-// ── The loopback transport (copied from the native-router test) ──────
+// ── The in-memory transport (mirrors the native-router test) ─────────
 
-/// A plain HTTP client to drive requests at the test substrate's socket.
-fn test_client() -> Client<HttpConnector, Body> {
-    Client::builder(TokioExecutor::new()).build(HttpConnector::new())
-}
-
-async fn get(port: u16, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
-    let authority = format!("127.0.0.1:{port}");
+/// Dispatch a GET through a freshly built router (`oneshot` consumes the
+/// router, so each request gets its own), capturing the same
+/// (status, headers, body) tuple a socket round-trip produced.
+async fn get(state: &Arc<AppState>, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     let request = http::Request::builder()
         .method("GET")
-        .uri(format!("http://{authority}{path}"))
-        .header("host", &authority)
+        .uri(path)
         .body(Body::empty())
         .expect("request builds");
-    let response = test_client()
-        .request(request)
+    let response = eo_http::build_router(state.clone())
+        .oneshot(request)
         .await
-        .expect("request succeeds");
+        .expect("router responds");
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = response
@@ -328,11 +323,8 @@ async fn assert_consistency_goldens(scenario_name: &str) {
         "the hotbar listener is composed but never started (snapshot hotbarListenerActive:false)"
     );
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let port = listener.local_addr().expect("addr").port();
     let state = Arc::new(
-        AppState::new(port)
+        AppState::new(0)
             .with_hydration(hydration)
             .with_tracker(tracker.clone())
             .with_skill_scan(scan)
@@ -340,23 +332,6 @@ async fn assert_consistency_goldens(scenario_name: &str) {
             .with_cors(CorsConfig::new(5173, None))
             .with_data_dir(dev_data_dir.path().to_path_buf()),
     );
-    let serve_state = state.clone();
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
-        eo_http::serve(listener, serve_state).await.expect("serve");
-    });
-    // The listener is already bound; one probe confirms the task runs.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if get(port, "/api/health").await.0 == http::StatusCode::OK {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "substrate never came up"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 
     // Capture the ten endpoints in the fixed order under one shared
     // Normalizer, fingerprinting each through the same emitter the goldens
@@ -365,7 +340,7 @@ async fn assert_consistency_goldens(scenario_name: &str) {
     let mut normalizer = Normalizer::new();
     let empty_query: Map<String, Value> = Map::new();
     for (endpoint_id, path) in &endpoints {
-        let (status, headers, body) = get(port, path).await;
+        let (status, headers, body) = get(&state, path).await;
         assert_eq!(
             status,
             http::StatusCode::OK,

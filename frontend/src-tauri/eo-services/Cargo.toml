@@ -45,11 +45,6 @@ tempfile = { workspace = true }
 # Test-only: a capturing layer for the eo::input breadcrumb instrument test.
 tracing-subscriber = { workspace = true }
 
-[features]
-# Tests that shell out to the Python oracle at runtime (the cost-engine
-# differential). Off by default so the hermetic Rust CI jobs need no Python.
-cross-language = []
-
 [[bench]]
 name = "smoke"
 harness = false

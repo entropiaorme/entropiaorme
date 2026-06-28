@@ -51,7 +51,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn scenario_dir() -> PathBuf {
-    repo_root().join("backend/tests/e2e/corpus/scripted/basic_hunt_10_events")
+    repo_root().join("frontend/src-tauri/fixtures/corpus/scripted/basic_hunt_10_events")
 }
 
 /// The committed clock plan: a frozen start instant the driver advances by one

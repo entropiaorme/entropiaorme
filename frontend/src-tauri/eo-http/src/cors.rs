@@ -58,20 +58,6 @@ impl CorsConfig {
         Self { allowed_origins }
     }
 
-    /// The backend reads `ENTROPIAORME_FRONTEND_PORT` (default 5173)
-    /// and `ENTROPIAORME_HOSTNAME` (a `.localhost` dev hostname); the
-    /// same environment drives the substrate's copy of the allowlist.
-    pub fn from_env() -> Self {
-        let frontend_port = std::env::var("ENTROPIAORME_FRONTEND_PORT")
-            .ok()
-            .and_then(|raw| raw.trim().parse().ok())
-            .unwrap_or(5173);
-        let hostname = std::env::var("ENTROPIAORME_HOSTNAME")
-            .ok()
-            .filter(|name| name.ends_with(".localhost"));
-        Self::new(frontend_port, hostname.as_deref())
-    }
-
     pub fn origin_allowed(&self, origin: &str) -> bool {
         self.allowed_origins.iter().any(|o| o == origin)
     }

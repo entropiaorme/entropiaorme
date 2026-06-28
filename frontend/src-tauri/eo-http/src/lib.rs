@@ -766,12 +766,6 @@ mod routes {
     }
 }
 
-/// Serve the substrate on an already-bound listener until the process
-/// exits. The shell spawns this once at setup.
-pub async fn serve(listener: tokio::net::TcpListener, state: Arc<AppState>) -> std::io::Result<()> {
-    axum::serve(listener, build_router(state)).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

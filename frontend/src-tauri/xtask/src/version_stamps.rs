@@ -1,4 +1,4 @@
-//! Port of `backend/scripts/check_version_stamps.py`.
+//! Port of the original Python implementation.
 //!
 //! Asserts the app version is identical across the three stamps a release bump
 //! must move in lock-step:

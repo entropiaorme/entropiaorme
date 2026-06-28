@@ -1,4 +1,4 @@
-//! Port of `backend/scripts/rust_mutation_floors.py`.
+//! Port of the original Python implementation.
 //!
 //! Reads a cargo-mutants `outcomes.json` and enforces the per-file mutation
 //! score floors below. Scoring matches the campaign's conventions: a mutant

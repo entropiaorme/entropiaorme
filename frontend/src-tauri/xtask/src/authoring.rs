@@ -1,4 +1,4 @@
-//! Port of `backend/scripts/check_authoring_lint.py`.
+//! Port of the original Python implementation.
 //!
 //! Two mechanical authoring rules, diff-scoped to the lines a change adds:
 //!   - No em dashes (U+2014) in any added line of a non-exempt file.

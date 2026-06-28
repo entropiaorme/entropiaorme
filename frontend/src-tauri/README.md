@@ -9,7 +9,7 @@ Cargo workspace for the desktop application's Rust side.
 - **`eo-services/`**: domain services behind that HTTP surface.
 - **`eo-wire/`**: wire-format contracts (response and event types, serialisation).
 
-The `eo-*` members implement the backend in-process; see `backend/architecture/PORT-READINESS.md` and `backend/architecture/PORTING-RULEBOOK.md` for how the Python backend's shapes mapped onto them and the divergence register that records where the shipped Rust deliberately differs. They are deliberately Tauri-free, and CI keeps them that way structurally: a Linux job without the Tauri toolchain's system stack builds and tests them in isolation, so a GUI dependency creeping into backend code fails the gate rather than landing silently.
+The `eo-*` members implement the backend in-process, built to the port-readiness criteria and porting rulebook that mapped the original Python backend's shapes onto them, along with a divergence register that records where the shipped Rust deliberately differs. They are deliberately Tauri-free, and CI keeps them that way structurally: a Linux job without the Tauri toolchain's system stack builds and tests them in isolation, so a GUI dependency creeping into backend code fails the gate rather than landing silently.
 
 ## Workspace-level files
 

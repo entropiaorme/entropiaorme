@@ -1,4 +1,4 @@
-//! Native tracking session-read surface (`backend/routers/tracking.py`):
+//! Native tracking session-read surface:
 //! the `/api/tracking/sessions`, `/api/tracking/session/{id}`, and
 //! `/api/tracking/tag-suggestions` GETs.
 //!
@@ -625,8 +625,8 @@ async fn tag_suggestions_impl(
 
 // ── Session edits (rename-mob / restore-mob / loot flip / armour-cost) ──
 //
-// Post-hoc edits to ENDED sessions, byte-faithful to
-// `backend/routers/tracking.py`. Each mutates only the shared SQLite
+// Post-hoc edits to ENDED sessions, byte-faithful to the original
+// Python implementation. Each mutates only the shared SQLite
 // database. The four mob/loot edits share the active-session guard
 // (`_validate_session_exists`): 404 when the session is absent, 409 when
 // it is still active. `armour-cost` deliberately omits that guard (the

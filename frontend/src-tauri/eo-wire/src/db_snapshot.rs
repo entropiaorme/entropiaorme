@@ -1,5 +1,5 @@
 //! Canonical DB-state snapshot emitter: Rust port of
-//! `backend/testing/db_snapshot.py`.
+//! the original Python implementation.
 //!
 //! The Python snapshot runs a fixed catalogue of `SELECT`s against the
 //! tracking schema and renders the rows under the shared [`Normalizer`]. This

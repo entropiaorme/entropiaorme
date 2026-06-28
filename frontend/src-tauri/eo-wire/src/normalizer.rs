@@ -1,6 +1,6 @@
 //! Byte-exact Rust port of the equivalence oracle's shared normaliser.
 //!
-//! The Python testing oracle (`backend/testing/fingerprint.py`) canonicalises
+//! The Python testing oracle canonicalises
 //! every bus payload, DB row, and HTTP body before golden comparison: UUIDs
 //! become sequential `<UUID_N>` symbols, timestamps become `<TS_N>` symbols,
 //! floats round to four decimal places, and dict keys sort lexically. The same

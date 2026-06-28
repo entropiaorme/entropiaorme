@@ -1,4 +1,4 @@
-//! Cost formula engine: Rust port of `backend/services/cost_engine.py`.
+//! Cost formula engine: ported from the original Python implementation.
 //!
 //! Per-use cost (decay + ammo + markups) and reference damage / heal ranges
 //! from equipment-catalogue payloads, at maxed skill. Pure arithmetic, no

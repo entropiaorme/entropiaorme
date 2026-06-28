@@ -1,17 +1,19 @@
 //! Repository task runner: the CI guards, as a single binary.
 //!
-//! Replaces the Python guard scripts that previously lived under
-//! `backend/scripts/`. Each guard is a subcommand; every subcommand exits
+//! Replaces the original Python guard scripts. Each guard is a subcommand; every subcommand exits
 //! non-zero on failure with a clear message, matching the pass/fail semantics
 //! (and, where reasonable, the wording) of the Python script it ports.
 //!
 //! Usage:
-//!   xtask ratify-check        --range <BASE>..<HEAD>
-//!   xtask authoring-lint      --range <BASE>..<HEAD>
-//!   xtask version-stamps
-//!   xtask mutation-floors     --outcomes <PATH>
-//!   xtask no-bare-setinterval [--warn-only]
-//!   xtask bump-version        <NEW_VERSION>
+//!
+//! ```text
+//! xtask ratify-check        --range <BASE>..<HEAD>
+//! xtask authoring-lint      --range <BASE>..<HEAD>
+//! xtask version-stamps
+//! xtask mutation-floors     --outcomes <PATH>
+//! xtask no-bare-setinterval [--warn-only]
+//! xtask bump-version        <NEW_VERSION>
+//! ```
 
 mod authoring;
 mod bump_version;

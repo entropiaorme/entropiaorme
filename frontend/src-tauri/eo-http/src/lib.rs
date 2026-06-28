@@ -5,8 +5,8 @@
 //! every backend route natively in-process. The Python sidecar and the
 //! reverse proxy were retired when the backend collapsed into the shell
 //! process, so there is no upstream and no per-route arm: a route is simply
-//! a registered native handler. The route map is documented in
-//! `backend/architecture/PORT-READINESS.md`.
+//! a registered native handler. The route map is documented in the
+//! port-readiness criteria.
 
 pub mod analytics_routes;
 pub mod body;

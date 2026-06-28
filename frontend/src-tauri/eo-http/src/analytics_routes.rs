@@ -1,4 +1,4 @@
-//! Native analytics reads (`backend/routers/analytics.py`): the
+//! Native analytics reads: the
 //! `/api/analytics/overview` and `/api/analytics/activity` GETs.
 //!
 //! These handlers are router-resident SQL aggregation: the reference keeps

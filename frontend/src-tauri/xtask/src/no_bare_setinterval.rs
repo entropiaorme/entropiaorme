@@ -1,4 +1,4 @@
-//! Port of `backend/scripts/check_no_bare_setinterval.py`.
+//! Port of the original Python implementation.
 //!
 //! Two whole-tree rules over the tracked frontend source, enforcing the
 //! visibility-aware polling discipline so the hidden-window-polling smell (and

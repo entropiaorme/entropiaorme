@@ -1,5 +1,5 @@
 //! Damage-based weapon attribution for configured trifecta profiles,
-//! ported from `backend/tracking/tool_inference.py`.
+//! ported from the original Python implementation.
 //!
 //! Each configured weapon carries a damage band; a combat hit
 //! attributes to the narrowest band containing its amount (name as the

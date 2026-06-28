@@ -5,7 +5,7 @@ changes to the testing oracle's expected output (a regenerated golden, or the
 first pin of a newly emitted one).
 
 When a change moves a golden file, the `golden-ratification` pull-request job
-(`backend/scripts/check_golden_ratification.py`) requires, alongside the
+requires, alongside the
 `test: regenerate goldens` commit-message marker, a report committed here as
 `<slug>.md` and committed no earlier than the last golden change in that range.
 The report ends in a fenced verdict block the guard parses (the block must be

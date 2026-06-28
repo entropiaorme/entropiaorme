@@ -3,13 +3,13 @@
 //! Skeleton member: this crate will carry the HTTP response and event
 //! envelope types and their serialisation rules as backend routes move
 //! into the shell process. The byte-level contract each type must
-//! reproduce is documented in `backend/architecture/PORTING-RULEBOOK.md`.
+//! reproduce is documented in the porting rulebook.
 //!
 //! The first landed surfaces are the cross-language equivalence runner's
 //! emitters: [`normalizer`] (the shared canonicaliser), [`fingerprint`] (the
 //! event-stream JSONL), [`db_snapshot`] (the DB-state snapshot), and
 //! [`http_fingerprint`] (the HTTP response goldens). Each is a byte-exact port
-//! of its `backend/testing/` counterpart, asserted against the committed Python
+//! of its Python testing-oracle counterpart, asserted against the committed Python
 //! goldens by the runner.
 //!
 //! The wire-contract spine sits beside them: [`domain_events`] (the typed

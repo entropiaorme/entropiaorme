@@ -1,5 +1,5 @@
 //! The event-stream hub: fan-out of domain events to per-client frame
-//! queues, mirroring `backend/services/event_stream.py`.
+//! queues, mirroring the original Python implementation.
 //!
 //! Semantics reproduced exactly:
 //! - one bounded queue per connected client (default 256 frames),

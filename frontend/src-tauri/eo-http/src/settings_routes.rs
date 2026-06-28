@@ -1,5 +1,5 @@
-//! Natively-served settings READ handlers, byte-faithful to
-//! `backend/routers/settings.py`: the assembled `AppSettings` response
+//! Natively-served settings READ handlers, byte-faithful to the original
+//! Python implementation: the assembled `AppSettings` response
 //! (config fields, live chat-log validation, per-preset trifecta
 //! readiness) and the overlay position.
 //!

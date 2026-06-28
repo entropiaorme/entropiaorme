@@ -1,7 +1,7 @@
 //! In-memory catalogue of game constants, ported from
-//! `backend/services/game_data_store.py`.
+//! the original Python implementation.
 //!
-//! The snapshot (per-endpoint JSON files under `backend/data/snapshot/`)
+//! The snapshot (the bundled per-endpoint JSON snapshot)
 //! is the application's sole source of truth for game-fact data. The
 //! store loads it once at construction and serves queries from memory.
 //! Iteration order is load-bearing: endpoints sit in sorted-filename

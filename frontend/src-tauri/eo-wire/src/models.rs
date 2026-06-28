@@ -1,6 +1,6 @@
 //! HTTP response models: the native side of the API wire contract.
 //!
-//! Conventions, mirroring `backend/routers/response_models.py`:
+//! Conventions, mirroring the original Python implementation:
 //!
 //! - **Extra-allow carry-forward**: every response model ends with a
 //!   flattened map, so undeclared keys pass through serialisation

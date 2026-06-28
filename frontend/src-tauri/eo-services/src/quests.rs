@@ -1,4 +1,4 @@
-//! Quest service, ported from `backend/services/quest_service.py`:
+//! Quest service, ported from the original Python implementation:
 //! the quest and playlist CRUD surface with its shared helper layer
 //! (row shaping, cooldown derivation, reward-markup normalisation,
 //! mob and playlist-item management), plus the lifecycle actions
@@ -2025,7 +2025,7 @@ fn python_str(value: &Value) -> String {
 }
 
 // Expected values in these tests are the original implementation's
-// outputs, computed by running `backend/services/quest_service.py`
+// outputs, computed by running the original Python implementation
 // over byte-identical payloads and database seeds (created_at and
 // updated_at pinned by direct UPDATE on both sides, since the schema
 // stamps them from the wall clock).

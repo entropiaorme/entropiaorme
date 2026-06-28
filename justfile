@@ -1,6 +1,6 @@
 # entropiaorme dev recipes. `just dev` launches the dev stack; `just
-# check` runs the frontend type-check + build; `just test-backend` runs
-# the pytest suite. Run `just --list` to see every recipe.
+# check` runs the frontend type-check + build; `just test-rust` runs the
+# native backend test suite. Run `just --list` to see every recipe.
 #
 # Env vars from .env.local (if present) are loaded automatically before
 # each recipe via `set dotenv-load` below. Recognised keys:
@@ -20,12 +20,6 @@ set dotenv-filename := ".env.local"
 # already pass to `powershell -File`.
 set windows-shell := ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "RemoteSigned", "-Command"]
 
-# Path to the project virtualenv's interpreter, resolved per OS: Windows venvs
-# lay the interpreter under Scripts/, POSIX venvs under bin/. Recipes that shell
-# out to the venv use {{venv_python}} so they run unchanged on Windows, macOS,
-# and Linux (forward slashes are accepted by PowerShell and sh alike).
-venv_python := if os_family() == "windows" { ".venv/Scripts/python.exe" } else { ".venv/bin/python" }
-
 # Default: list available recipes.
 default:
     @just --list
@@ -40,27 +34,6 @@ dev:
 dev:
     @echo "just dev: macOS / Linux dev launch is not yet implemented; contributions welcome."
     @exit 1
-
-# Run backend tests.
-test-backend:
-    {{venv_python}} -m pytest backend/tests/
-
-# Run the cross-language equivalence runner end to end: the Rust-native
-# per-unit gate (Normalizer conformance, DB-snapshot + HTTP fingerprint emitter
-# byte-equality, the .yml-family mirrors, the cost-engine numeric loop) PLUS the
-# live differential fuzzes against the Python oracle (the `cross-language`
-# feature) and the Python faithfulness legs. The virtualenv must be installed
-# (the differentials shell out to it). No ignore list: every divergence fails.
-# Split [windows]/[unix] only for the shell-specific oracle env-var export.
-[windows]
-test-equivalence:
-    $env:EO_ORACLE_PYTHON = (Resolve-Path .venv/Scripts/python.exe).Path; cargo test --manifest-path frontend/src-tauri/Cargo.toml -p eo-wire -p eo-services --features cross-language
-    {{venv_python}} -m pytest backend/tests/test_normalizer_conformance.py backend/tests/test_equivalence_emitters.py backend/tests/test_equivalence_yml_family.py
-
-[unix]
-test-equivalence:
-    EO_ORACLE_PYTHON="{{justfile_directory()}}/.venv/bin/python" cargo test --manifest-path frontend/src-tauri/Cargo.toml -p eo-wire -p eo-services --features cross-language
-    {{venv_python}} -m pytest backend/tests/test_normalizer_conformance.py backend/tests/test_equivalence_emitters.py backend/tests/test_equivalence_yml_family.py
 
 # Run the native backend (Rust) test suite. Invoked from the workspace so
 # frontend/src-tauri/.cargo/config.toml is discovered: it redirects test temp
@@ -102,8 +75,8 @@ smoke:
     @exit 1
 
 # Regenerate the typed frontend API client from the committed OpenAPI
-# snapshot (backend/tests/expected/openapi.snapshot.json). Run after any
-# backend change that regenerates the snapshot.
+# snapshot (frontend/src-tauri/contracts/openapi.snapshot.json). Run after a
+# change that regenerates the snapshot.
 gen-api:
     npm --prefix frontend run gen:api
 

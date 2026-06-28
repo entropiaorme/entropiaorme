@@ -1,7 +1,7 @@
 //! Application data-directory resolution, mirroring the backend's own
 //! rules so both arms of the hybrid read and write the same files.
 //!
-//! The backend resolves its data dir in `backend/main.py`: an
+//! The original Python implementation resolved its data dir as: an
 //! `ENTROPIAORME_DATA_DIR` override wins outside frozen builds
 //! (absolute as given, relative against the project root); a frozen
 //! build uses `%APPDATA%\EntropiaOrme\backend` (home as the fallback

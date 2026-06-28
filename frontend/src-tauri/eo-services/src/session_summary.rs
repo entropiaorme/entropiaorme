@@ -1,5 +1,5 @@
 //! Materialised per-session summaries, ported from
-//! `backend/services/session_summary.py`: a cache of derived state
+//! the original Python implementation: a cache of derived state
 //! whose source of truth is the tracking tables. Summaries write
 //! eagerly when a session ends and clear when a session stops
 //! qualifying; the lazy rebuild-on-read path lands with its reader.

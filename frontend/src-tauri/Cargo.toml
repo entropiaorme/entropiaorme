@@ -8,8 +8,8 @@
 #   - eo-services: domain services behind that HTTP surface.
 #   - eo-wire:     wire-format contracts (response/event types, serialisation).
 #
-# The eo-* members are the native backend (see
-# backend/architecture/PORT-READINESS.md and PORTING-RULEBOOK.md). They are
+# The eo-* members are the native backend (built to the port-readiness
+# criteria and porting rulebook). They are
 # deliberately Tauri-free: CI builds and tests them on a runner without the
 # Tauri toolchain's system stack, which structurally prevents a GUI dependency
 # from creeping into backend code.

@@ -1,4 +1,4 @@
-//! Configuration service, ported from `backend/services/config_service.py`:
+//! Configuration service, ported from the original Python implementation:
 //! typed settings with atomic persistence.
 //!
 //! Settings live as JSON in `data/settings.json`. Saves are atomic

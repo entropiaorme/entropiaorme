@@ -1,5 +1,5 @@
-//! Native manual-scan routes (`backend/routers/scan_manual.py` and the
-//! repair-scan leg of `backend/routers/tracking.py`): the user-driven,
+//! Native manual-scan routes (the manual skill scan and the repair-scan
+//! leg of tracking): the user-driven,
 //! page-by-page skill scan and the one-shot repair-cost read, served over the
 //! composed [`SkillScanManual`] / [`RepairOcrService`].
 //!

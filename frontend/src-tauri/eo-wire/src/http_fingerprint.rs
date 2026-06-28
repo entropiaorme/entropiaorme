@@ -1,5 +1,5 @@
 //! HTTP request/response fingerprint emitter: Rust port of
-//! `backend/testing/http_fingerprint.py`.
+//! the original Python implementation.
 //!
 //! For one captured response this reproduces the canonical
 //! `(request, normalised-response)` golden the committed

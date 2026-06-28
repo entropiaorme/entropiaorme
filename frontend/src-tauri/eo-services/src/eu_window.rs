@@ -1,5 +1,5 @@
 //! Locate and measure the Entropia Universe game window, ported from
-//! `backend/services/eu_window.py`.
+//! the original Python implementation.
 //!
 //! Helpers used by the manual scan flow to derive capture regions from
 //! the live game window rather than a fixed-resolution preset table.

@@ -1,4 +1,4 @@
-//! Codex service, ported from `backend/services/codex_service.py`:
+//! Codex service, ported from the original Python implementation:
 //! species listing, rank breakdowns, claim recording, manual rank
 //! calibration, per-rank skill recommendations, and the meta
 //! (attribute) codex.
@@ -782,7 +782,7 @@ fn compare_names(a: &Value, b: &Value) -> std::cmp::Ordering {
 }
 
 // Expected values in these tests are the original implementation's
-// outputs, computed by running `backend/services/codex_service.py`
+// outputs, computed by running the original Python implementation
 // over byte-identical catalogue fixtures and database seeds.
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,5 @@
-//! Natively-served equipment handlers, byte-faithful to
-//! `backend/routers/equipment.py`: catalogue search, the library CRUD
+//! Natively-served equipment handlers, byte-faithful to the original
+//! Python implementation: catalogue search, the library CRUD
 //! (including the trifecta-reference delete guard), the expanded
 //! detail, and the standalone cost calculation. Stored
 //! `properties_json` bytes match the backend's bare `json.dumps`

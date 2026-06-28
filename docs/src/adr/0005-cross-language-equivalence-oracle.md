@@ -1,7 +1,9 @@
 # ADR-0005: Cross-language equivalence oracle
 
-- Status: Accepted
-- Context: reflects the landed implementation; the port is now complete ([ADR-0013](0013-in-process-collapse.md): a single in-process Rust binary, superseding the strangler-fig topology of [ADR-0001](0001-strangler-fig-port.md)), and this oracle is retained as the cross-language equivalence test harness.
+- Status: Superseded by [ADR-0016](0016-retire-equivalence-oracle.md)
+- Context: reflects the landed implementation; the port is now complete ([ADR-0013](0013-in-process-collapse.md): a single in-process Rust binary, superseding the strangler-fig topology of [ADR-0001](0001-strangler-fig-port.md)), and this oracle was retained after the port as the cross-language equivalence test harness.
+
+> **Superseded.** This record describes the cross-language equivalence oracle that graded the Python-to-Rust port: the Python reference implementation retained as a test-only oracle, the shared normaliser reimplemented byte-for-byte on each side, and the live differential. The oracle has served its purpose and been retired; the equivalence evidence it produced is preserved as frozen, committed, Rust-side assertions (the byte-identical fingerprint and database-state goldens, the contract snapshots, and the normaliser conformance table), asserted with no second implementation present. See [ADR-0016](0016-retire-equivalence-oracle.md). The text below is preserved unchanged as the record of how equivalence was graded during the port.
 
 ## Context and problem statement
 

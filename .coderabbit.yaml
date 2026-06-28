@@ -19,9 +19,15 @@ reviews:
     - "!**/package-lock.json"
     - "!**/Cargo.lock"
     - "!data/demo/entropia_orme.db"
-    - "!backend/assets/models/*.onnx"
-    - "!backend/data/snapshot/*.json"
-    - "!backend/data/*.csv"
+    - "!frontend/src-tauri/entropia-orme/resources/models/*.onnx"
+    - "!frontend/src-tauri/entropia-orme/resources/snapshot/*.json"
+    - "!frontend/src-tauri/eo-services/src/data/*.csv"
+    # The frozen equivalence goldens and ratified contract snapshots: large,
+    # mechanically-generated, and guarded by the golden-ratification gate, so
+    # they are kept out of the line-by-line review surface.
+    - "!frontend/src-tauri/fixtures/**"
+    - "!frontend/src-tauri/contracts/*.snapshot.json"
+    - "!frontend/src-tauri/eo-wire/tests/fixtures/**"
     - "!assets/**"
     - "!frontend/static/**"
     - "!frontend/src-tauri/entropia-orme/icons/**"
@@ -44,16 +50,18 @@ reviews:
         - Prefer $state / $derived / $effect over legacy stores where the surrounding code uses runes.
         - Don't wipe local state to a placeholder on transient fetch errors; preserve last-good state and let the next poll restore live state.
 
-    - path: "backend/**/*.py"
+    - path: "frontend/src-tauri/**/*.rs"
       instructions: |
-        Conventions for newly authored content (not drive-by renames of pre-existing content):
-        - UK spelling on docstrings, comments, log messages, and user-visible error strings.
-        - No emdashes in newly authored content; use colons, semicolons, or sentence breaks instead.
+        Conventions for newly authored content (not drive-by renames):
+        - UK spelling on doc comments and user-visible strings.
+        - No emdashes in newly authored content.
 
         Code shape:
         - Default to writing no comments. Only add one when the WHY is non-obvious.
-        - Don't add try/except blocks that swallow exceptions to "make tests pass" or hide root causes; fix the underlying issue.
-        - Don't add error handling for scenarios that can't happen at internal boundaries.
+        - Don't add error handling for scenarios that can't happen at internal boundaries; validate at system boundaries only.
+
+        Process / subprocess safety:
+        - Any std::process::Command shelling out on Windows must set creation_flags(CREATE_NO_WINDOW = 0x08000000) under #[cfg(windows)] to avoid conhost-window flashes from a GUI-subsystem parent.
 
         Capability + listener scoping:
         - Keyboard / mouse / input hooks must be scoped to the narrowest context where the captured data is actually consumed. A listener that's only useful in a manual-scan flow should gate its dispatch on that flow's active state.
@@ -62,16 +70,6 @@ reviews:
 
         Boundaries:
         - User-visible strings returned from API endpoints flow to UI. Stylistic norms (UK / no emdash) apply.
-        - Don't change the toolchain (Python via .venv, npm for frontend) drive-by.
-
-    - path: "frontend/src-tauri/**/*.rs"
-      instructions: |
-        Conventions for newly authored content (not drive-by renames):
-        - UK spelling on doc comments and user-visible strings.
-        - No emdashes in newly authored content.
-
-        Process / subprocess safety:
-        - Any std::process::Command shelling out on Windows must set creation_flags(CREATE_NO_WINDOW = 0x08000000) under #[cfg(windows)] to avoid conhost-window flashes from a GUI-subsystem parent.
 
     - path: "frontend/src-tauri/entropia-orme/tauri.conf.json"
       instructions: |
@@ -105,8 +103,6 @@ reviews:
     actionlint:
       enabled: true
     biome:
-      enabled: true
-    ruff:
       enabled: true
     clippy:
       enabled: true

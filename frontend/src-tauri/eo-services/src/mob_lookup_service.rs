@@ -1,5 +1,5 @@
 //! Mob-name lookup against the bundled mobs catalogue, ported from
-//! `backend/services/mob_lookup_service.py`. Used by manual-mob
+//! the original Python implementation. Used by manual-mob
 //! tracking flows for autocomplete and validation.
 
 use serde_json::{Map, Value};

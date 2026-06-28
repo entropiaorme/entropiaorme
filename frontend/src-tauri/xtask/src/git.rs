@@ -33,7 +33,7 @@ pub fn run(args: &[&str], repo_root: &Path) -> Result<String, String> {
 /// Resolve the repository root (the working tree's top level).
 ///
 /// The Python guards take the repo root as `Path(__file__).resolve().parents[2]`
-/// (the directory containing `backend/`); here it is resolved from git so the
+/// (the project root); here it is resolved from git so the
 /// binary works regardless of where in the tree it is launched from.
 pub fn repo_root() -> Result<PathBuf, String> {
     let out = run(&["rev-parse", "--show-toplevel"], Path::new("."))?;

@@ -18,7 +18,7 @@
 //! cargo test -p eo-http --release --test router_microbench -- --ignored --nocapture
 //! ```
 //!
-//! The committed `backend/architecture/port_baseline.json` HTTP figures are a
+//! The committed HTTP port-baseline figures are a
 //! Linux, over-the-socket, Python capture: a different host, transport, and
 //! language, so they are a drift-only cross-reference, never a same-axis
 //! before/after. The same-axis comparison is a same-host capture of the prior

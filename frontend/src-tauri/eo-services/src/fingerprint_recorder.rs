@@ -1,5 +1,5 @@
 //! The event-stream fingerprint recorder, ported from the recorder in
-//! `backend/testing/fingerprint.py`.
+//! the original Python implementation.
 //!
 //! Captures every event published on a bus, in publish order, before
 //! subscriber dispatch (the original wraps the publish method; here

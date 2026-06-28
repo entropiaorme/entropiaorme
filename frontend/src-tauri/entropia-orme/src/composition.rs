@@ -1,6 +1,6 @@
 //! The native-services composition root.
 //!
-//! Mirrors the backend's own startup composition (`backend/main.py`):
+//! Mirrors the original Python startup composition:
 //! resolve the data directory, open the application database, load the
 //! game-data snapshot, and construct the ported services over the real
 //! clock. The substrate serves every route natively through the state
@@ -856,8 +856,8 @@ fn read_skill_page_levels(
 }
 
 /// Build and start the producer spine over the shared pool and clock.
-/// The providers are wired faithfully to the backend's own composition
-/// (`backend/main.py`): every lookup the tracker consults reads through
+/// The providers are wired faithfully to the original Python composition:
+/// every lookup the tracker consults reads through
 /// the same database or the same config read-through the native
 /// `ConfigService` writes.
 fn compose_producers(

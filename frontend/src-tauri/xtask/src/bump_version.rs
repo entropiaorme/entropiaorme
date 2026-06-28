@@ -1,4 +1,4 @@
-//! Port of `backend/scripts/bump_version.py`.
+//! Port of the original Python implementation.
 //!
 //! Writer paired with the `version-stamps` checker: sets the same version string
 //! in the three stamps that check governs:

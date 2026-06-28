@@ -1,4 +1,4 @@
-//! Injectable clock, ported from `backend/testing/clock.py`.
+//! Injectable clock, ported from the original Python implementation.
 //!
 //! Services that read wall-clock or monotonic time go through a
 //! `Clock` so replay scenarios can freeze and advance time

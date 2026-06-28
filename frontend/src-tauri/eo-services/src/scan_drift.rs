@@ -1,5 +1,5 @@
 //! Drift comparison between tracked levels and fresh scan results,
-//! ported from `backend/services/scan_drift.py`.
+//! ported from the original Python implementation.
 
 use serde_json::{Map, Value};
 

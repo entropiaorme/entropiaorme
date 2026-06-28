@@ -2652,7 +2652,7 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 tracking_snapshot,
             ),
         )
-        // Guide-mode demo read namespace (`backend/routers/demo.py`): the eight
+        // Guide-mode demo read namespace: the eight
         // GETs the guide retargets analytics/tracking reads onto.
         .route(
             "/api/demo/analytics/overview",

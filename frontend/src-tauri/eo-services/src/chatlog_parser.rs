@@ -1,5 +1,5 @@
 //! Parse Entropia Universe chat.log lines into app events, ported from
-//! `backend/services/chatlog_parser.py`.
+//! the original Python implementation.
 //!
 //! The grammar is a rule table over timestamped lines: a system-message
 //! family (combat, heals, loot, skill gains, enhancer breaks, missions)

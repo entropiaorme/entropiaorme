@@ -3,8 +3,8 @@
 //! Skeleton member: this crate will carry the backend's service layer
 //! (cost accounting, tracking, scans, quests, and the rest) as each
 //! service is ported from the Python implementation. Porting rules and
-//! the per-service equivalence obligations are documented in
-//! `backend/architecture/PORTING-RULEBOOK.md`.
+//! the per-service equivalence obligations are documented in the
+//! porting rulebook's byte-exact reproduction rules.
 //!
 //! First ported service: [`cost_engine`], the pure-arithmetic leaf the
 //! equivalence runner proves its per-unit `cargo test` loop on.

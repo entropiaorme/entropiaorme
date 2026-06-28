@@ -1,5 +1,4 @@
-//! Guide-mode demo playback: the native `/api/demo/*` read namespace
-//! (`backend/routers/demo.py`).
+//! Guide-mode demo playback: the native `/api/demo/*` read namespace.
 //!
 //! The demo serves a curated, never-mutated dataset that drives the in-app
 //! guide: a bundled demo database plus a synthetic "mid-hunt" active session.
@@ -54,7 +53,7 @@ use crate::AppState;
 const MID_HUNT_FIXTURE: &str = include_str!("../resources/mid_hunt_fixture.json");
 
 /// The demo's fixed mob lock and trifecta preset, matching the reference stub
-/// in `_ensure_svc` (`backend/routers/demo.py`).
+/// in `_ensure_svc`.
 const DEMO_MOB: (&str, &str, &str) = ("Caboria Old", "Caboria", "Old");
 const DEMO_PRESET_ID: &str = "demo_default";
 const DEMO_PRESET_NAME: &str = "Calypso";

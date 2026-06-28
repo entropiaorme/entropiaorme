@@ -1,4 +1,4 @@
-//! Native tracking session-read surface (`backend/routers/tracking.py`):
+//! Native tracking session-read surface:
 //! the `/api/tracking/sessions`, `/api/tracking/session/{id}`, and
 //! `/api/tracking/tag-suggestions` GETs.
 //!
@@ -625,8 +625,8 @@ async fn tag_suggestions_impl(
 
 // ── Session edits (rename-mob / restore-mob / loot flip / armour-cost) ──
 //
-// Post-hoc edits to ENDED sessions, byte-faithful to
-// `backend/routers/tracking.py`. Each mutates only the shared SQLite
+// Post-hoc edits to ENDED sessions, byte-faithful to the original
+// Python implementation. Each mutates only the shared SQLite
 // database. The four mob/loot edits share the active-session guard
 // (`_validate_session_exists`): 404 when the session is absent, 409 when
 // it is still active. `armour-cost` deliberately omits that guard (the
@@ -1100,9 +1100,9 @@ impl HydrationState {
     }
 }
 
-// The expected values in these tests are the backend's own outputs, held
-// byte-for-byte by the cross-language A/B battery; these hermetic pins guard
-// the same surface without a live backend.
+// The expected values in these tests are the original backend's own outputs,
+// frozen as committed goldens; these hermetic pins guard the same surface
+// with no second implementation present.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1452,8 +1452,8 @@ mod tests {
     // ── Session-edit hermetic pins ──
     //
     // These exercise the edit impls directly against an in-memory pool;
-    // the cross-language A/B battery holds the same surface byte-for-byte
-    // against the live backend.
+    // the committed goldens hold the same surface byte-for-byte (the
+    // cross-language oracle that first proved it has been retired).
 
     /// An ended session with three kills (two `Atrox`, one `Foul`), one
     /// of the Atrox already renamed from `Daikiba`, plus active loot

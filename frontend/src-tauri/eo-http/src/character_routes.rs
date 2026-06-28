@@ -1,5 +1,5 @@
-//! Natively-served character handlers, byte-faithful to
-//! `backend/routers/character.py`: calibration status, stats, skills,
+//! Natively-served character handlers, byte-faithful to the original
+//! Python implementation: calibration status, stats, skills,
 //! professions, the Prospect forecast family, the optimizers, and the
 //! codex progress list, all computed from the calibrated skill levels
 //! plus the bundled game-data catalogue through the already-ported
@@ -1097,8 +1097,8 @@ fn path_projection(data: Value) -> Value {
 
 // The prospect helpers are pure functions over the summary shapes;
 // these pins hold their arithmetic, ordering, and early returns
-// hermetically (the cross-language battery holds the same surface
-// byte-for-byte against the running backend).
+// hermetically (the retired cross-language oracle proved this surface
+// byte-for-byte; the committed goldens now hold it).
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

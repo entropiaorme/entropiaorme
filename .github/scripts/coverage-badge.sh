@@ -8,8 +8,9 @@
 # It badges BRANCH coverage (the figure the job exists to produce), so the label
 # says so and a reader cannot mistake it for the usually-higher line coverage.
 #
-# The shape and colour bands mirror backend/scripts/mutation_score.py so the two
-# product badges read consistently.
+# The shape and colour bands mirror the mutation badge (emitted by the
+# `mutation-floors` cargo xtask guard) so the two product badges read
+# consistently.
 #
 # Usage: coverage-badge.sh <llvm-cov-json-export> <out-json>
 #   <llvm-cov-json-export>  output of `cargo llvm-cov report --json --branch`
@@ -29,10 +30,10 @@ out="$2"
 # so a changed export shape is caught loudly instead of badging "null%".
 pct="$(jq -er '.data[0].totals.branches.percent' "$src")"
 
-# One-decimal message, matching the mutation badge's `f"{score:.1f}%"`.
+# One-decimal message, matching the mutation badge's one-decimal score.
 message="$(awk -v p="$pct" 'BEGIN { printf "%.1f%%", p }')"
 
-# Shields colour band, identical floors to mutation_score._colour.
+# Shields colour band, identical floors to the mutation badge's colour bands.
 color="$(awk -v p="$pct" 'BEGIN {
 	if (p >= 90) print "brightgreen"
 	else if (p >= 80) print "green"

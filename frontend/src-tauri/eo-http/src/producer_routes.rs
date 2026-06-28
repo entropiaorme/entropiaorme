@@ -1,4 +1,4 @@
-//! Native tracking PRODUCER routes (`backend/routers/tracking.py`): the
+//! Native tracking PRODUCER routes: the
 //! routes served over the live producer-spine tracker rather than the
 //! read-only database surface.
 //!

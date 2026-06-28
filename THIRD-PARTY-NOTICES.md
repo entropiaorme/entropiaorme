@@ -6,7 +6,7 @@ EntropiaOrme bundles the following third-party assets and libraries. The Softwar
 
 ### OpenOCR SVTRv2 mobile recognition model
 
-- **File:** `backend/assets/models/svtrv2_rec.onnx` (~24 MB)
+- **File:** `frontend/src-tauri/entropia-orme/resources/models/svtrv2_rec.onnx` (~24 MB)
 - **Source:** [`openocr-python`](https://github.com/Topdu/OpenOCR) by Topdu — `develop0.0.1` release artefact `openocr_rec_model.onnx`, byte-for-byte (SHA256 `2cebf56ec416d97a3a656337ae026502fbb95be11400c2ec8df512404f225085`)
 - **Used by:** the native OCR engine (`frontend/src-tauri/eo-services/src/ocr_engine.rs`): skill / profession panel scans and repair-window cost reads.
 - **License:** Apache License 2.0
@@ -14,7 +14,7 @@ EntropiaOrme bundles the following third-party assets and libraries. The Softwar
 
 ### PaddleOCR character dictionary
 
-- **File:** `backend/assets/models/ppocr_keys_v1.txt`
+- **File:** `frontend/src-tauri/entropia-orme/resources/models/ppocr_keys_v1.txt`
 - **Source:** the PaddleOCR `ppocr_keys_v1` key set, redistributed verbatim inside [`openocr-python`](https://github.com/Topdu/OpenOCR) (SHA256 `28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7`)
 - **Used by:** the native OCR engine (`frontend/src-tauri/eo-services/src/ocr_engine.rs`) as the recognition model's decode alphabet.
 - **License:** Apache License 2.0
@@ -22,9 +22,9 @@ EntropiaOrme bundles the following third-party assets and libraries. The Softwar
 
 ### Entropia Universe game-data snapshot
 
-- **Files:** `backend/data/snapshot/*.json` (weapons, weapon_amplifiers, medical_tools, mobs, professions, skills, skill_ranks, stimulants, absorbers, enhancers, weapon_vision_attachments).
+- **Files:** `frontend/src-tauri/entropia-orme/resources/snapshot/*.json` (weapons, weapon_amplifiers, medical_tools, mobs, professions, skills, skill_ranks, stimulants, absorbers, enhancers, weapon_vision_attachments).
 - **Source:** Curated subset re-bundled from [Entropia Nexus](https://entropianexus.com/), a community-maintained wiki for Entropia Universe. The underlying constants (item names, statistics, catalogue identifiers, mob species, profession names, skill names) originate with MindArk PE AB as the publisher of Entropia Universe; Entropia Nexus's contribution is the structured bundling.
-- **Used by:** backend equipment library, mob taxonomy, profession and skill panel scans, demo seeder; loaded at startup as static reference content (no runtime fetch).
+- **Used by:** the native game-data store (`frontend/src-tauri/eo-services/src/game_data_store.rs`): the equipment library, mob taxonomy, and profession and skill panel scans; loaded at startup as static reference content (no runtime fetch).
 - **Notice:** Bundled with the permission of Entropia Nexus. EntropiaOrme is independent and unofficial; it is not affiliated with, endorsed by, or sponsored by either Entropia Nexus or MindArk PE AB. Item names and statistics are factual references; "Entropia Universe" and related names remain trademarks of MindArk PE AB (see "Game references" below).
 
 ### ONNX Runtime

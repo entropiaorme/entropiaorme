@@ -1,6 +1,6 @@
 //! The native-services composition root.
 //!
-//! Mirrors the backend's own startup composition (`backend/main.py`):
+//! Mirrors the original Python startup composition:
 //! resolve the data directory, open the application database, load the
 //! game-data snapshot, and construct the ported services over the real
 //! clock. The substrate serves every route natively through the state
@@ -139,8 +139,10 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     match resource_dir {
         Some(dir) if !cfg!(debug_assertions) => dir.join("snapshot"),
         _ => dev_project_root()
-            .join("backend")
-            .join("data")
+            .join("frontend")
+            .join("src-tauri")
+            .join("entropia-orme")
+            .join("resources")
             .join("snapshot"),
     }
 }
@@ -185,17 +187,18 @@ fn ort_dylib_path(resource_dir: Option<&PathBuf>) -> PathBuf {
 }
 
 /// Where the recogniser's model + dict live: the bundled resource dir
-/// (`<resource_dir>/models/`) in a release build, the repo assets
-/// (`backend/assets/models/`) in dev. The asymmetry mirrors
-/// `tauri.conf.json`'s bundle map (`backend/assets/models/` ->
-/// `models/`): the model is `svtrv2_rec.onnx`, the dict
-/// `ppocr_keys_v1.txt`.
+/// (`<resource_dir>/models/`) in a release build, the repo copy
+/// (`entropia-orme/resources/models/`) in dev. The asymmetry mirrors
+/// `tauri.conf.json`'s bundle map (`resources/models/` -> `models/`):
+/// the model is `svtrv2_rec.onnx`, the dict `ppocr_keys_v1.txt`.
 fn models_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     match resource_dir {
         Some(dir) if !cfg!(debug_assertions) => dir.join("models"),
         _ => dev_project_root()
-            .join("backend")
-            .join("assets")
+            .join("frontend")
+            .join("src-tauri")
+            .join("entropia-orme")
+            .join("resources")
             .join("models"),
     }
 }
@@ -853,8 +856,8 @@ fn read_skill_page_levels(
 }
 
 /// Build and start the producer spine over the shared pool and clock.
-/// The providers are wired faithfully to the backend's own composition
-/// (`backend/main.py`): every lookup the tracker consults reads through
+/// The providers are wired faithfully to the original Python composition:
+/// every lookup the tracker consults reads through
 /// the same database or the same config read-through the native
 /// `ConfigService` writes.
 fn compose_producers(
@@ -1262,16 +1265,20 @@ mod tests {
 
     fn repo_snapshot() -> PathBuf {
         dev_project_root()
-            .join("backend")
-            .join("data")
+            .join("frontend")
+            .join("src-tauri")
+            .join("entropia-orme")
+            .join("resources")
             .join("snapshot")
     }
 
     /// The repo's recogniser model+dict directory (the dev `models_dir`).
     fn repo_models() -> PathBuf {
         dev_project_root()
-            .join("backend")
-            .join("assets")
+            .join("frontend")
+            .join("src-tauri")
+            .join("entropia-orme")
+            .join("resources")
             .join("models")
     }
 

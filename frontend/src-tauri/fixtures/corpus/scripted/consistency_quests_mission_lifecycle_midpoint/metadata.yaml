@@ -1,0 +1,38 @@
+name: consistency_quests_mission_lifecycle_midpoint
+flavour: scripted
+description: >
+  Two-segment chat-driven mission-received scenario for the quests
+  consistency property. The pre-midpoint segment fires one
+  mission_received event (QuestService auto-starts the matching
+  quest); the post-midpoint segment fires a second mission_received
+  event for a different quest. Property: hydrate the quests view at
+  T0 + fold the post-midpoint mission_received events through the
+  reducer == fresh quests view at T1.
+surfaces:
+  - quests-hydration-consistency
+  - quests-mission-received-event-stream
+segments:
+  pre: chat_replay.log
+  post: chat_replay_after.log
+events_pre: 1
+events_post: 1
+expected_mission_names_pre: 1
+expected_mission_names_post: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. The two missions are named to match
+  pre-populated quests in the test fixture. QuestService is wired into
+  the bus so each mission_received event auto-starts the matching
+  quest, which writes a notable_events row of type quest_started that
+  the view reads.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

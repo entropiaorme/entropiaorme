@@ -1,5 +1,5 @@
 //! Chat.log file watcher, ported from
-//! `backend/services/chatlog_watcher.py`: tails the log and publishes
+//! the original Python implementation: tails the log and publishes
 //! parsed events on the in-process bus for the tracker to consume.
 //!
 //! The tail is a deliberate 100ms polling loop (part of the recorded

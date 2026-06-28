@@ -1,0 +1,29 @@
+name: skill_gain_across_tick
+flavour: scripted
+description: >
+  Multiple skill_gain events landing within and across tick
+  boundaries during a two-kill hunt. Pins that skill-gain lines
+  do not partition the combat-accumulator (existing behaviour
+  also exercised by basic_hunt_10_events kill 3 but in a
+  narrower test surface here).
+surfaces:
+  - tracking-skill-gain
+  - tracking-skill-gain-during-tick
+  - tracking-tick-boundary
+events: 9
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Two kills with skill-gains scattered through
+  combat ticks, loot ticks, and the gap between kills.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

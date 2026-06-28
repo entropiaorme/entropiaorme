@@ -1,7 +1,7 @@
 ONNX Runtime (DirectML) bundled binaries
 
 Source: onnxruntime-directml 1.24.4 (PyPI wheel onnxruntime_directml-1.24.4-cp314-cp314-win_amd64.whl),
-the same ONNX Runtime build the Python backend ships on Windows (backend/requirements.txt).
+the same ONNX Runtime build (onnxruntime-directml 1.24.4) the Python oracle pins on Windows.
 ONNX Runtime C API version 24, matching the ort crate pin (api-24).
 Extracted verbatim from the wheel's onnxruntime/capi/ directory.
 

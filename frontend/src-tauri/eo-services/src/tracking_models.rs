@@ -1,5 +1,5 @@
 //! In-memory data models for tracking sessions, kills, and combat,
-//! ported from `backend/tracking/models.py`. The owner stamps every
+//! ported from the original Python implementation. The owner stamps every
 //! instant explicitly through its injected clock, so constructing a
 //! session can never read ambient time; the readout views are owned
 //! detached values, never references into live tracker state.

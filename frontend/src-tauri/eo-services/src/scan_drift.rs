@@ -1,5 +1,5 @@
 //! Drift comparison between tracked levels and fresh scan results,
-//! ported from `backend/services/scan_drift.py`.
+//! ported from the original Python implementation.
 
 use serde_json::{Map, Value};
 
@@ -32,7 +32,8 @@ pub fn summarize_level_drift(
     for name in &shared_names {
         // Bare float conversion (numeric strings and booleans coerce as
         // the backend's float() does); a value float() would crash on
-        // coalesces to 0 instead, per the divergence register.
+        // coalesces to 0 instead (a deliberate, recorded divergence from
+        // the original).
         let tracked =
             crate::character_calc::python_float_bare(&tracked_levels[name.as_str()]).unwrap_or(0.0);
         let scanned =

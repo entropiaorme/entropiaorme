@@ -1,0 +1,33 @@
+name: spacebar_scan_capture
+flavour: scripted
+description: >
+  Two space-key edges drive the SpacebarCaptureListener through the
+  KeystrokeSource seam: the first press while the skill scan is in
+  ``capturing`` phase dispatches ``capture_current_page``; the second
+  press while the scan is idle is the negative assertion (the tap
+  still records the edge, but no capture fires).
+surfaces:
+  - spacebar-capture-listener-seam
+  - keystroke-source-seam
+  - capture-dispatch-gating
+events: 0
+expected_kills: 0
+expected_total_loot_ped: 0.00
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Keystroke-only scenario; no chat-side activity (chat_replay.log
+  is empty by design). The test wires a SpacebarCaptureListener
+  with a MockKeystrokeSource and a fake skill-scan-manual that
+  records its ``capture_current_page`` invocations; the
+  scenario's keystrokes.jsonl is the input fixture.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

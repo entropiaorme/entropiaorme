@@ -1,5 +1,5 @@
 //! The native text recogniser, ported from the recognition chain
-//! `backend/services/local_ocr.py` drives through its bundled ONNX
+//! the original Python implementation drives through its bundled ONNX
 //! engine: the SVTRv2-mobile recogniser run under ONNX Runtime with
 //! the production preprocess and decode replicated exactly.
 //!
@@ -506,7 +506,7 @@ mod tests {
     fn repo_model_paths() -> (PathBuf, PathBuf) {
         let assets = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../..")
-            .join("backend/assets/models");
+            .join("frontend/src-tauri/entropia-orme/resources/models");
         (
             assets.join("svtrv2_rec.onnx"),
             assets.join("ppocr_keys_v1.txt"),

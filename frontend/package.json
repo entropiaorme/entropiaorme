@@ -16,7 +16,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"gen:api": "openapi-typescript ../backend/tests/expected/openapi.snapshot.json -o src/lib/api/schema.d.ts --default-non-nullable false",
+		"gen:api": "openapi-typescript src-tauri/contracts/openapi.snapshot.json -o src/lib/api/schema.d.ts --default-non-nullable false",
 		"gen:api:check": "npm run gen:api && git diff --exit-code -- src/lib/api/schema.d.ts",
 		"tauri": "tauri",
 		"tauri:dev": "node src-tauri/entropia-orme/build-dev-config.mjs && tauri dev --config src-tauri/entropia-orme/tauri.dev.conf.json --config src-tauri/entropia-orme/tauri.dev.local.json",

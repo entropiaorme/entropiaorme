@@ -1,0 +1,29 @@
+name: enhancer_break_during_hunt
+flavour: scripted
+description: >
+  A weapon enhancer breaks mid-combat during a single-mob hunt.
+  Pins the enhancer-break event path: the chatlog ENHANCER_BREAK
+  line surfaces as a tracked event, the shrapnel-return is
+  accounted for, and the surrounding kill closes normally on
+  the subsequent loot tick.
+surfaces:
+  - chatlog-enhancer-break
+  - tracking-enhancer-cost
+  - tracking-kill-creation
+events: 6
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. The enhancer-break line lands between two combat
+  shots; the kill closes on a Shrapnel loot tick.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

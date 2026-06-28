@@ -1,5 +1,5 @@
 //! Loot-item include/exclude decisions for tracking, ported from
-//! `backend/tracking/loot_filter.py`.
+//! the original Python implementation.
 //!
 //! Keys casefold and collapse internal whitespace before comparison.
 //! (The original casefolds; this lowercases, which agrees over every

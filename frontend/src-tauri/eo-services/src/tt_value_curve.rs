@@ -1,18 +1,16 @@
 //! TT value curve from the official Entropia Universe wiki chip-in
-//! optimiser, ported from `backend/data/tt_value_curve.py`.
+//! optimiser.
 //!
-//! The anchor data is the same CSV the backend loads (embedded at compile
-//! time from the one tracked copy, so the two implementations cannot read
-//! different curves). Linear interpolation between monotonic
-//! non-decreasing anchors, level 0 anchored to 0.0 PED; all rounding goes
-//! through the Python-faithful half-even helper so figures stay
-//! bit-identical to the backend's.
+//! The anchor data is embedded at compile time from the one tracked CSV
+//! copy. Linear interpolation between monotonic non-decreasing anchors,
+//! level 0 anchored to 0.0 PED; all rounding goes through the half-even
+//! helper so figures stay bit-identical to the frozen goldens.
 
 use std::sync::OnceLock;
 
 use eo_wire::normalizer::round_half_even;
 
-const CURVE_CSV: &str = include_str!("../../../../backend/data/tt_value_curve.csv");
+const CURVE_CSV: &str = include_str!("data/tt_value_curve.csv");
 
 fn round4(x: f64) -> f64 {
     round_half_even(x, 4)

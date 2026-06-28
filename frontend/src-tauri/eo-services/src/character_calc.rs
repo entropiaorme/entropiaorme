@@ -1,5 +1,5 @@
 //! Character calculation service, ported from
-//! `backend/services/character_calc.py`: profession levels, skill
+//! the original Python implementation: profession levels, skill
 //! ranks, HP, codex prediction. Pure functions; no I/O. Inputs arrive
 //! in the catalogue's nested JSON shape, and two adapter helpers hide
 //! that shape from the maths exactly as the backend's iterators do.

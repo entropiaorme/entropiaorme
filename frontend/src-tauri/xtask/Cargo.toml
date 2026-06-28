@@ -1,0 +1,25 @@
+# Repository maintenance task runner.
+#
+# Hosts the CI guards that were previously Python scripts:
+# the golden-ratification gate, the authoring-discipline lint, the version-stamp
+# parity check, and the per-file mutation-score floors. Each is a subcommand of a
+# single `xtask` binary, dispatched from main.rs.
+#
+# Dependencies are kept minimal: standard library, git invoked via
+# std::process::Command, plus serde_json and regex (both already vendored in the
+# workspace) for JSON parsing and the report/diff grammars.
+[package]
+name = "xtask"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+regex = { workspace = true }

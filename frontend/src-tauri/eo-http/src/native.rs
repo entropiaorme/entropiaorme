@@ -2365,7 +2365,8 @@ fn calculate_cost_request(v: &mut Validation, object: &BodyObject) -> Built<Equi
 /// An equipment int field. The backend carries arbitrary-precision
 /// integers through these (they flow into a JSON text column, never a
 /// direct parameter binding); the native side answers the deliberate
-/// 500 beyond i64 instead. See the divergence register (D-14).
+/// 500 beyond i64 instead, a deliberate divergence from the original's
+/// arbitrary-precision handling.
 fn equipment_int(value: BodyInt) -> Option<i64> {
     match value {
         BodyInt::Value(v) => Some(v),
@@ -2652,7 +2653,7 @@ pub(crate) fn register(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
                 tracking_snapshot,
             ),
         )
-        // Guide-mode demo read namespace (`backend/routers/demo.py`): the eight
+        // Guide-mode demo read namespace: the eight
         // GETs the guide retargets analytics/tracking reads onto.
         .route(
             "/api/demo/analytics/overview",

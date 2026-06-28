@@ -1,0 +1,35 @@
+name: hof_kill_correlated
+flavour: scripted
+description: >
+  A local hunt closes with a kill, then a Hall-of-Fame kill global
+  announcement lands within the 5-second correlation window naming
+  the test's configured player_name. Pins the HOF_KILL parser rule
+  path (the Hall-of-Fame kill global, the lone Globals-channel branch
+  not driven by any other corpus scenario) and the tracker's
+  _on_global tagging of the most recent kill as is_global AND is_hof.
+  Uses make_e2e_pipeline to set player_name explicitly since the
+  default pipeline drops globals on the floor.
+surfaces:
+  - chatlog-globals-hof-kill
+  - tracking-global-correlation
+  - tracking-hof-tagging
+  - tracking-notable-events
+events: 4
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. Player name "TestPlayer" must match the global
+  announcement's player field for correlation to fire; hof=True on
+  s.globals.kill appends the Hall-of-Fame suffix that promotes the
+  parse to HOF_KILL and the correlation to is_hof.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

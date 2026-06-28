@@ -1,7 +1,6 @@
 *.bat text eol=crlf
 *.ps1 text eol=crlf
 *.sh text eol=lf
-*.py text eol=lf
 *.rs text eol=lf
 *.toml text eol=lf
 *.json text eol=lf
@@ -26,11 +25,3 @@ frontend/src/lib/api/schema.d.ts text eol=lf
 # model): always binary, never line-ending- or text-normalised.
 *.dll binary
 *.onnx binary
-# The backend/ tree is the retained Python equivalence oracle: a test-only
-# reference implementation the cross-language differential checks the shipped
-# Rust binary against. It is never shipped (the product is the Rust binary plus
-# the Svelte frontend), so it is marked linguist-vendored: the repository
-# language statistics then reflect the shipped product rather than the test
-# scaffolding. The oracle's code remains fully reviewed (expand the collapsed
-# diff); this attribute affects GitHub's display only, not the build or tests.
-backend/** linguist-vendored

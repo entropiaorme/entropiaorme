@@ -1,5 +1,5 @@
 //! Synchronous in-process event dispatch, ported from
-//! `backend/core/event_bus.py`.
+//! the original Python implementation.
 //!
 //! Thread-safe pub/sub for services sharing process memory: per-topic
 //! subscribers, plus full-stream taps that observe every publish (the
@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-/// The bus topics, mirroring the string constants in
-/// `backend/core/events.py` plus the frontend-facing domain-event
-/// topic the tracker publishes (`backend/core/domain_events.py`).
+/// The bus topics, mirroring the string constants in the original
+/// Python implementation plus the frontend-facing domain-event
+/// topic the tracker publishes (from the domain-events module).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Topic {
     Combat,

@@ -4,10 +4,10 @@
 //!
 //! Hermetic: it feeds the committed raw-capture fixtures (the pre-normalisation
 //! bus events, DB rows, and HTTP responses a replay produced) through the Rust
-//! emitters and asserts byte-equality against the committed Python goldens. No
-//! Python at test time, so it runs on every Rust CI job. The Python faithfulness
-//! check (`test_equivalence_emitters.py`) proves the same raw fixtures still
-//! reproduce the goldens under the Python oracle, so a stale fixture cannot pass.
+//! emitters and asserts byte-equality against the committed goldens. The goldens
+//! are the frozen equivalence evidence banked when the byte-identical port was
+//! proven; the raw captures and goldens are committed together, so a stale
+//! fixture cannot pass.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 fn scenario_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../backend/tests/e2e/corpus/scripted/basic_hunt_10_events")
+        .join("../fixtures/corpus/scripted/basic_hunt_10_events")
 }
 
 fn read(path: &Path) -> String {

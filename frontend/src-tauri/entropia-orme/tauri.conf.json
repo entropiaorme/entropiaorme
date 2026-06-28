@@ -71,9 +71,9 @@
     "publisher": "EntropiaOrme",
     "homepage": "https://entropiaorme.com",
     "resources": {
-      "../../../backend/data/snapshot/": "snapshot/",
-      "../../../backend/data/panel_geometry.json": "panel_geometry.json",
-      "../../../backend/assets/models/": "models/",
+      "resources/snapshot/": "snapshot/",
+      "resources/panel_geometry.json": "panel_geometry.json",
+      "resources/models/": "models/",
       "../../../data/demo/entropia_orme.db": "demo/entropia_orme.db",
       "resources/ort/*.dll": "ort/"
     },

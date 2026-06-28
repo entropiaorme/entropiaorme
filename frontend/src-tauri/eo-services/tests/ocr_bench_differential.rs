@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn model_paths() -> (PathBuf, PathBuf) {
-    let assets = repo_root().join("backend/assets/models");
+    let assets = repo_root().join("frontend/src-tauri/entropia-orme/resources/models");
     (
         assets.join("svtrv2_rec.onnx"),
         assets.join("ppocr_keys_v1.txt"),

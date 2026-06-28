@@ -8,15 +8,15 @@
 #   - eo-services: domain services behind that HTTP surface.
 #   - eo-wire:     wire-format contracts (response/event types, serialisation).
 #
-# The eo-* members are the native backend (see
-# backend/architecture/PORT-READINESS.md and PORTING-RULEBOOK.md). They are
+# The eo-* members are the native backend (router, services, wire
+# contracts). They are
 # deliberately Tauri-free: CI builds and tests them on a runner without the
 # Tauri toolchain's system stack, which structurally prevents a GUI dependency
 # from creeping into backend code.
 
 [workspace]
 resolver = "2"
-members = ["entropia-orme", "eo-http", "eo-services", "eo-wire"]
+members = ["entropia-orme", "eo-http", "eo-services", "eo-wire", "xtask"]
 
 [workspace.package]
 version = "0.2.0"
@@ -43,8 +43,8 @@ serde = { version = "1", features = ["derive"] }
 # fidelity of ported routes both rely on (the canonicalising emitters sort
 # keys explicitly, so they are unaffected). float_roundtrip makes float
 # parsing correctly rounded (the default fast path can land one ULP off),
-# which the cross-language differentials' parsed-value comparisons and any
-# golden re-parse rely on for exactness.
+# which the goldens' parsed-value comparisons and any golden re-parse rely
+# on for exactness.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # The OCR recogniser runtime. `load-dynamic` binds the ONNX Runtime
 # shared library at process start rather than link time, so builds and
@@ -96,15 +96,15 @@ sqlx = { version = "~0.9", default-features = false, features = ["runtime-tokio"
 # Stream plumbing for the proxy-substrate tests' held-open upstream stub.
 bytes = "1"
 tokio-stream = "0.1"
-# Throwaway data directories for the cross-language proxy-fidelity test's
-# real-backend boots (eo-http dev-dependency).
+# Throwaway data directories for the hermetic tests that boot a substrate
+# over a temp data dir (eo-http dev-dependency).
 tempfile = "3"
 criterion = "0.8"
 # Shortest round-trip float digits, parsed and reformatted to match Python's
 # float repr byte-for-byte in the equivalence Normalizer (eo-wire).
 ryu = "1"
-# Property-based differential fuzzing of the Normalizer against the Python
-# oracle (eo-wire dev-dependency).
+# Property-based testing of pure service arithmetic (eo-services
+# dev-dependency).
 proptest = "1"
 # Decode the raw-capture HTTP bodies in the equivalence emitter proof
 # (eo-wire dev-dependency).

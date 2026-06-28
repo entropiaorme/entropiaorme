@@ -1,5 +1,5 @@
 //! Hotbar key listener, ported from
-//! `backend/services/hotbar_listener.py`: observes hotbar slot
+//! the original Python implementation: observes hotbar slot
 //! keypresses and resolves them into active-tool, heal-tool, and
 //! consumable outcomes on the bus.
 //!

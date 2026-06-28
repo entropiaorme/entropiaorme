@@ -1,16 +1,15 @@
 //! Wire-format contracts for the EntropiaOrme backend.
 //!
-//! Skeleton member: this crate will carry the HTTP response and event
-//! envelope types and their serialisation rules as backend routes move
-//! into the shell process. The byte-level contract each type must
-//! reproduce is documented in `backend/architecture/PORTING-RULEBOOK.md`.
+//! This crate carries the HTTP response and event envelope types and their
+//! serialisation rules. The byte-level contract each type reproduces is the
+//! frozen wire encoding the backend emits.
 //!
-//! The first landed surfaces are the cross-language equivalence runner's
-//! emitters: [`normalizer`] (the shared canonicaliser), [`fingerprint`] (the
-//! event-stream JSONL), [`db_snapshot`] (the DB-state snapshot), and
-//! [`http_fingerprint`] (the HTTP response goldens). Each is a byte-exact port
-//! of its `backend/testing/` counterpart, asserted against the committed Python
-//! goldens by the runner.
+//! The equivalence emitters are [`normalizer`] (the shared canonicaliser),
+//! [`fingerprint`] (the event-stream JSONL), [`db_snapshot`] (the DB-state
+//! snapshot), and [`http_fingerprint`] (the HTTP response goldens). Each was a
+//! byte-exact port of its Python testing-oracle counterpart; with the oracle
+//! retired, they are asserted against the committed goldens by the hermetic
+//! tests, with no second implementation present.
 //!
 //! The wire-contract spine sits beside them: [`domain_events`] (the typed
 //! frontend-facing event union, gated against the committed event-schema

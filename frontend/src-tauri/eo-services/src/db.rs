@@ -1,6 +1,6 @@
 //! The persistence base: one SQLite database behind a narrow handle.
 //!
-//! Design decisions, mirroring `backend/db/base.py` and the porting
+//! Design decisions, mirroring the original Python implementation and the porting
 //! references:
 //!
 //! - **Single-owner connection**: a `SqlitePool` capped at one

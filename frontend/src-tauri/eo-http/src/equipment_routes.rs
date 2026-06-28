@@ -1,5 +1,5 @@
-//! Natively-served equipment handlers, byte-faithful to
-//! `backend/routers/equipment.py`: catalogue search, the library CRUD
+//! Natively-served equipment handlers, byte-faithful to the original
+//! Python implementation: catalogue search, the library CRUD
 //! (including the trifecta-reference delete guard), the expanded
 //! detail, and the standalone cost calculation. Stored
 //! `properties_json` bytes match the backend's bare `json.dumps`
@@ -843,8 +843,8 @@ fn plain_ok(payload: &Value) -> Response<Body> {
 
 // The shaping helpers are pure functions over stored rows and the
 // catalogue; these pins hold their arithmetic and fallbacks
-// hermetically (the cross-language battery holds the same surface
-// against the running backend).
+// hermetically (the retired cross-language oracle proved this surface;
+// the committed goldens now hold it).
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

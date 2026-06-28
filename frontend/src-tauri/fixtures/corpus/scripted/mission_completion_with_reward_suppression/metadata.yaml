@@ -1,0 +1,34 @@
+name: mission_completion_with_reward_suppression
+flavour: scripted
+description: >
+  Mission lifecycle wrapped around a hunt: mission received, a
+  single-mob hunt, mission completed, a skill-gain that would be
+  the mission reward. Pins whatever the tracker + quest_service
+  do with the lifecycle pair under an unseeded quest DB (no
+  quest-DB match, so quest auto-start does not fire); fuller
+  reward-suppression coverage involving the junction-table and
+  playlist matching lands with the keystroke / quest-automation
+  harness layer, but the chatlog lifecycle pinning here catches
+  regressions in the upstream parser surface.
+surfaces:
+  - chatlog-mission-received
+  - chatlog-mission-completed
+  - tracking-skill-gain-during-mission
+events: 6
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored. The skill_gain after mission_completed is the
+  "would-be reward" line; what the production code does with it
+  is whatever the golden captures.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

@@ -1,5 +1,5 @@
 //! Event-stream fingerprint serialiser: Rust port of
-//! `FingerprintRecorder.serialize` (`backend/testing/fingerprint.py`).
+//! `FingerprintRecorder.serialize` from the original Python implementation.
 //!
 //! Given the recorded `(topic, payload)` events of a scenario in publish
 //! order, this produces the canonical JSONL the committed `fingerprint.jsonl`

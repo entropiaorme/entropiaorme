@@ -1,5 +1,5 @@
 //! Keystroke source abstraction, ported from
-//! `backend/testing/keystroke_source.py`.
+//! the original Python implementation.
 //!
 //! Listeners consume a `KeystrokeSource` rather than touching the OS
 //! hook themselves: production wires the Windows low-level keyboard

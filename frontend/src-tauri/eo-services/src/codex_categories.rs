@@ -1,4 +1,4 @@
-//! Codex category data, ported from `backend/data/codex_categories.py`:
+//! Codex category data, ported from the original Python implementation:
 //! skill categories, reward divisors, rank multipliers, and the per-rank
 //! breakdown builder whose camelCase wire shape feeds the codex
 //! responses.

@@ -3,7 +3,7 @@
 //! camelCase formatting (ids as strings, rounded analytics columns,
 //! or-empty text fields), the body serialisation form the backend's
 //! HTTP layer emits, and the strong-ETag conditional-GET semantics of
-//! its middleware (`backend/middleware/etag.py`): a SHA-256 ETag over
+//! its middleware: a SHA-256 ETag over
 //! the body, `Cache-Control: no-cache`, and `304 Not Modified` with an
 //! empty body when `If-None-Match` already names the representation.
 //!
@@ -161,7 +161,7 @@ pub(crate) fn internal_error() -> Response<Body> {
         .expect("response assembles")
 }
 
-// ── Router-layer formatters (backend/routers/quests.py) ────────────
+// ── Router-layer formatters ────────────
 
 /// The quest wire shape, mirroring `_format_quest` key for key.
 fn format_quest(quest: &Value) -> Value {

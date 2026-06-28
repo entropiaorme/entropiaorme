@@ -1,0 +1,39 @@
+name: hotbar_slot_use
+flavour: scripted
+description: >
+  Three hotbar slot presses drive the HotbarListener through the
+  KeystrokeSource seam: slot "1" is a weapon (publishes
+  ACTIVE_TOOL_CHANGED), slot "2" is a heal tool (publishes
+  ACTIVE_HEAL_TOOL_CHANGED), slot "3" is a consumable (no
+  tool-change event fires, by design). A minimal chat-side hunt
+  context provides the tracking session so the listener's gate
+  (capability ON + session active) holds throughout.
+surfaces:
+  - hotbar-listener-seam
+  - hotbar-weapon-slot
+  - hotbar-heal-slot
+  - hotbar-consumable-slot-suppression
+  - keystroke-source-seam
+events: 3
+expected_kills: 1
+expected_total_loot_ped: 5.00
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. The chat side carries a one-mob hunt
+  (damage tick + loot tick) for tracking-session context; the
+  hotbar side carries the three presses recorded in
+  keystrokes.jsonl. The acceptance test wires a HotbarListener
+  with a MockKeystrokeSource onto the harness pipeline and a tiny
+  hotbar_resolver, then injects each keystroke and pins the bus
+  event stream via pytest-regressions.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

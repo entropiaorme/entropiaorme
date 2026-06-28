@@ -1,0 +1,37 @@
+name: placeholder_recorded_hunt
+flavour: recorded
+description: >
+  Synthetic placeholder standing in for a real recorded scenario until one is
+  captured during live gameplay. Two kills across four tick boundaries, the
+  second carrying a critical hit.
+recorded_at: "2026-05-20T14:00:00+00:00"
+surfaces:
+  - tracking-kill-creation
+  - tracking-tick-boundary
+  - tracking-critical-hit
+  - tracking-loot-grouping
+character_context:
+  player_name: ""
+  profession_set: ""
+  location: ""
+  mob_species: ""
+rare_event_flags: []
+counts:
+  chat_lines: 5
+  scan_captures: 0
+  keystrokes: 0
+notes: >
+  DSL-authored via build.py, NOT a live capture. Replace with the first real
+  recorded hunt and repoint test_recorded_scenario_replay.py at it. Until then
+  this keeps the recorded-scenario replay path green and agent-runnable.
+verification: >
+  Only chat_replay.log is golden-verified. scan_captures/ and keystrokes.jsonl
+  are absent in this placeholder; their replay verification is not yet wired.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

@@ -5,17 +5,17 @@ database, the storage configuration applied to its connections, its tables, the
 forward-only migration mechanism, and the bundled game-data snapshot that lives
 outside SQLite entirely.
 
-The authoritative schema definitions live in three Python modules:
+The authoritative schema is the sqlx migration set under
+`frontend/src-tauri/eo-services/migrations/`, applied by the migrator in
+`frontend/src-tauri/eo-services/src/db.rs`. The set currently holds a single
+baseline migration, `0001_schema_baseline.sql`, which creates the complete
+schema (tables, indexes, and the timestamp-back-fill triggers) and stamps the
+schema-version row. The `Db::open` path opens the database, configures its
+session pragmas, adopts or refuses any pre-existing schema, and then runs the
+migrator (`MIGRATOR` in `db.rs`).
 
-- `backend/db/base.py`: the shared database wrapper (pragmas, the metadata
-  table, the version-counter migration loop).
-- `backend/db/app_database.py`: the application database, its current schema,
-  and its forward migrations.
-- `backend/tracking/schema.py`: the tracking tables (sessions, kills, loot).
-
-The column descriptions below are taken from those source files; a seeded
-database was introspected to confirm the stored schema version. The canonical
-table set is the one the source modules define.
+The column descriptions below are taken from that baseline migration. The
+canonical table set is the one it defines.
 
 ## Overview
 
@@ -40,9 +40,9 @@ read-only snapshot loaded from per-endpoint JSON files; see
 
 ## Storage configuration
 
-Every connection is configured identically by `BaseDatabase._configure_pragmas`
-in `backend/db/base.py`. The pragmas are applied once, immediately after the
-connection is opened and before any migration runs:
+Every connection is configured identically by the connect options assembled in
+`Db::open` (`eo-services/src/db.rs`). The pragmas are applied as the connection
+is opened, before adoption and the migrator run:
 
 | Pragma | Value | Effect |
 | --- | --- | --- |
@@ -50,39 +50,35 @@ connection is opened and before any migration runs:
 | `synchronous` | `NORMAL` | Reduced fsync frequency, the standard companion to WAL: durable across application crashes, with a small exposure to a power-loss truncation of the most recent WAL frames. |
 | `busy_timeout` | `5000` | Wait up to 5000 ms for a contended lock before raising `SQLITE_BUSY`. |
 | `cache_size` | `-8000` | Negative value: an 8 MB page cache (SQLite reads a negative `cache_size` as a kibibyte budget rather than a page count). |
+| `foreign_keys` | `OFF` | Referential enforcement is left off, so the schema's `REFERENCES` clauses are declarative; this matches the effective pragma surface the schema was authored against, where an overlay write for a session id with no surviving session row must be accepted. |
 
-### Shared-connection model
+### Single-connection model
 
-The connection is opened in `BaseDatabase.__init__` with
-`check_same_thread=False` and a `sqlite3.Row` row factory, and is shared across
-the request handlers plus background worker threads. SQLite serialises
-individual `execute` calls internally, but Python-level multi-step patterns (an
-`execute` followed by a `fetchall`, or a batch of writes inside one
-transaction) need external serialisation to keep cursor state coherent across
-threads. The wrapper therefore exposes a re-entrant lock (`self.lock`, a
-`threading.RLock`) that callers take with `with db.lock:` around any compound
-operation that may cross threads.
+The handle is a `SqlitePool` capped at a single connection
+(`max_connections(1)` in `Db::open`), so every statement serialises on one
+underlying connection. Cloning a `Db` shares that one pool rather than opening a
+second; the composition root opens the application database exactly once. The
+single-writer model is intentional, and relaxing to multiple reader connections
+would be a later, benchmark-justified change.
 
-The data directory is created on demand: `__init__` calls
-`mkdir(parents=True, exist_ok=True)` on the database file's parent before
-connecting.
+The data directory is created on demand: the connect options set
+`create_if_missing(true)`, and the composition root ensures the parent directory
+exists before opening.
 
 ## Application database tables
 
-All tables described here live in `entropia_orme.db`. The current schema is
-created in one shot by `AppDatabase._current_schema` (for fresh installs) in
-`backend/db/app_database.py`, except the tracking tables, which are created by
-`init_tracking_tables` in `backend/tracking/schema.py` when the tracker first
-initialises. Several `REAL` timestamp columns default to `unixepoch('now')`;
-where a column is instead back-filled by an `AFTER INSERT` trigger when the
-caller leaves it `NULL`, that is noted.
+All tables described here live in `entropia_orme.db`. The complete schema,
+including the tracking tables, is created in one shot by the baseline migration
+`0001_schema_baseline.sql`. Several `REAL` timestamp columns default to
+`unixepoch('now')`; where a column is instead back-filled by an `AFTER INSERT`
+trigger when the caller leaves it `NULL`, that is noted.
 
 ### Metadata
 
 #### `db_metadata`
 
-Key/value store for the schema version counter. Created by
-`BaseDatabase._ensure_meta_table`; shared with the migration mechanism described
+Key/value store for the schema version counter. Created by the baseline
+migration; the version row it carries is read by the adoption logic described
 later.
 
 | Column | Type | Notes |
@@ -154,10 +150,9 @@ User-tracked inventory entries with TT value and markup paid.
 #### `ledger_entries`
 
 The cost/sale ledger: dated, tagged, signed amounts that feed profit-and-loss
-accounting. This table is shared between the application database and the
-tracking layer; both `backend/db/app_database.py` and
-`backend/tracking/schema.py` declare it with the identical shape, and the
-tracker writes shrapnel-conversion entries into it.
+accounting. This table is shared between the user-data services and the tracking
+layer: the baseline migration declares it once, and the tracker writes
+shrapnel-conversion entries into it.
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -333,11 +328,10 @@ Keyed by session, so each session has at most one link.
 
 ### Tracking
 
-These tables are defined in `backend/tracking/schema.py` and created by
-`init_tracking_tables` when the tracker first initialises. They have no
-migration system of their own: fresh installs land on the canonical schema via
-`CREATE TABLE IF NOT EXISTS`, and in-place column additions are applied by the
-application database's versioned forward migrations (see below).
+These tables are created by the baseline migration alongside the rest of the
+schema. They carry no separate creation step or version counter of their own:
+the single baseline reproduces the complete version-33 surface, the tracking
+tables included.
 
 #### `tracking_sessions`
 
@@ -460,91 +454,59 @@ and is lazily rebuilt on read if missing.
 
 ## Migration mechanism
 
-Schema evolution is handled by a forward-only version counter in `BaseDatabase`
-(`backend/db/base.py`).
+Schema application is handled by the sqlx migrator (`MIGRATOR` in
+`eo-services/src/db.rs`) over the migration set in
+`eo-services/migrations/`. The set carries a single forward migration, the
+version-33 baseline (`0001_schema_baseline.sql`); sqlx records applied
+migrations in its own `_sqlx_migrations` ledger and never runs a down-migration.
+The version the baseline reproduces is pinned in `db.rs` by the
+`BASELINE_SCHEMA_VERSION` constant (33).
 
-### How the counter works
+### The version-33 baseline
 
-1. On construction, the wrapper ensures the `db_metadata` table exists, then
-   reads the integer stored under the `version` key (treating a missing row as
-   version 0).
-2. If the stored version is below the subclass's `DB_VERSION`, the wrapper calls
-   `_migrate(from_version)` and then stamps `DB_VERSION` into `db_metadata`.
-3. If the stored version already equals (or exceeds) `DB_VERSION`, nothing runs.
+The baseline is the schema as it stands at version 33, written out statement for
+statement. It creates every table, index, and timestamp-back-fill trigger in one
+migration and stamps the `db_metadata` version row to `33`. The version number
+is the cumulative result of the schema's earlier evolution; that incremental
+history is folded into the single baseline rather than replayed, so a freshly
+migrated database lands directly on the current surface.
 
-Migrations only ever move forward; there is no down-migration path.
+### Open paths: fresh, adoption, and first-launch upgrade
 
-### Application database migrations
+On open, `Db::open` configures the connection, then calls `adopt_or_refuse`
+before running the migrator. This reconciles the on-disk schema with the
+baseline and takes one of these paths:
 
-`AppDatabase` (`backend/db/app_database.py`) sets `DB_VERSION = 33`, the current
-schema version. Its `_migrate` method branches on the starting version:
+- **Fresh:** an empty (or absent) database is created and the migrator applies
+  the baseline directly, landing it at version 33.
+- **Adoption:** a database already at version 33 that carries no sqlx ledger is
+  adopted in place. The baseline is marked applied (the ledger row is written
+  with the baseline's own checksum) without re-running any DDL, and the
+  post-adoption migrator run then validates that row.
+- **Native first-launch upgrade:** a database at **version 32**, the version an
+  installed v0.1.0-lineage database occupies, is upgraded in place by
+  `upgrade_to_baseline` (dropping the retired write-only `tt_curve_observations`
+  table and bumping the version row to 33) and then adopted, exactly as a fresh
+  version-33 database is. The upgrade and the baseline stamp share one
+  transaction, so a failure rolls the file back to exactly as it was found.
 
-- **From version 0 (fresh install):** the entire current schema is created in
-  one step by `_current_schema`, which also defines the timestamp-back-fill
-  triggers. No incremental steps run.
-- **Below the supported floor (less than 28):** migration is refused with a
-  `RuntimeError`. Rather than stamp the current version over a schema that was
-  never actually migrated, the wrapper instructs the user to rebuild the
-  database from scratch or restore a backup matching the current version.
-  **Version 28 is therefore the oldest in-place-upgradable schema.**
-- **From version 28 up to 33:** the relevant incremental steps run in order. As
-  landed, these steps are:
-
-  | Step | Change |
-  | --- | --- |
-  | v29 | Drops the unused `profession_calibrations` and `profession_calibrations_archive` tables. |
-  | v30 | Adds the nullable `deactivated_at` column to `kill_loot_items`. |
-  | v31 | Adds the nullable `original_mob_name` column to `kills`. |
-  | v32 | Adds the `mob_tracking_mode` column (`NOT NULL DEFAULT 'mob'`) to `tracking_sessions`. |
-  | v33 | Drops the unused `tt_curve_observations` table. |
-
-The three column-adding steps (v30, v31, v32) target tables owned by the
-tracking schema. They are defensive in two directions: if the target table does
-not yet exist (a prior install that never started tracking), the step logs and
-skips, because `init_tracking_tables` will later create the table with the
-column already baked in; and if the column already exists (a partial earlier
-run), the duplicate-column error is caught so the step is idempotent.
-
-### Tracking-schema versioning
-
-The tracking tables have no version counter of their own. Fresh installs land
-on the canonical schema through `CREATE TABLE IF NOT EXISTS` in
-`init_tracking_tables`, and in-place column additions to existing tracking
-tables are carried by the application database's versioned forward migrations
-described above. This is why migrations that add columns to `kills`,
-`kill_loot_items`, and `tracking_sessions` live in `app_database.py` rather than
-in `tracking/schema.py`.
-
-### Shipped adoption model (the native runtime)
-
-The ladder above is the testing oracle's. The shipped application is the single
-Rust binary, whose persistence layer (`eo-services/src/db.rs`) does not re-run
-the historical ladder. It instead pins a single **baseline schema at version
-33** (the migration under `eo-services/migrations/`), reproduced statement for
-statement so a freshly created database is identical to the schema the ladder
-produces at version 33. On open it takes one of three paths:
-
-- **Fresh:** an empty database is created directly at the version-33 baseline.
-- **Adoption:** a database already at version 33 is adopted in place, marking the
-  baseline applied without re-running any DDL.
-- **Native first-launch upgrade:** a database at **version 32**, the version
-  every installed v0.1.0-lineage database occupies, is upgraded in place to the
-  version-33 baseline (dropping the retired write-only `tt_curve_observations`
-  table) and then adopted, exactly as a fresh version-33 database is.
-
-A database older than version 32 is declined rather than upgraded: no installed
-database occupies those versions, so the earlier ladder steps are deliberately
-not reproduced natively. The user's file is left untouched on a decline.
+A database older than version 32 is declined rather than upgraded
+(`DbError::UnsupportedSchemaVersion`): no installed database occupies those
+versions, so the earlier upgrade steps are deliberately not carried natively.
+The user's file is left untouched on a decline, and the composition root
+(`Db::open_adopted`) treats a pre-existing-but-unadoptable file as a quarantine
+signal rather than a bare error.
 
 ## Bundled game-data snapshot
 
 The game-fact data the application reasons over (weapons, mobs, skills,
 professions, and the rest) ships as a snapshot that is **not** stored in SQLite.
-`GameDataStore` (`backend/services/game_data_store.py`) loads it once at startup
-from per-endpoint JSON files under `backend/data/snapshot/` and serves all
-queries from memory. Each file is named for its endpoint (the file stem becomes
-the endpoint key); most files hold a JSON list, while `skill_ranks` holds a
-single object that the store wraps in a one-element list.
+`GameDataStore` (`eo-services/src/game_data_store.rs`) loads it once at startup
+from per-endpoint JSON files under
+`frontend/src-tauri/entropia-orme/resources/snapshot/` and serves all queries
+from memory. Each file is named for its endpoint (the file stem becomes the
+endpoint key); most files hold a JSON list, while `skill_ranks` holds a single
+object that the store wraps in a one-element list.
 
 The bundled snapshot files are:
 

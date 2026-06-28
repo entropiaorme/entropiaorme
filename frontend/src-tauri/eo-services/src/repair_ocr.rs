@@ -1,4 +1,4 @@
-//! Repair cost OCR, ported from `backend/services/repair_ocr.py`: a
+//! Repair cost OCR, ported from the original Python implementation: a
 //! one-shot screen read of the in-game repair terminal's total cost.
 //! The capture region derives at scan time from the live game window
 //! (the user docks the terminal bottom-right at default interface

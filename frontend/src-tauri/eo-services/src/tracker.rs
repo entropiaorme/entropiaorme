@@ -1,4 +1,4 @@
-//! The hunt tracker, ported from `backend/tracking/tracker.py`: the
+//! The hunt tracker, ported from the original Python implementation: the
 //! central coordinator that subscribes to the bus, accumulates combat
 //! stats, creates kill records on loot events, and persists to the
 //! database.
@@ -2187,7 +2187,7 @@ pub fn naive_isoformat(instant: NaiveDateTime) -> String {
     }
 }
 
-/// `backend/core/domain_events.to_iso_utc`: render an epoch float as
+/// The original `to_iso_utc` helper: render an epoch float as
 /// `datetime.fromtimestamp(ts, tz=UTC).isoformat()` does (the `T`
 /// separator, microseconds only when non-zero, `+00:00` suffix).
 pub fn to_iso_utc(ts: f64) -> String {

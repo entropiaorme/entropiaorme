@@ -8,8 +8,8 @@
 //! every check passes and `400 Disallowed CORS ...` when one fails;
 //! every other response on a request with an allowed `Origin` is
 //! decorated with `Access-Control-Allow-Origin` plus `Vary: Origin`.
-//! All forms here are pinned by the cross-language battery against the
-//! running backend.
+//! All forms here are pinned by the committed golden, asserted by a
+//! hermetic test.
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};
@@ -56,20 +56,6 @@ impl CorsConfig {
             allowed_origins.push(format!("https://{hostname}"));
         }
         Self { allowed_origins }
-    }
-
-    /// The backend reads `ENTROPIAORME_FRONTEND_PORT` (default 5173)
-    /// and `ENTROPIAORME_HOSTNAME` (a `.localhost` dev hostname); the
-    /// same environment drives the substrate's copy of the allowlist.
-    pub fn from_env() -> Self {
-        let frontend_port = std::env::var("ENTROPIAORME_FRONTEND_PORT")
-            .ok()
-            .and_then(|raw| raw.trim().parse().ok())
-            .unwrap_or(5173);
-        let hostname = std::env::var("ENTROPIAORME_HOSTNAME")
-            .ok()
-            .filter(|name| name.ends_with(".localhost"));
-        Self::new(frontend_port, hostname.as_deref())
     }
 
     pub fn origin_allowed(&self, origin: &str) -> bool {

@@ -1,11 +1,12 @@
 //! Hermetic router-level coverage for the native registrations. The test
-//! harness composes a temp-database hydration state and serves the router on
-//! a loopback socket (the production binary binds no socket and dispatches
-//! the same router in-process via the IPC command; here a socket is just the
-//! test transport). A registered route answers natively, an unmatched path is
-//! the framework 404, and an unported method the framework 405. This pins
-//! registration, adapter extraction, the validation envelopes, and the
-//! conditional-GET / CORS contracts without a Python toolchain.
+//! harness composes a temp-database hydration state and drives the router
+//! in-memory: each request is dispatched through `build_router(state).oneshot`
+//! (the same router core the production binary serves in-process via the IPC
+//! command), with no socket and no transport. A registered route answers
+//! natively, an unmatched path is the framework 404, and an unported method
+//! the framework 405. This pins registration, adapter extraction, the
+//! validation envelopes, and the conditional-GET / CORS contracts without a
+//! Python toolchain.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,21 +19,12 @@ use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use http_body_util::BodyExt;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use tower::ServiceExt;
 
-/// A plain HTTP client to drive requests at the test substrate's socket
-/// (replacing the retired proxy module's pooled client; the production
-/// substrate binds no socket, but this harness serves the router on one).
-fn test_client() -> Client<HttpConnector, Body> {
-    Client::builder(TokioExecutor::new()).build(HttpConnector::new())
-}
-
-async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
+async fn serve_substrate() -> (Arc<AppState>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = Db::open(&dir.path().join("entropia_orme.db"))
         .await
@@ -44,57 +36,37 @@ async fn serve_substrate() -> (u16, Arc<AppState>, tempfile::TempDir) {
         Arc::new(RealClock::new()),
         dir.path().to_path_buf(),
     ));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let port = listener.local_addr().expect("addr").port();
     let state = Arc::new(
-        AppState::new(port)
+        AppState::new(0)
             .with_hydration(hydration)
             .with_cors(CorsConfig::new(5173, None)),
     );
-    let serve_state = state.clone();
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
-        eo_http::serve(listener, serve_state).await.expect("serve");
-    });
-    // The listener is already bound; one probe confirms the task runs.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if get(port, "/api/health").await.0 == http::StatusCode::OK {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "substrate never came up"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    (port, state, dir)
+    (state, dir)
 }
 
-async fn get(port: u16, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
-    request(port, "GET", path, &[]).await
+async fn get(state: &Arc<AppState>, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+    request(state, "GET", path, &[]).await
 }
 
 async fn request(
-    port: u16,
+    state: &Arc<AppState>,
     method: &str,
     path: &str,
     extra_headers: &[(&str, &str)],
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
-    send(port, method, path, extra_headers, None).await
+    send(state, method, path, extra_headers, None).await
 }
 
 /// A mutating request: a JSON body plus the allowed origin the guard
 /// demands of mutating methods.
 async fn send_json(
-    port: u16,
+    state: &Arc<AppState>,
     method: &str,
     path: &str,
     body: &str,
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     send(
-        port,
+        state,
         method,
         path,
         &[
@@ -106,32 +78,29 @@ async fn send_json(
     .await
 }
 
+/// Dispatch one request through a freshly built router (`oneshot` consumes
+/// the router, so each request gets its own). No socket and no Host default:
+/// a request without a Host header is admitted exactly as the in-process IPC
+/// transport's requests are, so the guard / CORS / observe stack is exercised
+/// identically.
 async fn send(
-    port: u16,
+    state: &Arc<AppState>,
     method: &str,
     path: &str,
     extra_headers: &[(&str, &str)],
     body: Option<Vec<u8>>,
 ) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
-    let authority = format!("127.0.0.1:{port}");
-    let mut builder = http::Request::builder()
-        .method(method)
-        .uri(format!("http://{authority}{path}"));
-    // An explicit host in the probe replaces the default, so bad-Host
-    // probes carry exactly one Host header.
-    if !extra_headers.iter().any(|(name, _)| *name == "host") {
-        builder = builder.header("host", &authority);
-    }
+    let mut builder = http::Request::builder().method(method).uri(path);
     for (name, value) in extra_headers {
         builder = builder.header(*name, *value);
     }
     let request = builder
         .body(body.map(Body::from).unwrap_or_else(Body::empty))
         .unwrap();
-    let response = test_client()
-        .request(request)
+    let response = eo_http::build_router(state.clone())
+        .oneshot(request)
         .await
-        .expect("request succeeds");
+        .expect("router responds");
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = response
@@ -156,7 +125,7 @@ fn detail_types(body: &[u8]) -> Vec<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_registered_route_serves_natively_over_the_composed_state() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
     // List routes over a fresh database: empty collections, served
     // natively (a proxy fallback would 502 against the dead upstream).
     for (path, expected_body) in [
@@ -182,7 +151,7 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
         ("/api/tracking/sessions", "[]"),
         ("/api/tracking/tag-suggestions?q=a", "[]"),
     ] {
-        let (status, headers, body) = get(port, path).await;
+        let (status, headers, body) = get(&state, path).await;
         assert_eq!(status, http::StatusCode::OK, "{path}");
         assert_eq!(body, expected_body.as_bytes(), "{path}");
         assert!(headers.contains_key(http::header::ETAG), "{path}");
@@ -217,7 +186,7 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
         ("/api/analytics/ledger/presets", "[]"),
         ("/api/analytics/inventory", "[]"),
     ] {
-        let (status, headers, body) = get(port, path).await;
+        let (status, headers, body) = get(&state, path).await;
         assert_eq!(status, http::StatusCode::OK, "{path}");
         assert_eq!(body, expected_body.as_bytes(), "{path}");
         assert!(!headers.contains_key(http::header::ETAG), "{path}");
@@ -231,20 +200,20 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
     }
     // The path-parameter route: decoded lookup misses on the empty
     // catalogue with the handler's message, errors carry no ETag.
-    let (status, headers, body) = get(port, "/api/codex/species/No%20Such/ranks").await;
+    let (status, headers, body) = get(&state, "/api/codex/species/No%20Such/ranks").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Species 'No Such' not found\"}");
     assert!(!headers.contains_key(http::header::ETAG));
 
     // A missing tracking session: the handler's 404, no ETag.
-    let (status, headers, body) = get(port, "/api/tracking/session/no-such").await;
+    let (status, headers, body) = get(&state, "/api/tracking/session/no-such").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Session not found\"}");
     assert!(!headers.contains_key(http::header::ETAG));
 
     // The conditional-GET leg: the current validator earns a 304 with
     // an empty body; a stale one re-serves the representation.
-    let (_, headers, _) = get(port, "/api/quests").await;
+    let (_, headers, _) = get(&state, "/api/quests").await;
     let etag = headers
         .get(http::header::ETAG)
         .expect("etag present")
@@ -252,7 +221,7 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
         .unwrap()
         .to_string();
     let (status, headers, body) = request(
-        port,
+        &state,
         "GET",
         "/api/quests",
         &[("if-none-match", etag.as_str())],
@@ -265,7 +234,7 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
         etag
     );
     let (status, _, _) = request(
-        port,
+        &state,
         "GET",
         "/api/quests",
         &[("if-none-match", "\"stale\"")],
@@ -276,18 +245,19 @@ async fn every_registered_route_serves_natively_over_the_composed_state() {
 
 /// The analytics write adapters serve natively over the composed state:
 /// the success paths, the validation envelopes (exercising required_f64),
-/// and the handler error legs, all without the cross-language battery.
+/// and the handler error legs, all hermetically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_analytics_write_routes_serve_natively() {
-    let (port, _state, _dir) = serve_substrate().await;
-    let del = |port, path: &'static str| async move {
-        request(port, "DELETE", path, &[("origin", "tauri://localhost")]).await
+    let (state, _dir) = serve_substrate().await;
+    let del = |state: &Arc<AppState>, path: &'static str| {
+        let state = state.clone();
+        async move { request(&state, "DELETE", path, &[("origin", "tauri://localhost")]).await }
     };
 
     // Ledger: create -> 200 with a generated id; missing required float ->
     // 422 (required_f64); delete-404.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/ledger",
         r#"{"date":"2026-05-01","type":"expense","description":"Ammo","amount":12.5,"tag":"ammo"}"#,
@@ -298,7 +268,7 @@ async fn the_analytics_write_routes_serve_natively() {
     assert!(entry["id"].as_str().is_some());
     assert_eq!(entry["amount"], serde_json::json!(12.5));
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/ledger",
         r#"{"date":"2026-05-01","type":"expense","description":"x","tag":"t"}"#,
@@ -306,13 +276,13 @@ async fn the_analytics_write_routes_serve_natively() {
     .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing"]);
-    let (status, _, body) = del(port, "/api/analytics/ledger/nope").await;
+    let (status, _, body) = del(&state, "/api/analytics/ledger/nope").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Entry not found\"}");
 
     // Presets: create -> 200; bad type -> 400; delete-404.
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/ledger/presets",
         r#"{"name":"Decay","type":"expense","description":"d","amount":0.5,"tag":"decay"}"#,
@@ -320,7 +290,7 @@ async fn the_analytics_write_routes_serve_natively() {
     .await;
     assert_eq!(status, http::StatusCode::OK);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/ledger/presets",
         r#"{"name":"Bad","type":"income","description":"d","amount":1.0,"tag":"t"}"#,
@@ -328,14 +298,14 @@ async fn the_analytics_write_routes_serve_natively() {
     .await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body, b"{\"detail\":\"type must be 'expense' or 'markup'\"}");
-    let (status, _, body) = del(port, "/api/analytics/ledger/presets/nope").await;
+    let (status, _, body) = del(&state, "/api/analytics/ledger/presets/nope").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Preset not found\"}");
 
     // Inventory: create (snake_case) -> 200 camelCase; missing name -> 422;
     // patch + delete + sell over the created id; the 404 legs.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/inventory",
         r#"{"name":"Sword","tt_value":10.0,"markup_paid":2.0}"#,
@@ -347,7 +317,7 @@ async fn the_analytics_write_routes_serve_natively() {
     assert_eq!(item["ttValue"], serde_json::json!(10.0));
     assert_eq!(item["markupPaid"], serde_json::json!(2.0));
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/inventory",
         r#"{"tt_value":1.0,"markup_paid":0.0}"#,
@@ -356,7 +326,7 @@ async fn the_analytics_write_routes_serve_natively() {
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing"]);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PATCH",
         &format!("/api/analytics/inventory/{id}"),
         r#"{"name":"Renamed"}"#,
@@ -366,7 +336,7 @@ async fn the_analytics_write_routes_serve_natively() {
     let patched: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(patched["name"], serde_json::json!("Renamed"));
     let (status, _, body) = request(
-        port,
+        &state,
         "PATCH",
         "/api/analytics/inventory/nope",
         &[("origin", "tauri://localhost")],
@@ -376,13 +346,13 @@ async fn the_analytics_write_routes_serve_natively() {
     // precedes the 404 item lookup.
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing"]);
-    let (status, _, body) = del(port, "/api/analytics/inventory/nope").await;
+    let (status, _, body) = del(&state, "/api/analytics/inventory/nope").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Inventory item not found\"}");
 
     // Sell the created item -> 200 with a markup ledger entry; sell-404.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/analytics/inventory/{id}/sell"),
         r#"{"sale_price":20.0}"#,
@@ -395,7 +365,7 @@ async fn the_analytics_write_routes_serve_natively() {
     // The item was renamed by the earlier PATCH leg.
     assert_eq!(sold["soldItem"]["name"], serde_json::json!("Renamed"));
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/analytics/inventory/nope/sell",
         r#"{"sale_price":1.0}"#,
@@ -407,11 +377,11 @@ async fn the_analytics_write_routes_serve_natively() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_browser_surface_is_answered_at_the_substrate() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
     // A passing preflight short-circuits ahead of routing (no upstream
     // exists, so a forwarded preflight would 502).
     let (status, headers, body) = request(
-        port,
+        &state,
         "OPTIONS",
         "/api/quests",
         &[
@@ -430,7 +400,7 @@ async fn the_browser_surface_is_answered_at_the_substrate() {
     );
     // A failing preflight names its failure.
     let (status, _, body) = request(
-        port,
+        &state,
         "OPTIONS",
         "/api/quests",
         &[
@@ -443,7 +413,7 @@ async fn the_browser_surface_is_answered_at_the_substrate() {
     assert_eq!(body, b"Disallowed CORS origin");
     // Natively-served responses decorate for an allowed origin.
     let (status, headers, _) = request(
-        port,
+        &state,
         "GET",
         "/api/quests",
         &[("origin", "tauri://localhost")],
@@ -459,7 +429,7 @@ async fn the_browser_surface_is_answered_at_the_substrate() {
     assert_eq!(headers.get(http::header::VARY).unwrap(), "Origin");
     // Reads reject a present-but-disallowed origin ahead of routing.
     let (status, _, body) = request(
-        port,
+        &state,
         "GET",
         "/api/quests",
         &[("origin", "http://evil.example")],
@@ -469,68 +439,72 @@ async fn the_browser_surface_is_answered_at_the_substrate() {
     assert_eq!(body, b"{\"detail\":\"Invalid Origin header\"}");
     // Mutating methods require an allowed origin, enforced before any
     // upstream forward (a forwarded request would 502, not 403).
-    let (status, _, body) = request(port, "POST", "/api/quests", &[]).await;
+    let (status, _, body) = request(&state, "POST", "/api/quests", &[]).await;
     assert_eq!(status, http::StatusCode::FORBIDDEN);
     assert_eq!(body, b"{\"detail\":\"Origin header required\"}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_router_validates_through_the_extraction_layer() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
     // Declaration-order multi-error.
-    let (status, _, body) = get(port, "/api/codex/recommend?rank=abc&target=xx").await;
+    let (status, _, body) = get(&state, "/api/codex/recommend?rank=abc&target=xx").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         detail_types(&body),
         ["missing", "int_parsing", "literal_error"]
     );
     // Bounds re-render the raw text.
-    let (status, _, body) = get(port, "/api/codex/recommend?species_name=X&rank=-0").await;
+    let (status, _, body) = get(&state, "/api/codex/recommend?species_name=X&rank=-0").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     let parsed: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["detail"][0]["type"], "greater_than_equal");
     assert_eq!(parsed["detail"][0]["input"], "-0");
     // Duplicate parameter: the last occurrence validates.
-    let (status, _, body) = get(port, "/api/codex/recommend?species_name=X&rank=3&rank=abc").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/codex/recommend?species_name=X&rank=3&rank=abc",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing"]);
     // A decoded slash inside the path parameter de-matches the route.
-    let (status, _, body) = get(port, "/api/codex/species/A%2FB/ranks").await;
+    let (status, _, body) = get(&state, "/api/codex/species/A%2FB/ranks").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Not Found\"}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_framework_404s_unmatched_paths_and_405s_unported_methods() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
     // An encoded slash stays one raw segment, so it does not decode into the
     // registered `/api/quests/mobs` path: the framework 404 (nothing forwards
     // it upstream now).
-    let (status, _, body) = get(port, "/api/quests%2Fmobs").await;
+    let (status, _, body) = get(&state, "/api/quests%2Fmobs").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Not Found\"}");
     // An unmatched path under /api is likewise the framework 404.
-    let (status, _, _) = get(port, "/api/no-such-route").await;
+    let (status, _, _) = get(&state, "/api/no-such-route").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     // HEAD on a GET route is the framework 405: the backend hard-405s HEAD on
     // its GET routes, and the native router does not auto-serve HEAD from the
     // GET handler (it carries an explicit 405 method fallback).
-    let (status, _, _) = request(port, "HEAD", "/api/quests", &[]).await;
+    let (status, _, _) = request(&state, "HEAD", "/api/quests", &[]).await;
     assert_eq!(status, http::StatusCode::METHOD_NOT_ALLOWED);
     // A present-but-empty Host passes the guard (the backend's falsy check
     // skips it), so the route serves natively.
-    let (status, _, _) = request(port, "GET", "/api/quests", &[("host", "")]).await;
+    let (status, _, _) = request(&state, "GET", "/api/quests", &[("host", "")]).await;
     assert_eq!(status, http::StatusCode::OK);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_write_surface_serves_natively_over_the_composed_state() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
 
     // Create: minimal, then lax-coerced fields; ids are deterministic
     // over the fresh database.
     let (status, headers, body) =
-        send_json(port, "POST", "/api/quests", r#"{"name": "Alpha"}"#).await;
+        send_json(&state, "POST", "/api/quests", r#"{"name": "Alpha"}"#).await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         !headers.contains_key(http::header::ETAG),
@@ -541,7 +515,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(created["planet"], "Calypso");
     assert_eq!(created["rewardIsSkill"], false);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests",
         r#"{"name": "Beta", "reward_ped": "1_0.5", "reward_is_skill": "yes", "chain_position": 2.0, "mobs": ["Atrox"]}"#,
@@ -555,14 +529,14 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(created["targetMobs"], serde_json::json!(["Atrox"]));
 
     // The single-quest read serves with the conditional-GET contract.
-    let (status, headers, _) = get(port, "/api/quests/1").await;
+    let (status, headers, _) = get(&state, "/api/quests/1").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(headers.contains_key(http::header::ETAG));
 
     // Update: exclude-unset (only sent fields move), declaration-order
     // multi-error, and present-null clears.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/1",
         r#"{"notes": "updated", "reward_ped": null}"#,
@@ -574,7 +548,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(updated["reward"], Value::Null);
     assert_eq!(updated["name"], "Alpha", "unsent fields keep their values");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/1",
         r#"{"reward_description": 5, "cooldown_hours": "x"}"#,
@@ -590,25 +564,25 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
 
     // Lifecycle on a zero-cooldown quest.
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests",
         r#"{"name": "Cycle", "cooldown_hours": 0}"#,
     )
     .await;
     assert_eq!(status, http::StatusCode::OK);
-    let (status, _, body) = send_json(port, "POST", "/api/quests/3/start", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/quests/3/start", "").await;
     assert_eq!(status, http::StatusCode::OK);
     let started: Value = serde_json::from_slice(&body).unwrap();
     assert_ne!(started["startedAt"], Value::Null);
-    let (status, _, body) = send_json(port, "POST", "/api/quests/3/complete", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/quests/3/complete", "").await;
     assert_eq!(status, http::StatusCode::OK);
     let completed: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(completed["cooldownExpiresAt"], Value::Null);
-    let (status, _, _) = send_json(port, "POST", "/api/quests/3/start", "").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/quests/3/start", "").await;
     assert_eq!(status, http::StatusCode::OK);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests/3/cancel",
         r#"{"undo_reward": false}"#,
@@ -618,12 +592,12 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     let cancelled: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(cancelled["startedAt"], Value::Null);
     // Cancel tolerates a top-level null body (no-body semantics).
-    let (status, _, _) = send_json(port, "POST", "/api/quests/3/cancel", "null").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/quests/3/cancel", "null").await;
     assert_eq!(status, http::StatusCode::OK);
 
     // Playlists: create with nested items, update, delete.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests/playlists",
         r#"{"name": "Run", "estimated_minutes": "45", "quest_ids": [1, "2"], "items": [{"quest_id": 3, "group_type": "long_horizon"}]}"#,
@@ -633,12 +607,11 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     let playlist: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(playlist["estimatedMinutes"], 45);
     // Provided items supersede the plain id list: the playlist's quest
-    // set derives from them (the cross-language battery pins the same
-    // shape on both arms).
+    // set derives from them (the committed golden pins the same shape).
     assert_eq!(playlist["questIds"], serde_json::json!(["3"]));
     assert_eq!(playlist["items"][0]["groupType"], "long_horizon");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/playlists/1",
         r#"{"name": "Run 2"}"#,
@@ -647,13 +620,13 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(status, http::StatusCode::OK);
     let renamed: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(renamed["name"], "Run 2");
-    let (status, _, body) = send_json(port, "DELETE", "/api/quests/playlists/1", "").await;
+    let (status, _, body) = send_json(&state, "DELETE", "/api/quests/playlists/1", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"{\"ok\":true}");
 
     // Calibrate: the write, the bound, and the beyond-range rank.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/calibrate",
         r#"{"species_name": "Sp", "rank": 7}"#,
@@ -662,7 +635,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"{\"speciesName\":\"Sp\",\"rank\":7}");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/calibrate",
         r#"{"species_name": "Sp", "rank": 26}"#,
@@ -671,7 +644,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body, b"{\"detail\":\"Rank must be 0-25\"}");
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/calibrate",
         r#"{"species_name": "Sp", "rank": 999999999999999999999999}"#,
@@ -687,7 +660,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
         ("PUT", "/api/quests/playlists/424242", r#"{"name": "Z"}"#),
         ("DELETE", "/api/quests/playlists/424242", ""),
     ] {
-        let (status, _, reply) = send_json(port, method, path, body).await;
+        let (status, _, reply) = send_json(&state, method, path, body).await;
         assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
         assert!(
             reply == b"{\"detail\":\"Quest not found\"}"
@@ -695,16 +668,16 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
             "{method} {path}"
         );
     }
-    let (status, _, body) = send_json(port, "DELETE", "/api/quests/2", "").await;
+    let (status, _, body) = send_json(&state, "DELETE", "/api/quests/2", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"{\"ok\":true}");
 
     // Path-parameter legs on the write routes.
-    let (status, _, body) = send_json(port, "PUT", "/api/quests/abc", r#"{"name": "Z"}"#).await;
+    let (status, _, body) = send_json(&state, "PUT", "/api/quests/abc", r#"{"name": "Z"}"#).await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing"]);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests/999999999999999999999999/start",
         "",
@@ -714,7 +687,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
     // clean 404 (a missing resource), like the decoded-slash case below.
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Not Found\"}");
-    let (status, _, body) = send_json(port, "POST", "/api/quests/A%2FB/start", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/quests/A%2FB/start", "").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Not Found\"}");
 }
@@ -725,7 +698,7 @@ async fn the_write_surface_serves_natively_over_the_composed_state() {
 /// the 404 only after the body validates clean (a deferred 404).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn out_of_range_path_id_is_not_found() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
     let big = "99999999999999999999999999"; // > i64::MAX
 
     // No-body int-id routes (via `path_id`): every method answers the
@@ -739,7 +712,7 @@ async fn out_of_range_path_id_is_not_found() {
         ("DELETE", format!("/api/equipment/library/{big}")),
     ];
     for (method, path) in &no_body {
-        let (status, _, body) = send_json(port, method, path, "").await;
+        let (status, _, body) = send_json(&state, method, path, "").await;
         assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
         assert_eq!(body, b"{\"detail\":\"Not Found\"}", "{method} {path}");
     }
@@ -761,18 +734,18 @@ async fn out_of_range_path_id_is_not_found() {
         ),
     ];
     for (method, path, body) in &clean_body {
-        let (status, _, _) = send_json(port, method, path, body).await;
+        let (status, _, _) = send_json(&state, method, path, body).await;
         assert_eq!(status, http::StatusCode::NOT_FOUND, "{method} {path}");
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn body_failures_answer_the_backend_reply_classes() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
 
     // Missing and null bodies on a required-body route.
     for body in ["", "null"] {
-        let (status, _, reply) = send_json(port, "POST", "/api/quests", body).await;
+        let (status, _, reply) = send_json(&state, "POST", "/api/quests", body).await;
         assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{body:?}");
         let parsed: Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(parsed["detail"][0]["type"], "missing");
@@ -780,7 +753,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
     }
 
     // Malformed JSON carries the scanner's message and position.
-    let (status, _, reply) = send_json(port, "POST", "/api/quests", r#"{"name": "Q", }"#).await;
+    let (status, _, reply) = send_json(&state, "POST", "/api/quests", r#"{"name": "Q", }"#).await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     let parsed: Value = serde_json::from_slice(&reply).unwrap();
     assert_eq!(parsed["detail"][0]["type"], "json_invalid");
@@ -797,7 +770,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
         ("\"zz\"", "bool_parsing"),
     ] {
         let body = format!(r#"{{"name": "B", "reward_is_skill": {value}}}"#);
-        let (status, _, reply) = send_json(port, "POST", "/api/quests", &body).await;
+        let (status, _, reply) = send_json(&state, "POST", "/api/quests", &body).await;
         assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{value}");
         let parsed: Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(parsed["detail"][0]["type"], kind, "{value}");
@@ -807,13 +780,13 @@ async fn body_failures_answer_the_backend_reply_classes() {
     // both exact bounds excluded; digit strings stay the storage 500.
     for value in ["1e30", "9223372036854775808.0", "-9223372036854775808.0"] {
         let body = format!(r#"{{"name": "I", "chain_position": {value}}}"#);
-        let (status, _, reply) = send_json(port, "POST", "/api/quests", &body).await;
+        let (status, _, reply) = send_json(&state, "POST", "/api/quests", &body).await;
         assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY, "{value}");
         let parsed: Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(parsed["detail"][0]["type"], "int_parsing_size", "{value}");
     }
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/quests",
         r#"{"name": "I", "chain_position": 999999999999999999999999}"#,
@@ -825,21 +798,21 @@ async fn body_failures_answer_the_backend_reply_classes() {
     // Unrenderable echoes answer the plain-text 500: non-finite
     // values, lone surrogates, and over-deep echoed bodies.
     for body in [r#"{"name": Infinity}"#, "{\"planet\": \"\\ud800\"}"] {
-        let (status, _, reply) = send_json(port, "POST", "/api/quests", body).await;
+        let (status, _, reply) = send_json(&state, "POST", "/api/quests", body).await;
         assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert_eq!(reply, b"Internal Server Error");
     }
     let deep = format!(r#"{{"name": {}{}}}"#, "[".repeat(990), "]".repeat(990));
-    let (status, _, _) = send_json(port, "POST", "/api/quests", &deep).await;
+    let (status, _, _) = send_json(&state, "POST", "/api/quests", &deep).await;
     assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
     let shallow = format!(r#"{{"name": {}{}}}"#, "[".repeat(100), "]".repeat(100));
-    let (status, _, reply) = send_json(port, "POST", "/api/quests", &shallow).await;
+    let (status, _, reply) = send_json(&state, "POST", "/api/quests", &shallow).await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&reply), ["string_type"]);
 
     // Beyond the parse cap: the generic body-parse 400.
     let too_deep = "[".repeat(50_000) + &"]".repeat(50_000);
-    let (status, _, reply) = send_json(port, "POST", "/api/quests", &too_deep).await;
+    let (status, _, reply) = send_json(&state, "POST", "/api/quests", &too_deep).await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(
         reply,
@@ -850,7 +823,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
     // not JSON (raw-string echo), application subtypes match
     // case-insensitively.
     let (status, _, reply) = send(
-        port,
+        &state,
         "POST",
         "/api/quests",
         &[
@@ -864,7 +837,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
     let parsed: Value = serde_json::from_slice(&reply).unwrap();
     assert_eq!(parsed["detail"][0]["type"], "model_attributes_type");
     let (status, _, _) = send(
-        port,
+        &state,
         "POST",
         "/api/quests",
         &[
@@ -880,7 +853,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
     // the generic 400.
     let utf16: Vec<u8> = r#"{"name": "U16"}"#.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let (status, _, _) = send(
-        port,
+        &state,
         "POST",
         "/api/quests",
         &[
@@ -893,7 +866,7 @@ async fn body_failures_answer_the_backend_reply_classes() {
     assert_eq!(status, http::StatusCode::OK);
     let bad = [br#"{"name": ""#.to_vec(), vec![0xFF], br#""}"#.to_vec()].concat();
     let (status, _, reply) = send(
-        port,
+        &state,
         "POST",
         "/api/quests",
         &[
@@ -910,40 +883,6 @@ async fn body_failures_answer_the_backend_reply_classes() {
     );
 }
 
-/// A transport-level body read failure (the peer half-closes inside an
-/// over-declared Content-Length) answers the unhandled-error 500 and
-/// mutates nothing: the reference never reaches its handler on a failed
-/// read, so a started quest must not cancel off a truncated payload.
-#[tokio::test]
-async fn failed_body_read_answers_500_and_writes_nothing() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let (port, _state, _dir) = serve_substrate().await;
-    let (status, _, _) = send_json(port, "POST", "/api/quests", r#"{"name": "Probe"}"#).await;
-    assert_eq!(status, http::StatusCode::OK);
-    let (status, _, _) = send_json(port, "POST", "/api/quests/1/start", "").await;
-    assert_eq!(status, http::StatusCode::OK);
-    let (_, _, before) = get(port, "/api/quests/1").await;
-
-    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
-        .await
-        .expect("connect");
-    let head = format!(
-        "POST /api/quests/1/cancel HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\norigin: tauri://localhost\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\n{{\"undo_rew"
-    );
-    stream.write_all(head.as_bytes()).await.expect("write head");
-    stream.shutdown().await.expect("half-close");
-    let mut reply = Vec::new();
-    stream.read_to_end(&mut reply).await.expect("read reply");
-    let reply = String::from_utf8_lossy(&reply);
-    assert!(reply.starts_with("HTTP/1.1 500 "), "got: {reply}");
-    assert!(reply.ends_with("Internal Server Error"), "got: {reply}");
-
-    let (status, _, after) = get(port, "/api/quests/1").await;
-    assert_eq!(status, http::StatusCode::OK);
-    assert_eq!(after, before, "the failed read must not cancel the quest");
-}
-
 /// The settings/character/equipment surface serves natively over the
 /// composed state: the settings reads, the character family over an
 /// empty calibration table, and the equipment routes (a consumable
@@ -951,11 +890,11 @@ async fn failed_body_read_answers_500_and_writes_nothing() {
 /// against the temp database).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_settings_character_and_equipment_surface_serves_natively() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
 
     // Settings assembly over the fresh data dir: defaults, the live
     // db path, and the workspace version stamp.
-    let (status, headers, body) = get(port, "/api/settings").await;
+    let (status, headers, body) = get(&state, "/api/settings").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         !headers.contains_key(http::header::ETAG),
@@ -989,7 +928,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
     );
 
-    let (status, _, body) = get(port, "/api/settings/overlay-position").await;
+    let (status, _, body) = get(&state, "/api/settings/overlay-position").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"{\"x\":null,\"y\":null}");
 
@@ -1013,21 +952,25 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
             "{\"currentHp\":80.0,\"skills\":[],\"attributes\":[]}",
         ),
     ] {
-        let (status, _, body) = get(port, path).await;
+        let (status, _, body) = get(&state, path).await;
         assert_eq!(status, http::StatusCode::OK, "{path}");
         assert_eq!(body, expected.as_bytes(), "{path}");
     }
 
     // The prospect family's validation ladder: the envelope first (in
     // signature order), then the handler's own 422 details.
-    let (status, _, body) = get(port, "/api/character/prospect").await;
+    let (status, _, body) = get(&state, "/api/character/prospect").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing", "missing"]);
-    let (status, _, body) = get(port, "/api/character/prospect?profession=X&target_level=0").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/character/prospect?profession=X&target_level=0",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, b"{\"detail\":\"target_level must be positive\"}");
     let (status, _, body) = get(
-        port,
+        &state,
         "/api/character/prospect?profession=X&target_level=5&slice_type=banana",
     )
     .await;
@@ -1037,7 +980,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         b"{\"detail\":\"slice_type must be global, tag, mob, or weapon\"}"
     );
     let (status, _, body) = get(
-        port,
+        &state,
         "/api/character/prospect?profession=X&target_level=5&slice_type=mob",
     )
     .await;
@@ -1048,23 +991,27 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     );
     // An unknown profession answers the error SHAPE (model order puts
     // error/rows/warnings first), not a 404.
-    let (status, _, body) = get(port, "/api/character/prospect?profession=X&target_level=5").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/character/prospect?profession=X&target_level=5",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         body,
         b"{\"error\":\"Profession 'X' not found\",\"rows\":[],\"warnings\":[]}"
     );
-    let (status, _, body) = get(port, "/api/character/profession-optimizer?profession=X").await;
+    let (status, _, body) = get(&state, "/api/character/profession-optimizer?profession=X").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         body,
         b"{\"skills\":[],\"attributes\":[],\"error\":\"Profession 'X' not found\"}"
     );
-    let (status, _, body) = get(port, "/api/character/profession-optimizer").await;
+    let (status, _, body) = get(&state, "/api/character/profession-optimizer").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing"]);
     let (status, _, body) = get(
-        port,
+        &state,
         "/api/character/profession-path-optimizer?profession=X&target_level=5&ped_budget=1",
     )
     .await;
@@ -1074,7 +1021,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         b"{\"detail\":\"Exactly one of target_level or ped_budget must be provided\"}"
     );
     let (status, _, body) = get(
-        port,
+        &state,
         "/api/character/profession-path-optimizer?profession=X&target_level=abc",
     )
     .await;
@@ -1083,18 +1030,18 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
 
     // Equipment: the search type gate, the empty library, and the
     // catalogue-less validation ladder.
-    let (status, _, body) = get(port, "/api/equipment/search?q=op&type=banana").await;
+    let (status, _, body) = get(&state, "/api/equipment/search?q=op&type=banana").await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body, b"{\"detail\":\"Unknown type 'banana'\"}");
-    let (status, _, body) = get(port, "/api/equipment/search?q=o").await;
+    let (status, _, body) = get(&state, "/api/equipment/search?q=o").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"[]", "short queries return empty before any lookup");
-    let (status, _, body) = get(port, "/api/equipment/library").await;
+    let (status, _, body) = get(&state, "/api/equipment/library").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"[]");
 
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\":\"banana\"}",
@@ -1103,7 +1050,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["literal_error"]);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\":\"weapon\"}",
@@ -1112,7 +1059,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body, b"{\"detail\":\"catalog_id required for weapon\"}");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\":\"weapon\",\"catalog_id\":\"nope\"}",
@@ -1124,7 +1071,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         b"{\"detail\":\"Entity 'nope' not found in catalogue endpoint 'weapons'.\"}"
     );
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\":\"consumable\"}",
@@ -1139,7 +1086,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     // A custom consumable needs no catalogue: the full write path over
     // the temp database, then the list, update-type gate, and delete.
     let (status, headers, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\":\"consumable\",\"name\":\"  Nutrio Bar  \"}",
@@ -1156,12 +1103,12 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
           \"costPerUse\":0.0,\"damageMin\":null,\"damageMax\":null,\"reloadSeconds\":null,\
           \"isLimited\":false,\"enrichmentLevel\":1}"
     );
-    let (status, _, body) = get(port, "/api/equipment/library").await;
+    let (status, _, body) = get(&state, "/api/equipment/library").await;
     assert_eq!(status, http::StatusCode::OK);
     let listed: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(listed[0]["id"], "1");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/equipment/library/1",
         "{\"type\":\"weapon\",\"catalog_id\":\"x\"}",
@@ -1170,7 +1117,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body, b"{\"detail\":\"Cannot change equipment type\"}");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/equipment/library/9",
         "{\"type\":\"consumable\",\"name\":\"X\"}",
@@ -1178,18 +1125,18 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     .await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Equipment item 9 not found\"}");
-    let (status, _, body) = get(port, "/api/equipment/library/1/detail").await;
+    let (status, _, body) = get(&state, "/api/equipment/library/1/detail").await;
     assert_eq!(status, http::StatusCode::OK);
     let detail_shape: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(detail_shape["weapon"]["name"], "Nutrio Bar");
     assert_eq!(detail_shape["totalCostPerUse"], 0.0);
-    let (status, _, body) = get(port, "/api/equipment/library/9/detail").await;
+    let (status, _, body) = get(&state, "/api/equipment/library/9/detail").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body, b"{\"detail\":\"Equipment item 9 not found\"}");
     // Deletes are idempotent acknowledgements, present row or not.
     for item in ["1", "9"] {
         let (status, _, body) = send(
-            port,
+            &state,
             "DELETE",
             &format!("/api/equipment/library/{item}"),
             &[("origin", "tauri://localhost")],
@@ -1199,16 +1146,16 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         assert_eq!(status, http::StatusCode::OK);
         assert_eq!(body, b"{\"status\":\"deleted\"}");
     }
-    let (status, _, body) = get(port, "/api/equipment/library").await;
+    let (status, _, body) = get(&state, "/api/equipment/library").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"[]");
 
     // Cost calculation validates in model order (catalog_id first).
-    let (status, _, body) = send_json(port, "POST", "/api/equipment/cost/calculate", "{}").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/equipment/cost/calculate", "{}").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing"]);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/cost/calculate",
         "{\"catalog_id\":\"x\",\"type\":\"consumable\"}",
@@ -1221,7 +1168,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     // read-only harness does not compose, so it hits the defensive 503 floor
     // here (the producer harness exercises the native success path).
     let (status, _, _) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/settings/overlay-position",
         "{\"x\":1,\"y\":2}",
@@ -1236,11 +1183,11 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
 /// requests, each at its consumption point.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
-    let (port, _state, _dir) = serve_substrate().await;
+    let (state, _dir) = serve_substrate().await;
 
     // Path + body field issues, one envelope, path first.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/equipment/library/abc",
         "{\"type\": \"banana\"}",
@@ -1249,7 +1196,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing", "literal_error"]);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/abc",
         "{\"cooldown_hours\": \"x\", \"chain_position\": 1.5}",
@@ -1261,19 +1208,19 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
         ["int_parsing", "float_parsing", "int_from_float"]
     );
     // A non-object cancel body aggregates with the path issue.
-    let (status, _, body) = send_json(port, "POST", "/api/quests/abc/cancel", "5").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/quests/abc/cancel", "5").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         detail_types(&body),
         ["int_parsing", "model_attributes_type"]
     );
     // A decode failure stands alone, dropping the path issue.
-    let (status, _, body) = send_json(port, "PUT", "/api/quests/abc", "{bad").await;
+    let (status, _, body) = send_json(&state, "PUT", "/api/quests/abc", "{bad").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["json_invalid"]);
     // A missing body aggregates as the missing-["body"] issue.
     let (status, _, body) = send(
-        port,
+        &state,
         "PUT",
         "/api/quests/playlists/abc",
         &[("origin", "tauri://localhost")],
@@ -1286,7 +1233,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     // A beyond-i64 path id carries no validation issue, so a bad body
     // still renders its 422 envelope first (aggregation preserved)...
     let (status, _, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/99999999999999999999999999",
         "{\"cooldown_hours\": \"x\"}",
@@ -1297,7 +1244,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     // ...and on an otherwise-clean request it resolves to a clean 404
     // (the id can never name a stored row), a deferred 404.
     let (status, _, _) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/quests/99999999999999999999999999",
         "{\"name\": \"X\"}",
@@ -1308,7 +1255,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     // Beyond-i64 BODY integers answer the deferred 500 across the
     // dump builders (quest update field, playlist quest_ids, playlist
     // item ids, equipment ints), only after validation passes.
-    let (status, _, _) = send_json(port, "POST", "/api/quests", "{\"name\": \"Q\"}").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/quests", "{\"name\": \"Q\"}").await;
     assert_eq!(status, http::StatusCode::OK);
     for (method, path, body) in [
         (
@@ -1342,7 +1289,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
             "{\"catalog_id\": \"x\", \"amp_markup\": 99999999999999999999999999}",
         ),
     ] {
-        let (status, _, reply) = send_json(port, method, path, body).await;
+        let (status, _, reply) = send_json(&state, method, path, body).await;
         assert_eq!(
             status,
             http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1352,15 +1299,20 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     }
     // A playlist update whose only set field overflows must not slip
     // through as a no-op update.
-    let (status, _, _) =
-        send_json(port, "POST", "/api/quests/playlists", "{\"name\": \"Pl\"}").await;
+    let (status, _, _) = send_json(
+        &state,
+        "POST",
+        "/api/quests/playlists",
+        "{\"name\": \"Pl\"}",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     for body in [
         "{\"estimated_minutes\": 99999999999999999999999999}",
         "{\"quest_ids\": [99999999999999999999999999]}",
         "{\"items\": [{\"quest_id\": 99999999999999999999999999}]}",
     ] {
-        let (status, _, _) = send_json(port, "PUT", "/api/quests/playlists/1", body).await;
+        let (status, _, _) = send_json(&state, "PUT", "/api/quests/playlists/1", body).await;
         assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     }
 
@@ -1368,7 +1320,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     // consumption point; an UNUSED one flows (the lookup miss answers
     // its renderable 404 on the empty store).
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\": \"weapon\", \"catalog_id\": \"ta\\ud800int\"}",
@@ -1376,7 +1328,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     .await;
     assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\": \"weapon\", \"catalog_id\": \"clean\", \"name\": \"ta\\ud800int\"}",
@@ -1388,7 +1340,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
         b"{\"detail\":\"Entity 'clean' not found in catalogue endpoint 'weapons'.\"}"
     );
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/cost/calculate",
         "{\"catalog_id\": \"ta\\ud800int\", \"type\": \"healing\"}",
@@ -1396,7 +1348,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     .await;
     assert_eq!(status, http::StatusCode::INTERNAL_SERVER_ERROR);
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/equipment/library",
         "{\"type\": \"consumable\", \"name\": \"ta\\ud800int\"}",
@@ -1407,7 +1359,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     // The calibrate codec message splits singular/plural on the
     // surrogate RUN length, with the exact position arithmetic.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/calibrate",
         "{\"species_name\": \"ab\\ud800cd\", \"rank\": 3}",
@@ -1419,7 +1371,7 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
         b"{\"detail\":\"'utf-8' codec can't encode character '\\\\ud800' in position 2: surrogates not allowed\"}"
     );
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/calibrate",
         "{\"species_name\": \"ab\\ud800\\ud801cd\", \"rank\": 3}",
@@ -1433,13 +1385,13 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
 
     // The prospect markup gate sits strictly below zero.
     let (status, _, _) = get(
-        port,
+        &state,
         "/api/character/prospect?profession=X&target_level=5&markup_uplift=-0.1",
     )
     .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     let (status, _, _) = get(
-        port,
+        &state,
         "/api/character/prospect?profession=X&target_level=5&markup_uplift=0",
     )
     .await;
@@ -1449,9 +1401,9 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
 // ── Tracking session-edit write adapters, end-to-end and hermetic ──────
 //
 // The five edit adapters (`native.rs`) and the HydrationState method
-// wrappers (`tracking_routes.rs`) are only driven end-to-end by the
-// feature-gated cross-language battery, so the hermetic mutation
-// campaign never exercises them. This test seeds an ended + an active
+// wrappers (`tracking_routes.rs`) were once driven end-to-end only by
+// the now-retired cross-language battery, so the hermetic mutation
+// campaign never exercised them. This test seeds an ended + an active
 // session straight into the substrate's database and drives every edit
 // through the public port, asserting the RESPONSE BODY fields (not just
 // the status) so an adapter/wrapper degraded to `Default::default()`
@@ -1566,13 +1518,13 @@ fn body_json(body: &[u8]) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
-    let (port, _state, dir) = serve_substrate().await;
+    let (state, dir) = serve_substrate().await;
     let pool = open_pool(dir.path().join("entropia_orme.db")).await;
     seed_edits(&pool).await;
 
     // ── rename-mob: success body (sessionId / mobName / killCount) ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_MOB}/rename-mob"),
         "{\"fromMobName\":\"Atrox\",\"toMobName\":\"Daikiba\"}",
@@ -1586,7 +1538,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
 
     // ── restore-mob: the "Argo" kill restores to its "Wolf" original ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_MOB}/restore-mob"),
         "{\"currentMobName\":\"Argo\"}",
@@ -1600,7 +1552,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
 
     // ── loot-item deactivate: full body, incl. signed delta + totals ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/AnimalOil/deactivate"),
         "",
@@ -1618,7 +1570,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
     // ── loot-item activate on a DEACTIVATED row: the OTHER suffix arm,
     //    distinct result -> kills the wildcard split + suffix dispatch ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/OldHide/activate"),
         "",
@@ -1636,7 +1588,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
     // ── loot-item with a slash in the {item_name:path} segment: the
     //    converter KEEPS the slash, so the item is found and flipped ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/Metal/Wire/deactivate"),
         "",
@@ -1649,7 +1601,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
 
     // ── armour-cost: echoes round(cost, 2), NOT the new total ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_LOOT}/armour-cost"),
         "{\"cost\":2.5}",
@@ -1680,7 +1632,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
             "{\"cost\":1.0}",
         ),
     ] {
-        let (status, _, _) = send_json(port, "POST", &path, body).await;
+        let (status, _, _) = send_json(&state, "POST", &path, body).await;
         assert_eq!(
             status,
             http::StatusCode::NOT_FOUND,
@@ -1704,7 +1656,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
             "",
         ),
     ] {
-        let (status, _, _) = send_json(port, "POST", &path, body).await;
+        let (status, _, _) = send_json(&state, "POST", &path, body).await;
         assert_eq!(
             status,
             http::StatusCode::CONFLICT,
@@ -1714,7 +1666,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
 
     // ── 400: a blank mob name (the validated-then-trimmed empty leg) ──
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_MOB}/rename-mob"),
         "{\"fromMobName\":\"   \",\"toMobName\":\"x\"}",
@@ -1724,7 +1676,7 @@ async fn tracking_session_edits_drive_the_adapters_and_wrappers_end_to_end() {
 
     // ── 404: the wildcard tail matches NEITHER suffix ──
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{ENDED_LOOT}/loot-item/Foo/bogus"),
         "",
@@ -1772,13 +1724,13 @@ async fn seed_quest_link(pool: &SqlitePool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
-    let (port, _state, dir) = serve_substrate().await;
+    let (state, dir) = serve_substrate().await;
     let pool = open_pool(dir.path().join("entropia_orme.db")).await;
     seed_quest_link(&pool).await;
 
     // ── GET suggestion for a single_quest session: the 7-field body ──
     let (status, headers, body) = get(
-        port,
+        &state,
         &format!("/api/tracking/session/{QL_QUEST}/quest-link-suggestion"),
     )
     .await;
@@ -1801,7 +1753,7 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 
     // ── GET 304: re-fetch with the prior ETag -> empty 304 ──
     let (status, _, body) = request(
-        port,
+        &state,
         "GET",
         &format!("/api/tracking/session/{QL_QUEST}/quest-link-suggestion"),
         &[("if-none-match", etag.as_str())],
@@ -1812,7 +1764,7 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 
     // ── POST accept: persists; replies linked + linkType + questId ──
     let (status, headers, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{QL_QUEST}/quest-link"),
         "{\"action\":\"accept\"}",
@@ -1830,7 +1782,7 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 
     // ── POST decline on another session: EXACTLY {sessionId, status} ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{QL_DECLINE}/quest-link"),
         "{\"action\":\"decline\"}",
@@ -1850,14 +1802,14 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
     // ── 404: a missing session on BOTH routes ──
     let missing = "00000000-0000-4000-8000-000000000000";
     let (status, _, body) = get(
-        port,
+        &state,
         &format!("/api/tracking/session/{missing}/quest-link-suggestion"),
     )
     .await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body_json(&body)["detail"], "Session not found");
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{missing}/quest-link"),
         "{\"action\":\"decline\"}",
@@ -1868,7 +1820,7 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 
     // ── 400: an unrecognised action ──
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         &format!("/api/tracking/session/{QL_QUEST}/quest-link"),
         "{\"action\":\"frobnicate\"}",
@@ -1893,15 +1845,15 @@ async fn quest_link_routes_drive_the_adapters_and_handlers_end_to_end() {
 // dir carrying a `mobs.json` (the suggestions catalogue) and a
 // `settings.json` (the attribution gate's config read), then drives the
 // full leg set through the public port asserting RESPONSE BODY fields so
-// a wrapper degraded to an empty `Response` is caught. The
-// cross-language battery proves the same surface byte-identical against
-// the running backend.
+// a wrapper degraded to an empty `Response` is caught. The retired
+// cross-language oracle proved this surface byte-identical; the
+// committed goldens now hold it.
 
 /// A substrate composed with BOTH the read surface and a live tracker
 /// over a shared pool. `config_json` seeds `settings.json` (the
 /// attribution gate + the idle tag-mode leg read it); a small mobs
 /// catalogue seeds the suggestions lookup.
-async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tempfile::TempDir) {
+async fn serve_producer_substrate(config_json: &str) -> (Arc<AppState>, tempfile::TempDir) {
     use eo_services::event_bus::EventBus;
     use std::sync::Mutex;
 
@@ -2029,11 +1981,8 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
         dir.path().to_path_buf(),
     ));
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    listener.set_nonblocking(true).expect("nonblocking");
-    let port = listener.local_addr().expect("addr").port();
     let state = Arc::new(
-        AppState::new(port)
+        AppState::new(0)
             .with_hydration(hydration)
             .with_tracker(tracker)
             .with_skill_tracker(skill_tracker)
@@ -2044,23 +1993,7 @@ async fn serve_producer_substrate(config_json: &str) -> (u16, Arc<AppState>, tem
             .with_hotbar_listener(hotbar)
             .with_cors(CorsConfig::new(5173, None)),
     );
-    let serve_state = state.clone();
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
-        eo_http::serve(listener, serve_state).await.expect("serve");
-    });
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if get(port, "/api/health").await.0 == http::StatusCode::OK {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "substrate never came up"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    (port, state, dir)
+    (state, dir)
 }
 
 /// A settings.json with hotbar mode and slot "1" bound: the attribution
@@ -2075,10 +2008,10 @@ const SCAN_CAPTURE_PNG: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
 
     // ── start: 200 with the lifecycle acknowledgement (plain, no ETag) ──
-    let (status, headers, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (status, headers, body) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         !headers.contains_key(http::header::ETAG),
@@ -2094,12 +2027,12 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
     assert!(started["started_at"].as_str().is_some());
 
     // ── start again while active: 409 "Session already active" ──
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::CONFLICT);
     assert_eq!(body_json(&body)["detail"], "Session already active");
 
     // ── stop: 200 with the stop acknowledgement, same session id ──
-    let (status, headers, body) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    let (status, headers, body) = send_json(&state, "POST", "/api/tracking/stop", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     let stopped = body_json(&body);
@@ -2109,13 +2042,13 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
     assert_eq!(stopped["kill_count"], 0);
 
     // ── stop with no active session: 409 "No active session" ──
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/stop", "").await;
     assert_eq!(status, http::StatusCode::CONFLICT);
     assert_eq!(body_json(&body)["detail"], "No active session");
 
     // ── manual-mob-suggestions success: ETag-scoped 200 over the
     //    catalogue (mob mode -> no tag-mode gate) ──
-    let (status, headers, body) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox").await;
+    let (status, headers, body) = get(&state, "/api/tracking/manual-mob-suggestions?q=atrox").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         headers.contains_key(http::header::ETAG),
@@ -2133,35 +2066,39 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
     assert_eq!(suggestions[0]["maturity"], "Old");
 
     // ── the empty-q short-circuit: 200 [], still ETag-scoped ──
-    let (status, headers, body) = get(port, "/api/tracking/manual-mob-suggestions?q=").await;
+    let (status, headers, body) = get(&state, "/api/tracking/manual-mob-suggestions?q=").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(headers.contains_key(http::header::ETAG));
     assert_eq!(body, b"[]");
     // No `q` at all behaves the same.
-    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions").await;
+    let (status, _, body) = get(&state, "/api/tracking/manual-mob-suggestions").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body, b"[]");
 
     // ── the limit clamp: limit=99 clamps to 20 (here only 2 rows exist,
     //    so both surface); limit=0 clamps to 1 (one row) ──
     let (status, _, body) = get(
-        port,
+        &state,
         "/api/tracking/manual-mob-suggestions?q=atrox&limit=99",
     )
     .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body).as_array().unwrap().len(), 2);
-    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox&limit=0").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/tracking/manual-mob-suggestions?q=atrox&limit=0",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body).as_array().unwrap().len(), 1);
 
     // ── 422: an unparseable limit (the adapter's int_parsing envelope) ──
-    let (status, _, body) = get(port, "/api/tracking/manual-mob-suggestions?q=a&limit=abc").await;
+    let (status, _, body) = get(&state, "/api/tracking/manual-mob-suggestions?q=a&limit=abc").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing"]);
 
     // ── conditional GET: the suggestions 200 earns a 304 on its ETag ──
-    let (_, headers, _) = get(port, "/api/tracking/manual-mob-suggestions?q=atrox").await;
+    let (_, headers, _) = get(&state, "/api/tracking/manual-mob-suggestions?q=atrox").await;
     let etag = headers
         .get(http::header::ETAG)
         .unwrap()
@@ -2169,7 +2106,7 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
         .unwrap()
         .to_string();
     let (status, _, body) = request(
-        port,
+        &state,
         "GET",
         "/api/tracking/manual-mob-suggestions?q=atrox",
         &[("if-none-match", etag.as_str())],
@@ -2183,16 +2120,16 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
 async fn tracking_start_rejects_an_unready_attribution() {
     // No hotbar, no configured trifecta (the default-preset slots are
     // null): the attribution gate fails with the trifecta 400.
-    let (port, _state, _dir) = serve_producer_substrate("{}").await;
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (state, _dir) = serve_producer_substrate("{}").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(
         body_json(&body)["detail"],
         "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
     );
     // Hotbar mode with NO bound slot: the hotbar-specific 400.
-    let (port, _state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": true}"#).await;
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": true}"#).await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(
         body_json(&body)["detail"],
@@ -2204,7 +2141,7 @@ async fn tracking_start_rejects_an_unready_attribution() {
 async fn manual_mob_suggestions_tag_mode_409_precedes_the_empty_q_shortcut() {
     // Idle tag mode: the live config's `mob_tracking_mode == "tag"` gates
     // BEFORE the empty-q short-circuit, so even `q=` 409s (not []).
-    let (port, _state, _dir) =
+    let (state, _dir) =
         serve_producer_substrate(r#"{"mob_tracking_mode": "tag", "mob_tracking_tag": "Boss"}"#)
             .await;
     for path in [
@@ -2212,7 +2149,7 @@ async fn manual_mob_suggestions_tag_mode_409_precedes_the_empty_q_shortcut() {
         "/api/tracking/manual-mob-suggestions?q=",
         "/api/tracking/manual-mob-suggestions",
     ] {
-        let (status, headers, body) = get(port, path).await;
+        let (status, headers, body) = get(&state, path).await;
         assert_eq!(status, http::StatusCode::CONFLICT, "{path}");
         assert_eq!(
             body_json(&body)["detail"],
@@ -2233,12 +2170,12 @@ async fn producer_routes_answer_503_without_a_composed_tracker() {
     // proving the adapters require the live tracker. The production binary
     // publishes the router only once every service is composed, so this floor
     // is unreached on the normal startup path.
-    let (port, _state, _dir) = serve_substrate().await;
-    let (status, _, _) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (state, _dir) = serve_substrate().await;
+    let (status, _, _) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
-    let (status, _, _) = send_json(port, "POST", "/api/tracking/stop", "").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/tracking/stop", "").await;
     assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
-    let (status, _, _) = get(port, "/api/tracking/manual-mob-suggestions?q=a").await;
+    let (status, _, _) = get(&state, "/api/tracking/manual-mob-suggestions?q=a").await;
     assert_eq!(status, http::StatusCode::SERVICE_UNAVAILABLE);
 }
 
@@ -2254,11 +2191,11 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
     // handlers (over the composed ConfigService + skill tracker) and pins
     // their responses + the settings.json they persist; the dead proxy
     // (port 9) means any handler that fell back would 502 instead.
-    let (port, _state, dir) = serve_producer_substrate("{}").await;
+    let (state, dir) = serve_producer_substrate("{}").await;
 
     // overlay-position: plain 200 {"ok": true}, exact coordinates persisted.
     let (status, headers, body) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/settings/overlay-position",
         r#"{"x": 7, "y": 9}"#,
@@ -2273,7 +2210,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
 
     // An unparseable coordinate is the 422 int_parsing envelope.
     let (status, _, _) = send_json(
-        port,
+        &state,
         "PUT",
         "/api/settings/overlay-position",
         r#"{"x": "nope", "y": 0}"#,
@@ -2283,7 +2220,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
 
     // manual-mob-lock: a catalogue match locks; the selection persists.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/tracking/manual-mob-lock",
         r#"{"species": "Atrox", "maturity": "Old"}"#,
@@ -2300,7 +2237,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
 
     // A mob absent from the catalogue is the 400.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/tracking/manual-mob-lock",
         r#"{"species": "Notamob", "maturity": ""}"#,
@@ -2314,12 +2251,12 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
 
     // tag-lock outside tag mode is the 409.
     let (status, _, body) =
-        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
+        send_json(&state, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
     assert_eq!(status, http::StatusCode::CONFLICT);
     assert_eq!(body_json(&body)["detail"], "Tag mode is not enabled");
 
     // release-mob in idle manual mode returns the stored display and clears it.
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/release-mob", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body), json!({"released": "Old Atrox"}));
     let cfg = read_settings(dir.path());
@@ -2327,7 +2264,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
     assert_eq!(cfg["manual_mob_maturity"], "");
 
     // release-mob again with nothing stored: released is null.
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/release-mob", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body), json!({ "released": Value::Null }));
 
@@ -2335,7 +2272,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
     // not-found ValueError is the 400 (exercises the suppress-next handlers
     // and their skill-tracker dependency; idle, so no suppression fires).
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/claim",
         r#"{"species_name": "Notaspecies", "rank": 1, "skill_name": "Anatomy"}"#,
@@ -2346,7 +2283,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
     // nothing-to-unclaim ValueError is the 400 (exercises the route's
     // registration and error mapping).
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/unclaim",
         r#"{"species_name": "Notaspecies"}"#,
@@ -2358,7 +2295,7 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
         "No claimed rank to unclaim for 'Notaspecies'"
     );
     let (status, _, _) = send_json(
-        port,
+        &state,
         "POST",
         "/api/codex/meta/claim",
         r#"{"attribute_name": "Notanattribute"}"#,
@@ -2371,10 +2308,10 @@ async fn config_write_routes_serve_natively_idle_mob_mode() {
 async fn config_write_routes_serve_natively_idle_tag_mode() {
     // Tag-mode config, no active session: the tag-lock success/empty legs,
     // the manual-mob-lock tag-mode 409, and the idle-tag release branch.
-    let (port, _state, dir) = serve_producer_substrate(r#"{"mob_tracking_mode": "tag"}"#).await;
+    let (state, dir) = serve_producer_substrate(r#"{"mob_tracking_mode": "tag"}"#).await;
 
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/tracking/tag-lock",
         r#"{"tag": "Daily Hunt"}"#,
@@ -2385,14 +2322,19 @@ async fn config_write_routes_serve_natively_idle_tag_mode() {
     assert_eq!(read_settings(dir.path())["mob_tracking_tag"], "Daily Hunt");
 
     // An all-whitespace tag is the 400.
-    let (status, _, body) =
-        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "   "}"#).await;
+    let (status, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/tracking/tag-lock",
+        r#"{"tag": "   "}"#,
+    )
+    .await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body_json(&body)["detail"], "Tag cannot be empty");
 
     // manual-mob-lock is disabled in tag mode: the 409.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/tracking/manual-mob-lock",
         r#"{"species": "Atrox", "maturity": ""}"#,
@@ -2405,7 +2347,7 @@ async fn config_write_routes_serve_natively_idle_tag_mode() {
     );
 
     // release-mob in idle tag mode returns the trimmed tag and clears it.
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/release-mob", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body), json!({"released": "Daily Hunt"}));
     assert_eq!(read_settings(dir.path())["mob_tracking_tag"], "");
@@ -2416,13 +2358,13 @@ async fn config_write_routes_serve_natively_active_session() {
     // An active mob-mode session: the tracker in-memory calls fire, the
     // tag-lock active-session 409 leg, and release-mob's active branch
     // (clears the manual selection, not the tag).
-    let (port, _state, dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
-    let (status, _, _) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (state, dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (status, _, _) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::OK);
 
     // manual-mob-lock while tracking: 200, sets the live tracker + config.
     let (status, _, body) = send_json(
-        port,
+        &state,
         "POST",
         "/api/tracking/manual-mob-lock",
         r#"{"species": "Atrox", "maturity": "Young"}"#,
@@ -2434,7 +2376,7 @@ async fn config_write_routes_serve_natively_active_session() {
 
     // tag-lock against a mob-mode active session: the session-snapshot 409.
     let (status, _, body) =
-        send_json(port, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
+        send_json(&state, "POST", "/api/tracking/tag-lock", r#"{"tag": "X"}"#).await;
     assert_eq!(status, http::StatusCode::CONFLICT);
     assert_eq!(
         body_json(&body)["detail"],
@@ -2443,7 +2385,7 @@ async fn config_write_routes_serve_natively_active_session() {
 
     // release-mob in an active non-tag session clears the MANUAL selection
     // (the active-non-tag branch), not the tag.
-    let (status, _, _) = send_json(port, "POST", "/api/tracking/release-mob", "").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/tracking/release-mob", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         read_settings(dir.path())["manual_mob_species"],
@@ -2458,11 +2400,11 @@ async fn config_write_routes_serve_natively_active_session() {
 /// riding the plain-200 body exactly as the reference returns the dict.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scan_skills_state_machine_serves_natively() {
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
 
     // status: 200 + the conditional-GET contract, idle, full field set in the
     // ScanManualStatus declaration order.
-    let (status, headers, body) = get(port, "/api/scan/skills/status").await;
+    let (status, headers, body) = get(&state, "/api/scan/skills/status").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(headers.contains_key(http::header::ETAG));
     assert_eq!(
@@ -2507,7 +2449,7 @@ async fn scan_skills_state_machine_serves_natively() {
         .unwrap()
         .to_string();
     let (status, _, body) = request(
-        port,
+        &state,
         "GET",
         "/api/scan/skills/status",
         &[("if-none-match", &etag)],
@@ -2517,7 +2459,7 @@ async fn scan_skills_state_machine_serves_natively() {
     assert!(body.is_empty());
 
     // capture before start: a plain 200 carrying the refusal (no ETag: POST).
-    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    let (status, headers, body) = send_json(&state, "POST", "/api/scan/skills/capture", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     assert_eq!(
@@ -2527,7 +2469,7 @@ async fn scan_skills_state_machine_serves_natively() {
 
     // start with 2 pages: capturing.
     let (status, headers, body) =
-        send_json(port, "POST", "/api/scan/skills/start?page_count=2", "").await;
+        send_json(&state, "POST", "/api/scan/skills/start?page_count=2", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     let started = body_json(&body);
@@ -2536,7 +2478,7 @@ async fn scan_skills_state_machine_serves_natively() {
 
     // capture twice: page/captured present, AFTER the inherited status fields
     // (the ScanCaptureResult subclass order).
-    let (_, _, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    let (_, _, body) = send_json(&state, "POST", "/api/scan/skills/capture", "").await;
     let first = body_json(&body);
     assert_eq!(first["page"], 1);
     assert_eq!(first["captured"], true);
@@ -2548,23 +2490,23 @@ async fn scan_skills_state_machine_serves_natively() {
         .collect();
     assert_eq!(keys[0], "active", "the inherited status fields lead");
     assert_eq!(&keys[keys.len() - 2..], ["page", "captured"]);
-    let (_, _, body) = send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    let (_, _, body) = send_json(&state, "POST", "/api/scan/skills/capture", "").await;
     assert_eq!(body_json(&body)["captured_pages"], 2);
 
     // pending before processing: the reference's 404 (a non-2xx, so no ETag).
-    let (status, headers, body) = get(port, "/api/scan/skills/pending").await;
+    let (status, headers, body) = get(&state, "/api/scan/skills/pending").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert!(!headers.contains_key(http::header::ETAG));
     assert_eq!(body_json(&body)["detail"], "No pending skill scan result");
 
     // process: kicks extraction off on the worker thread.
-    let (status, _, _) = send_json(port, "POST", "/api/scan/skills/process", "").await;
+    let (status, _, _) = send_json(&state, "POST", "/api/scan/skills/process", "").await;
     assert_eq!(status, http::StatusCode::OK);
 
     // The worker settles the held result; poll the status to review.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let (_, _, body) = get(port, "/api/scan/skills/status").await;
+        let (_, _, body) = get(&state, "/api/scan/skills/status").await;
         if body_json(&body)["phase"] == "awaiting_review" {
             break;
         }
@@ -2577,7 +2519,7 @@ async fn scan_skills_state_machine_serves_natively() {
 
     // pending: 200 + ETag, the held result as a {name: level} object in
     // first-seen order.
-    let (status, headers, body) = get(port, "/api/scan/skills/pending").await;
+    let (status, headers, body) = get(&state, "/api/scan/skills/pending").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(headers.contains_key(http::header::ETAG));
     let pending = body_json(&body);
@@ -2585,7 +2527,7 @@ async fn scan_skills_state_machine_serves_natively() {
     assert_eq!(pending["skills"]["Rifle"], 100.5);
 
     // accept: 200 with the persisted count, fields in ScanAcceptResult order.
-    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/accept", "").await;
+    let (status, headers, body) = send_json(&state, "POST", "/api/scan/skills/accept", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     let accepted = body_json(&body);
@@ -2600,7 +2542,7 @@ async fn scan_skills_state_machine_serves_natively() {
     assert_eq!(keys, ["ok", "skills_persisted"]);
 
     // The accepted scan settled the resting status: idle, two skills.
-    let (_, _, body) = get(port, "/api/scan/skills/status").await;
+    let (_, _, body) = get(&state, "/api/scan/skills/status").await;
     let settled = body_json(&body);
     assert_eq!(settled["phase"], "idle");
     assert_eq!(settled["skills_count"], 2);
@@ -2611,12 +2553,12 @@ async fn scan_skills_state_machine_serves_natively() {
 /// scope), 404s a missing page, and 422s an unparseable one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scan_capture_png_serves_with_etag_and_refuses() {
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
-    send_json(port, "POST", "/api/scan/skills/start?page_count=2", "").await;
-    send_json(port, "POST", "/api/scan/skills/capture", "").await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    send_json(&state, "POST", "/api/scan/skills/start?page_count=2", "").await;
+    send_json(&state, "POST", "/api/scan/skills/capture", "").await;
 
     // capture/1: 200 image/png, the strong ETag of the bytes, the bytes.
-    let (status, headers, body) = get(port, "/api/scan/skills/capture/1").await;
+    let (status, headers, body) = get(&state, "/api/scan/skills/capture/1").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         headers.get(http::header::CONTENT_TYPE).unwrap(),
@@ -2640,7 +2582,7 @@ async fn scan_capture_png_serves_with_etag_and_refuses() {
 
     // The matching validator: 304, empty body.
     let (status, _, body) = request(
-        port,
+        &state,
         "GET",
         "/api/scan/skills/capture/1",
         &[("if-none-match", &etag)],
@@ -2650,12 +2592,12 @@ async fn scan_capture_png_serves_with_etag_and_refuses() {
     assert!(body.is_empty());
 
     // A page with no capture: the reference's 404.
-    let (status, _, body) = get(port, "/api/scan/skills/capture/99").await;
+    let (status, _, body) = get(&state, "/api/scan/skills/capture/99").await;
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(body_json(&body)["detail"], "Capture not available");
 
     // An unparseable page: the framework's 422 int_parsing on the path param.
-    let (status, _, body) = get(port, "/api/scan/skills/capture/abc").await;
+    let (status, _, body) = get(&state, "/api/scan/skills/capture/abc").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(&body)["detail"][0]["type"], "int_parsing");
     assert_eq!(
@@ -2669,9 +2611,9 @@ async fn scan_capture_png_serves_with_etag_and_refuses() {
 /// (POST, outside the ETag scope) carrying the declared fields in model order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repair_scan_serves_and_gates_on_the_config_flag() {
-    let (port, _state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": true}"#).await;
+    let (state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": true}"#).await;
     let (status, headers, body) =
-        send_json(port, "POST", "/api/tracking/session/abc/repair-scan", "").await;
+        send_json(&state, "POST", "/api/tracking/session/abc/repair-scan", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         !headers.contains_key(http::header::ETAG),
@@ -2693,9 +2635,9 @@ async fn repair_scan_serves_and_gates_on_the_config_flag() {
         "success carries the declared fields only, no null error key"
     );
 
-    let (port, _state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": false}"#).await;
+    let (state, _dir) = serve_producer_substrate(r#"{"repair_ocr_enabled": false}"#).await;
     let (status, _, body) =
-        send_json(port, "POST", "/api/tracking/session/abc/repair-scan", "").await;
+        send_json(&state, "POST", "/api/tracking/session/abc/repair-scan", "").await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body_json(&body)["detail"], "Repair OCR is disabled");
 }
@@ -2705,11 +2647,16 @@ async fn repair_scan_serves_and_gates_on_the_config_flag() {
 /// uninterpretable value, missing when absent).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spacebar_capture_toggle_serves_and_validates() {
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
 
     // enable: a plain 200 (POST), {ok, enabled} in model order.
-    let (status, headers, body) =
-        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=true", "").await;
+    let (status, headers, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=true",
+        "",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     let enabled = body_json(&body);
@@ -2724,13 +2671,23 @@ async fn spacebar_capture_toggle_serves_and_validates() {
     assert_eq!(keys, ["ok", "enabled"]);
 
     // disable.
-    let (_, _, body) =
-        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=false", "").await;
+    let (_, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=false",
+        "",
+    )
+    .await;
     assert_eq!(body_json(&body)["enabled"], false);
 
     // an uninterpretable value: 422 bool_parsing on the query param.
-    let (status, _, body) =
-        send_json(port, "POST", "/api/scan/spacebar-capture?enabled=maybe", "").await;
+    let (status, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=maybe",
+        "",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(&body)["detail"][0]["type"], "bool_parsing");
     assert_eq!(
@@ -2739,7 +2696,7 @@ async fn spacebar_capture_toggle_serves_and_validates() {
     );
 
     // absent: the framework's 422 missing.
-    let (status, _, body) = send_json(port, "POST", "/api/scan/spacebar-capture", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/scan/spacebar-capture", "").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(&body)["detail"][0]["type"], "missing");
 }
@@ -2750,8 +2707,8 @@ async fn spacebar_capture_toggle_serves_and_validates() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tracking_snapshot_serves_idle_and_active() {
     // ── idle, trifecta-mode (the default preset exists, nothing bound) ──
-    let (port, _state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": false}"#).await;
-    let (status, headers, body) = get(port, "/api/tracking/snapshot").await;
+    let (state, _dir) = serve_producer_substrate(r#"{"hotbar_hooks_enabled": false}"#).await;
+    let (status, headers, body) = get(&state, "/api/tracking/snapshot").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(
         headers.contains_key(http::header::ETAG),
@@ -2808,15 +2765,15 @@ async fn tracking_snapshot_serves_idle_and_active() {
     );
 
     // ── active, hotbar-mode (a started session) ──
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
-    let (status, _, body) = send_json(port, "POST", "/api/tracking/start", "").await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (status, _, body) = send_json(&state, "POST", "/api/tracking/start", "").await;
     assert_eq!(status, http::StatusCode::OK);
     let session_id = body_json(&body)["session_id"]
         .as_str()
         .expect("session id")
         .to_string();
 
-    let (status, headers, body) = get(port, "/api/tracking/snapshot").await;
+    let (status, headers, body) = get(&state, "/api/tracking/snapshot").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(headers.contains_key(http::header::ETAG));
     let active = body_json(&body);
@@ -2883,22 +2840,22 @@ async fn tracking_snapshot_serves_idle_and_active() {
 /// the no-active-scan refusal, reject the no-pending refusal. Plain 200s.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scan_skills_cancel_undo_reject_respond() {
-    let (port, _state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
+    let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
 
-    let (status, headers, body) = send_json(port, "POST", "/api/scan/skills/cancel", "").await;
+    let (status, headers, body) = send_json(&state, "POST", "/api/scan/skills/cancel", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     assert_eq!(body_json(&body)["phase"], "idle");
     assert_eq!(body_json(&body)["captured_pages"], 0);
 
-    let (status, _, body) = send_json(port, "POST", "/api/scan/skills/undo", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/scan/skills/undo", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         body_json(&body)["error"],
         "No active scan: call start first"
     );
 
-    let (status, _, body) = send_json(port, "POST", "/api/scan/skills/reject", "").await;
+    let (status, _, body) = send_json(&state, "POST", "/api/scan/skills/reject", "").await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body)["error"], "No pending result to reject");
 }

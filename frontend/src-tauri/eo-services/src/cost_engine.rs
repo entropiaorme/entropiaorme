@@ -1,4 +1,4 @@
-//! Cost formula engine: Rust port of `backend/services/cost_engine.py`.
+//! Cost formula engine: ported from the original Python implementation.
 //!
 //! Per-use cost (decay + ammo + markups) and reference damage / heal ranges
 //! from equipment-catalogue payloads, at maxed skill. Pure arithmetic, no
@@ -455,6 +455,44 @@ mod tests {
                 .collect();
             assert_eq!(components, ["Weapon decay"], "scope {falsy}");
         }
+    }
+
+    #[test]
+    fn truthy_scope_adds_a_marked_up_scope_decay_line_after_amp_before_ammo() {
+        // A real scope with positive decay emits a "Scope decay" line at
+        // effectiveCostPec = round4(scope_decay * scope_markup), positioned
+        // after "Amp decay" and before the ammo lines. The falsy-scope case
+        // (no line) is pinned separately; this freezes the positive branch,
+        // its ordering, and the scope-markup application.
+        let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 100}});
+        let amp = json!({"economy": {"decay": 0.02, "ammo_burn": 0}});
+        let scope = json!({"economy": {"decay": 0.04}});
+        let result = cost_per_shot(
+            &weapon,
+            Some(&amp),
+            Some(&scope),
+            None,
+            0,
+            1.0,
+            1.0,
+            1.5,
+            1.0,
+        );
+        let breakdown = result["costBreakdown"].as_array().unwrap();
+        let components: Vec<&str> = breakdown
+            .iter()
+            .map(|line| line["component"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            components,
+            ["Weapon decay", "Amp decay", "Scope decay", "Ammo (weapon)"]
+        );
+        // scope decay 0.04 @ 1.5 markup = 0.06.
+        assert_eq!(breakdown[2]["costPec"], json!(0.04));
+        assert_eq!(breakdown[2]["markupMultiplier"], json!(1.5));
+        assert_eq!(breakdown[2]["effectiveCostPec"], json!(0.06));
+        // 0.05 + 0.02 + 0.06 + 1.0.
+        assert_eq!(result["totalCostPerUse"], json!(1.13));
     }
 
     #[test]

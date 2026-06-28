@@ -39,23 +39,20 @@ jobs:
           # Full history so the base..head range resolves to the PR's commits.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.12'
-      # Pure stdlib + git, so no dependency install is needed. Emits code=false
+      # Pure git + POSIX shell, so no language runtime is needed. Emits code=false
       # only when every changed path is Markdown. On the merge queue the range is
       # the integrated commit's base..head (the queued change merged onto main),
       # so a documentation-only change skips the expensive jobs in the queue too.
       #
       # The gating LOGIC runs from the BASE commit's copy of the script, not the
-      # PR head's, so a fork pull request cannot rewrite classify_change_scope.py
-      # to emit code=false and skip the test gates. The trusted base script still
+      # PR head's, so a fork pull request cannot rewrite the classifier to emit
+      # code=false and skip the test gates. The trusted base script still
       # classifies the head's actual diff (the changed-file list is data the fork
       # cannot forge); only the docs-vs-code rules come from the base. The script
-      # is pure stdlib + git and accepts --repo-root, so it runs standalone over
-      # the checked-out head. If it is absent on the base (the commit that first
-      # introduced it, or any other non-gated event), the step falls back to
-      # code=true so the suite runs.
+      # reads the range from the event env and accepts --repo-root, so it runs
+      # standalone over the checked-out head. If it is absent on the base (the
+      # commit that first introduced it, or any other non-gated event), the step
+      # falls back to code=true so the suite runs.
       - name: Classify the change scope
         id: classify
         env:
@@ -70,11 +67,11 @@ jobs:
             merge_group) base_sha="$MERGE_GROUP_BASE_SHA" ;;
             *) base_sha="" ;;
           esac
-          script="backend/scripts/classify_change_scope.py"
-          base_script="$RUNNER_TEMP/classify_change_scope.base.py"
+          script=".github/scripts/classify-change-scope.sh"
+          base_script="$RUNNER_TEMP/classify-change-scope.base.sh"
           if [ -n "$base_sha" ] && git show "$base_sha:$script" > "$base_script" 2>/dev/null; then
             echo "Classifying from the base commit's script ($base_sha)."
-            python "$base_script" --repo-root "$GITHUB_WORKSPACE"
+            bash "$base_script" --repo-root "$GITHUB_WORKSPACE"
           else
             echo "Classifier absent on the base (or no gated range); code=true (run the jobs)."
             echo "code=true" >> "$GITHUB_OUTPUT"
@@ -97,26 +94,33 @@ jobs:
           # Full history so the base..head range resolves to the PR's commits.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
         with:
-          python-version: '3.12'
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: frontend/src-tauri
+          # Restrict cache writes to the trusted main timeline; PR and merge-queue
+          # runs restore read-only so a branch cannot seed or poison the cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Fail when a commit modifies a committed golden (a scenario fingerprint /
-      # DB-state snapshot, an HTTP-response or OpenAPI snapshot, a consistency
-      # golden, or the coverage matrix) without BOTH the documented
-      # 'test: regenerate goldens' commit-message marker AND a recorded
-      # adversarial ratification verdict. The marker proves the regeneration was
-      # conscious; the verdict supplies the correctness sign-off the marker
-      # cannot. The verdict is a report committed to
-      # backend/testing/ratifications/<slug>.md in this same PR range, carrying
-      # an 'ORACLE-RATIFICATION ... VERDICT: ratification-sound' block that names
-      # the changed sets, so a recorded adversarial verdict stands behind the
-      # diff and a stale verdict from a prior regeneration cannot bless a
-      # fresh golden change. Together this stops a regression being silently
+      # DB-state snapshot, an HTTP-response or OpenAPI snapshot, or a consistency
+      # golden) without BOTH the documented 'test: regenerate goldens'
+      # commit-message marker AND a recorded adversarial ratification verdict. The
+      # marker proves the regeneration was conscious; the verdict supplies the
+      # correctness sign-off the marker cannot. The verdict is a report committed
+      # to frontend/src-tauri/ratifications/<slug>.md in this same PR range,
+      # carrying an 'ORACLE-RATIFICATION ... VERDICT: ratification-sound' block
+      # that names the changed sets, so a recorded adversarial verdict stands
+      # behind the diff and a stale verdict from a prior regeneration cannot bless
+      # a fresh golden change. Together this stops a regression being silently
       # ratified by regenerating the expected output. CI can only presence-check
       # and parse the verdict, not prove the review happened; that residual is
       # closed by the report being reviewer-visible and by the human merge to
-      # main. Pure stdlib + git, so no dependency install is needed.
+      # main. The guard is a subcommand of the in-tree cargo xtask, so it
+      # fails closed on any range it cannot resolve.
       - name: Guard golden ratification
+        working-directory: frontend/src-tauri
         # On a pull request the range is the PR's base..head; on the merge queue
         # it is the integrated commit's base..head (the queued change merged onto
         # main), which carries the same commits, golden edits, and ratification
@@ -124,7 +128,7 @@ jobs:
         env:
           RANGE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
           RANGE_HEAD: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
-        run: python -m backend.scripts.check_golden_ratification --range "$RANGE_BASE..$RANGE_HEAD"
+        run: cargo run -q -p xtask -- ratify-check --range "$RANGE_BASE..$RANGE_HEAD"
 
   authoring-lint:
     name: Authoring lint (em dash + UK spelling)
@@ -143,28 +147,36 @@ jobs:
           # Full history so the base..head range resolves to the PR's commits.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
         with:
-          python-version: '3.12'
+          toolchain: 1.96.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: frontend/src-tauri
+          # Restrict cache writes to the trusted main timeline; PR and merge-queue
+          # runs restore read-only so a branch cannot seed or poison the cache.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Flag em dashes (U+2014) in any added line, and US spellings in added
       # prose lines (docs + comments), on the lines this PR adds only. Pre-existing
       # content is out of scope by construction, so the gate binds new authoring
-      # without forcing a drive-by sweep of the old. Pure stdlib + git, so no
-      # dependency install is needed.
+      # without forcing a drive-by sweep of the old. A subcommand of the in-tree
+      # cargo xtask.
       - name: Lint newly authored lines
+        working-directory: frontend/src-tauri
         # PR base..head on a pull request; the integrated commit's base..head on
         # the merge queue (the same added lines, merged onto main).
         env:
           RANGE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
           RANGE_HEAD: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || github.event.pull_request.head.sha }}
-        run: python -m backend.scripts.check_authoring_lint --range "$RANGE_BASE..$RANGE_HEAD"
+        run: cargo run -q -p xtask -- authoring-lint --range "$RANGE_BASE..$RANGE_HEAD"
 
       - name: Check version-stamp parity
+        working-directory: frontend/src-tauri
         # Whole-tree, not diff-scoped: the three version stamps (frontend
         # package.json, the Cargo workspace package, tauri.conf.json) must agree.
         # authoring-lint is a required input of the ci-gate aggregator, so this
         # binds the parity check at PR and merge-queue time, not just locally.
-        run: python -m backend.scripts.check_version_stamps
+        run: cargo run -q -p xtask -- version-stamps
 
   frontend:
     name: Frontend (build + check + test)

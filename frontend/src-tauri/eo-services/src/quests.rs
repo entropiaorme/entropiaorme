@@ -1,4 +1,4 @@
-//! Quest service, ported from `backend/services/quest_service.py`:
+//! Quest service, ported from the original Python implementation:
 //! the quest and playlist CRUD surface with its shared helper layer
 //! (row shaping, cooldown derivation, reward-markup normalisation,
 //! mob and playlist-item management), plus the lifecycle actions
@@ -108,9 +108,8 @@ pub struct QuestService {
     /// The active tracking session, fed by the bus handlers.
     current_session_id: Mutex<Option<String>>,
     /// The identifier source for ledger rows and session-less
-    /// completion keys (random by default; injected by the tests and
-    /// the cross-language differential so both sides stamp the same
-    /// identifiers).
+    /// completion keys (random by default; injected by the tests so the
+    /// committed goldens stamp the same identifiers).
     id_source: Mutex<Arc<dyn Fn() -> String + Send + Sync>>,
     /// The runtime the bus handlers bridge their database work onto,
     /// set when the service subscribes.
@@ -2025,7 +2024,7 @@ fn python_str(value: &Value) -> String {
 }
 
 // Expected values in these tests are the original implementation's
-// outputs, computed by running `backend/services/quest_service.py`
+// outputs, computed by running the original Python implementation
 // over byte-identical payloads and database seeds (created_at and
 // updated_at pinned by direct UPDATE on both sides, since the schema
 // stamps them from the wall clock).

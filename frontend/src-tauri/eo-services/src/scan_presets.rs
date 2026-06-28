@@ -1,5 +1,5 @@
 //! Capture regions for skill / profession scans, ported from
-//! `backend/services/scan_presets.py`: the pure geometry core.
+//! the original Python implementation: the pure geometry core.
 //!
 //! The user docks the relevant in-game panel in the bottom-right
 //! corner at default UI scale; the panel pixel size is fixed by the
@@ -10,13 +10,14 @@
 //! window rect as an argument so the maths is host-independent.
 //!
 //! Panel-relative grid geometry (row band + column splits) loads from
-//! `backend/data/panel_geometry.json` when present, falling back to
+//! the bundled `panel_geometry.json` when present, falling back to
 //! panel-anchor-only constants otherwise; an unreadable file falls
 //! back (the backend also logs a warning; this crate has no logging
 //! surface yet). The file is an optional calibration artefact, unlike
 //! the snapshot catalogue whose absence is a hard fault, and a
 //! wrong-shape payload also falls back where the backend would crash
-//! at import: the divergence register covers the strict typed reads.
+//! at import: this is a deliberate divergence from the original's strict
+//! typed reads.
 
 use std::path::Path;
 

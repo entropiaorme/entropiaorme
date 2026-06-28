@@ -1,5 +1,5 @@
-//! Screen-region capture for OCR: the mss-based `backend/ocr/capturer.py`
-//! equivalent. A region (`x`, `y`, `w`, `h`) goes in; PNG bytes (the
+//! Screen-region capture for OCR: the equivalent of the original
+//! Python implementation's mss-based capturer. A region (`x`, `y`, `w`, `h`) goes in; PNG bytes (the
 //! skill-scan path, RGB-encoded to match `mss.tools.to_png(shot.rgb)`) or
 //! a [`BgrImage`] (the repair-OCR path) comes out, via a GDI `BitBlt` of
 //! the screen device context.

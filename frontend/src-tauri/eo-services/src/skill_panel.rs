@@ -1,6 +1,6 @@
 //! Skill-panel reading, ported from the parsing half of
-//! `backend/services/skill_panel_parse.py` and the orchestration in
-//! `backend/services/local_ocr.py`: the calibrated cell-slicing grid,
+//! the original Python implementation and the orchestration in
+//! its OCR chain: the calibrated cell-slicing grid,
 //! the integer level parse, the bar fill-ratio estimate, and the
 //! fuzzy name resolution against the canonical vocabulary.
 //!

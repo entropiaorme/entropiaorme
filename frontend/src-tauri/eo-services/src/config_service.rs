@@ -1,4 +1,4 @@
-//! Configuration service, ported from `backend/services/config_service.py`:
+//! Configuration service, ported from the original Python implementation:
 //! typed settings with atomic persistence.
 //!
 //! Settings live as JSON in `data/settings.json`. Saves are atomic
@@ -454,7 +454,7 @@ fn normalize_trifecta_presets(
 /// Python `str(value)` over the scalar JSON shapes a stored id or name
 /// can take (strings pass through; booleans and numbers render as
 /// Python renders them). Container-typed ids and names are skipped
-/// rather than repr-rendered; see the divergence register.
+/// rather than repr-rendered, a deliberate divergence from the original.
 fn stringify(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),

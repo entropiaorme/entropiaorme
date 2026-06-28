@@ -322,17 +322,17 @@ fn destroy_runtime_window_icons(app: &tauri::AppHandle) {
     }
 }
 
-/// The nominal public loopback authority the inbound Host allowlist is
-/// derived from. The frontend reaches the backend over the in-process IPC
-/// command and sends no Host header, so this only bites a request presenting
-/// an explicit Host (which the IPC transport never does); 8421 unless the dev
-/// environment overrides it.
-fn public_backend_port() -> u16 {
-    std::env::var("ENTROPIAORME_BACKEND_PORT")
-        .ok()
-        .and_then(|raw| raw.parse().ok())
-        .unwrap_or(8421)
-}
+/// The nominal loopback authority the inbound Host allowlist is derived from.
+/// The frontend reaches the backend over the in-process IPC command and sends
+/// no Host header, so the allowlist only bites a request presenting an explicit
+/// Host (which the IPC transport never does); a fixed value therefore suffices.
+const IN_PROCESS_BACKEND_PORT: u16 = 8421;
+
+/// The nominal frontend origin the CORS allowlist is built for. Under in-process
+/// dispatch the webview's own origin (`tauri://localhost`) is always allow-listed
+/// regardless of this value (see `eo_http::cors::CorsConfig::new`), so a fixed
+/// value suffices; it is retained only so the guard's behaviour is unchanged.
+const NOMINAL_FRONTEND_PORT: u16 = 5173;
 
 /// Compose the native backend substrate and publish it to the IPC command.
 /// The single pure-Rust binary serves every route natively in-process: there
@@ -349,10 +349,12 @@ fn public_backend_port() -> u16 {
 fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::PathBuf>) {
     tauri::async_runtime::spawn(async move {
         let state = std::sync::Arc::new(
-            eo_http::AppState::new(public_backend_port())
+            eo_http::AppState::new(IN_PROCESS_BACKEND_PORT)
                 // Answer the browser surface (preflights, origin rules,
-                // response decoration) from the same environment inputs.
-                .with_cors(eo_http::cors::CorsConfig::from_env())
+                // response decoration). The in-process transport supplies the
+                // webview's own always-allow-listed origin, so the fixed
+                // allowlist is unchanged in behaviour.
+                .with_cors(eo_http::cors::CorsConfig::new(NOMINAL_FRONTEND_PORT, None))
                 // The data dir powers the developer-mode-gated dev-tools routes
                 // (the developer-mode gate and the crash-reporting toggle).
                 .with_data_dir(composition::data_dir())

@@ -5,8 +5,8 @@ import { defineConfig } from 'vite';
 // Read a port from env, validate range, fall back to a default when unset.
 // Fails fast at config time with a descriptive error so an invalid value
 // surfaces during `vite` startup rather than producing NaN binds or
-// malformed URLs in the resulting bundle. Mirrors backend/main.py's
-// _read_port shape so both halves of the chain enforce the same contract.
+// malformed URLs in the resulting bundle. Mirrors the original Python
+// implementation's _read_port shape so both halves of the chain enforce the same contract.
 function readPort(name: string, defaultValue: number): number {
 	const raw = (process.env[name] ?? String(defaultValue)).trim();
 	const port = Number(raw);

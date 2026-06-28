@@ -1,0 +1,40 @@
+name: consistency_tracking_hunt_midpoint
+flavour: scripted
+description: >
+  Two-segment hunt scenario for the snapshot / event-stream
+  consistency property. The pre-midpoint segment closes one kill plus
+  a skill gain so the T0 snapshot carries a meaningfully-populated
+  tracking projection; the post-midpoint segment continues the same
+  session with another kill, more shots, and a critical so the bus-
+  driven fields (kill_count, shots, damage, returns, pes) all advance
+  between T0 and T1. The property under test: hydrate from T0 + fold
+  the post-midpoint events == fresh T1 snapshot.
+surfaces:
+  - tracking-hydration-consistency
+  - tracking-snapshot-event-stream-equivalence
+segments:
+  pre: chat_replay.log
+  post: chat_replay_after.log
+events_pre: 4
+events_post: 5
+expected_kills_pre: 1
+expected_kills_post: 2
+expected_total_loot_ped: 12.50
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  DSL-authored via build.py. The two segments share the same session
+  (started before pre-segment, stopped after post-segment by the test
+  fixture). The pre-segment ticks at 10:00:00-10:00:02 and closes
+  with one loot drop; the post-segment ticks at 10:00:10-10:00:14
+  with combat, a critical, a skill gain, and one final loot drop.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus replay test). The
+# start instant is chosen away from the scenario's chat-log instants so a
+# plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

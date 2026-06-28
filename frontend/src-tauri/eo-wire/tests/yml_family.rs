@@ -1,13 +1,11 @@
-//! Rust leg of the `.yml`-family inheritance.
+//! The frozen `.yml`-family inheritance.
 //!
-//! The three out-of-`expected/` pytest-regressions goldens (the hotbar and
-//! spacebar listener bus-stream pins and the quest-automation pin) are bridged
-//! into the Rust runner as canonical-JSON mirrors under
-//! `backend/testing/equivalence/yml_family/`. This asserts the native
-//! normaliser + serialiser reproduce each pinned projection byte-for-byte, so a
-//! Rust listener port inherits the `.yml` pins mechanically. Hermetic: it reads
-//! the committed mirrors only (the Python leg proves the mirrors faithfully
-//! equal their `.yml` pins).
+//! The three listener bus-stream pins (hotbar and spacebar) and the
+//! quest-automation pin are banked as canonical-JSON mirrors under
+//! `eo-wire/tests/fixtures/yml_family/`. This asserts the native normaliser +
+//! serialiser reproduce each pinned projection byte-for-byte, so a listener
+//! change is caught against the frozen golden. Hermetic: it reads the committed
+//! mirrors only.
 
 use std::path::PathBuf;
 
@@ -21,8 +19,7 @@ const MIRRORS: [&str; 3] = [
 ];
 
 fn mirror_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../backend/testing/equivalence/yml_family")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/yml_family")
 }
 
 #[test]

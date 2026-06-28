@@ -1,6 +1,6 @@
 //! Frontend-facing domain events: the typed wire contract.
 //!
-//! Mirrors `backend/core/domain_events.py` exactly. The wire is closed in
+//! Mirrors the original Python implementation exactly. The wire is closed in
 //! both directions (unknown keys are rejected, mirroring the Python
 //! models' forbidden extras), payload keys are camelCase, `occurred_at`
 //! is a required ISO-8601 UTC string, and serialisation emits fields in

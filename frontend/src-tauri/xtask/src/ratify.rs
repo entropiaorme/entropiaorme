@@ -221,7 +221,11 @@ fn range_tip(commit_range: &str) -> String {
 
 fn changed_paths(repo_root: &Path, commit_range: &str) -> Result<Vec<String>, String> {
     let out = git::run(&["diff", "--name-only", commit_range], repo_root)?;
-    Ok(out.lines().filter(|l| !l.trim().is_empty()).map(|l| l.to_string()).collect())
+    Ok(out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect())
 }
 
 fn commit_messages(repo_root: &Path, commit_range: &str) -> Result<Vec<String>, String> {
@@ -320,7 +324,11 @@ impl Evaluation {
 
 fn evaluate(repo_root: &Path, commit_range: &str) -> Result<Evaluation, String> {
     let paths = changed_paths(repo_root, commit_range)?;
-    let mut goldens: Vec<String> = paths.iter().filter(|p| is_golden_path(p)).cloned().collect();
+    let mut goldens: Vec<String> = paths
+        .iter()
+        .filter(|p| is_golden_path(p))
+        .cloned()
+        .collect();
     goldens.sort();
     let messages = commit_messages(repo_root, commit_range)?;
     let has_marker = messages.iter().any(|m| marker_re().is_match(m));
@@ -507,7 +515,10 @@ VERDICT: ratification-sound\n\
         let v = parse_ratification_artifact("frontend/src-tauri/ratifications/x.md", REAL_REPORT)
             .expect("verdict parsed");
         assert!(v.is_sound());
-        assert_eq!(v.goldens, vec!["frontend/src-tauri/contracts/openapi.snapshot.json"]);
+        assert_eq!(
+            v.goldens,
+            vec!["frontend/src-tauri/contracts/openapi.snapshot.json"]
+        );
         assert_eq!(v.range.as_deref(), Some("c84cac6..HEAD"));
     }
 
@@ -535,26 +546,46 @@ VERDICT: ratification-sound | regression-suspected | needs-user-judgement\n```";
 
     #[test]
     fn golden_paths_classified() {
-        assert!(is_golden_path("frontend/src-tauri/contracts/openapi.snapshot.json"));
-        assert!(is_golden_path("frontend/src-tauri/contracts/event_schemas.snapshot.json"));
+        assert!(is_golden_path(
+            "frontend/src-tauri/contracts/openapi.snapshot.json"
+        ));
+        assert!(is_golden_path(
+            "frontend/src-tauri/contracts/event_schemas.snapshot.json"
+        ));
         assert!(is_golden_path(
             "frontend/src-tauri/fixtures/corpus/scripted/basic_hunt_10_events/expected/fingerprint.jsonl"
         ));
-        assert!(is_golden_path("frontend/src-tauri/eo-wire/tests/fixtures/normalizer_conformance.json"));
-        assert!(is_golden_path("frontend/src-tauri/eo-wire/tests/fixtures/yml_family/hotbar_slot_use.json"));
+        assert!(is_golden_path(
+            "frontend/src-tauri/eo-wire/tests/fixtures/normalizer_conformance.json"
+        ));
+        assert!(is_golden_path(
+            "frontend/src-tauri/eo-wire/tests/fixtures/yml_family/hotbar_slot_use.json"
+        ));
         // Old backend paths are NO LONGER goldens.
-        assert!(!is_golden_path("backend/tests/expected/openapi.snapshot.json"));
+        assert!(!is_golden_path(
+            "backend/tests/expected/openapi.snapshot.json"
+        ));
         assert!(!is_golden_path("backend/testing/COVERAGE.md"));
         // The ratification report is not a golden.
-        assert!(!is_golden_path("frontend/src-tauri/ratifications/typed-api-responses.md"));
+        assert!(!is_golden_path(
+            "frontend/src-tauri/ratifications/typed-api-responses.md"
+        ));
     }
 
     #[test]
     fn ratification_artifact_classified() {
-        assert!(is_ratification_artifact("frontend/src-tauri/ratifications/x.md"));
-        assert!(is_ratification_artifact("frontend/src-tauri/ratifications/README.md"));
-        assert!(!is_ratification_artifact("frontend/src-tauri/ratifications/notes.txt"));
-        assert!(!is_ratification_artifact("backend/testing/ratifications/x.md"));
+        assert!(is_ratification_artifact(
+            "frontend/src-tauri/ratifications/x.md"
+        ));
+        assert!(is_ratification_artifact(
+            "frontend/src-tauri/ratifications/README.md"
+        ));
+        assert!(!is_ratification_artifact(
+            "frontend/src-tauri/ratifications/notes.txt"
+        ));
+        assert!(!is_ratification_artifact(
+            "backend/testing/ratifications/x.md"
+        ));
     }
 
     #[test]
@@ -578,7 +609,9 @@ VERDICT: ratification-sound | regression-suspected | needs-user-judgement\n```";
             "normalizer_conformance"
         );
         assert_eq!(
-            golden_set_key("frontend/src-tauri/eo-wire/tests/fixtures/yml_family/hotbar_slot_use.json"),
+            golden_set_key(
+                "frontend/src-tauri/eo-wire/tests/fixtures/yml_family/hotbar_slot_use.json"
+            ),
             "hotbar_slot_use"
         );
     }

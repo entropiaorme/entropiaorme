@@ -44,10 +44,7 @@ async fn serve_substrate() -> (Arc<AppState>, tempfile::TempDir) {
     (state, dir)
 }
 
-async fn get(
-    state: &Arc<AppState>,
-    path: &str,
-) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
+async fn get(state: &Arc<AppState>, path: &str) -> (http::StatusCode, http::HeaderMap, Vec<u8>) {
     request(state, "GET", path, &[]).await
 }
 
@@ -254,9 +251,7 @@ async fn the_analytics_write_routes_serve_natively() {
     let (state, _dir) = serve_substrate().await;
     let del = |state: &Arc<AppState>, path: &'static str| {
         let state = state.clone();
-        async move {
-            request(&state, "DELETE", path, &[("origin", "tauri://localhost")]).await
-        }
+        async move { request(&state, "DELETE", path, &[("origin", "tauri://localhost")]).await }
     };
 
     // Ledger: create -> 200 with a generated id; missing required float ->
@@ -466,7 +461,11 @@ async fn the_router_validates_through_the_extraction_layer() {
     assert_eq!(parsed["detail"][0]["type"], "greater_than_equal");
     assert_eq!(parsed["detail"][0]["input"], "-0");
     // Duplicate parameter: the last occurrence validates.
-    let (status, _, body) = get(&state, "/api/codex/recommend?species_name=X&rank=3&rank=abc").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/codex/recommend?species_name=X&rank=3&rank=abc",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["int_parsing"]);
     // A decoded slash inside the path parameter de-matches the route.
@@ -963,7 +962,11 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     let (status, _, body) = get(&state, "/api/character/prospect").await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(detail_types(&body), ["missing", "missing"]);
-    let (status, _, body) = get(&state, "/api/character/prospect?profession=X&target_level=0").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/character/prospect?profession=X&target_level=0",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body, b"{\"detail\":\"target_level must be positive\"}");
     let (status, _, body) = get(
@@ -988,7 +991,11 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     );
     // An unknown profession answers the error SHAPE (model order puts
     // error/rows/warnings first), not a 404.
-    let (status, _, body) = get(&state, "/api/character/prospect?profession=X&target_level=5").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/character/prospect?profession=X&target_level=5",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(
         body,
@@ -1292,8 +1299,13 @@ async fn validation_envelopes_aggregate_and_defer_the_backend_way() {
     }
     // A playlist update whose only set field overflows must not slip
     // through as a no-op update.
-    let (status, _, _) =
-        send_json(&state, "POST", "/api/quests/playlists", "{\"name\": \"Pl\"}").await;
+    let (status, _, _) = send_json(
+        &state,
+        "POST",
+        "/api/quests/playlists",
+        "{\"name\": \"Pl\"}",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     for body in [
         "{\"estimated_minutes\": 99999999999999999999999999}",
@@ -2072,7 +2084,11 @@ async fn tracking_producer_lifecycle_and_suggestions_serve_natively() {
     .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body).as_array().unwrap().len(), 2);
-    let (status, _, body) = get(&state, "/api/tracking/manual-mob-suggestions?q=atrox&limit=0").await;
+    let (status, _, body) = get(
+        &state,
+        "/api/tracking/manual-mob-suggestions?q=atrox&limit=0",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert_eq!(body_json(&body).as_array().unwrap().len(), 1);
 
@@ -2306,8 +2322,13 @@ async fn config_write_routes_serve_natively_idle_tag_mode() {
     assert_eq!(read_settings(dir.path())["mob_tracking_tag"], "Daily Hunt");
 
     // An all-whitespace tag is the 400.
-    let (status, _, body) =
-        send_json(&state, "POST", "/api/tracking/tag-lock", r#"{"tag": "   "}"#).await;
+    let (status, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/tracking/tag-lock",
+        r#"{"tag": "   "}"#,
+    )
+    .await;
     assert_eq!(status, http::StatusCode::BAD_REQUEST);
     assert_eq!(body_json(&body)["detail"], "Tag cannot be empty");
 
@@ -2629,8 +2650,13 @@ async fn spacebar_capture_toggle_serves_and_validates() {
     let (state, _dir) = serve_producer_substrate(HOTBAR_BOUND_CONFIG).await;
 
     // enable: a plain 200 (POST), {ok, enabled} in model order.
-    let (status, headers, body) =
-        send_json(&state, "POST", "/api/scan/spacebar-capture?enabled=true", "").await;
+    let (status, headers, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=true",
+        "",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::OK);
     assert!(!headers.contains_key(http::header::ETAG));
     let enabled = body_json(&body);
@@ -2645,13 +2671,23 @@ async fn spacebar_capture_toggle_serves_and_validates() {
     assert_eq!(keys, ["ok", "enabled"]);
 
     // disable.
-    let (_, _, body) =
-        send_json(&state, "POST", "/api/scan/spacebar-capture?enabled=false", "").await;
+    let (_, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=false",
+        "",
+    )
+    .await;
     assert_eq!(body_json(&body)["enabled"], false);
 
     // an uninterpretable value: 422 bool_parsing on the query param.
-    let (status, _, body) =
-        send_json(&state, "POST", "/api/scan/spacebar-capture?enabled=maybe", "").await;
+    let (status, _, body) = send_json(
+        &state,
+        "POST",
+        "/api/scan/spacebar-capture?enabled=maybe",
+        "",
+    )
+    .await;
     assert_eq!(status, http::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(&body)["detail"][0]["type"], "bool_parsing");
     assert_eq!(

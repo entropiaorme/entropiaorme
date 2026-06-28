@@ -72,7 +72,10 @@ fn read_cargo_version(path: &Path) -> Result<String, String> {
 /// The three stamps in declaration order, each mapped to its version string.
 fn read_stamps(repo_root: &Path) -> Result<Vec<(&'static str, String)>, String> {
     Ok(vec![
-        (PACKAGE_JSON, read_json_version(&repo_root.join(PACKAGE_JSON))?),
+        (
+            PACKAGE_JSON,
+            read_json_version(&repo_root.join(PACKAGE_JSON))?,
+        ),
         (CARGO_TOML, read_cargo_version(&repo_root.join(CARGO_TOML))?),
         (TAURI_CONF, read_json_version(&repo_root.join(TAURI_CONF))?),
     ])
@@ -153,7 +156,11 @@ mod tests {
     fn reads_json_version() {
         let dir = std::env::temp_dir().join(format!("xtask-vs3-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        write(&dir, "package.json", "{\"name\":\"x\",\"version\":\"0.2.0\"}");
+        write(
+            &dir,
+            "package.json",
+            "{\"name\":\"x\",\"version\":\"0.2.0\"}",
+        );
         let v = read_json_version(&dir.join("package.json")).unwrap();
         assert_eq!(v, "0.2.0");
         let _ = std::fs::remove_dir_all(&dir);

@@ -126,7 +126,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let mut total_caught: u32 = 0;
     let mut total_considered: u32 = 0;
 
-    println!("{:45} {:>6} {:>6} {:>7} {:>9}", "file", "caught", "missed", "score", "floor");
+    println!(
+        "{:45} {:>6} {:>6} {:>7} {:>9}",
+        "file", "caught", "missed", "score", "floor"
+    );
     for (file, counts) in &per_file {
         let caught = counts.caught + counts.timeout;
         let denominator = caught + counts.missed;

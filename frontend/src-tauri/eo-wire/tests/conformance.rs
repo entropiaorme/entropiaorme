@@ -14,8 +14,7 @@ use serde_json::Value;
 /// Resolve the committed conformance fixture from this crate's manifest dir
 /// (`frontend/src-tauri/eo-wire/tests/fixtures/`).
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/normalizer_conformance.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/normalizer_conformance.json")
 }
 
 #[test]

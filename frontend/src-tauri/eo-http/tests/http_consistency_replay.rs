@@ -191,8 +191,14 @@ fn headers_as_map(headers: &http::HeaderMap) -> Map<String, Value> {
 /// two session-scoped paths. The `endpoint_id` is the golden file stem.
 fn endpoint_table(session_id: &str) -> Vec<(&'static str, String)> {
     vec![
-        ("GET_tracking_snapshot", "/api/tracking/snapshot".to_string()),
-        ("GET_tracking_sessions", "/api/tracking/sessions".to_string()),
+        (
+            "GET_tracking_snapshot",
+            "/api/tracking/snapshot".to_string(),
+        ),
+        (
+            "GET_tracking_sessions",
+            "/api/tracking/sessions".to_string(),
+        ),
         (
             "GET_tracking_session_detail",
             format!("/api/tracking/session/{session_id}"),
@@ -205,7 +211,10 @@ fn endpoint_table(session_id: &str) -> Vec<(&'static str, String)> {
         ("GET_quests_mobs", "/api/quests/mobs".to_string()),
         ("GET_quests_analytics", "/api/quests/analytics".to_string()),
         ("GET_quests_playlists", "/api/quests/playlists".to_string()),
-        ("GET_scan_skills_status", "/api/scan/skills/status".to_string()),
+        (
+            "GET_scan_skills_status",
+            "/api/scan/skills/status".to_string(),
+        ),
         (
             "GET_codex_meta_attributes",
             "/api/codex/meta/attributes".to_string(),
@@ -275,10 +284,8 @@ async fn assert_consistency_goldens(scenario_name: &str) {
         // block_in_place so the runtime keeps polling the tracker's
         // database futures while the watcher thread drains.
         let total = cumulative;
-        tokio::task::block_in_place(|| {
-            watcher.wait_until_drained(total, Duration::from_secs(10))
-        })
-        .expect("watcher drains the segment");
+        tokio::task::block_in_place(|| watcher.wait_until_drained(total, Duration::from_secs(10)))
+            .expect("watcher drains the segment");
     }
 
     clock.advance(plan.step_seconds).expect("plan step");
@@ -355,17 +362,16 @@ async fn assert_consistency_goldens(scenario_name: &str) {
             headers: &header_map,
             body: &body,
         };
-        let actual = http_fingerprint::serialize_capture(&http_fingerprint::capture(
-            &raw,
-            &mut normalizer,
-        ));
+        let actual =
+            http_fingerprint::serialize_capture(&http_fingerprint::capture(&raw, &mut normalizer));
         let golden = scenario
             .join("expected/http_responses")
             .join(format!("{endpoint_id}.json"));
         let expected = std::fs::read_to_string(&golden)
             .unwrap_or_else(|e| panic!("read golden {}: {e}", golden.display()));
         assert_eq!(
-            actual, expected,
+            actual,
+            expected,
             "{scenario_name}: {endpoint_id} diverged from its golden\n{}",
             first_divergence(&expected, &actual)
         );

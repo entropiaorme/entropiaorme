@@ -118,7 +118,11 @@ fn evaluate(repo_root: &std::path::Path) -> Result<Vec<Finding>, String> {
             // Any other read failure (permissions, I/O) must fail loudly: a
             // guard that silently skips an unreadable source can return a false
             // clean.
-            Err(e) => return Err(format!("check-no-bare-setinterval: cannot read {path}: {e}")),
+            Err(e) => {
+                return Err(format!(
+                    "check-no-bare-setinterval: cannot read {path}: {e}"
+                ))
+            }
         }
     }
     Ok(findings)
@@ -163,7 +167,10 @@ mod tests {
 
     #[test]
     fn flags_bare_setinterval_outside_home() {
-        let f = scan_text("frontend/src/lib/foo.ts", "const id = setInterval(tick, 1000);");
+        let f = scan_text(
+            "frontend/src/lib/foo.ts",
+            "const id = setInterval(tick, 1000);",
+        );
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].rule, "bare-setinterval");
         assert_eq!(f[0].lineno, 1);

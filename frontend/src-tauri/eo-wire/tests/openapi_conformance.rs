@@ -18,8 +18,7 @@ use eo_wire::models::{registered_contracts, FieldSchema};
 use serde_json::Value;
 
 fn snapshot() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../contracts/openapi.snapshot.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../contracts/openapi.snapshot.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("committed snapshot unreadable at {}: {e}", path.display()));
     serde_json::from_str(&raw).expect("committed snapshot parses as JSON")

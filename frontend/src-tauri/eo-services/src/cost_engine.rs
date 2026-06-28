@@ -467,7 +467,17 @@ mod tests {
         let weapon = json!({"economy": {"decay": 0.05, "ammo_burn": 100}});
         let amp = json!({"economy": {"decay": 0.02, "ammo_burn": 0}});
         let scope = json!({"economy": {"decay": 0.04}});
-        let result = cost_per_shot(&weapon, Some(&amp), Some(&scope), None, 0, 1.0, 1.0, 1.5, 1.0);
+        let result = cost_per_shot(
+            &weapon,
+            Some(&amp),
+            Some(&scope),
+            None,
+            0,
+            1.0,
+            1.0,
+            1.5,
+            1.0,
+        );
         let breakdown = result["costBreakdown"].as_array().unwrap();
         let components: Vec<&str> = breakdown
             .iter()

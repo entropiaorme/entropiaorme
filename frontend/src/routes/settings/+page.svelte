@@ -77,14 +77,23 @@
 	}
 
 	let chatlogSaveStatus: 'idle' | 'saved' | 'invalid' = $state('idle');
+	let chatlogInvalidMessage = $state('Chat.log not found at this path. Check the file exists.');
 
 	async function handleChatlogPathChange() {
 		if (!settings) return;
 		const path = settings.gameConnection.chatLogPath.trim();
-		const updated = await updateSettings({ chatlog_path: path });
-		settings.gameConnection.chatLogPath = updated.gameConnection.chatLogPath;
-		settings.gameConnection.chatLogValid = updated.gameConnection.chatLogValid;
-		chatlogSaveStatus = updated.gameConnection.chatLogValid ? 'saved' : 'invalid';
+		try {
+			const updated = await updateSettings({ chatlog_path: path });
+			settings.gameConnection.chatLogPath = updated.gameConnection.chatLogPath;
+			settings.gameConnection.chatLogValid = updated.gameConnection.chatLogValid;
+			chatlogSaveStatus = updated.gameConnection.chatLogValid ? 'saved' : 'invalid';
+		} catch (e) {
+			// The backend rejects an invalid path (empty, wrong basename, or a
+			// missing file) with a 400 carrying the reason. Surface it inline
+			// instead of letting the promise reject uncaught.
+			chatlogInvalidMessage = e instanceof Error ? e.message : 'Chat.log path could not be saved.';
+			chatlogSaveStatus = 'invalid';
+		}
 		setTimeout(() => { chatlogSaveStatus = 'idle'; }, 3000);
 	}
 
@@ -225,9 +234,7 @@
 				{#if chatlogSaveStatus === 'saved'}
 					<p class="text-xs text-success">Chat.log found, connected.</p>
 				{:else if chatlogSaveStatus === 'invalid'}
-					<p class="text-xs text-warning">
-						Saved, but chat.log not found at this path. Check the file exists.
-					</p>
+					<p class="text-xs text-warning">{chatlogInvalidMessage}</p>
 				{:else if !settings.gameConnection.chatLogValid}
 					<p class="text-xs text-warning">Chat.log not found at this path.</p>
 				{/if}

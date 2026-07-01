@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "entropia-orme"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "eo-http"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "bytes",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "eo-services"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "criterion",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "eo-wire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "proptest",
@@ -6743,7 +6743,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "regex",
  "serde_json",

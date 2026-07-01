@@ -1114,7 +1114,6 @@
 										<span class="text-text">{attr.name}</span>
 										<span class="text-text-tertiary">Lv {attr.currentLevel}</span>
 										<span class="text-accent tabular-nums font-medium">{attr.levelsPerHp} lvl/HP</span>
-										<span class="text-text-tertiary">({attr.hpContribution} HP)</span>
 									</div>
 								{/each}
 							</div>

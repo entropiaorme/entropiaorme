@@ -70,9 +70,9 @@ checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "arbitrary"
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "entropia-orme"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1109,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "eo-http"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "bytes",
@@ -1134,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "eo-services"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "criterion",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "eo-wire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "proptest",
@@ -6743,7 +6743,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "regex",
  "serde_json",

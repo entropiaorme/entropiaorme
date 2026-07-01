@@ -77,15 +77,35 @@
 	}
 
 	let chatlogSaveStatus: 'idle' | 'saved' | 'invalid' = $state('idle');
+	let chatlogInvalidMessage = $state('Chat.log not found at this path. Check the file exists.');
+	let chatlogStatusToken = 0;
 
 	async function handleChatlogPathChange() {
 		if (!settings) return;
 		const path = settings.gameConnection.chatLogPath.trim();
-		const updated = await updateSettings({ chatlog_path: path });
-		settings.gameConnection.chatLogPath = updated.gameConnection.chatLogPath;
-		settings.gameConnection.chatLogValid = updated.gameConnection.chatLogValid;
-		chatlogSaveStatus = updated.gameConnection.chatLogValid ? 'saved' : 'invalid';
-		setTimeout(() => { chatlogSaveStatus = 'idle'; }, 3000);
+		const token = ++chatlogStatusToken;
+		try {
+			const updated = await updateSettings({ chatlog_path: path });
+			settings.gameConnection.chatLogPath = updated.gameConnection.chatLogPath;
+			settings.gameConnection.chatLogValid = updated.gameConnection.chatLogValid;
+			// A 200 that still reports the path invalid carries no error reason, so
+			// reset the message to the default rather than leaving a prior failure's.
+			if (!updated.gameConnection.chatLogValid) {
+				chatlogInvalidMessage = 'Chat.log not found at this path. Check the file exists.';
+			}
+			chatlogSaveStatus = updated.gameConnection.chatLogValid ? 'saved' : 'invalid';
+		} catch (e) {
+			// The backend rejects an invalid path (empty, wrong basename, or a
+			// missing file) with a 400 carrying the reason. Surface it inline
+			// instead of letting the promise reject uncaught.
+			chatlogInvalidMessage = e instanceof Error ? e.message : 'Chat.log path could not be saved.';
+			chatlogSaveStatus = 'invalid';
+		}
+		// Guard the reset so a stale timer from a rapid earlier edit cannot clear a
+		// status a later edit has since set (mirrors flashSaved's token guard).
+		setTimeout(() => {
+			if (chatlogStatusToken === token) chatlogSaveStatus = 'idle';
+		}, 3000);
 	}
 
 	async function handlePlayerNameInput() {
@@ -225,9 +245,7 @@
 				{#if chatlogSaveStatus === 'saved'}
 					<p class="text-xs text-success">Chat.log found, connected.</p>
 				{:else if chatlogSaveStatus === 'invalid'}
-					<p class="text-xs text-warning">
-						Saved, but chat.log not found at this path. Check the file exists.
-					</p>
+					<p class="text-xs text-warning">{chatlogInvalidMessage}</p>
 				{:else if !settings.gameConnection.chatLogValid}
 					<p class="text-xs text-warning">Chat.log not found at this path.</p>
 				{/if}

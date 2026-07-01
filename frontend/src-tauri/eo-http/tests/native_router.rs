@@ -933,7 +933,8 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
     assert_eq!(body, b"{\"x\":null,\"y\":null}");
 
     // Character family over an empty calibration table (the skills
-    // catalogue is empty in this harness, so HP sits at its base).
+    // catalogue is empty in this harness, so with no Health skill both the
+    // Stats HP and the Optimiser's current HP read 0: they share one source).
     for (path, expected) in [
         (
             "/api/character/calibration",
@@ -949,7 +950,7 @@ async fn the_settings_character_and_equipment_surface_serves_natively() {
         ("/api/character/codex", "[]"),
         (
             "/api/character/hp-optimizer",
-            "{\"currentHp\":80.0,\"skills\":[],\"attributes\":[]}",
+            "{\"currentHp\":0.0,\"skills\":[],\"attributes\":[]}",
         ),
     ] {
         let (status, _, body) = get(&state, path).await;

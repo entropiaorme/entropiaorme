@@ -19,7 +19,7 @@ resolver = "2"
 members = ["entropia-orme", "eo-http", "eo-services", "eo-wire", "xtask"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Mikel Williams-Lekuona <MikelWL@protonmail.com>"]
 edition = "2021"
 license = "MIT"

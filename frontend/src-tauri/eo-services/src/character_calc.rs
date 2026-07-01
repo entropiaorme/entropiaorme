@@ -506,6 +506,14 @@ fn path_result(
 
 /// `80 + sum(effective_points(skill) / hp_increase)` over contributing
 /// skills with a positive level.
+///
+/// Retained as the documented reference for the historical HP overshoot: it
+/// counts the attributes with the ×20 profession multiplier (`effective_points`),
+/// which is correct for profession levels but inflates HP, so the sum runs well
+/// above the avatar's real HP. It is no longer the Optimiser's current-HP source
+/// (`hp_skill_optimizer` reconciles to the Stats panel's truncated `Health`
+/// skill, the reading that matches real HP); it stays here as the frozen HP
+/// equivalence golden and the overshoot's documented cause.
 pub fn calculate_hp(skill_levels: &Map<String, Value>, skills_data: &[Value]) -> f64 {
     let mut hp = 80.0;
     for (name, hp_inc) in iter_hp_skills(skills_data) {
@@ -520,7 +528,16 @@ pub fn calculate_hp(skill_levels: &Map<String, Value>, skills_data: &[Value]) ->
 /// Rank skills by cost-efficiency for gaining HP: regular skills by
 /// PED cost per +1 HP, attributes by HP contribution factor.
 pub fn hp_skill_optimizer(skill_levels: &Map<String, Value>, skills_data: &[Value]) -> Value {
-    let current_hp = calculate_hp(skill_levels, skills_data);
+    // Current HP reconciles to the Stats panel's source of truth: the truncated
+    // `Health` skill level (mirrors `character_stats`' `int(Health)`). The older
+    // `calculate_hp` sum overshot real HP by counting attributes with the ×20
+    // profession multiplier; the `Health`-skill reading matches the avatar's
+    // actual HP, so the Optimiser and Stats panels now agree by construction.
+    let current_hp = skill_levels
+        .get("Health")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .trunc();
 
     let mut skills: Vec<Value> = Vec::new();
     let mut attributes: Vec<Value> = Vec::new();
@@ -529,18 +546,17 @@ pub fn hp_skill_optimizer(skill_levels: &Map<String, Value>, skills_data: &[Valu
         let current_level = level_of(skill_levels, &name);
 
         if is_attribute(&name) {
+            // `levelsPerHp` (the ×20-aware "levels per +1 HP" gaining rate) is the
+            // actionable metric when an attribute is offered as a reward. A current
+            // per-attribute HP contribution is deliberately not surfaced: HP now
+            // reconciles to the truncated `Health` skill (see the current-HP note),
+            // a model that has no per-attribute decomposition to report.
             let levels_per_hp = hp_inc / 20.0;
-            let hp_contributed = if current_level > 0.0 {
-                effective_points(&name, current_level) / hp_inc
-            } else {
-                0.0
-            };
             attributes.push(serde_json::json!({
                 "name": name,
                 "hpIncrease": hp_inc,
                 "currentLevel": current_level,
                 "levelsPerHp": round_half_even(levels_per_hp, 2),
-                "hpContribution": round_half_even(hp_contributed, 2),
             }));
         } else {
             let levels_per_hp = hp_inc;
@@ -718,12 +734,15 @@ mod tests {
             json!({"name": "", "hp_increase": 5}),
         ];
         let level_map = levels(&[("Athletics", 800.0), ("Health", 30.0)]);
+        // `calculate_hp` retains the historical overshoot formula:
         // 80 + 800/80 + 30*20/6 = 80 + 10 + 100 = 190.
         assert_eq!(calculate_hp(&level_map, &skills_data), 190.0);
         assert_eq!(calculate_hp(&Map::new(), &skills_data), 80.0);
 
         let result = hp_skill_optimizer(&level_map, &skills_data);
-        assert_eq!(result["currentHp"], 190.0);
+        // The Optimiser's current HP now reconciles to the Stats source: the
+        // truncated `Health` skill level (30), not the `calculate_hp` sum (190).
+        assert_eq!(result["currentHp"], 30.0);
         let skills = result["skills"].as_array().unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0]["name"], "Athletics");
@@ -731,7 +750,6 @@ mod tests {
         let attrs = result["attributes"].as_array().unwrap();
         assert_eq!(attrs[0]["name"], "Health");
         assert_eq!(attrs[0]["levelsPerHp"], 0.3);
-        assert_eq!(attrs[0]["hpContribution"], 100.0);
     }
 
     #[test]
@@ -802,7 +820,7 @@ mod tests {
         );
         pin(
             &hp_skill_optimizer(&hp_levels, &skills_data),
-            r#"{"attributes": [{"currentLevel": 30.0, "hpContribution": 100.0, "hpIncrease": 6.0, "levelsPerHp": 0.3, "name": "Health"}, {"currentLevel": 12.0, "hpContribution": 20.0, "hpIncrease": 12.0, "levelsPerHp": 0.6, "name": "Strength"}], "currentHp": 214.69, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpIncrease": 80.0, "hpPerPed": 3.0303, "levelsPerHp": 80.0, "name": "Athletics", "pedPerHp": 0.33}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpIncrease": 320.0, "hpPerPed": 0.3704, "levelsPerHp": 320.0, "name": "Rifle", "pedPerHp": 2.7}]}"#,
+            r#"{"attributes": [{"currentLevel": 30.0, "hpIncrease": 6.0, "levelsPerHp": 0.3, "name": "Health"}, {"currentLevel": 12.0, "hpIncrease": 12.0, "levelsPerHp": 0.6, "name": "Strength"}], "currentHp": 30.0, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpIncrease": 80.0, "hpPerPed": 3.0303, "levelsPerHp": 80.0, "name": "Athletics", "pedPerHp": 0.33}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpIncrease": 320.0, "hpPerPed": 0.3704, "levelsPerHp": 320.0, "name": "Rifle", "pedPerHp": 2.7}]}"#,
             "hp_optimizer",
         );
         assert_eq!(calculate_hp(&hp_levels, &skills_data), 214.68828125);

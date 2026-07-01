@@ -376,7 +376,6 @@ export interface HpOptimizerAttribute {
 	hpIncrease: number;
 	currentLevel: number;
 	levelsPerHp: number;
-	hpContribution: number;
 }
 
 export interface HpOptimizerResult {

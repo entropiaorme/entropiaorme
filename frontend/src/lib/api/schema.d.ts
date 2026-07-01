@@ -2284,13 +2284,11 @@ export interface components {
         };
         /**
          * HpOptimizerAttribute
-         * @description An attribute ranked by HP contribution.
+         * @description An attribute ranked by levels per HP.
          */
         HpOptimizerAttribute: {
             /** Currentlevel */
             currentLevel: number;
-            /** Hpcontribution */
-            hpContribution: number;
             /** Hpincrease */
             hpIncrease: number;
             /** Levelsperhp */

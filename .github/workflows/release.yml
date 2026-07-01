@@ -231,7 +231,7 @@ jobs:
               "**Full changelog:** https://github.com/entropiaorme/entropiaorme/compare/PREVIOUS_TAG...$TAG" \
               > release-notes.md
             gh release create "$TAG" --draft --prerelease \
-              --title "EntropiaOrme $TAG" --notes-file release-notes.md dist/*
+              --title "$TAG" --notes-file release-notes.md dist/*
           else
             TAG="dry-run-$RUN_ID"
             gh release create "$TAG" --target "$COMMIT_SHA" --draft --prerelease \

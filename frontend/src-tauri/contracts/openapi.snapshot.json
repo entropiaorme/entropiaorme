@@ -1343,14 +1343,10 @@
       },
       "HpOptimizerAttribute": {
         "additionalProperties": true,
-        "description": "An attribute ranked by HP contribution.",
+        "description": "An attribute ranked by levels per HP.",
         "properties": {
           "currentLevel": {
             "title": "Currentlevel",
-            "type": "number"
-          },
-          "hpContribution": {
-            "title": "Hpcontribution",
             "type": "number"
           },
           "hpIncrease": {
@@ -1370,8 +1366,7 @@
           "name",
           "hpIncrease",
           "currentLevel",
-          "levelsPerHp",
-          "hpContribution"
+          "levelsPerHp"
         ],
         "title": "HpOptimizerAttribute",
         "type": "object"

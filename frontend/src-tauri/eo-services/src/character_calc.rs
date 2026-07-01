@@ -546,18 +546,17 @@ pub fn hp_skill_optimizer(skill_levels: &Map<String, Value>, skills_data: &[Valu
         let current_level = level_of(skill_levels, &name);
 
         if is_attribute(&name) {
+            // `levelsPerHp` (the ×20-aware "levels per +1 HP" gaining rate) is the
+            // actionable metric when an attribute is offered as a reward. A current
+            // per-attribute HP contribution is deliberately not surfaced: HP now
+            // reconciles to the truncated `Health` skill (see the current-HP note),
+            // a model that has no per-attribute decomposition to report.
             let levels_per_hp = hp_inc / 20.0;
-            let hp_contributed = if current_level > 0.0 {
-                effective_points(&name, current_level) / hp_inc
-            } else {
-                0.0
-            };
             attributes.push(serde_json::json!({
                 "name": name,
                 "hpIncrease": hp_inc,
                 "currentLevel": current_level,
                 "levelsPerHp": round_half_even(levels_per_hp, 2),
-                "hpContribution": round_half_even(hp_contributed, 2),
             }));
         } else {
             let levels_per_hp = hp_inc;
@@ -751,7 +750,6 @@ mod tests {
         let attrs = result["attributes"].as_array().unwrap();
         assert_eq!(attrs[0]["name"], "Health");
         assert_eq!(attrs[0]["levelsPerHp"], 0.3);
-        assert_eq!(attrs[0]["hpContribution"], 100.0);
     }
 
     #[test]
@@ -822,7 +820,7 @@ mod tests {
         );
         pin(
             &hp_skill_optimizer(&hp_levels, &skills_data),
-            r#"{"attributes": [{"currentLevel": 30.0, "hpContribution": 100.0, "hpIncrease": 6.0, "levelsPerHp": 0.3, "name": "Health"}, {"currentLevel": 12.0, "hpContribution": 20.0, "hpIncrease": 12.0, "levelsPerHp": 0.6, "name": "Strength"}], "currentHp": 30.0, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpIncrease": 80.0, "hpPerPed": 3.0303, "levelsPerHp": 80.0, "name": "Athletics", "pedPerHp": 0.33}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpIncrease": 320.0, "hpPerPed": 0.3704, "levelsPerHp": 320.0, "name": "Rifle", "pedPerHp": 2.7}]}"#,
+            r#"{"attributes": [{"currentLevel": 30.0, "hpIncrease": 6.0, "levelsPerHp": 0.3, "name": "Health"}, {"currentLevel": 12.0, "hpIncrease": 12.0, "levelsPerHp": 0.6, "name": "Strength"}], "currentHp": 30.0, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpIncrease": 80.0, "hpPerPed": 3.0303, "levelsPerHp": 80.0, "name": "Athletics", "pedPerHp": 0.33}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpIncrease": 320.0, "hpPerPed": 0.3704, "levelsPerHp": 320.0, "name": "Rifle", "pedPerHp": 2.7}]}"#,
             "hp_optimizer",
         );
         assert_eq!(calculate_hp(&hp_levels, &skills_data), 214.68828125);

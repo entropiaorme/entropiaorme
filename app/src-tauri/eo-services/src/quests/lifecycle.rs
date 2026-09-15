@@ -616,6 +616,8 @@ impl QuestService {
         Ok(self
             .db
             .with_reader(move |conn| {
+                // id-order: insertion (contexts append in process order, so
+                // the newest is the one in force; see skill_tracker).
                 Ok(conn
                     .query_row(
                         "SELECT c.id, i.id \

@@ -684,6 +684,8 @@ impl ProtectionService {
                     |row| row.get(0),
                 )?;
 
+                // id-order: insertion (the session's first protection
+                // interval is the one to reuse).
                 let existing: Option<(i64, i64)> = tx
                     .query_row(
                         "SELECT i.id, p.loadout_id FROM session_intervals i \
@@ -879,6 +881,8 @@ impl ProtectionService {
                 }
 
                 let tx = conn.transaction()?;
+                // id-order: cursor (the observation closes the defence-event
+                // stream at the highest id seen so far).
                 let closing_cursor: i64 = tx.query_row(
                     "SELECT COALESCE(MAX(id), 0) FROM protection_defence_events",
                     [],
@@ -1343,6 +1347,7 @@ fn read_eligible_evidence(
             )
         };
     let closing = spec.closing_cursor.unwrap_or(i64::MAX);
+    // id-order: cursor (the window is bounded by recorded stream positions).
     let sql = format!(
         "SELECT d.id, d.session_id, \
                 CASE WHEN s.track_protection_by_segment != 0 THEN d.context_id END, \
@@ -1578,6 +1583,7 @@ fn read_unsettled_evidence(
         ProtectionSetKind::Armour => "armour_set_id",
         ProtectionSetKind::Plates => "plate_set_id",
     };
+    // id-order: cursor (events past the set's recorded stream position).
     let sql = format!(
         "SELECT COALESCE(SUM(COALESCE(d.damage, 0)), 0), \
                 COALESCE(SUM(d.deflected), 0), COUNT(DISTINCT d.session_id) \
@@ -2232,6 +2238,7 @@ mod tests {
                  (kind, cost_ped, status, created_at) VALUES ('repair', 1.55, 'booked', 0)",
                 [],
             )?;
+            // id-order: insertion (the first event this test seeded).
             conn.execute(
                 "INSERT INTO protection_cost_evidence (window_id, set_id, defence_event_id) \
                  SELECT 1, NULL, MIN(id) FROM protection_defence_events",

@@ -187,6 +187,8 @@ impl QuestService {
                 // Unclaimed evidence is a short operational journal, not a
                 // second permanent loot history. Claimed rows stay as durable
                 // provenance beside the immutable completion evidence.
+                // id-order: retention (the journal keeps its most recently
+                // recorded clumps, in arrival order like the hand-in cursor).
                 tx.execute(
                     "DELETE FROM quest_reward_clump_items WHERE clump_id IN ( \
                        SELECT id FROM quest_reward_clumps \
@@ -196,6 +198,7 @@ impl QuestService {
                                         ORDER BY id DESC LIMIT ?))",
                     rusqlite::params![RAW_CLUMP_RETENTION],
                 )?;
+                // id-order: retention (same window as the items above).
                 tx.execute(
                     "DELETE FROM quest_reward_clumps \
                      WHERE claimed_completion_id IS NULL \
@@ -252,6 +255,8 @@ impl QuestService {
                     tx.commit()?;
                     return Ok(false);
                 };
+                // id-order: cursor (the hand-in waits for the next clump
+                // recorded after this position, whatever its observed_at).
                 let marker = match after_clump_id {
                     Some(id) => id,
                     None => tx.query_row(
@@ -486,6 +491,8 @@ fn read_candidate(
     run: &RunState,
     exact_clump_id: Option<i64>,
 ) -> Result<Option<HandInCandidate>, crate::db::DbError> {
+    // id-order: cursor (a waiting run takes the first clump recorded
+    // past its marker; otherwise the exact clump the caller named).
     let (predicate, order) = if exact_clump_id.is_some() {
         ("AND c.id = ?", "ORDER BY c.id DESC")
     } else if run.waiting {

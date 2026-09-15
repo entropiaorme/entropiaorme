@@ -625,6 +625,7 @@ impl CodexService {
                 // on the instant the claim and calibration inserts share; the
                 // id-subquery removes at most one row, and an uncalibrated-skill
                 // claim (which wrote none) removes nothing here.
+                // id-order: tiebreak (rows already narrowed to one scanned_at).
                 tx.execute(
                     "DELETE FROM skill_calibrations WHERE id = ( \
                         SELECT id FROM skill_calibrations \
@@ -1058,6 +1059,7 @@ impl CodexService {
                 // matched on the instant the two inserts share; an
                 // uncalibrated-skill claim (which wrote none) removes
                 // nothing here.
+                // id-order: tiebreak (rows already narrowed to one scanned_at).
                 tx.execute(
                     "DELETE FROM skill_calibrations WHERE id = ( \
                         SELECT id FROM skill_calibrations \

@@ -257,6 +257,7 @@ The configured hooks are:
 - **Biome** (lint + format) over the frontend, mirroring the CI `npm run lint` step through the lockfile-pinned binary (run `npm ci` in `app/` once so the hook can resolve it).
 - **`no-bare-setinterval`**: the frontend polling-discipline guard (a `cargo xtask` subcommand), forbidding a bare `setInterval` outside the visibility-gated helper and any reference to the retired tracking event.
 - **`in-development`**: the in-development surface guard (a `cargo xtask` subcommand); see "In-development surfaces" below.
+- **`id-order`**: the latest-in-time read guard (a `cargo xtask` subcommand); see "Latest-in-time reads" below.
 - **authoring lint** (em dash, UK spelling, and the reference and vocabulary rules), diff-scoped against the staged change, and **version-stamp parity**, both `cargo xtask` subcommands (see "Authoring lint" below).
 - general hygiene: end-of-file and trailing-whitespace fixers, YAML and TOML validity, merge-conflict markers, and a mixed-line-ending check (line-ending policy itself is set per file type in `.gitattributes`).
 
@@ -275,6 +276,15 @@ Three parts, in `app/src/lib/inDevelopment/`:
 `cargo xtask in-development` (a required CI check and a pre-commit hook) fails on three conditions: a marker referencing an id the register does not declare, a register entry no consumer references (a surface finished without removing its entry), and a release build step that does not stamp the channel. The third is checked because losing that stamp is invisible in CI and visible only to whoever downloads the release.
 
 Only genuinely misleading surfaces belong in the register: a control that does nothing when used, or a figure whose value can diverge from the truth with nothing signalling it. A figure that sits beside unbuilt work but is already correct needs no entry.
+
+## Latest-in-time reads
+
+The database is long-lived and its rows are not guaranteed to arrive in chronological order: a skill scan can be recorded from an older screenshot after a newer one, a backup can be restored beside newer rows, a chat log can be replayed, and an import or backfill writes older data with higher ids. An autoincrement id is therefore an arrival order, never a time order, and the convention is:
+
+- A read that means "the latest in time" orders by the row's timestamp column, with `id` as the tiebreak only (`ORDER BY scanned_at DESC, id DESC LIMIT 1`, or the `MAX(scanned_at)` window with `MAX(id)` inside it). The current level per skill is one such read, shared by every consumer through `latest_skill_levels` in the database module so the definition cannot drift between call sites.
+- A read that genuinely orders by id says which allowed case it is, on a one-line comment at the site: `id-order: cursor` (a stream position: the highest id seen so far, or the rows on one side of a recorded position), `id-order: retention` (a window of the most recently appended rows of an append-only journal), `id-order: tiebreak` (rows already narrowed to one timestamp), or `id-order: insertion` (insertion order is itself the meaning: a seeded default, the current entry of a stream only ever appended in process order, a test reading what it just wrote).
+
+`cargo xtask id-order` (a required CI check and a pre-commit hook) scans the tracked Rust sources of the backend crates for the id-ordering shapes (`MAX(id)` and `MIN(id)` over an `id`, `rowid`, or `<name>_id` column, an `ORDER BY` that leads with such a column and takes `DESC` or a `LIMIT`, and a placeholder comparison that bounds one) and fails on any site whose annotation is missing from the twelve lines above it, or names a case outside the four. Comment lines are skipped, so prose about the patterns does not trip it. A timestamp-first order with the id trailing as the tiebreak matches none of the shapes and needs no annotation. Migrations are immutable once applied and are out of scope.
 
 ## Authoring lint
 

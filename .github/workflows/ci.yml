@@ -241,13 +241,17 @@ jobs:
         # informational and never joins a realised figure), and the
         # in-development register (a surface shipping ahead of its capability
         # is declared once and marked where it renders; graduating it deletes
-        # both). All bind on every pull request and push through this required job.
+        # both), and the latest-in-time read convention (a database read that
+        # means "the newest" orders by its timestamp column; an id-ordered read
+        # names its allowed case at the site). All bind on every pull request
+        # and push through this required job.
         run: |
           cargo run -q -p xtask -- no-bare-setinterval
           cargo run -q -p xtask -- no-new-writable
           cargo run -q -p xtask -- route-ceilings
           cargo run -q -p xtask -- market-isolation
           cargo run -q -p xtask -- in-development
+          cargo run -q -p xtask -- id-order
 
   frontend:
     name: Frontend (build + check + test)

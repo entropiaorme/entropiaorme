@@ -4863,6 +4863,7 @@ impl AnalyticsService {
 
         // The seek predicate reproduces the (date DESC, id DESC) order past
         // the cursor row; one extra row is fetched to detect a further page.
+        // id-order: tiebreak (the seek is by date; id splits equal dates).
         let mut sql =
             String::from("SELECT id, date, type, description, amount, tag FROM ledger_entries");
         if seek.is_some() {

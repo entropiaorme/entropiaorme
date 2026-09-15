@@ -14,32 +14,11 @@ use serde_json::{Map, Value};
 use crate::db::{Db, DbError};
 use crate::scan_drift::summarize_level_drift;
 
-/// Latest calibrated level per skill: `MAX(scanned_at)` with
-/// `MAX(id)` as the tiebreaker for rows sharing a timestamp.
+/// Latest calibrated level per skill, believed-current across every
+/// source: the shared read behind [`crate::db::latest_skill_levels`]
+/// (latest `scanned_at`, id as the tiebreaker only).
 pub async fn latest_skill_levels(db: &Db) -> Result<Vec<(String, f64)>, DbError> {
-    db.with_reader(|conn| {
-        let mut stmt = conn.prepare(
-            "WITH latest_ts AS ( \
-                 SELECT skill_name, MAX(scanned_at) AS ts \
-                 FROM skill_calibrations \
-                 GROUP BY skill_name \
-             ) \
-             SELECT skill_name, level FROM skill_calibrations \
-             WHERE id IN ( \
-                 SELECT MAX(s2.id) FROM skill_calibrations s2 \
-                 JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts \
-                 GROUP BY s2.skill_name \
-             )",
-        )?;
-        let mapped = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0).unwrap_or_default(),
-                row.get::<_, Option<f64>>(1)?.unwrap_or(0.0),
-            ))
-        })?;
-        Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
-    })
-    .await
+    db.latest_skill_calibrations(None).await
 }
 
 async fn last_skill_scan_time(db: &Db) -> Result<Option<f64>, DbError> {

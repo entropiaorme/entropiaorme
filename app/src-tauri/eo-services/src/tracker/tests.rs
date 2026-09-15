@@ -3374,6 +3374,7 @@ fn tick_flushed_coalesces_dirty_mutations() {
     );
     let evidence = rig
         .wait(rig.db.with_reader(|conn| {
+            // id-order: insertion (the event this test just recorded).
             Ok(conn.query_row(
                 "SELECT session_id, context_id, protection_interval_id, damage, deflected \
                  FROM protection_defence_events ORDER BY id DESC LIMIT 1",

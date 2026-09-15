@@ -82,6 +82,16 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # A database read that means "the latest in time" orders by its
+      # timestamp column, id as the tiebreak only; a read that genuinely
+      # orders by id names its allowed case at the site. A whole-tree cargo
+      # xtask guard over the backend crates.
+      - id: id-order
+        name: id-ordered reads name their case (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- id-order'
+        language: system
+        pass_filenames: false
+        always_run: true
       # The authoring lint is diff-scoped (it inspects the lines a change adds,
       # against HEAD here); the version-stamp parity check reads the manifests
       # whole, so both always_run. Both are cargo xtask subcommands.

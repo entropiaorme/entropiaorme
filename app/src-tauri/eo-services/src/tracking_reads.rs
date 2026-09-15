@@ -220,6 +220,7 @@ pub fn list_sessions_read(
         clauses.push("definition_id = ?");
         params.push(Box::new(id));
     }
+    // id-order: tiebreak (the seek is by started_at; id splits equal instants).
     if let Some((started_at, id)) = seek {
         clauses.push("(started_at < ? OR (started_at = ? AND id < ?))");
         params.push(Box::new(*started_at));
@@ -878,21 +879,14 @@ pub fn session_skill_gains(
         return Ok(json!([]));
     }
 
+    // The current level per gained skill is the latest calibration in
+    // time, never the highest id: a calibration recorded later from an
+    // older screenshot must not displace a newer reading.
     let skill_names: Vec<String> = rows.iter().map(|(name, _)| name.clone()).collect();
-    let placeholders = vec!["?"; skill_names.len()].join(",");
-    let cal_sql = format!(
-        "SELECT skill_name, level FROM skill_calibrations WHERE id IN ( \
-         SELECT MAX(id) FROM skill_calibrations WHERE skill_name IN ({placeholders}) \
-         GROUP BY skill_name)"
-    );
-    let mut levels: BTreeMap<String, f64> = BTreeMap::new();
-    {
-        let mut stmt = conn.prepare(&cal_sql)?;
-        let mut cal_rows = stmt.query(rusqlite::params_from_iter(&skill_names))?;
-        while let Some(row) = cal_rows.next()? {
-            levels.insert(row.get::<_, String>(0)?, as_f64(&sql_number(row, 1)));
-        }
-    }
+    let levels: BTreeMap<String, f64> =
+        crate::db::latest_skill_levels(conn, None, Some(&skill_names))?
+            .into_iter()
+            .collect();
 
     let gains: Vec<Value> = rows
         .iter()
@@ -1859,6 +1853,20 @@ mod tests {
         Ok(())
     }
 
+    fn seed_calibration_at(
+        conn: &Connection,
+        skill: &str,
+        level: f64,
+        scanned_at: f64,
+    ) -> Result<(), DbError> {
+        conn.execute(
+            "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+             VALUES (?, ?, 'scan', ?)",
+            params![skill, level, scanned_at],
+        )?;
+        Ok(())
+    }
+
     fn seed_equipment(
         conn: &Connection,
         id: i64,
@@ -2716,6 +2724,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(empty, json!([]));
+    }
+
+    #[tokio::test]
+    async fn session_skill_gains_reports_the_level_latest_in_time_not_by_id() {
+        let (_dir, db) = open_db().await;
+        db.with_writer(|conn| {
+            seed_session(
+                conn,
+                "s1",
+                1000.0,
+                Some(2000.0),
+                false,
+                "mob",
+                0.0,
+                0.0,
+                0.0,
+            )?;
+            seed_skill_gain(conn, "s1", "Laser Weaponry Technology", 1.0, 0.5, 1000.0)?;
+            // The newer reading is written first; an older screenshot is
+            // recorded afterwards and so carries the higher id. The level
+            // reported is the one latest in time.
+            seed_calibration_at(conn, "Laser Weaponry Technology", 50.0, 5000.0)?;
+            seed_calibration_at(conn, "Laser Weaponry Technology", 40.0, 4000.0)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let gains = db
+            .with_reader(|conn| session_skill_gains(conn, "s1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            gains,
+            json!([{"skillName": "Laser Weaponry Technology", "level": 50.0, "ttValueGained": 0.5}])
+        );
     }
 
     #[test]

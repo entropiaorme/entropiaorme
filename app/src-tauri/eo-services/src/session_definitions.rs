@@ -567,6 +567,8 @@ impl SessionDefinitionService {
                      WHERE id = ?",
                     rusqlite::params![now, definition_id],
                 )?;
+                // id-order: insertion (the first seeded protected
+                // definition is the fallback).
                 let fallback = tx
                     .query_row(
                         "SELECT id, name FROM session_definitions \
@@ -815,6 +817,7 @@ pub async fn resolve_selection(
                 return Ok(selected);
             }
         }
+        // id-order: insertion (the first seeded protected definition).
         Ok(conn
             .query_row(
                 "SELECT id, name, track_protection_costs, track_protection_by_segment \

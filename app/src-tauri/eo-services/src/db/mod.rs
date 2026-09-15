@@ -167,6 +167,73 @@ pub struct Db {
     path: std::path::PathBuf,
 }
 
+/// The latest calibrated level per skill: the row with the greatest
+/// `scanned_at`, and among rows sharing that instant the greatest id.
+///
+/// This is the single definition of "the current level" over
+/// `skill_calibrations`. Rows are not guaranteed to arrive in time
+/// order (a scan recorded from an older screenshot after a newer one, a
+/// restored backup beside newer rows, a replayed chat log, a backfill),
+/// so the id is never a time order here: it only breaks a tie between
+/// rows written at the same instant. `source` narrows to one source's
+/// anchor (`Some("scan")` for the scan anchor); `skill_names` narrows to
+/// the named skills. Every consumer goes through this function so the
+/// reads cannot drift apart.
+pub fn latest_skill_levels(
+    conn: &rusqlite::Connection,
+    source: Option<&str>,
+    skill_names: Option<&[String]>,
+) -> rusqlite::Result<Vec<(String, f64)>> {
+    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    let mut latest_filters: Vec<String> = Vec::new();
+    if let Some(source) = &source {
+        params.push(source);
+        latest_filters.push("source = ?".to_string());
+    }
+    if let Some(names) = skill_names {
+        let placeholders = vec!["?"; names.len()].join(",");
+        latest_filters.push(format!("skill_name IN ({placeholders})"));
+        for name in names {
+            params.push(name);
+        }
+    }
+    let latest_where = if latest_filters.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", latest_filters.join(" AND "))
+    };
+    // The picking subquery joins on skill name, so only the source
+    // needs restating there; its parameter binds after the CTE's.
+    let pick_where = match &source {
+        Some(source) => {
+            params.push(source);
+            "WHERE s2.source = ?".to_string()
+        }
+        None => String::new(),
+    };
+    // id-order: tiebreak (the CTE has already narrowed each skill to its
+    // latest scanned_at; MAX(id) only separates rows sharing that instant).
+    let sql = format!(
+        "WITH latest_ts AS ( \
+             SELECT skill_name, MAX(scanned_at) AS ts \
+             FROM skill_calibrations {latest_where} \
+             GROUP BY skill_name \
+         ) \
+         SELECT skill_name, level FROM skill_calibrations \
+         WHERE id IN ( \
+             SELECT MAX(s2.id) FROM skill_calibrations s2 \
+             JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts \
+             {pick_where} \
+             GROUP BY s2.skill_name \
+         )"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mapped = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })?;
+    mapped.collect()
+}
+
 impl Db {
     /// Run a read closure on the synchronous core: whichever reader
     /// thread is free runs it to completion on its own connection,
@@ -488,32 +555,14 @@ impl Db {
     /// The latest calibrated level per skill, by scan instant with the
     /// row id as the tiebreaker: believed-current when `source` is None,
     /// a single source's anchor otherwise (`source='scan'` for the scan
-    /// anchor).
+    /// anchor). The one read every consumer of "the current level" goes
+    /// through; see [`latest_skill_levels`].
     pub async fn latest_skill_calibrations(
         &self,
         source: Option<String>,
     ) -> Result<Vec<(String, f64)>, DbError> {
-        self.with_reader(move |conn| match source {
-            None => {
-                let mut stmt = conn.prepare(
-                    "WITH latest_ts AS (\n                        SELECT skill_name, MAX(scanned_at) AS ts\n                        FROM skill_calibrations\n                        GROUP BY skill_name\n                    )\n                    SELECT skill_name, level FROM skill_calibrations\n                    WHERE id IN (\n                        SELECT MAX(s2.id) FROM skill_calibrations s2\n                        JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts\n                        GROUP BY s2.skill_name\n                    )",
-                )?;
-                let mapped = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                })?;
-                Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
-            }
-            Some(source) => {
-                let mut stmt = conn.prepare(
-                    "WITH latest_ts AS (\n                        SELECT skill_name, MAX(scanned_at) AS ts\n                        FROM skill_calibrations\n                        WHERE source = ?\n                        GROUP BY skill_name\n                    )\n                    SELECT skill_name, level FROM skill_calibrations\n                    WHERE id IN (\n                        SELECT MAX(s2.id) FROM skill_calibrations s2\n                        JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts\n                        WHERE s2.source = ?\n                        GROUP BY s2.skill_name\n                    )",
-                )?;
-                let mapped = stmt.query_map(rusqlite::params![source, source], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                })?;
-                Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
-            }
-        })
-        .await
+        self.with_reader(move |conn| Ok(latest_skill_levels(conn, source.as_deref(), None)?))
+            .await
     }
 
     /// Epoch timestamp of the most recent skill calibration, or None.

@@ -271,9 +271,11 @@ impl MarketService {
                             o.markup_pct, o.sales_ped \
                      FROM market_observations o \
                      JOIN market_submissions s ON s.id = o.submission_id \
-                     WHERE o.submission_id = (SELECT MAX(o2.submission_id) \
+                     WHERE o.submission_id = (SELECT o2.submission_id \
                                               FROM market_observations o2 \
-                                              WHERE o2.item_name = o.item_name) \
+                                              JOIN market_submissions s2 ON s2.id = o2.submission_id \
+                                              WHERE o2.item_name = o.item_name \
+                                              ORDER BY s2.submitted_at DESC, s2.id DESC LIMIT 1) \
                      ORDER BY o.item_name, o.id",
                 )?;
                 let mut rows = stmt.query([])?;
@@ -341,9 +343,11 @@ impl MarketService {
     }
 
     /// The most recent accepted paste as a contributable batch, or None
-    /// before the first commit. Rows come back exactly as stored; the
-    /// batch never blends submissions, so what a contributor shares is
-    /// precisely the export they pasted.
+    /// before the first commit. Most recent by `submitted_at` (the id only
+    /// breaks a tie), so a restored or replayed older paste written later
+    /// never displaces the newest one. Rows come back exactly as stored;
+    /// the batch never blends submissions, so what a contributor shares
+    /// is precisely the export they pasted.
     pub async fn latest_submission(&self) -> Result<Option<SubmissionBatch>, DbError> {
         self.db
             .with_reader(|connection| {
@@ -352,7 +356,8 @@ impl MarketService {
                             o.markup_pct, o.sales_ped \
                      FROM market_observations o \
                      JOIN market_submissions s ON s.id = o.submission_id \
-                     WHERE o.submission_id = (SELECT MAX(id) FROM market_submissions) \
+                     WHERE o.submission_id = (SELECT id FROM market_submissions \
+                                              ORDER BY submitted_at DESC, id DESC LIMIT 1) \
                      ORDER BY o.item_name, o.id",
                 )?;
                 let mut rows = stmt.query([])?;
@@ -410,9 +415,11 @@ impl MarketService {
                     "SELECT o.item_name, o.markup_pct \
                      FROM market_observations o \
                      WHERE o.horizon = ?1 \
-                       AND o.submission_id = (SELECT MAX(o2.submission_id) \
+                       AND o.submission_id = (SELECT o2.submission_id \
                                               FROM market_observations o2 \
-                                              WHERE o2.item_name = o.item_name)",
+                                              JOIN market_submissions s2 ON s2.id = o2.submission_id \
+                                              WHERE o2.item_name = o.item_name \
+                                              ORDER BY s2.submitted_at DESC, s2.id DESC LIMIT 1)",
                 )?;
                 let mut markups: std::collections::HashMap<String, Option<f64>> =
                     std::collections::HashMap::new();
@@ -569,10 +576,12 @@ impl MarketService {
                     "SELECT o.item_name, o.horizon, o.markup_pct, o.sales_ped \
                      FROM market_observations o \
                      WHERE o.horizon IN ('day', 'week', 'month', 'year') \
-                       AND o.submission_id = (SELECT MAX(o2.submission_id) \
+                       AND o.submission_id = (SELECT o2.submission_id \
                                               FROM market_observations o2 \
+                                              JOIN market_submissions s2 ON s2.id = o2.submission_id \
                                               WHERE o2.item_name = o.item_name \
-                                                AND o2.horizon = o.horizon)",
+                                                AND o2.horizon = o.horizon \
+                                              ORDER BY s2.submitted_at DESC, s2.id DESC LIMIT 1)",
                 )?;
                 // item -> horizon -> (markup, sales_ped).
                 let mut per_item: std::collections::HashMap<
@@ -820,6 +829,41 @@ Carabok Leg Fur\t0\tN/A\t0.000 PEC\tN/A\t0.000 PEC\tN/A\t0.000 PEC\t109.380%\t6.
         assert_eq!(batch.items[0].item_name, "Carabok Hide");
         assert_eq!(batch.items[0].readings[0].markup_pct, Some(101.000));
         assert_eq!(batch.items[0].readings[4].sales_ped, 10.0);
+    }
+
+    #[test]
+    fn latest_submission_is_latest_in_time_not_the_highest_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, service, clock) = rig(dir.path());
+
+        // The newer paste is committed first; an older export is then
+        // committed with the clock wound back (a restored backup, a
+        // replayed log), so it carries the higher id but the earlier
+        // submitted_at. Both the contributable batch and the per-item
+        // overview read the paste latest in time.
+        let newest = runtime.block_on(service.commit_paste(SAMPLE)).unwrap();
+        clock.freeze_at(
+            chrono::NaiveDateTime::parse_from_str("2026-07-01 12:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap(),
+        );
+        let older = "Carabok Hide\t0\t101.000%\t10.000 PED\t101.000%\t10.000 PED\t\
+101.000%\t10.000 PED\t101.000%\t10.000 PED\t101.000%\t10.000 PED";
+        let stale = runtime.block_on(service.commit_paste(older)).unwrap();
+        assert!(stale.observed_at < newest.observed_at);
+
+        let batch = runtime
+            .block_on(service.latest_submission())
+            .unwrap()
+            .unwrap();
+        assert_eq!(batch.observed_at, newest.observed_at);
+        assert_eq!(batch.items.len(), 2);
+        assert_eq!(batch.items[0].readings[0].markup_pct, Some(106.880));
+
+        let overview = runtime.block_on(service.overview()).unwrap();
+        assert_eq!(overview.len(), 2);
+        assert_eq!(overview[0].item_name, "Carabok Hide");
+        assert_eq!(overview[0].observed_at, newest.observed_at);
+        assert_eq!(overview[0].readings[0].markup_pct, Some(106.880));
     }
 
     #[test]

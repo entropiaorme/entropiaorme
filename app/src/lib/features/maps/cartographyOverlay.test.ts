@@ -100,14 +100,14 @@ describe('cartographyPinInput', () => {
 				status: 'read',
 				lon: 61_234,
 				lat: 75_456,
-				altitude: 103,
-				rawText: '61234 75456 103',
+				rawText: 'LON 61234 | LAT 75456',
 			}),
 		).toEqual({
 			planet: 'Arkadia',
 			lon: 61_234,
 			lat: 75_456,
-			altitude: 103,
+			// The readout carries no altitude, so a scanned pin has none.
+			altitude: null,
 			name: 'Tree',
 			icon: '🌳',
 			kind: 'tree',
@@ -126,7 +126,7 @@ describe('cartographyPinInput', () => {
 			'Arkadia',
 			null,
 			treeConfig({ category: 'generic', specialKind: null, icon: '📍' }),
-			{ status: 'read', lon: 100, lat: 200, altitude: null, rawText: null },
+			{ status: 'read', lon: 100, lat: 200, rawText: null },
 		);
 		expect(input?.kind).toBe('marker');
 	});
@@ -138,7 +138,6 @@ describe('cartographyPinInput', () => {
 				status: 'read',
 				lon: null,
 				lat: 75_456,
-				altitude: null,
 				rawText: null,
 			}),
 		).toBeNull();

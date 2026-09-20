@@ -1070,8 +1070,6 @@ pub struct CoordScanResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lat: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub altitude: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
@@ -1084,7 +1082,6 @@ impl From<eo_services::coord_capture::CoordScanOutcome> for CoordScanResult {
             status,
             lon: None,
             lat: None,
-            altitude: None,
             raw_text: None,
             confidence: None,
         };
@@ -1092,7 +1089,6 @@ impl From<eo_services::coord_capture::CoordScanOutcome> for CoordScanResult {
             O::Read(read) => CoordScanResult {
                 lon: Some(read.lon),
                 lat: Some(read.lat),
-                altitude: read.altitude,
                 confidence: Some(read.confidence),
                 ..empty(CoordScanStatus::Read)
             },

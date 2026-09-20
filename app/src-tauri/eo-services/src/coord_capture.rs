@@ -1,15 +1,15 @@
 //! Coordinate capture: reading the avatar's on-screen position (the
-//! minimap's longitude/latitude/altitude readout) for one-click map
-//! pins, plus the guided two-point calibration that defines where that
-//! readout sits on screen.
+//! radar's longitude and latitude readout) for one-click map pins, plus
+//! the guided two-point calibration that defines where that readout
+//! sits on screen.
 //!
-//! The minimap is freely movable and resizable, so the capture
-//! rectangle is per-user state, not a constant. Calibration is a
-//! two-step flow: the user hovers the readout's top-left corner and
-//! presses Enter, then its bottom-right corner and presses Enter; the
-//! cursor position at each press defines a corner. The completed
-//! rectangle persists through an injected sink, and a validation scan
-//! runs immediately so the user sees what the calibrated region reads.
+//! The radar is freely movable and resizable, so the capture rectangle
+//! is per-user state, not a constant. Calibration is a two-step flow:
+//! the user hovers the readout's top-left corner and presses Enter,
+//! then its bottom-right corner and presses Enter; the cursor position
+//! at each press defines a corner. The completed rectangle persists
+//! through an injected sink, and a validation scan runs immediately so
+//! the user sees what the calibrated region reads.
 //!
 //! Two seams are deliberately narrow, in this service and its callers:
 //!
@@ -22,8 +22,8 @@
 //!   over the shared OCR engine. A specialised recogniser replaces that
 //!   single closure; capture, parsing, and the plausibility gate stay.
 //!
-//! Every scan validates before it answers: the text must parse as two
-//! or three integer runs, and when the caller supplies the selected
+//! Every scan validates before it answers: each half of the strip must
+//! yield a digit run, and when the caller supplies the selected
 //! planet's calibrated bounds the coordinates must fall inside them. An
 //! implausible read is a typed refusal, never a silently-wrong pin.
 
@@ -98,12 +98,13 @@ impl CalibrationPhase {
     }
 }
 
-/// A successful coordinate read.
+/// A successful coordinate read. The readout carries longitude and
+/// latitude only; the client stopped showing an altitude alongside
+/// them, so the reader cannot invent one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoordRead {
     pub lon: i64,
     pub lat: i64,
-    pub altitude: Option<i64>,
     pub raw_text: String,
     pub confidence: f64,
 }
@@ -312,13 +313,15 @@ impl CoordCaptureService {
     /// One coordinate scan through the seams: region -> capture ->
     /// read -> parse -> optional bounds gate.
     ///
-    /// The game shows the readout as two stacked lines (`Lon: <value>`
-    /// above `Lat: <value>`), and the recogniser is a single-line
-    /// model, so the captured rectangle is split at mid-height and each
-    /// line reads separately, taking the line's trailing digit run (the
-    /// value follows its label, so a label misread such as `L0n` cannot
-    /// inject a spurious value). A whole-rectangle single-line read
-    /// remains the fallback for a readout that is not stacked.
+    /// The game shows the readout as one horizontal strip, `LON <value>`
+    /// on its left half and `LAT <value>` on its right, so the captured
+    /// rectangle is split into two columns and each half reads
+    /// separately, taking that half's trailing digit run (the value
+    /// follows its label, so a label misread such as `L0N` cannot
+    /// inject a spurious value). The split column is the dead space
+    /// between the two halves rather than a fixed midpoint; see
+    /// `split_columns`. A whole-rectangle single-line read remains the
+    /// fallback for a strip the split could not read.
     pub fn scan(&self, bounds: Option<CoordBounds>) -> CoordScanOutcome {
         let Some(region) = (self.providers.region)() else {
             return CoordScanOutcome::NoRegion;
@@ -336,20 +339,20 @@ impl CoordCaptureService {
         let mut reads: Vec<(&'static str, String, f64)> = Vec::new();
 
         let outcome = (|| {
-            let mut parsed: Option<(i64, i64, Option<i64>, String, f64)> = None;
-            if frame.h >= 2 {
-                let (top, bottom) = split_rows(&frame);
-                let Some((top_text, top_conf)) = (self.providers.read_text)(&top) else {
+            let mut parsed: Option<(i64, i64, String, f64)> = None;
+            if frame.w >= 2 {
+                let (left, right) = split_columns(&frame);
+                let Some((left_text, left_conf)) = (self.providers.read_text)(&left) else {
                     return CoordScanOutcome::EngineUnavailable;
                 };
-                let Some((bottom_text, bottom_conf)) = (self.providers.read_text)(&bottom) else {
+                let Some((right_text, right_conf)) = (self.providers.read_text)(&right) else {
                     return CoordScanOutcome::EngineUnavailable;
                 };
-                reads.push(("lon-line", top_text.clone(), top_conf));
-                reads.push(("lat-line", bottom_text.clone(), bottom_conf));
-                if let Some((lon, lat)) = trailing_run(&top_text).zip(trailing_run(&bottom_text)) {
-                    let raw = format!("{top_text} | {bottom_text}");
-                    parsed = Some((lon, lat, None, raw, top_conf.min(bottom_conf)));
+                reads.push(("lon-half", left_text.clone(), left_conf));
+                reads.push(("lat-half", right_text.clone(), right_conf));
+                if let Some((lon, lat)) = trailing_run(&left_text).zip(trailing_run(&right_text)) {
+                    let raw = format!("{left_text} | {right_text}");
+                    parsed = Some((lon, lat, raw, left_conf.min(right_conf)));
                 }
             }
             if parsed.is_none() {
@@ -358,8 +361,8 @@ impl CoordCaptureService {
                 };
                 reads.push(("whole", text.clone(), confidence));
                 match parse_coordinates(&text) {
-                    Some((lon, lat, altitude)) => {
-                        parsed = Some((lon, lat, altitude, text, confidence));
+                    Some((lon, lat)) => {
+                        parsed = Some((lon, lat, text, confidence));
                     }
                     None => {
                         return CoordScanOutcome::Unreadable {
@@ -369,7 +372,7 @@ impl CoordCaptureService {
                     }
                 }
             }
-            let (lon, lat, altitude, raw_text, confidence) = parsed.expect("parsed set above");
+            let (lon, lat, raw_text, confidence) = parsed.expect("parsed set above");
             if let Some(bounds) = bounds {
                 if !bounds.contains(lon, lat) {
                     return CoordScanOutcome::Implausible { lon, lat, raw_text };
@@ -378,7 +381,6 @@ impl CoordCaptureService {
             CoordScanOutcome::Read(CoordRead {
                 lon,
                 lat,
-                altitude,
                 raw_text,
                 confidence,
             })
@@ -604,20 +606,92 @@ fn write_debug_artefacts(
     }
 }
 
-/// Split a frame at mid-height into its two stacked readout lines.
-fn split_rows(frame: &BgrImage) -> (BgrImage, BgrImage) {
-    let top_h = frame.h / 2;
+/// The column the strip splits at: the centre of the widest blank run
+/// in its middle third, or the exact midpoint when the strip shows no
+/// such gap.
+///
+/// The two values sit in the strip's left and right halves with empty
+/// space between them, and cutting through that space rather than at a
+/// fixed midpoint keeps the boundary off the digits: the values are
+/// unpadded, so one can be much wider than the other. The search is
+/// confined to the middle third so the gap between a label and its own
+/// value cannot win, and a strip with no discernible gap (a blank
+/// capture, a uniform crop) falls back to the midpoint rather than
+/// inventing a boundary.
+fn split_column(frame: &BgrImage) -> usize {
+    let midpoint = frame.w / 2;
+    if frame.w < 6 || frame.h == 0 {
+        return midpoint;
+    }
+    let mut column_means = vec![0.0f64; frame.w];
+    for (x, mean) in column_means.iter_mut().enumerate() {
+        let mut total = 0.0;
+        for y in 0..frame.h {
+            let idx = (y * frame.w + x) * 3;
+            total += f64::from(frame.data[idx])
+                + f64::from(frame.data[idx + 1])
+                + f64::from(frame.data[idx + 2]);
+        }
+        *mean = total / (frame.h as f64 * 3.0);
+    }
+    let lo = column_means.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = column_means
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    if hi - lo <= f64::EPSILON {
+        return midpoint;
+    }
+    let threshold = (lo + hi) / 2.0;
+
+    let start = frame.w / 3;
+    let end = frame.w - frame.w / 3;
+    let mut best: Option<(usize, usize)> = None;
+    let mut run_start: Option<usize> = None;
+    let close = |run_start: &mut Option<usize>, at: usize, best: &mut Option<(usize, usize)>| {
+        if let Some(from) = run_start.take() {
+            let len = at - from;
+            if best.is_none_or(|(_, longest)| len > longest) {
+                *best = Some((from, len));
+            }
+        }
+    };
+    for (offset, mean) in column_means[start..end].iter().enumerate() {
+        let x = start + offset;
+        if *mean < threshold {
+            run_start.get_or_insert(x);
+        } else {
+            close(&mut run_start, x, &mut best);
+        }
+    }
+    close(&mut run_start, end, &mut best);
+
+    best.map_or(midpoint, |(from, len)| from + len / 2)
+}
+
+/// Split a frame into its two side-by-side readout halves. The caller
+/// guarantees a frame at least two columns wide, so both halves are
+/// non-empty.
+fn split_columns(frame: &BgrImage) -> (BgrImage, BgrImage) {
+    let split = split_column(frame).clamp(1, frame.w - 1);
     let stride = frame.w * 3;
+    let cut = split * 3;
+    let mut left = Vec::with_capacity(frame.h * cut);
+    let mut right = Vec::with_capacity(frame.h * (stride - cut));
+    for row in frame.data.chunks_exact(stride) {
+        left.extend_from_slice(&row[..cut]);
+        right.extend_from_slice(&row[cut..]);
+    }
     (
         BgrImage {
-            data: frame.data[..top_h * stride].to_vec(),
-            h: top_h,
-            w: frame.w,
+            data: left,
+            h: frame.h,
+            w: split,
         },
         BgrImage {
-            data: frame.data[top_h * stride..].to_vec(),
-            h: frame.h - top_h,
-            w: frame.w,
+            data: right,
+            h: frame.h,
+            w: frame.w - split,
         },
     )
 }
@@ -642,12 +716,14 @@ pub fn trailing_run(text: &str) -> Option<i64> {
     current.or(last)
 }
 
-/// Parse a coordinate readout: two or three integer runs in order
-/// (longitude, latitude, optional altitude), with everything between
-/// runs treated as separator noise. Fullwidth digits fold by value
-/// (the recogniser's alphabet carries both forms). More or fewer runs
-/// than a readout shows is unreadable, not guessable.
-pub fn parse_coordinates(text: &str) -> Option<(i64, i64, Option<i64>)> {
+/// Parse a whole-strip readout: exactly two integer runs in order
+/// (longitude, latitude), with everything between runs treated as
+/// separator noise. Fullwidth digits fold by value (the recogniser's
+/// alphabet carries both forms). Any other run count is unreadable,
+/// not guessable: a label misread into a digit (`L0N`) shows up as a
+/// third run, and refusing it is what keeps the fallback honest now
+/// that no altitude run can legitimately appear.
+pub fn parse_coordinates(text: &str) -> Option<(i64, i64)> {
     let mut runs: Vec<i64> = Vec::new();
     let mut current: Option<i64> = None;
     for ch in text.chars() {
@@ -666,8 +742,7 @@ pub fn parse_coordinates(text: &str) -> Option<(i64, i64, Option<i64>)> {
         runs.push(done);
     }
     match runs.as_slice() {
-        [lon, lat] => Some((*lon, *lat, None)),
-        [lon, lat, alt] => Some((*lon, *lat, Some(*alt))),
+        [lon, lat] => Some((*lon, *lat)),
         _ => None,
     }
 }
@@ -677,22 +752,33 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A 2x2 capture frame whose rows carry distinct bytes, so a mock
-    /// reader can tell the split top line (h 1, byte 1), the split
-    /// bottom line (h 1, byte 2), and the whole frame (h 2) apart.
+    /// A 2x2 capture frame whose columns carry distinct bytes, so a mock
+    /// reader can tell the left half (w 1, byte 1), the right half
+    /// (w 1, byte 2), and the whole frame (w 2) apart.
     fn frame() -> BgrImage {
         BgrImage {
-            data: [vec![1u8; 6], vec![2u8; 6]].concat(),
+            data: [vec![1u8; 3], vec![2u8; 3], vec![1u8; 3], vec![2u8; 3]].concat(),
             h: 2,
             w: 2,
         }
     }
 
-    /// Providers whose reader answers per readout line: `top`/`bottom`
-    /// for the split halves, `whole` for the whole-frame fallback.
-    fn providers_lines(
-        top: &'static str,
-        bottom: &'static str,
+    /// A one-row strip whose columns take the given brightnesses: the
+    /// column-gap geometry `split_column` reads, without any pixels
+    /// standing for glyphs.
+    fn strip(columns: &[u8]) -> BgrImage {
+        BgrImage {
+            data: columns.iter().flat_map(|b| [*b, *b, *b]).collect(),
+            h: 1,
+            w: columns.len(),
+        }
+    }
+
+    /// Providers whose reader answers per readout half: `left`/`right`
+    /// for the split columns, `whole` for the whole-frame fallback.
+    fn providers_halves(
+        left: &'static str,
+        right: &'static str,
         whole: &'static str,
     ) -> CoordCaptureProviders {
         CoordCaptureProviders {
@@ -707,9 +793,9 @@ mod tests {
             }),
             capture_region: Arc::new(|_, _, _, _| Some(frame())),
             read_text: Arc::new(move |img| {
-                let text = match (img.h, img.data[0]) {
-                    (1, 1) => top,
-                    (1, 2) => bottom,
+                let text = match (img.w, img.data[0]) {
+                    (1, 1) => left,
+                    (1, 2) => right,
                     _ => whole,
                 };
                 Some((text.to_string(), 0.93))
@@ -720,44 +806,36 @@ mod tests {
     }
 
     /// Providers where only the whole-frame single-line read carries
-    /// text (the stacked halves read empty), exercising the fallback.
+    /// text (the split halves read empty), exercising the fallback.
     fn providers_reading(text: &'static str) -> CoordCaptureProviders {
-        providers_lines("", "", text)
+        providers_halves("", "", text)
     }
 
     #[test]
-    fn parses_two_and_three_run_readouts() {
+    fn parses_a_two_run_strip() {
+        assert_eq!(parse_coordinates("61234, 75456"), Some((61234, 75456)));
+        // OCR noise between the runs is separator, not failure.
         assert_eq!(
-            parse_coordinates("61234, 75456"),
-            Some((61234, 75456, None))
-        );
-        assert_eq!(
-            parse_coordinates("61234, 75456, 103"),
-            Some((61234, 75456, Some(103)))
-        );
-        // OCR noise between runs is separator, not failure.
-        assert_eq!(
-            parse_coordinates(" 61234 . 75456 ; 103m"),
-            Some((61234, 75456, Some(103)))
+            parse_coordinates(" LON 61234 . LAT 75456 "),
+            Some((61234, 75456))
         );
         // Fullwidth digits fold by value.
         assert_eq!(
             parse_coordinates("６１２３４, ７５４５６"),
-            Some((61234, 75456, None))
+            Some((61234, 75456))
         );
     }
 
     #[test]
-    fn a_stacked_readout_reads_per_line() {
-        // The game's actual layout: `Lon: <value>` above `Lat: <value>`,
-        // labels included in the calibrated rectangle.
-        let service = CoordCaptureService::new(providers_lines("Lon: 31915", "Lat: 19999", "junk"));
+    fn a_side_by_side_readout_reads_per_half() {
+        // The client's layout: `LON <value>` on the strip's left half,
+        // `LAT <value>` on its right, labels inside the rectangle.
+        let service = CoordCaptureService::new(providers_halves("LON 31915", "LAT 19999", "junk"));
         assert!(matches!(
             service.scan(None),
             CoordScanOutcome::Read(CoordRead {
                 lon: 31915,
                 lat: 19999,
-                altitude: None,
                 ..
             })
         ));
@@ -766,7 +844,7 @@ mod tests {
     #[test]
     fn a_label_misread_cannot_inject_a_value() {
         // OCR reading the label's O as a zero: the trailing run wins.
-        let service = CoordCaptureService::new(providers_lines("L0n: 31915", "Lat: 19999", ""));
+        let service = CoordCaptureService::new(providers_halves("L0N 31915", "LAT 19999", ""));
         assert!(matches!(
             service.scan(None),
             CoordScanOutcome::Read(CoordRead {
@@ -779,8 +857,8 @@ mod tests {
 
     #[test]
     fn trailing_run_takes_the_last_digit_run() {
-        assert_eq!(trailing_run("Lon: 31915"), Some(31915));
-        assert_eq!(trailing_run("L0n: 31915"), Some(31915));
+        assert_eq!(trailing_run("LON 31915"), Some(31915));
+        assert_eq!(trailing_run("L0N 31915"), Some(31915));
         assert_eq!(trailing_run("31915"), Some(31915));
         assert_eq!(trailing_run("no digits"), None);
         assert_eq!(trailing_run(""), None);
@@ -791,7 +869,59 @@ mod tests {
         assert_eq!(parse_coordinates(""), None);
         assert_eq!(parse_coordinates("no digits"), None);
         assert_eq!(parse_coordinates("61234"), None);
+        // A label misread into a digit shows up as a third run, and the
+        // whole-strip fallback refuses rather than guessing which two
+        // of the three are the coordinates.
+        assert_eq!(parse_coordinates("L0N 61234 LAT 75456"), None);
         assert_eq!(parse_coordinates("1, 2, 3, 4"), None);
+    }
+
+    #[test]
+    fn the_split_cuts_the_gap_between_the_halves_not_the_midpoint() {
+        // A wide longitude and a narrow latitude: bright through column
+        // 7, a two-column gap, then bright again. The midpoint (7) sits
+        // inside the left value's digits; the gap's centre is 9.
+        let mut columns = [200u8; 15];
+        columns[8] = 10;
+        columns[9] = 10;
+        assert_eq!(split_column(&strip(&columns)), 9);
+    }
+
+    #[test]
+    fn a_gap_outside_the_middle_third_cannot_win() {
+        // A wider blank run at the strip's left edge (outside the
+        // search window) must not drag the split off the real gap.
+        let mut columns = [200u8; 15];
+        for column in columns.iter_mut().take(5) {
+            *column = 10;
+        }
+        columns[8] = 10;
+        columns[9] = 10;
+        assert_eq!(split_column(&strip(&columns)), 9);
+    }
+
+    #[test]
+    fn a_strip_with_no_discernible_gap_falls_back_to_the_midpoint() {
+        // Uniform pixels: no contrast to read a boundary from.
+        assert_eq!(split_column(&strip(&[128u8; 15])), 7);
+        // Too narrow to search at all.
+        assert_eq!(split_column(&strip(&[10, 200, 10, 200])), 2);
+    }
+
+    #[test]
+    fn the_halves_carry_the_pixels_either_side_of_the_split() {
+        let mut columns = [200u8; 15];
+        columns[8] = 10;
+        columns[9] = 10;
+        let (left, right) = split_columns(&strip(&columns));
+        assert_eq!((left.w, right.w), (9, 6));
+        assert_eq!(left.w + right.w, 15, "no column is dropped or duplicated");
+        assert_eq!(left.data.len(), left.w * left.h * 3);
+        assert_eq!(right.data.len(), right.w * right.h * 3);
+        // The gap's first column lands in the left half, its second in
+        // the right: the cut runs through the dead space.
+        assert_eq!(left.data[8 * 3], 10);
+        assert_eq!(right.data[0], 10);
     }
 
     #[test]
@@ -800,7 +930,7 @@ mod tests {
         let sink = persisted.clone();
         let cursor_calls = Arc::new(AtomicUsize::new(0));
         let counter = cursor_calls.clone();
-        let mut providers = providers_reading("61234, 75456, 103");
+        let mut providers = providers_reading("61234, 75456");
         // Second corner arrives up-left of the first: normalisation duty.
         providers.cursor_position = Arc::new(move || {
             let call = counter.fetch_add(1, Ordering::SeqCst);
@@ -898,13 +1028,12 @@ mod tests {
         ));
 
         // A clean read inside bounds.
-        let service = CoordCaptureService::new(providers_reading("61234, 75456, 103"));
+        let service = CoordCaptureService::new(providers_reading("61234, 75456"));
         assert!(matches!(
             service.scan(Some(bounds)),
             CoordScanOutcome::Read(CoordRead {
                 lon: 61234,
                 lat: 75456,
-                altitude: Some(103),
                 ..
             })
         ));

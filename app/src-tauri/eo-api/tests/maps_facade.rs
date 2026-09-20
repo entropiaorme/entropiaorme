@@ -46,11 +46,12 @@ fn coord_service(text: &'static str) -> Arc<CoordCaptureService> {
                 w: 2,
             })
         }),
-        // The split per-line reads answer empty (no digit runs), so the
-        // scan falls through to the whole-frame single-line read, which
-        // is where these tests inject their text.
+        // The split per-half reads answer empty (no digit runs), so the
+        // scan falls through to the whole-strip single-line read, which
+        // is where these tests inject their text. The halves are one
+        // column wide; the whole strip is two.
         read_text: Arc::new(move |img| {
-            if img.h == 1 {
+            if img.w == 1 {
                 return Some((String::new(), 0.9));
             }
             Some((text.to_string(), 0.9))
@@ -379,7 +380,7 @@ async fn validation_and_not_found_legs_answer_typed_errors() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_coordinate_scan_gates_against_the_selected_planet() {
     let dir = tempfile::tempdir().unwrap();
-    let api = maps_api(dir.path(), true, Some(coord_service("61234, 75456, 103"))).await;
+    let api = maps_api(dir.path(), true, Some(coord_service("61234, 75456"))).await;
 
     // A clean read inside Calypso's bounds, in its wire shape.
     let wire = serde_json::to_value(
@@ -390,7 +391,8 @@ async fn the_coordinate_scan_gates_against_the_selected_planet() {
     assert_eq!(wire["status"], "read");
     assert_eq!(wire["lon"], 61234);
     assert_eq!(wire["lat"], 75456);
-    assert_eq!(wire["altitude"], 103);
+    // The readout carries no altitude, so the wire shape has no such field.
+    assert!(wire.get("altitude").is_none());
     // The successful read's coordinates carry everything; the raw
     // capture text stays server-side (it only rides the unreadable leg).
     assert!(wire.get("rawText").is_none());

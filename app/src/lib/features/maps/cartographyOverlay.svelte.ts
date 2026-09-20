@@ -168,7 +168,8 @@ export function cartographyPinInput(
 		planet,
 		lon: result.lon,
 		lat: result.lat,
-		altitude: result.altitude,
+		// The readout no longer shows an altitude, so a scanned pin has none.
+		altitude: null,
 		name: config.label,
 		icon: config.icon,
 		kind: config.specialKind ?? 'marker',

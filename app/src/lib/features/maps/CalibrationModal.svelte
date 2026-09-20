@@ -62,8 +62,7 @@
 		if (!validation) return null;
 		if (validation.status === 'read') {
 			const point = formatGamePoint({ lon: validation.lon ?? 0, lat: validation.lat ?? 0 });
-			const altitude = validation.altitude != null ? `, altitude ${validation.altitude}` : '';
-			return `We read: ${point}${altitude}.`;
+			return `We read: ${point}.`;
 		}
 		if (validation.status === 'unreadable') {
 			return `The calibrated region did not read as coordinates (saw: "${validation.rawText ?? ''}").`;
@@ -87,10 +86,10 @@
 			</div>
 		{:else if phase === 'awaitTopLeft'}
 			<p class="text-text">
-				Step 1 of 2: switch to the game and find the position readout (the stacked
-				<strong>Lon:</strong> and <strong>Lat:</strong> lines). Hover the mouse over the
-				<strong>top-left corner of the Lon line</strong> (including the label is fine) and
-				press
+				Step 1 of 2: switch to the game and find the position readout below the radar
+				(<strong>LON</strong> on the left, <strong>LAT</strong> on the right). Hover the
+				mouse over the <strong>top-left corner of LON</strong> (including the label is
+				fine) and press
 				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>.
 			</p>
 			<p>The app stays open; you do not need to switch back between steps.</p>
@@ -100,9 +99,10 @@
 		{:else if phase === 'awaitBottomRight'}
 			<p class="text-text">
 				Step 2 of 2: hover over the
-				<strong>bottom-right corner of the Lat line</strong> (just past the last digit) and
-				press
-				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>.
+				<strong>bottom-right corner of the LAT digits</strong> (just past the last digit)
+				and press
+				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>. Draw the
+				box around both numbers in one strip; the app finds the gap between them.
 			</p>
 			<div class="flex justify-end">
 				<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
@@ -118,7 +118,7 @@
 				{:else}
 					<p>
 						The region was saved, but its first read failed. Recalibrate with the corners
-						tighter around the location numbers, and check the minimap is visible.
+						tighter around the two numbers, and check the radar is visible.
 					</p>
 				{/if}
 				<div class="flex justify-end gap-2">

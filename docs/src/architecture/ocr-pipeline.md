@@ -53,7 +53,7 @@ Five consumers share the recogniser:
 | Repair-cost read | A single small numeric region on the repair terminal | A parsed PED cost |
 | Trade Terminal value read | The total TT value shown for seven armour pieces or seven plates | A reviewable PED value for a limited-set observation |
 | Sale-window read | One calibrated auction panel sliced into independently validated fields | A reviewable listing draft |
-| Map-coordinate read | A calibrated minimap region read line by line | Parsed longitude, latitude, and optional altitude |
+| Map-coordinate read | A calibrated radar readout strip, split into its two halves | Parsed longitude and latitude |
 
 This page focuses on the skill-panel scan; the repair-cost and Trade Terminal reads
 (`app/src-tauri/eo-services/src/repair_ocr.rs`) reuses the same recogniser
@@ -61,9 +61,12 @@ for a single on-demand number and is summarised under
 [The shared repair and Trade Terminal reads](#the-shared-repair-and-trade-terminal-reads). The auction reader
 (`app/src-tauri/eo-services/src/sale_window_ocr.rs`) is described under
 [The auction sale-window read](#the-auction-sale-window-read). The coordinate
-reader (`app/src-tauri/eo-services/src/coord_capture.rs`) adds explicit grammar
-and per-planet bounds checks so an unreadable or implausible result cannot
-silently become a map pin.
+reader (`app/src-tauri/eo-services/src/coord_capture.rs`) captures one strip
+holding both values (`LON` on its left half, `LAT` on its right), splits it at
+the dead space between them rather than at a fixed midpoint so an unpadded value
+cannot be cut in two, and reads each half for its trailing digit run. Explicit
+grammar and per-planet bounds checks then keep an unreadable or implausible
+result from silently becoming a map pin.
 
 ## The stages in order
 

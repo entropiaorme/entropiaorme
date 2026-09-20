@@ -627,7 +627,6 @@ export interface CoordScanResult {
 	status: CoordScanStatus;
 	lon?: number | null;
 	lat?: number | null;
-	altitude?: number | null;
 	rawText?: string | null;
 	confidence?: number | null;
 }

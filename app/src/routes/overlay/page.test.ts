@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The overlay window's popup orchestration: a hidden popup webview is spawned
 // once, and showing a menu must wait on the popup route's readiness handshake
@@ -153,6 +153,25 @@ vi.mock('$lib/statsScope.svelte', () => ({
 }));
 
 import OverlayPage from './+page.svelte';
+
+// happy-dom has no Web Animations API, and Svelte drives transition
+// completion (and outro element removal) through `animation.onfinish`; the
+// stub finishes instantly on a microtask so the notice rail's fades settle.
+beforeAll(() => {
+	Element.prototype.animate = function animate() {
+		const animation = {
+			cancel() {},
+			finish() {},
+			effect: null,
+			currentTime: 0,
+			playState: 'finished',
+			onfinish: null as (() => void) | null,
+			oncancel: null as (() => void) | null,
+		};
+		queueMicrotask(() => animation.onfinish?.());
+		return animation as unknown as Animation;
+	};
+});
 
 const activeSnapshot = {
 	status: 'active',

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fade } from 'svelte/transition';
 	import type { OverlayNotice } from '$lib/features/tracking/overlayNotices.svelte';
+	import { shouldSettleInstantly } from '$lib/motion/testMotion';
 
 	const noop = () => {};
 
@@ -13,6 +14,9 @@
 		onHold?: () => void;
 		onRelease?: () => void;
 	} = $props();
+
+	// A reduced-motion preference (and the frozen e2e build) drops the fade.
+	const fadeMs = shouldSettleInstantly() ? 0 : 150;
 </script>
 
 <!-- Sits under the strip and takes the strip's width without widening
@@ -34,7 +38,7 @@
 			class="notice rounded-lg px-3 py-1.5 text-[11px] leading-snug"
 			class:notice-warning={notice.tone === 'warning'}
 			class:notice-error={notice.tone === 'error'}
-			transition:fade={{ duration: 150 }}
+			transition:fade={{ duration: fadeMs }}
 		>
 			{notice.text}
 		</div>

@@ -296,8 +296,7 @@ export const dashboardSurface: GuideSurface = {
 			// beneath the strip across the Next-transition. The slot wrapper is
 			// always-mounted while guideState.isActive + demoTrackingLive, and the
 			// inner strip's outer div renders in both idle and active variants
-			// (status='idle' + lastSessionId=null hits the same template branch as
-			// status='active'), so the cutout d-attribute tweens smoothly from the
+			// (one template serves both), so the cutout d-attribute tweens smoothly from the
 			// prior card's strip-wrapper shape to this card's mob-section shape.
 			placementAnchor: () =>
 				document.querySelector<HTMLElement>('[data-guide-anchor="dashboard-overlay-spawn-slot"]'),

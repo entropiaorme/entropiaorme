@@ -22,7 +22,7 @@
 		type TrackingSnapshot,
 		type ManualMobSuggestion
 	} from '$lib/api';
-	import { tick, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { useVisiblePoll, windowGeometryPoll } from '$lib/realtime/useVisiblePoll';
 	import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 	import { createPostSessionFlow } from '$lib/features/tracking/postSession.svelte';
@@ -79,7 +79,6 @@
 
 	let overlayRoot: HTMLDivElement | null = $state(null);
 	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
-	let postSessionArmourButton: HTMLButtonElement | null = $state(null);
 	let inSessionArmourButton: HTMLButtonElement | null = $state(null);
 	let mobInput: HTMLInputElement | null = $state(null);
 	let mobInputFocused = $state(false);
@@ -138,10 +137,9 @@
 	const snapshot = createSnapshotStore<TrackingSnapshot>(TRACKING_TOPIC, getTrackingSnapshot);
 	const protection = createOverlayProtectionModel(() => snapshot.hydrate());
 
-	// Post-session flow: the armour prompt gating the stop and the
-	// final-stats readout (see the module for the state machine). Render
-	// state comes off `flow`; the deps close over this window's snapshot
-	// and armour-cost popup.
+	// The stop flow: the armour prompt gating the stop (see the module for
+	// the state machine). Render state comes off `flow`; the deps close over
+	// this window's snapshot and armour-cost popup.
 	const flow = createPostSessionFlow({
 		isSessionActive: () => data.status === 'active',
 		isBusy: () => toggling,
@@ -151,22 +149,8 @@
 			protectionCostAction(protection.overview, data.trackProtectionBySegment !== false)
 				.enabled,
 		refresh: () => snapshot.hydrate(),
-		readStats: () => ({
-			cost: snapshot.current?.cost ?? 0,
-			returns: snapshot.current?.returns ?? 0,
-			pes: snapshot.current?.pes ?? 0,
-			net: snapshot.current?.net ?? 0
-		}),
 		stopTracking,
-		captureArmourSetupOnLater: () =>
-			data.trackProtectionCosts !== false &&
-			data.trackProtectionBySegment === false &&
-			(protection.overview?.loadouts.length ?? 0) > 0,
-		showArmourPopup: (recordNow: boolean) => armourCost.showPostSession(recordNow),
-		showArmourWorkflowInSession: () => armourCost.showInSession(),
-		onPromptShown: () => {
-			void tick().then(() => armourCost.scheduleAnchorSync());
-		}
+		showArmourWorkflowInSession: () => armourCost.showInSession()
 	});
 	const toggling = $derived(starting || flow.stopping);
 
@@ -418,9 +402,7 @@
 		repairOcrEnabled: () => data.repairOcrEnabled === true,
 		bySegment: () => data.trackProtectionBySegment !== false,
 		protection: () => protection.overview,
-		postSessionAnchor: () => postSessionArmourButton,
-		inSessionAnchor: () => inSessionArmourButton,
-		onClosed: () => flow.notifyArmourPopupClosed()
+		inSessionAnchor: () => inSessionArmourButton
 	});
 
 	async function handleTrifectaPresetSelection(presetId: string) {
@@ -758,7 +740,7 @@
 
 	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
 
-	const armourSessionId = $derived(data.sessionId ?? flow.lastSessionId);
+	const armourSessionId = $derived(data.sessionId ?? null);
 	const showManualInput = $derived(
 		(data.status === 'active' || data.status === 'idle') && !data.currentMob
 	);
@@ -931,12 +913,9 @@
 		savingBoost={facets.savingBoost}
 		savingActivity={activities.saving}
 		activitiesMenuOpen={overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn'}
-		lastSessionId={flow.lastSessionId}
-		lastSessionStats={flow.lastSessionStats}
 		bind:mobQuery
 		bind:mobInput
 		bind:boostDraft={facets.boostDraft}
-		bind:postSessionArmourButton
 		bind:inSessionArmourButton
 		onStart={handleStart}
 		onStop={flow.requestStop}

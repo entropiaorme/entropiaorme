@@ -51,9 +51,7 @@ function model(anchor: () => HTMLElement | null, sessionId: string | null = 's1'
 		repairOcrEnabled: () => false,
 		bySegment: () => false,
 		protection: () => overview,
-		postSessionAnchor: anchor,
 		inSessionAnchor: anchor,
-		onClosed: () => {},
 	});
 }
 
@@ -84,7 +82,7 @@ describe('overlay armour cost model', () => {
 	it('says so when there is no session left to record against', async () => {
 		const target = anchorElement();
 		const armour = model(() => target, null);
-		expect(await armour.showPostSession(true)).toBe(false);
+		expect(await armour.showInSession()).toBe(false);
 		expect(armour.error).toBe('There is no session left to record an armour cost against');
 	});
 });

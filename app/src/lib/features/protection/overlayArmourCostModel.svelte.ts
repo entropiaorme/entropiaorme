@@ -28,12 +28,8 @@ export interface OverlayArmourCostPorts {
 	/** The session's stamped attribution: false means whole-session. */
 	bySegment: () => boolean;
 	protection: () => ProtectionOverview | null;
-	/** The post-session readout's Cost button, once it has rendered. */
-	postSessionAnchor: () => HTMLElement | null;
 	/** The running session's own Cost control on the strip. */
 	inSessionAnchor: () => HTMLElement | null;
-	/** Told after the popup closes, so the stop flow can settle. */
-	onClosed: () => void;
 }
 
 /**
@@ -70,12 +66,8 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 	// popup that the same gesture just dismissed. Gating the open branch on this
 	// timestamp suppresses that reopen.
 	let closedAt = 0;
-	let recordNow = true;
 
-	async function buildState(
-		target: HTMLElement,
-		forRecording = recordNow,
-	): Promise<OverlayArmourCostState | null> {
+	async function buildState(target: HTMLElement): Promise<OverlayArmourCostState | null> {
 		const sessionId = ports.sessionId();
 		if (!sessionId || !target.isConnected) return null;
 		const overview = ports.protection();
@@ -92,7 +84,6 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 			steps,
 			protection: overview,
 			requiresLoadoutSelection,
-			recordNow: forRecording,
 			anchor: await anchorCentreBelow(target, ports.anchorGap),
 		};
 	}
@@ -112,11 +103,10 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 		tracker.schedule();
 	}
 
-	async function show(target: HTMLElement, forRecording = true): Promise<boolean> {
+	async function show(target: HTMLElement): Promise<boolean> {
 		try {
-			recordNow = forRecording;
 			await ports.window.ensure();
-			const state = await buildState(target, forRecording);
+			const state = await buildState(target);
 			if (!state) return false;
 
 			anchor = target;
@@ -144,7 +134,6 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 		open = false;
 		anchor = null;
 		tracker.cancel();
-		ports.onClosed();
 	}
 
 	async function hide(): Promise<void> {
@@ -160,28 +149,7 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 		if (Date.now() - closedAt < 250) return;
 		const target = event.currentTarget as HTMLElement | null;
 		if (!target) return;
-		await show(target, true);
-	}
-
-	/**
-	 * The popup over the post-session readout: its anchor button only renders
-	 * once that readout has, so the anchor is waited for rather than assumed
-	 * present after one microtask. A single `tick()` was a bet on the readout
-	 * rendering in the same flush, and losing it left the workflow silently
-	 * unopened.
-	 */
-	async function showPostSession(forRecording: boolean): Promise<boolean> {
-		const target = await waitForAnchor(ports.postSessionAnchor);
-		if (!ports.sessionId()) {
-			error = 'There is no session left to record an armour cost against';
-			return false;
-		}
-		if (!target) {
-			error = 'The armour cost window could not be opened';
-			return false;
-		}
-		if (open) return false;
-		return show(target, forRecording);
+		await show(target);
 	}
 
 	/** The armour workflow over the running session's own Cost control. */
@@ -196,7 +164,7 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 			return false;
 		}
 		if (open) return true;
-		return show(target, true);
+		return show(target);
 	}
 
 	/** The popup reported that it closed itself. */
@@ -215,7 +183,6 @@ export function createOverlayArmourCostModel(ports: OverlayArmourCostPorts) {
 		show,
 		hide,
 		toggle,
-		showPostSession,
 		showInSession,
 		scheduleAnchorSync,
 		noteClosed,

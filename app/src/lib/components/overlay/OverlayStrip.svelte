@@ -8,8 +8,6 @@
 	import { NO_DATA } from '$lib/utils/format';
 	import { protectionCostAction } from '$lib/features/protection/protectionCostFlow';
 
-	type LastSessionStats = { cost: number; returns: number; pes: number; net: number };
-
 	const noop = () => {};
 
 	let {
@@ -30,12 +28,9 @@
 		protectionSaving = false,
 		definitionMenuOpen = false,
 		trifectaMenuOpen = false,
-		lastSessionId = null,
-		lastSessionStats = null,
 		mobQuery = $bindable(''),
 		mobInput = $bindable(null),
 		boostDraft = $bindable(''),
-		postSessionArmourButton = $bindable(null),
 		inSessionArmourButton = $bindable(null),
 		awaitingArmourTrackDecision = false,
 		onStart = noop,
@@ -69,12 +64,9 @@
 		protectionSaving?: boolean;
 		definitionMenuOpen?: boolean;
 		trifectaMenuOpen?: boolean;
-		lastSessionId?: string | null;
-		lastSessionStats?: LastSessionStats | null;
 		mobQuery?: string;
 		mobInput?: HTMLInputElement | null;
 		boostDraft?: string;
-		postSessionArmourButton?: HTMLButtonElement | null;
 		inSessionArmourButton?: HTMLButtonElement | null;
 		awaitingArmourTrackDecision?: boolean;
 		onStart?: () => void | Promise<void>;
@@ -133,6 +125,9 @@
 	const activeProtection = $derived(
 		protection?.loadouts.find((loadout) => loadout.id === protection?.activeLoadoutId) ?? null
 	);
+	const enabledPills = $derived(
+		scopedStats(overlayStats.current, overlayScope, { fallback: false }),
+	);
 	const costAction = $derived(
 		protectionCostAction(protection, data.trackProtectionBySegment !== false),
 	);
@@ -144,451 +139,400 @@
 		if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 		return `${m}:${s.toString().padStart(2, '0')}`;
 	}
-
-	function formatPed(v: number): string {
-		return v.toFixed(2);
-	}
 </script>
 
 <!-- Glassmorphic container -->
 <div class="overlay-strip glass-panel flex items-center gap-3 rounded-xl px-4 py-2 w-max">
-	{#if data.status === 'active' || !lastSessionId}
-		<!-- Track Button + Timer -->
-		<div class="flex items-center gap-3 shrink-0 border-r border-white/10 pr-3">
-			{#if awaitingArmourTrackDecision && data.status === 'active'}
-				<div class="armour-prompt flex items-center gap-1.5 shrink-0">
-					<span class="text-[10px] font-semibold text-amber-300 tracking-wide whitespace-nowrap">Record armour costs?</span>
-					<button
-						type="button"
-						class="armour-prompt-btn armour-prompt-yes"
-						disabled={toggling}
-						onclick={() => onArmourTrackDecision('yes')}
-					>Record</button>
-					<button
-						type="button"
-						class="armour-prompt-btn armour-prompt-no"
-						disabled={toggling}
-						onclick={() => onArmourTrackDecision('no')}
-					>Later</button>
-				</div>
-			{:else}
+	<!-- Track Button + Timer -->
+	<div class="flex items-center gap-3 shrink-0 border-r border-white/10 pr-3">
+		{#if awaitingArmourTrackDecision && data.status === 'active'}
+			<div class="armour-prompt flex items-center gap-1.5 shrink-0">
+				<span class="text-[10px] font-semibold text-amber-300 tracking-wide whitespace-nowrap">Record armour costs?</span>
 				<button
-					class={data.status === 'active' ? 'stop-btn' : 'start-btn'}
+					type="button"
+					class="armour-prompt-btn armour-prompt-yes"
 					disabled={toggling}
-					onclick={data.status === 'active' ? onStop : onStart}
-					title={data.status === 'active' ? 'Stop tracking' : 'Start tracking'}
-				>
-					{#if toggling}
-						<span class="text-[10px] px-1">...</span>
-					{:else if data.status === 'active'}
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-2.5 h-2.5">
-							<rect x="3" y="3" width="10" height="10" rx="1" />
-						</svg>
-					{:else}
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
-							<path d="M4 3.5a.5.5 0 0 1 .757-.429l8 4.8a.5.5 0 0 1 0 .858l-8 4.8A.5.5 0 0 1 4 13V3.5z" />
-						</svg>
-						<span class="font-bold tracking-wide">TRACK</span>
-					{/if}
-				</button>
-			{/if}
-			{#if data.status === 'active'}
-				<div class="flex items-center gap-1.5">
-					<span class="relative flex h-2 w-2 shrink-0">
-						<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-						<span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
-					</span>
-					<!-- Always the live session's own elapsed, whatever scope
-						 the pills read in: this readout sits under a pulsing
-						 live cue, so it must be the thing that is actually
-						 ticking. The family's summed duration is a figure,
-						 and figures live in the labelled pill group. -->
-					<span class="text-sm font-semibold text-emerald-400 tabular-nums tracking-wider w-12 text-center">
-						{formatElapsed(data.elapsed ?? 0)}
-					</span>
-				</div>
-			{/if}
+					onclick={() => onArmourTrackDecision('yes')}
+				>Record</button>
+				<button
+					type="button"
+					class="armour-prompt-btn armour-prompt-no"
+					disabled={toggling}
+					onclick={() => onArmourTrackDecision('no')}
+				>Later</button>
+			</div>
+		{:else}
+			<button
+				class={data.status === 'active' ? 'stop-btn' : 'start-btn'}
+				disabled={toggling}
+				onclick={data.status === 'active' ? onStop : onStart}
+				title={data.status === 'active' ? 'Stop tracking' : 'Start tracking'}
+			>
+				{#if toggling}
+					<span class="text-[10px] px-1">...</span>
+				{:else if data.status === 'active'}
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-2.5 h-2.5">
+						<rect x="3" y="3" width="10" height="10" rx="1" />
+					</svg>
+				{:else}
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3">
+						<path d="M4 3.5a.5.5 0 0 1 .757-.429l8 4.8a.5.5 0 0 1 0 .858l-8 4.8A.5.5 0 0 1 4 13V3.5z" />
+					</svg>
+					<span class="font-bold tracking-wide">TRACK</span>
+				{/if}
+			</button>
+		{/if}
+		{#if data.status === 'active'}
+			<div class="flex items-center gap-1.5">
+				<span class="relative flex h-2 w-2 shrink-0">
+					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+					<span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-400"></span>
+				</span>
+				<!-- Always the live session's own elapsed, whatever scope
+					 the pills read in: this readout sits under a pulsing
+					 live cue, so it must be the thing that is actually
+					 ticking. The family's summed duration is a figure,
+					 and figures live in the labelled pill group. -->
+				<span class="text-sm font-semibold text-emerald-400 tabular-nums tracking-wider w-12 text-center">
+					{formatElapsed(data.elapsed ?? 0)}
+				</span>
+			</div>
+		{/if}
+	</div>
+
+	<!-- Session facets: the independent, co-recorded attributions a
+		 session carries. Each control here declares gameplay from now on,
+		 so a facet is editable while a session runs only if its stamp is
+		 finer-grained than the session. The boost is (it stamps each skill
+		 gain, so a pill expiring is recordable); the name is not (it names
+		 the whole session, so a live edit could only rewrite history) and
+		 is corrected on the session record instead. -->
+	<div
+		class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
+		data-guide-anchor="overlay-session-section"
+	>
+		<div class="w-32 flex flex-col shrink-0">
+			<span class="facet-label">Session</span>
+			<div class="flex items-center gap-1" data-testid="definition-facet">
+				{#if isActive && data.sessionName}
+					<div
+						class="text-sm font-medium text-white/90 truncate px-1 min-w-0 flex-1"
+						title={`${data.sessionName} (fixed for this session; correct it from the session record once it ends)`}
+					>
+						{data.sessionName}
+					</div>
+				{:else}
+					<button
+						type="button"
+						class="facet-chip min-w-0 flex-1 {data.sessionName ? 'facet-chip-open' : ''}"
+						disabled={savingDefinition || !definitionEditable}
+						aria-haspopup="menu"
+						aria-expanded={definitionMenuOpen}
+						title={!definitionEditable
+							? 'The session is fixed while one runs'
+							: data.sessionName
+								? `${data.sessionName}; pick the session for the next run`
+								: 'Pick the session for the next run'}
+						onclick={(event) => onDefinitionTrigger(event.currentTarget as HTMLButtonElement)}
+					>
+						{#if data.sessionName}
+							<span class="truncate">{data.sessionName}</span>
+						{:else}
+							<span class="text-white/40">Pick...</span>
+						{/if}
+					</button>
+					<!-- No clear: a session always runs under a definition, so
+						 "nothing in particular" is picked from the menu (the
+						 protected default) rather than emptied here. -->
+				{/if}
+			</div>
 		</div>
 
-		<!-- Session facets: the independent, co-recorded attributions a
-			 session carries. Each control here declares gameplay from now on,
-			 so a facet is editable while a session runs only if its stamp is
-			 finer-grained than the session. The boost is (it stamps each skill
-			 gain, so a pill expiring is recordable); the name is not (it names
-			 the whole session, so a live edit could only rewrite history) and
-			 is corrected on the session record instead. -->
-		<div
-			class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
-			data-guide-anchor="overlay-session-section"
-		>
-			<div class="w-32 flex flex-col shrink-0">
-				<span class="facet-label">Session</span>
-				<div class="flex items-center gap-1" data-testid="definition-facet">
-					{#if isActive && data.sessionName}
-						<div
-							class="text-sm font-medium text-white/90 truncate px-1 min-w-0 flex-1"
-							title={`${data.sessionName} (fixed for this session; correct it from the session record once it ends)`}
-						>
-							{data.sessionName}
-						</div>
-					{:else}
-						<button
-							type="button"
-							class="facet-chip min-w-0 flex-1 {data.sessionName ? 'facet-chip-open' : ''}"
-							disabled={savingDefinition || !definitionEditable}
-							aria-haspopup="menu"
-							aria-expanded={definitionMenuOpen}
-							title={!definitionEditable
-								? 'The session is fixed while one runs'
-								: data.sessionName
-									? `${data.sessionName}; pick the session for the next run`
-									: 'Pick the session for the next run'}
-							onclick={(event) => onDefinitionTrigger(event.currentTarget as HTMLButtonElement)}
-						>
-							{#if data.sessionName}
-								<span class="truncate">{data.sessionName}</span>
-							{:else}
-								<span class="text-white/40">Pick...</span>
-							{/if}
-						</button>
-						<!-- No clear: a session always runs under a definition, so
-							 "nothing in particular" is picked from the menu (the
-							 protected default) rather than emptied here. -->
-					{/if}
-				</div>
+		<!-- Skill boost: the labelled percentage of the pill in force,
+			 because it changes how PES reads. Three declarations, not
+			 two: blank claims nothing, a typed 0 declares deliberately
+			 unboosted play (the baseline a boost's effect is measured
+			 against), and a number declares its magnitude. Editable at
+			 any time: re-declaring when a pill runs out marks every gain
+			 from that moment onward, and never touches the ones already
+			 stamped. -->
+		<div class="flex flex-col shrink-0">
+			<span class="facet-label">Boost</span>
+			<div class="flex items-baseline">
+				<input
+					class="w-9 bg-transparent border-b border-white/10 focus:border-accent text-sm text-white/90 px-1 py-0.5 outline-none placeholder:text-white/20 tabular-nums transition-colors"
+					bind:value={boostDraft}
+					placeholder={NO_DATA}
+					inputmode="numeric"
+					aria-label="Skill boost percent"
+					title="Boost percent in force. Leave blank to claim nothing; enter 0 to record deliberately unboosted play."
+					disabled={savingBoost}
+					onblur={onBoostCommit}
+					onkeydown={(event) => {
+						if (event.key === 'Enter') {
+							event.preventDefault();
+							void onBoostCommit();
+						}
+					}}
+				/>
+				<span class="text-[10px] text-white/30 leading-none">%</span>
 			</div>
+		</div>
 
-			<!-- Skill boost: the labelled percentage of the pill in force,
-				 because it changes how PES reads. Three declarations, not
-				 two: blank claims nothing, a typed 0 declares deliberately
-				 unboosted play (the baseline a boost's effect is measured
-				 against), and a number declares its magnitude. Editable at
-				 any time: re-declaring when a pill runs out marks every gain
-				 from that moment onward, and never touches the ones already
-				 stamped. -->
-			<div class="flex flex-col shrink-0">
-				<span class="facet-label">Boost</span>
-				<div class="flex items-baseline">
-					<input
-						class="w-9 bg-transparent border-b border-white/10 focus:border-accent text-sm text-white/90 px-1 py-0.5 outline-none placeholder:text-white/20 tabular-nums transition-colors"
-						bind:value={boostDraft}
-						placeholder={NO_DATA}
-						inputmode="numeric"
-						aria-label="Skill boost percent"
-						title="Boost percent in force. Leave blank to claim nothing; enter 0 to record deliberately unboosted play."
-						disabled={savingBoost}
-						onblur={onBoostCommit}
-						onkeydown={(event) => {
-							if (event.key === 'Enter') {
-								event.preventDefault();
-								void onBoostCommit();
-							}
-						}}
-					/>
-					<span class="text-[10px] text-white/30 leading-none">%</span>
-				</div>
-			</div>
-
-			<!-- Activities: what the play from now on counts toward. One
-				 control over the session's authored roster and whatever the
-				 mission log actually carries, so switching from one boss to
-				 the next is a single tap. Absent, not disabled, when the
-				 session has nothing to offer: a deliberately simple session
-				 gets no activity surface at all. -->
-			{#if activities?.visible}
-				<!-- The section element is the menu's anchor, not the chip
-					 clicked: declaring something swaps the ready-count button
-					 for chips, so a button anchor would be destroyed by the
-					 very action that needs to re-present the menu over it. -->
-				<div
-					class="flex flex-col shrink-0"
-					data-testid="activities-facet"
-					bind:this={activitiesSection}
-				>
-					<span class="facet-label">Activities</span>
-					<div class="flex items-center gap-1">
-						{#if standing.length > 0}
-							{#each standing as activity (activity.key)}
-								<button
-									type="button"
-									class="facet-chip facet-chip-open max-w-[140px]"
-									disabled={savingActivity}
-									aria-haspopup="menu"
-									aria-expanded={activitiesMenuOpen}
-									title={activity.handInWaiting
-										? `Waiting for the next reward clump for ${activity.name}`
-										: `Recording ${activity.name}; open the activities`}
-									onclick={() => activitiesSection && onActivitiesTrigger(activitiesSection)}
-								>
-									<span class="truncate">{activity.name}</span>
-									{#if activity.handInWaiting}
-										<span class="text-[9px] font-semibold text-sky-200/80">Waiting</span>
-									{/if}
-								</button>
-							{/each}
-						{:else}
+		<!-- Activities: what the play from now on counts toward. One
+			 control over the session's authored roster and whatever the
+			 mission log actually carries, so switching from one boss to
+			 the next is a single tap. Absent, not disabled, when the
+			 session has nothing to offer: a deliberately simple session
+			 gets no activity surface at all. -->
+		{#if activities?.visible}
+			<!-- The section element is the menu's anchor, not the chip
+				 clicked: declaring something swaps the ready-count button
+				 for chips, so a button anchor would be destroyed by the
+				 very action that needs to re-present the menu over it. -->
+			<div
+				class="flex flex-col shrink-0"
+				data-testid="activities-facet"
+				bind:this={activitiesSection}
+			>
+				<span class="facet-label">Activities</span>
+				<div class="flex items-center gap-1">
+					{#if standing.length > 0}
+						{#each standing as activity (activity.key)}
 							<button
 								type="button"
-								class="facet-chip"
+								class="facet-chip facet-chip-open max-w-[140px]"
 								disabled={savingActivity}
 								aria-haspopup="menu"
 								aria-expanded={activitiesMenuOpen}
-								title="Declare what the play from now on counts toward"
+								title={activity.handInWaiting
+									? `Waiting for the next reward clump for ${activity.name}`
+									: `Recording ${activity.name}; open the activities`}
 								onclick={() => activitiesSection && onActivitiesTrigger(activitiesSection)}
 							>
-								{#if readyCount > 0}
-									<span class="whitespace-nowrap">{readyCount} ready</span>
-								{:else}
-									<span>{NO_DATA}</span>
+								<span class="truncate">{activity.name}</span>
+								{#if activity.handInWaiting}
+									<span class="text-[9px] font-semibold text-sky-200/80">Waiting</span>
 								{/if}
 							</button>
-						{/if}
-					</div>
-				</div>
-			{/if}
-		</div>
-
-		<!-- Declared mob: the source of each kill's mob stamp, changeable
-			 mid-session (an off-declaration kill still stamps the declared
-			 mob until detection can read the target directly). -->
-		<div
-			class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
-			data-guide-anchor="overlay-mob-section"
-		>
-			<div class="w-32 flex flex-col shrink-0">
-				<span class="facet-label">Mob</span>
-				<div class="flex items-center">
-					{#if showManualInput}
-						<input
-							bind:this={mobInput}
-							class="w-full bg-transparent border-b border-white/10 focus:border-accent text-sm text-white/90 px-1 py-0.5 outline-none placeholder:text-white/20 transition-colors"
-							bind:value={mobQuery}
-							placeholder="Mob..."
-							disabled={selectingMob}
-							onfocus={onMobFocus}
-							onblur={onMobBlur}
-							onkeydown={onMobKeydown}
-						/>
-					{:else if data.currentMob}
-						<div class="text-sm font-medium text-white/90 truncate px-1 w-full">{data.currentMob}</div>
+						{/each}
 					{:else}
-						<div class="text-sm font-medium text-white/20 px-1">{NO_DATA}</div>
+						<button
+							type="button"
+							class="facet-chip"
+							disabled={savingActivity}
+							aria-haspopup="menu"
+							aria-expanded={activitiesMenuOpen}
+							title="Declare what the play from now on counts toward"
+							onclick={() => activitiesSection && onActivitiesTrigger(activitiesSection)}
+						>
+							{#if readyCount > 0}
+								<span class="whitespace-nowrap">{readyCount} ready</span>
+							{:else}
+								<span>{NO_DATA}</span>
+							{/if}
+						</button>
 					{/if}
 				</div>
 			</div>
-			{#if data.currentMob}
-				<button
-					type="button"
-					class="release-btn shrink-0"
-					aria-label="Release mob"
-					onclick={onReleaseMob}
-					title="Release mob"
-				>
-					{releasing ? '...' : 'x'}
-				</button>
-			{/if}
-		</div>
+		{/if}
+	</div>
 
-		<!-- Trifecta/Weapon Section. No own separator; the adjacent armour section
-			 owns the boundary via its left border. -->
-		<div
-			class="flex items-center gap-2 shrink-0"
-			data-guide-anchor="overlay-equipment-section"
-		>
-			<span class="text-white/40 shrink-0">{@html ICON_EQUIPMENT}</span>
-			{#if data.currentToolKind === 'healing'}
+	<!-- Declared mob: the source of each kill's mob stamp, changeable
+		 mid-session (an off-declaration kill still stamps the declared
+		 mob until detection can read the target directly). -->
+	<div
+		class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
+		data-guide-anchor="overlay-mob-section"
+	>
+		<div class="w-32 flex flex-col shrink-0">
+			<span class="facet-label">Mob</span>
+			<div class="flex items-center">
+				{#if showManualInput}
+					<input
+						bind:this={mobInput}
+						class="w-full bg-transparent border-b border-white/10 focus:border-accent text-sm text-white/90 px-1 py-0.5 outline-none placeholder:text-white/20 transition-colors"
+						bind:value={mobQuery}
+						placeholder="Mob..."
+						disabled={selectingMob}
+						onfocus={onMobFocus}
+						onblur={onMobBlur}
+						onkeydown={onMobKeydown}
+					/>
+				{:else if data.currentMob}
+					<div class="text-sm font-medium text-white/90 truncate px-1 w-full">{data.currentMob}</div>
+				{:else}
+					<div class="text-sm font-medium text-white/20 px-1">{NO_DATA}</div>
+				{/if}
+			</div>
+		</div>
+		{#if data.currentMob}
+			<button
+				type="button"
+				class="release-btn shrink-0"
+				aria-label="Release mob"
+				onclick={onReleaseMob}
+				title="Release mob"
+			>
+				{releasing ? '...' : 'x'}
+			</button>
+		{/if}
+	</div>
+
+	<!-- Trifecta/Weapon Section. No own separator; the adjacent armour section
+		 owns the boundary via its left border. -->
+	<div
+		class="flex items-center gap-2 shrink-0"
+		data-guide-anchor="overlay-equipment-section"
+	>
+		<span class="text-white/40 shrink-0">{@html ICON_EQUIPMENT}</span>
+		{#if data.currentToolKind === 'healing'}
+			<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
+				{data.currentTool || NO_DATA}
+			</div>
+		{:else if isTrifectaAttribution}
+			<TrifectaSelector
+				trifecta={data.trifectaAttribution}
+				tone={data.status === 'active' ? 'active' : 'idle'}
+				menuOpen={trifectaMenuOpen}
+				disabled={trifectaSaving}
+				ontrigger={onTrifectaTrigger}
+			/>
+		{:else if data.harvestGuardrail}
+			<!-- The guardrail cue: loot evidence disagrees with the hotbar's
+				 tool. The believed tool shows in red (the questionable
+				 belief) with the corrected attribution beneath, until a
+				 hotbar press or agreeing loot resolves it. -->
+			<div
+				class="flex flex-col min-w-0"
+				title={`Board output says ${data.harvestGuardrail.expectedTool}; hotbar shows ${data.harvestGuardrail.observedTool ?? 'no tool'}`}
+				data-testid="guardrail-alert"
+			>
+				<div class="text-xs text-red-400 animate-pulse truncate max-w-[120px]">
+					{data.harvestGuardrail.observedTool ?? 'No tool'}
+				</div>
+				<!-- Never truncated: what is actually being recorded must be
+					 readable in full, so the self-sizing window widens for it. -->
+				<div class="text-[10px] leading-tight text-white/70 whitespace-nowrap">
+					Recording: {data.harvestGuardrail.expectedTool}
+				</div>
+			</div>
+		{:else}
+			<div class="flex flex-col min-w-0">
 				<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
 					{data.currentTool || NO_DATA}
 				</div>
-			{:else if isTrifectaAttribution}
-				<TrifectaSelector
-					trifecta={data.trifectaAttribution}
-					tone={data.status === 'active' ? 'active' : 'idle'}
-					menuOpen={trifectaMenuOpen}
-					disabled={trifectaSaving}
-					ontrigger={onTrifectaTrigger}
-				/>
-			{:else if data.harvestGuardrail}
-				<!-- The guardrail cue: loot evidence disagrees with the hotbar's
-					 tool. The believed tool shows in red (the questionable
-					 belief) with the corrected attribution beneath, until a
-					 hotbar press or agreeing loot resolves it. -->
-				<div
-					class="flex flex-col min-w-0"
-					title={`Board output says ${data.harvestGuardrail.expectedTool}; hotbar shows ${data.harvestGuardrail.observedTool ?? 'no tool'}`}
-					data-testid="guardrail-alert"
-				>
-					<div class="text-xs text-red-400 animate-pulse truncate max-w-[120px]">
-						{data.harvestGuardrail.observedTool ?? 'No tool'}
+				{#if activityLabel}
+					<!-- Derived, never declared: the held tool implies which
+						 activity the next action records as. What actually gets
+						 recorded still follows the loot evidence, so this reads
+						 as feedback the user can catch disagreeing. -->
+					<div
+						class="text-[9px] leading-tight uppercase tracking-wider text-white/35 whitespace-nowrap"
+						title="Held tool: recording as {activityLabel}"
+						data-testid="activity-feedback"
+					>
+						{activityLabel}
 					</div>
-					<!-- Never truncated: what is actually being recorded must be
-						 readable in full, so the self-sizing window widens for it. -->
-					<div class="text-[10px] leading-tight text-white/70 whitespace-nowrap">
-						Recording: {data.harvestGuardrail.expectedTool}
-					</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Active protection identity and live selection. -->
+	{#if data.trackProtectionCosts !== false && data.trackProtectionBySegment !== false && protection && protection.loadouts.length > 0}
+		<div class="flex flex-col shrink-0 border-l border-white/10 pl-3" data-testid="protection-facet">
+			<span class="facet-label">Armour</span>
+			{#if protection.loadouts.length === 1}
+				<div class="px-1 text-xs text-white/70 whitespace-nowrap" title="Armour recorded from now on">
+					{activeProtection?.name ?? protection.loadouts[0].name}
 				</div>
 			{:else}
-				<div class="flex flex-col min-w-0">
-					<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
-						{data.currentTool || NO_DATA}
-					</div>
-					{#if activityLabel}
-						<!-- Derived, never declared: the held tool implies which
-							 activity the next action records as. What actually gets
-							 recorded still follows the loot evidence, so this reads
-							 as feedback the user can catch disagreeing. -->
-						<div
-							class="text-[9px] leading-tight uppercase tracking-wider text-white/35 whitespace-nowrap"
-							title="Held tool: recording as {activityLabel}"
-							data-testid="activity-feedback"
+				<div class="flex items-center gap-1">
+					{#each protection.loadouts as loadout (loadout.id)}
+						<button
+							type="button"
+							class="facet-chip max-w-[130px] {loadout.id === protection.activeLoadoutId ? 'facet-chip-open' : ''}"
+							disabled={protectionSaving}
+							aria-pressed={loadout.id === protection.activeLoadoutId}
+							title={`Record ${loadout.name} from now on`}
+							onclick={() => onProtectionSelect(loadout.id)}
 						>
-							{activityLabel}
-						</div>
-					{/if}
+							<span class="truncate">{loadout.name}</span>
+						</button>
+					{/each}
 				</div>
 			{/if}
 		</div>
+	{/if}
 
-		<!-- Active protection identity and live selection. -->
-		{#if data.trackProtectionCosts !== false && data.trackProtectionBySegment !== false && protection && protection.loadouts.length > 0}
-			<div class="flex flex-col shrink-0 border-l border-white/10 pl-3" data-testid="protection-facet">
-				<span class="facet-label">Armour</span>
-				{#if protection.loadouts.length === 1}
-					<div class="px-1 text-xs text-white/70 whitespace-nowrap" title="Armour recorded from now on">
-						{activeProtection?.name ?? protection.loadouts[0].name}
-					</div>
-				{:else}
-					<div class="flex items-center gap-1">
-						{#each protection.loadouts as loadout (loadout.id)}
-							<button
-								type="button"
-								class="facet-chip max-w-[130px] {loadout.id === protection.activeLoadoutId ? 'facet-chip-open' : ''}"
-								disabled={protectionSaving}
-								aria-pressed={loadout.id === protection.activeLoadoutId}
-								title={`Record ${loadout.name} from now on`}
-								onclick={() => onProtectionSelect(loadout.id)}
-							>
-								<span class="truncate">{loadout.name}</span>
-							</button>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		{/if}
-
-		<!-- Armour cost, sequenced from the active loadout. -->
-		{#if data.trackProtectionCosts !== false}
-			<div
-				class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3"
-				data-guide-anchor="overlay-armour-section"
+	<!-- Armour cost, sequenced from the active loadout. -->
+	{#if data.trackProtectionCosts !== false}
+		<div
+			class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3"
+			data-guide-anchor="overlay-armour-section"
+		>
+			<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
+			<button
+				class="px-2 py-0.5 rounded-[4px] border text-[9px] font-medium transition-all
+					{armourSessionId && costAction.enabled
+						? armourCostOpen
+							? 'cursor-pointer bg-accent/20 border-accent/40 text-accent'
+							: 'cursor-pointer bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white/90'
+						: 'cursor-not-allowed bg-white/5 border-white/10 text-white/20'}"
+				bind:this={inSessionArmourButton}
+				disabled={!armourSessionId || !costAction.enabled}
+				aria-haspopup="dialog"
+				aria-expanded={armourCostOpen}
+				onclick={onArmourCostToggle}
+				title={armourSessionId ? costAction.label : 'Start or stop a session to enable'}
+				data-guide-anchor="overlay-armour-cost-btn"
 			>
-				<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
-				<button
-					class="px-2 py-0.5 rounded-[4px] border text-[9px] font-medium transition-all
-						{armourSessionId && costAction.enabled
-							? armourCostOpen
-								? 'cursor-pointer bg-accent/20 border-accent/40 text-accent'
-								: 'cursor-pointer bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white/90'
-							: 'cursor-not-allowed bg-white/5 border-white/10 text-white/20'}"
-					bind:this={inSessionArmourButton}
-					disabled={!armourSessionId || !costAction.enabled}
-					aria-haspopup="dialog"
-					aria-expanded={armourCostOpen}
-					onclick={onArmourCostToggle}
-					title={armourSessionId ? costAction.label : 'Start or stop a session to enable'}
-					data-guide-anchor="overlay-armour-cost-btn"
-				>
-					Cost
-				</button>
-			</div>
-		{/if}
+				Cost
+			</button>
+		</div>
+	{/if}
 
-		<!-- Customisable stat pills (driven by the overlay stat prefs): treated as
-			 one unit, so the section separator sits at the unit boundary, not
-			 between individual pills. -->
-		{@const enabledPills = scopedStats(overlayStats.current, overlayScope, { fallback: false })}
-		{#if enabledPills.length > 0}
-			<div class="flex items-center gap-4 shrink-0 border-l border-white/10 pl-3">
-				<!-- The strip carries no scope CONTROL of its own: it
-					 follows the dashboard's choice, so the flip is a
-					 deliberate trip there rather than another control
-					 competing for width here. It does carry a scope
-					 MARKER, because the pills below are labelled
-					 identically in either scope: without it, a family
-					 total would sit in the slot an instance figure
-					 usually occupies with nothing saying so. -->
-				{#if showingLifetime && lifetime}
-					<div
-						class="flex flex-col items-center justify-center gap-0.5 shrink-0"
-						data-testid="overlay-lifetime-marker"
-						title={`Lifetime figures across ${lifetime.instanceCount} recorded ${lifetime.instanceCount === 1 ? 'session' : 'sessions'}. Change this on the dashboard.`}
-					>
-						<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">Showing</span>
-						<span class="text-sm font-semibold leading-none text-amber-300/90">Lifetime</span>
+	<!-- Customisable stat pills (driven by the overlay stat prefs): treated as
+		 one unit, so the section separator sits at the unit boundary, not
+		 between individual pills. -->
+	{#if enabledPills.length > 0}
+		<div class="flex items-center gap-4 shrink-0 border-l border-white/10 pl-3">
+			<!-- The strip carries no scope CONTROL of its own: it
+				 follows the dashboard's choice, so the flip is a
+				 deliberate trip there rather than another control
+				 competing for width here. It does carry a scope
+				 MARKER, because the pills below are labelled
+				 identically in either scope: without it, a family
+				 total would sit in the slot an instance figure
+				 usually occupies with nothing saying so. -->
+			{#if showingLifetime && lifetime}
+				<div
+					class="flex flex-col items-center justify-center gap-0.5 shrink-0"
+					data-testid="overlay-lifetime-marker"
+					title={`Lifetime figures across ${lifetime.instanceCount} recorded ${lifetime.instanceCount === 1 ? 'session' : 'sessions'}. Change this on the dashboard.`}
+				>
+					<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">Showing</span>
+					<span class="text-sm font-semibold leading-none text-amber-300/90">Lifetime</span>
+				</div>
+			{/if}
+			{#each enabledPills as pref (pref.id)}
+				{@const def = getStatDef(pref.id)}
+				{#if def}
+					{@const r = showingLifetime && def.renderLifetime && lifetime
+						? def.renderLifetime(lifetime)
+						: def.render(status)}
+					{@const valueColor = r.value === NO_DATA
+						? 'text-white/25'
+						: r.color === 'text-text'
+							? 'text-white/85'
+							: r.color}
+					<div class="flex flex-col items-center justify-center gap-0.5 shrink-0">
+						<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">{def.shortLabel ?? def.label}</span>
+						<span class="text-sm font-semibold tabular-nums leading-none {valueColor}">{r.value}</span>
 					</div>
 				{/if}
-				{#each enabledPills as pref (pref.id)}
-					{@const def = getStatDef(pref.id)}
-					{#if def}
-						{@const r = showingLifetime && def.renderLifetime && lifetime
-							? def.renderLifetime(lifetime)
-							: def.render(status)}
-						{@const valueColor = r.value === '—'
-							? 'text-white/25'
-							: r.color === 'text-text'
-								? 'text-white/85'
-								: r.color}
-						<div class="flex flex-col items-center justify-center gap-0.5 shrink-0">
-							<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">{def.shortLabel ?? def.label}</span>
-							<span class="text-sm font-semibold tabular-nums leading-none {valueColor}">{r.value}</span>
-						</div>
-					{/if}
-				{/each}
-			</div>
-		{/if}
-	{:else}
-		<!-- Post-session readout: the stopped session's final totals, held
-			 while the armour-cost popup needs them. -->
-		<div class="flex items-center gap-4 shrink-0">
-			<span class="text-[10px] font-bold text-white/60 tracking-wider uppercase shrink-0">Session ended</span>
-
-			{#if lastSessionStats}
-				<div class="flex items-center gap-3 px-3 border-x border-white/10 shrink-0">
-					<div class="flex items-center gap-1.5">
-						<span class="text-[9px] text-white/40 uppercase tracking-widest">Cycled</span>
-						<span class="text-xs font-semibold text-orange-400 tabular-nums">{formatPed(lastSessionStats.cost)}</span>
-					</div>
-					<div class="flex items-center gap-1.5">
-						<span class="text-[9px] text-white/40 uppercase tracking-widest">Net</span>
-						<span class="text-xs font-semibold tabular-nums {lastSessionStats.net >= 0 ? 'text-emerald-400' : 'text-orange-400'}">
-							{lastSessionStats.net >= 0 ? '+' : ''}{formatPed(lastSessionStats.net)}
-						</span>
-					</div>
-				</div>
-			{/if}
-
-			<!-- Armour cost remains reachable post-session for end-of-session bookkeeping. -->
-			{#if data.trackProtectionCosts !== false}
-				<div class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3">
-					<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
-					<button
-						bind:this={postSessionArmourButton}
-						class="px-2 py-0.5 rounded-[4px] border text-[9px] font-medium transition-all
-							{!costAction.enabled
-								? 'cursor-not-allowed bg-white/5 border-white/10 text-white/20'
-								: armourCostOpen
-									? 'cursor-pointer bg-accent/20 border-accent/40 text-accent'
-									: 'cursor-pointer bg-white/5 border-white/10 text-white/60 hover:bg-white/10 hover:text-white/90'}"
-						aria-haspopup="dialog"
-						aria-expanded={armourCostOpen}
-						onclick={onArmourCostToggle}
-						disabled={!costAction.enabled}
-						title={costAction.label}
-					>
-						Cost
-					</button>
-				</div>
-			{/if}
+			{/each}
 		</div>
 	{/if}
 </div>

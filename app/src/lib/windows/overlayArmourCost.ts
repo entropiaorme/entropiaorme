@@ -13,7 +13,6 @@ export interface OverlayArmourCostState {
 	steps: ProtectionCostStep[];
 	protection: ProtectionOverview | null;
 	requiresLoadoutSelection: boolean;
-	recordNow: boolean;
 	// Logical screen-px anchor: horizontal centre and top edge for the popup,
 	// so it can re-centre against the cost button as it resizes.
 	anchor: { centerX: number; top: number };

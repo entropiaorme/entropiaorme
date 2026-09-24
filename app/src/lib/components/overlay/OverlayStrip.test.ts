@@ -570,46 +570,6 @@ describe('armour cost control', () => {
 	});
 });
 
-describe('post-session bar', () => {
-	const postSession = {
-		data: liveData({ status: 'idle' }),
-		lastSessionId: 's1',
-	};
-
-	it('replaces the active strip once a session has ended', () => {
-		render(OverlayStrip, { props: postSession });
-		expect(screen.getByText('Session ended')).toBeTruthy();
-		expect(screen.queryByTitle('Start tracking')).toBeNull();
-	});
-
-	it('does not appear while idle with no finished session', () => {
-		render(OverlayStrip, { props: { data: liveData() } });
-		expect(screen.queryByText('Session ended')).toBeNull();
-		expect(screen.getByTitle('Start tracking')).toBeTruthy();
-	});
-
-	it('renders the last-session cost and signed net', () => {
-		render(OverlayStrip, {
-			props: {
-				...postSession,
-				lastSessionStats: { cost: 25.5, returns: 27.75, pes: 1.2, net: 2.25 },
-			},
-		});
-		expect(screen.getByText('25.50')).toBeTruthy();
-		expect(screen.getByText('+2.25')).toBeTruthy();
-	});
-
-	it('renders a negative net without the plus sign', () => {
-		render(OverlayStrip, {
-			props: {
-				...postSession,
-				lastSessionStats: { cost: 25.5, returns: 20, pes: 1.2, net: -5.5 },
-			},
-		});
-		expect(screen.getByText('-5.50')).toBeTruthy();
-	});
-});
-
 describe('activities control', () => {
 	function activities(overrides: Partial<NonNullable<TrackingLive['activities']>> = {}) {
 		return {

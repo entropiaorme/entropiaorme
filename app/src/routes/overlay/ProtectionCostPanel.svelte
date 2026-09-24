@@ -26,7 +26,6 @@
 		steps: ProtectionCostStep[];
 		protection?: ProtectionOverview | null;
 		requiresLoadoutSelection?: boolean;
-		recordNow?: boolean;
 		onClose: () => void;
 	}
 
@@ -36,7 +35,6 @@
 		steps,
 		protection = null,
 		requiresLoadoutSelection = false,
-		recordNow = true,
 		onClose,
 	}: Props = $props();
 
@@ -183,7 +181,7 @@
 		selectedLoadoutId = loadoutId;
 		currentSteps = buildProtectionCostStepsForLoadout(protection, loadoutId);
 		stepIndex = 0;
-		setupSaved = !recordNow || currentSteps.length === 0;
+		setupSaved = currentSteps.length === 0;
 	}
 </script>
 
@@ -194,7 +192,7 @@
 		<div>
 			<p class="text-xs font-medium">Armour setup saved</p>
 			<p class="mt-1 text-[11px] text-white/45">
-				{recordNow ? 'No armour cost needs recording.' : 'You can record its measured cost later.'}
+				No armour cost needs recording.
 			</p>
 		</div>
 		<Button size="sm" onclick={onClose}>Done</Button>

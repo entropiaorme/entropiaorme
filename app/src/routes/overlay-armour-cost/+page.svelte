@@ -195,7 +195,6 @@
 				steps={panelState.steps}
 				protection={panelState.protection}
 				requiresLoadoutSelection={panelState.requiresLoadoutSelection}
-				recordNow={panelState.recordNow}
 				onClose={() => void requestClose()}
 			/>
 		</div>

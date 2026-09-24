@@ -136,8 +136,7 @@ describe('protection cost panel', () => {
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
-	it('captures a whole-session setup on Later without recording a cost', async () => {
-		const onClose = vi.fn();
+	it('names a whole-session setup for a session owed one', async () => {
 		api.assignSessionProtectionLoadout.mockResolvedValue({});
 		api.pendingProtectionAttribution
 			.mockResolvedValueOnce([
@@ -156,7 +155,6 @@ describe('protection cost panel', () => {
 				repairOcrEnabled: false,
 				steps: [],
 				requiresLoadoutSelection: true,
-				recordNow: false,
 				protection: {
 					sets: [],
 					loadouts: [
@@ -171,7 +169,7 @@ describe('protection cost panel', () => {
 					recentReconciliations: [],
 					recentCostWindows: [],
 				},
-				onClose,
+				onClose: vi.fn(),
 			},
 		});
 
@@ -184,11 +182,6 @@ describe('protection cost panel', () => {
 		// read as the hits it just attributed having gone away.
 		await waitFor(() => expect(screen.getByText(/Recording under/)).toBeTruthy());
 		expect(screen.queryByText(/hits/)).toBeNull();
-		await fireEvent.click(await screen.findByText('Continue'));
-		expect(screen.getByText('Armour setup saved')).toBeTruthy();
-		expect(api.confirmProtectionRepair).not.toHaveBeenCalled();
-		await fireEvent.click(screen.getByText('Done'));
-		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
 	it('waits for a named setup before it will carry one forward', async () => {
@@ -203,7 +196,6 @@ describe('protection cost panel', () => {
 				repairOcrEnabled: false,
 				steps: [],
 				requiresLoadoutSelection: true,
-				recordNow: true,
 				protection: {
 					sets: [],
 					loadouts: [
@@ -261,7 +253,6 @@ describe('protection cost panel', () => {
 				repairOcrEnabled: false,
 				steps: [],
 				requiresLoadoutSelection: true,
-				recordNow: false,
 				protection: {
 					sets: [],
 					loadouts: [

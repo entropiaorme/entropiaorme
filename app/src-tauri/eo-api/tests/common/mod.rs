@@ -93,7 +93,7 @@ pub async fn producer_handles_with_tracker(
     )
     .await
     .expect("tracker");
-    let hotbar = HotbarListener::new(bus.clone(), None, None);
+    let hotbar = HotbarListener::new(bus.clone(), None, None, None);
     let watcher = Arc::new(ChatlogWatcher::new(
         bus.clone(),
         data_dir.join("chat.log"),

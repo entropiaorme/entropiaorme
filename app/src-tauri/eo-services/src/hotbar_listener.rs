@@ -5,12 +5,18 @@
 //! and an active tracking session, observed through the bus's session
 //! events. Resolution runs on one owned worker rather than a
 //! short-lived thread per press; a failing resolver is contained.
+//!
+//! The keystroke source observes keys globally, so a slot key typed
+//! into another application arrives here too. An injected focus probe
+//! drops presses made while another window holds focus: they never
+//! reached the game, so they must not move the tracked tool.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::bus_events::{BusEvent, HotbarIntentPayload, HotbarItemKind};
+use crate::eu_window::GameFocus;
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::healing_profile::HealingProfile;
 use crate::keystroke_source::{KeystrokeEvent, KeystrokeKind, KeystrokeSource};
@@ -32,6 +38,10 @@ pub struct ResolvedHotbarItem {
 /// The resolver: slot key to the current equipment snapshot, or None for an
 /// empty or unreadable slot. It runs on the listener-owned worker.
 pub type HotbarResolver = Arc<dyn Fn(&str) -> Option<ResolvedHotbarItem> + Send + Sync>;
+
+/// The focus seam: where keyboard focus sits relative to the game client
+/// at the moment it is asked. Production wires `eu_window::game_focus`.
+pub type GameFocusProbe = Arc<dyn Fn() -> GameFocus + Send + Sync>;
 
 /// A keystroke observer (the recording controller's seam): called with
 /// (key, kind) for each hotbar-slot press.
@@ -57,6 +67,7 @@ struct Gate {
 pub struct HotbarListener {
     bus: Arc<EventBus>,
     source: Option<Arc<dyn KeystrokeSource>>,
+    focus: Option<GameFocusProbe>,
     gate: Arc<Gate>,
     key_tap: Arc<Mutex<Option<KeyTap>>>,
     resolve_queue: Mutex<Option<Sender<HotbarResolveRequest>>>,
@@ -66,11 +77,13 @@ pub struct HotbarListener {
 
 impl HotbarListener {
     /// A `None` source leaves the listener inert, matching the
-    /// original's missing-hook-library path.
+    /// original's missing-hook-library path. A `None` focus probe admits
+    /// every press, as does a probe answering `Unknown`.
     pub fn new(
         bus: Arc<EventBus>,
         source: Option<Arc<dyn KeystrokeSource>>,
         resolver: Option<HotbarResolver>,
+        focus: Option<GameFocusProbe>,
     ) -> Arc<Self> {
         let gate = Arc::new(Gate {
             hooks_enabled: AtomicBool::new(false),
@@ -104,6 +117,7 @@ impl HotbarListener {
         let listener = Arc::new(Self {
             bus: bus.clone(),
             source: source.clone(),
+            focus,
             gate: gate.clone(),
             key_tap: key_tap.clone(),
             resolve_queue: Mutex::new(queue),
@@ -263,6 +277,18 @@ impl HotbarListener {
         if !HOTBAR_SLOT_KEYS.contains(&event.key.as_str()) {
             return;
         }
+        // Asked on the source's dispatch worker, never the hook thread.
+        // Only a definite Unfocused drops the press: a platform that
+        // cannot tell keeps admitting every press, as before the probe.
+        if let Some(focus) = &self.focus {
+            if focus() == GameFocus::Unfocused {
+                tracing::debug!(
+                    target: "eo::input",
+                    "hotbar press ignored: the game window does not hold focus"
+                );
+                return;
+            }
+        }
         let tap = self.key_tap.lock().expect("key tap").clone();
         if let Some(tap) = tap {
             let _ =
@@ -350,6 +376,10 @@ mod tests {
     }
 
     fn rig(resolver: Option<HotbarResolver>) -> Rig {
+        rig_with_focus(resolver, None)
+    }
+
+    fn rig_with_focus(resolver: Option<HotbarResolver>, focus: Option<GameFocusProbe>) -> Rig {
         let bus = Arc::new(EventBus::new());
         let stream = Arc::new(Mutex::new(Vec::new()));
         let sink = stream.clone();
@@ -359,7 +389,7 @@ mod tests {
                 .push((event.topic(), event.payload_value()));
         });
         let source = Arc::new(MockKeystrokeSource::new());
-        let listener = HotbarListener::new(bus.clone(), Some(source.clone()), resolver);
+        let listener = HotbarListener::new(bus.clone(), Some(source.clone()), resolver, focus);
         Rig {
             bus,
             source,
@@ -597,6 +627,53 @@ mod tests {
     }
 
     #[test]
+    fn presses_made_while_another_window_holds_focus_are_dropped() {
+        let focus = Arc::new(Mutex::new(GameFocus::Unfocused));
+        let probe_focus = focus.clone();
+        let probe: GameFocusProbe = Arc::new(move || *probe_focus.lock().unwrap());
+        let rig = rig_with_focus(Some(standard_resolver()), Some(probe));
+        rig.listener.set_hotbar_hooks_enabled(true);
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+
+        let taps = Arc::new(Mutex::new(Vec::new()));
+        let sink = taps.clone();
+        rig.listener
+            .set_key_tap(Arc::new(move |key: &str, _kind: &str| {
+                sink.lock().unwrap().push(key.to_string());
+            }));
+
+        rig.source.inject("1", now(), KeystrokeKind::Press);
+        *focus.lock().unwrap() = GameFocus::Focused;
+        rig.source.inject("2", now(), KeystrokeKind::Press);
+        *focus.lock().unwrap() = GameFocus::Unknown;
+        rig.source.inject("3", now(), KeystrokeKind::Press);
+        wait_for_intents(&rig, 2);
+        rig.listener.stop();
+
+        assert_eq!(
+            *taps.lock().unwrap(),
+            ["2", "3"],
+            "the unfocused press never reaches the key tap"
+        );
+        // The resolve queue is FIFO, so an admitted "1" would have
+        // published ahead of "2".
+        let stream = rig.stream.lock().unwrap();
+        let slots: Vec<&Value> = stream
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| &payload["slot"])
+            .collect();
+        assert_eq!(
+            slots,
+            ["2", "3"],
+            "focused and unknown presses both resolve"
+        );
+    }
+
+    #[test]
     fn a_panicking_resolver_is_contained() {
         let resolver: HotbarResolver = Arc::new(|_| panic!("resolver down"));
         let rig = rig(Some(resolver));
@@ -723,8 +800,12 @@ mod tests {
     fn the_explicit_stop_is_what_releases_the_listener() {
         let bus = Arc::new(EventBus::new());
         let source = Arc::new(MockKeystrokeSource::new());
-        let listener =
-            HotbarListener::new(bus.clone(), Some(source.clone()), Some(standard_resolver()));
+        let listener = HotbarListener::new(
+            bus.clone(),
+            Some(source.clone()),
+            Some(standard_resolver()),
+            None,
+        );
         // The bus subscriptions hold the listener alive through their
         // closures; scope exit alone cannot tear it down.
         assert!(bus.has_subscribers(Topic::SessionStarted));

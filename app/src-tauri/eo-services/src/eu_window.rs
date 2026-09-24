@@ -1,7 +1,9 @@
 //! Locate and measure the Entropia Universe game window.
 //!
 //! Helpers used by the manual scan flow to derive capture regions from
-//! the live game window rather than a fixed-resolution preset table.
+//! the live game window rather than a fixed-resolution preset table,
+//! and the focus check the hotbar listener consults before a slot key
+//! may move the tracked tool.
 //! On non-Windows platforms the helpers return None and callers handle
 //! the missing-window case, exactly as the original does. The capture
 //! regions compose these lookups with the pure geometry in
@@ -30,6 +32,28 @@ pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)>
 /// Whether the game client window is currently locatable.
 pub fn game_window_present() -> bool {
     find_game_window().is_some()
+}
+
+/// Where keyboard focus sits relative to the game client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameFocus {
+    /// The game client window holds focus.
+    Focused,
+    /// The game client is running but another window (or none) holds
+    /// focus.
+    Unfocused,
+    /// The platform cannot tell: no display connection, a window
+    /// manager that does not publish the active window, or a game
+    /// window this lookup cannot see (a native-Wayland client, say).
+    Unknown,
+}
+
+/// Where keyboard focus sits relative to the game client. `Unfocused`
+/// is only reported when the game window is itself visible to the
+/// lookup, so a game this platform layer cannot see reads as `Unknown`
+/// rather than as permanently unfocused.
+pub fn game_focus() -> GameFocus {
+    platform::game_focus()
 }
 
 /// The pointer's current position in screen coordinates, or None where
@@ -80,30 +104,66 @@ pub fn sale_window_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])>
 
 #[cfg(windows)]
 mod platform {
-    use super::{WindowHandle, GAME_TITLE_PREFIX};
+    use super::{GameFocus, WindowHandle, GAME_TITLE_PREFIX};
 
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
     use windows::Win32::Graphics::Gdi::ClientToScreen;
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetCursorPos, GetWindowTextLengthW, GetWindowTextW,
-        IsWindowVisible,
+        EnumWindows, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowTextLengthW,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
     };
+
+    /// The window's title, or None for an untitled window or one this
+    /// process owns. Reading an in-process window's title sends it a
+    /// message and waits on its owning (UI) thread; the focus probe runs
+    /// on the keystroke dispatch worker, which the UI thread joins at
+    /// shutdown, so that wait could deadlock. The game is never
+    /// in-process, so skipping our own windows loses nothing.
+    fn window_title(hwnd: HWND) -> Option<String> {
+        unsafe {
+            let mut owner = 0u32;
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut owner as *mut u32));
+            if owner == std::process::id() {
+                return None;
+            }
+            let length = GetWindowTextLengthW(hwnd);
+            if length == 0 {
+                return None;
+            }
+            let mut buffer = vec![0u16; (length + 1) as usize];
+            let copied = GetWindowTextW(hwnd, &mut buffer);
+            Some(String::from_utf16_lossy(&buffer[..copied as usize]))
+        }
+    }
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let result = &mut *(lparam.0 as *mut Option<WindowHandle>);
-        let length = GetWindowTextLengthW(hwnd);
-        if length == 0 {
+        let Some(title) = window_title(hwnd) else {
             return BOOL(1);
-        }
-        let mut buffer = vec![0u16; (length + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buffer);
-        let title = String::from_utf16_lossy(&buffer[..copied as usize]);
+        };
         if title.starts_with(GAME_TITLE_PREFIX) && IsWindowVisible(hwnd).as_bool() {
             *result = Some(WindowHandle(hwnd.0 as isize));
             return BOOL(0);
         }
         BOOL(1)
+    }
+
+    pub fn game_focus() -> GameFocus {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.0.is_null() {
+            // No foreground window: activation is mid-transition, so the
+            // answer is unknowable rather than "not the game".
+            return GameFocus::Unknown;
+        }
+        if window_title(foreground).is_some_and(|title| title.starts_with(GAME_TITLE_PREFIX)) {
+            return GameFocus::Focused;
+        }
+        if find_game_window().is_some() {
+            GameFocus::Unfocused
+        } else {
+            GameFocus::Unknown
+        }
     }
 
     pub fn find_game_window() -> Option<WindowHandle> {
@@ -154,16 +214,49 @@ mod platform {
 /// invisible to clients). Discovery walks the window manager's
 /// `_NET_CLIENT_LIST`, matches the title prefix, and geometry
 /// translates the client origin to root coordinates: the same
-/// title-then-client-area contract as the Windows helpers. Every call
-/// opens its own short-lived connection (lookups are per-scan, not
-/// hot-path) and any X error folds to None, matching the
-/// window-vanished handling on Windows.
+/// title-then-client-area contract as the Windows helpers. The scan
+/// lookups open their own short-lived connection (they are per-scan,
+/// not hot-path); the focus query answers per hotbar press, so it keeps
+/// one connection for the process and reopens it after an error. Any X
+/// error folds to None, matching the window-vanished handling on
+/// Windows.
+///
+/// Focus reads the window manager's `_NET_ACTIVE_WINDOW`. Under a
+/// Wayland compositor the XWayland window manager keeps it current for
+/// X11 clients and points it away from them (at None, or at a
+/// compositor-owned placeholder) when a native-Wayland client takes
+/// focus, so "is the active window the game" stays answerable even
+/// though the Wayland client itself is invisible here.
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{WindowHandle, GAME_TITLE_PREFIX};
+    use super::{GameFocus, WindowHandle, GAME_TITLE_PREFIX};
+
+    use std::sync::{Mutex, PoisonError};
 
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, MapState, Window};
+    use x11rb::rust_connection::RustConnection;
+
+    struct Atoms {
+        net_client_list: Atom,
+        net_active_window: Atom,
+        net_wm_name: Atom,
+        utf8_string: Atom,
+    }
+
+    impl Atoms {
+        fn intern(conn: &impl Connection) -> Option<Self> {
+            let intern = |name: &[u8]| -> Option<Atom> {
+                Some(conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
+            };
+            Some(Self {
+                net_client_list: intern(b"_NET_CLIENT_LIST")?,
+                net_active_window: intern(b"_NET_ACTIVE_WINDOW")?,
+                net_wm_name: intern(b"_NET_WM_NAME")?,
+                utf8_string: intern(b"UTF8_STRING")?,
+            })
+        }
+    }
 
     fn window_title(
         conn: &impl Connection,
@@ -188,37 +281,26 @@ mod platform {
         (reply.value_len > 0).then(|| String::from_utf8_lossy(&reply.value).into_owned())
     }
 
-    pub fn find_game_window() -> Option<WindowHandle> {
-        let (conn, screen_num) = x11rb::connect(None).ok()?;
-        let root = conn.setup().roots[screen_num].root;
-        let net_client_list = conn
-            .intern_atom(false, b"_NET_CLIENT_LIST")
-            .ok()?
-            .reply()
-            .ok()?
-            .atom;
-        let net_wm_name = conn
-            .intern_atom(false, b"_NET_WM_NAME")
-            .ok()?
-            .reply()
-            .ok()?
-            .atom;
-        let utf8_string = conn
-            .intern_atom(false, b"UTF8_STRING")
-            .ok()?
-            .reply()
-            .ok()?
-            .atom;
+    fn is_game_title(conn: &impl Connection, window: Window, atoms: &Atoms) -> bool {
+        window_title(conn, window, atoms.net_wm_name, atoms.utf8_string)
+            .is_some_and(|title| title.starts_with(GAME_TITLE_PREFIX))
+    }
+
+    fn find_game_window_on(conn: &impl Connection, root: Window, atoms: &Atoms) -> Option<Window> {
         let clients = conn
-            .get_property(false, root, net_client_list, AtomEnum::WINDOW, 0, u32::MAX)
+            .get_property(
+                false,
+                root,
+                atoms.net_client_list,
+                AtomEnum::WINDOW,
+                0,
+                u32::MAX,
+            )
             .ok()?
             .reply()
             .ok()?;
         for window in clients.value32()? {
-            let Some(title) = window_title(&conn, window, net_wm_name, utf8_string) else {
-                continue;
-            };
-            if !title.starts_with(GAME_TITLE_PREFIX) {
+            if !is_game_title(conn, window, atoms) {
                 continue;
             }
             let viewable = conn
@@ -227,10 +309,84 @@ mod platform {
                 .and_then(|cookie| cookie.reply().ok())
                 .is_some_and(|attributes| attributes.map_state == MapState::VIEWABLE);
             if viewable {
-                return Some(WindowHandle(window as isize));
+                return Some(window);
             }
         }
         None
+    }
+
+    pub fn find_game_window() -> Option<WindowHandle> {
+        let (conn, screen_num) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots[screen_num].root;
+        let atoms = Atoms::intern(&conn)?;
+        find_game_window_on(&conn, root, &atoms).map(|window| WindowHandle(window as isize))
+    }
+
+    struct FocusConnection {
+        conn: RustConnection,
+        root: Window,
+        atoms: Atoms,
+    }
+
+    impl FocusConnection {
+        fn open() -> Option<Self> {
+            let (conn, screen_num) = x11rb::connect(None).ok()?;
+            let root = conn.setup().roots[screen_num].root;
+            let atoms = Atoms::intern(&conn)?;
+            Some(Self { conn, root, atoms })
+        }
+
+        /// None when the connection itself failed, so the caller reopens it.
+        fn query(&self) -> Option<GameFocus> {
+            let reply = self
+                .conn
+                .get_property(
+                    false,
+                    self.root,
+                    self.atoms.net_active_window,
+                    AtomEnum::WINDOW,
+                    0,
+                    1,
+                )
+                .ok()?
+                .reply()
+                .ok()?;
+            let Some(active) = reply.value32().and_then(|mut windows| windows.next()) else {
+                // The window manager does not publish the active window.
+                return Some(GameFocus::Unknown);
+            };
+            if active != x11rb::NONE && is_game_title(&self.conn, active, &self.atoms) {
+                return Some(GameFocus::Focused);
+            }
+            Some(
+                if find_game_window_on(&self.conn, self.root, &self.atoms).is_some() {
+                    GameFocus::Unfocused
+                } else {
+                    GameFocus::Unknown
+                },
+            )
+        }
+    }
+
+    static FOCUS_CONNECTION: Mutex<Option<FocusConnection>> = Mutex::new(None);
+
+    pub fn game_focus() -> GameFocus {
+        let mut slot = FOCUS_CONNECTION
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = FocusConnection::open();
+        }
+        let Some(connection) = slot.as_ref() else {
+            return GameFocus::Unknown;
+        };
+        match connection.query() {
+            Some(focus) => focus,
+            None => {
+                *slot = None;
+                GameFocus::Unknown
+            }
+        }
     }
 
     pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)> {
@@ -269,10 +425,14 @@ mod platform {
 
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
-    use super::WindowHandle;
+    use super::{GameFocus, WindowHandle};
 
     pub fn find_game_window() -> Option<WindowHandle> {
         None
+    }
+
+    pub fn game_focus() -> GameFocus {
+        GameFocus::Unknown
     }
 
     pub fn get_window_geometry(_handle: WindowHandle) -> Option<(i64, i64, i64, i64)> {
@@ -294,6 +454,7 @@ mod tests {
         {
             assert!(find_game_window().is_none());
             assert!(!game_window_present());
+            assert_eq!(game_focus(), GameFocus::Unknown);
             assert!(get_window_geometry(WindowHandle(1)).is_none());
             let presets = ScanPresets::new(std::path::Path::new("/nonexistent.json"));
             assert!(skill_region(&presets).is_none());

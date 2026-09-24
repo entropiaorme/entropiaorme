@@ -84,7 +84,7 @@ use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
 use eo_services::hotbar_listener::{
-    HotbarListener, HotbarResolver, ResolvedHotbarItem, HOTBAR_SLOT_KEYS,
+    GameFocusProbe, HotbarListener, HotbarResolver, ResolvedHotbarItem, HOTBAR_SLOT_KEYS,
 };
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
 use eo_services::ocr_engine::load_bgr_png;
@@ -572,7 +572,10 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     // future key is genuinely sensitive. Tests inject a hook-free
     // `MockKeystrokeSource` through the same parameter instead, so a generic
     // test run never installs the OS hook (whose attach/detach lifecycle can
-    // intermittently wedge a headless run).
+    // intermittently wedge a headless run). The game-focus probe is the other
+    // half of that input boundary (the hotbar listener asks it whether a slot
+    // press reached the game), so it is injected alongside, and tests pass
+    // none rather than reading the live desktop's focus.
     let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
         .iter()
         .map(|key| key.to_string())
@@ -592,6 +595,7 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
         Some(demo_db_path(resource_dir.as_ref())),
         maps_dir(resource_dir.as_ref()),
         keystroke_source,
+        Some(Arc::new(eu_window::game_focus)),
     )
     .await
 }
@@ -608,6 +612,7 @@ async fn compose_with(
     demo_db_path: Option<PathBuf>,
     maps: PathBuf,
     keystroke_source: Arc<dyn KeystrokeSource>,
+    game_focus: Option<GameFocusProbe>,
 ) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
         tracing::error!(
@@ -719,6 +724,7 @@ async fn compose_with(
         &data_dir,
         None,
         keystroke_source,
+        game_focus,
         Some(game_data.clone()),
     ) {
         Ok(producers) => producers,
@@ -1219,6 +1225,7 @@ fn compose_producers(
     data_dir: &std::path::Path,
     chatlog_override: Option<PathBuf>,
     keystroke_source: Arc<dyn KeystrokeSource>,
+    game_focus: Option<GameFocusProbe>,
     game_data: Option<Arc<GameDataStore>>,
 ) -> Result<ProducerState, ComposeError> {
     // The producers run on the substrate's tokio runtime; the trackers
@@ -1293,6 +1300,7 @@ fn compose_producers(
             data_dir,
             game_data.clone(),
         )),
+        game_focus,
     );
     // Apply the stored toggle; the source still only attaches while a session
     // is active (the listener reconciles on the session bus events).
@@ -1841,6 +1849,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
@@ -1869,6 +1878,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
@@ -1909,6 +1919,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
@@ -1927,6 +1938,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
@@ -2118,6 +2130,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
@@ -2194,6 +2207,7 @@ mod tests {
             None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
@@ -2243,6 +2257,7 @@ mod tests {
             data_dir,
             Some(chatlog),
             Arc::new(MockKeystrokeSource::new()),
+            None,
             None,
         )
         .expect("producer spine composes")

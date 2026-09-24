@@ -302,7 +302,7 @@ impl CoordCaptureService {
                 // The validation echo: read the freshly calibrated
                 // region once (no bounds gate; the echo shows the raw
                 // read for the user to eyeball).
-                let validation = self.scan(None);
+                let validation = self.scan_validation(None);
                 *self.last_validation.lock().expect("validation slot") = Some(validation);
                 return CalibrationPhase::Idle;
             }
@@ -323,6 +323,19 @@ impl CoordCaptureService {
     /// `split_columns`. A whole-rectangle single-line read remains the
     /// fallback for a strip the split could not read.
     pub fn scan(&self, bounds: Option<CoordBounds>) -> CoordScanOutcome {
+        self.scan_inner(bounds, false)
+    }
+
+    /// The same scan, keeping its debug artefacts whatever the outcome.
+    /// The calibration validation read takes this path: it happens once,
+    /// the user is watching its answer, and a read that looks clean but
+    /// is wrong (both halves seeing the same text, say) leaves no other
+    /// evidence behind.
+    fn scan_validation(&self, bounds: Option<CoordBounds>) -> CoordScanOutcome {
+        self.scan_inner(bounds, true)
+    }
+
+    fn scan_inner(&self, bounds: Option<CoordBounds>, keep_evidence: bool) -> CoordScanOutcome {
         let Some(region) = (self.providers.region)() else {
             return CoordScanOutcome::NoRegion;
         };
@@ -337,10 +350,12 @@ impl CoordCaptureService {
         // Every recogniser answer is recorded, so a debug dump (and the
         // scan log line) shows exactly what the model saw and said.
         let mut reads: Vec<(&'static str, String, f64)> = Vec::new();
+        let mut split_at: Option<usize> = None;
 
         let outcome = (|| {
             let mut parsed: Option<(i64, i64, String, f64)> = None;
             if frame.w >= 2 {
+                split_at = Some(split_column(&frame));
                 let (left, right) = split_columns(&frame);
                 let Some((left_text, left_conf)) = (self.providers.read_text)(&left) else {
                     return CoordScanOutcome::EngineUnavailable;
@@ -350,9 +365,21 @@ impl CoordCaptureService {
                 };
                 reads.push(("lon-half", left_text.clone(), left_conf));
                 reads.push(("lat-half", right_text.clone(), right_conf));
-                if let Some((lon, lat)) = trailing_run(&left_text).zip(trailing_run(&right_text)) {
-                    let raw = format!("{left_text} | {right_text}");
-                    parsed = Some((lon, lat, raw, left_conf.min(right_conf)));
+                // Two halves that recognise the same text did not separate
+                // the two values: each is seeing the whole strip. Taking a
+                // trailing run from each would then answer the latitude
+                // twice, which reads as a clean position and is not one, so
+                // the split result is discarded and the whole-strip
+                // fallback below gets its turn (it can still recover the
+                // pair, since it demands exactly two runs).
+                let separated = left_text != right_text;
+                if separated {
+                    if let Some((lon, lat)) =
+                        trailing_run(&left_text).zip(trailing_run(&right_text))
+                    {
+                        let raw = format!("{left_text} | {right_text}");
+                        parsed = Some((lon, lat, raw, left_conf.min(right_conf)));
+                    }
                 }
             }
             if parsed.is_none() {
@@ -392,6 +419,7 @@ impl CoordCaptureService {
             reads = ?reads,
             region_w = region.w,
             region_h = region.h,
+            split_at = ?split_at,
             "coordinate scan"
         );
         // Persist the debug crop only for a problematic read (unreadable or
@@ -399,9 +427,9 @@ impl CoordCaptureService {
         // writes nothing, so the high-frequency navigation auto-poll does not
         // leave a ~1 Hz screenshot of the player's live position in the data
         // directory; the escape hatch stays available exactly when a read fails.
-        if !matches!(outcome, CoordScanOutcome::Read(_)) {
+        if keep_evidence || !matches!(outcome, CoordScanOutcome::Read(_)) {
             if let Some(dir) = (self.providers.debug_dir)() {
-                write_debug_artefacts(&dir, &frame, &reads, &outcome);
+                write_debug_artefacts(&dir, &frame, &reads, &outcome, split_at);
             }
         }
         outcome
@@ -595,9 +623,15 @@ fn write_debug_artefacts(
     frame: &BgrImage,
     reads: &[(&'static str, String, f64)],
     outcome: &CoordScanOutcome,
+    split_at: Option<usize>,
 ) {
     crate::screen_capture::write_debug_frame(dir, "coord-scan-last.png", frame);
-    let mut report = format!("outcome: {outcome:?}\nframe: {}x{}\n", frame.w, frame.h);
+    let mut report = format!(
+        "outcome: {outcome:?}\nframe: {}x{}\nsplit at column: {}\n",
+        frame.w,
+        frame.h,
+        split_at.map_or_else(|| "none".to_string(), |at| at.to_string())
+    );
     for (label, text, confidence) in reads {
         report.push_str(&format!("{label}: {text:?} (confidence {confidence:.3})\n"));
     }
@@ -836,6 +870,27 @@ mod tests {
             CoordScanOutcome::Read(CoordRead {
                 lon: 31915,
                 lat: 19999,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn halves_that_read_the_same_text_fall_through_to_the_whole_strip() {
+        // The failure this guards: a split that does not separate the
+        // values leaves each half seeing the whole strip, and a trailing
+        // run from each would answer the latitude for both. The
+        // whole-strip read still carries the pair in order.
+        let service = CoordCaptureService::new(providers_halves(
+            "LON36510LAT17042",
+            "LON36510LAT17042",
+            "LON36510LAT17042",
+        ));
+        assert!(matches!(
+            service.scan(None),
+            CoordScanOutcome::Read(CoordRead {
+                lon: 36510,
+                lat: 17042,
                 ..
             })
         ));

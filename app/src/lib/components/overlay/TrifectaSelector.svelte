@@ -8,14 +8,12 @@
 		tone = 'active',
 		menuOpen = false,
 		disabled = false,
-		error = null,
 		ontrigger
 	}: {
 		trifecta: TrifectaAttribution | null | undefined;
 		tone?: 'active' | 'idle';
 		menuOpen?: boolean;
 		disabled?: boolean;
-		error?: string | null;
 		ontrigger?: (anchor: HTMLButtonElement) => Promise<void> | void;
 	} = $props();
 
@@ -54,10 +52,6 @@
 		<span class="trifecta-label">{label}</span>
 		<span class="trifecta-chevron {menuOpen ? 'trifecta-chevron-open' : ''}">▾</span>
 	</button>
-
-	{#if error}
-		<div class="trifecta-error">{error}</div>
-	{/if}
 </div>
 
 <style>
@@ -121,12 +115,5 @@
 	.trifecta-chevron-open {
 		transform: rotate(180deg);
 		color: rgba(125, 211, 252, 0.8);
-	}
-
-	.trifecta-error {
-		margin-top: 4px;
-		color: rgba(251, 146, 60, 0.9);
-		font-size: 10px;
-		line-height: 1.3;
 	}
 </style>

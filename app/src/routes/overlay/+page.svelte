@@ -28,6 +28,7 @@
 	import { createPostSessionFlow } from '$lib/features/tracking/postSession.svelte';
 	import { createSessionFacets } from '$lib/features/tracking/sessionFacets.svelte';
 	import { createActivitiesModel } from '$lib/features/tracking/activitiesModel.svelte';
+	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
 	import { protectionCostAction } from '$lib/features/protection/protectionCostFlow';
 	import { createOverlayProtectionModel } from '$lib/features/protection/overlayProtectionModel.svelte';
 	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
@@ -65,6 +66,7 @@
 		OVERLAY_ARMOUR_COST_WINDOW_LABEL
 	} from '$lib/windows/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
+	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 
 	// The colon-form Tauri topic the event relay re-emits each backend tracking
 	// frame on (the wire topic `tracking.session.updated`; Tauri event names
@@ -79,16 +81,9 @@
 	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
 	let postSessionArmourButton: HTMLButtonElement | null = $state(null);
 	let inSessionArmourButton: HTMLButtonElement | null = $state(null);
-	// Yellow attribution-not-ready warning that replaces the TRACK button when
-	// startTracking is refused by the backend (no hotbar slot bound in hotbar
-	// mode, or trifecta not configured in trifecta mode). Persists until the
-	// user closes it; clicking TRACK again clears it implicitly on success.
-	let attributionWarning = $state<string | null>(null);
 	let mobInput: HTMLInputElement | null = $state(null);
 	let mobInputFocused = $state(false);
 	let trifectaSaving = $state(false);
-	let trifectaError = $state<string | null>(null);
-	let overlayMenuLaunchError = $state<string | null>(null);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
@@ -175,6 +170,11 @@
 	});
 	const toggling = $derived(starting || flow.stopping);
 
+	// Everything the strip has to say (a session's tracking warnings, a
+	// refused start, a failed action) surfaces as a self-clearing notice
+	// under it, never as text wedged between its controls.
+	const notices = createOverlayNotices();
+
 	// The session facets (the session it runs as, and the boost): state
 	// and writes live in the feature model; this route owns only the
 	// popup plumbing.
@@ -229,13 +229,8 @@
 	}
 
 	function reportOverlayMenuOpenError(kind: OverlayMenuKind, error: unknown) {
-		const message = describeOverlayMenuError(error);
 		console.error(`Overlay ${kind} popup failed`, error);
-		if (kind === 'trifecta') {
-			trifectaError = message;
-			return;
-		}
-		overlayMenuLaunchError = message;
+		notices.push(describeOverlayMenuError(error));
 	}
 
 	// Keep this window's OS size in step with the strip; each sync re-anchors
@@ -300,9 +295,6 @@
 				{ x: anchorPosition.x, y: anchorPosition.y, width: state.width, height },
 				{ focus: options.focusPopup }
 			);
-			if (kind === 'mob') {
-				overlayMenuLaunchError = null;
-			}
 			overlayMenuKind = kind;
 		} catch (error) {
 			overlayMenuKind = null;
@@ -322,7 +314,6 @@
 		if (!mobInput) return;
 		const state = buildMobMenuState(mobInput.getBoundingClientRect().width);
 		if (!state) return;
-		overlayMenuLaunchError = null;
 		await showOverlayMenu('mob', mobInput, state);
 	}
 
@@ -341,10 +332,9 @@
 		try {
 			definitions = await getSessionDefinitions();
 		} catch (error) {
-			facets.facetError = describeOverlayMenuError(error);
+			notices.push(describeOverlayMenuError(error));
 			return;
 		}
-		facets.facetError = null;
 		const state = buildDefinitionMenuState(
 			anchor.getBoundingClientRect().width,
 			definitions,
@@ -367,7 +357,6 @@
 			return;
 		}
 
-		trifectaError = null;
 		const state = buildTrifectaMenuState(anchor.getBoundingClientRect().width);
 		if (!state) return;
 		await showOverlayMenu('trifecta', anchor, state, { focusPopup: true });
@@ -380,13 +369,9 @@
 	let activitiesAnchor: HTMLElement | null = null;
 
 	async function openActivitiesMenu(anchor: HTMLElement) {
+		// A failed read reports through the activities error channel.
 		const options = await activities.load();
-		if (!options) {
-			facets.facetError = activities.error;
-			return;
-		}
-		// A successful open clears a prior open's failure message.
-		facets.facetError = null;
+		if (!options) return;
 		const state = buildActivitiesMenuState(
 			anchor.getBoundingClientRect().width,
 			options,
@@ -410,7 +395,6 @@
 		const option = activities.find(key);
 		if (!anchor?.isConnected || !option) return;
 		const handIn = await activities.beginHandIn(option);
-		facets.facetError = activities.error;
 		if (!handIn) return;
 		await showOverlayMenu('questHandIn', anchor, buildQuestHandInMenuState(anchor.getBoundingClientRect().width, handIn), { focusPopup: true });
 	}
@@ -422,14 +406,9 @@
 	 * anchor. */
 	async function handleActivityAction(action: () => Promise<unknown>) {
 		await action();
-		// Held across the re-present: re-opening the menu re-reads the
-		// offerings, and a successful read clears the error channel that
-		// the refusal just wrote to.
-		const failure = activities.error;
 		if (overlayMenuKind === 'activities' && activitiesAnchor?.isConnected) {
 			await openActivitiesMenu(activitiesAnchor);
 		}
-		if (failure) facets.facetError = failure;
 	}
 
 	const armourCost = createOverlayArmourCostModel({
@@ -449,14 +428,15 @@
 		if (!trifecta || trifectaSaving || presetId === trifecta.activePresetId) return;
 
 		trifectaSaving = true;
-		trifectaError = null;
 		try {
 			await updateSettings({ active_trifecta_preset_id: presetId });
 			await snapshot.hydrate();
 		} catch (error) {
-			trifectaError = error instanceof ApiError || error instanceof Error
-				? error.message
-				: 'Failed to switch trifecta preset';
+			notices.push(
+				error instanceof ApiError || error instanceof Error
+					? error.message
+					: 'Failed to switch trifecta preset'
+			);
 		}
 		trifectaSaving = false;
 	}
@@ -761,6 +741,21 @@
 		applySnapshot(current);
 	});
 
+	// A session's warnings arrive as its cumulative list on every frame;
+	// each one notifies once, when it first appears.
+	$effect(() => {
+		const sessionId = data.sessionId ?? null;
+		const warnings = (data.warnings ?? []).map((warning) => warning.description);
+		untrack(() => notices.observeWarnings(sessionId, warnings));
+	});
+
+	// The feature models' failure channels: each new message is a notice.
+	notices.follow(() => facets.facetError);
+	notices.follow(() => activities.error);
+	notices.follow(() => protection.error);
+	notices.follow(() => armourCost.error);
+	$effect(() => () => notices.destroy());
+
 	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
 
 	const armourSessionId = $derived(data.sessionId ?? flow.lastSessionId);
@@ -792,7 +787,6 @@
 		if (!showManualInput) {
 			mobTypeahead.cancel();
 			void closeMobMenu();
-			overlayMenuLaunchError = null;
 			return;
 		}
 
@@ -800,7 +794,6 @@
 		if (!mobQuery.trim()) {
 			mobTypeahead.cancel();
 			void closeMobMenu();
-			overlayMenuLaunchError = null;
 			return;
 		}
 
@@ -843,20 +836,17 @@
 
 	async function handleStart() {
 		starting = true;
-		attributionWarning = null;
 		try {
 			await startTracking();
 			await snapshot.hydrate();
 		} catch (error) {
+			// A refused start (no hotbar slot bound, trifecta not configured)
+			// says what to set up; TRACK stays in place for the retry.
 			if (error instanceof ApiError && error.kind === 'badRequest') {
-				attributionWarning = error.message;
+				notices.push(error.message, 'warning');
 			}
 		}
 		starting = false;
-	}
-
-	function dismissAttributionWarning() {
-		attributionWarning = null;
 	}
 
 	async function handleReleaseMob() {
@@ -911,7 +901,6 @@
 			await lockManualMob(option.species, option.maturity);
 			mobQuery = '';
 			mobTypeahead.cancel();
-			overlayMenuLaunchError = null;
 			await closeMobMenu();
 			await snapshot.hydrate();
 		} catch (error) {
@@ -931,23 +920,17 @@
 		{releasing}
 		{selectingMob}
 		{trifectaSaving}
-		{trifectaError}
 		armourCostOpen={armourCost.open}
-		armourCostError={armourCost.error}
 		{armourSessionId}
 		protection={protection.overview}
 		protectionSaving={protection.saving}
-		protectionError={protection.error}
-		mobMenuOpen={overlayMenuKind === 'mob'}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
 		trifectaMenuOpen={overlayMenuKind === 'trifecta'}
-		{overlayMenuLaunchError}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
 		savingBoost={facets.savingBoost}
 		savingActivity={activities.saving}
 		activitiesMenuOpen={overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn'}
-		facetError={facets.facetError}
 		lastSessionId={flow.lastSessionId}
 		lastSessionStats={flow.lastSessionStats}
 		bind:mobQuery
@@ -959,8 +942,6 @@
 		onStop={flow.requestStop}
 		awaitingArmourTrackDecision={flow.awaitingArmourDecision}
 		onArmourTrackDecision={flow.decideArmourTrack}
-		attributionWarning={attributionWarning}
-		onDismissAttributionWarning={dismissAttributionWarning}
 		onReleaseMob={handleReleaseMob}
 		onMobFocus={handleMobFocus}
 		onMobBlur={handleMobBlur}
@@ -972,6 +953,7 @@
 		onArmourCostToggle={armourCost.toggle}
 		onProtectionSelect={protection.select}
 	/>
+	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>
 <style>
 	.overlay-frame {

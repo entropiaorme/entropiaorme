@@ -173,9 +173,6 @@ export function createActivitiesModel(deps: ActivitiesModelDeps) {
 		get error() {
 			return error;
 		},
-		set error(value: string | null) {
-			error = value;
-		},
 		get segmentDraft() {
 			return segmentDraft;
 		},

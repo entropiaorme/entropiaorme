@@ -139,9 +139,6 @@ export function createSessionFacets(deps: SessionFacetsDeps) {
 		get facetError() {
 			return facetError;
 		},
-		set facetError(value: string | null) {
-			facetError = value;
-		},
 
 		/** Keep the boost buffer in step with the persisted value while the
 		 * user is not editing it. A persisted 0 renders as "0", not as the

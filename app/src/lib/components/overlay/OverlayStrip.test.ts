@@ -158,57 +158,19 @@ describe('armour track decision prompt', () => {
 	});
 });
 
-describe('attribution warning', () => {
-	it('replaces TRACK while idle and dismisses through the callback', () => {
-		const onDismissAttributionWarning = vi.fn();
-		render(OverlayStrip, {
-			props: {
-				data: liveData(),
-				attributionWarning: 'Configure a weapon before tracking',
-				onDismissAttributionWarning,
-			},
-		});
-
-		expect(screen.getByText('Configure a weapon before tracking')).toBeTruthy();
-		expect(screen.queryByTitle('Start tracking')).toBeNull();
-
-		screen.getByLabelText('Dismiss warning').click();
-		expect(onDismissAttributionWarning).toHaveBeenCalledTimes(1);
-	});
-
-	it('does not replace the stop control during an active session', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active' }),
-				attributionWarning: 'Configure a weapon before tracking',
-			},
-		});
-		expect(screen.queryByText('Configure a weapon before tracking')).toBeNull();
-		expect(screen.getByTitle('Stop tracking')).toBeTruthy();
-	});
-});
-
-describe('tracking warnings', () => {
-	it('keeps every warning visible without replacing the live stop control', () => {
-		const accountingWarning =
-			'Protection accounting degraded: defensive evidence could not be saved';
-		const healingWarning = 'Healing detected: no heal tool equipped via hotbar';
+describe('messages', () => {
+	it('keeps tracking warnings out of the strip: the notice rail owns them', () => {
+		const warning =
+			'Harvest guardrail: Short Boards were looted while ChopChop Jr was equipped; costs are attributed to Timber Saw';
 		render(OverlayStrip, {
 			props: {
 				data: liveData({
 					status: 'active',
-					warnings: [
-						{ type: 'warning', description: accountingWarning, value: 0 },
-						{ type: 'warning', description: healingWarning, value: 0 },
-					],
+					warnings: [{ type: 'warning', description: warning, value: 0 }],
 				}),
 			},
 		});
-
-		const warningSurface = screen.getByTestId('tracking-warning');
-		expect(warningSurface.textContent).toContain('Tracking warnings');
-		expect(warningSurface.textContent).toContain(accountingWarning);
-		expect(warningSurface.textContent).toContain(healingWarning);
+		expect(screen.queryByText(warning)).toBeNull();
 		expect(screen.getByTitle('Stop tracking')).toBeTruthy();
 	});
 });
@@ -313,24 +275,6 @@ describe('session facets and declared mob', () => {
 			props: { data: liveData({ status: 'active', currentMob: null }) },
 		});
 		expect(screen.getByPlaceholderText('Mob...')).toBeTruthy();
-	});
-
-	it('surfaces a facet write failure beside the controls', () => {
-		render(OverlayStrip, {
-			props: { data: liveData(), facetError: 'Skill boost is fixed for the active session' },
-		});
-		expect(screen.getByText('Skill boost is fixed for the active session')).toBeTruthy();
-	});
-
-	it('surfaces the popup launch error under the input when the menu is closed', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ currentMob: null }),
-				overlayMenuLaunchError: 'Popup route did not become ready',
-				mobMenuOpen: false,
-			},
-		});
-		expect(screen.getByText('Popup route did not become ready')).toBeTruthy();
 	});
 });
 
@@ -486,16 +430,6 @@ describe('trifecta selector', () => {
 		expect(trigger.disabled).toBe(true);
 	});
 
-	it('surfaces the trifecta error under the trigger', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ weaponAttribution: 'trifecta', trifectaAttribution: trifecta }),
-				trifectaError: 'Popup route did not become ready',
-			},
-		});
-		expect(screen.getByText('Popup route did not become ready')).toBeTruthy();
-	});
-
 	it('falls back to the current tool readout under hotbar attribution', () => {
 		render(OverlayStrip, {
 			props: {
@@ -633,18 +567,6 @@ describe('armour cost control', () => {
 		});
 		const button = screen.getByTitle('Record repair cost') as HTMLButtonElement;
 		expect(button.disabled).toBe(false);
-	});
-
-	it('surfaces the armour cost error while the popup is closed', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active' }),
-				armourSessionId: 's1',
-				armourCostError: 'Armour cost popup did not become ready',
-				armourCostOpen: false,
-			},
-		});
-		expect(screen.getByText('Armour cost popup did not become ready')).toBeTruthy();
 	});
 });
 

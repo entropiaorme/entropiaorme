@@ -23,19 +23,13 @@
 		savingBoost = false,
 		savingActivity = false,
 		activitiesMenuOpen = false,
-		facetError = null,
 		trifectaSaving = false,
-		trifectaError = null,
 		armourCostOpen = false,
-		armourCostError = null,
 		armourSessionId = null,
 		protection = null,
 		protectionSaving = false,
-		protectionError = null,
-		mobMenuOpen = false,
 		definitionMenuOpen = false,
 		trifectaMenuOpen = false,
-		overlayMenuLaunchError = null,
 		lastSessionId = null,
 		lastSessionStats = null,
 		mobQuery = $bindable(''),
@@ -44,11 +38,9 @@
 		postSessionArmourButton = $bindable(null),
 		inSessionArmourButton = $bindable(null),
 		awaitingArmourTrackDecision = false,
-		attributionWarning = null,
 		onStart = noop,
 		onStop = noop,
 		onArmourTrackDecision = noop,
-		onDismissAttributionWarning = noop,
 		onReleaseMob = noop,
 		onMobFocus = noop,
 		onMobBlur = noop,
@@ -70,19 +62,13 @@
 		savingBoost?: boolean;
 		savingActivity?: boolean;
 		activitiesMenuOpen?: boolean;
-		facetError?: string | null;
 		trifectaSaving?: boolean;
-		trifectaError?: string | null;
 		armourCostOpen?: boolean;
-		armourCostError?: string | null;
 		armourSessionId?: string | null;
 		protection?: ProtectionOverview | null;
 		protectionSaving?: boolean;
-		protectionError?: string | null;
-		mobMenuOpen?: boolean;
 		definitionMenuOpen?: boolean;
 		trifectaMenuOpen?: boolean;
-		overlayMenuLaunchError?: string | null;
 		lastSessionId?: string | null;
 		lastSessionStats?: LastSessionStats | null;
 		mobQuery?: string;
@@ -91,11 +77,9 @@
 		postSessionArmourButton?: HTMLButtonElement | null;
 		inSessionArmourButton?: HTMLButtonElement | null;
 		awaitingArmourTrackDecision?: boolean;
-		attributionWarning?: string | null;
 		onStart?: () => void | Promise<void>;
 		onStop?: () => void | Promise<void>;
 		onArmourTrackDecision?: (action: 'yes' | 'no') => void | Promise<void>;
-		onDismissAttributionWarning?: () => void;
 		onReleaseMob?: () => void | Promise<void>;
 		onMobFocus?: () => void;
 		onMobBlur?: () => void;
@@ -152,7 +136,6 @@
 	const costAction = $derived(
 		protectionCostAction(protection, data.trackProtectionBySegment !== false),
 	);
-	const trackingWarnings = $derived(data.warnings ?? []);
 
 	function formatElapsed(seconds: number): string {
 		const h = Math.floor(seconds / 3600);
@@ -187,16 +170,6 @@
 						disabled={toggling}
 						onclick={() => onArmourTrackDecision('no')}
 					>Later</button>
-				</div>
-			{:else if attributionWarning && data.status !== 'active'}
-				<div class="armour-prompt flex items-center gap-2 shrink-0 max-w-[420px]">
-					<span class="text-[10px] font-medium text-amber-200 leading-snug">{attributionWarning}</span>
-					<button
-						type="button"
-						class="armour-prompt-btn armour-prompt-close"
-						aria-label="Dismiss warning"
-						onclick={() => onDismissAttributionWarning()}
-					>×</button>
 				</div>
 			{:else}
 				<button
@@ -236,21 +209,6 @@
 				</div>
 			{/if}
 		</div>
-
-		{#if trackingWarnings.length > 0}
-			<div
-				class="flex flex-col shrink-0 border-l border-amber-300/25 pl-3 max-w-[260px]"
-				data-testid="tracking-warning"
-				title={trackingWarnings.map((warning) => warning.description).join('\n')}
-			>
-				<span class="facet-label text-amber-300/70"
-					>{trackingWarnings.length === 1 ? 'Tracking warning' : 'Tracking warnings'}</span
-				>
-				{#each trackingWarnings as warning}
-					<span class="truncate text-[10px] leading-tight text-amber-200">{warning.description}</span>
-				{/each}
-			</div>
-		{/if}
 
 		<!-- Session facets: the independent, co-recorded attributions a
 			 session carries. Each control here declares gameplay from now on,
@@ -417,11 +375,6 @@
 						<div class="text-sm font-medium text-white/20 px-1">{NO_DATA}</div>
 					{/if}
 				</div>
-				{#if showManualInput && overlayMenuLaunchError && !mobMenuOpen}
-					<div class="mt-1 px-1 text-[10px] leading-tight text-orange-300/90">
-						{overlayMenuLaunchError}
-					</div>
-				{/if}
 			</div>
 			{#if data.currentMob}
 				<button
@@ -435,12 +388,6 @@
 				</button>
 			{/if}
 		</div>
-
-		{#if facetError}
-			<div class="shrink-0 max-w-[180px] text-[10px] leading-tight text-orange-300/90 border-r border-white/10 pr-3">
-				{facetError}
-			</div>
-		{/if}
 
 		<!-- Trifecta/Weapon Section. No own separator; the adjacent armour section
 			 owns the boundary via its left border. -->
@@ -459,7 +406,6 @@
 					tone={data.status === 'active' ? 'active' : 'idle'}
 					menuOpen={trifectaMenuOpen}
 					disabled={trifectaSaving}
-					error={trifectaError}
 					ontrigger={onTrifectaTrigger}
 				/>
 			{:else if data.harvestGuardrail}
@@ -527,19 +473,15 @@
 						{/each}
 					</div>
 				{/if}
-				{#if protectionError}
-					<div class="mt-1 max-w-[180px] text-[10px] leading-tight text-orange-300/90">{protectionError}</div>
-				{/if}
 			</div>
 		{/if}
 
 		<!-- Armour cost, sequenced from the active loadout. -->
 		{#if data.trackProtectionCosts !== false}
 			<div
-				class="flex flex-col shrink-0 border-l border-white/10 pl-3"
+				class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3"
 				data-guide-anchor="overlay-armour-section"
 			>
-			<div class="flex items-center gap-2 shrink-0">
 				<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
 				<button
 					class="px-2 py-0.5 rounded-[4px] border text-[9px] font-medium transition-all
@@ -558,12 +500,6 @@
 				>
 					Cost
 				</button>
-			</div>
-			{#if armourCostError && !armourCostOpen}
-				<div class="mt-1 px-1 text-[10px] leading-tight text-orange-300/90">
-					{armourCostError}
-				</div>
-			{/if}
 			</div>
 		{/if}
 
@@ -633,8 +569,7 @@
 
 			<!-- Armour cost remains reachable post-session for end-of-session bookkeeping. -->
 			{#if data.trackProtectionCosts !== false}
-				<div class="flex flex-col shrink-0 border-l border-white/10 pl-3">
-				<div class="flex items-center gap-2 shrink-0">
+				<div class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3">
 					<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
 					<button
 						bind:this={postSessionArmourButton}
@@ -652,12 +587,6 @@
 					>
 						Cost
 					</button>
-				</div>
-				{#if armourCostError && !armourCostOpen}
-					<div class="mt-1 px-1 text-[10px] leading-tight text-orange-300/90">
-						{armourCostError}
-					</div>
-				{/if}
 				</div>
 			{/if}
 		</div>
@@ -818,20 +747,6 @@
 	.armour-prompt-no:hover {
 		background: rgba(255, 255, 255, 0.12);
 		border-color: rgba(255, 255, 255, 0.3);
-	}
-	.armour-prompt-close {
-		padding: 0 6px;
-		min-width: 18px;
-		background: transparent;
-		border-color: rgba(251, 191, 36, 0.35);
-		color: rgba(251, 191, 36, 0.85);
-		font-size: 13px;
-		line-height: 1;
-	}
-	.armour-prompt-close:hover {
-		background: rgba(251, 191, 36, 0.15);
-		border-color: rgba(251, 191, 36, 0.6);
-		color: rgb(253, 224, 71);
 	}
 	.armour-prompt-btn:disabled {
 		opacity: 0.4;

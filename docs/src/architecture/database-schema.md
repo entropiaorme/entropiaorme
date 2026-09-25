@@ -104,9 +104,11 @@ parent armour-cost policy and whole-session default), and
 position, the retirement of unlimited sets and loadouts, and the session
 lookups the recording surface reads), and
 `0056_protection_recording_undo.sql` (when a protection recording or reading
-was undone), and `0057_healing_corrections.sql` (post-play healing corrections,
+was undone), `0057_healing_corrections.sql` (post-play healing corrections,
 their supersession and exact-undo provenance, and the effect-window expiry
-read). The
+read), and `0058_weapon_attribution_evidence.sql` (stored weapon evidence, live
+mismatch decisions, post-play assignments of unpriced shots, and each
+session's attribution tallies). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -621,6 +623,8 @@ facets, and an optional session-definition identity.
 | `definition_id` | INTEGER | Optional reference to `session_definitions(id)` (migration `0022`; indexed `idx_tracking_sessions_definition`). Null is valid for legacy or deliberately unattached sessions. |
 | `track_protection_costs` | INTEGER | Not null; defaults to 1 (migration `0054`). Immutable policy stamped from the selected definition at session start. When 0, the session records no defensive evidence, so no protection recording can reach it. |
 | `track_protection_by_segment` | INTEGER | Not null; migration `0053`. Retired (ADR-0031): new sessions record 0 and nothing reads it. |
+| `weapon_shots_agreed` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon the hotbar declared, as they stood after any live decision. Null for a session recorded before the tally was kept. |
+| `weapon_shots_evidenced` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon their damage named (including those a confirmed decision repriced). Null for a session recorded before the tally was kept. |
 | `updated_at` | REAL | Back-filled by an `AFTER INSERT` trigger when left null. |
 
 #### Healing attribution evidence
@@ -694,6 +698,54 @@ session's activations, or heals its corrections moved: in the same
 transaction those heals first return to their uncorrected state, then any
 explanation by a deleted activation (current, or recorded for a later undo)
 becomes unattributed, so no row points at a deleted one.
+
+#### Weapon attribution evidence
+
+Migration `0058` keeps, one row each, the shots whose attribution a player may
+want to inspect or correct (see ADR-0032). Every other shot agrees with the
+hotbar, or is attributed by damage alone with no hotbar signal, and lives only
+in its kill's `kill_tool_stats` phase. A shot no single carried weapon explains
+is counted there under the `Unknown` phase at no cost.
+
+`weapon_shot_evidence` records one stored shot: its session, the kill it
+settled into (null for a shot after the session's last kill, whose cost is the
+session's dangling cost), its attributed context, local observation time,
+printed amount (null for a jam, dodge, or evade), whether it was a critical,
+its classification (`evidence` when its damage overrode the weapon the hotbar
+declared, `unresolved` when no single carried weapon explains it,
+`effect_tick` when an earlier activation's effect window explains it), the
+weapon the hotbar declared, the weapon it is priced to and the per-shot cost
+booked (null and 0 while unpriced), the carried weapons at the time as JSON
+(each with whether its band fitted the shot), an explanatory reason, the
+effect window that explained a tick, the live decision that repriced it, and
+the live assignment that priced it. A row is written in the same transaction as
+the kill its shot settled into, or with the session's stop, so a row exists
+exactly when its shot's cost does. It is indexed by session, classification,
+and observation time, and by kill.
+
+`weapon_attribution_reviews` records each decision on a standing mismatch while
+the session ran: its session, `confirmed` (the evidence weapon became the
+declared one and the regime's shots it plausibly fired were repriced to it) or
+`kept` (the evidence shots were repriced back to the hotbar's weapon), the two
+weapons, when the evidence first disagreed, when the player decided, how many
+shots were repriced, and the signed cost delta. The repriced kills' phases and
+costs are rewritten in the same transaction. It is indexed by session and
+decision time.
+
+`weapon_attribution_corrections` records each post-play assignment of an
+unpriced shot: its session and shot, the chosen weapon's equipment identity and
+name, the per-shot cost booked from the weapon as configured at correction
+time, when it was made, and when it was undone (null while it stands). An
+assignment moves the shot out of its kill's `Unknown` phase into the weapon's
+(a corrected phase carries no expected-return evidence) and adds its cost to
+the kill (or to the dangling cost), summed at twelve decimals so an undo lands
+on the exact figure it started from; the summary, daily rollup, and settled
+session cells are repaired in the same transaction. A shot carries at most one
+live assignment, and only an ended session is corrected. It is indexed by
+session and correction time.
+
+Foreign-key enforcement remains disabled, so session deletion removes these
+three tables explicitly before deleting the session.
 
 #### `session_intervals`
 
@@ -1389,7 +1441,7 @@ migrations (`0002_analytical_indexes.sql`,
 `0051_context_offensive_evidence.sql`, `0052_protection_hit_allocation.sql`,
 `0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`,
 `0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`,
-`0057_healing_corrections.sql`); the runner
+`0057_healing_corrections.sql`, `0058_weapon_attribution_evidence.sql`); the runner
 records applied migrations in the `_sqlx_migrations` ledger (the table name,
 column shapes, and SHA-384 checksum accounting are inherited unchanged from
 the previous runner, so existing databases reconcile byte for byte) and never

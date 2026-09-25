@@ -310,6 +310,7 @@ mod tests {
                 min: 5.0,
                 max: 10.0,
             }),
+            effect: None,
         };
         runtime.load_carried(vec![
             CarriedWeaponProfile {

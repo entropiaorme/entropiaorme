@@ -32,6 +32,7 @@ function summary(overrides: Partial<Equipment> = {}): Equipment {
 		enrichmentLevel: 1,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 		...overrides,
 	};
 }
@@ -59,6 +60,7 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 		expectedReturn: null,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 		...overrides,
 	};
 }
@@ -424,10 +426,84 @@ describe('saveEquipment', () => {
 			damage_enhancers: 4,
 			implant_catalog_id: null,
 			implant_markup: 100,
+			weapon_effect: null,
 		});
 		expect(model.showAddModal).toBe(false);
 		expect(model.detailCache['9']).toBeDefined();
 		expect(model.sortedEquipment.map((e) => e.id)).toEqual(['9']);
+	});
+
+	it('sends a declared damage-over-time effect, and gates the save until it is whole', async () => {
+		mocked.addToLibrary.mockResolvedValue(summary({ id: '9', name: 'Electrocution' }));
+		mocked.getEquipmentDetail.mockResolvedValue(detail({ id: '9' }));
+		const model = createLibraryModel();
+		model.openAddModal();
+		model.weaponPicker.select(weaponHit);
+		expect(model.weaponEffectProblem).toBeNull();
+		model.weaponEffectMode = 'compound';
+		expect(model.weaponEffectProblem).toBe('Enter the initial hit range');
+		model.hitMin = 100;
+		model.hitMax = 160;
+		expect(model.weaponEffectProblem).toBe('Enter how long the effect lasts');
+		model.effectDurationSeconds = 25;
+		model.tickMin = 80;
+		model.tickMax = 75;
+		expect(model.weaponEffectProblem).toBe('The tick minimum must not exceed its maximum');
+		model.tickMin = 35;
+		expect(model.weaponEffectProblem).toBeNull();
+		await model.saveEquipment();
+
+		expect(mocked.addToLibrary).toHaveBeenCalledWith(
+			expect.objectContaining({
+				weapon_effect: {
+					mode: 'compound',
+					hit_min: 100,
+					hit_max: 160,
+					duration_seconds: 25,
+					tick_min: 35,
+					tick_max: 75,
+					tick_seconds: null,
+				},
+			}),
+		);
+	});
+
+	it('prefills an edit with the declared effect, and Direct drops it', async () => {
+		const effectProfile = {
+			mode: 'over_time' as const,
+			hitMin: null,
+			hitMax: null,
+			durationSeconds: 12,
+			tickMin: 4,
+			tickMax: 6,
+			tickSeconds: 2,
+		};
+		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', effectProfile })]);
+		mocked.getEquipmentDetail.mockResolvedValue(detail({ effectProfile }));
+		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
+		const model = createLibraryModel();
+		await model.loadData(false);
+		await model.openEditModal('1');
+		expect(model.weaponEffectMode).toBe('over_time');
+		expect(model.effectDurationSeconds).toBe(12);
+		expect(model.tickSeconds).toBe(2);
+		model.weaponEffectMode = 'direct';
+		await model.saveEquipment();
+		expect(mocked.updateLibrary).toHaveBeenCalledWith(
+			'1',
+			expect.objectContaining({ weapon_effect: null }),
+		);
+	});
+
+	it('starts the shared over-time fields afresh on a change of kind', () => {
+		const model = createLibraryModel();
+		model.openAddModal();
+		model.weaponEffectMode = 'over_time';
+		model.tickMin = 4;
+		model.setAddType('healing');
+		model.setAddType('weapon');
+		expect(model.weaponEffectMode).toBe('direct');
+		expect(model.tickMin).toBeNull();
 	});
 
 	it('routes an edit through updateLibrary and swaps the row in place', async () => {

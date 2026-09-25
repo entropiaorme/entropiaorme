@@ -329,6 +329,17 @@ pub async fn weapon_assign(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_mark_effect_tick(
+    app: tauri::AppHandle,
+    evidence_id: String,
+    window_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?
+        .weapon_mark_effect_tick(evidence_id, window_id)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn weapon_assignment_undo(
     app: tauri::AppHandle,
     correction_id: String,
@@ -1956,6 +1967,7 @@ mod tests {
         "weapon_unpriced_sessions",
         "weapon_correction_weapons",
         "weapon_assign",
+        "weapon_mark_effect_tick",
         "weapon_assignment_undo",
         "character_calibration",
         "character_stats",

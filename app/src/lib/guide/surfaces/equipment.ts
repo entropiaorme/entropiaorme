@@ -125,7 +125,16 @@ export const equipmentSurface: GuideSurface = {
 			anchor: () => anchor('damage-ranges-chart'),
 			prose: {
 				title: 'Damage ranges',
-				body: 'Every hit is checked against these ranges. A hit only another carried weapon explains is recorded to that weapon, and the overlay asks you to confirm the switch.',
+				body: [
+					{
+						kind: 'p',
+						text: 'Every hit is checked against these ranges. A hit only another carried weapon explains is recorded to that weapon, and the overlay asks you to confirm the switch.',
+					},
+					{
+						kind: 'p',
+						text: 'A weapon whose cast keeps dealing damage shows its ticks too, once its damage pattern is set in the weapon’s form. Ticks cost nothing and never count as shots.',
+					},
+				],
 				note: 'Where two ranges overlap, only the hotbar tells the weapons apart. A hit there with neither in hand is kept unpriced until you assign it after the session.',
 			},
 			async play({ demoApi, wait }) {

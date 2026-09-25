@@ -848,6 +848,9 @@ impl TrackerActor {
         // previous session, or before a restart) keeps running in the game:
         // its window carries over by its absolute expiry.
         self.restore_persisted_healing(start_ts).await;
+        // Likewise a damage-over-time effect: its ticks stay outcomes of the
+        // paid hit that started it.
+        self.restore_persisted_weapon_effects(start_ts).await;
         self.subscribe_handlers();
         self.publish_status();
 

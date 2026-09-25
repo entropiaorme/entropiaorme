@@ -65,6 +65,17 @@ pub(super) struct Candidate {
     pub(super) fits: bool,
 }
 
+/// One open effect window as a stored row offers it: the effect the shot
+/// was (or may have been) a tick of.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EffectCandidate {
+    pub(super) window_id: String,
+    pub(super) tool_name: String,
+    /// When the paid hit that opened it landed.
+    pub(super) activated_at: f64,
+}
+
 /// One stored shot.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ShotEvidence {
@@ -83,7 +94,10 @@ pub(super) struct ShotEvidence {
     pub(super) cost_per_shot: Ped,
     pub(super) candidates: Vec<Candidate>,
     pub(super) reason: String,
+    /// The one window a tick belongs to; None when several explained it.
     pub(super) effect_window_id: Option<String>,
+    /// Every open window that explained it.
+    pub(super) effect_candidates: Vec<EffectCandidate>,
     pub(super) review_id: Option<String>,
 }
 
@@ -124,9 +138,19 @@ impl ShotEvidence {
             })
             .collect();
         let effect_window_id = match &resolved.attribution {
-            Attribution::EffectTick { window_id } => Some(window_id.clone()),
+            Attribution::EffectTick { window_id } => window_id.clone(),
             _ => None,
         };
+        let effect_candidates = runtime
+            .effect_windows()
+            .iter()
+            .filter(|window| resolved.windows.contains(&window.id))
+            .map(|window| EffectCandidate {
+                window_id: window.id.clone(),
+                tool_name: window.tool.clone(),
+                activated_at: window.started_at,
+            })
+            .collect();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             session_id: active.session.id.clone(),
@@ -141,6 +165,7 @@ impl ShotEvidence {
             candidates,
             reason: resolved.reason.clone(),
             effect_window_id,
+            effect_candidates,
             review_id: None,
         }
     }
@@ -157,12 +182,17 @@ impl ShotEvidence {
                 context: "weapon evidence candidates encode",
                 source,
             })?;
+        let effect_candidates =
+            serde_json::to_string(&self.effect_candidates).map_err(|source| DbError::Decode {
+                context: "weapon evidence effect candidates encode",
+                source,
+            })?;
         conn.execute(
             "INSERT INTO weapon_shot_evidence \
              (id, session_id, kill_id, context_id, observed_at, amount, critical, \
               attribution, hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
-              effect_window_id, review_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              effect_window_id, review_id, effect_candidates_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 self.id,
                 self.session_id,
@@ -179,6 +209,7 @@ impl ShotEvidence {
                 self.reason,
                 self.effect_window_id,
                 self.review_id,
+                effect_candidates,
             ],
         )?;
         Ok(())
@@ -420,6 +451,7 @@ impl TrackerActor {
                 review_id,
                 session_id: active.session.id.clone(),
                 decision,
+                withdrawn: decided.withdrawn,
                 declared: decided.mismatch.declared,
                 evidence: decided.mismatch.evidence,
                 since: decided.mismatch.since,
@@ -464,6 +496,13 @@ impl TrackerActor {
                         rusqlite::params![tool, cost.value(), write.review_id, id],
                     )?;
                 }
+                for window in &write.withdrawn {
+                    tx.execute(
+                        "UPDATE weapon_effect_windows \
+                         SET withdrawn_at = ?1, withdrawn_by_review_id = ?2 WHERE id = ?3",
+                        rusqlite::params![write.decided_at, write.review_id, window],
+                    )?;
+                }
                 tx.commit()?;
                 Ok(())
             })
@@ -501,6 +540,8 @@ struct DecisionWrite {
     review_id: String,
     session_id: String,
     decision: MismatchDecision,
+    /// Effect windows the decision took back.
+    withdrawn: Vec<String>,
     declared: String,
     evidence: String,
     since: f64,

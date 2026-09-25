@@ -21,6 +21,9 @@ use eo_services::expected_hunting::{
     self, HuntingLooterLevels, LooterSource, OffensiveLoadoutEvidence,
 };
 use eo_services::game_data_store::GameDataStore;
+use eo_services::weapon_effect::{
+    effect_profile_from_props, WeaponEffectProfile, EFFECT_PROFILE_KEY,
+};
 use eo_wire::normalizer::{round_half_even, to_python_json_dumps};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -135,6 +138,95 @@ pub struct HealingProfileDto {
     pub tick_seconds: Nullable<f64>,
 }
 
+/// How a paid activation of a weapon with a damage-over-time effect shows
+/// in the chat log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeaponEffectMode {
+    /// Only ticks: the first tick is the activation's outcome.
+    OverTime,
+    /// An initial hit, then ticks.
+    Compound,
+}
+
+impl From<WeaponEffectMode> for eo_services::weapon_effect::WeaponEffectMode {
+    fn from(value: WeaponEffectMode) -> Self {
+        match value {
+            WeaponEffectMode::OverTime => Self::OverTime,
+            WeaponEffectMode::Compound => Self::Compound,
+        }
+    }
+}
+
+impl From<eo_services::weapon_effect::WeaponEffectMode> for WeaponEffectMode {
+    fn from(value: eo_services::weapon_effect::WeaponEffectMode) -> Self {
+        match value {
+            eo_services::weapon_effect::WeaponEffectMode::OverTime => Self::OverTime,
+            eo_services::weapon_effect::WeaponEffectMode::Compound => Self::Compound,
+        }
+    }
+}
+
+/// A weapon's declared damage-over-time effect: what one paid activation
+/// prints, and for how long its ticks follow.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponEffectProfileDto {
+    pub mode: WeaponEffectMode,
+    /// The initial hit's range; null for an effect with only ticks.
+    pub hit_min: Nullable<f64>,
+    pub hit_max: Nullable<f64>,
+    pub duration_seconds: f64,
+    pub tick_min: f64,
+    pub tick_max: f64,
+    pub tick_seconds: Nullable<f64>,
+}
+
+fn weapon_effect_dto(props: &Value) -> Option<WeaponEffectProfileDto> {
+    effect_profile_from_props(props).map(|profile| WeaponEffectProfileDto {
+        mode: profile.mode.into(),
+        hit_min: profile.hit_min.into(),
+        hit_max: profile.hit_max.into(),
+        duration_seconds: profile.duration_seconds,
+        tick_min: profile.tick_min,
+        tick_max: profile.tick_max,
+        tick_seconds: profile.tick_seconds.into(),
+    })
+}
+
+/// A weapon's damage-over-time effect as an add or update request declares
+/// it, in the request's casing. Absent: the weapon's every hit is a shot.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct WeaponEffectRequest {
+    pub mode: WeaponEffectMode,
+    #[serde(default)]
+    pub hit_min: Option<f64>,
+    #[serde(default)]
+    pub hit_max: Option<f64>,
+    pub duration_seconds: f64,
+    pub tick_min: f64,
+    pub tick_max: f64,
+    #[serde(default)]
+    pub tick_seconds: Option<f64>,
+}
+
+impl WeaponEffectRequest {
+    /// The profile to store, or why it cannot be.
+    fn profile(&self) -> Result<WeaponEffectProfile, ApiError> {
+        WeaponEffectProfile {
+            mode: self.mode.into(),
+            hit_min: self.hit_min,
+            hit_max: self.hit_max,
+            duration_seconds: self.duration_seconds,
+            tick_min: self.tick_min,
+            tick_max: self.tick_max,
+            tick_seconds: self.tick_seconds,
+        }
+        .validated()
+        .map_err(|error| ApiError::bad_request(error.to_string()))
+    }
+}
+
 /// A library entry in the list shape.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -153,6 +245,8 @@ pub struct EquipmentSummary {
     pub enrichment_level: i64,
     pub healing_profile: Nullable<HealingProfileDto>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's declared damage-over-time effect, when it has one.
+    pub effect_profile: Nullable<WeaponEffectProfileDto>,
 }
 
 /// One configured component of a stored weapon setup.
@@ -289,6 +383,8 @@ pub struct EquipmentDetail {
     pub expected_return: Nullable<EquipmentExpectedReturn>,
     pub healing_profile: Nullable<HealingProfileDto>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's declared damage-over-time effect, when it has one.
+    pub effect_profile: Nullable<WeaponEffectProfileDto>,
 }
 
 /// An add or update request. Field names stay in the request casing the
@@ -335,6 +431,9 @@ pub struct EquipmentRequest {
     pub tick_max: Option<f64>,
     #[serde(default)]
     pub tick_seconds: Option<f64>,
+    /// A weapon's damage-over-time effect; absent for every other kind.
+    #[serde(default)]
+    pub weapon_effect: Option<WeaponEffectRequest>,
 }
 
 fn default_markup() -> i64 {
@@ -552,6 +651,7 @@ fn row_to_summary(
             enrichment_level: compute_enrichment(props),
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
+            effect_profile: weapon_effect_dto(props).into(),
         });
     }
 
@@ -569,6 +669,7 @@ fn row_to_summary(
             enrichment_level: 1,
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
         });
     }
 
@@ -595,6 +696,7 @@ fn row_to_summary(
             enrichment_level: 1,
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
         });
     }
 
@@ -618,6 +720,7 @@ fn row_to_summary(
         enrichment_level: 1,
         healing_profile: Some(healing_profile_dto(props)).into(),
         lifesteal_percent: None.into(),
+        effect_profile: None.into(),
     })
 }
 
@@ -714,6 +817,7 @@ fn row_to_detail(
             expected_return: equipment_expected_return(props, enhancers, looters)?.into(),
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
+            effect_profile: weapon_effect_dto(props).into(),
         });
     }
 
@@ -740,6 +844,7 @@ fn row_to_detail(
             expected_return: None.into(),
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
         });
     }
 
@@ -828,6 +933,7 @@ fn row_to_detail(
             .then(|| healing_profile_dto(props))
             .into(),
         lifesteal_percent: None.into(),
+        effect_profile: None.into(),
     })
 }
 
@@ -1111,6 +1217,16 @@ impl Api {
                     props.insert("implant_entity".into(), implant_e);
                     props.insert("implant_catalog_id".into(), json!(req.implant_catalog_id));
                     props.insert("implant_markup".into(), json!(req.implant_markup));
+                }
+                // Likewise the damage-over-time effect: stored only when
+                // declared, validated as attribution will read it.
+                if let Some(effect) = &req.weapon_effect {
+                    let profile = effect.profile()?;
+                    props.insert(
+                        EFFECT_PROFILE_KEY.into(),
+                        serde_json::to_value(profile)
+                            .map_err(ApiError::internal("weapon effect encode"))?,
+                    );
                 }
                 Ok(BuiltProps {
                     name,

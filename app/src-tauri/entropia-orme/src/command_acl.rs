@@ -233,6 +233,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "weapon_assign",
     "weapon_assignment_undo",
     "weapon_correction_weapons",
+    "weapon_mark_effect_tick",
     "weapon_shots",
     "weapon_unpriced_sessions",
 ];

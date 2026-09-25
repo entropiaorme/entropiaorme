@@ -173,6 +173,87 @@ async fn seed_session(db: &Db, session_id: &'static str, active: bool) {
     .unwrap();
 }
 
+/// An Electrocution effect the session paid for (window `w`, opened at
+/// 1200) and, in kill `k`: a tick of it (`t1`, 12 damage), an unresolved
+/// critical hit of 11 it could equally have ticked (`u4`, counted in the
+/// unpriced phase), and a tick after the last kill (`t2`, 13 damage).
+async fn seed_effects(db: &Db, session_id: &'static str) {
+    db.with_writer(move |conn| {
+        let tx = conn.transaction()?;
+        let id = |name: &str| format!("{session_id}-{name}");
+        tx.execute(
+            "INSERT INTO weapon_effect_windows \
+             (id, session_id, equipment_id, tool_name, started_at, expires_at, hit_amount, \
+              cost_per_shot, tick_min, tick_max, profile_json) \
+             VALUES (?1, ?2, 5, 'Electrocution', 1200, 1225, 129.2, 4.8732, 10, 15, '{}')",
+            rusqlite::params![id("w"), session_id],
+        )?;
+        tx.execute(
+            "UPDATE kill_tool_stats SET shots_fired = shots_fired + 1, \
+                 damage_dealt = damage_dealt + 11, critical_hits = critical_hits + 1 \
+             WHERE kill_id = ?1 AND tool_name = 'Unknown'",
+            [id("k")],
+        )?;
+        tx.execute(
+            "UPDATE kills SET shots_fired = shots_fired + 1, critical_hits = 2 WHERE id = ?1",
+            [id("k")],
+        )?;
+        let effects = serde_json::json!([
+            {"windowId": id("w"), "toolName": "Electrocution", "activatedAt": 1200.0},
+        ])
+        .to_string();
+        for (name, kill, at, amount, critical, attribution, window) in [
+            (
+                "t1",
+                Some("k"),
+                1205.0,
+                12.0,
+                false,
+                "effect_tick",
+                Some("w"),
+            ),
+            ("u4", Some("k"), 1206.0, 11.0, true, "unresolved", None),
+            ("t2", None, 1610.0, 13.0, false, "effect_tick", Some("w")),
+        ] {
+            tx.execute(
+                "INSERT INTO weapon_shot_evidence \
+                 (id, session_id, kill_id, observed_at, amount, critical, attribution, \
+                  hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
+                  effect_window_id, effect_candidates_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'Pistol', NULL, 0, ?8, 'seeded', ?9, ?10)",
+                rusqlite::params![
+                    id(name),
+                    session_id,
+                    kill.map(id),
+                    at,
+                    amount,
+                    critical,
+                    attribution,
+                    candidates(),
+                    window.map(id),
+                    effects,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+async fn kill_shots(db: &Db, kill_id: &'static str) -> (i64, i64) {
+    db.with_reader(move |conn| {
+        Ok(conn.query_row(
+            "SELECT shots_fired, COALESCE(critical_hits, 0) FROM kills WHERE id = ?1",
+            [kill_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
 /// The kill's phases as (tool, shots, damage, crits, cost), and its cost.
 async fn kill_state(db: &Db, kill_id: &'static str) -> (Vec<(String, i64, f64, i64, f64)>, f64) {
     db.with_reader(move |conn| {
@@ -547,7 +628,11 @@ async fn the_detail_block_reads_tallies_shots_and_decisions() {
             "unresolved": 3,
             "unpriced": 3,
             "assigned": 0,
+            "markedTicks": 0,
             "effectTicks": 0,
+            "pricedTicks": 0,
+            "unclaimedTicks": 0,
+            "effects": [],
             "reviews": [{
                 "id": "s-r",
                 "decision": "kept",
@@ -579,6 +664,308 @@ async fn the_detail_block_reads_tallies_shots_and_decisions() {
     assert_eq!(block["reviews"], serde_json::json!([]));
 }
 
+#[tokio::test]
+async fn a_tick_priced_as_a_paid_shot_adds_one_and_its_undo_takes_it_back() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    let before = (
+        kill_state(&h.db, "s-k").await,
+        kill_shots(&h.db, "s-k").await,
+    );
+    let correction = h.service.assign("s-t1", CANNON).await.unwrap();
+    assert_eq!(correction.kind, WeaponCorrectionKind::Priced);
+    let (phases, cost) = kill_state(&h.db, "s-k").await;
+    assert!(phases.contains(&("Cannon".to_string(), 2, 42.0, 0, 0.2)));
+    assert!(phases.contains(&("Unknown".to_string(), 3, 36.0, 2, 0.0)));
+    assert!(close(cost, 0.5));
+    assert_eq!(kill_shots(&h.db, "s-k").await.0, 7);
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "s"))
+            .await
+            .unwrap();
+    assert_eq!(block["effectTicks"], 2);
+    assert_eq!(block["pricedTicks"], 1);
+    assert_eq!(block["effects"][0]["ticks"], 1, "only t2 still stands");
+
+    h.service.undo(&correction.id).await.unwrap();
+    assert_eq!(
+        (
+            kill_state(&h.db, "s-k").await,
+            kill_shots(&h.db, "s-k").await
+        ),
+        before
+    );
+
+    // After the last kill, pricing a tick is the session's dangling cost.
+    let dangling = h.service.assign("s-t2", CANNON).await.unwrap();
+    assert!(close(
+        scalar_f64(
+            &h.db,
+            "SELECT dangling_cost FROM tracking_sessions WHERE id = 's'"
+        )
+        .await,
+        0.2
+    ));
+    h.service.undo(&dangling.id).await.unwrap();
+    assert!(close(
+        scalar_f64(
+            &h.db,
+            "SELECT dangling_cost FROM tracking_sessions WHERE id = 's'"
+        )
+        .await,
+        0.0
+    ));
+}
+
+#[tokio::test]
+async fn an_unresolved_hit_marked_as_an_effects_tick_stops_counting_as_a_shot() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    let before = (
+        kill_state(&h.db, "s-k").await,
+        kill_shots(&h.db, "s-k").await,
+    );
+    assert_eq!(before.1, (6, 2));
+
+    let correction = h.service.mark_effect_tick("s-u4", "s-w").await.unwrap();
+    assert_eq!(correction.kind, WeaponCorrectionKind::EffectTick);
+    assert_eq!(correction.tool_name, "Electrocution");
+    assert_eq!(correction.equipment_id, Some(5));
+    assert_eq!(correction.effect_window_id.as_deref(), Some("s-w"));
+    let (phases, cost) = kill_state(&h.db, "s-k").await;
+    assert!(phases.contains(&("Unknown".to_string(), 2, 25.0, 1, 0.0)));
+    assert!(close(cost, before.0 .1), "a tick costs nothing either way");
+    assert_eq!(kill_shots(&h.db, "s-k").await, (5, 1));
+
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "s"))
+            .await
+            .unwrap();
+    assert_eq!(block["markedTicks"], 1);
+    assert_eq!(block["unpriced"], 3, "u1, u2, u3 remain; u4 is a tick now");
+    assert_eq!(
+        block["effects"],
+        serde_json::json!([{
+            "id": "s-w",
+            "toolName": "Electrocution",
+            "activatedAt": 1200.0,
+            "expiresAt": 1225.0,
+            "hitAmount": 129.2,
+            "costPerShot": 4.8732,
+            "paidHere": true,
+            "withdrawn": false,
+            "ticks": 3,
+            "tickDamage": 36.0,
+        }])
+    );
+    let page = h
+        .service
+        .session_shots("s", ShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap();
+    let marked = page.shots.iter().find(|shot| shot.id == "s-u4").unwrap();
+    assert_eq!(
+        marked.correction_kind,
+        Some(WeaponCorrectionKind::EffectTick)
+    );
+    assert_eq!(marked.correction_window_id.as_deref(), Some("s-w"));
+    assert!(!marked.correctable);
+    assert_eq!(marked.effect_candidates[0].tool_name, "Electrocution");
+    assert!(marked.effect_candidates[0].standing);
+    // Once its other unpriced shots are priced, a marked hit leaves the
+    // session with nothing unpriced.
+    for shot in ["s-u1", "s-u2", "s-u3"] {
+        h.service.assign(shot, PISTOL).await.unwrap();
+    }
+    assert!(h
+        .service
+        .unpriced_sessions(vec!["s".to_string()])
+        .await
+        .unwrap()
+        .is_empty());
+    for shot in ["s-u1", "s-u2", "s-u3"] {
+        let correction =
+            h.db.with_reader(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT correction_id FROM weapon_shot_evidence WHERE id = ?1",
+                    [shot],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        h.service.undo(&correction).await.unwrap();
+    }
+
+    h.service.undo(&correction.id).await.unwrap();
+    assert_eq!(
+        (
+            kill_state(&h.db, "s-k").await,
+            kill_shots(&h.db, "s-k").await
+        ),
+        before
+    );
+}
+
+#[tokio::test]
+async fn effect_corrections_are_refused_where_they_would_not_be_honest() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    let refusal = |result: Result<WeaponCorrection, WeaponReviewError>| match result {
+        Err(error) => error.to_string(),
+        Ok(_) => "corrected".to_string(),
+    };
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u1", "s-w").await),
+        "Only an effect open when the hit landed can claim it"
+    );
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u2", "s-w").await),
+        "Only an unresolved hit can be marked as an effect's tick",
+        "a jam carries no magnitude"
+    );
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-t1", "s-w").await),
+        "Only an unresolved hit can be marked as an effect's tick"
+    );
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u4", "other").await),
+        "Only an effect open when the hit landed can claim it"
+    );
+    h.service.assign("s-u4", CANNON).await.unwrap();
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u4", "s-w").await),
+        "This shot is already priced"
+    );
+    h.service.mark_effect_tick("s-u1", "s-w").await.unwrap_err();
+    // A marked hit cannot also be priced.
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    h.service.mark_effect_tick("s-u4", "s-w").await.unwrap();
+    assert_eq!(
+        refusal(h.service.assign("s-u4", CANNON).await),
+        "This shot is already marked as an effect's tick"
+    );
+    // A cast the player took back can claim no hit, nor is it offered.
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    h.db.with_writer(|conn| {
+        conn.execute("UPDATE weapon_effect_windows SET withdrawn_at = 1300", [])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u4", "s-w").await),
+        "That cast was taken back while the session ran"
+    );
+    let page = h
+        .service
+        .session_shots("s", ShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap();
+    let u4 = page.shots.iter().find(|shot| shot.id == "s-u4").unwrap();
+    assert!(!u4.effect_candidates[0].standing);
+    // An effect whose paying session is gone can no longer claim a hit.
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    h.db.with_writer(|conn| {
+        conn.execute("DELETE FROM weapon_effect_windows", [])?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        refusal(h.service.mark_effect_tick("s-u4", "s-w").await),
+        "That effect's session was deleted"
+    );
+}
+
+#[tokio::test]
+async fn review_lists_effect_ticks_with_their_effects() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    let page = h
+        .service
+        .session_shots("s", ShotGroup::EffectTick, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 2);
+    let first = &page.shots[0];
+    assert_eq!(first.id, "s-t1");
+    assert_eq!(first.effect_window_id.as_deref(), Some("s-w"));
+    assert_eq!(first.effect_candidates.len(), 1);
+    assert!(first.correctable, "a tick can be priced as a shot");
+    assert_eq!(first.tool_name, None);
+}
+
+#[tokio::test]
+async fn an_effect_paid_elsewhere_lists_where_its_ticks_landed() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_effects(&h.db, "s").await;
+    seed_session(&h.db, "t", false).await;
+    h.db.with_writer(|conn| {
+        conn.execute(
+            "INSERT INTO weapon_shot_evidence \
+             (id, session_id, kill_id, observed_at, amount, critical, attribution, \
+              candidates_json, reason, effect_window_id) \
+             VALUES ('t-t3', 't', 't-k', 1210, 14, 0, 'effect_tick', '[]', 'seeded', 's-w')",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "t"))
+            .await
+            .unwrap();
+    assert_eq!(block["effects"][0]["id"], "s-w");
+    assert_eq!(block["effects"][0]["paidHere"], false);
+    assert_eq!(block["effects"][0]["ticks"], 1);
+    assert_eq!(block["effects"][0]["tickDamage"], 14.0);
+
+    // Deleting the paying session unhooks the tick but leaves it a tick.
+    crate::tracking_reads::delete_session_impl(&h.db, "s")
+        .await
+        .unwrap();
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "t"))
+            .await
+            .unwrap();
+    assert_eq!(block["effects"], serde_json::json!([]));
+    assert_eq!(block["effectTicks"], 1);
+    assert_eq!(block["unclaimedTicks"], 1);
+    // A tick a still-running tracker wrote after the delete names the gone
+    // window: it reads as unclaimed too, so the totals agree.
+    h.db.with_writer(|conn| {
+        conn.execute(
+            "INSERT INTO weapon_shot_evidence \
+             (id, session_id, kill_id, observed_at, amount, critical, attribution, \
+              candidates_json, reason, effect_window_id) \
+             VALUES ('t-t4', 't', 't-k', 1212, 15, 0, 'effect_tick', '[]', 'seeded', 's-w')",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "t"))
+            .await
+            .unwrap();
+    assert_eq!(block["effectTicks"], 2);
+    assert_eq!(block["unclaimedTicks"], 2);
+}
+
 mod conservation {
     use super::*;
     use proptest::prelude::*;
@@ -591,16 +978,20 @@ mod conservation {
         /// live correction restores the session exactly.
         #[test]
         fn assignments_conserve_and_undo_restores(
-            steps in proptest::collection::vec((0usize..3, any::<bool>(), any::<bool>()), 1..12),
+            steps in proptest::collection::vec((0usize..6, any::<bool>(), any::<bool>()), 1..14),
         ) {
             let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             runtime.block_on(async {
                 let h = harness().await;
                 seed_session(&h.db, "s", false).await;
-                let initial_kill = kill_state(&h.db, "s-k").await;
+                seed_effects(&h.db, "s").await;
                 let initial_dangling = scalar_f64(&h.db, "SELECT dangling_cost FROM tracking_sessions WHERE id = 's'").await;
-                let shots = ["s-u1", "s-u2", "s-u3"];
-                let mut live: Vec<Option<String>> = vec![None, None, None];
+                let initial_kill = kill_state(&h.db, "s-k").await;
+                let initial_shots = kill_shots(&h.db, "s-k").await;
+                // In kill k: u1, u2, u4 are unresolved shots, t1 a tick; u3
+                // and t2 land after the last kill.
+                let shots = ["s-u1", "s-u2", "s-u3", "s-u4", "s-t1", "s-t2"];
+                let mut live: Vec<Option<String>> = vec![None; shots.len()];
                 for (index, cannon, undo) in steps {
                     match (&live[index], undo) {
                         (Some(correction), true) => {
@@ -608,8 +999,12 @@ mod conservation {
                             live[index] = None;
                         }
                         (None, false) => {
-                            let weapon = if cannon { CANNON } else { PISTOL };
-                            let correction = h.service.assign(shots[index], weapon).await.unwrap();
+                            let correction = if shots[index] == "s-u4" && cannon {
+                                h.service.mark_effect_tick(shots[index], "s-w").await.unwrap()
+                            } else {
+                                let weapon = if cannon { CANNON } else { PISTOL };
+                                h.service.assign(shots[index], weapon).await.unwrap()
+                            };
                             live[index] = Some(correction.id);
                         }
                         _ => {}
@@ -617,13 +1012,15 @@ mod conservation {
                     let (phases, cost) = kill_state(&h.db, "s-k").await;
                     let sum: f64 = phases.iter().map(|(_, n, _, _, c)| *n as f64 * c).sum();
                     prop_assert!(close(sum, cost));
+                    // The kill's shots are its phases' shots, whatever moved.
                     let count: i64 = phases.iter().map(|(_, n, _, _, _)| n).sum();
-                    prop_assert_eq!(count, 5);
+                    prop_assert_eq!(count, kill_shots(&h.db, "s-k").await.0);
                 }
                 for correction in live.iter().flatten() {
                     h.service.undo(correction).await.unwrap();
                 }
                 prop_assert_eq!(kill_state(&h.db, "s-k").await, initial_kill);
+                prop_assert_eq!(kill_shots(&h.db, "s-k").await, initial_shots);
                 let dangling = scalar_f64(&h.db, "SELECT dangling_cost FROM tracking_sessions WHERE id = 's'").await;
                 prop_assert!(close(dangling, initial_dangling));
                 Ok(())

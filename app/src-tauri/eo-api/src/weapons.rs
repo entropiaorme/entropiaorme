@@ -1,6 +1,7 @@
 //! Weapon attribution: the live decision on a standing mismatch, and the
-//! post-play review of a session's stored shots with the assignment of an
-//! unpriced shot and its undo.
+//! post-play review of a session's stored shots with their corrections
+//! (assigning a shot left without a price to a weapon, marking an
+//! unresolved hit as an effect's tick) and the undo of either.
 //!
 //! The vocabulary stays closed at the IPC boundary. The tracker owns the
 //! live decision and the review service owns the corrections and every
@@ -10,8 +11,9 @@
 
 use eo_services::tracker::{MismatchDecision, WeaponDecisionError};
 use eo_services::weapon_review::{
-    CorrectionWeapon as ServiceCorrectionWeapon, ReviewShot, ReviewShotPage,
-    ShotCandidate as ServiceCandidate, ShotGroup, WeaponReviewError,
+    CorrectionWeapon as ServiceCorrectionWeapon, EffectCandidate as ServiceEffectCandidate,
+    ReviewShot, ReviewShotPage, ShotCandidate as ServiceCandidate, ShotGroup,
+    WeaponCorrectionKind as ServiceCorrectionKind, WeaponReviewError,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -41,12 +43,24 @@ impl From<WeaponMismatchDecision> for MismatchDecision {
 
 /// Which stored shots a review page lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WeaponShotGroup {
     /// Shots no single carried weapon explained.
     Unresolved,
     /// Shots whose damage overrode the hotbar's weapon.
     Evidence,
+    /// Ticks of a damage-over-time effect an earlier paid hit started.
+    EffectTick,
+}
+
+impl From<ShotGroup> for WeaponShotGroup {
+    fn from(value: ShotGroup) -> Self {
+        match value {
+            ShotGroup::Unresolved => Self::Unresolved,
+            ShotGroup::Evidence => Self::Evidence,
+            ShotGroup::EffectTick => Self::EffectTick,
+        }
+    }
 }
 
 impl From<WeaponShotGroup> for ShotGroup {
@@ -54,6 +68,26 @@ impl From<WeaponShotGroup> for ShotGroup {
         match value {
             WeaponShotGroup::Unresolved => Self::Unresolved,
             WeaponShotGroup::Evidence => Self::Evidence,
+            WeaponShotGroup::EffectTick => Self::EffectTick,
+        }
+    }
+}
+
+/// What a post-play correction did to its shot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeaponCorrectionKind {
+    /// Priced it from a carried weapon.
+    Priced,
+    /// Marked it as a tick of an open effect.
+    EffectTick,
+}
+
+impl From<ServiceCorrectionKind> for WeaponCorrectionKind {
+    fn from(value: ServiceCorrectionKind) -> Self {
+        match value {
+            ServiceCorrectionKind::Priced => Self::Priced,
+            ServiceCorrectionKind::EffectTick => Self::EffectTick,
         }
     }
 }
@@ -86,13 +120,41 @@ impl From<ServiceCandidate> for WeaponShotCandidate {
     }
 }
 
+/// One open effect as a stored shot remembers it: the effect it was (or
+/// may have been) a tick of.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponEffectCandidate {
+    pub window_id: String,
+    /// The weapon whose paid hit started it.
+    pub tool_name: String,
+    /// When that hit landed.
+    pub activated_at: f64,
+    /// The effect still stands (no decision took it back and its session
+    /// was not deleted), so a hit can be marked as its tick.
+    pub standing: bool,
+}
+
+impl From<ServiceEffectCandidate> for WeaponEffectCandidate {
+    fn from(value: ServiceEffectCandidate) -> Self {
+        Self {
+            window_id: value.window_id,
+            tool_name: value.tool_name,
+            activated_at: value.activated_at,
+            standing: value.standing,
+        }
+    }
+}
+
 /// One stored shot, as review lists it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WeaponShot {
     pub id: String,
+    /// How it was classified as it landed.
+    pub group: WeaponShotGroup,
     pub observed_at: f64,
-    /// Null for a jam, dodge, or evade: a shot with no damage figure.
+    /// Null for a jam, dodge, evade, or miss: a shot with no damage figure.
     pub amount: Nullable<f64>,
     pub critical: bool,
     pub reason: String,
@@ -103,11 +165,19 @@ pub struct WeaponShot {
     pub cost_per_shot: f64,
     /// The weapons carried when it landed.
     pub candidates: Vec<WeaponShotCandidate>,
-    /// The live assignment that priced it, which can be undone.
+    /// The open effects that explained it when it landed.
+    pub effect_candidates: Vec<WeaponEffectCandidate>,
+    /// The one effect a tick belongs to; null when several explained it.
+    pub effect_window_id: Nullable<String>,
+    /// The live correction, which can be undone.
     pub correction_id: Nullable<String>,
+    pub correction_kind: Nullable<WeaponCorrectionKind>,
+    /// For a live effect-tick correction, the effect it named.
+    pub correction_window_id: Nullable<String>,
     /// The decision on a mismatch that repriced it while the session ran.
     pub review_decision: Nullable<WeaponReviewDecision>,
-    /// It can be assigned to a weapon: unpriced, in an ended session.
+    /// It can be corrected: without a price or a correction, in an ended
+    /// session.
     pub correctable: bool,
 }
 
@@ -126,6 +196,7 @@ impl TryFrom<ReviewShot> for WeaponShot {
     fn try_from(value: ReviewShot) -> Result<Self, ApiError> {
         Ok(Self {
             review_decision: review_decision(value.review_decision)?.into(),
+            group: value.group.into(),
             id: value.id,
             observed_at: value.observed_at,
             amount: value.amount.into(),
@@ -135,7 +206,15 @@ impl TryFrom<ReviewShot> for WeaponShot {
             tool_name: value.tool_name.into(),
             cost_per_shot: value.cost_per_shot,
             candidates: value.candidates.into_iter().map(Into::into).collect(),
+            effect_candidates: value
+                .effect_candidates
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            effect_window_id: value.effect_window_id.into(),
             correction_id: value.correction_id.into(),
+            correction_kind: value.correction_kind.map(Into::into).into(),
+            correction_window_id: value.correction_window_id.into(),
             correctable: value.correctable,
         })
     }
@@ -253,8 +332,25 @@ impl Api {
             .map_err(review_error)
     }
 
-    /// Assign one unpriced shot of an ended session to a weapon; answers
-    /// with the session's refreshed detail.
+    /// Mark an unresolved hit of an ended session as a tick of an effect
+    /// that was open and explained it when it landed; answers with the
+    /// session's refreshed detail.
+    pub async fn weapon_mark_effect_tick(
+        &self,
+        evidence_id: String,
+        window_id: String,
+    ) -> Result<SessionDetail, ApiError> {
+        let correction = self
+            .weapon_review
+            .mark_effect_tick(&evidence_id, &window_id)
+            .await
+            .map_err(review_error)?;
+        self.tracking_session_detail(correction.session_id).await
+    }
+
+    /// Assign one shot of an ended session left without a price (an
+    /// unresolved shot, or an effect tick) to a weapon; answers with the
+    /// session's refreshed detail.
     pub async fn weapon_assign(
         &self,
         evidence_id: String,
@@ -268,7 +364,7 @@ impl Api {
         self.tracking_session_detail(correction.session_id).await
     }
 
-    /// Undo a live assignment; answers with the session's refreshed detail.
+    /// Undo a live correction; answers with the session's refreshed detail.
     pub async fn weapon_assignment_undo(
         &self,
         correction_id: String,

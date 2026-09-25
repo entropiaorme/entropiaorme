@@ -1,9 +1,10 @@
 /**
  * Runes-native state for a session's weapon attribution review.
  *
- * An assignment answers with the session's refreshed detail, which the owner
- * applies; the review list then re-reads so a shot the assignment priced
- * changes in place. Every assignment is undoable, so none asks for
+ * A correction (pricing a shot from a weapon, or marking a hit as an
+ * effect's tick) answers with the session's refreshed detail, which the
+ * owner applies; the review list then re-reads so the corrected shot
+ * changes in place. Every correction is undoable, so none asks for
  * confirmation.
  */
 
@@ -11,6 +12,7 @@ import {
 	assignWeaponShot,
 	getWeaponCorrectionWeapons,
 	getWeaponShots,
+	markWeaponShotEffectTick,
 	undoWeaponAssignment,
 	type WeaponCorrectionWeapon,
 	type WeaponShot,
@@ -96,7 +98,7 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 			weapons = {};
 			await reloadShots();
 		} catch (e) {
-			error = describeError(e, 'The assignment could not be saved.');
+			error = describeError(e, 'The correction could not be saved.');
 		} finally {
 			busy = null;
 		}
@@ -143,9 +145,13 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 			error = null;
 		},
 
-		/** Price an unpriced shot as one shot of a weapon. */
+		/** Price a shot left without a price as one shot of a weapon. */
 		assign(shotId: string, equipmentId: number) {
 			return act(shotId, () => assignWeaponShot(shotId, equipmentId));
+		},
+		/** Mark an unresolved hit as a tick of an effect open when it landed. */
+		markTick(shotId: string, windowId: string) {
+			return act(shotId, () => markWeaponShotEffectTick(shotId, windowId));
 		},
 		undo(correctionId: string) {
 			return act(correctionId, () => undoWeaponAssignment(correctionId));

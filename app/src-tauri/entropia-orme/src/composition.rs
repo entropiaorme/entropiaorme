@@ -106,8 +106,8 @@ use eo_services::skill_tracker::SkillTracker;
 pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::time::naive_to_epoch;
 use eo_services::tracker::{
-    damage_band_from_props, ActivityKey, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary,
-    EquipmentProfile, GuardrailTool, HarvestGuardrailTools, HuntTracker, Providers, TrackingConfig,
+    ActivityKey, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary, EquipmentProfile,
+    GuardrailTool, HarvestGuardrailTools, HuntTracker, Providers, TrackingConfig,
 };
 use eo_wire::bus::DomainBus;
 use eo_wire::domain_events::DomainEvent;
@@ -1705,13 +1705,8 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
                     Some(game_data) => with_current_offensive_efficiencies(&props, game_data),
                     None => props,
                 };
-                let band = damage_band_from_props(&props);
                 Some(CarriedWeaponProfile {
-                    weapon: CarriedWeapon {
-                        equipment_id: id,
-                        name,
-                        band,
-                    },
+                    weapon: CarriedWeapon::from_props(id, name, &props),
                     props: props.as_object().cloned().unwrap_or_default(),
                 })
             })

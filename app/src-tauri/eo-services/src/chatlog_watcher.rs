@@ -36,10 +36,11 @@ use crate::ped::Ped;
 /// Seconds between reads, exactly the original's tail interval.
 pub const TAIL_INTERVAL: Duration = Duration::from_millis(100);
 
-const COMBAT_MESSAGE_PREFIXES: [&str; 12] = [
+const COMBAT_MESSAGE_PREFIXES: [&str; 13] = [
     "Critical hit",
     "You inflicted",
     "The target Jammed",
+    "You missed",
     "The target Dodged",
     "The target Evaded",
     "You took",
@@ -115,6 +116,7 @@ fn bus_topic(event_type: EventType) -> Option<Topic> {
         | EventType::TargetDodge
         | EventType::TargetEvade
         | EventType::TargetJam
+        | EventType::TargetMiss
         | EventType::PlayerDodge
         | EventType::PlayerEvade
         | EventType::PlayerJam
@@ -173,6 +175,7 @@ fn typed_bus_event(event: &ChatEvent) -> Option<BusEvent> {
         EventType::TargetDodge => combat(CombatPayload::TargetDodge { timestamp }),
         EventType::TargetEvade => combat(CombatPayload::TargetEvade { timestamp }),
         EventType::TargetJam => combat(CombatPayload::TargetJam { timestamp }),
+        EventType::TargetMiss => combat(CombatPayload::TargetMiss { timestamp }),
         EventType::PlayerDodge => combat(CombatPayload::PlayerDodge { timestamp }),
         EventType::PlayerEvade => combat(CombatPayload::PlayerEvade { timestamp }),
         EventType::PlayerJam => combat(CombatPayload::PlayerJam { timestamp }),

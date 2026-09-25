@@ -24,6 +24,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		enrichmentLevel: 2,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	{
 		id: '2',
@@ -38,6 +39,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		enrichmentLevel: 3,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	{
 		id: '3',
@@ -52,6 +54,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		enrichmentLevel: 1,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	{
 		id: '4',
@@ -74,6 +77,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 			tickSeconds: null,
 		},
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	{
 		id: '5',
@@ -88,6 +92,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		enrichmentLevel: 0,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 ];
 
@@ -141,6 +146,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		},
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	'2': {
 		id: '2',
@@ -212,6 +218,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		},
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 	'4': {
 		id: '4',
@@ -250,6 +257,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 			tickSeconds: null,
 		},
 		lifestealPercent: null,
+		effectProfile: null,
 	},
 };
 

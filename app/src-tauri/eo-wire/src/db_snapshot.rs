@@ -205,9 +205,13 @@ pub const CATALOGUE: &[TableSpec] = &[
     },
     TableSpec {
         name: "weapon_shot_evidence",
+        // The effect candidates carry window ids inside a JSON string, where
+        // the normaliser cannot reach them: the snapshot pins how many there
+        // were, and the one a tick belongs to through `effect_window_id`.
         query: "SELECT id, session_id, kill_id, context_id, observed_at, amount, critical, \
                 attribution, hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
-                effect_window_id, review_id, correction_id \
+                effect_window_id, review_id, correction_id, \
+                json_array_length(effect_candidates_json) AS effect_candidates \
                 FROM weapon_shot_evidence",
         order_by: &["observed_at", "rowid"],
     },
@@ -216,6 +220,18 @@ pub const CATALOGUE: &[TableSpec] = &[
         query: "SELECT id AS session_id, weapon_shots_agreed, weapon_shots_evidenced \
                 FROM tracking_sessions",
         order_by: &["rowid"],
+    },
+    // Damage-over-time effect windows: each paid hit of a weapon with a
+    // declared effect, the profile it was opened under, and the decision that
+    // took it back, if any. Appended last so no earlier table's symbol
+    // assignment moves.
+    TableSpec {
+        name: "weapon_effect_windows",
+        query: "SELECT id, session_id, equipment_id, tool_name, context_id, started_at, \
+                expires_at, hit_amount, critical, cost_per_shot, tick_min, tick_max, profile_json, \
+                withdrawn_at, withdrawn_by_review_id \
+                FROM weapon_effect_windows",
+        order_by: &["started_at", "rowid"],
     },
 ];
 

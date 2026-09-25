@@ -1,16 +1,19 @@
 <script lang="ts">
 	/**
 	 * The carried weapons' damage ranges on one axis: each weapon's regular
-	 * hit band, and how far its criticals reach. These are the ranges weapon
-	 * attribution checks every hit against, so an overlap is where only the
-	 * hotbar can tell two weapons apart.
+	 * hit band, how far its criticals reach, and the ticks of a declared
+	 * damage-over-time effect. These are the ranges weapon attribution checks
+	 * every hit against, so an overlap is where only the hotbar can tell two
+	 * weapons apart, or where a hit could be a shot or an effect's tick.
 	 */
 	import {
 		axisTicks,
+		effectOverlaps,
 		formatRange,
 		sharedRanges,
 		type WeaponBand,
 	} from './carriedWeapons';
+	import { NO_DATA } from '$lib/utils/format';
 	import type { Equipment } from '$lib/types';
 
 	let {
@@ -24,9 +27,13 @@
 	let hoverTip = $state<{ text: string; x: number; y: number } | null>(null);
 	let chart: HTMLDivElement | null = $state(null);
 
-	const ticks = $derived(axisTicks(Math.max(0, ...banded.map((band) => band.critMax))));
+	const ticks = $derived(
+		axisTicks(Math.max(0, ...banded.map((band) => Math.max(band.critMax, band.tick?.max ?? 0)))),
+	);
 	const top = $derived(ticks[ticks.length - 1] || 1);
 	const shared = $derived(sharedRanges(banded));
+	const overlaps = $derived(effectOverlaps(banded));
+	const anyEffect = $derived(banded.some((band) => band.tick !== null));
 
 	function span(min: number, max: number): string {
 		const left = (min / top) * 100;
@@ -52,6 +59,11 @@
 				<span class="flex items-center gap-1.5">
 					<span class="h-3 w-4 rounded-full bg-accent/15"></span>Critical reach
 				</span>
+				{#if anyEffect}
+					<span class="flex items-center gap-1.5">
+						<span class="h-1 w-4 rounded-full bg-positive/70"></span>Effect tick
+					</span>
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -75,8 +87,21 @@
 							</span>
 							<span class="truncate text-xs text-text-secondary" title={band.name}>{band.name}</span>
 						</div>
-						<div class="relative h-4">
+						<div class="relative {band.tick ? 'h-6' : 'h-4'}">
 							<div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border/60"></div>
+							{#if band.tick}
+								{@const tick = band.tick}
+								<div
+									role="presentation"
+									class="absolute bottom-0 h-1 rounded-full bg-positive/70"
+									style={span(tick.min, tick.max)}
+									onpointerenter={(event) =>
+										showTip(event, `${band.name} effect tick: ${formatRange(tick.min, tick.max)}`)}
+									onpointermove={(event) =>
+										showTip(event, `${band.name} effect tick: ${formatRange(tick.min, tick.max)}`)}
+									onpointerleave={() => (hoverTip = null)}
+								></div>
+							{/if}
 							<div
 								role="presentation"
 								class="absolute top-1/2 h-3 -translate-y-1/2 rounded-full bg-accent/15"
@@ -131,7 +156,7 @@
 			<table class="sr-only">
 				<caption>Damage ranges of the carried weapons</caption>
 				<thead>
-					<tr><th>Weapon</th><th>Hotbar slot</th><th>Hit</th><th>Critical reach</th></tr>
+					<tr><th>Weapon</th><th>Hotbar slot</th><th>Hit</th><th>Critical reach</th><th>Effect tick</th></tr>
 				</thead>
 				<tbody>
 					{#each banded as band (band.id)}
@@ -140,11 +165,24 @@
 							<td>{band.slot ?? 'None'}</td>
 							<td>{formatRange(band.min, band.max)}</td>
 							<td>up to {band.critMax.toFixed(1)}</td>
+							<td>{band.tick ? formatRange(band.tick.min, band.tick.max) : NO_DATA}</td>
 						</tr>
 					{/each}
 				</tbody>
 			</table>
 		</div>
+
+		{#if overlaps.length > 0}
+			<ul class="space-y-1 text-xs text-text-secondary" data-testid="effect-overlaps">
+				{#each overlaps as overlap (`${overlap.effect}|${overlap.weapon}`)}
+					<li>
+						<span class="text-warning">{overlap.effect}'s ticks and {overlap.weapon}'s hits</span>
+						share <span class="tabular-nums">{formatRange(overlap.min, overlap.max)}</span>: while
+						the effect runs, a hit there with {overlap.weapon} on your hotbar is left unpriced.
+					</li>
+				{/each}
+			</ul>
+		{/if}
 
 		{#if shared.length > 0}
 			<ul class="space-y-1 text-xs text-text-secondary" data-testid="shared-ranges">

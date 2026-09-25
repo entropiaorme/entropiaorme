@@ -31,6 +31,12 @@ import type {
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead } from '$lib/view/typeahead.svelte';
 import { previewCostPerUse } from './costPreview';
+import {
+	effectFields,
+	effectFormProblem,
+	effectRequest,
+	type WeaponEffectForm,
+} from './weaponEffect';
 
 export type EquipmentFormType = 'weapon' | 'healing' | 'consumable' | 'tool';
 
@@ -79,6 +85,11 @@ export function createLibraryModel() {
 	let tickMax = $state<number | null>(null);
 	let tickSeconds = $state<number | null>(null);
 	let seededHealerId = $state<string | null>(null);
+	// A weapon's damage-over-time effect shares the over-time fields above
+	// (duration and ticks) with a healing tool's; only one form shows.
+	let weaponEffectMode = $state<WeaponEffectForm>('direct');
+	let hitMin = $state<number | null>(null);
+	let hitMax = $state<number | null>(null);
 
 	// ── Catalogue pickers ──
 	const label = (item: EquipmentSearchResult) => item.name;
@@ -144,6 +155,17 @@ export function createLibraryModel() {
 
 	// ── Computed ──
 	const sortedEquipment = $derived([...equipmentList].sort((a, b) => a.name.localeCompare(b.name)));
+
+	const weaponEffectFields = $derived({
+		mode: weaponEffectMode,
+		hitMin,
+		hitMax,
+		durationSeconds: effectDurationSeconds,
+		tickMin,
+		tickMax,
+		tickSeconds,
+	});
+	const weaponEffectProblem = $derived(effectFormProblem(weaponEffectFields));
 
 	const liveCostPreview = $derived(
 		previewCostPerUse({
@@ -244,6 +266,9 @@ export function createLibraryModel() {
 		tickMax = null;
 		tickSeconds = null;
 		seededHealerId = null;
+		weaponEffectMode = 'direct';
+		hitMin = null;
+		hitMax = null;
 		showAddModal = true;
 	}
 
@@ -324,6 +349,16 @@ export function createLibraryModel() {
 		tickMax = detail.healingProfile?.tickMax ?? null;
 		tickSeconds = detail.healingProfile?.tickSeconds ?? null;
 		seededHealerId = detail.type === 'healing' ? detail.weapon.catalogId : null;
+		const effect = effectFields(detail.type === 'weapon' ? detail.effectProfile : null);
+		weaponEffectMode = effect.mode;
+		hitMin = effect.hitMin;
+		hitMax = effect.hitMax;
+		if (detail.type === 'weapon') {
+			effectDurationSeconds = effect.durationSeconds;
+			tickMin = effect.tickMin;
+			tickMax = effect.tickMax;
+			tickSeconds = effect.tickSeconds;
+		}
 		showAddModal = true;
 	}
 
@@ -359,6 +394,15 @@ export function createLibraryModel() {
 
 	function setAddType(type: EquipmentFormType) {
 		addType = type;
+		// The over-time fields are shared between a weapon's effect and a
+		// healing tool's: a change of kind starts them afresh.
+		weaponEffectMode = 'direct';
+		hitMin = null;
+		hitMax = null;
+		effectDurationSeconds = null;
+		tickMin = null;
+		tickMax = null;
+		tickSeconds = null;
 		if (type === 'weapon') {
 			healerPicker.clear();
 			toolPicker.clear();
@@ -432,6 +476,7 @@ export function createLibraryModel() {
 					damage_enhancers: damageEnhancers,
 					implant_catalog_id: implantPicker.selected?.catalogId ?? null,
 					implant_markup: implantPicker.selected?.isLimited ? implantMarkupPercent : 100,
+					weapon_effect: effectRequest(weaponEffectFields),
 				};
 				const item = editingEquipmentId
 					? await updateLibrary(editingEquipmentId, payload)
@@ -643,6 +688,28 @@ export function createLibraryModel() {
 		},
 		set implantMarkupPercent(value: number) {
 			implantMarkupPercent = value;
+		},
+		get weaponEffectMode() {
+			return weaponEffectMode;
+		},
+		set weaponEffectMode(value: WeaponEffectForm) {
+			weaponEffectMode = value;
+		},
+		get hitMin() {
+			return hitMin;
+		},
+		set hitMin(value: number | null) {
+			hitMin = value;
+		},
+		get hitMax() {
+			return hitMax;
+		},
+		set hitMax(value: number | null) {
+			hitMax = value;
+		},
+		/** Why the weapon's declared effect cannot be saved yet, or null. */
+		get weaponEffectProblem() {
+			return weaponEffectProblem;
 		},
 		get healingMode() {
 			return healingMode;

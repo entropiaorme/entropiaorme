@@ -27,6 +27,7 @@ pub enum EventType {
     TargetDodge,
     TargetEvade,
     TargetJam,
+    TargetMiss,
     DamageReceived,
     PlayerDodge,
     PlayerEvade,
@@ -52,12 +53,13 @@ impl EventType {
     /// scenario). Kept in step with the compiler-exhaustive `as_str`
     /// match below; the `all_lists_every_variant_once` test guards it
     /// against drift.
-    pub const ALL: [EventType; 22] = [
+    pub const ALL: [EventType; 23] = [
         EventType::DamageDealt,
         EventType::CriticalHit,
         EventType::TargetDodge,
         EventType::TargetEvade,
         EventType::TargetJam,
+        EventType::TargetMiss,
         EventType::DamageReceived,
         EventType::PlayerDodge,
         EventType::PlayerEvade,
@@ -85,6 +87,7 @@ impl EventType {
             EventType::TargetDodge => "target_dodge",
             EventType::TargetEvade => "target_evade",
             EventType::TargetJam => "target_jam",
+            EventType::TargetMiss => "target_miss",
             EventType::DamageReceived => "damage_received",
             EventType::PlayerDodge => "player_dodge",
             EventType::PlayerEvade => "player_evade",
@@ -241,6 +244,13 @@ fn system_rules() -> &'static [Rule] {
                 pattern: regex(r"The target Jammed your attack"),
                 extract: empty_data,
                 prefix: Some("The target Jammed"),
+            },
+            // The player's own attack missed: a paid shot that hit nothing.
+            Rule {
+                event_type: EventType::TargetMiss,
+                pattern: regex(r"^You missed$"),
+                extract: empty_data,
+                prefix: Some("You missed"),
             },
             Rule {
                 event_type: EventType::TargetDodge,
@@ -555,7 +565,7 @@ mod tests {
         // the corpus 21/21 coverage assertion) to grow alongside it.
         let names: BTreeSet<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
         assert_eq!(names.len(), EventType::ALL.len());
-        assert_eq!(names.len(), 22);
+        assert_eq!(names.len(), 23);
     }
 
     #[test]
@@ -594,6 +604,7 @@ mod tests {
             ("The target Dodged your attack", EventType::TargetDodge),
             ("The target Evaded your attack", EventType::TargetEvade),
             ("The target Jammed your attack", EventType::TargetJam),
+            ("You missed", EventType::TargetMiss),
             ("You Dodged the attack", EventType::PlayerDodge),
             ("You Evaded the attack", EventType::PlayerEvade),
             ("You Jammed the attack", EventType::PlayerJam),
@@ -746,6 +757,7 @@ mod tests {
             (EventType::TargetDodge, "target_dodge"),
             (EventType::TargetEvade, "target_evade"),
             (EventType::TargetJam, "target_jam"),
+            (EventType::TargetMiss, "target_miss"),
             (EventType::DamageReceived, "damage_received"),
             (EventType::PlayerDodge, "player_dodge"),
             (EventType::PlayerEvade, "player_evade"),

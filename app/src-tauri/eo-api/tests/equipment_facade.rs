@@ -113,6 +113,7 @@ fn consumable(name: &str) -> EquipmentRequest {
         tick_min: None,
         tick_max: None,
         tick_seconds: None,
+        weapon_effect: None,
     }
 }
 
@@ -208,7 +209,7 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
         "{\"id\":\"1\",\"name\":\"Nutrio Bar\",\"type\":\"consumable\",\"amplifierName\":null,\
          \"costPerUse\":0.0,\"damageMin\":null,\"damageMax\":null,\"reloadSeconds\":null,\
          \"isLimited\":false,\"enrichmentLevel\":1,\"healingProfile\":null,\
-         \"lifestealPercent\":null}"
+         \"lifestealPercent\":null,\"effectProfile\":null}"
     );
 
     // Storage invariance: the stored props bytes are the reference
@@ -284,6 +285,89 @@ async fn a_weapon_setup_stores_and_lists_with_its_catalogue_economy() {
     assert!(detail.amplifier.is_none());
     assert!(detail.scope.is_none());
     assert!(detail.absorber.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_weapon_declares_its_damage_over_time_effect_and_can_drop_it() {
+    use eo_api::equipment::{WeaponEffectMode, WeaponEffectRequest};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    let mut req = consumable("");
+    req.kind = EquipmentKind::Weapon;
+    req.name = None;
+    req.catalog_id = Some("w1".to_string());
+    req.weapon_effect = Some(WeaponEffectRequest {
+        mode: WeaponEffectMode::Compound,
+        hit_min: Some(100.0),
+        hit_max: Some(160.0),
+        duration_seconds: 25.0,
+        tick_min: 35.0,
+        tick_max: 75.0,
+        tick_seconds: Some(1.2),
+    });
+    let added = api.equipment_add(&req).await.unwrap();
+    let effect = added.effect_profile.as_ref().unwrap();
+    assert_eq!(effect.mode, WeaponEffectMode::Compound);
+    assert_eq!(effect.hit_min.as_ref(), Some(&100.0));
+    assert_eq!(effect.duration_seconds, 25.0);
+    assert_eq!(effect.tick_seconds.as_ref(), Some(&1.2));
+    let detail = api.equipment_detail(1).await.unwrap();
+    assert_eq!(detail.effect_profile.as_ref().unwrap().tick_max, 75.0);
+
+    // The stored props carry it where attribution reads it.
+    let stored = db
+        .with_reader(|conn| {
+            Ok::<String, eo_services::db::DbError>(conn.query_row(
+                "SELECT properties_json FROM equipment_library WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let props: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(
+        eo_services::tracker::damage_band_from_props(&props),
+        Some(eo_services::tracker::DamageBand {
+            min: 100.0,
+            max: 160.0
+        })
+    );
+
+    // A profile attribution could not use is refused, and changes nothing.
+    let mut bad = req.clone();
+    bad.weapon_effect = Some(WeaponEffectRequest {
+        mode: WeaponEffectMode::OverTime,
+        hit_min: None,
+        hit_max: None,
+        duration_seconds: 0.0,
+        tick_min: 35.0,
+        tick_max: 75.0,
+        tick_seconds: None,
+    });
+    assert_eq!(
+        api.equipment_update(1, &bad).await.unwrap_err(),
+        ApiError::bad_request("An effect needs a duration above zero and at most ten minutes"),
+    );
+    assert!(api
+        .equipment_detail(1)
+        .await
+        .unwrap()
+        .effect_profile
+        .is_some());
+
+    // Saving without one drops it: every hit is a shot again.
+    let mut plain = req.clone();
+    plain.weapon_effect = None;
+    let updated = api.equipment_update(1, &plain).await.unwrap();
+    assert!(updated.effect_profile.is_none());
+    assert!(api
+        .equipment_detail(1)
+        .await
+        .unwrap()
+        .effect_profile
+        .is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

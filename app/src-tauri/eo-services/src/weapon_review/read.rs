@@ -1,11 +1,13 @@
 //! Review reads: a session's stored shots of one group, the weapons an
-//! unpriced shot could be assigned to, and the session-detail summary.
+//! unpriced shot could be assigned to, and the session-detail summary with
+//! the damage-over-time effects that ticked in the session.
 
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 
 use super::{
-    CorrectionWeapon, ReviewShot, ReviewShotPage, ShotCandidate, ShotGroup, WeaponReviewError,
+    CorrectionWeapon, EffectCandidate, ReviewShot, ReviewShotPage, ShotCandidate, ShotGroup,
+    WeaponCorrectionKind, WeaponReviewError,
 };
 use crate::cost_engine::cost_per_shot_from_props;
 use crate::db::DbError;
@@ -43,6 +45,28 @@ pub(super) fn parse_candidates(raw: &str) -> Result<Vec<ShotCandidate>, WeaponRe
     serde_json::from_str(raw).map_err(|_| WeaponReviewError::Stored("unreadable shot candidates"))
 }
 
+/// Whether an effect window still stands: it exists and no decision took
+/// it back.
+pub(super) fn window_stands(
+    conn: &rusqlite::Connection,
+    window_id: &str,
+) -> Result<bool, WeaponReviewError> {
+    Ok(conn
+        .query_row(
+            "SELECT withdrawn_at IS NULL FROM weapon_effect_windows WHERE id = ?1",
+            [window_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false))
+}
+
+pub(super) fn parse_effect_candidates(
+    raw: &str,
+) -> Result<Vec<EffectCandidate>, WeaponReviewError> {
+    serde_json::from_str(raw).map_err(|_| WeaponReviewError::Stored("unreadable effect candidates"))
+}
+
 pub(super) fn session_shots(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -65,7 +89,8 @@ pub(super) fn session_shots(
     )?;
     let mut stmt = conn.prepare(
         "SELECT e.id, e.observed_at, e.amount, e.critical, e.reason, e.hotbar_tool, \
-                e.tool_name, e.cost_per_shot, e.candidates_json, c.id, r.decision \
+                e.tool_name, e.cost_per_shot, e.candidates_json, c.id, r.decision, \
+                e.effect_candidates_json, e.effect_window_id, c.kind, c.effect_window_id \
          FROM weapon_shot_evidence e \
          LEFT JOIN weapon_attribution_corrections c \
                 ON c.id = e.correction_id AND c.undone_at IS NULL \
@@ -89,6 +114,10 @@ pub(super) fn session_shots(
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, Option<String>>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
             ))
         },
     )?;
@@ -106,9 +135,32 @@ pub(super) fn session_shots(
             candidates,
             correction_id,
             review_decision,
+            effect_candidates,
+            effect_window_id,
+            correction_kind,
+            correction_window_id,
         ) = row?;
+        let correction_kind = match correction_kind.as_deref() {
+            None => None,
+            Some(kind) => Some(
+                WeaponCorrectionKind::parse(kind)
+                    .ok_or(WeaponReviewError::Stored("unknown correction kind"))?,
+            ),
+        };
+        let mut effect_candidates = parse_effect_candidates(&effect_candidates)?;
+        for candidate in &mut effect_candidates {
+            candidate.standing = window_stands(conn, &candidate.window_id)?;
+        }
         shots.push(ReviewShot {
-            correctable: ended && group == ShotGroup::Unresolved && tool_name.is_none(),
+            correctable: ended
+                && group != ShotGroup::Evidence
+                && tool_name.is_none()
+                && correction_id.is_none(),
+            group,
+            effect_candidates,
+            effect_window_id,
+            correction_kind,
+            correction_window_id,
             id,
             observed_at,
             amount,
@@ -168,7 +220,7 @@ pub(super) fn sessions_with_unpriced_shots(
         let sql = format!(
             "SELECT DISTINCT session_id FROM weapon_shot_evidence \
              WHERE attribution = 'unresolved' AND tool_name IS NULL \
-               AND session_id IN ({placeholders})"
+               AND correction_id IS NULL AND session_id IN ({placeholders})"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
@@ -183,8 +235,9 @@ pub(super) fn sessions_with_unpriced_shots(
 
 /// The session detail's weapon attribution block: the tallies the session
 /// recorded at its stop (null for a session recorded before they were kept),
-/// its stored shots by state, and the decisions made on a mismatch while it
-/// ran. A session with nothing to tell reads as all zeros and no decisions.
+/// its stored shots by state, the decisions made on a mismatch while it
+/// ran, and the damage-over-time effects that ticked in it. A session with
+/// nothing to tell reads as all zeros, no decisions, and no effects.
 pub fn session_detail_block(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -198,25 +251,36 @@ pub fn session_detail_block(
         )
         .optional()?
         .unwrap_or((None, None, false));
-    let (evidence, unresolved, unpriced, assigned, effect_ticks): (i64, i64, i64, i64, i64) = conn
-        .query_row(
-            "SELECT COALESCE(SUM(attribution = 'evidence'), 0), \
-                    COALESCE(SUM(attribution = 'unresolved'), 0), \
-                    COALESCE(SUM(attribution = 'unresolved' AND tool_name IS NULL), 0), \
-                    COALESCE(SUM(attribution = 'unresolved' AND correction_id IS NOT NULL), 0), \
-                    COALESCE(SUM(attribution = 'effect_tick'), 0) \
-             FROM weapon_shot_evidence WHERE session_id = ?1",
-            [session_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )?;
+    // A shot's standing: the live correction (if any) decides what it is
+    // now, while `attribution` keeps how it was classified as it landed.
+    let counts: [i64; 7] = conn.query_row(
+        "SELECT COALESCE(SUM(e.attribution = 'evidence'), 0), \
+                COALESCE(SUM(e.attribution = 'unresolved'), 0), \
+                COALESCE(SUM(e.attribution = 'unresolved' AND e.tool_name IS NULL \
+                             AND e.correction_id IS NULL), 0), \
+                COALESCE(SUM(e.attribution = 'unresolved' AND c.kind = 'priced'), 0), \
+                COALESCE(SUM(e.attribution = 'unresolved' AND c.kind = 'effect_tick'), 0), \
+                COALESCE(SUM(e.attribution = 'effect_tick'), 0), \
+                COALESCE(SUM(e.attribution = 'effect_tick' AND c.kind = 'priced'), 0) \
+         FROM weapon_shot_evidence e \
+         LEFT JOIN weapon_attribution_corrections c \
+                ON c.id = e.correction_id AND c.undone_at IS NULL \
+         WHERE e.session_id = ?1",
+        [session_id],
+        |row| {
+            Ok([
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ])
+        },
+    )?;
+    let [evidence, unresolved, unpriced, assigned, marked_ticks, effect_ticks, priced_ticks] =
+        counts;
     let reviews: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT id, decision, hotbar_tool, evidence_tool, mismatch_since, decided_at, \
@@ -246,7 +310,70 @@ pub fn session_detail_block(
         "unresolved": unresolved,
         "unpriced": unpriced,
         "assigned": assigned,
+        "markedTicks": marked_ticks,
         "effectTicks": effect_ticks,
+        "pricedTicks": priced_ticks,
+        "unclaimedTicks": unclaimed_ticks(conn, session_id)?,
+        "effects": session_effects(conn, session_id)?,
         "reviews": reviews,
     }))
+}
+
+/// Ticks standing as ticks: effect-tick rows no correction priced, plus
+/// unresolved hits a live correction marked as a tick.
+/// A tick naming a window that no longer exists (its paying session was
+/// deleted while a later one still ran) reads as unclaimed.
+const STANDING_TICKS: &str = "\
+    SELECT e.amount, \
+           (SELECT w.id FROM weapon_effect_windows w \
+            WHERE w.id = COALESCE(c.effect_window_id, e.effect_window_id)) AS window_id \
+    FROM weapon_shot_evidence e \
+    LEFT JOIN weapon_attribution_corrections c \
+           ON c.id = e.correction_id AND c.undone_at IS NULL \
+    WHERE e.session_id = ?1 \
+      AND ((e.attribution = 'effect_tick' AND c.id IS NULL) \
+        OR (e.attribution = 'unresolved' AND c.kind = 'effect_tick'))";
+
+/// Standing ticks no one effect claims: several overlapping effects
+/// explained them, or the session that paid for their effect was deleted.
+fn unclaimed_ticks(conn: &rusqlite::Connection, session_id: &str) -> Result<i64, DbError> {
+    Ok(conn.query_row(
+        &format!("SELECT COUNT(*) FROM ({STANDING_TICKS}) WHERE window_id IS NULL"),
+        [session_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Every effect the session paid for or saw tick, oldest first: who opened
+/// it and when, what the opening hit cost, whether a decision took it back,
+/// and the ticks it claims in this session. An effect paid for in an
+/// earlier session is listed where its ticks landed, marked as paid
+/// elsewhere, so its cost is never counted twice.
+fn session_effects(conn: &rusqlite::Connection, session_id: &str) -> Result<Vec<Value>, DbError> {
+    let sql = format!(
+        "WITH ticks AS ({STANDING_TICKS}) \
+         SELECT w.id, w.tool_name, w.started_at, w.expires_at, w.hit_amount, w.cost_per_shot, \
+                w.session_id = ?1, w.withdrawn_at IS NOT NULL, \
+                (SELECT COUNT(*) FROM ticks t WHERE t.window_id = w.id), \
+                (SELECT COALESCE(SUM(t.amount), 0) FROM ticks t WHERE t.window_id = w.id) \
+         FROM weapon_effect_windows w \
+         WHERE w.session_id = ?1 OR w.id IN (SELECT window_id FROM ticks) \
+         ORDER BY w.started_at, w.id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([session_id], |row| {
+        Ok(json!({
+            "id": row.get::<_, String>(0)?,
+            "toolName": row.get::<_, String>(1)?,
+            "activatedAt": row.get::<_, f64>(2)?,
+            "expiresAt": row.get::<_, f64>(3)?,
+            "hitAmount": row.get::<_, Option<f64>>(4)?,
+            "costPerShot": row.get::<_, f64>(5)?,
+            "paidHere": row.get::<_, bool>(6)?,
+            "withdrawn": row.get::<_, bool>(7)?,
+            "ticks": row.get::<_, i64>(8)?,
+            "tickDamage": row.get::<_, f64>(9)?,
+        }))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }

@@ -6,6 +6,7 @@
 	import { enrichmentColor, enrichmentLabel, formatPec } from './display';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';
+	import { describeEffectProfile } from './weaponEffect';
 
 	let { model, item }: { model: LibraryModel; item: Equipment } = $props();
 
@@ -105,6 +106,11 @@
 			{/if}
 			{#if item.lifestealPercent}
 				<p class="text-xs text-positive mt-0.5">{item.lifestealPercent}% lifesteal</p>
+			{/if}
+			{#if item.effectProfile}
+				<p class="text-xs text-text-tertiary mt-0.5 truncate" data-testid="weapon-effect-summary">
+					{describeEffectProfile(item.effectProfile)}
+				</p>
 			{/if}
 		</div>
 

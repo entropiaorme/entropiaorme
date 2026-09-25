@@ -14,6 +14,7 @@ use super::attribution::{Attribution, Observation, ShotLocation, ShotRecord};
 use super::providers::Providers;
 use super::session::ActiveSession;
 use super::time::{instant_to_epoch, resolve_local};
+use super::weapon_effects::EffectActivation;
 use super::weapon_evidence::ShotEvidence;
 use super::weapons::break_matches_active_weapon;
 
@@ -95,13 +96,15 @@ impl TrackerActor {
     /// Accumulate one offensive observation: a hit, or a jam/dodge/evade
     /// countered shot. Attribution names the weapon (or leaves the shot
     /// unpriced); an effect tick is damage an earlier activation already
-    /// paid for, so it counts no shot and books no cost.
+    /// paid for, so it counts no shot and books no cost. A priced hit of a
+    /// weapon with a declared damage-over-time effect opens its window at
+    /// once, and returns it for the caller to persist.
     fn record_offensive_shot(
         providers: &Providers,
         active: &mut ActiveSession,
         observation: Observation,
         observed_at: f64,
-    ) {
+    ) -> Option<EffectActivation> {
         let resolved = active
             .weapons
             .attribution
@@ -124,7 +127,7 @@ impl TrackerActor {
                 Ped::ZERO,
             );
             active.accumulator.evidence.push(row);
-            return;
+            return None;
         }
         active.accumulator.shots_fired += 1;
         if critical {
@@ -149,17 +152,31 @@ impl TrackerActor {
                     id
                 },
             );
+        let activation = tool.as_deref().and_then(|tool| {
+            EffectActivation::for_shot(active, tool, observation, observed_at, cost)
+        });
+        if let Some(activation) = &activation {
+            active
+                .weapons
+                .attribution
+                .open_effect_window(activation.window.clone());
+        }
         active.weapons.attribution.remember(ShotRecord {
             seq,
             observed_at,
             observation,
             attribution: resolved.attribution,
             fits: resolved.fits,
+            windows: resolved.windows,
             location: ShotLocation::Pending,
             evidence_id,
             booked: tool,
             cost,
+            opened_window: activation
+                .as_ref()
+                .map(|activation| activation.window.id.clone()),
         });
+        activation
     }
 
     /// Count one shot into the accumulator's phase for its weapon, and
@@ -254,6 +271,7 @@ impl TrackerActor {
         // unhandled combat kind does not wake listeners for a no-op.
         let mut mutated = false;
         let mut defence: Option<DefenceEvidence> = None;
+        let mut effect: Option<EffectActivation> = None;
 
         match payload {
             CombatPayload::DamageDealt { amount, .. } => {
@@ -261,7 +279,7 @@ impl TrackerActor {
                     amount: *amount,
                     critical: false,
                 };
-                Self::record_offensive_shot(providers, active, hit, observed_at);
+                effect = Self::record_offensive_shot(providers, active, hit, observed_at);
                 active.healing.note_damage(observed_at, *amount);
                 mutated = true;
             }
@@ -270,14 +288,20 @@ impl TrackerActor {
                     amount: *amount,
                     critical: true,
                 };
-                Self::record_offensive_shot(providers, active, hit, observed_at);
+                effect = Self::record_offensive_shot(providers, active, hit, observed_at);
                 active.healing.note_damage(observed_at, *amount);
                 mutated = true;
             }
             CombatPayload::TargetDodge { .. }
             | CombatPayload::TargetEvade { .. }
-            | CombatPayload::TargetJam { .. } => {
-                Self::record_offensive_shot(providers, active, Observation::Countered, observed_at);
+            | CombatPayload::TargetJam { .. }
+            | CombatPayload::TargetMiss { .. } => {
+                effect = Self::record_offensive_shot(
+                    providers,
+                    active,
+                    Observation::Countered,
+                    observed_at,
+                );
                 mutated = true;
             }
             CombatPayload::DamageReceived { amount, .. } => {
@@ -341,6 +365,9 @@ impl TrackerActor {
                 }
                 active.dirty = true;
             }
+        }
+        if let Some(effect) = effect {
+            self.persist_effect_activation(effect).await;
         }
     }
 

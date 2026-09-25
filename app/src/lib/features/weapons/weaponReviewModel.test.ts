@@ -7,6 +7,7 @@ vi.mock('$lib/api', () => ({
 	assignWeaponShot: vi.fn(),
 	getWeaponCorrectionWeapons: vi.fn(),
 	getWeaponShots: vi.fn(),
+	markWeaponShotEffectTick: vi.fn(),
 	undoWeaponAssignment: vi.fn(),
 }));
 
@@ -25,7 +26,11 @@ function detail(overrides: Partial<WeaponAttributionSummary> = {}): SessionDetai
 			unresolved: 3,
 			unpriced: 3,
 			assigned: 0,
+			markedTicks: 0,
 			effectTicks: 0,
+			pricedTicks: 0,
+			unclaimedTicks: 0,
+			effects: [],
 			reviews: [],
 			...overrides,
 		},
@@ -35,6 +40,7 @@ function detail(overrides: Partial<WeaponAttributionSummary> = {}): SessionDetai
 function shot(id: string): WeaponShot {
 	return {
 		id,
+		group: 'unresolved',
 		observedAt: 1,
 		amount: 30,
 		critical: false,
@@ -43,7 +49,11 @@ function shot(id: string): WeaponShot {
 		toolName: null,
 		costPerShot: 0,
 		candidates: [],
+		effectCandidates: [],
+		effectWindowId: null,
 		correctionId: null,
+		correctionKind: null,
+		correctionWindowId: null,
 		reviewDecision: null,
 		correctable: true,
 	};
@@ -79,6 +89,24 @@ describe('the weapon review model', () => {
 		expect(current()).toBe(fresh);
 		expect(mocked.getWeaponShots).toHaveBeenLastCalledWith('s1', 'unresolved', 0, SHOT_PAGE);
 		expect(model.busy).toBeNull();
+	});
+
+	it('marks a hit as an effect’s tick and follows the refreshed detail', async () => {
+		const { model, current } = harness();
+		const fresh = detail({ unpriced: 0, markedTicks: 1 });
+		mocked.markWeaponShotEffectTick.mockResolvedValue(fresh);
+		await model.markTick('a', 'w1');
+		expect(mocked.markWeaponShotEffectTick).toHaveBeenCalledWith('a', 'w1');
+		expect(current()).toBe(fresh);
+		expect(model.busy).toBeNull();
+	});
+
+	it('reviews the effect ticks when they are all there is', async () => {
+		const { model } = harness(detail({ unresolved: 0, evidenceShots: 0, effectTicks: 21 }));
+		mocked.getWeaponShots.mockResolvedValue({ shots: [shot('t')], total: 21 });
+		await model.toggleReview();
+		expect(model.group).toBe('effect_tick');
+		expect(mocked.getWeaponShots).toHaveBeenLastCalledWith('s1', 'effect_tick', 0, SHOT_PAGE);
 	});
 
 	it('pages on demand and settles on a group that has shots', async () => {

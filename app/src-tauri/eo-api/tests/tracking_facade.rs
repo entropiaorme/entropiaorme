@@ -2071,11 +2071,14 @@ async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() 
         serde_json::to_value(&page).unwrap(),
         serde_json::json!({
             "shots": [{
-                "id": "u1", "observedAt": 1200.0, "amount": 90.0, "critical": false,
+                "id": "u1", "group": "unresolved", "observedAt": 1200.0, "amount": 90.0,
+                "critical": false,
                 "reason": "exceeds every carried weapon's reach", "hotbarTool": "Pistol",
                 "toolName": null, "costPerShot": 0.0,
                 "candidates": [{"equipmentId": 2, "name": "Cannon", "fits": false}],
-                "correctionId": null, "reviewDecision": null, "correctable": true,
+                "effectCandidates": [], "effectWindowId": null,
+                "correctionId": null, "correctionKind": null, "correctionWindowId": null,
+                "reviewDecision": null, "correctable": true,
             }],
             "total": 1,
         })
@@ -2147,4 +2150,86 @@ async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() 
     let decision: WeaponMismatchDecision =
         serde_json::from_value(serde_json::json!("keep")).unwrap();
     assert_eq!(decision, WeaponMismatchDecision::Keep);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unresolved_hit_is_marked_an_effects_tick_across_the_facade() {
+    use eo_api::weapons::WeaponShotGroup;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            r#"INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,dangling_cost,
+                 mob_tracking_mode,updated_at,weapon_shots_agreed,weapon_shots_evidenced)
+               VALUES('dot',1000.0,4600.0,0,0.0,'mob',4600.0,5,0);
+               INSERT INTO weapon_effect_windows(id,session_id,equipment_id,tool_name,started_at,
+                 expires_at,hit_amount,cost_per_shot,tick_min,tick_max,profile_json)
+               VALUES('w1','dot',7,'Electrocution',1190.0,1215.0,130.0,4.8732,35.0,75.0,'{}');
+               INSERT INTO weapon_shot_evidence(id,session_id,kill_id,observed_at,amount,critical,
+                 attribution,hotbar_tool,tool_name,cost_per_shot,candidates_json,reason,
+                 effect_candidates_json)
+               VALUES('u1','dot',NULL,1200.0,60.0,0,'unresolved','Pistol',NULL,0,'[]',
+                 'fits the hotbar''s Pistol and a tick of the open Electrocution effect',
+                 '[{"windowId":"w1","toolName":"Electrocution","activatedAt":1190.0}]'),
+                 ('t1','dot',NULL,1201.0,55.0,0,'effect_tick','Pistol',NULL,0,'[]',
+                 'a tick of an open effect',
+                 '[{"windowId":"w1","toolName":"Electrocution","activatedAt":1190.0}]');
+               UPDATE weapon_shot_evidence SET effect_window_id = 'w1' WHERE id = 't1';"#,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // The tick group crosses the wire as its snake-case literal.
+    let group: WeaponShotGroup = serde_json::from_value(serde_json::json!("effect_tick")).unwrap();
+    let ticks = api.weapon_shots("dot".into(), group, 0, 10).await.unwrap();
+    assert_eq!(ticks.total, 1);
+    assert_eq!(
+        serde_json::to_value(&ticks.shots[0]).unwrap()["effectCandidates"],
+        serde_json::json!([{"windowId": "w1", "toolName": "Electrocution", "activatedAt": 1190.0, "standing": true}])
+    );
+
+    let marked = api
+        .weapon_mark_effect_tick("u1".into(), "w1".into())
+        .await
+        .unwrap();
+    let block = serde_json::to_value(&marked.weapon_attribution).unwrap();
+    assert_eq!(block["markedTicks"], 1);
+    assert_eq!(block["unpriced"], 0);
+    assert_eq!(block["effects"][0]["ticks"], 2);
+    assert_eq!(block["effects"][0]["paidHere"], true);
+    assert_eq!(block["effects"][0]["withdrawn"], false);
+    let listed = api
+        .weapon_shots("dot".into(), WeaponShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap();
+    let shot = serde_json::to_value(&listed.shots[0]).unwrap();
+    assert_eq!(shot["correctionKind"], "effect_tick");
+    assert_eq!(shot["correctionWindowId"], "w1");
+    let correction = listed.shots[0].correction_id.0.clone().unwrap();
+
+    let restored = api.weapon_assignment_undo(correction).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.weapon_attribution).unwrap()["unpriced"],
+        1
+    );
+    let kind = |error: ApiError| serde_json::to_value(&error).unwrap()["kind"].clone();
+    assert_eq!(
+        kind(
+            api.weapon_mark_effect_tick("u1".into(), "elsewhere".into())
+                .await
+                .unwrap_err()
+        ),
+        "badRequest"
+    );
+    assert_eq!(
+        kind(
+            api.weapon_mark_effect_tick("nope".into(), "w1".into())
+                .await
+                .unwrap_err()
+        ),
+        "notFound"
+    );
 }

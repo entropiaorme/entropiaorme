@@ -351,6 +351,20 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(SessionDetail))),
         },
         CommandSpec {
+            name: "weapon_mark_effect_tick",
+            args: vec![
+                ArgSpec {
+                    name: "evidence_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "window_id",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
             name: "weapon_assignment_undo",
             args: vec![ArgSpec {
                 name: "correction_id",

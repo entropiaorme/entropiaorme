@@ -138,7 +138,8 @@
       "reason": "fits no carried weapon",
       "effect_window_id": null,
       "review_id": null,
-      "correction_id": null
+      "correction_id": null,
+      "effect_candidates": 0
     },
     {
       "id": "1c8d7a2f-6b63-4a2f-8e7f-2a4b3d5c6e72",
@@ -156,7 +157,8 @@
       "reason": "fits no carried weapon",
       "effect_window_id": null,
       "review_id": null,
-      "correction_id": null
+      "correction_id": null,
+      "effect_candidates": 0
     },
     {
       "id": "2d9e8b3a-7c74-4b3a-9f8a-3b5c4e6d7f83",
@@ -174,7 +176,8 @@
       "reason": "fits no carried weapon",
       "effect_window_id": null,
       "review_id": null,
-      "correction_id": null
+      "correction_id": null,
+      "effect_candidates": 0
     },
     {
       "id": "3eaf9c4b-8d85-4c4b-8a9b-4c6d5f7e8a94",
@@ -192,7 +195,8 @@
       "reason": "fits no carried weapon",
       "effect_window_id": null,
       "review_id": null,
-      "correction_id": null
+      "correction_id": null,
+      "effect_candidates": 0
     },
     {
       "id": "4fb0ad5c-9e96-4d5c-9bac-5d7e6a8f9ba5",
@@ -210,7 +214,8 @@
       "reason": "fits no carried weapon",
       "effect_window_id": null,
       "review_id": null,
-      "correction_id": null
+      "correction_id": null,
+      "effect_candidates": 0
     }
   ],
   "weapon_attribution_tallies": [

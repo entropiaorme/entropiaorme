@@ -1,10 +1,13 @@
-/** Weapon attribution: the live decision on a standing mismatch, and the post-play review of a session's stored shots with the assignment of an unpriced shot and its undo. */
+/** Weapon attribution: the live decision on a standing mismatch, and the post-play review of a session's stored shots with their corrections (assigning a shot left without a price to a weapon, marking an unresolved hit as an effect's tick) and the undo of either. */
 
 import * as commands from './commands.gen';
 
 export type {
 	WeaponAttributionSummary,
+	WeaponCorrectionKind,
 	WeaponCorrectionWeapon,
+	WeaponEffectCandidate,
+	WeaponEffectRow,
 	WeaponGuardrailAlert,
 	WeaponMismatchDecision,
 	WeaponReviewDecision,
@@ -30,7 +33,9 @@ export const getWeaponShots = commands.weaponShots;
 export const getUnpricedShotSessions = commands.weaponUnpricedSessions;
 /** The weapons an unpriced shot could be assigned to, fitting ones first. */
 export const getWeaponCorrectionWeapons = commands.weaponCorrectionWeapons;
-/** Assign an ended session's unpriced shot to a weapon; answers with its refreshed detail. */
+/** Assign an ended session's shot left without a price (an unresolved shot, or an effect tick) to a weapon; answers with its refreshed detail. */
 export const assignWeaponShot = commands.weaponAssign;
-/** Undo a live assignment; answers with the session's refreshed detail. */
+/** Mark an ended session's unresolved hit as a tick of an effect open when it landed; answers with its refreshed detail. */
+export const markWeaponShotEffectTick = commands.weaponMarkEffectTick;
+/** Undo a live correction; answers with the session's refreshed detail. */
 export const undoWeaponAssignment = commands.weaponAssignmentUndo;

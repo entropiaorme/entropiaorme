@@ -3,12 +3,13 @@
 	import type { EquipmentSearchResult } from '$lib/api';
 	import { formatPec } from './display';
 	import type { EquipmentFormType, LibraryModel } from './libraryModel.svelte';
+	import { WEAPON_EFFECT_OPTIONS, type WeaponEffectForm } from './weaponEffect';
 
 	let { model }: { model: LibraryModel } = $props();
 
 	const saveDisabled = $derived(
 		(model.addType === 'weapon'
-			? !model.weaponPicker.selected
+			? !model.weaponPicker.selected || model.weaponEffectProblem !== null
 			: model.addType === 'healing'
 				? !model.healerPicker.selected
 				: model.addType === 'tool'
@@ -191,6 +192,60 @@
 							{/if}
 						</div>
 					</div>
+				</div>
+
+				<!-- Damage over time: what one paid cast prints, and for how long its
+				     ticks follow. Ticks are outcomes of the cast, never shots. -->
+				<div class="space-y-3 border-t border-border/50 pt-4" data-guide-anchor="weapon-effect">
+					<div class="flex flex-wrap items-start justify-between gap-3">
+						<div class="min-w-0">
+							<span class="block eyebrow">Damage pattern</span>
+							<p class="mt-1 max-w-md text-xs text-text-tertiary">
+								For a weapon whose cast keeps dealing damage after it lands. Its ticks cost
+								nothing and never count as shots.
+							</p>
+						</div>
+						<SegmentedControl
+							size="sm"
+							options={WEAPON_EFFECT_OPTIONS}
+							active={model.weaponEffectMode}
+							onchange={(id) => (model.weaponEffectMode = id as WeaponEffectForm)}
+						/>
+					</div>
+					{#if model.weaponEffectMode !== 'direct'}
+						<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+							{#if model.weaponEffectMode === 'compound'}
+								<label class="text-xs text-text-tertiary">
+									Initial hit minimum
+									<Input type="number" bind:value={model.hitMin} min={0} step="any" class="mt-1 w-full" />
+								</label>
+								<label class="text-xs text-text-tertiary">
+									Initial hit maximum
+									<Input type="number" bind:value={model.hitMax} min={0} step="any" class="mt-1 w-full" />
+								</label>
+							{/if}
+							<label class="text-xs text-text-tertiary">
+								Tick minimum
+								<Input type="number" bind:value={model.tickMin} min={0} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Tick maximum
+								<Input type="number" bind:value={model.tickMax} min={0} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Duration (seconds)
+								<Input type="number" bind:value={model.effectDurationSeconds} min={0.1} max={600} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Tick cadence (optional)
+								<Input type="number" bind:value={model.tickSeconds} min={0.1} step="any" class="mt-1 w-full" />
+							</label>
+						</div>
+						<p class="text-xs text-text-tertiary" data-testid="weapon-effect-hint">
+							{model.weaponEffectProblem ??
+								'Use the damage the game prints. The catalogue carries no figures for effects over time.'}
+						</p>
+					{/if}
 				</div>
 			{:else if model.addType === 'healing'}
 				<div class="grid md:grid-cols-2 gap-x-8 gap-y-5 items-start">

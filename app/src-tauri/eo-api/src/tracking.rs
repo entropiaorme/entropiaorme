@@ -370,6 +370,31 @@ pub struct WeaponReviewRow {
     pub cost_delta: f64,
 }
 
+/// One damage-over-time effect the session paid for or saw tick: the paid
+/// hit that started it, and the ticks it claims in this session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponEffectRow {
+    pub id: String,
+    /// The weapon whose paid hit started it.
+    pub tool_name: String,
+    pub activated_at: f64,
+    pub expires_at: f64,
+    /// The damage that paid hit printed.
+    pub hit_amount: Nullable<f64>,
+    /// What that hit was booked at (in the session that paid for it).
+    pub cost_per_shot: f64,
+    /// This session paid for it; otherwise an earlier one did, and its
+    /// cost sits there.
+    pub paid_here: bool,
+    /// The player kept the hotbar's weapon over the damage evidence that
+    /// named this cast: its hit was repriced and it explains no later tick.
+    pub withdrawn: bool,
+    /// Its ticks standing in this session.
+    pub ticks: i64,
+    pub tick_damage: f64,
+}
+
 /// How a session's shots were attributed. The two tallies were kept from
 /// this app version on and are null for an older session; the counts of
 /// stored shots and the decisions exist for every session.
@@ -390,8 +415,18 @@ pub struct WeaponAttributionSummary {
     pub unpriced: i64,
     /// Of those, the ones assigned a weapon after play.
     pub assigned: i64,
+    /// Of those, the ones marked as an effect's tick after play.
+    pub marked_ticks: i64,
     /// Ticks of an effect an earlier paid activation owns.
     pub effect_ticks: i64,
+    /// Of those, the ones priced as a paid shot after play.
+    pub priced_ticks: i64,
+    /// Ticks standing as ticks that no one effect claims: several
+    /// overlapping effects explained them, or their effect's paying session
+    /// was deleted.
+    pub unclaimed_ticks: i64,
+    /// The effects the session paid for or saw tick, oldest first.
+    pub effects: Vec<WeaponEffectRow>,
     pub reviews: Vec<WeaponReviewRow>,
 }
 

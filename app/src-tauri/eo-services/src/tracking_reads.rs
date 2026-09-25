@@ -1597,11 +1597,30 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 "DELETE FROM healing_corrections WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
-            // Weapon evidence is scoped to its own session.
+            // A weapon's damage-over-time effect outlives the session that
+            // paid for it too: another session's ticks (and corrections
+            // marking a hit as a tick) may name it. They keep standing as
+            // ticks, since the hit that paid for them was paid, but lose
+            // their pointer to the deleted effect.
+            tx.execute(
+                "UPDATE weapon_shot_evidence SET effect_window_id = NULL, \
+                     reason = 'its paying session was deleted' \
+                 WHERE session_id <> ?1 AND effect_window_id IN \
+                     (SELECT id FROM weapon_effect_windows WHERE session_id = ?1)",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
+                "UPDATE weapon_attribution_corrections SET effect_window_id = NULL \
+                 WHERE session_id <> ?1 AND effect_window_id IN \
+                     (SELECT id FROM weapon_effect_windows WHERE session_id = ?1)",
+                rusqlite::params![sid],
+            )?;
+            // Weapon evidence is otherwise scoped to its own session.
             for table in [
                 "weapon_attribution_corrections",
                 "weapon_shot_evidence",
                 "weapon_attribution_reviews",
+                "weapon_effect_windows",
             ] {
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE session_id = ?"),
@@ -2478,7 +2497,11 @@ mod tests {
                     "unresolved": 0,
                     "unpriced": 0,
                     "assigned": 0,
+                    "markedTicks": 0,
                     "effectTicks": 0,
+                    "pricedTicks": 0,
+                    "unclaimedTicks": 0,
+                    "effects": [],
                     "reviews": [],
                 },
                 "healing": {
@@ -2620,7 +2643,11 @@ mod tests {
                     "unresolved": 0,
                     "unpriced": 0,
                     "assigned": 0,
+                    "markedTicks": 0,
                     "effectTicks": 0,
+                    "pricedTicks": 0,
+                    "unclaimedTicks": 0,
+                    "effects": [],
                     "reviews": [],
                 },
                 "healing": {

@@ -440,6 +440,7 @@ pub fn run() {
             commands::weapon_unpriced_sessions,
             commands::weapon_correction_weapons,
             commands::weapon_assign,
+            commands::weapon_mark_effect_tick,
             commands::weapon_assignment_undo,
             commands::character_calibration,
             commands::character_stats,

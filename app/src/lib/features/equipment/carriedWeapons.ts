@@ -8,10 +8,16 @@
  * that weapon, and a hit several explain (or none) is recorded without a
  * price. Where two bands overlap, only the hotbar can tell the weapons
  * apart, which is what the shared ranges below say.
+ *
+ * A weapon with a declared damage-over-time effect is checked against what
+ * its cast prints (the effect's initial hit, or its first tick) instead of
+ * the catalogue's figure, and its effect's ticks are a second band: while
+ * the effect runs, a hit in that band is a tick, not a shot.
  */
 
 import type { Equipment } from '$lib/types';
 import type { Hotbar } from '$lib/types/settings';
+import { activationRange } from './weaponEffect';
 
 /** A critical hit reaches at most this multiple of a weapon's maximum. */
 export const CRITICAL_REACH = 3;
@@ -29,6 +35,16 @@ export interface WeaponBand {
 	critMax: number;
 	/** How the player reaches it: a hotbar slot key, or none. */
 	slot: string | null;
+	/** The range its effect's ticks print, when it declares one. */
+	tick: { min: number; max: number } | null;
+}
+
+/** Where one weapon's effect ticks and another weapon's hits overlap. */
+export interface EffectOverlap {
+	effect: string;
+	weapon: string;
+	min: number;
+	max: number;
 }
 
 export interface SharedRange {
@@ -91,21 +107,44 @@ export function weaponBands(carried: { weapon: Equipment; slot: string | null }[
 	const banded: WeaponBand[] = [];
 	const bandless: Equipment[] = [];
 	for (const { weapon, slot } of carried) {
-		const { damageMin, damageMax } = weapon;
-		if (damageMin == null || damageMax == null || damageMax <= 0) {
+		const effect = weapon.effectProfile;
+		const cast = effect
+			? activationRange(effect)
+			: weapon.damageMin != null && weapon.damageMax != null
+				? { min: weapon.damageMin, max: weapon.damageMax }
+				: null;
+		if (!cast || cast.max <= 0) {
 			bandless.push(weapon);
 			continue;
 		}
 		banded.push({
 			id: weapon.id,
 			name: weapon.name,
-			min: damageMin,
-			max: damageMax,
-			critMax: damageMax * CRITICAL_REACH,
+			min: cast.min,
+			max: cast.max,
+			critMax: cast.max * CRITICAL_REACH,
 			slot,
+			tick: effect ? { min: effect.tickMin, max: effect.tickMax } : null,
 		});
 	}
 	return { banded, bandless };
+}
+
+/** Every place one weapon's effect ticks overlap another weapon's hits.
+ * While the effect runs, a hit there is left unpriced if the other weapon
+ * is on the hotbar (both could have printed it), and is a tick otherwise. */
+export function effectOverlaps(bands: WeaponBand[]): EffectOverlap[] {
+	const overlaps: EffectOverlap[] = [];
+	for (const owner of bands) {
+		if (!owner.tick) continue;
+		for (const other of bands) {
+			if (other.id === owner.id) continue;
+			const min = Math.max(owner.tick.min, other.min);
+			const max = Math.min(owner.tick.max, other.max);
+			if (min <= max) overlaps.push({ effect: owner.name, weapon: other.name, min, max });
+		}
+	}
+	return overlaps;
 }
 
 /** Every pair of regular bands that overlap, and where. A hit in a shared

@@ -717,6 +717,8 @@ export interface EquipmentDetail {
 	expectedReturn: EquipmentExpectedReturn | null;
 	healingProfile: HealingProfileDto | null;
 	lifestealPercent: number | null;
+	/** A weapon's declared damage-over-time effect, when it has one. */
+	effectProfile: WeaponEffectProfileDto | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -794,6 +796,8 @@ export interface EquipmentRequest {
 	tick_min?: number | null;
 	tick_max?: number | null;
 	tick_seconds?: number | null;
+	/** A weapon's damage-over-time effect; absent for every other kind. */
+	weapon_effect?: WeaponEffectRequest | null;
 }
 
 /**
@@ -832,6 +836,8 @@ export interface EquipmentSummary {
 	enrichmentLevel: number;
 	healingProfile: HealingProfileDto | null;
 	lifestealPercent: number | null;
+	/** A weapon's declared damage-over-time effect, when it has one. */
+	effectProfile: WeaponEffectProfileDto | null;
 }
 
 /**
@@ -3344,10 +3350,23 @@ export interface WeaponAttributionSummary {
 	unpriced: number;
 	/** Of those, the ones assigned a weapon after play. */
 	assigned: number;
+	/** Of those, the ones marked as an effect's tick after play. */
+	markedTicks: number;
 	/** Ticks of an effect an earlier paid activation owns. */
 	effectTicks: number;
+	/** Of those, the ones priced as a paid shot after play. */
+	pricedTicks: number;
+	/** Ticks standing as ticks that no one effect claims: several overlapping effects explained them, or their effect's paying session was deleted. */
+	unclaimedTicks: number;
+	/** The effects the session paid for or saw tick, oldest first. */
+	effects: WeaponEffectRow[];
 	reviews: WeaponReviewRow[];
 }
+
+/**
+ * What a post-play correction did to its shot.
+ */
+export type WeaponCorrectionKind = 'priced' | 'effect_tick';
 
 /**
  * A weapon an unpriced shot could be assigned to.
@@ -3359,6 +3378,78 @@ export interface WeaponCorrectionWeapon {
 	costPerShotPed: number;
 	/** Its damage band fitted the shot when it landed. */
 	fits: boolean;
+}
+
+/**
+ * One open effect as a stored shot remembers it: the effect it was (or
+ * may have been) a tick of.
+ */
+export interface WeaponEffectCandidate {
+	windowId: string;
+	/** The weapon whose paid hit started it. */
+	toolName: string;
+	/** When that hit landed. */
+	activatedAt: number;
+	/** The effect still stands (no decision took it back and its session was not deleted), so a hit can be marked as its tick. */
+	standing: boolean;
+}
+
+/**
+ * How a paid activation of a weapon with a damage-over-time effect shows
+ * in the chat log.
+ */
+export type WeaponEffectMode = 'over_time' | 'compound';
+
+/**
+ * A weapon's declared damage-over-time effect: what one paid activation
+ * prints, and for how long its ticks follow.
+ */
+export interface WeaponEffectProfileDto {
+	mode: WeaponEffectMode;
+	/** The initial hit's range; null for an effect with only ticks. */
+	hitMin: number | null;
+	hitMax: number | null;
+	durationSeconds: number;
+	tickMin: number;
+	tickMax: number;
+	tickSeconds: number | null;
+}
+
+/**
+ * A weapon's damage-over-time effect as an add or update request declares
+ * it, in the request's casing. Absent: the weapon's every hit is a shot.
+ */
+export interface WeaponEffectRequest {
+	mode: WeaponEffectMode;
+	hit_min?: number | null;
+	hit_max?: number | null;
+	duration_seconds: number;
+	tick_min: number;
+	tick_max: number;
+	tick_seconds?: number | null;
+}
+
+/**
+ * One damage-over-time effect the session paid for or saw tick: the paid
+ * hit that started it, and the ticks it claims in this session.
+ */
+export interface WeaponEffectRow {
+	id: string;
+	/** The weapon whose paid hit started it. */
+	toolName: string;
+	activatedAt: number;
+	expiresAt: number;
+	/** The damage that paid hit printed. */
+	hitAmount: number | null;
+	/** What that hit was booked at (in the session that paid for it). */
+	costPerShot: number;
+	/** This session paid for it; otherwise an earlier one did, and its cost sits there. */
+	paidHere: boolean;
+	/** The player kept the hotbar's weapon over the damage evidence that named this cast: its hit was repriced and it explains no later tick. */
+	withdrawn: boolean;
+	/** Its ticks standing in this session. */
+	ticks: number;
+	tickDamage: number;
 }
 
 /**
@@ -3407,8 +3498,10 @@ export interface WeaponReviewRow {
  */
 export interface WeaponShot {
 	id: string;
+	/** How it was classified as it landed. */
+	group: WeaponShotGroup;
 	observedAt: number;
-	/** Null for a jam, dodge, or evade: a shot with no damage figure. */
+	/** Null for a jam, dodge, evade, or miss: a shot with no damage figure. */
 	amount: number | null;
 	critical: boolean;
 	reason: string;
@@ -3419,11 +3512,18 @@ export interface WeaponShot {
 	costPerShot: number;
 	/** The weapons carried when it landed. */
 	candidates: WeaponShotCandidate[];
-	/** The live assignment that priced it, which can be undone. */
+	/** The open effects that explained it when it landed. */
+	effectCandidates: WeaponEffectCandidate[];
+	/** The one effect a tick belongs to; null when several explained it. */
+	effectWindowId: string | null;
+	/** The live correction, which can be undone. */
 	correctionId: string | null;
+	correctionKind: WeaponCorrectionKind | null;
+	/** For a live effect-tick correction, the effect it named. */
+	correctionWindowId: string | null;
 	/** The decision on a mismatch that repriced it while the session ran. */
 	reviewDecision: WeaponReviewDecision | null;
-	/** It can be assigned to a weapon: unpriced, in an ended session. */
+	/** It can be corrected: without a price or a correction, in an ended session. */
 	correctable: boolean;
 }
 
@@ -3440,7 +3540,7 @@ export interface WeaponShotCandidate {
 /**
  * Which stored shots a review page lists.
  */
-export type WeaponShotGroup = 'unresolved' | 'evidence';
+export type WeaponShotGroup = 'unresolved' | 'evidence' | 'effect_tick';
 
 export interface WeaponShotPage {
 	shots: WeaponShot[];
@@ -3554,7 +3654,7 @@ export async function healingCorrectionUndo(correctionId: string): Promise<Sessi
 	return invokeCommand('healing_correction_undo', { correction_id: correctionId });
 }
 
-export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence', offset: number, limit: number): Promise<WeaponShotPage> {
+export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence' | 'effect_tick', offset: number, limit: number): Promise<WeaponShotPage> {
 	return invokeCommand('weapon_shots', { session_id: sessionId, group, offset, limit });
 }
 
@@ -3568,6 +3668,10 @@ export async function weaponCorrectionWeapons(evidenceId: string): Promise<Weapo
 
 export async function weaponAssign(evidenceId: string, equipmentId: number): Promise<SessionDetail> {
 	return invokeCommand('weapon_assign', { evidence_id: evidenceId, equipment_id: equipmentId });
+}
+
+export async function weaponMarkEffectTick(evidenceId: string, windowId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_mark_effect_tick', { evidence_id: evidenceId, window_id: windowId });
 }
 
 export async function weaponAssignmentUndo(correctionId: string): Promise<SessionDetail> {

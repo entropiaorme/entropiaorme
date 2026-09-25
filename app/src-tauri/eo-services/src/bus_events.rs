@@ -48,18 +48,50 @@ event_tag!(MissionReceivedTag, "mission_received");
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CombatPayload {
-    DamageDealt { amount: f64, timestamp: String },
-    CriticalHit { amount: f64, timestamp: String },
-    TargetDodge { timestamp: String },
-    TargetEvade { timestamp: String },
-    TargetJam { timestamp: String },
-    DamageReceived { amount: f64, timestamp: String },
-    PlayerDodge { timestamp: String },
-    PlayerEvade { timestamp: String },
-    PlayerJam { timestamp: String },
-    MobMiss { timestamp: String },
-    Deflect { timestamp: String },
-    SelfHeal { amount: f64, timestamp: String },
+    DamageDealt {
+        amount: f64,
+        timestamp: String,
+    },
+    CriticalHit {
+        amount: f64,
+        timestamp: String,
+    },
+    TargetDodge {
+        timestamp: String,
+    },
+    TargetEvade {
+        timestamp: String,
+    },
+    TargetJam {
+        timestamp: String,
+    },
+    /// The player's own attack missed: a paid shot with no outcome.
+    TargetMiss {
+        timestamp: String,
+    },
+    DamageReceived {
+        amount: f64,
+        timestamp: String,
+    },
+    PlayerDodge {
+        timestamp: String,
+    },
+    PlayerEvade {
+        timestamp: String,
+    },
+    PlayerJam {
+        timestamp: String,
+    },
+    MobMiss {
+        timestamp: String,
+    },
+    Deflect {
+        timestamp: String,
+    },
+    SelfHeal {
+        amount: f64,
+        timestamp: String,
+    },
 }
 
 /// One item within a settled loot tick: the tracking model's loot

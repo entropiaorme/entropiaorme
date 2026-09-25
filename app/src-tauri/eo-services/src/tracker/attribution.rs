@@ -10,8 +10,7 @@
 //!   weapon's shot is still landing just after a switch). Priced to that
 //!   weapon.
 //! - **Effect tick**: an open effect window an earlier paid activation owns
-//!   explains the magnitude. No shot and no cost. (No producer opens
-//!   offensive windows yet; this is the seam damage-over-time fills.)
+//!   explains the magnitude. No shot and no cost.
 //! - **Evidence**: the magnitude fits exactly one carried weapon, and it is
 //!   not the declared one (a missed switch), or nothing is declared at all
 //!   (no hotbar signal). Priced to the weapon the evidence names.
@@ -34,6 +33,20 @@
 //! carried weapon explains still agrees with the declared weapon, while a
 //! hit above every band is out of profile and stays unresolved.
 //!
+//! A weapon with a declared damage-over-time effect opens an effect window
+//! with every paid hit: for the effect's duration, its ticks are outcomes of
+//! that one activation. A window is not an alternative to the weapon in
+//! hand but a second source running beside it, so intent cannot choose
+//! between them: a hit that both the declared weapon and another weapon's
+//! open effect explain stays unresolved rather than being priced as a shot
+//! or waved through as a tick. A tick that fits the weapon in hand's own
+//! effect is a tick (a recast lands its own, distinct outcome). Where no
+//! band holds a hit at all, it is short of every source, and the source
+//! whose floor sits nearest above it needs the least reduction to explain
+//! it: the effect's floor when that is lower than the declared weapon's.
+//! Where several windows explain a tick, each stays a candidate; none is
+//! chosen by the order it opened in.
+//!
 //! The engine is pure state over observations; pricing, persistence, and
 //! the kill accumulator belong to the tracker actor that drives it.
 
@@ -42,6 +55,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 use crate::cost_engine::get_weapon_damage_profile;
+use crate::weapon_effect::{effect_profile_from_props, WeaponEffectProfile};
 
 /// A critical hit reaches at most this multiple of a weapon's maximum.
 pub const CRITICAL_REACH: f64 = 3.0;
@@ -80,10 +94,14 @@ impl DamageBand {
     }
 }
 
-/// A stored weapon's regular-hit band at full skill: its catalogue damage
-/// with its amplifier and configured damage enhancers. None when the
-/// catalogue exposes no usable damage figure.
+/// A stored weapon's regular-hit band at full skill: the outcome its
+/// declared effect's activation prints, when it declares one, else its
+/// catalogue damage with its amplifier and configured damage enhancers.
+/// None when neither gives a usable figure.
 pub fn damage_band_from_props(props: &Value) -> Option<DamageBand> {
+    if let Some(effect) = effect_profile_from_props(props) {
+        return Some(effect.activation_band());
+    }
     let weapon = props.get("weapon_entity")?;
     let enhancers = (props
         .get("damage_enhancers")
@@ -108,6 +126,21 @@ pub struct CarriedWeapon {
     /// None when the catalogue exposes no usable damage figure: the weapon
     /// can then never be named by evidence, and never contradicted by it.
     pub band: Option<DamageBand>,
+    /// The damage-over-time effect each paid hit starts, when declared.
+    pub effect: Option<WeaponEffectProfile>,
+}
+
+impl CarriedWeapon {
+    /// A stored weapon as attribution sees it: the band its shots are
+    /// checked against and the effect its paid hits start.
+    pub fn from_props(equipment_id: i64, name: String, props: &Value) -> Self {
+        Self {
+            equipment_id,
+            name,
+            band: damage_band_from_props(props),
+            effect: effect_profile_from_props(props),
+        }
+    }
 }
 
 /// One offensive chat-log observation.
@@ -115,8 +148,8 @@ pub struct CarriedWeapon {
 pub(super) enum Observation {
     /// A hit with its printed magnitude.
     Hit { amount: f64, critical: bool },
-    /// A jam, dodge, or evade: a shot was fired, but no magnitude says by
-    /// what.
+    /// A jam, dodge, evade, or miss: a shot was fired, but no magnitude
+    /// says by what.
     Countered,
 }
 
@@ -153,8 +186,10 @@ pub(super) enum Attribution {
         tool: String,
         reason: AgreeReason,
     },
+    /// `window_id` names the window when exactly one explains the tick;
+    /// with several, the candidates travel on [`Resolved::windows`].
     EffectTick {
-        window_id: String,
+        window_id: Option<String>,
     },
     /// `confirmed` marks a shot the player's confirmation priced rather
     /// than its own magnitude.
@@ -219,12 +254,17 @@ impl AttributionKind {
 }
 
 /// A classification together with the carried weapons whose band fits the
-/// observation (every carried weapon, for a countered shot) and the reason
-/// a stored row records.
+/// observation (every carried weapon, for a countered shot), the open
+/// effect windows that could explain it, and the reason a stored row
+/// records.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Resolved {
     pub(super) attribution: Attribution,
     pub(super) fits: Vec<String>,
+    /// The ids of the open windows that explain the observation: the tick
+    /// candidates of an effect tick, and the effects an unresolved hit
+    /// could equally have been a tick of.
+    pub(super) windows: Vec<String>,
     pub(super) reason: String,
 }
 
@@ -233,9 +273,20 @@ pub(super) struct Resolved {
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct OffensiveEffectWindow {
     pub(super) id: String,
+    /// The weapon whose paid hit opened it.
+    pub(super) tool: String,
+    pub(super) equipment_id: Option<i64>,
     pub(super) started_at: f64,
     pub(super) expires_at: f64,
     pub(super) tick: DamageBand,
+}
+
+impl OffensiveEffectWindow {
+    /// Whether an observation at `at` falls inside the window, allowing
+    /// the delivery tail past its expiry.
+    fn live_at(&self, at: f64) -> bool {
+        self.started_at <= at + 0.05 && at <= self.expires_at + SWITCH_TAIL_SECONDS
+    }
 }
 
 /// A standing disagreement between the declared weapon and the evidence.
@@ -269,6 +320,8 @@ pub(super) struct ShotRecord {
     pub(super) observation: Observation,
     pub(super) attribution: Attribution,
     pub(super) fits: Vec<String>,
+    /// Open effect windows that could equally explain it.
+    pub(super) windows: Vec<String>,
     pub(super) location: ShotLocation,
     /// The shot's stored evidence row, when its state keeps one.
     pub(super) evidence_id: Option<String>,
@@ -276,6 +329,8 @@ pub(super) struct ShotRecord {
     pub(super) booked: Option<String>,
     /// The per-shot cost booked for it (zero when unpriced).
     pub(super) cost: crate::ped::Ped,
+    /// The effect window its hit opened, when its weapon declares one.
+    pub(super) opened_window: Option<String>,
 }
 
 /// One logged shot a decision moves to another weapon, with the record as
@@ -292,6 +347,9 @@ pub(super) struct Reprice {
 pub(super) struct Decision {
     pub(super) mismatch: WeaponMismatch,
     pub(super) moves: Vec<Reprice>,
+    /// Effect windows the decision took back: those the evidence shots a
+    /// keep repriced had opened.
+    pub(super) withdrawn: Vec<String>,
 }
 
 /// Session tallies of how shots resolved, as they stand after decisions.
@@ -371,9 +429,26 @@ impl AttributionRuntime {
 
     /// Open an effect window whose ticks are outcomes of an earlier paid
     /// activation.
-    #[cfg(test)]
     pub(super) fn open_effect_window(&mut self, window: OffensiveEffectWindow) {
         self.effect_windows.push(window);
+    }
+
+    /// Adopt the persisted effect windows as the live ones (a session's
+    /// start: effects paid for before it keep ticking into it).
+    pub(super) fn set_effect_windows(&mut self, windows: Vec<OffensiveEffectWindow>) {
+        self.effect_windows = windows;
+    }
+
+    pub(super) fn effect_windows(&self) -> &[OffensiveEffectWindow] {
+        &self.effect_windows
+    }
+
+    /// The carried weapon's declared effect, when it has one.
+    pub(super) fn effect_of(&self, tool: &str) -> Option<(&CarriedWeapon, &WeaponEffectProfile)> {
+        self.carried
+            .iter()
+            .find(|weapon| weapon.name == tool)
+            .and_then(|weapon| weapon.effect.as_ref().map(|effect| (weapon, effect)))
     }
 
     /// A new regime: no evidence may reach back past this point.
@@ -417,16 +492,80 @@ impl AttributionRuntime {
             .collect()
     }
 
-    fn open_window(&self, at: f64, amount: f64) -> Option<&OffensiveEffectWindow> {
-        let mut matches = self.effect_windows.iter().filter(|window| {
-            window.started_at <= at + 0.05
-                && at <= window.expires_at + SWITCH_TAIL_SECONDS
-                && window.tick.fits(amount, false)
-        });
-        let first = matches.next()?;
-        // Two windows explaining the same tick leave its source ambiguous;
-        // either way it is no shot, so the first stands in for provenance.
-        Some(first)
+    /// The open windows whose tick band holds the hit.
+    fn ticking(&self, at: f64, amount: f64, critical: bool) -> Vec<&OffensiveEffectWindow> {
+        self.effect_windows
+            .iter()
+            .filter(|window| window.live_at(at) && window.tick.fits(amount, critical))
+            .collect()
+    }
+
+    /// The open windows that best explain a hit short of every band: those
+    /// whose tick floor is the nearest above it, provided that floor sits
+    /// below `rival_floor` (the declared weapon's, when one competes).
+    fn nearest_below(&self, at: f64, amount: f64, rival_floor: f64) -> Vec<&OffensiveEffectWindow> {
+        let short: Vec<&OffensiveEffectWindow> = self
+            .effect_windows
+            .iter()
+            .filter(|window| {
+                window.live_at(at)
+                    && window.tick.undershoots(amount)
+                    && window.tick.min < rival_floor
+            })
+            .collect();
+        let Some(nearest) = short
+            .iter()
+            .map(|window| window.tick.min)
+            .min_by(f64::total_cmp)
+        else {
+            return Vec::new();
+        };
+        short
+            .into_iter()
+            .filter(|window| (window.tick.min - nearest).abs() < 1e-9)
+            .collect()
+    }
+
+    /// Whether every window was opened by `tool`.
+    fn all_owned_by(windows: &[&OffensiveEffectWindow], tool: &str) -> bool {
+        windows.iter().all(|window| window.tool == tool)
+    }
+
+    fn effect_tick(
+        windows: &[&OffensiveEffectWindow],
+        fits: Vec<String>,
+        reason: &str,
+    ) -> Resolved {
+        let ids: Vec<String> = windows.iter().map(|window| window.id.clone()).collect();
+        let window_id = match ids.as_slice() {
+            [only] => Some(only.clone()),
+            _ => None,
+        };
+        let reason = if window_id.is_some() {
+            reason.to_string()
+        } else {
+            format!("{reason}; several open effects explain it")
+        };
+        Resolved {
+            attribution: Attribution::EffectTick { window_id },
+            fits,
+            windows: ids,
+            reason,
+        }
+    }
+
+    fn concurrent(windows: &[&OffensiveEffectWindow], fits: Vec<String>, rival: &str) -> Resolved {
+        let owners: BTreeSet<&str> = windows.iter().map(|window| window.tool.as_str()).collect();
+        let owners: Vec<&str> = owners.into_iter().collect();
+        Resolved {
+            attribution: Attribution::Unresolved,
+            reason: format!(
+                "fits {rival} and a tick of the open {} effect",
+                owners.join(" and ")
+            ),
+            windows: windows.iter().map(|window| window.id.clone()).collect(),
+            fits,
+        }
     }
 
     /// Classify one observation without changing any state.
@@ -436,74 +575,64 @@ impl AttributionRuntime {
             Observation::Countered => return self.classify_countered(),
         };
         let fits = self.fitting(amount, critical);
+        let ticking = self.ticking(at, amount, critical);
         let Some(declared) = self.declared.clone() else {
-            return match fits.as_slice() {
-                [only] => Resolved {
-                    attribution: Attribution::Evidence {
-                        tool: only.clone(),
-                        confirmed: false,
-                    },
-                    reason: format!("fits only {only}"),
-                    fits,
-                },
-                [] => Resolved {
-                    attribution: Attribution::Unresolved,
-                    reason: "fits no carried weapon".to_string(),
-                    fits,
-                },
-                _ => Resolved {
-                    attribution: Attribution::Unresolved,
-                    reason: "fits several carried weapons".to_string(),
-                    fits,
-                },
-            };
+            return self.classify_undeclared(amount, at, fits, &ticking);
         };
 
+        // A declared weapon with no band cannot be contradicted, so it
+        // explains every hit, and competes with any effect ticking beside
+        // it exactly as a fitting band does.
         let declared_band = self.band_of(&declared);
-        let Some(band) = declared_band else {
-            return Resolved {
-                attribution: Attribution::Agrees {
-                    tool: declared,
-                    reason: AgreeReason::Unvalidated,
-                },
-                reason: String::new(),
-                fits,
+        if declared_band.is_none_or(|band| band.fits(amount, critical)) {
+            let reason = if declared_band.is_some() {
+                AgreeReason::Fits
+            } else {
+                AgreeReason::Unvalidated
             };
-        };
-        if band.fits(amount, critical) {
-            return Resolved {
-                attribution: Attribution::Agrees {
-                    tool: declared,
-                    reason: AgreeReason::Fits,
-                },
-                reason: String::new(),
-                fits,
-            };
-        }
-        if let Some((previous, switched_at)) = &self.previous {
-            let in_tail = at >= switched_at - 0.05 && at - switched_at <= SWITCH_TAIL_SECONDS;
-            if in_tail
-                && self
-                    .band_of(previous)
-                    .is_some_and(|band| band.fits(amount, critical))
-            {
+            if ticking.is_empty() {
                 return Resolved {
                     attribution: Attribution::Agrees {
-                        tool: previous.clone(),
-                        reason: AgreeReason::InFlight,
+                        tool: declared,
+                        reason,
                     },
                     reason: String::new(),
                     fits,
+                    windows: Vec::new(),
                 };
             }
+            if Self::all_owned_by(&ticking, &declared) {
+                return Self::effect_tick(&ticking, fits, "a tick of the effect in hand");
+            }
+            return Self::concurrent(&ticking, fits, &format!("the hotbar's {declared}"));
         }
-        if let Some(window) = self.open_window(at, amount) {
+        let band = declared_band.expect("a bandless declared weapon fits every hit");
+
+        let in_flight = self.previous.as_ref().and_then(|(previous, switched_at)| {
+            let in_tail = at >= switched_at - 0.05 && at - switched_at <= SWITCH_TAIL_SECONDS;
+            (in_tail
+                && self
+                    .band_of(previous)
+                    .is_some_and(|band| band.fits(amount, critical)))
+            .then(|| previous.clone())
+        });
+        if !ticking.is_empty() {
+            return match &in_flight {
+                Some(previous) if !Self::all_owned_by(&ticking, previous) => {
+                    Self::concurrent(&ticking, fits, &format!("{previous}'s shot still landing"))
+                }
+                _ => Self::effect_tick(&ticking, fits, "a tick of an open effect"),
+            };
+        }
+        if let Some(previous) = in_flight {
             return Resolved {
-                attribution: Attribution::EffectTick {
-                    window_id: window.id.clone(),
+                attribution: Attribution::Agrees {
+                    tool: previous,
+                    reason: AgreeReason::InFlight,
                 },
-                reason: "a tick of an open effect window".to_string(),
+                reason: String::new(),
                 fits,
+                windows: Vec::new(),
             };
         }
         let others: Vec<&String> = fits.iter().filter(|name| **name != declared).collect();
@@ -515,6 +644,7 @@ impl AttributionRuntime {
                 },
                 reason: String::new(),
                 fits,
+                windows: Vec::new(),
             },
             [only] => {
                 let only = (*only).clone();
@@ -525,25 +655,109 @@ impl AttributionRuntime {
                         confirmed: false,
                     },
                     fits,
+                    windows: Vec::new(),
                 }
             }
-            [] if band.undershoots(amount) => Resolved {
-                attribution: Attribution::Agrees {
-                    tool: declared,
-                    reason: AgreeReason::BelowBand,
-                },
-                reason: String::new(),
-                fits,
-            },
+            [] if band.undershoots(amount) => {
+                let nearer = self.nearest_below(at, amount, band.min);
+                if !nearer.is_empty() {
+                    return Self::effect_tick(
+                        &nearer,
+                        fits,
+                        "short of every band, nearest an open effect's ticks",
+                    );
+                }
+                Resolved {
+                    attribution: Attribution::Agrees {
+                        tool: declared,
+                        reason: AgreeReason::BelowBand,
+                    },
+                    reason: String::new(),
+                    fits,
+                    windows: Vec::new(),
+                }
+            }
             [] => Resolved {
                 attribution: Attribution::Unresolved,
                 reason: "exceeds every carried weapon's reach".to_string(),
                 fits,
+                windows: Vec::new(),
             },
             _ => Resolved {
                 attribution: Attribution::Unresolved,
                 reason: "fits several carried weapons other than the hotbar's".to_string(),
                 fits,
+                windows: Vec::new(),
+            },
+        }
+    }
+
+    /// Classify a hit with no weapon declared. An open effect explains its
+    /// ticks unless a carried weapon other than the effect's own also fits:
+    /// with nothing declared, that weapon is a second live source.
+    fn classify_undeclared(
+        &self,
+        amount: f64,
+        at: f64,
+        fits: Vec<String>,
+        ticking: &[&OffensiveEffectWindow],
+    ) -> Resolved {
+        if !ticking.is_empty() {
+            let owners: BTreeSet<&str> =
+                ticking.iter().map(|window| window.tool.as_str()).collect();
+            let rivals: Vec<&String> = fits
+                .iter()
+                .filter(|name| !owners.contains(name.as_str()))
+                .collect();
+            return match rivals.as_slice() {
+                [] => Self::effect_tick(ticking, fits, "a tick of an open effect"),
+                [only] => {
+                    let only = (*only).clone();
+                    Self::concurrent(ticking, fits, &only)
+                }
+                _ => Self::concurrent(ticking, fits, "several carried weapons"),
+            };
+        }
+        match fits.as_slice() {
+            [only] => Resolved {
+                attribution: Attribution::Evidence {
+                    tool: only.clone(),
+                    confirmed: false,
+                },
+                reason: format!("fits only {only}"),
+                fits,
+                windows: Vec::new(),
+            },
+            [] => {
+                // A carried weapon whose floor sits nearer rivals the
+                // effect; with nothing declared, that leaves it unresolved.
+                let nearest_weapon = self
+                    .carried
+                    .iter()
+                    .filter_map(|weapon| weapon.band)
+                    .filter(|band| band.undershoots(amount))
+                    .map(|band| band.min)
+                    .fold(f64::INFINITY, f64::min);
+                let nearer = self.nearest_below(at, amount, nearest_weapon);
+                if !nearer.is_empty() {
+                    return Self::effect_tick(
+                        &nearer,
+                        fits,
+                        "short of every band, nearest an open effect's ticks",
+                    );
+                }
+                Resolved {
+                    attribution: Attribution::Unresolved,
+                    reason: "fits no carried weapon".to_string(),
+                    fits,
+                    windows: Vec::new(),
+                }
+            }
+            _ => Resolved {
+                attribution: Attribution::Unresolved,
+                reason: "fits several carried weapons".to_string(),
+                fits,
+                windows: Vec::new(),
             },
         }
     }
@@ -562,6 +776,7 @@ impl AttributionRuntime {
                 },
                 reason: format!("a countered shot while {} is recorded", mismatch.evidence),
                 fits,
+                windows: Vec::new(),
             };
         }
         if let Some(declared) = &self.declared {
@@ -572,6 +787,7 @@ impl AttributionRuntime {
                 },
                 reason: String::new(),
                 fits,
+                windows: Vec::new(),
             };
         }
         match &self.recording {
@@ -582,11 +798,13 @@ impl AttributionRuntime {
                 },
                 reason: format!("a countered shot while {recording} is recorded"),
                 fits,
+                windows: Vec::new(),
             },
             None => Resolved {
                 attribution: Attribution::Unresolved,
                 reason: "a countered shot with no weapon known".to_string(),
                 fits,
+                windows: Vec::new(),
             },
         }
     }
@@ -673,7 +891,8 @@ impl AttributionRuntime {
     /// shot the player already vouched for (kept) or a previous weapon's
     /// in-flight shot bounds the walk the same way. Before those, a
     /// countered shot, a hit either weapon explains, a hit short of every
-    /// band, and an unresolved hit the evidence weapon fits all move.
+    /// band, and an unresolved hit the evidence weapon fits (unless an open
+    /// effect could equally have ticked it) all move.
     pub(super) fn confirm(&mut self, at: f64) -> Option<Decision> {
         let mismatch = self.mismatch.take()?;
         let evidence = mismatch.evidence.clone();
@@ -692,9 +911,11 @@ impl AttributionRuntime {
                         true
                     }
                 },
+                // A hit an open effect could equally have ticked stays as
+                // recorded: the decision is about weapons, not effects.
                 Attribution::Unresolved => {
                     matches!(record.observation, Observation::Countered)
-                        || record.fits.contains(&evidence)
+                        || (record.fits.contains(&evidence) && record.windows.is_empty())
                 }
                 Attribution::Evidence { .. } | Attribution::EffectTick { .. } => false,
             };
@@ -728,16 +949,23 @@ impl AttributionRuntime {
         self.recording = None;
         self.kept.clear();
         self.log.clear();
-        Some(Decision { mismatch, moves })
+        Some(Decision {
+            mismatch,
+            moves,
+            withdrawn: Vec::new(),
+        })
     }
 
     /// Keep the declared weapon: the regime's evidence shots of the
     /// mismatch's weapon are repriced back to the declared weapon, and that
-    /// weapon's evidence stops overriding it until the next regime.
+    /// weapon's evidence stops overriding it until the next regime. An
+    /// effect one of those shots opened is taken back with it: the player
+    /// says no such cast happened, so it explains no later tick.
     pub(super) fn keep(&mut self) -> Option<Decision> {
         let mismatch = self.mismatch.take()?;
         let declared = mismatch.declared.clone();
         let mut moves = Vec::new();
+        let mut withdrawn = Vec::new();
         for record in &mut self.log {
             let Attribution::Evidence { tool, .. } = &record.attribution else {
                 continue;
@@ -750,6 +978,9 @@ impl AttributionRuntime {
                 tool: declared.clone(),
                 reason: AgreeReason::Kept,
             };
+            if let Some(window) = record.opened_window.take() {
+                withdrawn.push(window);
+            }
             self.counts.evidenced -= 1;
             self.counts.agreed += 1;
             moves.push(Reprice {
@@ -758,8 +989,14 @@ impl AttributionRuntime {
                 record: before,
             });
         }
+        self.effect_windows
+            .retain(|window| !withdrawn.contains(&window.id));
         self.kept.insert(mismatch.evidence.clone());
-        Some(Decision { mismatch, moves })
+        Some(Decision {
+            mismatch,
+            moves,
+            withdrawn,
+        })
     }
 
     /// The observation amount of a logged shot (zero for a countered one).
@@ -778,6 +1015,7 @@ mod tests {
             equipment_id: id,
             name: name.to_string(),
             band: Some(DamageBand { min, max }),
+            effect: None,
         }
     }
 
@@ -816,12 +1054,68 @@ mod tests {
             observation,
             attribution: resolved.attribution.clone(),
             fits: resolved.fits.clone(),
+            windows: resolved.windows.clone(),
             location: ShotLocation::Pending,
             evidence_id: None,
             booked: resolved.attribution.priced_tool().map(str::to_string),
             cost: Ped::ZERO,
+            opened_window: None,
         });
         resolved.attribution
+    }
+
+    /// An effect window `owner` opened, ticking `tick_min`-`tick_max`.
+    fn window(
+        id: &str,
+        owner: &str,
+        started_at: f64,
+        expires_at: f64,
+        tick_min: f64,
+        tick_max: f64,
+    ) -> OffensiveEffectWindow {
+        OffensiveEffectWindow {
+            id: id.to_string(),
+            tool: owner.to_string(),
+            equipment_id: None,
+            started_at,
+            expires_at,
+            tick: DamageBand {
+                min: tick_min,
+                max: tick_max,
+            },
+        }
+    }
+
+    fn tick_of(id: &str) -> Attribution {
+        Attribution::EffectTick {
+            window_id: Some(id.to_string()),
+        }
+    }
+
+    /// The captured rotation's loadout: the primary chip (with its
+    /// amplifier, 95.7-191.4) and an Electrocution chip whose declared
+    /// effect lands a 100-160 hit, then ticks 35-75 for 25 seconds.
+    fn rotation() -> AttributionRuntime {
+        let effect = WeaponEffectProfile {
+            mode: crate::weapon_effect::WeaponEffectMode::Compound,
+            hit_min: Some(100.0),
+            hit_max: Some(160.0),
+            duration_seconds: 25.0,
+            tick_min: 35.0,
+            tick_max: 75.0,
+            tick_seconds: Some(1.2),
+        };
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Mayhem", 95.7, 191.4),
+            CarriedWeapon {
+                equipment_id: 2,
+                name: "Electrocution".to_string(),
+                band: Some(effect.activation_band()),
+                effect: Some(effect),
+            },
+        ]);
+        runtime
     }
 
     fn agrees(tool: &str, reason: AgreeReason) -> Attribution {
@@ -962,6 +1256,7 @@ mod tests {
                 equipment_id: 9,
                 name: "Mystery".to_string(),
                 band: None,
+                effect: None,
             },
             weapon(2, "Cannon", 20.0, 40.0),
         ]);
@@ -1061,21 +1356,8 @@ mod tests {
     fn an_open_effect_window_explains_its_ticks_without_a_switch() {
         let mut runtime = runtime();
         runtime.declare("Pistol", 0.0);
-        runtime.open_effect_window(OffensiveEffectWindow {
-            id: "w1".to_string(),
-            started_at: 1.0,
-            expires_at: 11.0,
-            tick: DamageBand {
-                min: 28.0,
-                max: 32.0,
-            },
-        });
-        assert_eq!(
-            observe(&mut runtime, hit(30.0), 5.0),
-            Attribution::EffectTick {
-                window_id: "w1".to_string()
-            }
-        );
+        runtime.open_effect_window(window("w1", "Zapper", 1.0, 11.0, 28.0, 32.0));
+        assert_eq!(observe(&mut runtime, hit(30.0), 5.0), tick_of("w1"));
         assert!(runtime.mismatch().is_none(), "a tick never raises a switch");
         // The declared weapon's own hits still win first.
         assert_eq!(
@@ -1085,6 +1367,323 @@ mod tests {
         // Past its expiry (and tail) the window no longer explains anything.
         assert_eq!(observe(&mut runtime, hit(30.0), 13.0), evidence("Cannon"));
         assert_eq!(runtime.counts().effect_ticks, 1);
+    }
+
+    #[test]
+    fn a_hit_both_the_hotbar_weapon_and_another_weapons_effect_explain_is_unresolved() {
+        let mut runtime = runtime();
+        runtime.declare("Cannon", 0.0);
+        runtime.open_effect_window(window("w1", "Zapper", 1.0, 11.0, 28.0, 32.0));
+        let resolved = runtime.classify(hit(30.0), 5.0);
+        assert_eq!(resolved.attribution, Attribution::Unresolved);
+        assert_eq!(resolved.windows, vec!["w1".to_string()]);
+        assert!(resolved.reason.contains("Zapper"), "{}", resolved.reason);
+        // Outside the tick band the cannon's hits are the cannon's.
+        assert_eq!(
+            runtime.classify(hit(38.0), 5.5).attribution,
+            agrees("Cannon", AgreeReason::Fits)
+        );
+    }
+
+    #[test]
+    fn a_tick_of_the_weapon_in_hands_own_effect_is_a_tick() {
+        let mut runtime = rotation();
+        runtime.declare("Electrocution", 0.0);
+        // A 110 hit opens the effect; the declared weapon's own ticks
+        // are ticks even where its hit band would hold them too.
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 120.0));
+        let resolved = runtime.classify(hit(110.0), 2.0);
+        assert_eq!(resolved.attribution, tick_of("e1"));
+        assert_eq!(
+            resolved.fits,
+            vec!["Mayhem".to_string(), "Electrocution".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_captured_rotation_bills_the_opener_once_and_the_primary_normally() {
+        let mut runtime = rotation();
+        runtime.declare("Electrocution", 0.0);
+        // The opener agrees with the chip in hand; its effect opens.
+        assert_eq!(
+            observe(&mut runtime, hit(129.2), 1.0),
+            agrees("Electrocution", AgreeReason::Fits)
+        );
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        // A sliver short of every band is nearest the effect's floor.
+        assert_eq!(observe(&mut runtime, hit(0.8), 1.1), tick_of("e1"));
+        assert_eq!(observe(&mut runtime, hit(53.0), 2.0), tick_of("e1"));
+        runtime.declare("Mayhem", 2.4);
+        assert_eq!(observe(&mut runtime, hit(57.5), 3.0), tick_of("e1"));
+        // Short of the primary's band but above every tick: armour on a
+        // primary hit, not a tick.
+        assert_eq!(
+            observe(&mut runtime, hit(90.0), 4.0),
+            agrees("Mayhem", AgreeReason::BelowBand)
+        );
+        assert_eq!(
+            observe(&mut runtime, hit(147.7), 4.1),
+            agrees("Mayhem", AgreeReason::Fits)
+        );
+        assert_eq!(observe(&mut runtime, hit(70.4), 5.0), tick_of("e1"));
+        // A jam is a shot of the weapon in hand, never a tick.
+        assert_eq!(
+            observe(&mut runtime, Observation::Countered, 6.0),
+            agrees("Mayhem", AgreeReason::Countered)
+        );
+        assert!(runtime.mismatch().is_none(), "ticks never raise a switch");
+        // Past the effect (and its tail) a low hit is the primary's again.
+        assert_eq!(
+            observe(&mut runtime, hit(57.5), 28.0),
+            agrees("Mayhem", AgreeReason::BelowBand)
+        );
+        assert_eq!(
+            runtime.counts(),
+            AttributionCounts {
+                agreed: 5,
+                evidenced: 0,
+                unresolved: 0,
+                effect_ticks: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn a_hit_short_of_every_band_goes_to_the_nearest_floor() {
+        let mut runtime = rotation();
+        runtime.declare("Mayhem", 0.0);
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        assert_eq!(runtime.classify(hit(20.0), 2.0).attribution, tick_of("e1"));
+        // An effect whose floor sits above the declared weapon's does not
+        // out-reach it.
+        let mut runtime = rotation();
+        runtime.declare("Mayhem", 0.0);
+        runtime.open_effect_window(window("hi", "Electrocution", 1.0, 26.0, 120.0, 130.0));
+        assert_eq!(
+            runtime.classify(hit(20.0), 2.0).attribution,
+            agrees("Mayhem", AgreeReason::BelowBand)
+        );
+        // Of two effects short of the hit, the nearer floor explains it.
+        let mut runtime = rotation();
+        runtime.declare("Mayhem", 0.0);
+        runtime.open_effect_window(window("far", "Electrocution", 1.0, 26.0, 60.0, 75.0));
+        runtime.open_effect_window(window("near", "Zapper", 1.0, 26.0, 30.0, 40.0));
+        let resolved = runtime.classify(hit(20.0), 2.0);
+        assert_eq!(resolved.attribution, tick_of("near"));
+        assert_eq!(resolved.windows, vec!["near".to_string()]);
+    }
+
+    #[test]
+    fn overlapping_windows_keep_every_candidate_and_choose_none() {
+        let mut runtime = rotation();
+        runtime.declare("Mayhem", 0.0);
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        runtime.open_effect_window(window("e2", "Electrocution", 10.0, 35.0, 35.0, 75.0));
+        let resolved = runtime.classify(hit(50.0), 12.0);
+        assert_eq!(
+            resolved.attribution,
+            Attribution::EffectTick { window_id: None }
+        );
+        assert_eq!(resolved.windows, vec!["e1".to_string(), "e2".to_string()]);
+        assert!(resolved.attribution.priced_tool().is_none());
+        // Before the second opened, only the first explains a tick.
+        assert_eq!(runtime.classify(hit(50.0), 5.0).attribution, tick_of("e1"));
+        // A below-floor sliver both windows reach is ambiguous too.
+        let resolved = runtime.classify(hit(1.0), 12.0);
+        assert_eq!(
+            resolved.attribution,
+            Attribution::EffectTick { window_id: None }
+        );
+        assert_eq!(resolved.windows.len(), 2);
+    }
+
+    #[test]
+    fn with_nothing_declared_an_open_effect_explains_its_ticks() {
+        let mut runtime = rotation();
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        assert_eq!(runtime.classify(hit(50.0), 2.0).attribution, tick_of("e1"));
+        assert_eq!(runtime.classify(hit(3.0), 2.0).attribution, tick_of("e1"));
+        // A primary hit is still evidence of the primary.
+        assert_eq!(
+            runtime.classify(hit(180.0), 2.0).attribution,
+            evidence("Mayhem")
+        );
+        // Short of everything, an effect claims the hit only when its floor
+        // is the nearest: a nearer weapon floor leaves it unresolved.
+        let mut high = rotation();
+        high.open_effect_window(window("h1", "Electrocution", 1.0, 26.0, 120.0, 130.0));
+        assert_eq!(
+            high.classify(hit(20.0), 2.0).attribution,
+            Attribution::Unresolved
+        );
+        // A tick band the primary's band also holds: two live sources.
+        let mut runtime = rotation();
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 100.0));
+        let resolved = runtime.classify(hit(98.0), 2.0);
+        assert_eq!(resolved.attribution, Attribution::Unresolved);
+        assert_eq!(resolved.windows, vec!["e1".to_string()]);
+        // The effect's own weapon fitting is no rival: over-time-only
+        // weapons are confirmed by a tick-shaped hit.
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![weapon(2, "Electrocution", 35.0, 75.0)]);
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        assert_eq!(runtime.classify(hit(50.0), 2.0).attribution, tick_of("e1"));
+    }
+
+    #[test]
+    fn the_previous_weapons_in_flight_shot_competes_with_another_effect() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Mayhem", 150.0, 191.4),
+            weapon(2, "Electrocution", 100.0, 140.0),
+        ]);
+        runtime.declare("Electrocution", 0.0);
+        runtime.declare("Mayhem", 1.0);
+        // The chip's own effect: a hit its effect ticks and its in-flight
+        // shot would print alike is a tick, not a second activation.
+        runtime.open_effect_window(window("e1", "Electrocution", 0.5, 25.5, 110.0, 130.0));
+        assert_eq!(runtime.classify(hit(120.0), 1.5).attribution, tick_of("e1"));
+        // Out of the tick band, the chip's shot still lands as its own.
+        assert_eq!(
+            runtime.classify(hit(135.0), 1.5).attribution,
+            agrees("Electrocution", AgreeReason::InFlight)
+        );
+        // A third weapon's effect beside the chip's in-flight shot: both
+        // explain it.
+        runtime.set_effect_windows(vec![window("z1", "Zapper", 0.5, 25.5, 110.0, 130.0)]);
+        let resolved = runtime.classify(hit(120.0), 1.5);
+        assert_eq!(resolved.attribution, Attribution::Unresolved);
+        assert!(
+            resolved.reason.contains("still landing"),
+            "{}",
+            resolved.reason
+        );
+        // Past the switch tail, the third weapon's effect alone explains it.
+        assert_eq!(runtime.classify(hit(120.0), 3.0).attribution, tick_of("z1"));
+    }
+
+    #[test]
+    fn a_bandless_declared_weapon_competes_with_an_effect_it_does_not_own() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![CarriedWeapon {
+            equipment_id: 9,
+            name: "Mystery".to_string(),
+            band: None,
+            effect: None,
+        }]);
+        runtime.declare("Mystery", 0.0);
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        assert_eq!(
+            runtime.classify(hit(50.0), 2.0).attribution,
+            Attribution::Unresolved
+        );
+        assert_eq!(
+            runtime.classify(hit(90.0), 2.0).attribution,
+            agrees("Mystery", AgreeReason::Unvalidated)
+        );
+        runtime.set_effect_windows(vec![window("m1", "Mystery", 1.0, 26.0, 35.0, 75.0)]);
+        assert_eq!(runtime.classify(hit(50.0), 2.0).attribution, tick_of("m1"));
+    }
+
+    #[test]
+    fn a_window_explains_ticks_until_its_expiry_and_delivery_tail() {
+        let mut runtime = rotation();
+        runtime.declare("Mayhem", 0.0);
+        runtime.open_effect_window(window("e1", "Electrocution", 10.0, 20.0, 35.0, 75.0));
+        assert_eq!(
+            runtime.classify(hit(50.0), 9.0).attribution,
+            agrees("Mayhem", AgreeReason::BelowBand),
+            "before its activation landed"
+        );
+        assert_eq!(runtime.classify(hit(50.0), 9.96).attribution, tick_of("e1"));
+        assert_eq!(runtime.classify(hit(50.0), 21.2).attribution, tick_of("e1"));
+        assert_eq!(
+            runtime.classify(hit(50.0), 21.3).attribution,
+            agrees("Mayhem", AgreeReason::BelowBand)
+        );
+        // Applying an observation past the tail forgets the window.
+        observe(&mut runtime, hit(150.0), 30.0);
+        assert!(runtime.effect_windows().is_empty());
+    }
+
+    #[test]
+    fn a_decision_leaves_a_hit_an_effect_could_have_ticked() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 30.0),
+            weapon(2, "Cannon", 20.0, 40.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        runtime.open_effect_window(window("z1", "Zapper", 0.0, 60.0, 20.0, 30.0));
+        // The pistol and the effect both explain it: unresolved, though
+        // the cannon fits it too.
+        assert_eq!(
+            observe(&mut runtime, hit(25.0), 1.0),
+            Attribution::Unresolved
+        );
+        assert_eq!(observe(&mut runtime, hit(35.0), 2.0), evidence("Cannon"));
+        let decision = runtime.confirm(3.0).unwrap();
+        assert!(
+            decision.moves.is_empty(),
+            "the unresolved hit might be a tick: {:?}",
+            decision.moves
+        );
+        assert_eq!(runtime.counts().unresolved, 1);
+    }
+
+    #[test]
+    fn keeping_the_hotbar_weapon_takes_back_the_effect_its_evidence_opened() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 10.0),
+            weapon(2, "Electrocution", 100.0, 160.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        assert_eq!(
+            observe(&mut runtime, hit(130.0), 1.0),
+            evidence("Electrocution")
+        );
+        // As the actor does: the priced hit opened its effect.
+        let seq = runtime.log().last().unwrap().seq;
+        runtime.record_mut(seq).unwrap().opened_window = Some("e1".to_string());
+        runtime.open_effect_window(window("e1", "Electrocution", 1.0, 26.0, 35.0, 75.0));
+        assert_eq!(runtime.classify(hit(55.0), 2.0).attribution, tick_of("e1"));
+
+        let decision = runtime.keep().unwrap();
+        assert_eq!(decision.withdrawn, vec!["e1".to_string()]);
+        assert!(runtime.effect_windows().is_empty());
+        assert_ne!(runtime.classify(hit(55.0), 3.0).attribution, tick_of("e1"));
+        // A confirm takes nothing back.
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 10.0),
+            weapon(2, "Electrocution", 100.0, 160.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(130.0), 1.0);
+        assert!(runtime.confirm(2.0).unwrap().withdrawn.is_empty());
+    }
+
+    #[test]
+    fn a_declared_effect_replaces_the_catalogue_band() {
+        let props = serde_json::json!({
+            "weapon_entity": {"damage": {"electric": 2000.0}},
+            "effect_profile": {
+                "mode": "compound",
+                "hit_min": 100.0,
+                "hit_max": 160.0,
+                "duration_seconds": 25.0,
+                "tick_min": 35.0,
+                "tick_max": 75.0,
+            },
+        });
+        assert_eq!(
+            damage_band_from_props(&props),
+            Some(DamageBand {
+                min: 100.0,
+                max: 160.0
+            })
+        );
     }
 
     #[test]
@@ -1326,6 +1925,14 @@ mod tests {
             Resync,
             Confirm,
             Keep,
+            /// An effect `OWNERS[owner]` opened now, for `duration` seconds,
+            /// ticking `tick_min` to `tick_min + width`.
+            Effect {
+                owner: usize,
+                duration: f64,
+                tick_min: f64,
+                width: f64,
+            },
         }
 
         fn step() -> impl Strategy<Value = Step> {
@@ -1336,10 +1943,15 @@ mod tests {
                 1 => Just(Step::Resync),
                 1 => Just(Step::Confirm),
                 1 => Just(Step::Keep),
+                1 => (0usize..4, 0.5f64..30.0, 0.0f64..60.0, 0.0f64..30.0).prop_map(
+                    |(owner, duration, tick_min, width)| Step::Effect { owner, duration, tick_min, width }
+                ),
             ]
         }
 
         const NAMES: [&str; 3] = ["Pistol", "Cannon", "Rifle"];
+        /// The carried weapons, and one weapon nobody carries.
+        const OWNERS: [&str; 4] = ["Pistol", "Cannon", "Rifle", "Zapper"];
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(96))]
@@ -1396,6 +2008,17 @@ mod tests {
                                 prop_assert!(decision.moves.iter().all(|m| m.to_tool == decision.mismatch.declared));
                             }
                         }
+                        Step::Effect { owner, duration, tick_min, width } => {
+                            let id = format!("w{}", runtime.effect_windows().len());
+                            runtime.open_effect_window(window(
+                                &id,
+                                OWNERS[owner],
+                                at,
+                                at + duration,
+                                tick_min,
+                                tick_min + width,
+                            ));
+                        }
                     }
                     let counts = runtime.counts();
                     prop_assert_eq!(
@@ -1408,6 +2031,71 @@ mod tests {
                         prop_assert_ne!(&mismatch.evidence, &mismatch.declared);
                         prop_assert!(!runtime.kept.contains(&mismatch.evidence));
                     }
+                }
+            }
+
+            /// Bill once: a hit any open effect's ticks explain is never
+            /// priced as a shot; a tick never carries a price, and names its
+            /// window exactly when one alone explains it; every window a
+            /// classification cites was open; and a hit short of the
+            /// declared band is only priced when no open effect's floor
+            /// sits nearer above it.
+            #[test]
+            fn a_hit_an_open_effect_explains_is_never_priced(
+                windows in proptest::collection::vec(
+                    (0usize..4, 0.0f64..20.0, 0.5f64..30.0, 0.0f64..60.0, 0.0f64..30.0),
+                    0..4,
+                ),
+                declare in proptest::option::of(0usize..3),
+                previous in proptest::option::of(0usize..3),
+                amount in 0.0f64..130.0,
+                critical in any::<bool>(),
+                at in 0.0f64..40.0,
+            ) {
+                let mut runtime = runtime();
+                if let Some(index) = previous {
+                    runtime.declare(NAMES[index], at - 0.5);
+                }
+                if let Some(index) = declare {
+                    runtime.declare(NAMES[index], at - 0.5);
+                }
+                for (index, (owner, start, duration, tick_min, width)) in windows.iter().enumerate() {
+                    runtime.open_effect_window(window(
+                        &format!("w{index}"),
+                        OWNERS[*owner],
+                        *start,
+                        start + duration,
+                        *tick_min,
+                        tick_min + width,
+                    ));
+                }
+                let resolved = runtime.classify(Observation::Hit { amount, critical }, at);
+                let live: Vec<&OffensiveEffectWindow> = runtime
+                    .effect_windows()
+                    .iter()
+                    .filter(|window| window.live_at(at))
+                    .collect();
+                let ticking = live.iter().any(|window| window.tick.fits(amount, critical));
+                if resolved.attribution.priced_tool().is_some() {
+                    prop_assert!(!ticking, "priced a hit an open effect explains: {resolved:?}");
+                }
+                for id in &resolved.windows {
+                    prop_assert!(live.iter().any(|window| &window.id == id));
+                }
+                match &resolved.attribution {
+                    Attribution::EffectTick { window_id } => {
+                        prop_assert!(!resolved.windows.is_empty());
+                        prop_assert_eq!(window_id.is_some(), resolved.windows.len() == 1);
+                        prop_assert!(resolved.attribution.priced_tool().is_none());
+                    }
+                    Attribution::Agrees { tool, reason: AgreeReason::BelowBand } => {
+                        let floor = runtime.band_of(tool).unwrap().min;
+                        let nearer = live
+                            .iter()
+                            .any(|window| window.tick.undershoots(amount) && window.tick.min < floor);
+                        prop_assert!(!nearer, "priced past a nearer effect floor: {:?}", resolved);
+                    }
+                    _ => {}
                 }
             }
 

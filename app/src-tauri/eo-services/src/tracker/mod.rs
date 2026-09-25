@@ -39,6 +39,9 @@ mod session;
 #[cfg(test)]
 mod tests;
 mod time;
+mod weapon_effects;
+#[cfg(test)]
+mod weapon_effects_tests;
 mod weapon_evidence;
 mod weapons;
 

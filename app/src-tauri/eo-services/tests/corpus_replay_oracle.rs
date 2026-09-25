@@ -50,10 +50,10 @@ use eo_services::fingerprint_recorder::FingerprintRecorder;
 use eo_services::healing_profile::HealingProfile;
 use eo_services::time::naive_to_epoch;
 use eo_services::tracker::{
-    damage_band_from_props, ActivityKey, ActivityRef, CarriedWeapon, CarriedWeaponProfile,
-    EquipmentLibrary, EquipmentProfile, HarvestGuardrailTools, HuntTracker, MismatchDecision,
-    Providers,
+    ActivityKey, ActivityRef, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary,
+    EquipmentProfile, HarvestGuardrailTools, HuntTracker, MismatchDecision, Providers,
 };
+use eo_services::weapon_effect::EFFECT_PROFILE_KEY;
 use eo_wire::db_snapshot::{capture, serialize};
 use eo_wire::normalizer::Normalizer;
 
@@ -194,7 +194,9 @@ enum ScriptedDecision {
 }
 
 /// One weapon a scenario carries (its optional `carried.json`): a stored
-/// weapon with a single impact damage figure and a per-shot decay in PEC.
+/// weapon with a single impact damage figure, a per-shot decay in PEC, and
+/// optionally the damage-over-time effect it declares (stored as Equipment
+/// stores it).
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptedWeapon {
@@ -202,6 +204,8 @@ struct ScriptedWeapon {
     name: String,
     damage: f64,
     decay: f64,
+    #[serde(default)]
+    effect_profile: Option<serde_json::Value>,
 }
 
 /// The equipment library a scenario's carried weapons make up.
@@ -243,19 +247,18 @@ fn load_carried(scenario: &Path) -> Vec<CarriedWeaponProfile> {
     weapons
         .into_iter()
         .map(|weapon| {
-            let props = serde_json::json!({
+            let mut props = serde_json::json!({
                 "weapon_entity": {
                     "name": weapon.name,
                     "damage": {"impact": weapon.damage},
                     "economy": {"decay": weapon.decay, "ammo_burn": 0}
                 }
             });
+            if let Some(effect) = weapon.effect_profile {
+                props[EFFECT_PROFILE_KEY] = effect;
+            }
             CarriedWeaponProfile {
-                weapon: CarriedWeapon {
-                    equipment_id: weapon.equipment_id,
-                    name: weapon.name,
-                    band: damage_band_from_props(&props),
-                },
+                weapon: CarriedWeapon::from_props(weapon.equipment_id, weapon.name, &props),
                 props: props.as_object().cloned().expect("an object"),
             }
         })
@@ -629,6 +632,11 @@ fn healing_effect_rotation_matches_the_goldens() {
 #[test]
 fn weapon_attribution_mismatch_matches_the_goldens() {
     replay_against_goldens("scripted", "weapon_attribution_mismatch", "");
+}
+
+#[test]
+fn dot_weapon_rotation_matches_the_goldens() {
+    replay_against_goldens("scripted", "dot_weapon_rotation", "");
 }
 
 #[test]

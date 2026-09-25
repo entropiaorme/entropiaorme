@@ -105,6 +105,7 @@
       "weapon_shots_evidenced": 0
     }
   ],
+  "weapon_effect_windows": [],
   "weapon_shot_evidence": [
     {
       "amount": 20.0,
@@ -114,6 +115,7 @@
       "correction_id": null,
       "cost_per_shot": 0.0,
       "critical": 0,
+      "effect_candidates": 0,
       "effect_window_id": null,
       "hotbar_tool": null,
       "id": "<UUID_4>",
@@ -132,6 +134,7 @@
       "correction_id": null,
       "cost_per_shot": 0.0,
       "critical": 0,
+      "effect_candidates": 0,
       "effect_window_id": null,
       "hotbar_tool": null,
       "id": "<UUID_5>",
@@ -150,6 +153,7 @@
       "correction_id": null,
       "cost_per_shot": 0.0,
       "critical": 1,
+      "effect_candidates": 0,
       "effect_window_id": null,
       "hotbar_tool": null,
       "id": "<UUID_6>",

@@ -201,6 +201,18 @@ impl Rig {
         .unwrap()
     }
 
+    pub(super) fn scalar_string(&self, sql: &'static str, binds: &[&str]) -> String {
+        let binds: Vec<String> = binds.iter().map(|bind| bind.to_string()).collect();
+        self.wait(self.db.with_reader(move |conn| {
+            Ok(
+                conn.query_row(sql, rusqlite::params_from_iter(binds.iter()), |row| {
+                    row.get::<_, String>(0)
+                })?,
+            )
+        }))
+        .unwrap()
+    }
+
     fn execute(&self, sql: &'static str) {
         self.wait(self.db.with_writer(move |conn| {
             conn.execute(sql, [])?;
@@ -265,11 +277,7 @@ pub(super) fn carried(id: i64, name: &str, damage: f64, decay: f64) -> CarriedWe
     .unwrap()
     .clone();
     CarriedWeaponProfile {
-        weapon: CarriedWeapon {
-            equipment_id: id,
-            name: name.to_string(),
-            band: damage_band_from_props(&Value::Object(props.clone())),
-        },
+        weapon: CarriedWeapon::from_props(id, name.to_string(), &Value::Object(props.clone())),
         props,
     }
 }

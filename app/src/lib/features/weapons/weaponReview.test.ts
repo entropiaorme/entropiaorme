@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { WeaponAttributionSummary, WeaponShot } from '$lib/api/weapons';
+import { formatClock } from '$lib/features/healing/healingReview';
 import {
 	attributionTally,
+	describeEffect,
 	describeReview,
 	describeShot,
+	effectTickLine,
 	formatDamage,
 	hasWeaponEvidence,
 	reviewGroups,
@@ -20,7 +23,11 @@ function summary(overrides: Partial<WeaponAttributionSummary> = {}): WeaponAttri
 		unresolved: 4,
 		unpriced: 3,
 		assigned: 1,
+		markedTicks: 0,
 		effectTicks: 0,
+		pricedTicks: 0,
+		unclaimedTicks: 0,
+		effects: [],
 		reviews: [],
 		...overrides,
 	};
@@ -29,6 +36,7 @@ function summary(overrides: Partial<WeaponAttributionSummary> = {}): WeaponAttri
 function shot(overrides: Partial<WeaponShot> = {}): WeaponShot {
 	return {
 		id: 'e1',
+		group: 'unresolved',
 		observedAt: 1000,
 		amount: 30,
 		critical: false,
@@ -41,7 +49,11 @@ function shot(overrides: Partial<WeaponShot> = {}): WeaponShot {
 			{ equipmentId: 2, name: 'Cannon', fits: true },
 			{ equipmentId: 3, name: 'Carbine', fits: true },
 		],
+		effectCandidates: [],
+		effectWindowId: null,
 		correctionId: null,
+		correctionKind: null,
+		correctionWindowId: null,
 		reviewDecision: null,
 		correctable: true,
 		...overrides,
@@ -80,6 +92,38 @@ describe('the attribution summary', () => {
 	it('offers only the groups with shots in them, unresolved first', () => {
 		expect(reviewGroups(summary()).map((g) => g.id)).toEqual(['unresolved', 'evidence']);
 		expect(reviewGroups(summary({ unresolved: 0 })).map((g) => g.id)).toEqual(['evidence']);
+		expect(reviewGroups(summary({ effectTicks: 21 })).map((g) => [g.id, g.count])).toEqual([
+			['unresolved', 4],
+			['evidence', 6],
+			['effect_tick', 21],
+		]);
+	});
+
+	it('has something to show when only an effect paid here ticked elsewhere', () => {
+		const quiet = summary({
+			agreed: 0,
+			evidenced: 0,
+			evidenceShots: 0,
+			unresolved: 0,
+		});
+		expect(hasWeaponEvidence(quiet)).toBe(false);
+		const effect = {
+			id: 'w',
+			toolName: 'Electrocution',
+			activatedAt: 1000,
+			expiresAt: 1025,
+			hitAmount: 129.2,
+			costPerShot: 4.8732,
+			paidHere: true,
+			withdrawn: false,
+			ticks: 0,
+			tickDamage: 0,
+		};
+		expect(hasWeaponEvidence({ ...quiet, effects: [effect] })).toBe(true);
+		expect(effectTickLine({ ticks: 21, tickDamage: 1183.8 })).toBe(
+			`21 ticks · ${(1183.8).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} damage`,
+		);
+		expect(effectTickLine({ ticks: 1, tickDamage: 50 })).toBe('1 tick · 50.0 damage');
 	});
 });
 
@@ -90,7 +134,7 @@ describe('a stored shot', () => {
 			'Fits no carried weapon (no hotbar press)',
 		);
 		expect(describeShot(shot({ amount: null }))).toBe(
-			'A jam, dodge, or evade with no weapon known (hotbar: Pistol)',
+			'A jam, dodge, evade, or miss with no weapon known (hotbar: Pistol)',
 		);
 		expect(
 			describeShot(shot({ candidates: [{ equipmentId: 2, name: 'Cannon', fits: true }] })),
@@ -98,6 +142,68 @@ describe('a stored shot', () => {
 		expect(describeShot(shot({ reviewDecision: 'kept', toolName: 'Pistol' }))).toBe(
 			'Fit Cannon, Carbine; you kept Pistol',
 		);
+	});
+
+	it('names the effect a tick belongs to, or the casts it could have been', () => {
+		const cast = { windowId: 'w1', toolName: 'Electrocution', activatedAt: 1000, standing: true };
+		const recast = { windowId: 'w2', toolName: 'Electrocution', activatedAt: 1010, standing: true };
+		expect(describeEffect(cast)).toBe(`Electrocution, cast ${formatClock(1000)}`);
+		const tick = shot({
+			group: 'effect_tick',
+			candidates: [],
+			effectCandidates: [cast],
+			effectWindowId: 'w1',
+		});
+		expect(describeShot(tick)).toBe(`A tick of Electrocution, cast ${formatClock(1000)}`);
+		expect(describeShot({ ...tick, effectWindowId: null, effectCandidates: [cast, recast] })).toBe(
+			'A tick shared by 2 overlapping casts of Electrocution',
+		);
+		expect(describeShot({ ...tick, effectCandidates: [{ ...cast, standing: false }] })).toBe(
+			`A tick of Electrocution, cast ${formatClock(1000)} (taken back)`,
+		);
+		expect(describeShot({ ...tick, effectWindowId: null })).toBe(
+			'A tick of a cast whose session was deleted',
+		);
+		expect(
+			describeShot(
+				shot({
+					candidates: [{ equipmentId: 1, name: 'Pistol', fits: true }],
+					effectCandidates: [cast],
+				}),
+			),
+		).toBe(`Fits Pistol, or a tick of Electrocution, cast ${formatClock(1000)} (hotbar: Pistol)`);
+		expect(describeShot(shot({ candidates: [], effectCandidates: [cast] }))).toBe(
+			`Could be a tick of Electrocution, cast ${formatClock(1000)} (hotbar: Pistol)`,
+		);
+	});
+
+	it('says where a tick stands', () => {
+		const cast = { windowId: 'w1', toolName: 'Electrocution', activatedAt: 1000, standing: true };
+		expect(shotStanding(shot({ group: 'effect_tick', effectWindowId: 'w1' }))).toEqual({
+			kind: 'tick',
+		});
+		expect(
+			shotStanding(
+				shot({
+					effectCandidates: [cast],
+					correctionId: 'c1',
+					correctionKind: 'effect_tick',
+					correctionWindowId: 'w1',
+				}),
+			),
+		).toEqual({ kind: 'marked', tool: 'Electrocution', correctionId: 'c1' });
+		// A tick priced as a shot stands like any assigned shot.
+		expect(
+			shotStanding(
+				shot({
+					group: 'effect_tick',
+					toolName: 'Cannon',
+					costPerShot: 0.2,
+					correctionId: 'c2',
+					correctionKind: 'priced',
+				}),
+			),
+		).toEqual({ kind: 'assigned', tool: 'Cannon', cost: 0.2, correctionId: 'c2' });
 	});
 
 	it('says where its price stands', () => {

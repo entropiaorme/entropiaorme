@@ -19,6 +19,7 @@ const band = (
 	max,
 	critMax: max * 3,
 	slot,
+	tick: null,
 });
 
 describe('damage ranges', () => {
@@ -36,9 +37,9 @@ describe('damage ranges', () => {
 				.getAllByRole(index === 0 ? 'columnheader' : 'cell')
 				.map((cell) => cell.textContent?.trim());
 		expect(rows.map(cells)).toEqual([
-			['Weapon', 'Hotbar slot', 'Hit', 'Critical reach'],
-			['Pistol', '1', '5.0–10.0', 'up to 30.0'],
-			['Rifle', 'None', '8.0–16.0', 'up to 48.0'],
+			['Weapon', 'Hotbar slot', 'Hit', 'Critical reach', 'Effect tick'],
+			['Pistol', '1', '5.0–10.0', 'up to 30.0', '\u2014'],
+			['Rifle', 'None', '8.0–16.0', 'up to 48.0', '\u2014'],
 		]);
 		expect(screen.getByTitle('Carried without a hotkey')).toBeTruthy();
 	});
@@ -52,6 +53,26 @@ describe('damage ranges', () => {
 		});
 		expect(screen.getByTestId('shared-ranges').textContent?.replace(/\s+/g, ' ')).toContain(
 			'Pistol and Rifle share 8.0\u201310.0',
+		);
+	});
+
+	it("bands an effect's ticks and says where they meet another weapon's hits", () => {
+		render(DamageRanges, {
+			props: {
+				banded: [
+					band('1', 'Cannon', 20, 40, '1'),
+					{ ...band('2', 'Zapper', 100, 160, '2'), tick: { min: 35, max: 75 } },
+				],
+				bandless: [],
+			},
+		});
+		const zapper = within(screen.getByRole('table'))
+			.getAllByRole('row')
+			.find((row) => row.textContent?.includes('Zapper'));
+		expect(zapper?.textContent).toContain('35.0–75.0');
+		expect(screen.getByText('Effect tick', { selector: 'span' })).toBeTruthy();
+		expect(screen.getByTestId('effect-overlaps').textContent?.replace(/\s+/g, ' ')).toContain(
+			"Zapper's ticks and Cannon's hits share 35.0\u201340.0: while the effect runs, a hit there with Cannon on your hotbar is left unpriced.",
 		);
 	});
 

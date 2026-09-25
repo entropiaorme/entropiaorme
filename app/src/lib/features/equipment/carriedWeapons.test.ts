@@ -5,6 +5,7 @@ import {
 	axisTicks,
 	CRITICAL_REACH,
 	carriedWeapons,
+	effectOverlaps,
 	formatRange,
 	sharedRanges,
 	weaponBands,
@@ -62,7 +63,15 @@ describe('the carried weapons', () => {
 	it('splits weapons with a damage figure from those without', () => {
 		const { banded, bandless } = weaponBands(carriedWeapons(library, { '1': 1 }, [5]));
 		expect(banded).toEqual([
-			{ id: '1', name: 'Pistol', min: 5, max: 10, critMax: 10 * CRITICAL_REACH, slot: '1' },
+			{
+				id: '1',
+				name: 'Pistol',
+				min: 5,
+				max: 10,
+				critMax: 10 * CRITICAL_REACH,
+				slot: '1',
+				tick: null,
+			},
 		]);
 		expect(bandless.map((w) => w.name)).toEqual(['Mystery']);
 	});
@@ -79,6 +88,53 @@ describe('the carried weapons', () => {
 			),
 		).banded;
 		expect(sharedRanges(touching)).toEqual([{ first: 'A', second: 'B', min: 10, max: 10 }]);
+	});
+
+	it('checks a weapon with an effect against what its cast prints, and bands its ticks', () => {
+		const zapper = {
+			...item('6', 'Zapper', 'weapon', 1000, 2000),
+			effectProfile: {
+				mode: 'compound' as const,
+				hitMin: 100,
+				hitMax: 160,
+				durationSeconds: 25,
+				tickMin: 35,
+				tickMax: 75,
+				tickSeconds: null,
+			},
+		};
+		const ticker = {
+			...item('7', 'Ticker', 'weapon', null, null),
+			effectProfile: {
+				...zapper.effectProfile,
+				mode: 'over_time' as const,
+				hitMin: null,
+				hitMax: null,
+			},
+		};
+		const { banded, bandless } = weaponBands(
+			carriedWeapons([...library, zapper, ticker], { '1': 2, '2': 6 }, [7]),
+		);
+		expect(bandless).toEqual([]);
+		expect(banded.find((band) => band.name === 'Zapper')).toMatchObject({
+			min: 100,
+			max: 160,
+			critMax: 160 * CRITICAL_REACH,
+			tick: { min: 35, max: 75 },
+		});
+		// With only ticks, the first tick is what a cast prints.
+		expect(banded.find((band) => band.name === 'Ticker')).toMatchObject({
+			min: 35,
+			max: 75,
+			tick: { min: 35, max: 75 },
+		});
+		// The cannon's 20-40 hits overlap both effects' ticks; an effect's
+		// own cast never counts against it.
+		expect(effectOverlaps(banded)).toEqual([
+			{ effect: 'Zapper', weapon: 'Cannon', min: 35, max: 40 },
+			{ effect: 'Zapper', weapon: 'Ticker', min: 35, max: 75 },
+			{ effect: 'Ticker', weapon: 'Cannon', min: 35, max: 40 },
+		]);
 	});
 
 	it('formats ranges and axis ticks for reading', () => {

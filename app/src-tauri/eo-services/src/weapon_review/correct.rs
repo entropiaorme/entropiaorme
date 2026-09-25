@@ -6,7 +6,7 @@
 
 use rusqlite::OptionalExtension;
 
-use super::read::weapon_price;
+use super::read::{parse_candidates, weapon_price};
 use super::{WeaponCorrection, WeaponReviewError};
 use crate::db::DbError;
 
@@ -24,6 +24,7 @@ struct StoredShot {
     amount: Option<f64>,
     critical: bool,
     correction_id: Option<String>,
+    candidates: String,
 }
 
 fn stored_shot(
@@ -32,7 +33,8 @@ fn stored_shot(
 ) -> Result<Option<StoredShot>, DbError> {
     Ok(tx
         .query_row(
-            "SELECT session_id, kill_id, attribution, tool_name, amount, critical, correction_id \
+            "SELECT session_id, kill_id, attribution, tool_name, amount, critical, correction_id, \
+                    candidates_json \
              FROM weapon_shot_evidence WHERE id = ?1",
             [evidence_id],
             |row| {
@@ -44,6 +46,7 @@ fn stored_shot(
                     amount: row.get(4)?,
                     critical: row.get(5)?,
                     correction_id: row.get(6)?,
+                    candidates: row.get(7)?,
                 })
             },
         )
@@ -212,6 +215,17 @@ pub(super) fn assign(
     }
     if let Some(refusal) = session_refusal(tx, &shot.session_id)? {
         return Ok(Err(refusal));
+    }
+    // The review offers only the weapons carried when the shot landed; the
+    // same rule holds here, whatever the caller sends.
+    match parse_candidates(&shot.candidates) {
+        Ok(candidates) if candidates.iter().any(|c| c.equipment_id == equipment_id) => {}
+        Ok(_) => {
+            return Ok(Err(WeaponReviewError::Invalid(
+                "Only a weapon carried when the shot landed can be assigned",
+            )));
+        }
+        Err(refusal) => return Ok(Err(refusal)),
     }
     let Some((name, cost)) = (match weapon_price(tx, equipment_id) {
         Ok(price) => price,

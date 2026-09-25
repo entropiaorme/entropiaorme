@@ -13,6 +13,10 @@ const PISTOL: i64 = 1;
 const CANNON: i64 = 2;
 /// Not a weapon.
 const FAP: i64 = 3;
+/// A weapon in Equipment that no seeded shot was fired while carrying.
+const RIFLE: i64 = 4;
+/// Carried when the shots landed, since removed from Equipment.
+const SOLD_RIFLE: i64 = 99;
 
 struct Harness {
     _dir: tempfile::TempDir,
@@ -39,7 +43,9 @@ async fn harness() -> Harness {
                 '{"weapon_entity": {"damage": {"impact": 10}, "economy": {"decay": 5.0, "ammo_burn": 0}}}'),
                (2, 'Cannon', 'weapon',
                 '{"weapon_entity": {"damage": {"impact": 40}, "economy": {"decay": 20.0, "ammo_burn": 0}}}'),
-               (3, 'FAP', 'healing', '{}');"#,
+               (3, 'FAP', 'healing', '{}'),
+               (4, 'Rifle', 'weapon',
+                '{"weapon_entity": {"damage": {"impact": 16}, "economy": {"decay": 10.0, "ammo_burn": 0}}}');"#,
         )?;
         Ok(())
     })
@@ -57,7 +63,7 @@ fn candidates() -> String {
     serde_json::json!([
         {"equipmentId": PISTOL, "name": "Pistol", "fits": false},
         {"equipmentId": CANNON, "name": "Cannon", "fits": true},
-        {"equipmentId": 99, "name": "Sold rifle", "fits": true},
+        {"equipmentId": SOLD_RIFLE, "name": "Sold rifle", "fits": true},
     ])
     .to_string()
 }
@@ -349,7 +355,15 @@ async fn assignments_are_refused_where_they_would_not_be_honest() {
         "Only a shot no weapon explained can be assigned"
     );
     assert_eq!(
+        refusal(h.service.assign("s-u1", RIFLE).await),
+        "Only a weapon carried when the shot landed can be assigned"
+    );
+    assert_eq!(
         refusal(h.service.assign("s-u1", FAP).await),
+        "Only a weapon carried when the shot landed can be assigned"
+    );
+    assert_eq!(
+        refusal(h.service.assign("s-u1", SOLD_RIFLE).await),
         "That weapon is no longer in Equipment"
     );
     assert_eq!(

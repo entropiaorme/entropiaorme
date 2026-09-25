@@ -541,13 +541,22 @@ fn normalize_hotbar(raw: Option<&Value>) -> Map<String, Value> {
     hotbar
 }
 
+/// The most weapons carried without a hotkey that the config keeps: far
+/// beyond any real loadout, and a bound on the work every read repeats.
+const MAX_CARRIED_WEAPONS: usize = 64;
+
 /// Normalise stored or submitted carried weapons: positive integer ids,
-/// each once, in the order given. Anything else is skipped.
+/// each once, in the order given, up to `MAX_CARRIED_WEAPONS`. Anything
+/// else is skipped.
 fn normalize_carried_weapon_ids(raw: Option<&Value>) -> Vec<i64> {
     let mut ids: Vec<i64> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if let Some(Value::Array(entries)) = raw {
         for id in entries.iter().filter_map(Value::as_i64) {
-            if id > 0 && !ids.contains(&id) {
+            if ids.len() == MAX_CARRIED_WEAPONS {
+                break;
+            }
+            if id > 0 && seen.insert(id) {
                 ids.push(id);
             }
         }
@@ -869,6 +878,10 @@ mod tests {
         assert_eq!(normalize_carried_weapon_ids(Some(&raw)), vec![4, 9]);
         assert!(normalize_carried_weapon_ids(Some(&serde_json::json!({"1": 2}))).is_empty());
         assert!(normalize_carried_weapon_ids(None).is_empty());
+        let many = serde_json::json!((1..=MAX_CARRIED_WEAPONS as i64 + 10).collect::<Vec<_>>());
+        let kept = normalize_carried_weapon_ids(Some(&many));
+        assert_eq!(kept.len(), MAX_CARRIED_WEAPONS);
+        assert_eq!(kept.last(), Some(&(MAX_CARRIED_WEAPONS as i64)));
 
         let dir = tempfile::tempdir().unwrap();
         let mut svc = service(dir.path());

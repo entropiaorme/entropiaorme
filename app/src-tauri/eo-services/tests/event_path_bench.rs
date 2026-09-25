@@ -223,6 +223,7 @@ fn label(event: &BusEvent) -> &'static str {
         BusEvent::ScanStatusChanged(_) => "scan_status_changed",
         BusEvent::HarvestRecorded(_) => "harvest_recorded",
         BusEvent::NavigationUpdated(_) => "navigation_updated",
+        BusEvent::ProtectionUpdated(_) => "protection_updated",
     }
 }
 

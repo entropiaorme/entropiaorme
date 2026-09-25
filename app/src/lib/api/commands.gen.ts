@@ -2184,11 +2184,27 @@ export interface ProtectionCandidateSession {
 	unrecorded: boolean;
 }
 
+/**
+ * One stretch of a session's share of a recording.
+ */
+export interface ProtectionContextShare {
+	/** The segment and quest names in force; absent outside any. */
+	label: string | null;
+	hitCount: number;
+	costPed: number;
+}
+
 export interface ProtectionCostAllocation {
 	sessionId: string;
+	sessionName: string | null;
+	/** The session type it was played under; absent for none. */
+	definitionName: string | null;
+	startedAt: number;
 	hitCount: number;
 	allocationShare: number;
 	costPed: number;
+	/** The session's share by the stretch of play its hits landed in. */
+	contexts: ProtectionContextShare[];
 }
 
 export type ProtectionCostKind = 'limitedDecay' | 'repair';
@@ -2207,6 +2223,10 @@ export interface ProtectionCostWindow {
 	status: ProtectionCostStatus;
 	reason: string | null;
 	createdAt: number;
+	/** When it was undone; an undone recording costs nothing. */
+	supersededAt: number | null;
+	/** The latest live recording of its stream, so it can be undone. */
+	undoable: boolean;
 	allocations: ProtectionCostAllocation[];
 }
 
@@ -2218,6 +2238,8 @@ export interface ProtectionObservation {
 	rawText: string | null;
 	observedAt: number;
 	resetReason: string | null;
+	/** It measured a loss against the reading before it; a baseline or a reset measures nothing. */
+	measured: boolean;
 }
 
 export interface ProtectionObservationInput {
@@ -2240,6 +2262,8 @@ export type ProtectionObservationSource = 'ocr' | 'manual';
 
 export interface ProtectionOverview {
 	sets: ProtectionSet[];
+	/** Removed limited sets, newest removal first; each can be restored. */
+	removedSets: ProtectionSet[];
 	/** The pooled unlimited repair stream's lag. */
 	unlimited: ProtectionBacklog;
 	recentCostWindows: ProtectionCostWindow[];
@@ -2324,6 +2348,17 @@ export type ProtectionStream = {
 	} | {
 		setId: number;
 		kind: 'limited';
+	};
+
+/**
+ * What an undo takes back: the latest recording of one stream.
+ */
+export type ProtectionUndoTarget = {
+		windowId: number;
+		kind: 'recording';
+	} | {
+		observationId: number;
+		kind: 'reading';
 	};
 
 /**
@@ -3307,6 +3342,24 @@ export async function protectionSetUpdate(setId: number, input: ProtectionSetUpd
 
 export async function protectionSetArchive(setId: number): Promise<ProtectionOverview> {
 	return invokeCommand('protection_set_archive', { set_id: setId });
+}
+
+export async function protectionSetRestore(setId: number): Promise<ProtectionOverview> {
+	return invokeCommand('protection_set_restore', { set_id: setId });
+}
+
+export async function protectionUndo(target: {
+		windowId: number;
+		kind: 'recording';
+	} | {
+		observationId: number;
+		kind: 'reading';
+	}): Promise<ProtectionOverview> {
+	return invokeCommand('protection_undo', { target });
+}
+
+export async function protectionUnrecordedSessions(sessionIds: string[]): Promise<string[]> {
+	return invokeCommand('protection_unrecorded_sessions', { session_ids: sessionIds });
 }
 
 export async function protectionSessionStatus(sessionId: string): Promise<ProtectionSessionStatus> {

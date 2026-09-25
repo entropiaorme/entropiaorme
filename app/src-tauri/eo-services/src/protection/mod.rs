@@ -23,6 +23,9 @@ mod recording;
 mod sets;
 #[cfg(test)]
 mod tests;
+mod undo;
+#[cfg(test)]
+mod undo_tests;
 
 use std::sync::Arc;
 
@@ -166,13 +169,33 @@ pub struct ProtectionObservation {
     pub raw_text: Option<String>,
     pub observed_at: f64,
     pub reset_reason: Option<String>,
+    /// The reading measured a loss against the one before it. A baseline
+    /// or a reset measures nothing.
+    pub measured: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtectionCostAllocation {
     pub session_id: String,
+    pub session_name: Option<String>,
+    /// The session type it was played under; absent for none.
+    pub definition_name: Option<String>,
+    pub started_at: f64,
     pub hit_count: i64,
     pub allocation_share: f64,
+    pub cost_ped: f64,
+    /// How the session's share split over the stretches of play its hits
+    /// landed in, in the order they were opened.
+    pub contexts: Vec<ContextShare>,
+}
+
+/// One stretch of a session's share of a recording.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextShare {
+    /// The segment and quest names in force; absent for hits taken
+    /// outside any named stretch.
+    pub label: Option<String>,
+    pub hit_count: i64,
     pub cost_ped: f64,
 }
 
@@ -190,7 +213,22 @@ pub struct ProtectionCostWindow {
     pub status: CostStatus,
     pub reason: Option<String>,
     pub created_at: f64,
+    /// When the recording was undone; an undone recording costs nothing
+    /// and stays only as provenance.
+    pub superseded_at: Option<f64>,
+    /// It is the latest live recording of its stream, so it can be undone.
+    pub undoable: bool,
     pub allocations: Vec<ProtectionCostAllocation>,
+}
+
+/// What an undo takes back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoTarget {
+    /// A recorded cost: an unlimited repair, or the limited reading that
+    /// measured it.
+    Recording { window_id: i64 },
+    /// A limited reading that booked nothing: a baseline or a reset.
+    Reading { observation_id: i64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +302,9 @@ pub struct UnrecordedProtection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtectionOverview {
     pub sets: Vec<ProtectionSet>,
+    /// Limited sets removed from the recording surface, newest removal
+    /// first; each can be restored.
+    pub removed_sets: Vec<ProtectionSet>,
     /// The pooled unlimited repair stream's lag.
     pub unlimited: StreamBacklog,
     pub recent_cost_windows: Vec<ProtectionCostWindow>,
@@ -290,14 +331,34 @@ impl From<rusqlite::Error> for ProtectionError {
     }
 }
 
+/// Told after any protection write commits, so other surfaces can re-read.
+pub type ChangedSink = Arc<dyn Fn() + Send + Sync>;
+
 pub struct ProtectionService {
     db: Db,
     clock: Arc<dyn Clock>,
+    changed: Option<ChangedSink>,
 }
 
 impl ProtectionService {
     pub fn new(db: Db, clock: Arc<dyn Clock>) -> Self {
-        Self { db, clock }
+        Self {
+            db,
+            clock,
+            changed: None,
+        }
+    }
+
+    /// Announce every committed write through `changed`.
+    pub fn with_changed(mut self, changed: ChangedSink) -> Self {
+        self.changed = Some(changed);
+        self
+    }
+
+    fn notify_changed(&self) {
+        if let Some(changed) = &self.changed {
+            changed();
+        }
     }
 
     fn now(&self) -> f64 {
@@ -335,6 +396,25 @@ impl ProtectionService {
         self.db
             .with_reader(move |conn| {
                 read::session_unrecorded_hits(conn, &session_id).map_err(Into::into)
+            })
+            .await
+            .map_err(ProtectionError::from)
+    }
+
+    /// Which of `session_ids` have recorded hits no protection cost
+    /// reaches yet, so a session list can mark their cost as incomplete.
+    pub async fn sessions_with_unrecorded_hits(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<String>, ProtectionError> {
+        self.db
+            .with_reader(move |conn| {
+                let unrecorded = read::sessions_with_unrecorded_hits(conn, &session_ids)?;
+                // Keep the caller's order, so the answer reads like its page.
+                Ok(session_ids
+                    .into_iter()
+                    .filter(|id| unrecorded.contains(id))
+                    .collect())
             })
             .await
             .map_err(ProtectionError::from)

@@ -313,6 +313,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session grain protection costs",
         sql: include_str!("../../migrations/0055_session_grain_protection_costs.sql"),
     },
+    Migration {
+        version: 56,
+        description: "protection recording undo",
+        sql: include_str!("../../migrations/0056_protection_recording_undo.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -376,6 +381,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "44F7DCA5C01DE16671062A14175F318FB4EB7720327303E5F9438DD957130F60CF42D3C47910BCA27816B0F05422202A",
     "DE89CC822BFD6A6BB728B669B2F198DB7DD80048D60ACE1957B03F54CF58C5403F5C74C5B6B423899513AB389742C435",
     "828E7C8B43DFA748063DFFF3AE648B9E9DEF29432B6CDA627558FE42B9DC8209B19B14392F495D16C9B014BFF53BCCFF",
+    "36A5E18AF53F84859A0F2CECAF44335F37EF5F9159649871D91DE8D65E1CCC6CC50CE5DDB5F1AD3B844AF49EAE0AA56F",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

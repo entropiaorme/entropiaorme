@@ -18,6 +18,7 @@ pub const TOPIC_TRACKING_SESSION_UPDATED: &str = "tracking.session.updated";
 pub const TOPIC_SCAN_STATUS_CHANGED: &str = "scan.status.changed";
 pub const TOPIC_HARVEST_RECORDED: &str = "harvest.recorded";
 pub const TOPIC_NAVIGATION_UPDATED: &str = "navigation.updated";
+pub const TOPIC_PROTECTION_UPDATED: &str = "protection.updated";
 
 /// A field that serialises to exactly one topic literal and refuses any
 /// other input: the discriminator the union routes on, kept closed so a
@@ -50,6 +51,7 @@ topic_tag!(TrackingSessionUpdatedTag, "tracking.session.updated");
 topic_tag!(ScanStatusChangedTag, "scan.status.changed");
 topic_tag!(HarvestRecordedTag, "harvest.recorded");
 topic_tag!(NavigationUpdatedTag, "navigation.updated");
+topic_tag!(ProtectionUpdatedTag, "protection.updated");
 
 fn default_event_version() -> i64 {
     1
@@ -159,6 +161,24 @@ pub struct NavigationUpdated {
     pub payload: NavigationUpdatedPayload,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectionUpdatedPayload {}
+
+/// A protection cost was recorded or undone, or a limited set changed:
+/// session armour costs and the protection overview may have moved.
+/// Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectionUpdated {
+    #[serde(rename = "type")]
+    pub topic: ProtectionUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: ProtectionUpdatedPayload,
+}
+
 /// The discriminated union of every frontend-facing domain event. The
 /// untagged dispatch is made exact by the closed topic-tag fields: a
 /// frame routes to the one variant whose `type` literal it carries, and
@@ -171,6 +191,7 @@ pub enum DomainEvent {
     ScanStatusChanged(ScanStatusChanged),
     HarvestRecorded(HarvestRecorded),
     NavigationUpdated(NavigationUpdated),
+    ProtectionUpdated(ProtectionUpdated),
 }
 
 impl DomainEvent {
@@ -181,6 +202,7 @@ impl DomainEvent {
             DomainEvent::ScanStatusChanged(_) => TOPIC_SCAN_STATUS_CHANGED,
             DomainEvent::HarvestRecorded(_) => TOPIC_HARVEST_RECORDED,
             DomainEvent::NavigationUpdated(_) => TOPIC_NAVIGATION_UPDATED,
+            DomainEvent::ProtectionUpdated(_) => TOPIC_PROTECTION_UPDATED,
         }
     }
 
@@ -261,6 +283,20 @@ mod tests {
             payload: NavigationUpdatedPayload {},
         });
         assert_eq!(event.to_wire_json(), "{\"type\":\"navigation.updated\",\"event_version\":1,\"occurred_at\":\"2026-07-19T08:00:00+00:00\",\"payload\":{}}");
+    }
+
+    #[test]
+    fn protection_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::ProtectionUpdated(ProtectionUpdated {
+            topic: ProtectionUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-09-25T08:00:00+00:00".into(),
+            payload: ProtectionUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"protection.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_PROTECTION_UPDATED);
     }
 
     #[test]

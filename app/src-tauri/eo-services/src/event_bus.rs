@@ -43,6 +43,7 @@ pub enum Topic {
     ScanStatusChanged,
     HarvestRecorded,
     NavigationUpdated,
+    ProtectionUpdated,
 }
 
 impl Topic {
@@ -67,6 +68,7 @@ impl Topic {
             Topic::ScanStatusChanged => eo_wire::domain_events::TOPIC_SCAN_STATUS_CHANGED,
             Topic::HarvestRecorded => eo_wire::domain_events::TOPIC_HARVEST_RECORDED,
             Topic::NavigationUpdated => eo_wire::domain_events::TOPIC_NAVIGATION_UPDATED,
+            Topic::ProtectionUpdated => eo_wire::domain_events::TOPIC_PROTECTION_UPDATED,
         }
     }
 }

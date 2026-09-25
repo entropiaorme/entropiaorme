@@ -1,12 +1,31 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Button, Divider, ErrorNotice, Input, Modal } from '$lib/components';
 	import type { ProtectionBacklog, ProtectionCostWindow } from '$lib/api';
 	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { formatPed } from '$lib/utils/format';
 	import { formatDay, formatSessionStart } from './armourRecording';
+	import ProtectionRecordingDetail from './ProtectionRecordingDetail.svelte';
 	import type { ProtectionModel } from './protectionModel.svelte';
 
 	let { model }: { model: ProtectionModel } = $props();
+
+	let showRemoved = $state(false);
+
+	// Recordings land from the overlay's Cost popup, a different window: follow
+	// every protection write so this tab never shows a stale cost.
+	onMount(() => {
+		let stop: (() => void) | undefined;
+		let disposed = false;
+		void model.subscribe().then((unlisten) => {
+			if (disposed) unlisten();
+			else stop = unlisten;
+		});
+		return () => {
+			disposed = true;
+			stop?.();
+		};
+	});
 
 	const unrecorded = $derived(model.overview.unrecorded);
 	const unlimited = $derived(model.overview.unlimited);
@@ -23,6 +42,7 @@
 	}
 
 	function windowDetail(window: ProtectionCostWindow): string {
+		if (window.supersededAt !== null) return `Undone ${formatDay(window.supersededAt)}`;
 		if (!window.costKnown) return 'A baseline reset left this reading unmeasured';
 		if (window.allocations.length === 0) return 'Not attributed to any session';
 		const sessions = window.allocations.length;
@@ -107,6 +127,9 @@
 											{/if}
 										</div>
 										<div class="flex items-center gap-1 opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+											{#if set.latestObservation && !set.latestObservation.measured}
+												<Button variant="ghost" size="sm" onclick={() => model.askUndoReading(set)}>Undo reading</Button>
+											{/if}
 											<Button variant="ghost" size="sm" onclick={() => model.editSet(set)}>Edit</Button>
 											<Button variant="ghost" size="sm" class="text-error" onclick={() => model.askRemoveSet(set)}>Remove</Button>
 										</div>
@@ -117,6 +140,29 @@
 					</section>
 				{/each}
 			</div>
+			{#if model.removedSets.length > 0}
+				<button
+					type="button"
+					class="mt-4 text-xs text-text-tertiary hover:text-text-secondary focus-visible:text-text-secondary"
+					aria-expanded={showRemoved}
+					aria-controls="protection-removed-sets"
+					onclick={() => (showRemoved = !showRemoved)}
+				>
+					{showRemoved ? 'Hide' : 'Show'} removed sets ({model.removedSets.length})
+				</button>
+				{#if showRemoved}
+					<div id="protection-removed-sets" class="mt-2 divide-y divide-border/60 border-y border-border/70">
+						{#each model.removedSets as set (set.id)}
+							<div class="flex items-center gap-3 py-2 text-xs">
+								<span class="min-w-0 flex-1 truncate text-text-secondary">{set.name}</span>
+								<span class="text-text-tertiary">{set.kind === 'armour' ? 'Armour' : 'Plates'}</span>
+								<span class="w-28 text-right tabular-nums text-text-tertiary">{set.markupPercent.toFixed(2)}% MU</span>
+								<Button variant="ghost" size="sm" onclick={() => model.restoreSet(set)} disabled={model.saving}>Restore</Button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			{/if}
 		</section>
 
 		{#if model.overview.recentCostWindows.length > 0}
@@ -125,18 +171,46 @@
 				<h3 id="protection-history-heading" class="mb-3 text-sm font-semibold text-text">Recent armour costs</h3>
 				<div class="divide-y divide-border/60 border-y border-border/70">
 					{#each model.overview.recentCostWindows as window (window.id)}
-						<div class="grid grid-cols-[minmax(0,1fr)_110px_100px_70px] items-center gap-4 py-2.5 text-xs">
-							<div class="min-w-0">
-								<span class="font-medium text-text">{windowTitle(window)}</span>
-								<div class="truncate text-text-tertiary">{windowDetail(window)}</div>
+						{@const undone = window.supersededAt !== null}
+						{@const expanded = model.expandedWindowId === window.id}
+						{@const reviewable = window.allocations.length > 0}
+						<div class="py-2.5 text-xs">
+							<div class="grid grid-cols-[minmax(0,1fr)_110px_100px_70px_64px] items-center gap-4">
+								<div class="min-w-0">
+									{#if reviewable}
+										<button
+											type="button"
+											class="flex max-w-full items-baseline gap-1.5 text-left font-medium {undone ? 'text-text-tertiary' : 'text-text'} hover:underline focus-visible:underline"
+											aria-expanded={expanded}
+											aria-controls={`protection-recording-${window.id}`}
+											onclick={() => model.toggleWindow(window.id)}
+										>
+											<span class="truncate">{windowTitle(window)}</span>
+											<span class="text-[10px] text-text-tertiary transition-transform {expanded ? 'rotate-90' : ''}" aria-hidden="true">›</span>
+										</button>
+									{:else}
+										<span class="font-medium {undone ? 'text-text-tertiary' : 'text-text'}">{windowTitle(window)}</span>
+									{/if}
+									<div class="truncate text-text-tertiary">{windowDetail(window)}</div>
+								</div>
+								<div class="tabular-nums {undone ? 'text-text-tertiary' : 'text-text-secondary'}">
+									{#if window.kind === 'limitedDecay' && window.costKnown && window.consumedTtPed !== null}
+										{window.consumedTtPed.toFixed(2)} TT lost
+									{/if}
+								</div>
+								<div class="text-right tabular-nums font-medium {undone ? 'text-text-tertiary line-through' : 'text-text'}">{window.costKnown ? `${formatPed(window.costPed)} PED` : 'Unknown'}</div>
+								<div class="text-right tabular-nums text-text-tertiary">{formatDay(window.createdAt)}</div>
+								<div class="text-right">
+									{#if window.undoable}
+										<Button variant="ghost" size="sm" onclick={() => model.askUndoWindow(window)} disabled={model.saving}>Undo</Button>
+									{/if}
+								</div>
 							</div>
-							<div class="tabular-nums text-text-secondary">
-								{#if window.kind === 'limitedDecay' && window.costKnown && window.consumedTtPed !== null}
-									{window.consumedTtPed.toFixed(2)} TT lost
-								{/if}
-							</div>
-							<div class="text-right tabular-nums font-medium text-text">{window.costKnown ? `${formatPed(window.costPed)} PED` : 'Unknown'}</div>
-							<div class="text-right tabular-nums text-text-tertiary">{formatDay(window.createdAt)}</div>
+							{#if expanded && reviewable}
+								<div id={`protection-recording-${window.id}`}>
+									<ProtectionRecordingDetail {window} />
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>
@@ -170,11 +244,24 @@
 	</div>
 </Modal>
 
+<Modal bind:open={model.undoModalOpen} title={model.pendingUndo?.title ?? 'Undo recording'}>
+	{#if model.pendingUndo}
+		<div class="space-y-5">
+			<p class="text-sm text-text-secondary">{model.pendingUndo.detail}</p>
+			<p class="text-xs text-text-tertiary">To correct it, undo it here and record it again from the overlay's Cost button.</p>
+			<div class="flex justify-end gap-2">
+				<Button variant="secondary" onclick={() => (model.undoModalOpen = false)} disabled={model.saving}>Cancel</Button>
+				<Button variant="danger" onclick={model.confirmUndo} loading={model.saving}>Undo</Button>
+			</div>
+		</div>
+	{/if}
+</Modal>
+
 <Modal bind:open={model.removalModalOpen} title="Remove limited set">
 	{#if model.removalTarget}
 		<div class="space-y-5">
 			<p class="text-sm text-text-secondary">
-				Remove <span class="font-medium text-text">{model.removalTarget.name}</span> from the Cost popup? The costs it recorded keep its name.
+				Remove <span class="font-medium text-text">{model.removalTarget.name}</span> from the Cost popup? The costs it recorded keep its name, and it can be restored later.
 			</p>
 			<div class="flex justify-end gap-2">
 				<Button variant="secondary" onclick={() => (model.removalModalOpen = false)} disabled={model.saving}>Cancel</Button>

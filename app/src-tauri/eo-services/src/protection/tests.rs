@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::*;
 use crate::clock::MockClock;
 
-async fn harness() -> (tempfile::TempDir, Db, Arc<MockClock>, ProtectionService) {
+pub(super) async fn harness() -> (tempfile::TempDir, Db, Arc<MockClock>, ProtectionService) {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = Db::open(&dir.path().join("test.db"))
         .await
@@ -15,7 +15,7 @@ async fn harness() -> (tempfile::TempDir, Db, Arc<MockClock>, ProtectionService)
 
 /// A played session: its hits, grouped by the context each landed in.
 /// `None` is a hit recorded outside any context.
-struct Played<'a> {
+pub(super) struct Played<'a> {
     id: &'a str,
     started_at: f64,
     definition: Option<(i64, &'a str)>,
@@ -23,7 +23,7 @@ struct Played<'a> {
 }
 
 impl<'a> Played<'a> {
-    fn new(id: &'a str, started_at: f64, hits: &'a [(Option<&'a str>, i64)]) -> Self {
+    pub(super) fn new(id: &'a str, started_at: f64, hits: &'a [(Option<&'a str>, i64)]) -> Self {
         Self {
             id,
             started_at,
@@ -32,7 +32,7 @@ impl<'a> Played<'a> {
         }
     }
 
-    fn under(mut self, definition_id: i64, name: &'a str) -> Self {
+    pub(super) fn under(mut self, definition_id: i64, name: &'a str) -> Self {
         self.definition = Some((definition_id, name));
         self
     }
@@ -40,7 +40,7 @@ impl<'a> Played<'a> {
 
 /// Record a finished session and its hits. Contexts are created per
 /// label, so one label names one segment of the session.
-async fn play(db: &Db, played: Played<'_>) {
+pub(super) async fn play(db: &Db, played: Played<'_>) {
     let id = played.id.to_string();
     let started_at = played.started_at;
     let definition = played.definition.map(|(id, name)| (id, name.to_string()));
@@ -99,7 +99,7 @@ async fn play(db: &Db, played: Played<'_>) {
     .expect("play session");
 }
 
-async fn session_armour(db: &Db, session_id: &str) -> f64 {
+pub(super) async fn session_armour(db: &Db, session_id: &str) -> f64 {
     let session_id = session_id.to_string();
     db.with_reader(move |conn| {
         Ok(conn.query_row(
@@ -113,7 +113,7 @@ async fn session_armour(db: &Db, session_id: &str) -> f64 {
 }
 
 /// Each context's summed allocation for a session, oldest context first.
-async fn context_costs(db: &Db, session_id: &str) -> Vec<f64> {
+pub(super) async fn context_costs(db: &Db, session_id: &str) -> Vec<f64> {
     let session_id = session_id.to_string();
     db.with_reader(move |conn| {
         let mut stmt = conn.prepare(
@@ -129,15 +129,15 @@ async fn context_costs(db: &Db, session_id: &str) -> Vec<f64> {
     .expect("context costs")
 }
 
-fn ids(candidates: &[CandidateSession]) -> Vec<&str> {
+pub(super) fn ids(candidates: &[CandidateSession]) -> Vec<&str> {
     candidates.iter().map(|c| c.session_id.as_str()).collect()
 }
 
-fn close(a: f64, b: f64) -> bool {
+pub(super) fn close(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
 }
 
-async fn limited(service: &ProtectionService, name: &str, markup: f64) -> ProtectionSet {
+pub(super) async fn limited(service: &ProtectionService, name: &str, markup: f64) -> ProtectionSet {
     service
         .create_set(ProtectionSetKind::Armour, name, markup)
         .await

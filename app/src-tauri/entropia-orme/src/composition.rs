@@ -898,26 +898,46 @@ async fn compose_with(
     // a codex claim suppresses on, and the manual-scan state machine +
     // spacebar listener the scan family drives), so the facade and the
     // producer spine serve over the same live instances.
-    let api = Arc::new(eo_api::Api::new(
-        db.clone(),
-        game_data.clone(),
-        clock.clone(),
-        data_dir.clone(),
-        producers.config_service_handle(),
-        producers.tracker_handle(),
-        producers.hotbar_handle(),
-        producers.watcher_handle(),
-        producers.skill_tracker_handle(),
-        skill_scan.clone(),
-        spacebar_listener.clone(),
-        repair_ocr.clone(),
-        sale_window_ocr.clone(),
-        producers.quests_handle(),
-        demo_db_path,
-        planet_maps,
-        Some(coord_capture.clone()),
-        Some(navigation.0),
-    ));
+    let api = Arc::new(
+        eo_api::Api::new(
+            db.clone(),
+            game_data.clone(),
+            clock.clone(),
+            data_dir.clone(),
+            producers.config_service_handle(),
+            producers.tracker_handle(),
+            producers.hotbar_handle(),
+            producers.watcher_handle(),
+            producers.skill_tracker_handle(),
+            skill_scan.clone(),
+            spacebar_listener.clone(),
+            repair_ocr.clone(),
+            sale_window_ocr.clone(),
+            producers.quests_handle(),
+            demo_db_path,
+            planet_maps,
+            Some(coord_capture.clone()),
+            Some(navigation.0),
+        )
+        .with_protection_changed({
+            // Recording happens in the overlay's Cost popup while Equipment,
+            // History, and the dashboard may be open elsewhere: each re-reads
+            // on this signal rather than holding a stale armour cost.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    ProtectionUpdated, ProtectionUpdatedPayload, ProtectionUpdatedTag,
+                };
+                bus.publish(&BusEvent::ProtectionUpdated(ProtectionUpdated {
+                    topic: ProtectionUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: ProtectionUpdatedPayload {},
+                }));
+            })
+        }),
+    );
     Composition::Ready(Composed {
         db,
         api,
@@ -1528,6 +1548,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::ScanStatusChanged,
         Topic::HarvestRecorded,
         Topic::NavigationUpdated,
+        Topic::ProtectionUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1542,6 +1563,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             }
             BusEvent::NavigationUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::NavigationUpdated(envelope.clone()));
+            }
+            BusEvent::ProtectionUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::ProtectionUpdated(envelope.clone()));
             }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.

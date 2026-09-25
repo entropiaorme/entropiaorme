@@ -251,4 +251,14 @@ impl Api {
             demo: tokio::sync::OnceCell::new(),
         }
     }
+
+    /// Announce every committed protection write through `changed`, so
+    /// surfaces showing armour costs can re-read them.
+    pub fn with_protection_changed(
+        mut self,
+        changed: eo_services::protection::ChangedSink,
+    ) -> Self {
+        self.protection = self.protection.with_changed(changed);
+        self
+    }
 }

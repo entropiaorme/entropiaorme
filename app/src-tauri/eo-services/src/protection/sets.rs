@@ -51,6 +51,7 @@ impl ProtectionService {
             })
             .await
             .map_err(map_constraint("An active set already uses that name"))?;
+        self.notify_changed();
         self.active_set(id).await
     }
 
@@ -82,6 +83,7 @@ impl ProtectionService {
             })
             .await
             .map_err(map_constraint("An active set already uses that name"))?;
+        self.notify_changed();
         self.active_set(set_id).await
     }
 
@@ -100,7 +102,34 @@ impl ProtectionService {
                 Ok(())
             })
             .await?;
+        self.notify_changed();
         Ok(())
+    }
+
+    /// Return a removed set to the recording surface, its readings and
+    /// markup intact. Refused while an active set holds its name.
+    pub async fn restore_set(&self, set_id: i64) -> Result<ProtectionSet, ProtectionError> {
+        let set = self
+            .db
+            .with_reader(move |conn| read::read_set(conn, set_id).map_err(super::protection_decode))
+            .await?
+            .ok_or(ProtectionError::NotFound("Protection set not found"))?;
+        if set.archived_at.is_none() {
+            return Ok(set);
+        }
+        self.db
+            .with_writer(move |conn| {
+                conn.execute(
+                    "UPDATE protection_sets SET archived_at = NULL \
+                     WHERE id = ?1 AND economy_kind = 'limited'",
+                    [set_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(map_constraint("An active set already uses that name"))?;
+        self.notify_changed();
+        self.active_set(set_id).await
     }
 }
 

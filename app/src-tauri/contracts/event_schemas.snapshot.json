@@ -45,6 +45,27 @@
       "title": "NavigationUpdatedPayload",
       "type": "object"
     },
+    "ProtectionUpdated": {
+      "additionalProperties": false,
+      "description": "A protection cost was recorded or undone, or a limited set changed.",
+      "properties": {
+        "event_version": { "default": 1, "title": "Event Version", "type": "integer" },
+        "occurred_at": { "title": "Occurred At", "type": "string" },
+        "payload": { "$ref": "#/$defs/ProtectionUpdatedPayload" },
+        "type": { "const": "protection.updated", "default": "protection.updated", "title": "Type", "type": "string" }
+      },
+      "required": ["occurred_at", "payload"],
+      "title": "ProtectionUpdated",
+      "type": "object"
+    },
+    "ProtectionUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "A content-free invalidation that prompts consumers to re-read armour costs.",
+      "properties": {},
+      "required": [],
+      "title": "ProtectionUpdatedPayload",
+      "type": "object"
+    },
     "ScanStatusChanged": {
       "additionalProperties": false,
       "description": "The manual skill-scan status changed (phase transition or capture/OCR progress).",
@@ -172,6 +193,7 @@
     "mapping": {
       "harvest.recorded": "#/$defs/HarvestRecorded",
       "navigation.updated": "#/$defs/NavigationUpdated",
+      "protection.updated": "#/$defs/ProtectionUpdated",
       "scan.status.changed": "#/$defs/ScanStatusChanged",
       "tracking.session.updated": "#/$defs/TrackingSessionUpdated"
     },
@@ -189,6 +211,9 @@
     },
     {
       "$ref": "#/$defs/NavigationUpdated"
+    },
+    {
+      "$ref": "#/$defs/ProtectionUpdated"
     }
   ]
 }

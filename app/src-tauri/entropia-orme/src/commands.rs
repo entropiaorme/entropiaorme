@@ -52,7 +52,7 @@ use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
     ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
-    ProtectionStream,
+    ProtectionStream, ProtectionUndoTarget,
 };
 use eo_api::quests::{
     Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
@@ -180,6 +180,32 @@ pub async fn protection_set_archive(
     set_id: i64,
 ) -> Result<ProtectionOverview, ApiError> {
     facade(&app)?.protection_set_archive(set_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_set_restore(
+    app: tauri::AppHandle,
+    set_id: i64,
+) -> Result<ProtectionOverview, ApiError> {
+    facade(&app)?.protection_set_restore(set_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_undo(
+    app: tauri::AppHandle,
+    target: ProtectionUndoTarget,
+) -> Result<ProtectionOverview, ApiError> {
+    facade(&app)?.protection_undo(target).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_unrecorded_sessions(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+) -> Result<Vec<String>, ApiError> {
+    facade(&app)?
+        .protection_unrecorded_sessions(session_ids)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1817,6 +1843,9 @@ mod tests {
         "protection_set_create",
         "protection_set_update",
         "protection_set_archive",
+        "protection_set_restore",
+        "protection_undo",
+        "protection_unrecorded_sessions",
         "protection_session_status",
         "protection_recording_candidates",
         "protection_observation_confirm",

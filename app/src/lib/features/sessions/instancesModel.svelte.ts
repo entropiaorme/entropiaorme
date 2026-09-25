@@ -14,14 +14,30 @@
  * as the pager steps past it), while the client-side pager over the
  * loaded window is the shared table model; the server's count gives the
  * pager its true bounds.
+ *
+ * Armour cost is recorded when the player repairs, possibly sessions after
+ * the play it covers, so a row whose session still awaits a recording is
+ * marked: its net is not final. A recording or undo from the overlay
+ * re-reads the loaded rows and their marks in place.
  */
 
-import { deleteSession, getSessionDetail, getTrackingSessions, reassignSession } from '$lib/api';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import {
+	deleteSession,
+	getSessionDetail,
+	getTrackingSessions,
+	getUnrecordedArmourSessions,
+	PROTECTION_TOPIC,
+	reassignSession,
+} from '$lib/api';
 import type { SessionDetail, TrackingSession } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 
 export const PAGE_SIZE = 10;
+
+/** The most rows one in-place refresh re-reads (the backend's page cap). */
+const REFRESH_LIMIT = 200;
 
 export interface InstancesModelOptions {
 	/** The definition whose instances to read; null (or omitted) reads
@@ -50,6 +66,8 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 	// The in-flight guard for a re-file write. The chooser's own open
 	// state belongs to the menu that renders it.
 	let reassigning = $state(false);
+	// Loaded sessions whose armour cost no recording covers yet.
+	let armourPending = $state<ReadonlySet<string>>(new Set());
 
 	// Pure pager over the loaded window: no search, category, or sort, so
 	// the paged rows keep the backend's ordering unchanged.
@@ -57,6 +75,37 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		rows: () => sessions,
 		pageSize: PAGE_SIZE,
 	});
+
+	/** Re-read which loaded sessions still await an armour recording. A
+	 * failed read keeps the previous marks rather than clearing them. */
+	async function refreshArmourMarks(): Promise<void> {
+		const ids = sessions.map((session) => session.id);
+		try {
+			armourPending = new Set(ids.length === 0 ? [] : await getUnrecordedArmourSessions(ids));
+		} catch {
+			// The next protection write re-reads.
+		}
+	}
+
+	/** After a protection write: re-read the loaded rows' figures in place,
+	 * keeping the page and any open row, then their marks. */
+	async function refreshAfterProtection(): Promise<void> {
+		if (loading || sessions.length === 0) return;
+		try {
+			const limit = Math.min(sessions.length, REFRESH_LIMIT);
+			const page = await getTrackingSessions(undefined, limit, scope());
+			const fresh = new Map(page.sessions.map((session) => [session.id, session]));
+			sessions = sessions.map((session) => fresh.get(session.id) ?? session);
+		} catch {
+			// Keep the rows shown; the next write re-reads.
+		}
+		await refreshArmourMarks();
+	}
+
+	/** Follow protection writes from any window; returns the detach function. */
+	function subscribeProtection(): Promise<UnlistenFn> {
+		return listen(PROTECTION_TOPIC, () => void refreshAfterProtection());
+	}
 
 	async function loadSessions() {
 		loading = true;
@@ -77,6 +126,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loading = false;
 		}
+		await refreshArmourMarks();
 	}
 
 	// Fetch the next keyset page and append it, growing the client
@@ -96,6 +146,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loadingMore = false;
 		}
+		await refreshArmourMarks();
 	}
 
 	// Pager bounds from the server total: the client pages the loaded
@@ -240,8 +291,15 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 			return reassigning;
 		},
 
+		/** The session's armour cost awaits a recording, so its net is not final. */
+		armourPending(id: string): boolean {
+			return armourPending.has(id);
+		},
+
 		loadSessions,
 		loadMoreSessions,
+		refreshAfterProtection,
+		subscribeProtection,
 		nextPage,
 		prevPage,
 		toggleSession,

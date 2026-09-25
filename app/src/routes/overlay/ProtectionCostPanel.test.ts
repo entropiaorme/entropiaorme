@@ -73,11 +73,17 @@ function costWindow(costPed: number, sessionIds: string[]): ProtectionCostWindow
 		status: sessionIds.length > 0 ? 'booked' : 'pending',
 		reason: null,
 		createdAt: 1,
+		supersededAt: null,
+		undoable: true,
 		allocations: sessionIds.map((sessionId) => ({
 			sessionId,
+			sessionName: null,
+			definitionName: null,
+			startedAt: 1,
 			hitCount: 1,
 			allocationShare: 1 / sessionIds.length,
 			costPed: costPed / sessionIds.length,
+			contexts: [],
 		})),
 	};
 }

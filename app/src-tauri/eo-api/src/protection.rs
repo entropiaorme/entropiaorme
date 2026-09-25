@@ -6,15 +6,15 @@
 //! maps domain outcomes into the generated frontend contract.
 
 use eo_services::protection::{
-    CandidateSession as ServiceCandidate, CostKind as ServiceCostKind,
-    CostStatus as ServiceCostStatus, ObservationOutcome as ServiceObservationOutcome,
-    ObservationSource as ServiceObservationSource,
+    CandidateSession as ServiceCandidate, ContextShare as ServiceContextShare,
+    CostKind as ServiceCostKind, CostStatus as ServiceCostStatus,
+    ObservationOutcome as ServiceObservationOutcome, ObservationSource as ServiceObservationSource,
     ProtectionCostAllocation as ServiceCostAllocation, ProtectionCostWindow as ServiceCostWindow,
     ProtectionError, ProtectionObservation as ServiceObservation,
     ProtectionOverview as ServiceOverview, ProtectionSet as ServiceSet,
     ProtectionSetKind as ServiceSetKind, ProtectionStream as ServiceStream,
     RecordingCandidates as ServiceCandidates, RepairOutcome as ServiceRepairOutcome,
-    StreamBacklog as ServiceBacklog,
+    StreamBacklog as ServiceBacklog, UndoTarget as ServiceUndoTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -127,6 +127,9 @@ pub struct ProtectionObservation {
     pub raw_text: Nullable<String>,
     pub observed_at: f64,
     pub reset_reason: Nullable<String>,
+    /// It measured a loss against the reading before it; a baseline or a
+    /// reset measures nothing.
+    pub measured: bool,
 }
 
 /// How far one stream's recordings lag the play since them.
@@ -170,8 +173,24 @@ pub struct ProtectionSet {
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionCostAllocation {
     pub session_id: String,
+    pub session_name: Nullable<String>,
+    /// The session type it was played under; absent for none.
+    pub definition_name: Nullable<String>,
+    pub started_at: f64,
     pub hit_count: i64,
     pub allocation_share: f64,
+    pub cost_ped: f64,
+    /// The session's share by the stretch of play its hits landed in.
+    pub contexts: Vec<ProtectionContextShare>,
+}
+
+/// One stretch of a session's share of a recording.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionContextShare {
+    /// The segment and quest names in force; absent outside any.
+    pub label: Nullable<String>,
+    pub hit_count: i64,
     pub cost_ped: f64,
 }
 
@@ -189,6 +208,10 @@ pub struct ProtectionCostWindow {
     pub status: ProtectionCostStatus,
     pub reason: Nullable<String>,
     pub created_at: f64,
+    /// When it was undone; an undone recording costs nothing.
+    pub superseded_at: Nullable<f64>,
+    /// The latest live recording of its stream, so it can be undone.
+    pub undoable: bool,
     pub allocations: Vec<ProtectionCostAllocation>,
 }
 
@@ -213,6 +236,8 @@ pub struct ProtectionSessionStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionOverview {
     pub sets: Vec<ProtectionSet>,
+    /// Removed limited sets, newest removal first; each can be restored.
+    pub removed_sets: Vec<ProtectionSet>,
     /// The pooled unlimited repair stream's lag.
     pub unlimited: ProtectionBacklog,
     pub recent_cost_windows: Vec<ProtectionCostWindow>,
@@ -252,6 +277,27 @@ pub struct ProtectionRecordingCandidates {
     /// Unlimited only: recent sessions from before the previous
     /// recording, which may be re-included. Oldest first.
     pub earlier: Vec<ProtectionCandidateSession>,
+}
+
+/// What an undo takes back: the latest recording of one stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProtectionUndoTarget {
+    /// A recorded cost: an unlimited repair, or a limited reading's loss.
+    #[serde(rename_all = "camelCase")]
+    Recording { window_id: i64 },
+    /// A limited reading that booked nothing: a baseline or a reset.
+    #[serde(rename_all = "camelCase")]
+    Reading { observation_id: i64 },
+}
+
+impl From<ProtectionUndoTarget> for ServiceUndoTarget {
+    fn from(value: ProtectionUndoTarget) -> Self {
+        match value {
+            ProtectionUndoTarget::Recording { window_id } => Self::Recording { window_id },
+            ProtectionUndoTarget::Reading { observation_id } => Self::Reading { observation_id },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -362,6 +408,42 @@ impl Api {
         self.protection_overview().await
     }
 
+    pub async fn protection_set_restore(
+        &self,
+        set_id: i64,
+    ) -> Result<ProtectionOverview, ApiError> {
+        self.protection
+            .restore_set(set_id)
+            .await
+            .map_err(protection_error)?;
+        self.protection_overview().await
+    }
+
+    /// Undo the latest recording of one stream, handing its cost back to
+    /// the sessions it reached.
+    pub async fn protection_undo(
+        &self,
+        target: ProtectionUndoTarget,
+    ) -> Result<ProtectionOverview, ApiError> {
+        self.protection
+            .undo(target.into())
+            .await
+            .map_err(protection_error)?;
+        self.protection_overview().await
+    }
+
+    /// The subset of `session_ids`, in order, with hits no recording
+    /// covers yet: their armour cost is not recorded.
+    pub async fn protection_unrecorded_sessions(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<String>, ApiError> {
+        self.protection
+            .sessions_with_unrecorded_hits(session_ids)
+            .await
+            .map_err(protection_error)
+    }
+
     pub async fn protection_session_status(
         &self,
         session_id: String,
@@ -468,6 +550,7 @@ impl From<ServiceObservation> for ProtectionObservation {
             raw_text: value.raw_text.into(),
             observed_at: value.observed_at,
             reset_reason: value.reset_reason.into(),
+            measured: value.measured,
         }
     }
 }
@@ -499,8 +582,22 @@ impl From<ServiceCostAllocation> for ProtectionCostAllocation {
     fn from(value: ServiceCostAllocation) -> Self {
         Self {
             session_id: value.session_id,
+            session_name: value.session_name.into(),
+            definition_name: value.definition_name.into(),
+            started_at: value.started_at,
             hit_count: value.hit_count,
             allocation_share: value.allocation_share,
+            cost_ped: value.cost_ped,
+            contexts: value.contexts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ServiceContextShare> for ProtectionContextShare {
+    fn from(value: ServiceContextShare) -> Self {
+        Self {
+            label: value.label.into(),
+            hit_count: value.hit_count,
             cost_ped: value.cost_ped,
         }
     }
@@ -526,6 +623,8 @@ impl From<ServiceCostWindow> for ProtectionCostWindow {
             },
             reason: value.reason.into(),
             created_at: value.created_at,
+            superseded_at: value.superseded_at.into(),
+            undoable: value.undoable,
             allocations: value.allocations.into_iter().map(Into::into).collect(),
         }
     }
@@ -571,6 +670,7 @@ impl From<ServiceOverview> for ProtectionOverview {
     fn from(value: ServiceOverview) -> Self {
         Self {
             sets: value.sets.into_iter().map(Into::into).collect(),
+            removed_sets: value.removed_sets.into_iter().map(Into::into).collect(),
             unlimited: value.unlimited.into(),
             recent_cost_windows: value
                 .recent_cost_windows
@@ -582,5 +682,21 @@ impl From<ServiceOverview> for ProtectionOverview {
                 hits: value.unrecorded.hits,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_undo_target_reads_the_shape_the_frontend_sends() {
+        let recording: ProtectionUndoTarget =
+            serde_json::from_str(r#"{"kind":"recording","windowId":12}"#).unwrap();
+        assert_eq!(recording, ProtectionUndoTarget::Recording { window_id: 12 });
+        let reading: ProtectionUndoTarget =
+            serde_json::from_str(r#"{"kind":"reading","observationId":5}"#).unwrap();
+        assert_eq!(reading, ProtectionUndoTarget::Reading { observation_id: 5 });
+        assert!(serde_json::from_str::<ProtectionUndoTarget>(r#"{"kind":"session"}"#).is_err());
     }
 }

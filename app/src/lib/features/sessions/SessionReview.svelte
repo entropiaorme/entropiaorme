@@ -47,6 +47,26 @@
 	}
 
 	const archived = $derived(model.definition !== null && !model.definition.isActive);
+
+	/** Some row on this page nets without an armour cost still to be recorded. */
+	const armourPendingOnPage = $derived(table.pageRows.some((session) => instances.armourPending(session.id)));
+
+	// A recording or undo from the overlay moves session figures: follow it
+	// while the surface is open.
+	$effect(() => {
+		if (!model.open) return;
+		const current = instances;
+		let stop: (() => void) | undefined;
+		let disposed = false;
+		void current.subscribeProtection().then((unlisten) => {
+			if (disposed) unlisten();
+			else stop = unlisten;
+		});
+		return () => {
+			disposed = true;
+			stop?.();
+		};
+	});
 </script>
 
 <svelte:window onkeydown={model.open ? handleKeydown : undefined} />
@@ -186,7 +206,11 @@
 										class="border-b border-border/50 px-4 py-3 text-right font-semibold tabular-nums
 											{session.net >= 0 ? 'text-positive' : 'text-negative'}"
 									>
-										{session.net >= 0 ? '+' : ''}{formatPed(session.net)}
+										{session.net >= 0 ? '+' : ''}{formatPed(session.net)}{#if instances.armourPending(session.id)}<span
+												class="ml-0.5 align-super text-[10px] font-normal text-warning"
+												title="Armour cost not recorded yet: this net leaves it out"
+												aria-hidden="true">*</span
+											><span class="sr-only">, armour cost not recorded yet</span>{/if}
 									</td>
 									<td class="border-b border-border/50 px-4 py-3">
 										<div class="flex items-center justify-end gap-1">
@@ -330,6 +354,12 @@
 						</tbody>
 					</table>
 				</div>
+
+				{#if armourPendingOnPage}
+					<p class="px-2 text-xs text-text-tertiary">
+						<span class="text-warning">*</span> Armour cost not recorded yet. It is added when you record a repair or reading from the overlay's Cost button.
+					</p>
+				{/if}
 
 				{#if instances.totalPages > 1}
 					<div class="flex items-center justify-between px-2">

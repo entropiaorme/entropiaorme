@@ -102,7 +102,9 @@ segment-protection policy), `0054_session_armour_cost_policy.sql` (the
 parent armour-cost policy and whole-session default), and
 `0055_session_grain_protection_costs.sql` (each protection recording's stream
 position, the retirement of unlimited sets and loadouts, and the session
-lookups the recording surface reads). The
+lookups the recording surface reads), and
+`0056_protection_recording_undo.sql` (when a protection recording or reading
+was undone). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -707,6 +709,8 @@ claiming decay, which is required when a reading rises, and books nothing.
 Each observation also stores `defence_event_cursor`, the latest defensive-event
 identifier visible at confirmation. That durable cursor is the limited
 stream's position: the next reading of the set covers only hits after it.
+`superseded_at` (migration `0056`) marks a reading that was undone; the set's
+baseline is its latest reading without one.
 
 `protection_reconciliations` preserves the initial single-session
 implementation and is no longer written; `protection_cost_windows` supersedes
@@ -726,6 +730,17 @@ backfilled the cursor for history from each limited window's closing
 observation, and for each repair window from the hits it claimed and every
 session that had ended before it.
 
+`superseded_at` (migration `0056`) marks an undone recording. Only the latest
+live recording of a stream can be undone: for the unlimited stream its newest
+repair window, for a limited set the window its latest reading closed. Undoing
+never deletes. The window (and, for a limited set, its closing reading) is
+marked, its allocation rows stay as provenance, and each session it reached
+gives its share back to `armour_cost`, with its summary and daily rollup
+repaired, in the same transaction. Every read of a stream's position, of which
+sessions a recording covers, and of unrecorded play skips superseded rows, so
+the stream falls back to its previous recording and the next one offers the
+same sessions again.
+
 `protection_cost_allocations` stores the conserved per-session split and
 `protection_cost_context_allocations` the finer split over each session's
 immutable activity contexts. Both carry `hit_count` (migration `0052`): every
@@ -735,8 +750,8 @@ sessions by hit count, then within each session across its contexts by hit
 count, and the last context takes the rounding residual so the stored rows sum
 to the recorded cost exactly. Each allocated session's `armour_cost`, summary,
 and daily rollup are repaired in the same transaction. A session with
-defensive hits and no allocation row reads as having no protection cost
-recorded yet.
+defensive hits and no allocation row from a live recording reads as having no
+protection cost recorded yet.
 
 `protection_cost_evidence` holds the per-hit claims written by the
 declared-loadout model. Recordings no longer write it: which hits a recording
@@ -1331,7 +1346,8 @@ migrations (`0002_analytical_indexes.sql`,
 `0049_expected_hunting_phase_identity.sql`,
 `0050_session_offensive_evidence_rollups.sql`,
 `0051_context_offensive_evidence.sql`, `0052_protection_hit_allocation.sql`,
-`0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`); the runner
+`0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`,
+`0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`); the runner
 records applied migrations in the `_sqlx_migrations` ledger (the table name,
 column shapes, and SHA-384 checksum accounting are inherited unchanged from
 the previous runner, so existing databases reconcile byte for byte) and never

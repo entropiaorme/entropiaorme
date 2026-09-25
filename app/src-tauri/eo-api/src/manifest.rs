@@ -54,7 +54,7 @@ use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
     ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
-    ProtectionStream,
+    ProtectionStream, ProtectionUndoTarget,
 };
 use crate::quests::{
     Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
@@ -184,6 +184,30 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(i64)),
             }],
             returns: Some(schema(schema_for!(ProtectionOverview))),
+        },
+        CommandSpec {
+            name: "protection_set_restore",
+            args: vec![ArgSpec {
+                name: "set_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionOverview))),
+        },
+        CommandSpec {
+            name: "protection_undo",
+            args: vec![ArgSpec {
+                name: "target",
+                schema: schema(schema_for!(ProtectionUndoTarget)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionOverview))),
+        },
+        CommandSpec {
+            name: "protection_unrecorded_sessions",
+            args: vec![ArgSpec {
+                name: "session_ids",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<String>))),
         },
         CommandSpec {
             name: "protection_session_status",

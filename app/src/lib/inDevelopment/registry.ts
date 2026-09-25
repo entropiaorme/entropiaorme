@@ -25,9 +25,8 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 	{
 		id: 'limited-protection',
 		summary:
-			'Limited armour sets can be recorded, but a recorded cost cannot yet be corrected or undone, and a removed set cannot be restored.',
-		graduates:
-			'Recorded costs can be corrected, removed sets can be restored, and recording has been walked in live play.',
+			'Armour costs can be recorded, reviewed, undone and re-recorded, but recording has not yet been walked in live play.',
+		graduates: 'Recording has been walked in live play.',
 	},
 ] as const;
 

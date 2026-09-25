@@ -8,12 +8,22 @@ import SessionDetail from './SessionDetail.svelte';
 
 vi.mock('$lib/api', () => ({
 	ApiError: class ApiError extends Error {},
+	PROTECTION_TOPIC: 'protection:updated',
 	activateLootItem: vi.fn(),
 	deactivateLootItem: vi.fn(),
 	getProtectionSessionStatus: vi.fn(async () => ({ unrecordedHits: 0 })),
 	getSessionDetail: vi.fn(),
 	renameSessionMob: vi.fn(),
 	restoreSessionMob: vi.fn(),
+}));
+
+// The protection bridge: capture the listener so a test can fire a write.
+const protectionListeners: Array<() => void> = [];
+vi.mock('@tauri-apps/api/event', () => ({
+	listen: vi.fn(async (topic: string, handler: () => void) => {
+		if (topic === 'protection:updated') protectionListeners.push(handler);
+		return () => {};
+	}),
 }));
 
 function detail(overrides: Partial<SessionDetailType> = {}): SessionDetailType {
@@ -51,6 +61,7 @@ function detail(overrides: Partial<SessionDetailType> = {}): SessionDetailType {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	protectionListeners.length = 0;
 });
 
 // The name is a stamp of the session definition's name, not a label of
@@ -84,6 +95,24 @@ describe('the armour standing', () => {
 		vi.mocked(api.getProtectionSessionStatus).mockResolvedValueOnce({ unrecordedHits: 42 });
 		render(SessionDetail, { props: { detail: detail() } });
 		expect(await screen.findByText('not recorded yet')).toBeTruthy();
+	});
+
+	it('re-reads the cost and standing when a recording lands elsewhere', async () => {
+		const api = await import('$lib/api');
+		vi.mocked(api.getProtectionSessionStatus)
+			.mockResolvedValueOnce({ unrecordedHits: 42 })
+			.mockResolvedValue({ unrecordedHits: 0 });
+		const recorded = detail();
+		recorded.summary.costBreakdown.armourCost = 2.25;
+		vi.mocked(api.getSessionDetail).mockResolvedValue(recorded);
+		render(SessionDetail, { props: { detail: detail() } });
+		expect(await screen.findByText('not recorded yet')).toBeTruthy();
+
+		await vi.waitFor(() => expect(protectionListeners).toHaveLength(1));
+		protectionListeners[0]();
+		expect(await screen.findByText('2.25')).toBeTruthy();
+		expect(api.getSessionDetail).toHaveBeenCalledWith('s1');
+		expect(screen.queryByText('not recorded yet')).toBeNull();
 	});
 
 	it('shows the recorded cost once a recording covers the session', async () => {

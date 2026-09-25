@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { listen } from '@tauri-apps/api/event';
+	import { onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
 	import {
 		activateLootItem,
 		deactivateLootItem,
 		getProtectionSessionStatus,
 		getSessionDetail,
+		PROTECTION_TOPIC,
 		renameSessionMob,
 		restoreSessionMob,
 	} from '$lib/api';
@@ -28,8 +31,11 @@
 	// later, so a session with hits and no recording yet reads as "not
 	// recorded" rather than as a zero it has not earned.
 	let unrecordedHits = $state(0);
+	// Bumped by a protection write elsewhere, so the standing is re-read.
+	let protectionRevision = $state(0);
 	$effect(() => {
 		const sessionId = detail.sessionId;
+		void protectionRevision;
 		let current = true;
 		getProtectionSessionStatus(sessionId)
 			.then((status) => {
@@ -40,6 +46,31 @@
 			});
 		return () => {
 			current = false;
+		};
+	});
+
+	// A recording or undo from the overlay moves this session's armour cost:
+	// re-read the detail and its standing rather than showing the old figure.
+	onMount(() => {
+		let stop: (() => void) | undefined;
+		let disposed = false;
+		void listen(PROTECTION_TOPIC, () => {
+			const sessionId = detail.sessionId;
+			protectionRevision += 1;
+			getSessionDetail(sessionId)
+				.then((fresh) => {
+					if (!disposed && detail.sessionId === sessionId) detail = fresh;
+				})
+				.catch(() => {
+					// Keep the detail shown; the next write re-reads.
+				});
+		}).then((unlisten) => {
+			if (disposed) unlisten();
+			else stop = unlisten;
+		});
+		return () => {
+			disposed = true;
+			stop?.();
 		};
 	});
 	const costBreakdown = $derived(detail.summary.costBreakdown);

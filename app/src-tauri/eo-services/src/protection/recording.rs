@@ -54,7 +54,8 @@ fn stream_position(
         ProtectionStream::Unlimited => {
             let (cursor, since) = conn.query_row(
                 "SELECT COALESCE(MAX(evidence_cursor), 0), MAX(created_at) \
-                 FROM protection_cost_windows WHERE kind = 'repair'",
+                 FROM protection_cost_windows \
+                 WHERE kind = 'repair' AND superseded_at IS NULL",
                 [],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<f64>>(1)?)),
             )?;
@@ -68,7 +69,8 @@ fn stream_position(
             let latest = conn
                 .query_row(
                     "SELECT id, tt_value_ped, observed_at, COALESCE(defence_event_cursor, 0) \
-                     FROM protection_observations WHERE set_id = ?1 \
+                     FROM protection_observations \
+                     WHERE set_id = ?1 AND superseded_at IS NULL \
                      ORDER BY observed_at DESC, id DESC LIMIT 1",
                     [set_id],
                     |row| {
@@ -110,12 +112,12 @@ fn current_cursor(conn: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
     )
 }
 
-/// The stream's own windows, as a SQL predicate over `w`.
+/// The stream's own live windows, as a SQL predicate over `w`.
 fn stream_filter(stream: ProtectionStream) -> String {
     match stream {
-        ProtectionStream::Unlimited => "w.kind = 'repair'".to_string(),
+        ProtectionStream::Unlimited => "w.kind = 'repair' AND w.superseded_at IS NULL".to_string(),
         ProtectionStream::Limited { set_id } => {
-            format!("w.kind = 'limited_decay' AND w.set_id = {set_id}")
+            format!("w.kind = 'limited_decay' AND w.set_id = {set_id} AND w.superseded_at IS NULL")
         }
     }
 }
@@ -154,9 +156,9 @@ pub(super) fn read_candidates(
         "EXISTS (SELECT 1 FROM protection_cost_allocations a \
                  JOIN protection_cost_windows w ON w.id = a.window_id \
                  WHERE a.session_id = s.id AND {}), \
-         NOT EXISTS (SELECT 1 FROM protection_cost_allocations a \
-                     WHERE a.session_id = s.id)",
-        stream_filter(stream)
+         NOT EXISTS ({})",
+        stream_filter(stream),
+        super::read::live_allocation("s.id")
     );
 
     // id-order: cursor (hits on the far side of the stream's position).
@@ -421,20 +423,40 @@ fn write_recording(
              VALUES (?1, ?2, 0, 0, ?3, ?4, ?5)",
             rusqlite::params![window_id, session_id, share, cost, hits],
         )?;
-        let started_at: f64 = tx.query_row(
-            "SELECT started_at FROM tracking_sessions WHERE id = ?1",
-            [&session_id],
-            |row| row.get(0),
-        )?;
-        tx.execute(
-            "UPDATE tracking_sessions SET armour_cost = COALESCE(armour_cost, 0) + ?1 \
-             WHERE id = ?2",
-            rusqlite::params![cost, session_id],
-        )?;
-        crate::daily_rollup::refresh_days(tx, [crate::daily_rollup::epoch_day(started_at)])?;
-        crate::session_summary::write_session_summary(tx, &session_id)?;
+        adjust_session_armour(tx, &session_id, cost)?;
     }
     Ok(Ok(window_id))
+}
+
+/// Move one session's armour cost by `delta` and repair every figure
+/// derived from it (its summary and its day's rollup) in the caller's
+/// transaction. A reversal that lands within rounding of zero stores zero,
+/// so undoing the only recording leaves no residue behind.
+pub(super) fn adjust_session_armour(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    delta: f64,
+) -> Result<(), DbError> {
+    let Some(started_at) = tx
+        .query_row(
+            "SELECT started_at FROM tracking_sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    tx.execute(
+        "UPDATE tracking_sessions SET armour_cost = \
+             CASE WHEN abs(COALESCE(armour_cost, 0) + ?1) < 1e-9 THEN 0 \
+                  ELSE COALESCE(armour_cost, 0) + ?1 END \
+         WHERE id = ?2",
+        rusqlite::params![delta, session_id],
+    )?;
+    crate::daily_rollup::refresh_days(tx, [crate::daily_rollup::epoch_day(started_at)])?;
+    crate::session_summary::write_session_summary(tx, session_id)?;
+    Ok(())
 }
 
 enum Written<T> {
@@ -449,7 +471,8 @@ fn read_observation_outcome(
     let observation = read_observation(conn, observation_id)?;
     let window_id = conn
         .query_row(
-            "SELECT id FROM protection_cost_windows WHERE closing_observation_id = ?1",
+            "SELECT id FROM protection_cost_windows \
+             WHERE closing_observation_id = ?1 AND superseded_at IS NULL",
             [observation_id],
             |row| row.get::<_, i64>(0),
         )
@@ -567,13 +590,16 @@ impl ProtectionService {
             })
             .await?;
         match written {
-            Written::Saved(observation_id) => self
-                .db
-                .with_reader(move |conn| {
-                    read_observation_outcome(conn, observation_id).map_err(super::protection_decode)
-                })
-                .await
-                .map_err(ProtectionError::from),
+            Written::Saved(observation_id) => {
+                self.notify_changed();
+                self.db
+                    .with_reader(move |conn| {
+                        read_observation_outcome(conn, observation_id)
+                            .map_err(super::protection_decode)
+                    })
+                    .await
+                    .map_err(ProtectionError::from)
+            }
             Written::Refused(refusal) => Err(refusal.into_error()),
         }
     }
@@ -636,6 +662,7 @@ impl ProtectionService {
             .await?;
         match written {
             Written::Saved(id) => {
+                self.notify_changed();
                 let cost_window = self
                     .db
                     .with_reader(move |conn| {

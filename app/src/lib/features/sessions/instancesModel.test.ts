@@ -3,10 +3,20 @@ import type { SessionDetail, TrackingSession } from '$lib/types/tracking';
 import { createInstancesModel, PAGE_SIZE } from './instancesModel.svelte';
 
 vi.mock('$lib/api', () => ({
+	PROTECTION_TOPIC: 'protection:updated',
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
+	getUnrecordedArmourSessions: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
+}));
+
+const protectionListeners: Array<() => void> = [];
+vi.mock('@tauri-apps/api/event', () => ({
+	listen: vi.fn(async (_topic: string, handler: () => void) => {
+		protectionListeners.push(handler);
+		return () => {};
+	}),
 }));
 
 import * as api from '$lib/api';
@@ -452,5 +462,67 @@ describe('reassign', () => {
 		release?.();
 		expect(await first).toBe(true);
 		expect(mocked.reassignSession).toHaveBeenCalledTimes(1);
+	});
+});
+
+// Armour is recorded when the player repairs, so a row can net without an
+// armour cost that is still to come; the list marks those rows.
+describe('armour still to record', () => {
+	it('marks the loaded sessions no recording covers yet', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(
+			page([session({ id: 's1' }), session({ id: 's2' })]),
+		);
+		mocked.getUnrecordedArmourSessions.mockResolvedValue(['s2']);
+		const model = createInstancesModel();
+		await model.loadSessions();
+		expect(mocked.getUnrecordedArmourSessions).toHaveBeenCalledWith(['s1', 's2']);
+		expect(model.armourPending('s1')).toBe(false);
+		expect(model.armourPending('s2')).toBe(true);
+	});
+
+	it('marks the sessions a later page brings in', async () => {
+		mocked.getTrackingSessions
+			.mockResolvedValueOnce(page([session({ id: 's1' })], 'c1', 2))
+			.mockResolvedValueOnce(page([session({ id: 's2' })], null, 2));
+		mocked.getUnrecordedArmourSessions.mockResolvedValueOnce([]).mockResolvedValueOnce(['s2']);
+		const model = createInstancesModel();
+		await model.loadSessions();
+		await model.loadMoreSessions();
+		expect(mocked.getUnrecordedArmourSessions).toHaveBeenLastCalledWith(['s1', 's2']);
+		expect(model.armourPending('s2')).toBe(true);
+	});
+
+	it('re-reads rows and marks in place after a recording, keeping the page and open row', async () => {
+		const sessions = Array.from({ length: 12 }, (_, i) => session({ id: `s${i}`, net: 1 }));
+		mocked.getTrackingSessions.mockResolvedValue(page(sessions));
+		mocked.getUnrecordedArmourSessions.mockResolvedValue(['s11']);
+		mocked.getSessionDetail.mockResolvedValue(detail());
+		const model = createInstancesModel({ definitionId: () => '7' });
+		await model.loadSessions();
+		await model.nextPage();
+		await model.toggleSession('s11');
+
+		mocked.getTrackingSessions.mockResolvedValue(
+			page([...sessions.slice(0, 11), session({ id: 's11', net: -3 })]),
+		);
+		mocked.getUnrecordedArmourSessions.mockResolvedValue([]);
+		await model.subscribeProtection();
+		protectionListeners.at(-1)?.();
+		await vi.waitFor(() => expect(model.armourPending('s11')).toBe(false));
+
+		expect(mocked.getTrackingSessions).toHaveBeenLastCalledWith(undefined, 12, '7');
+		expect(model.sessions.find((s) => s.id === 's11')?.net).toBe(-3);
+		expect(model.table.page).toBe(1);
+		expect(model.expandedSessionId).toBe('s11');
+	});
+
+	it('keeps the marks it had when the re-read fails', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1' })]));
+		mocked.getUnrecordedArmourSessions.mockResolvedValueOnce(['s1']);
+		const model = createInstancesModel();
+		await model.loadSessions();
+		mocked.getUnrecordedArmourSessions.mockRejectedValueOnce(new Error('offline'));
+		await model.refreshAfterProtection();
+		expect(model.armourPending('s1')).toBe(true);
 	});
 });

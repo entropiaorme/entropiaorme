@@ -254,6 +254,7 @@ pub enum BusEvent {
     ScanStatusChanged(ScanStatusChanged),
     HarvestRecorded(eo_wire::domain_events::HarvestRecorded),
     NavigationUpdated(eo_wire::domain_events::NavigationUpdated),
+    ProtectionUpdated(eo_wire::domain_events::ProtectionUpdated),
 }
 
 impl BusEvent {
@@ -278,6 +279,7 @@ impl BusEvent {
             BusEvent::ScanStatusChanged(_) => Topic::ScanStatusChanged,
             BusEvent::HarvestRecorded(_) => Topic::HarvestRecorded,
             BusEvent::NavigationUpdated(_) => Topic::NavigationUpdated,
+            BusEvent::ProtectionUpdated(_) => Topic::ProtectionUpdated,
         }
     }
 

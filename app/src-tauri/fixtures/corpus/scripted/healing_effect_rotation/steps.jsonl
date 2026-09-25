@@ -1,0 +1,26 @@
+{"chat": 1}
+{"advance": 1.0}
+{"hotbar": {"slot": "2", "equipment_id": 8, "item_name": "Restoration Chip", "item_kind": "healing", "cost_per_use_ped": 0.04, "reload_seconds": 10.0, "healing_profile": {"mode": "compound", "direct_min": 28.0, "direct_max": 32.0, "effect_duration_seconds": 20.0, "tick_min": 9.0, "tick_max": 11.0, "tick_seconds": 2.0}}}
+{"chat": 1}
+{"advance": 0.4}
+{"hotbar": {"slot": "1", "equipment_id": 2, "item_name": "Rifle", "item_kind": "weapon", "cost_per_use_ped": 0.05, "reload_seconds": 0.0}}
+{"advance": 1.6}
+{"chat": 1}
+{"advance": 1.0}
+{"hotbar": {"slot": "3", "equipment_id": 9, "item_name": "FAP", "item_kind": "healing", "cost_per_use_ped": 0.03, "reload_seconds": 3.0, "healing_profile": {"mode": "direct", "direct_min": 60.0, "direct_max": 100.0}}}
+{"chat": 1}
+{"advance": 2.0}
+{"chat": 1}
+{"segment": "Boss"}
+{"advance": 2.0}
+{"chat": 1}
+"restart"
+{"advance": 2.0}
+{"chat": 1}
+{"advance": 16.0}
+{"chat": 1}
+{"hotbar": {"slot": "3", "equipment_id": 9, "item_name": "FAP", "item_kind": "healing", "cost_per_use_ped": 0.03, "reload_seconds": 3.0, "healing_profile": {"mode": "direct", "direct_min": 60.0, "direct_max": 100.0}}}
+{"chat": 1}
+{"advance": 1.0}
+{"hotbar": {"slot": "3", "equipment_id": 9, "item_name": "FAP", "item_kind": "healing", "cost_per_use_ped": 0.03, "reload_seconds": 3.0, "healing_profile": {"mode": "direct", "direct_min": 60.0, "direct_max": 100.0}}}
+{"chat": 1}

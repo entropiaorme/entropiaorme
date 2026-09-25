@@ -168,6 +168,30 @@ pub const CATALOGUE: &[TableSpec] = &[
         query: "SELECT skill_name, level, source, scanned_at FROM skill_calibrations",
         order_by: &["scanned_at", "rowid"],
     },
+    // Healing evidence: a post-port extension of the catalogue (no Python
+    // reference existed), pinned by the healing replay scenario. Appended
+    // last so no earlier table's symbol assignment moves.
+    TableSpec {
+        name: "healing_activations",
+        query: "SELECT id, session_id, equipment_id, tool_name, intent_at, observed_at, \
+                context_id, cost_ped, provenance, confirming_output_id, superseded_at \
+                FROM healing_activations",
+        order_by: &["observed_at", "rowid"],
+    },
+    TableSpec {
+        name: "healing_effect_windows",
+        query: "SELECT id, activation_id, session_id, started_at, expires_at, context_id, \
+                superseded_at \
+                FROM healing_effect_windows",
+        order_by: &["started_at", "rowid"],
+    },
+    TableSpec {
+        name: "healing_outputs",
+        query: "SELECT id, session_id, activation_id, effect_window_id, context_id, \
+                observed_at, amount, classification, reason \
+                FROM healing_outputs",
+        order_by: &["observed_at", "rowid"],
+    },
 ];
 
 /// Normalise the pre-fetched catalogue rows, returning the snapshot value.

@@ -22,6 +22,17 @@
 //! per timestamp tick so the tail never observes end-of-file inside a
 //! tick; a drain barrier on the appended line count; one plan step
 //! before the session stops.
+//!
+//! A scenario may also carry a `steps.jsonl` script, for behaviour the
+//! chat log alone cannot drive: it interleaves the log's tick groups with
+//! clock steps, resolved hotbar presses (stamped at the clock's current
+//! instant, as the listener stamps the OS key occurrence), segment
+//! declarations, and process restarts. A restart is a crash: the old
+//! process's bus and tail go quiet, and a fresh bus, tail, and tracker
+//! open the same database, whose construction recovers the orphaned
+//! session before the next one starts. Every producer publish completes
+//! its tracker dispatch before returning, so a drained tick group is a
+//! processed one and the next step observes its effects.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,13 +40,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
+use eo_services::bus_events::{BusEvent, HotbarIntentPayload, HotbarItemKind};
 use eo_services::chatlog_time::ChatLogClock;
 use eo_services::chatlog_watcher::ChatlogWatcher;
-use eo_services::clock::MockClock;
+use eo_services::clock::{Clock, MockClock};
 use eo_services::db::Db;
 use eo_services::event_bus::EventBus;
 use eo_services::fingerprint_recorder::FingerprintRecorder;
-use eo_services::tracker::{HuntTracker, Providers};
+use eo_services::healing_profile::HealingProfile;
+use eo_services::time::naive_to_epoch;
+use eo_services::tracker::{ActivityKey, ActivityRef, HuntTracker, Providers};
 use eo_wire::db_snapshot::{capture, serialize};
 use eo_wire::normalizer::Normalizer;
 
@@ -149,6 +163,136 @@ async fn catalogue_snapshot(db: &Db, normalizer: &mut Normalizer) -> String {
     serialize(&capture(&tables, normalizer))
 }
 
+/// One step of a scenario's optional `steps.jsonl` script.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum Step {
+    /// Stream the next N tick groups of the chat log and drain them.
+    Chat(usize),
+    /// Advance the injected clock by this many seconds.
+    Advance(f64),
+    /// A resolved hotbar press at the clock's current instant.
+    Hotbar(Box<ScriptedPress>),
+    /// Declare a segment, or end the standing one with null.
+    Segment(Option<String>),
+    /// The process dies; a new one starts over the same database.
+    Restart,
+}
+
+/// What the hotbar listener publishes for a resolved slot, minus the
+/// session and the occurrence instant the replay supplies.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedPress {
+    slot: String,
+    equipment_id: i64,
+    item_name: String,
+    item_kind: String,
+    cost_per_use_ped: f64,
+    reload_seconds: f64,
+    #[serde(default)]
+    healing_profile: Option<HealingProfile>,
+    #[serde(default)]
+    lifesteal_percent: Option<f64>,
+}
+
+fn load_steps(scenario: &Path) -> Option<Vec<Step>> {
+    let script = std::fs::read_to_string(scenario.join("steps.jsonl")).ok()?;
+    Some(
+        script
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("a well-formed replay step"))
+            .collect(),
+    )
+}
+
+/// One process lifetime: its bus, chat-log tail, and tracker, plus the
+/// lines this tail has been handed.
+struct Process {
+    bus: Arc<EventBus>,
+    watcher: ChatlogWatcher,
+    tracker: Arc<HuntTracker>,
+    appended: u64,
+}
+
+/// Start a process and its session, in the order the fingerprint's
+/// opening lines assume: the tail, the recorder, the tracker, the start.
+fn boot(
+    runtime: &tokio::runtime::Runtime,
+    db: &Db,
+    clock: &Arc<MockClock>,
+    chatlog: &Path,
+    recorder: &FingerprintRecorder,
+    player_name: &str,
+) -> Process {
+    let bus = Arc::new(EventBus::new());
+    let watcher = ChatlogWatcher::new(bus.clone(), chatlog, None, ChatLogClock::host_local());
+    watcher.start();
+    recorder.install(&bus);
+    let tracker = runtime
+        .block_on(HuntTracker::new(
+            bus.clone(),
+            db.clone(),
+            clock.clone(),
+            ChatLogClock::host_local(),
+            Providers {
+                player_name: player_name.to_string(),
+                ..Providers::default()
+            },
+        ))
+        .expect("tracker");
+    runtime
+        .block_on(tracker.start_session())
+        .expect("session start");
+    Process {
+        bus,
+        watcher,
+        tracker,
+        appended: 0,
+    }
+}
+
+/// Append tick groups one flush each, then wait until the tail has read
+/// (and so dispatched) every line.
+fn stream(chatlog: &Path, process: &mut Process, groups: &[String]) {
+    let mut sink = std::fs::OpenOptions::new()
+        .append(true)
+        .open(chatlog)
+        .expect("chatlog append");
+    for group in groups {
+        sink.write_all(group.as_bytes()).expect("tick write");
+        sink.flush().expect("tick flush");
+        process.appended += group.split_inclusive('\n').count() as u64;
+    }
+    process
+        .watcher
+        .wait_until_drained(process.appended, Duration::from_secs(10))
+        .expect("watcher drains the scenario");
+}
+
+fn press(process: &Process, clock: &MockClock, press: &ScriptedPress) {
+    let item_kind = match press.item_kind.as_str() {
+        "healing" => HotbarItemKind::Healing,
+        "weapon" => HotbarItemKind::Weapon,
+        other => panic!("unsupported scripted hotbar item kind {other}"),
+    };
+    process
+        .bus
+        .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+            session_id: None,
+            slot: press.slot.clone(),
+            occurred_at: naive_to_epoch(clock.now()),
+            equipment_id: press.equipment_id,
+            item_name: press.item_name.clone(),
+            item_kind,
+            cost_per_use_ped: press.cost_per_use_ped,
+            reload_seconds: press.reload_seconds,
+            healing_profile: press.healing_profile.clone(),
+            lifesteal_percent: press.lifesteal_percent,
+        }));
+}
+
 /// Replay one scenario through the full native pipeline and assert
 /// both committed goldens byte-for-byte.
 fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
@@ -168,54 +312,76 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     let chatlog = dir.path().join("chat_testing.log");
     std::fs::File::create(&chatlog).expect("empty chatlog");
 
-    let bus = Arc::new(EventBus::new());
     let clock = Arc::new(MockClock::new(Some(plan.start), 0.0));
-    let watcher = ChatlogWatcher::new(bus.clone(), &chatlog, None, ChatLogClock::host_local());
-    watcher.start();
-
     // The recorder installs before the session starts, so the start
     // events are the fingerprint's opening lines.
     let recorder = FingerprintRecorder::new();
-    recorder.install(&bus);
-
-    let tracker = runtime
-        .block_on(HuntTracker::new(
-            bus.clone(),
-            db.clone(),
-            clock.clone(),
-            ChatLogClock::host_local(),
-            Providers {
-                player_name: player_name.to_string(),
-                ..Providers::default()
-            },
-        ))
-        .expect("tracker");
-    runtime
-        .block_on(tracker.start_session())
-        .expect("session start");
+    let mut process = boot(&runtime, &db, &clock, &chatlog, &recorder, player_name);
 
     // Stream the replay one tick per flush, then drain on the line
-    // count (the watcher counts every line it has read whole).
+    // count (the watcher counts every line it has read whole); a
+    // scripted scenario interleaves its steps between tick groups.
     let content = std::fs::read_to_string(scenario.join("chat_replay.log")).expect("chat replay");
-    let appended = content.split_inclusive('\n').count() as u64;
-    {
-        let mut sink = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&chatlog)
-            .expect("chatlog append");
-        for group in tick_groups(&content) {
-            sink.write_all(group.as_bytes()).expect("tick write");
-            sink.flush().expect("tick flush");
+    let groups = tick_groups(&content);
+    match load_steps(&scenario) {
+        None => stream(&chatlog, &mut process, &groups),
+        Some(steps) => {
+            let mut next = 0;
+            let mut segment: Option<String> = None;
+            for step in steps {
+                match step {
+                    Step::Chat(count) => {
+                        let until = next + count;
+                        assert!(
+                            until <= groups.len(),
+                            "{name}: the script outruns the chat log"
+                        );
+                        stream(&chatlog, &mut process, &groups[next..until]);
+                        next = until;
+                    }
+                    Step::Advance(seconds) => clock.advance(seconds).expect("script step"),
+                    Step::Hotbar(scripted) => press(&process, &clock, &scripted),
+                    Step::Segment(declared) => {
+                        if let Some(standing) = segment.take() {
+                            runtime
+                                .block_on(
+                                    process
+                                        .tracker
+                                        .deactivate_activity(ActivityKey::Segment(standing)),
+                                )
+                                .expect("segment ends");
+                        }
+                        if let Some(name) = declared.clone() {
+                            runtime
+                                .block_on(
+                                    process
+                                        .tracker
+                                        .activate_activity(ActivityRef::Segment { name }, false),
+                                )
+                                .expect("segment starts");
+                        }
+                        segment = declared;
+                    }
+                    Step::Restart => {
+                        recorder.uninstall(&process.bus);
+                        process.watcher.stop();
+                        process = boot(&runtime, &db, &clock, &chatlog, &recorder, player_name);
+                        segment = None;
+                    }
+                }
+            }
+            assert_eq!(
+                next,
+                groups.len(),
+                "{name}: the script leaves chat unreplayed"
+            );
         }
     }
-    watcher
-        .wait_until_drained(appended, Duration::from_secs(10))
-        .expect("watcher drains the scenario");
     clock.advance(plan.step_seconds).expect("plan step");
     runtime
-        .block_on(tracker.stop_session())
+        .block_on(process.tracker.stop_session())
         .expect("session stop");
-    watcher.stop();
+    process.watcher.stop();
 
     // Fingerprint first, snapshot second, one normaliser: the symbol
     // tables assign in exactly the golden harness's encounter order.
@@ -333,6 +499,11 @@ fn tree_harvesting_session_matches_the_goldens() {
 #[test]
 fn placeholder_recorded_hunt_matches_the_goldens() {
     replay_against_goldens("recorded", "placeholder_recorded_hunt", "");
+}
+
+#[test]
+fn healing_effect_rotation_matches_the_goldens() {
+    replay_against_goldens("scripted", "healing_effect_rotation", "");
 }
 
 #[test]

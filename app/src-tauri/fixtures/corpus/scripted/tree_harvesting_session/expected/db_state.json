@@ -95,6 +95,9 @@
       "value_ped": 0.08
     }
   ],
+  "healing_activations": [],
+  "healing_effect_windows": [],
+  "healing_outputs": [],
   "kill_loot_items": [
     {
       "is_enhancer_shrapnel": 0,

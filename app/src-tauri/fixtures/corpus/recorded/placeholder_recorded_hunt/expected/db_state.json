@@ -3,6 +3,9 @@
   "codex_progress": [],
   "harvest_events": [],
   "harvest_loot_items": [],
+  "healing_activations": [],
+  "healing_effect_windows": [],
+  "healing_outputs": [],
   "kill_loot_items": [
     {
       "is_enhancer_shrapnel": 0,

@@ -3,6 +3,21 @@
   "codex_progress": [],
   "harvest_events": [],
   "harvest_loot_items": [],
+  "healing_activations": [],
+  "healing_effect_windows": [],
+  "healing_outputs": [
+    {
+      "activation_id": null,
+      "amount": 12.0,
+      "classification": "unattributed",
+      "context_id": 1,
+      "effect_window_id": null,
+      "id": "<UUID_2>",
+      "observed_at": "<TS_15>",
+      "reason": "no compatible paid-healer activation",
+      "session_id": "<UUID_1>"
+    }
+  ],
   "kill_loot_items": [],
   "kill_tool_stats": [],
   "kills": [],

@@ -1,0 +1,191 @@
+{
+  "codex_claims": [],
+  "codex_progress": [],
+  "harvest_events": [],
+  "harvest_loot_items": [],
+  "healing_activations": [
+    {
+      "confirming_output_id": "<UUID_3>",
+      "context_id": 1,
+      "cost_ped": 0.04,
+      "equipment_id": 8,
+      "id": "<UUID_4>",
+      "intent_at": "<TS_4>",
+      "observed_at": "<TS_4>",
+      "provenance": "direct",
+      "session_id": "<UUID_1>",
+      "superseded_at": null,
+      "tool_name": "Restoration Chip"
+    },
+    {
+      "confirming_output_id": "<UUID_5>",
+      "context_id": 1,
+      "cost_ped": 0.03,
+      "equipment_id": 9,
+      "id": "<UUID_6>",
+      "intent_at": "<TS_12>",
+      "observed_at": "<TS_12>",
+      "provenance": "direct",
+      "session_id": "<UUID_1>",
+      "superseded_at": null,
+      "tool_name": "FAP"
+    },
+    {
+      "confirming_output_id": "<UUID_7>",
+      "context_id": 3,
+      "cost_ped": 0.03,
+      "equipment_id": 9,
+      "id": "<UUID_8>",
+      "intent_at": "<TS_25>",
+      "observed_at": "<TS_25>",
+      "provenance": "direct",
+      "session_id": "<UUID_2>",
+      "superseded_at": null,
+      "tool_name": "FAP"
+    }
+  ],
+  "healing_effect_windows": [
+    {
+      "activation_id": "<UUID_4>",
+      "context_id": 1,
+      "expires_at": "<TS_36>",
+      "id": "<UUID_9>",
+      "session_id": "<UUID_1>",
+      "started_at": "<TS_4>",
+      "superseded_at": null
+    }
+  ],
+  "healing_outputs": [
+    {
+      "activation_id": "<UUID_4>",
+      "amount": 30.0,
+      "classification": "direct",
+      "context_id": 1,
+      "effect_window_id": "<UUID_9>",
+      "id": "<UUID_3>",
+      "observed_at": "<TS_4>",
+      "reason": "confirmed a paid healing activation",
+      "session_id": "<UUID_1>"
+    },
+    {
+      "activation_id": "<UUID_4>",
+      "amount": 10.0,
+      "classification": "effect",
+      "context_id": 1,
+      "effect_window_id": "<UUID_9>",
+      "id": "<UUID_10>",
+      "observed_at": "<TS_37>",
+      "reason": "matched an active healing effect window",
+      "session_id": "<UUID_1>"
+    },
+    {
+      "activation_id": "<UUID_6>",
+      "amount": 80.0,
+      "classification": "direct",
+      "context_id": 1,
+      "effect_window_id": null,
+      "id": "<UUID_5>",
+      "observed_at": "<TS_12>",
+      "reason": "confirmed a paid healing activation",
+      "session_id": "<UUID_1>"
+    },
+    {
+      "activation_id": "<UUID_4>",
+      "amount": 10.0,
+      "classification": "effect",
+      "context_id": 1,
+      "effect_window_id": "<UUID_9>",
+      "id": "<UUID_11>",
+      "observed_at": "<TS_38>",
+      "reason": "matched an active healing effect window",
+      "session_id": "<UUID_1>"
+    },
+    {
+      "activation_id": "<UUID_4>",
+      "amount": 10.0,
+      "classification": "effect",
+      "context_id": 2,
+      "effect_window_id": "<UUID_9>",
+      "id": "<UUID_12>",
+      "observed_at": "<TS_33>",
+      "reason": "matched an active healing effect window",
+      "session_id": "<UUID_1>"
+    },
+    {
+      "activation_id": "<UUID_4>",
+      "amount": 10.0,
+      "classification": "effect",
+      "context_id": 3,
+      "effect_window_id": "<UUID_9>",
+      "id": "<UUID_13>",
+      "observed_at": "<TS_39>",
+      "reason": "matched an active healing effect window",
+      "session_id": "<UUID_2>"
+    },
+    {
+      "activation_id": null,
+      "amount": 10.0,
+      "classification": "unattributed",
+      "context_id": 3,
+      "effect_window_id": null,
+      "id": "<UUID_14>",
+      "observed_at": "<TS_25>",
+      "reason": "no compatible paid-healer activation",
+      "session_id": "<UUID_2>"
+    },
+    {
+      "activation_id": "<UUID_8>",
+      "amount": 80.0,
+      "classification": "direct",
+      "context_id": 3,
+      "effect_window_id": null,
+      "id": "<UUID_7>",
+      "observed_at": "<TS_25>",
+      "reason": "confirmed a paid healing activation",
+      "session_id": "<UUID_2>"
+    },
+    {
+      "activation_id": null,
+      "amount": 80.0,
+      "classification": "unattributed",
+      "context_id": 3,
+      "effect_window_id": null,
+      "id": "<UUID_15>",
+      "observed_at": "<TS_29>",
+      "reason": "no compatible paid-healer activation",
+      "session_id": "<UUID_2>"
+    }
+  ],
+  "kill_loot_items": [],
+  "kill_tool_stats": [],
+  "kills": [],
+  "ledger_entries": [],
+  "map_pins": [],
+  "notable_events": [],
+  "quest_claims": [],
+  "quest_mobs": [],
+  "quest_playlist_items": [],
+  "quest_playlists": [],
+  "quests": [],
+  "session_quest_analytics_links": [],
+  "session_quest_completions": [],
+  "skill_calibrations": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_33>",
+      "heal_cost": 0.07,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_34>"
+    },
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_35>",
+      "heal_cost": 0.03,
+      "id": "<UUID_2>",
+      "is_active": 0,
+      "started_at": "<TS_33>"
+    }
+  ]
+}

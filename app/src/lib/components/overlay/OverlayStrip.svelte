@@ -1,9 +1,8 @@
 <script lang="ts">
-	import type { TrackingLive, TrackingStatus } from '$lib/api';
+	import type { TrackingLive, TrackingStatus, WeaponMismatchDecision } from '$lib/api';
 	import { overlayStats, scopedStats } from '$lib/statsCustomisation.svelte';
 	import { getStatDef } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
-	import TrifectaSelector from './TrifectaSelector.svelte';
 	import { ICON_EQUIPMENT, ICON_ARMOUR } from './icons';
 	import { NO_DATA } from '$lib/utils/format';
 
@@ -20,10 +19,9 @@
 		savingBoost = false,
 		savingActivity = false,
 		activitiesMenuOpen = false,
-		trifectaSaving = false,
+		decidingWeapon = false,
 		armourCostOpen = false,
 		definitionMenuOpen = false,
-		trifectaMenuOpen = false,
 		mobQuery = $bindable(''),
 		mobInput = $bindable(null),
 		boostDraft = $bindable(''),
@@ -36,7 +34,7 @@
 		onDefinitionTrigger = noop,
 		onBoostCommit = noop,
 		onActivitiesTrigger = noop,
-		onTrifectaTrigger = noop,
+		onWeaponDecision = noop,
 		onArmourCostToggle = noop
 	}: {
 		data: TrackingLive;
@@ -49,10 +47,9 @@
 		savingBoost?: boolean;
 		savingActivity?: boolean;
 		activitiesMenuOpen?: boolean;
-		trifectaSaving?: boolean;
+		decidingWeapon?: boolean;
 		armourCostOpen?: boolean;
 		definitionMenuOpen?: boolean;
-		trifectaMenuOpen?: boolean;
 		mobQuery?: string;
 		mobInput?: HTMLInputElement | null;
 		boostDraft?: string;
@@ -65,7 +62,7 @@
 		onDefinitionTrigger?: (anchor: HTMLButtonElement) => void | Promise<void>;
 		onBoostCommit?: () => void | Promise<void>;
 		onActivitiesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
-		onTrifectaTrigger?: (anchor: HTMLButtonElement) => void | Promise<void>;
+		onWeaponDecision?: (decision: WeaponMismatchDecision) => void | Promise<void>;
 		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
 	} = $props();
 
@@ -73,7 +70,6 @@
 	// churn a declaration causes (see the markup below).
 	let activitiesSection = $state<HTMLDivElement | null>(null);
 
-	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
 	const isActive = $derived(data.status === 'active');
 	// The declared mob is the kill-stamp source and may change mid-session,
 	// so its input is available in both states; a standing declaration
@@ -340,7 +336,7 @@
 		{/if}
 	</div>
 
-	<!-- Trifecta/Weapon Section. No own separator; the adjacent armour section
+	<!-- Weapon section. No own separator; the adjacent armour section
 		 owns the boundary via its left border. -->
 	<div
 		class="flex items-center gap-2 shrink-0"
@@ -351,14 +347,54 @@
 			<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
 				{data.currentTool || NO_DATA}
 			</div>
-		{:else if isTrifectaAttribution}
-			<TrifectaSelector
-				trifecta={data.trifectaAttribution}
-				tone={data.status === 'active' ? 'active' : 'idle'}
-				menuOpen={trifectaMenuOpen}
-				disabled={trifectaSaving}
-				ontrigger={onTrifectaTrigger}
-			/>
+		{:else if data.weaponGuardrail}
+			<!-- The weapon cue: the damage says another carried weapon is
+				 being fired than the one the hotbar declared. The declared
+				 weapon shows in red (the questionable belief) with what is
+				 actually being recorded beneath, and the one decision the
+				 player can make without leaving the game: confirm the switch
+				 (record it from now, and reprice the shots since the last
+				 press it plausibly fired) or keep the hotbar's weapon. -->
+			{@const cue = data.weaponGuardrail}
+			<div class="flex items-center gap-1.5" data-testid="weapon-guardrail-alert">
+				<div
+					class="flex flex-col min-w-0"
+					title={`Damage fits ${cue.recordingTool}; the hotbar shows ${cue.hotbarTool}`}
+				>
+					<div class="text-xs text-red-400 animate-pulse truncate max-w-[120px]">
+						{cue.hotbarTool}
+					</div>
+					<!-- Never truncated: what is actually being recorded must be
+						 readable in full, so the self-sizing window widens for it. -->
+					<div class="text-[10px] leading-tight text-white/70 whitespace-nowrap">
+						Recording: {cue.recordingTool}
+					</div>
+				</div>
+				<button
+					type="button"
+					class="cue-btn cue-btn-confirm"
+					aria-label={`Confirm ${cue.recordingTool}`}
+					title={`Confirm ${cue.recordingTool}: record it from now and reprice the shots since your last hotbar press`}
+					disabled={decidingWeapon}
+					onclick={() => onWeaponDecision('confirm')}
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3 w-3" aria-hidden="true">
+						<path fill-rule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clip-rule="evenodd" />
+					</svg>
+				</button>
+				<button
+					type="button"
+					class="cue-btn"
+					aria-label={`Keep ${cue.hotbarTool}`}
+					title={`Keep ${cue.hotbarTool}: price these shots to it`}
+					disabled={decidingWeapon}
+					onclick={() => onWeaponDecision('keep')}
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-3 w-3" aria-hidden="true">
+						<path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+					</svg>
+				</button>
+			</div>
 		{:else if data.harvestGuardrail}
 			<!-- The guardrail cue: loot evidence disagrees with the hotbar's
 				 tool. The believed tool shows in red (the questionable
@@ -458,7 +494,13 @@
 							: r.color}
 					<div class="flex flex-col items-center justify-center gap-0.5 shrink-0">
 						<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">{def.shortLabel ?? def.label}</span>
-						<span class="text-sm font-semibold tabular-nums leading-none {valueColor}">{r.value}</span>
+						<span
+							class="text-sm font-semibold tabular-nums leading-none {valueColor}"
+							title={r.incomplete}
+						>{r.value}{#if r.incomplete}<span
+									class="ml-px align-super text-[9px] font-normal text-amber-300/90"
+									aria-hidden="true">*</span
+								><span class="sr-only">, {r.incomplete}</span>{/if}</span>
 					</div>
 				{/if}
 			{/each}
@@ -512,6 +554,36 @@
 		color: rgb(125, 211, 252);
 	}
 	.facet-chip:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.cue-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 18px;
+		border-radius: 4px;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		background: rgba(255, 255, 255, 0.05);
+		color: rgba(255, 255, 255, 0.6);
+		transition: all 150ms ease-out;
+	}
+	.cue-btn:hover:not(:disabled),
+	.cue-btn:focus-visible {
+		background: rgba(255, 255, 255, 0.12);
+		color: rgba(255, 255, 255, 0.95);
+		border-color: rgba(255, 255, 255, 0.3);
+		outline: none;
+	}
+	.cue-btn-confirm:hover:not(:disabled),
+	.cue-btn-confirm:focus-visible {
+		background: rgba(52, 211, 153, 0.18);
+		border-color: rgba(52, 211, 153, 0.45);
+		color: rgb(110, 231, 183);
+	}
+	.cue-btn:disabled {
 		opacity: 0.35;
 		cursor: default;
 	}

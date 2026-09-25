@@ -1,7 +1,7 @@
 //! Behavioural pins for the settings family over the typed facade,
 //! ported from the family's HTTP-era hermetic handler tests: the
 //! assembled settings read (defaults, the live db path, the version
-//! stamp, the trifecta readiness, the hotbar slot order), the
+//! stamp, the carried weapons, the hotbar slot order), the
 //! overlay-position read/write, and the partial-update validation ladder
 //! (the empty-patch refusal, the chat-log path checks, the mob-mode
 //! gate), plus a transport-invariance pin (the typed overlay-position
@@ -89,7 +89,7 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "sessionName",
             "declaredSkillBoostPercent",
             "hotbar",
-            "trifecta",
+            "carriedWeaponIds",
             "passiveEffectSources",
             "harvestGuardrail",
             "lootFilterBlacklist",
@@ -111,16 +111,6 @@ async fn the_settings_assembly_shapes_the_default_config() {
         keys(&body["gameConnection"]),
         ["chatLogPath", "chatLogValid", "playerName"]
     );
-    assert_eq!(
-        keys(&body["trifecta"]),
-        [
-            "activePresetId",
-            "activePresetName",
-            "presets",
-            "ready",
-            "message"
-        ]
-    );
 
     // The default values: both facets undeclared. The boost's undeclared
     // state is null, NOT 0: a stored 0 is the distinct declaration that
@@ -131,13 +121,8 @@ async fn the_settings_assembly_shapes_the_default_config() {
         body["lootFilterBlacklist"],
         serde_json::json!(["Universal Ammo"])
     );
-    assert_eq!(body["trifecta"]["activePresetId"], "default");
+    assert_eq!(body["carriedWeaponIds"], serde_json::json!([]));
     assert_eq!(body["passiveEffectSources"], serde_json::json!([]));
-    assert_eq!(body["trifecta"]["presets"][0]["ready"], false);
-    assert_eq!(
-        body["trifecta"]["message"],
-        "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
-    );
     assert_eq!(body["appVersion"], env!("CARGO_PKG_VERSION"));
     assert!(body["dbPath"]
         .as_str()

@@ -26,6 +26,13 @@ export type StatId =
 export type StatRender = {
 	value: string;
 	color: string;
+	/**
+	 * Set when the figure is known to leave something out, saying what:
+	 * shots recorded without a price are missing from every cost the
+	 * figure is built on. Surfaces mark the figure rather than let it read
+	 * as a precise total.
+	 */
+	incomplete?: string;
 };
 
 export type StatDef = {
@@ -78,6 +85,35 @@ function overSpan(
 	return lifetime.instanceCount > 0 ? render(lifetime) : EMPTY;
 }
 
+/** What an incomplete cost leaves out, in the player's terms. */
+export function unpricedNote(shots: number): string {
+	return `Leaves out ${shots} ${shots === 1 ? 'shot' : 'shots'} that could not be priced`;
+}
+
+/**
+ * Mark a cost-derived figure incomplete while shots sit unpriced. Only a
+ * figure actually drawn is marked: an empty reading claims nothing.
+ */
+function costBased(shots: number | null | undefined, render: StatRender): StatRender {
+	return shots && shots > 0 && render.value !== EMPTY.value
+		? { ...render, incomplete: unpricedNote(shots) }
+		: render;
+}
+
+/** A live figure built on the session's cost. */
+function liveCost(
+	render: (status: TrackingStatus) => StatRender,
+): (status: TrackingStatus | null) => StatRender {
+	return (status) => (isActive(status) ? costBased(status.unpricedShots, render(status)) : EMPTY);
+}
+
+/** A lifetime figure built on the family's cycled total. */
+function lifetimeCost(
+	render: (lifetime: LifetimeStats) => StatRender,
+): (lifetime: LifetimeStats) => StatRender {
+	return (lifetime) => costBased(lifetime.unpricedShots, overSpan(lifetime, render));
+}
+
 /** A net figure reads the same either side of the flip: signed, and
  * coloured by which side of break-even it falls. */
 function signedNet(net: number): StatRender {
@@ -100,10 +136,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'cycled',
 		label: 'Cycled',
 		defaultEnabled: true,
-		render: (status) =>
-			isActive(status) ? { value: formatPed(status.cost ?? 0), color: PLAIN } : EMPTY,
-		renderLifetime: (lifetime) =>
-			overSpan(lifetime, (l) => ({ value: formatPed(l.cycled), color: PLAIN })),
+		render: liveCost((status) => ({ value: formatPed(status.cost ?? 0), color: PLAIN })),
+		renderLifetime: lifetimeCost((l) => ({ value: formatPed(l.cycled), color: PLAIN })),
 	},
 	loot_tt: {
 		id: 'loot_tt',
@@ -119,23 +153,17 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Net',
 		defaultEnabled: true,
 		defaultOverlayEnabled: true,
-		render: (status) => {
-			if (!isActive(status)) return EMPTY;
-			const net = (status.returns ?? 0) - (status.cost ?? 0);
-			return signedNet(net);
-		},
-		renderLifetime: (lifetime) => overSpan(lifetime, (l) => signedNet(l.net)),
+		render: liveCost((status) => signedNet((status.returns ?? 0) - (status.cost ?? 0))),
+		renderLifetime: lifetimeCost((l) => signedNet(l.net)),
 	},
 	rate: {
 		id: 'rate',
 		label: 'Rate',
 		defaultEnabled: true,
-		render: (status) =>
-			isActive(status) ? { value: formatPercent(status.returnRate ?? 0), color: PLAIN } : EMPTY,
+		render: liveCost((status) => ({ value: formatPercent(status.returnRate ?? 0), color: PLAIN })),
 		// Already the ratio of the summed parts, computed backend-side;
 		// never the mean of the per-instance rates.
-		renderLifetime: (lifetime) =>
-			overSpan(lifetime, (l) => ({ value: formatPercent(l.returnRate), color: PLAIN })),
+		renderLifetime: lifetimeCost((l) => ({ value: formatPercent(l.returnRate), color: PLAIN })),
 	},
 	pes: {
 		id: 'pes',
@@ -150,19 +178,17 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'pes_per_100',
 		label: 'PES/100',
 		defaultEnabled: false,
-		render: (status) => {
-			if (!isActive(status)) return EMPTY;
+		render: liveCost((status) => {
 			const cost = status.cost ?? 0;
 			if (cost <= 0) return EMPTY;
 			return { value: (((status.pes ?? 0) / cost) * 100).toFixed(2), color: PLAIN };
-		},
+		}),
 		// A ratio of two sums that both flip, so it flips with them:
 		// leaving it on the instance beside a lifetime PES and a
 		// lifetime Cycled would be the arbitrary choice.
-		renderLifetime: (lifetime) =>
-			overSpan(lifetime, (l) =>
-				l.cycled > 0 ? { value: ((l.pes / l.cycled) * 100).toFixed(2), color: PLAIN } : EMPTY,
-			),
+		renderLifetime: lifetimeCost((l) =>
+			l.cycled > 0 ? { value: ((l.pes / l.cycled) * 100).toFixed(2), color: PLAIN } : EMPTY,
+		),
 	},
 	latest_kill_loot: {
 		id: 'latest_kill_loot',
@@ -177,12 +203,11 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'avg_cost_per_kill',
 		label: 'Avg cost/kill',
 		defaultEnabled: false,
-		render: (status) => {
-			if (!isActive(status)) return EMPTY;
+		render: liveCost((status) => {
 			const kills = status.kill_count ?? 0;
 			if (kills <= 0) return EMPTY;
 			return { value: formatPed((status.cost ?? 0) / kills), color: PLAIN };
-		},
+		}),
 	},
 	avg_damage: {
 		id: 'avg_damage',
@@ -203,28 +228,37 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Last Mult',
 		defaultEnabled: false,
 		defaultOverlayEnabled: true,
-		render: (status) =>
-			isActive(status) && status.multiplierLast != null
+		// A kill's multiplier divides by its weapon cost, so an unpriced
+		// shot inflates it.
+		render: liveCost((status) =>
+			status.multiplierLast != null
 				? { value: formatMultiplier(status.multiplierLast), color: PLAIN }
 				: EMPTY,
+		),
 	},
 	multiplier_avg: {
 		id: 'multiplier_avg',
 		label: 'Avg Mult',
 		defaultEnabled: false,
-		render: (status) =>
-			isActive(status) && status.multiplierAvg != null
+		// A kill's multiplier divides by its weapon cost, so an unpriced
+		// shot inflates it.
+		render: liveCost((status) =>
+			status.multiplierAvg != null
 				? { value: formatMultiplier(status.multiplierAvg), color: PLAIN }
 				: EMPTY,
+		),
 	},
 	multiplier_max: {
 		id: 'multiplier_max',
 		label: 'Max Mult',
 		defaultEnabled: false,
-		render: (status) =>
-			isActive(status) && status.multiplierMax != null
+		// A kill's multiplier divides by its weapon cost, so an unpriced
+		// shot inflates it.
+		render: liveCost((status) =>
+			status.multiplierMax != null
 				? { value: formatMultiplier(status.multiplierMax), color: PLAIN }
 				: EMPTY,
+		),
 	},
 	max_damage: {
 		id: 'max_damage',
@@ -239,15 +273,14 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'dpp',
 		label: 'DPP',
 		defaultEnabled: false,
-		render: (status) => {
-			if (!isActive(status)) return EMPTY;
+		render: liveCost((status) => {
 			const weaponCostPed = status.weaponCost ?? 0;
 			if (weaponCostPed <= 0) return EMPTY;
 			const weaponDamage = status.weaponDamageDealt ?? status.damageDealtTotal ?? 0;
 			// Backend weapon cost is PED; classic DPP is damage per PEC.
 			const dpp = weaponDamage / (weaponCostPed * 100);
 			return { value: dpp.toFixed(2), color: PLAIN };
-		},
+		}),
 	},
 	avg_dps: {
 		id: 'avg_dps',

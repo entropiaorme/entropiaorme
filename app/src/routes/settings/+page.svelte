@@ -123,13 +123,6 @@
 
 	async function handleHotbarHooks(checked: boolean) {
 		if (!settings) return;
-		const trifectaReady = settings.trifecta.ready;
-		if (!checked && !trifectaReady) {
-			capabilityError =
-				settings.trifecta.message ??
-				'Configure the trifecta in Equipment before disabling the hotbar key listener.';
-			return;
-		}
 		savingField = 'hotbarHooks';
 		capabilityError = null;
 		try {
@@ -279,9 +272,10 @@
 				<div id="cost-attribution" class="flex items-start justify-between gap-6">
 					<div>
 						<p class="text-sm text-text">Hotbar key listener</p>
-						<p class="text-xs text-text-tertiary mt-0.5">
-							Use your number hotbar (1-9, 0) to switch cost tracking of weapons.
-							When off, trifecta mode is used (preset small weapon, big weapon, and healing item).
+						<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+							Reads your number hotbar (1-9, 0) while a session runs, so each press tells the
+							app which weapon or healer is in hand. When off, weapon costs follow damage
+							ranges alone and healing is not billed.
 						</p>
 					</div>
 					<Toggle
@@ -289,19 +283,8 @@
 						disabled={savingField !== null}
 						onchange={handleHotbarHooks}
 						label="Enable hotbar key listener"
-						title={!settings.trifecta.ready && settings.hotbarHooksEnabled
-							? settings.trifecta.message ??
-								'Configure the trifecta in Equipment before disabling the hotbar key listener'
-							: undefined}
 					/>
 				</div>
-				{#if !settings.trifecta.ready}
-					<p class="text-xs text-text-tertiary">
-						Trifecta:
-						{settings.trifecta.message ??
-							'set a small weapon, big weapon, and healing tool in Equipment → Trifecta to enable trifecta attribution.'}
-					</p>
-				{/if}
 				{#if savedIndicator === 'hotbarHooks'}
 					<p class="text-xs text-success">Saved</p>
 				{/if}

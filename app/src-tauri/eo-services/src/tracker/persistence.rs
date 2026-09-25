@@ -78,12 +78,14 @@ impl TrackerActor {
             Ok(())
         }
     }
-    /// Write a finalised kill to the database: the kill row, the
-    /// per-tool stats (`INSERT OR REPLACE` keyed on the tool name, so
-    /// among same-name phases the last written wins, as the
-    /// original's insertion-ordered iteration does), and the loot
-    /// items, under one commit.
-    pub(super) async fn persist_kill(&self, kill: &Kill) {
+    /// Write a finalised kill to the database: the kill row, its weapon
+    /// phases, its loot items, and the stored weapon evidence of its shots,
+    /// under one commit.
+    pub(super) async fn persist_kill(
+        &self,
+        kill: &Kill,
+        evidence: Vec<super::weapon_evidence::ShotEvidence>,
+    ) {
         let kill = kill.clone();
         let result = self
             .db
@@ -118,34 +120,7 @@ impl TrackerActor {
                     ],
                 )?;
 
-                for (_, stats) in &kill.tool_stats {
-                    let expected_economics_json = stats
-                        .expected_economics
-                        .as_ref()
-                        .map(serde_json::to_string)
-                        .transpose()
-                        .map_err(|source| DbError::Decode {
-                            context: "kill tool expected economics encode",
-                            source,
-                        })?;
-                    tx.execute(
-                        "INSERT OR REPLACE INTO kill_tool_stats \
-                         (kill_id, tool_name, shots_fired, damage_dealt, \
-                          critical_hits, cost_per_shot, expected_economics_json, \
-                          evidence_fingerprint) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            kill.id,
-                            stats.tool_name,
-                            stats.shots_fired,
-                            stats.damage_dealt,
-                            stats.critical_hits,
-                            stats.cost_per_shot.value(),
-                            expected_economics_json,
-                            expected_economics_json.as_deref().unwrap_or(""),
-                        ],
-                    )?;
-                }
+                super::weapon_evidence::write_kill_phases(&tx, &kill)?;
 
                 for item in &kill.loot_items {
                     tx.execute(
@@ -160,6 +135,9 @@ impl TrackerActor {
                             i64::from(item.is_enhancer_shrapnel),
                         ],
                     )?;
+                }
+                for row in &evidence {
+                    row.insert(&tx, Some(&kill.id))?;
                 }
                 tx.commit()?;
                 Ok(())

@@ -33,8 +33,7 @@ function snapshot(): TrackingSnapshot {
 		sessionName: 'Guide Demo',
 		skillBoostPercent: null,
 		currentActivity: 'hunting',
-		weaponAttribution: 'hotbar',
-		trifectaAttribution: null,
+		hotbarKeysEnabled: true,
 		repairOcrEnabled: true,
 	} as TrackingSnapshot;
 }
@@ -105,8 +104,9 @@ describe('refreshDemoTracking', () => {
 			sessionName: 'Guide Demo',
 			skillBoostPercent: null,
 			currentActivity: 'hunting',
-			weaponAttribution: 'hotbar',
-			trifectaAttribution: null,
+			hotbarKeysEnabled: true,
+			weaponGuardrail: undefined,
+			unpricedShots: undefined,
 			repairOcrEnabled: true,
 		});
 

@@ -1,8 +1,8 @@
 //! Behavioural pins for the equipment family over the typed facade,
 //! ported from the family's HTTP-era integration tests: the search
 //! gates, the catalogue-less validation ladder, the custom-consumable
-//! write cycle, the type-change and missing-row refusals, the
-//! trifecta-reference delete guard, and the transport-invariance pins
+//! write cycle, the type-change and missing-row refusals, the unguarded
+//! delete, and the transport-invariance pins
 //! (the typed response serialises to the exact bytes the HTTP route
 //! answered, and the stored `properties_json` bytes are unchanged).
 
@@ -398,20 +398,22 @@ async fn a_catalogue_implant_and_extender_reprice_the_weapon() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_trifecta_referenced_row_refuses_deletion() {
+async fn a_slotted_or_carried_row_still_deletes() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
-    api.equipment_add(&consumable("Kept")).await.unwrap();
+    api.equipment_add(&consumable("Gone")).await.unwrap();
 
-    // A preset referencing row 1 blocks its removal.
+    // A hotbar slot and the carried list naming row 1 do not hold it: the
+    // tracker skips ids the library no longer holds. A retired preset
+    // naming it holds it no longer either.
     std::fs::write(
         dir.path().join("data").join("settings.json"),
-        r#"{"trifecta_presets": [{"id": "p1", "name": "P", "small_weapon_id": 1}]}"#,
+        r#"{"hotbar": {"1": 1}, "carried_weapon_ids": [1],
+            "trifecta_presets": [{"id": "p1", "name": "P", "small_weapon_id": 1}]}"#,
     )
     .unwrap();
-    assert_eq!(
-        api.equipment_delete(1).await.unwrap_err(),
-        ApiError::conflict("Cannot remove equipment selected in a trifecta preset"),
-    );
-    assert_eq!(api.equipment_library().await.unwrap().len(), 1);
+    api.equipment_delete(1).await.unwrap();
+    assert!(api.equipment_library().await.unwrap().is_empty());
+    // Idempotent over the missing row.
+    api.equipment_delete(1).await.unwrap();
 }

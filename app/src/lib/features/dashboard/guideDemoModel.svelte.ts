@@ -70,8 +70,9 @@ export function createGuideDemoModel(statsGrid: StatsGridModel) {
 				sessionName: live.sessionName,
 				skillBoostPercent: live.skillBoostPercent,
 				currentActivity: live.currentActivity,
-				weaponAttribution: live.weaponAttribution,
-				trifectaAttribution: live.trifectaAttribution,
+				hotbarKeysEnabled: live.hotbarKeysEnabled,
+				weaponGuardrail: live.weaponGuardrail,
+				unpricedShots: live.unpricedShots,
 				repairOcrEnabled: live.repairOcrEnabled,
 			};
 		} catch {

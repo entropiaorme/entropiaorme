@@ -41,5 +41,14 @@
       "is_active": 0,
       "started_at": "<TS_15>"
     }
-  ]
+  ],
+  "weapon_attribution_reviews": [],
+  "weapon_attribution_tallies": [
+    {
+      "session_id": "<UUID_1>",
+      "weapon_shots_agreed": 0,
+      "weapon_shots_evidenced": 0
+    }
+  ],
+  "weapon_shot_evidence": []
 }

@@ -17,17 +17,16 @@ import {
 	updateLibrary,
 } from '$lib/api';
 import {
+	equipmentDemoCarriedWeaponIds,
 	equipmentDemoDetails,
 	equipmentDemoHotbar,
 	equipmentDemoLibrary,
-	equipmentDemoTrifecta,
 } from '$lib/guide/fixtures/equipment';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
 	HarvestGuardrailSettings,
 	Hotbar,
 	PassiveEffectSourceView,
-	TrifectaSettings,
 } from '$lib/types/settings';
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead } from '$lib/view/typeahead.svelte';
@@ -44,13 +43,7 @@ export function createLibraryModel() {
 	let harvestingTools = $state<Equipment[]>([]);
 	let hotbar = $state<Hotbar>({});
 	let hotbarHooksEnabled = $state(true);
-	let trifecta = $state<TrifectaSettings>({
-		activePresetId: null,
-		activePresetName: null,
-		presets: [],
-		ready: false,
-		message: null,
-	});
+	let carriedWeaponIds = $state<number[]>([]);
 	let harvestGuardrail = $state<HarvestGuardrailSettings>({
 		enabled: false,
 		shortToolId: null,
@@ -199,10 +192,7 @@ export function createLibraryModel() {
 				splitByKind(library);
 				hotbar = { ...equipmentDemoHotbar };
 				hotbarHooksEnabled = true;
-				trifecta = {
-					...equipmentDemoTrifecta,
-					presets: equipmentDemoTrifecta.presets.map((p) => ({ ...p })),
-				};
+				carriedWeaponIds = [...equipmentDemoCarriedWeaponIds];
 				passiveEffectSources = [];
 				detailCache = Object.fromEntries(
 					Object.entries(equipmentDemoDetails).map(([k, v]) => [k, { ...v }]),
@@ -213,7 +203,7 @@ export function createLibraryModel() {
 				splitByKind(library);
 				hotbar = hotbarFromSettings(settings);
 				hotbarHooksEnabled = settings.hotbarHooksEnabled;
-				trifecta = settings.trifecta;
+				carriedWeaponIds = [...settings.carriedWeaponIds];
 				harvestGuardrail = settings.harvestGuardrail;
 				passiveEffectSources = (settings.passiveEffectSources ?? []).map((source) => ({
 					...source,
@@ -561,11 +551,11 @@ export function createLibraryModel() {
 		get hotbarHooksEnabled() {
 			return hotbarHooksEnabled;
 		},
-		get trifecta() {
-			return trifecta;
+		get carriedWeaponIds() {
+			return carriedWeaponIds;
 		},
-		set trifecta(value: TrifectaSettings) {
-			trifecta = value;
+		set carriedWeaponIds(value: number[]) {
+			carriedWeaponIds = value;
 		},
 		get harvestGuardrail() {
 			return harvestGuardrail;

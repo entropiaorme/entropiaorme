@@ -14,10 +14,9 @@ export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
 export const OVERLAY_MENU_CLOSED_EVENT = 'overlay-menu:closed';
 export const OVERLAY_MENU_INTERACT_EVENT = 'overlay-menu:interact';
 
-export type OverlayMenuKind = 'definition' | 'mob' | 'trifecta' | 'activities' | 'questHandIn';
+export type OverlayMenuKind = 'definition' | 'mob' | 'activities' | 'questHandIn';
 
 export type OverlayMenuState =
-	| OverlayTrifectaMenuState
 	| OverlayDefinitionMenuState
 	| OverlayMobMenuState
 	| OverlayActivitiesMenuState
@@ -27,16 +26,6 @@ export interface OverlayQuestHandInMenuState {
 	kind: 'questHandIn';
 	width: number;
 	handIn: QuestHandInState;
-}
-
-export interface OverlayTrifectaMenuState {
-	kind: 'trifecta';
-	width: number;
-	options: {
-		id: string;
-		name: string;
-		active: boolean;
-	}[];
 }
 
 /** The session picker: the authored definitions with the current
@@ -83,7 +72,6 @@ export interface OverlayActivitiesMenuState {
 }
 
 export type OverlayMenuSelection =
-	| { kind: 'trifecta'; presetId: string }
 	| { kind: 'definition'; definitionId: string; selected: boolean }
 	| { kind: 'mob'; species: string; maturity: string }
 	| { kind: 'activities'; action: 'toggle'; key: string }
@@ -136,7 +124,6 @@ export function computeMenuHeight(rows: number): number {
  * loading, error, and empty states each occupy exactly one line. The
  * Activities menu counts its free-text row as one more. */
 export function menuRowCount(state: OverlayMenuState): number {
-	if (state.kind === 'trifecta') return Math.max(1, state.options.length);
 	if (state.kind === 'definition') return Math.max(1, state.definitions.length);
 	if (state.kind === 'activities') {
 		// The free-text row is one more line, and the empty state is one

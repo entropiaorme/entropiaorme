@@ -1,6 +1,6 @@
 //! The tracking read/edit computation: the session list and detail
-//! reads, the tag suggestions, the post-hoc session edits, and the
-//! snapshot's trifecta attribution summary, over the shared database.
+//! reads, the tag suggestions, and the post-hoc session edits, over the
+//! shared database.
 //!
 //! The shaping here produces the wire `serde_json::Value` forms the
 //! facade's DTOs pin byte-for-byte: the exclude-none projections, the
@@ -14,7 +14,7 @@ use chrono::DateTime;
 use serde_json::{json, Map, Value};
 
 use crate::character_calc::ATTRIBUTE_SKILLS;
-use crate::config_service::{active_trifecta_preset, AppConfig};
+use crate::config_service::AppConfig;
 use crate::db::{Db, DbError};
 use crate::time::to_iso_utc;
 use eo_wire::normalizer::round_half_even;
@@ -795,6 +795,7 @@ pub fn get_session_read(
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,
         "skillGains": skill_gains,
+        "weaponAttribution": crate::weapon_review::session_detail_block(conn, session_id)?,
         "healing": {
             "correctable": healing_correctable,
             "activations": healing_activations,
@@ -1596,6 +1597,17 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 "DELETE FROM healing_corrections WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
+            // Weapon evidence is scoped to its own session.
+            for table in [
+                "weapon_attribution_corrections",
+                "weapon_shot_evidence",
+                "weapon_attribution_reviews",
+            ] {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE session_id = ?"),
+                    rusqlite::params![sid],
+                )?;
+            }
             tx.execute(
                 "DELETE FROM healing_outputs WHERE session_id = ?",
                 rusqlite::params![sid],
@@ -1630,20 +1642,22 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
 
 // ── Producer helpers ────────────────────────────────────────────────
 
-/// `_validate_hotbar`: hotbar attribution is workable while at least one
-/// slot is bound (a non-null library id).
-pub fn validate_hotbar(config: &AppConfig) -> (bool, Option<String>) {
+/// Tracking is workable once the player has configured a tool: a bound
+/// hotbar slot (a non-null library id) or a weapon carried without one.
+/// With neither, no shot could ever be priced.
+pub fn validate_tools(config: &AppConfig) -> (bool, Option<String>) {
     let any_bound = config
         .hotbar
         .values()
         .any(|library_id| !library_id.is_null());
-    if any_bound {
+    if any_bound || !config.carried_weapon_ids.is_empty() {
         (true, None)
     } else {
         (
             false,
             Some(
-                "Bind at least one hotbar slot in the Equipment page before tracking.".to_string(),
+                "Bind a hotbar slot or add a carried weapon in Equipment before tracking."
+                    .to_string(),
             ),
         )
     }
@@ -1746,64 +1760,10 @@ pub fn opt_str(value: &Value) -> Option<String> {
     value.as_str().map(str::to_string)
 }
 
-/// `_trifecta_attribution_summary`: the active preset's bound
-/// weapon/heal names plus the preset list, or null when nothing exists.
-pub async fn trifecta_attribution_summary(db: &Db, config: &AppConfig) -> Result<Value, DbError> {
-    let active = active_trifecta_preset(config);
-    let small = active.and_then(|preset| preset.small_weapon_id);
-    let big = active.and_then(|preset| preset.big_weapon_id);
-    let heal = active.and_then(|preset| preset.heal_id);
-    let presets: Vec<Value> = config
-        .trifecta_presets
-        .iter()
-        .map(|preset| json!({"id": preset.id, "name": preset.name}))
-        .collect();
-    if presets.is_empty() && small.is_none() && big.is_none() && heal.is_none() {
-        return Ok(Value::Null);
-    }
-    let mut summary = Map::new();
-    summary.insert(
-        "activePresetId".into(),
-        match &config.active_trifecta_preset_id {
-            Some(id) => Value::String(id.clone()),
-            None => Value::Null,
-        },
-    );
-    summary.insert(
-        "presetName".into(),
-        match active {
-            Some(preset) => Value::String(preset.name.clone()),
-            None => Value::Null,
-        },
-    );
-    summary.insert("presets".into(), Value::Array(presets));
-    summary.insert(
-        "smallWeapon".into(),
-        equipment_name(db, small, "weapon").await?,
-    );
-    summary.insert("bigWeapon".into(), equipment_name(db, big, "weapon").await?);
-    summary.insert(
-        "healTool".into(),
-        equipment_name(db, heal, "healing").await?,
-    );
-    Ok(Value::Object(summary))
-}
-
-/// The equipment-library name for a bound id and type, or null.
-pub async fn equipment_name(db: &Db, id: Option<i64>, item_type: &str) -> Result<Value, DbError> {
-    let Some(id) = id else {
-        return Ok(Value::Null);
-    };
-    match db.equipment_item(id, item_type).await? {
-        Some((_id, name, _properties)) => Ok(Value::String(name)),
-        None => Ok(Value::Null),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_service::{AppConfig, TrifectaPresetConfig};
+    use crate::config_service::AppConfig;
     use crate::db::Db;
     use rusqlite::{params, Connection};
     use serde_json::json;
@@ -1948,19 +1908,6 @@ mod tests {
             "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
              VALUES (?, ?, 'scan', ?)",
             params![skill, level, scanned_at],
-        )?;
-        Ok(())
-    }
-
-    fn seed_equipment(
-        conn: &Connection,
-        id: i64,
-        name: &str,
-        item_type: &str,
-    ) -> Result<(), DbError> {
-        conn.execute(
-            "INSERT INTO equipment_library (id, name, item_type, properties_json) VALUES (?, ?, ?, '{}')",
-            params![id, name, item_type],
         )?;
         Ok(())
     }
@@ -2523,6 +2470,17 @@ mod tests {
                 "effectiveLoot": 30.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 20, "damageDealt": 200.0, "crits": 1, "costAttributed": 10.0}],
                 "skillGains": [{"skillName": "Laser Weaponry Technology", "level": 42.5, "ttValueGained": 0.5}],
+                "weaponAttribution": {
+                    "correctable": true,
+                    "agreed": null,
+                    "evidenced": null,
+                    "evidenceShots": 0,
+                    "unresolved": 0,
+                    "unpriced": 0,
+                    "assigned": 0,
+                    "effectTicks": 0,
+                    "reviews": [],
+                },
                 "healing": {
                     "correctable": true,
                     "activations": [{
@@ -2654,6 +2612,17 @@ mod tests {
                 "effectiveLoot": 28.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 10, "damageDealt": 100.0, "crits": 0, "costAttributed": 5.0}],
                 "skillGains": [],
+                "weaponAttribution": {
+                    "correctable": true,
+                    "agreed": null,
+                    "evidenced": null,
+                    "evidenceShots": 0,
+                    "unresolved": 0,
+                    "unpriced": 0,
+                    "assigned": 0,
+                    "effectTicks": 0,
+                    "reviews": [],
+                },
                 "healing": {
                     "correctable": true,
                     "activations": [],
@@ -3358,16 +3327,21 @@ mod tests {
     // ── Producer helpers ────────────────────────────────────────────
 
     #[test]
-    fn validate_hotbar_needs_a_bound_slot() {
+    fn validate_tools_needs_a_bound_slot_or_a_carried_weapon() {
         let mut config = AppConfig::default();
-        // The default hotbar is all-null: not workable.
-        let (ok, message) = validate_hotbar(&config);
+        // The default hotbar is all-null and nothing is carried.
+        let (ok, message) = validate_tools(&config);
         assert!(!ok);
-        assert!(message.unwrap().contains("Bind at least one"));
+        assert!(message.unwrap().contains("Bind a hotbar slot"));
 
-        // Binding one slot makes it workable.
+        // A carried weapon alone makes it workable.
+        config.carried_weapon_ids = vec![4];
+        assert_eq!(validate_tools(&config), (true, None));
+
+        // So does one bound slot alone.
+        config.carried_weapon_ids.clear();
         config.hotbar.insert("1".to_string(), json!(5));
-        assert_eq!(validate_hotbar(&config), (true, None));
+        assert_eq!(validate_tools(&config), (true, None));
     }
 
     #[test]
@@ -3452,80 +3426,6 @@ mod tests {
         assert_eq!(opt_str(&json!("x")), Some("x".to_string()));
         assert_eq!(opt_str(&Value::Null), None);
         assert_eq!(opt_str(&json!(5)), None);
-    }
-
-    // ── Trifecta ────────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn trifecta_attribution_summary_builds_or_nulls() {
-        let (_dir, db) = open_db().await;
-        db.with_writer(|conn| {
-            seed_equipment(conn, 1, "Small Gun", "weapon")?;
-            seed_equipment(conn, 2, "Heal Tool", "healing")?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-        let config = AppConfig {
-            trifecta_presets: vec![TrifectaPresetConfig {
-                id: "p1".to_string(),
-                name: "Preset One".to_string(),
-                small_weapon_id: Some(1),
-                big_weapon_id: None,
-                heal_id: Some(2),
-            }],
-            active_trifecta_preset_id: Some("p1".to_string()),
-            ..AppConfig::default()
-        };
-        let summary = trifecta_attribution_summary(&db, &config).await.unwrap();
-        assert_eq!(
-            summary,
-            json!({
-                "activePresetId": "p1",
-                "presetName": "Preset One",
-                "presets": [{"id": "p1", "name": "Preset One"}],
-                "smallWeapon": "Small Gun",
-                "bigWeapon": null,
-                "healTool": "Heal Tool",
-            })
-        );
-
-        // No presets and no bound ids collapses to null.
-        let empty = AppConfig {
-            trifecta_presets: vec![],
-            active_trifecta_preset_id: None,
-            ..AppConfig::default()
-        };
-        assert_eq!(
-            trifecta_attribution_summary(&db, &empty).await.unwrap(),
-            Value::Null
-        );
-    }
-
-    #[tokio::test]
-    async fn equipment_name_resolves_by_id_and_type() {
-        let (_dir, db) = open_db().await;
-        db.with_writer(|conn| seed_equipment(conn, 1, "Small Gun", "weapon"))
-            .await
-            .unwrap();
-        assert_eq!(
-            equipment_name(&db, None, "weapon").await.unwrap(),
-            Value::Null
-        );
-        assert_eq!(
-            equipment_name(&db, Some(1), "weapon").await.unwrap(),
-            json!("Small Gun")
-        );
-        // An absent id and a type mismatch both read null.
-        assert_eq!(
-            equipment_name(&db, Some(999), "weapon").await.unwrap(),
-            Value::Null
-        );
-        assert_eq!(
-            equipment_name(&db, Some(1), "healing").await.unwrap(),
-            Value::Null
-        );
     }
 
     // ── Return-rate zero-cost guards and active-duration ────────────
@@ -3613,33 +3513,5 @@ mod tests {
         assert_eq!(value["summary"]["duration"], json!(3600));
         assert_eq!(value["summary"]["cost"], json!(0.0));
         assert_eq!(value["summary"]["returnRate"], json!(0.0));
-    }
-
-    /// A preset exists but none is active, so every bound id is None while the
-    /// preset list is non-empty. The early-return guard is a conjunction of
-    /// four terms; turning any `&&` into `||` would collapse this real preset
-    /// list to null.
-    #[tokio::test]
-    async fn trifecta_attribution_summary_keeps_an_unbound_preset_list() {
-        let (_dir, db) = open_db().await;
-        let config = AppConfig {
-            trifecta_presets: vec![TrifectaPresetConfig {
-                id: "p1".to_string(),
-                name: "Preset One".to_string(),
-                small_weapon_id: None,
-                big_weapon_id: None,
-                heal_id: None,
-            }],
-            active_trifecta_preset_id: None,
-            ..AppConfig::default()
-        };
-        let summary = trifecta_attribution_summary(&db, &config).await.unwrap();
-        assert_ne!(summary, Value::Null);
-        assert_eq!(
-            summary["presets"],
-            json!([{"id": "p1", "name": "Preset One"}])
-        );
-        assert_eq!(summary["activePresetId"], Value::Null);
-        assert_eq!(summary["smallWeapon"], Value::Null);
     }
 }

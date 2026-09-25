@@ -17,8 +17,10 @@
  *
  * Armour cost is recorded when the player repairs, possibly sessions after
  * the play it covers, so a row whose session still awaits a recording is
- * marked: its net is not final. A recording or undo from the overlay
- * re-reads the loaded rows and their marks in place.
+ * marked: its net is not final. So is a row holding shots no weapon could
+ * be priced to, until they are assigned in the session's record. A
+ * recording, a correction, or an assignment from any window re-reads the
+ * loaded rows and their marks in place.
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -26,10 +28,12 @@ import {
 	deleteSession,
 	getSessionDetail,
 	getTrackingSessions,
+	getUnpricedShotSessions,
 	getUnrecordedArmourSessions,
 	HEALING_TOPIC,
 	PROTECTION_TOPIC,
 	reassignSession,
+	WEAPONS_TOPIC,
 } from '$lib/api';
 import type { SessionDetail, TrackingSession } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
@@ -69,6 +73,8 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 	let reassigning = $state(false);
 	// Loaded sessions whose armour cost no recording covers yet.
 	let armourPending = $state<ReadonlySet<string>>(new Set());
+	// Loaded sessions holding shots recorded without a price.
+	let unpricedShots = $state<ReadonlySet<string>>(new Set());
 
 	// Pure pager over the loaded window: no search, category, or sort, so
 	// the paged rows keep the backend's ordering unchanged.
@@ -77,18 +83,27 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		pageSize: PAGE_SIZE,
 	});
 
-	/** Re-read which loaded sessions still await an armour recording. A
-	 * failed read keeps the previous marks rather than clearing them. */
-	async function refreshArmourMarks(): Promise<void> {
+	/** Re-read which loaded sessions' costs are not final: awaiting an
+	 * armour recording, or holding unpriced shots. A failed read keeps that
+	 * mark's previous state rather than clearing it. */
+	async function refreshMarks(): Promise<void> {
 		const ids = sessions.map((session) => session.id);
-		try {
-			armourPending = new Set(ids.length === 0 ? [] : await getUnrecordedArmourSessions(ids));
-		} catch {
-			// The next protection write re-reads.
+		if (ids.length === 0) {
+			armourPending = new Set();
+			unpricedShots = new Set();
+			return;
 		}
+		const [armour, unpriced] = await Promise.allSettled([
+			(async () => getUnrecordedArmourSessions(ids))(),
+			(async () => getUnpricedShotSessions(ids))(),
+		]);
+		// A failed read waits for the next write to re-read.
+		if (armour.status === 'fulfilled') armourPending = new Set(armour.value);
+		if (unpriced.status === 'fulfilled') unpricedShots = new Set(unpriced.value);
 	}
 
-	/** After an armour recording or a healing correction: re-read the loaded
+	/** After an armour recording, a healing correction, or a weapon
+	 * assignment: re-read the loaded
 	 * rows' figures in place, keeping the page and any open row, then their
 	 * marks. */
 	async function refreshCosts(): Promise<void> {
@@ -101,14 +116,17 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} catch {
 			// Keep the rows shown; the next write re-reads.
 		}
-		await refreshArmourMarks();
+		await refreshMarks();
 	}
 
-	/** Follow armour recordings and healing corrections from any window,
-	 * both of which move session costs; returns the detach function. */
+	/** Follow armour recordings, healing corrections, and weapon assignments
+	 * from any window, all of which move session costs; returns the detach
+	 * function. */
 	async function subscribeCostChanges(): Promise<UnlistenFn> {
 		const stops = await Promise.all(
-			[PROTECTION_TOPIC, HEALING_TOPIC].map((topic) => listen(topic, () => void refreshCosts())),
+			[PROTECTION_TOPIC, HEALING_TOPIC, WEAPONS_TOPIC].map((topic) =>
+				listen(topic, () => void refreshCosts()),
+			),
 		);
 		return () => {
 			for (const stop of stops) stop();
@@ -134,7 +152,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loading = false;
 		}
-		await refreshArmourMarks();
+		await refreshMarks();
 	}
 
 	// Fetch the next keyset page and append it, growing the client
@@ -154,7 +172,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loadingMore = false;
 		}
-		await refreshArmourMarks();
+		await refreshMarks();
 	}
 
 	// Pager bounds from the server total: the client pages the loaded
@@ -302,6 +320,10 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		/** The session's armour cost awaits a recording, so its net is not final. */
 		armourPending(id: string): boolean {
 			return armourPending.has(id);
+		},
+		/** The session holds shots recorded without a price, so its net leaves them out. */
+		unpriced(id: string): boolean {
+			return unpricedShots.has(id);
 		},
 
 		loadSessions,

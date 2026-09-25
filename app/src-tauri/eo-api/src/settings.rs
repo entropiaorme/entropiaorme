@@ -11,7 +11,7 @@
 //! typed-command crossing. The pydantic-era `exclude_unset` partial the HTTP layer
 //! parsed is now the all-`Option` [`SettingsPatch`] DTO, so the framework
 //! 422/500 envelopes it produced (a non-integer overlay coordinate, a
-//! structurally-malformed `hotbar`/`trifecta_presets` container, an
+//! structurally-malformed `hotbar` container, an
 //! unrenderable surrogate string) become unrepresentable over the typed
 //! command rather than validated. And the dead `POST /api/settings/reset`
 //! retires unconverted: it has no frontend caller, exactly as the
@@ -20,9 +20,8 @@
 
 use std::path::Path;
 
-use eo_services::config_service::{load_config_readonly, AppConfig};
+use eo_services::config_service::load_config_readonly;
 use eo_services::paths::DB_FILE_NAME;
-use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
@@ -45,32 +44,6 @@ pub struct GameConnection {
     pub chat_log_path: String,
     pub chat_log_valid: bool,
     pub player_name: String,
-}
-
-/// One trifecta preset in the settings view: the stored equipment ids
-/// plus the live readiness validation against the library.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaPresetView {
-    pub id: String,
-    pub name: String,
-    pub small_weapon_id: Nullable<i64>,
-    pub big_weapon_id: Nullable<i64>,
-    pub heal_id: Nullable<i64>,
-    pub ready: bool,
-    pub message: Nullable<String>,
-}
-
-/// The trifecta block: every preset validated, with the active preset's
-/// readiness lifted to the top level.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaSettings {
-    pub active_preset_id: Nullable<String>,
-    pub active_preset_name: Nullable<String>,
-    pub presets: Vec<TrifectaPresetView>,
-    pub ready: bool,
-    pub message: Nullable<String>,
 }
 
 /// The harvest-guardrail block: the enabled flag and the intended tool
@@ -137,7 +110,9 @@ pub struct AppSettings {
     /// The slot-to-equipment map, carried through in its stored insertion
     /// order (`serde_json`'s `preserve_order`), so slot "0" stays last.
     pub hotbar: Map<String, Value>,
-    pub trifecta: TrifectaSettings,
+    /// Weapons carried without a hotbar slot: with the slotted weapons,
+    /// the candidates weapon attribution chooses among.
+    pub carried_weapon_ids: Vec<i64>,
     pub passive_effect_sources: Vec<PassiveEffectSourceView>,
     pub harvest_guardrail: HarvestGuardrailSettings,
     pub loot_filter_blacklist: Vec<String>,
@@ -156,20 +131,6 @@ pub struct OverlayPosition {
 
 // ── Request DTOs ────────────────────────────────────────────────────
 
-/// One trifecta preset in a settings update. Field names stay in the
-/// stored snake_case the config writer re-normalises.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TrifectaPresetInput {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub small_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub big_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub heal_id: Option<i64>,
-}
-
 /// The harvest-guardrail block in a settings update. Field names stay
 /// in the stored snake_case the config writer re-normalises.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -186,10 +147,10 @@ pub struct HarvestGuardrailInput {
 
 /// The partial settings update: every field optional, only the present
 /// ones applied (the `exclude_unset` semantics the pydantic model had).
-/// `active_trifecta_preset_id` is a double option so an explicit `null`
-/// (clear the active preset) stays distinct from an absent field (leave
-/// it untouched); every other field is nullless, so a plain `Option`
-/// carries the present/absent distinction.
+/// `declared_skill_boost_percent` is a double option so an explicit
+/// `null` (withdraw the declaration) stays distinct from an absent field
+/// (leave it untouched); every other field is nullless, so a plain
+/// `Option` carries the present/absent distinction.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct SettingsPatch {
     #[serde(default)]
@@ -211,10 +172,8 @@ pub struct SettingsPatch {
     pub declared_skill_boost_percent: Option<Option<i64>>,
     #[serde(default)]
     pub hotbar: Option<Map<String, Value>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub active_trifecta_preset_id: Option<Option<String>>,
     #[serde(default)]
-    pub trifecta_presets: Option<Vec<TrifectaPresetInput>>,
+    pub carried_weapon_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub passive_effect_sources: Option<Vec<PassiveEffectSourceInput>>,
     #[serde(default)]
@@ -237,7 +196,7 @@ where
 impl SettingsPatch {
     /// The present fields as the update map the config writer applies
     /// (stored snake_case keys). Absent fields are omitted; the `hotbar`
-    /// and `trifecta_presets` containers pass through as their raw JSON
+    /// and `carried_weapon_ids` containers pass through as their raw JSON
     /// value, which the writer re-normalises.
     fn into_updates(self) -> Map<String, Value> {
         let mut updates = Map::new();
@@ -277,14 +236,8 @@ impl SettingsPatch {
         if let Some(value) = self.hotbar {
             updates.insert("hotbar".into(), Value::Object(value));
         }
-        if let Some(value) = self.active_trifecta_preset_id {
-            updates.insert(
-                "active_trifecta_preset_id".into(),
-                value.map(Value::String).unwrap_or(Value::Null),
-            );
-        }
-        if let Some(value) = self.trifecta_presets {
-            updates.insert("trifecta_presets".into(), json!(value));
+        if let Some(value) = self.carried_weapon_ids {
+            updates.insert("carried_weapon_ids".into(), json!(value));
         }
         if let Some(value) = self.passive_effect_sources {
             updates.insert("passive_effect_sources".into(), json!(value));
@@ -303,13 +256,11 @@ impl SettingsPatch {
 
 impl Api {
     /// The full settings assembly: the config fields, the live chat-log
-    /// validity, the per-preset trifecta readiness, the resolved db path,
-    /// and the version stamp. Reads the config fresh from disk, so a read
+    /// validity, the resolved db path, and the version stamp. Reads the config fresh from disk, so a read
     /// after a write is coherent (the writer saves before responding).
     pub async fn settings(&self) -> Result<AppSettings, ApiError> {
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("settings config read"))?;
-        let trifecta = self.trifecta_block(&config).await?;
         Ok(AppSettings {
             game_connection: GameConnection {
                 chat_log_path: config.chatlog_path.clone(),
@@ -324,7 +275,7 @@ impl Api {
                 .declared_skill_boost_percent
                 .filter(|percent| *percent >= 0),
             hotbar: config.hotbar.clone(),
-            trifecta,
+            carried_weapon_ids: config.carried_weapon_ids.clone(),
             passive_effect_sources: config
                 .passive_effect_sources
                 .iter()
@@ -467,49 +418,6 @@ impl Api {
         }
         self.tracker.reload_config().await;
         self.settings().await
-    }
-
-    /// The trifecta block: every preset validated against the live
-    /// equipment library, with the active preset's readiness lifted to
-    /// the top level (mirrors the backend's `_build_trifecta_response`).
-    async fn trifecta_block(&self, config: &AppConfig) -> Result<TrifectaSettings, ApiError> {
-        let mut presets = Vec::new();
-        let mut active_ready = false;
-        let mut active_message: Option<String> = None;
-        let mut active_name: Option<String> = None;
-
-        for preset in &config.trifecta_presets {
-            let service_preset = TrifectaPreset {
-                small_weapon_id: preset.small_weapon_id,
-                big_weapon_id: preset.big_weapon_id,
-                heal_id: preset.heal_id,
-            };
-            let (ready, message) = validate_trifecta(&self.db, Some(&service_preset))
-                .await
-                .map_err(ApiError::internal("trifecta validation"))?;
-            presets.push(TrifectaPresetView {
-                id: preset.id.clone(),
-                name: preset.name.clone(),
-                small_weapon_id: preset.small_weapon_id.into(),
-                big_weapon_id: preset.big_weapon_id.into(),
-                heal_id: preset.heal_id.into(),
-                ready,
-                message: message.clone().into(),
-            });
-            if Some(preset.id.as_str()) == config.active_trifecta_preset_id.as_deref() {
-                active_ready = ready;
-                active_message = message;
-                active_name = Some(preset.name.clone());
-            }
-        }
-
-        Ok(TrifectaSettings {
-            active_preset_id: config.active_trifecta_preset_id.clone().into(),
-            active_preset_name: active_name.into(),
-            presets,
-            ready: active_ready,
-            message: active_message.into(),
-        })
     }
 }
 
@@ -693,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_field_is_omitted_while_an_explicit_null_preset_clears() {
+    fn an_absent_field_is_omitted_while_an_explicit_null_boost_withdraws() {
         // A bare Option field: absent stays absent.
         let patch = SettingsPatch {
             player_name: Some("Mikel".into()),
@@ -703,17 +611,30 @@ mod tests {
         assert_eq!(updates.get("player_name"), Some(&json!("Mikel")));
         assert!(!updates.contains_key("chatlog_path"));
 
-        // The double-option preset id: present-null lands as a null in the
-        // update map (clear the active preset), distinct from absent.
+        // The double-option boost: present-null lands as a null in the
+        // update map (withdraw the declaration), distinct from absent.
         let cleared: SettingsPatch =
-            serde_json::from_value(json!({ "active_trifecta_preset_id": null })).unwrap();
+            serde_json::from_value(json!({ "declared_skill_boost_percent": null })).unwrap();
         assert_eq!(
-            cleared.into_updates().get("active_trifecta_preset_id"),
+            cleared.into_updates().get("declared_skill_boost_percent"),
             Some(&Value::Null)
         );
         let untouched: SettingsPatch = serde_json::from_value(json!({})).unwrap();
         assert!(!untouched
             .into_updates()
-            .contains_key("active_trifecta_preset_id"));
+            .contains_key("declared_skill_boost_percent"));
+
+        // Carried weapons pass through as the raw list the writer
+        // re-normalises; the retired preset keys are no longer accepted
+        // into the update.
+        let carried: SettingsPatch =
+            serde_json::from_value(json!({ "carried_weapon_ids": [4, 4, 7] })).unwrap();
+        assert_eq!(
+            carried.into_updates().get("carried_weapon_ids"),
+            Some(&json!([4, 4, 7]))
+        );
+        let retired: SettingsPatch =
+            serde_json::from_value(json!({ "active_trifecta_preset_id": "p" })).unwrap();
+        assert!(retired.into_updates().is_empty());
     }
 }

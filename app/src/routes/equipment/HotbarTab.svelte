@@ -2,18 +2,32 @@
 	import type { Equipment } from '$lib/types';
 	import type { Hotbar } from '$lib/types/settings';
 	import { hotbarFromSettings, updateSettings } from '$lib/api';
-	import { Select } from '$lib/components';
+	import { Divider, Select } from '$lib/components';
+	import CarriedWeapons from '$lib/features/equipment/CarriedWeapons.svelte';
+	import DamageRanges from '$lib/features/equipment/DamageRanges.svelte';
+	import {
+		addableWeapons,
+		carriedWeapons,
+		weaponBands
+	} from '$lib/features/equipment/carriedWeapons';
 
 	let {
 		equipment,
 		hotbar: initialHotbar,
+		carriedWeaponIds,
+		hotbarHooksEnabled,
 		enabled = true,
-		onchange
+		onchange,
+		oncarriedchange
 	}: {
 		equipment: Equipment[];
 		hotbar: Hotbar;
+		carriedWeaponIds: number[];
+		/** The hotbar key listener setting: presses declare the weapon in hand. */
+		hotbarHooksEnabled: boolean;
 		enabled?: boolean;
 		onchange?: (value: Hotbar) => void;
+		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
 
 	let hotbar: Hotbar = $state({});
@@ -23,6 +37,13 @@
 	let healingTools = $derived(equipment.filter((e) => e.type === 'healing'));
 	let consumablesList = $derived(equipment.filter((e) => e.type === 'consumable'));
 	let harvestingToolsList = $derived(equipment.filter((e) => e.type === 'tool'));
+
+	// The weapons attribution chooses among: the slotted ones and the ones
+	// carried without a hotkey, with the damage band each is checked against.
+	let carried = $derived(carriedWeapons(equipment, hotbar, carriedWeaponIds));
+	let unslotted = $derived(carried.filter((entry) => entry.slot === null).map((entry) => entry.weapon));
+	let addable = $derived(addableWeapons(equipment, hotbar, carriedWeaponIds));
+	let bands = $derived(weaponBands(carried));
 
 	$effect(() => {
 		hotbar = { ...initialHotbar };
@@ -74,28 +95,18 @@
 		</div>
 	{/if}
 
-	<div class="relative min-h-64">
-		{#if !enabled}
-			<div class="absolute inset-0 z-10 flex items-center justify-center px-4 py-10">
-				<div
-					data-guide-anchor="hotbar-disabled-notice"
-					class="max-w-md rounded-md border border-border bg-surface-raised/95 px-5 py-4 text-center shadow-lg backdrop-blur-sm"
-				>
-					<p class="text-sm font-medium text-text">Trifecta is currently in use.</p>
-					<p class="mt-1.5 text-sm leading-6 text-text-secondary">
-						To use the Hotbar, enable the hotbar key listener in the
-						<a
-							href="/settings#cost-attribution"
-							class="whitespace-nowrap font-medium text-accent underline underline-offset-4 hover:text-accent-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-						>
-							Settings tab
-						</a>.
-					</p>
-				</div>
-			</div>
+	<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
+		{#if hotbarHooksEnabled}
+			The hotbar key listener is on: a press tells the app which weapon is in hand, and each
+			weapon's damage range checks it.
+		{:else}
+			The hotbar key listener is off, so shots are attributed by damage range alone.
+			<a href="/settings#cost-attribution" class="linklet">Turn it on in Settings</a> for exact
+			switching.
 		{/if}
+	</p>
 
-		<div class="{enabled ? '' : 'opacity-40 grayscale blur-[2px] pointer-events-none select-none'}">
+	<div>
 		{#if weapons.length === 0 && healingTools.length === 0 && consumablesList.length === 0 && harvestingToolsList.length === 0}
 			<p class="text-sm text-text-tertiary py-4">
 				Add equipment in the Library tab first, then assign them to hotbar slots here.
@@ -184,6 +195,18 @@
 				{/each}
 			</div>
 		{/if}
-		</div>
 	</div>
+
+	{#if weapons.length > 0}
+		<Divider />
+		<CarriedWeapons
+			carried={unslotted}
+			{addable}
+			carriedIds={carriedWeaponIds}
+			{enabled}
+			onchange={oncarriedchange}
+		/>
+		<Divider />
+		<DamageRanges banded={bands.banded} bandless={bands.bandless} />
+	{/if}
 </div>

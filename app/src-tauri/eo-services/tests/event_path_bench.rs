@@ -225,6 +225,7 @@ fn label(event: &BusEvent) -> &'static str {
         BusEvent::NavigationUpdated(_) => "navigation_updated",
         BusEvent::ProtectionUpdated(_) => "protection_updated",
         BusEvent::HealingUpdated(_) => "healing_updated",
+        BusEvent::WeaponsUpdated(_) => "weapons_updated",
     }
 }
 

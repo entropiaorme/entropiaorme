@@ -16,9 +16,8 @@ import type {
 	ToolActivity,
 	TrackingSnapshot,
 	TrackingState,
-	TrifectaAttribution,
 	Warning,
-	WeaponAttribution,
+	WeaponGuardrailAlert,
 } from './commands.gen';
 import * as commands from './commands.gen';
 import { guideSwapped } from './guide';
@@ -41,7 +40,8 @@ export interface TrackingLive {
 	pes?: number | null;
 	net?: number | null;
 	returnRate?: number | null;
-	weaponAttribution?: WeaponAttribution | null;
+	/** The hotbar key listener is enabled: presses declare the weapon in hand. */
+	hotbarKeysEnabled?: boolean | null;
 	repairOcrEnabled?: boolean | null;
 	sessionName?: string | null;
 	/** The selected session definition (stringified id): the active
@@ -60,8 +60,12 @@ export interface TrackingLive {
 	 * every frame, idle included, over the session a start would run as;
 	 * the standing set is necessarily empty until one does. */
 	activities?: ActivitySummary | null;
-	trifectaAttribution?: TrifectaAttribution | null;
 	harvestGuardrail?: HarvestGuardrailAlert | null;
+	/** The standing weapon mismatch: present only while the damage evidence
+	 * says another carried weapon is being fired than the hotbar declared. */
+	weaponGuardrail?: WeaponGuardrailAlert | null;
+	/** Shots recorded without a price this session: the cost leaves them out. */
+	unpricedShots?: number | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 	recentEvents?: {

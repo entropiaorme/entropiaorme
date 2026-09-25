@@ -33,14 +33,13 @@
 
 use std::collections::HashMap;
 
-use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
+use eo_services::config_service::{load_config_readonly, AppConfig};
 use eo_services::db::Db;
 use eo_services::mob_lookup_service::{python_whitespace, MobLookupService};
 use eo_services::session_definitions::SessionDefinitionService;
 use eo_services::time::{local_isoformat, naive_to_epoch};
 use eo_services::tracker::{HuntTracker, TrackerCommandError};
 use eo_services::tracking_models::ActiveSessionView;
-use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -57,10 +56,10 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 49] = [
+const SNAPSHOT_FIELDS: [&str; 50] = [
     "status",
     "hotbarListenerActive",
-    "weaponAttribution",
+    "hotbarKeysEnabled",
     "repairOcrEnabled",
     "sessionName",
     "sessionDefinitionId",
@@ -72,7 +71,6 @@ const SNAPSHOT_FIELDS: [&str; 49] = [
     "currentActivity",
     "activities",
     "lifetime",
-    "trifectaAttribution",
     "recentEvents",
     "session_id",
     "started_at",
@@ -105,6 +103,8 @@ const SNAPSHOT_FIELDS: [&str; 49] = [
     "harvestLoot",
     "harvestCost",
     "harvestGuardrail",
+    "weaponGuardrail",
+    "unpricedShots",
     "healing",
     "warnings",
 ];
@@ -151,14 +151,6 @@ pub enum ToolActivity {
 pub enum TrackingState {
     Idle,
     Active,
-}
-
-/// Which attribution source prices weapon shots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum WeaponAttribution {
-    Hotbar,
-    Trifecta,
 }
 
 /// The legacy exclusive-capture input mode recorded on pre-facet
@@ -360,6 +352,49 @@ pub struct HealingSessionSummary {
     pub unattributed_outputs: i64,
 }
 
+/// A decision the player made on a weapon mismatch while the session ran.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponReviewRow {
+    pub id: String,
+    pub decision: crate::weapons::WeaponReviewDecision,
+    /// The weapon the hotbar declared.
+    pub hotbar_tool: String,
+    /// The weapon the damage evidence named.
+    pub evidence_tool: String,
+    /// When the evidence first disagreed.
+    pub since: f64,
+    pub decided_at: f64,
+    pub repriced_shots: i64,
+    /// What the repricing moved the session's weapon cost by.
+    pub cost_delta: f64,
+}
+
+/// How a session's shots were attributed. The two tallies were kept from
+/// this app version on and are null for an older session; the counts of
+/// stored shots and the decisions exist for every session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponAttributionSummary {
+    /// The session has ended, so its unpriced shots can be assigned.
+    pub correctable: bool,
+    /// Shots priced to the weapon the hotbar declared.
+    pub agreed: Nullable<i64>,
+    /// Shots priced to the weapon their damage named.
+    pub evidenced: Nullable<i64>,
+    /// Stored shots whose damage overrode the hotbar's weapon.
+    pub evidence_shots: i64,
+    /// Shots no single carried weapon explained.
+    pub unresolved: i64,
+    /// Of those, the ones still without a price.
+    pub unpriced: i64,
+    /// Of those, the ones assigned a weapon after play.
+    pub assigned: i64,
+    /// Ticks of an effect an earlier paid activation owns.
+    pub effect_ticks: i64,
+    pub reviews: Vec<WeaponReviewRow>,
+}
+
 /// The full session detail.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -379,6 +414,7 @@ pub struct SessionDetail {
     pub effective_loot: f64,
     pub tool_stats: Vec<ToolStat>,
     pub skill_gains: Vec<SkillGain>,
+    pub weapon_attribution: WeaponAttributionSummary,
     pub healing: HealingSessionSummary,
 }
 
@@ -440,27 +476,6 @@ pub struct SessionIntervals {
     pub intervals: Vec<SessionIntervalRow>,
 }
 
-/// One preset reference inside the trifecta attribution summary.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TrifectaPresetRef {
-    pub id: String,
-    pub name: String,
-}
-
-/// The trifecta attribution summary (present when trifecta mode is active
-/// and a preset or binding exists). Its members are always emitted (a
-/// null binding stays on the wire), so none skip.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaAttribution {
-    pub active_preset_id: Nullable<String>,
-    pub preset_name: Nullable<String>,
-    pub presets: Vec<TrifectaPresetRef>,
-    pub small_weapon: Nullable<String>,
-    pub big_weapon: Nullable<String>,
-    pub heal_tool: Nullable<String>,
-}
-
 /// One recent event in the active-session snapshot feed.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RecentEvent {
@@ -511,6 +526,9 @@ pub struct LifetimeStats {
     pub return_rate: f64,
     pub pes: f64,
     pub duration_seconds: f64,
+    /// Shots across these instances recorded without a price: the cycled
+    /// figure (and everything derived from it) leaves them out.
+    pub unpriced_shots: i64,
 }
 
 /// The consolidated dashboard hydration snapshot: the polymorphic idle /
@@ -524,8 +542,11 @@ pub struct TrackingSnapshot {
     pub status: Option<TrackingState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hotbar_listener_active: Option<bool>,
+    /// Whether the player enabled the hotbar key listener: hotbar presses
+    /// then declare the weapon in hand. Without it, costs follow the
+    /// carried weapons' damage ranges alone.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub weapon_attribution: Option<WeaponAttribution>,
+    pub hotbar_keys_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_ocr_enabled: Option<bool>,
     /// The session-name facet: the active session's when tracking, the
@@ -570,8 +591,6 @@ pub struct TrackingSnapshot {
     /// and the surfaces read that absence as "offer no control".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<LifetimeStats>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trifecta_attribution: Option<TrifectaAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recent_events: Option<Vec<RecentEvent>>,
     #[serde(rename = "session_id", skip_serializing_if = "Option::is_none")]
@@ -639,6 +658,14 @@ pub struct TrackingSnapshot {
     /// the loot evidence contradicts the hotbar-equipped tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harvest_guardrail: Option<HarvestGuardrailAlert>,
+    /// The standing weapon mismatch; present only while the damage
+    /// evidence contradicts the weapon the hotbar declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_guardrail: Option<WeaponGuardrailAlert>,
+    /// Shots this session recorded without a price because no single
+    /// carried weapon explains them: the cost leaves them out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_shots: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing: Option<HealingStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -687,6 +714,19 @@ pub struct HarvestGuardrailAlert {
     pub observed_tool: Nullable<String>,
     pub tree_size: TreeSizeName,
     pub at_epoch: f64,
+}
+
+/// A weapon-guardrail disagreement on the snapshot: the weapon the hotbar
+/// declared, the weapon the damage evidence says is being fired (and what is
+/// being recorded), when the evidence first disagreed, and the shots it has
+/// recorded since.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponGuardrailAlert {
+    pub hotbar_tool: String,
+    pub recording_tool: String,
+    pub since: f64,
+    pub shots: i64,
 }
 
 /// The guardrail's closed board-yield vocabulary: the yield tier evidenced by
@@ -1001,38 +1041,19 @@ impl Api {
     }
 
     /// Begin a tracking session. 409 if one is already active (before the
-    /// attribution gate), 400 if the attribution requirement is unmet.
+    /// tool gate), 400 while no tool is configured.
     pub async fn tracking_start(&self) -> Result<StartResult, ApiError> {
         if self.tracker.is_tracking() {
             return Err(ApiError::conflict("Session already active"));
         }
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("tracking start config"))?;
-        let (ready, message) = if config.hotbar_hooks_enabled {
-            validate_hotbar(&config)
-        } else {
-            let preset = active_trifecta_preset(&config).map(|p| TrifectaPreset {
-                small_weapon_id: p.small_weapon_id,
-                big_weapon_id: p.big_weapon_id,
-                heal_id: p.heal_id,
-            });
-            let (ready, reason) = validate_trifecta(&self.db, preset.as_ref())
-                .await
-                .map_err(ApiError::internal("tracking start validate"))?;
-            (
-                ready,
-                reason.or_else(|| {
-                    Some(
-                        "Configure the trifecta in the Equipment page before tracking.".to_string(),
-                    )
-                }),
-            )
-        };
+        let (ready, message) = validate_tools(&config);
         if !ready {
-            let detail_message = message.unwrap_or_else(|| {
-                "Configure the trifecta in the Equipment page before tracking.".to_string()
-            });
-            return Err(ApiError::bad_request(detail_message));
+            return Err(ApiError::bad_request(message.unwrap_or_else(|| {
+                "Bind a hotbar slot or add a carried weapon in Equipment before tracking."
+                    .to_string()
+            })));
         }
         let session = self
             .tracker
@@ -1405,6 +1426,7 @@ impl Api {
 /// user is watching would be a trap; the summaries cover ended sessions
 /// only, so there is no double count.
 async fn lifetime_stats(
+    db: &Db,
     definitions: Option<&SessionDefinitionService>,
     active: Option<&ActiveSessionView>,
     idle_definition_id: Option<i64>,
@@ -1426,6 +1448,21 @@ async fn lifetime_stats(
     let mut loot_tt = stored.loot_tt;
     let mut pes = stored.pes;
     let mut duration_seconds = stored.duration_seconds;
+    // The ended instances' unpriced shots are stored; the running one's are
+    // counted live (most are still waiting for their kill to be written).
+    let mut unpriced_shots = db
+        .with_reader(move |conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM weapon_shot_evidence e \
+                 JOIN tracking_sessions s ON s.id = e.session_id \
+                 WHERE s.definition_id = ?1 AND s.is_active = 0 \
+                   AND e.attribution = 'unresolved' AND e.tool_name IS NULL",
+                [definition_id],
+                |row| row.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .map_err(ApiError::internal("snapshot lifetime unpriced shots"))?;
     // Only when the running session belongs to THIS definition: a
     // selection changed while idle reads the newly-picked family's
     // history, not the running instance's figures.
@@ -1435,6 +1472,7 @@ async fn lifetime_stats(
         loot_tt += active.returns;
         pes += active.pes;
         duration_seconds += active.elapsed as f64;
+        unpriced_shots += active.unpriced_shots;
     }
 
     Ok(Some(LifetimeStats {
@@ -1452,6 +1490,7 @@ async fn lifetime_stats(
         },
         pes: round_half_even(pes, 2),
         duration_seconds: round_half_even(duration_seconds, 0),
+        unpriced_shots,
     }))
 }
 
@@ -1468,18 +1507,6 @@ pub(crate) async fn build_snapshot_value(
     definitions: Option<&SessionDefinitionService>,
     now: f64,
 ) -> Result<Value, ApiError> {
-    let weapon_attribution = if config.hotbar_hooks_enabled {
-        "hotbar"
-    } else {
-        "trifecta"
-    };
-    let trifecta_attribution = if weapon_attribution == "trifecta" {
-        trifecta_attribution_summary(db, config)
-            .await
-            .map_err(ApiError::internal("snapshot trifecta summary"))?
-    } else {
-        Value::Null
-    };
     let readout = tracker
         .snapshot()
         .await
@@ -1560,7 +1587,8 @@ pub(crate) async fn build_snapshot_value(
     // The family side of the instance-versus-family flip, resolved over
     // the same definition the Activities control reads: the stamped one
     // while tracking, otherwise the one a start would stamp.
-    let lifetime = lifetime_stats(definitions, readout.active.as_ref(), idle_definition_id).await?;
+    let lifetime =
+        lifetime_stats(db, definitions, readout.active.as_ref(), idle_definition_id).await?;
     let lifetime = match lifetime {
         Some(stats) => json!(stats),
         None => Value::Null,
@@ -1571,12 +1599,11 @@ pub(crate) async fn build_snapshot_value(
             json!({
                 "status": "idle",
                 "hotbarListenerActive": hotbar_active,
-                "weaponAttribution": weapon_attribution,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled,
                 "repairOcrEnabled": config.repair_ocr_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,
                 "currentActivity": current_activity,
-                "trifectaAttribution": trifecta_attribution,
                 "sessionName": name_value(Some(if config.session_name.trim().is_empty() {
                     idle_selection.as_ref().map_or("", |(_, name, _)| name.as_str())
                 } else {
@@ -1654,6 +1681,7 @@ pub(crate) async fn build_snapshot_value(
                 "harvestSuccesses": active.harvest_successes,
                 "harvestLoot": active.harvest_loot,
                 "harvestCost": active.harvest_cost,
+                "unpricedShots": active.unpriced_shots,
                 "healing": {
                     "toolName": active.healing.tool_name.clone(),
                     "state": active.healing.state.clone(),
@@ -1666,14 +1694,13 @@ pub(crate) async fn build_snapshot_value(
                     "unattributedOutputs": active.healing.unattributed_output_count,
                 },
                 "hotbarListenerActive": hotbar_active,
-                "weaponAttribution": weapon_attribution,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled,
                 "repairOcrEnabled": config.repair_ocr_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,
                 "currentActivity": current_activity,
                 "activities": activities,
                 "lifetime": lifetime,
-                "trifectaAttribution": trifecta_attribution,
                 "sessionName": name_value(active.session_name.as_deref()),
                 "sessionDefinitionId": definition_value(active.definition_id),
                 "trackProtectionCosts": active.track_protection_costs,
@@ -1684,6 +1711,19 @@ pub(crate) async fn build_snapshot_value(
             });
             if let (Some(mismatch), Some(object)) = (harvest_guardrail, value.as_object_mut()) {
                 object.insert("harvestGuardrail".to_string(), mismatch);
+            }
+            // Likewise the weapon guardrail: absent while the evidence
+            // agrees with the hotbar.
+            let weapon_guardrail = active.weapon_guardrail_mismatch.as_ref().map(|mismatch| {
+                json!({
+                    "hotbarTool": mismatch.hotbar_tool.clone(),
+                    "recordingTool": mismatch.recording_tool.clone(),
+                    "since": mismatch.since,
+                    "shots": mismatch.shots,
+                })
+            });
+            if let (Some(mismatch), Some(object)) = (weapon_guardrail, value.as_object_mut()) {
+                object.insert("weaponGuardrail".to_string(), mismatch);
             }
             value
         }

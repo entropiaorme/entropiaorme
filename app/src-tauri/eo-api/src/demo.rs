@@ -33,7 +33,7 @@ use chrono::TimeDelta;
 use eo_services::analytics::AnalyticsService;
 use eo_services::chatlog_time::ChatLogClock;
 use eo_services::clock::Clock;
-use eo_services::config_service::{AppConfig, TrifectaPresetConfig};
+use eo_services::config_service::AppConfig;
 use eo_services::db::Db;
 use eo_services::event_bus::EventBus;
 use eo_services::ped::Ped;
@@ -60,10 +60,8 @@ use crate::{Api, ApiError};
 /// every other value is replayed verbatim.
 const MID_HUNT_FIXTURE: &str = include_str!("../resources/mid_hunt_fixture.json");
 
-/// The demo's fixed mob lock and trifecta preset.
+/// The demo's fixed mob lock and hotbar.
 const DEMO_MOB: (&str, &str, &str) = ("Caboria Old", "Caboria", "Old");
-const DEMO_PRESET_ID: &str = "demo_default";
-const DEMO_PRESET_NAME: &str = "Calypso";
 const DEMO_SMALL_WEAPON: &str = "Jester D-1";
 const DEMO_BIG_WEAPON: &str = "Korss H400";
 const DEMO_HEAL_TOOL: &str = "Vivo T1";
@@ -593,26 +591,28 @@ impl DemoState {
         Ok(())
     }
 
-    /// The demo's config stub: trifecta mode with the curated "Calypso" preset,
-    /// its weapon ids resolved by name from the demo equipment library.
-    /// Everything else is the default config.
+    /// The demo's config stub: the curated weapons and healer bound to the
+    /// first three hotbar slots, their ids resolved by name from the demo
+    /// equipment library. Everything else is the default config.
     async fn demo_config(&self) -> Result<AppConfig, DemoError> {
-        let preset = TrifectaPresetConfig {
-            id: DEMO_PRESET_ID.to_string(),
-            name: DEMO_PRESET_NAME.to_string(),
-            small_weapon_id: Some(self.lookup_equipment_id(DEMO_SMALL_WEAPON).await?),
-            big_weapon_id: Some(self.lookup_equipment_id(DEMO_BIG_WEAPON).await?),
-            heal_id: Some(self.lookup_equipment_id(DEMO_HEAL_TOOL).await?),
-        };
-        Ok(AppConfig {
-            hotbar_hooks_enabled: false,
+        let mut config = AppConfig {
+            hotbar_hooks_enabled: true,
             repair_ocr_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
-            trifecta_presets: vec![preset],
-            active_trifecta_preset_id: Some(DEMO_PRESET_ID.to_string()),
             ..AppConfig::default()
-        })
+        };
+        for (slot, name) in [
+            ("1", DEMO_SMALL_WEAPON),
+            ("2", DEMO_BIG_WEAPON),
+            ("3", DEMO_HEAL_TOOL),
+        ] {
+            config.hotbar.insert(
+                slot.to_string(),
+                serde_json::Value::from(self.lookup_equipment_id(name).await?),
+            );
+        }
+        Ok(config)
     }
 
     async fn lookup_equipment_id(&self, name: &str) -> Result<i64, DemoError> {
@@ -936,7 +936,8 @@ mod tests {
         assert_eq!(snap["elapsed"], 754);
         assert_eq!(snap["kill_count"], 100);
         assert_eq!(snap["currentMob"], "Caboria Old");
-        assert_eq!(snap["weaponAttribution"], "trifecta");
+        assert_eq!(snap["unpricedShots"], 0);
+        assert!(snap.get("weaponGuardrail").is_none());
         assert!(is_iso_datetime(snap["started_at"].as_str().unwrap()));
 
         assert_matches_golden(

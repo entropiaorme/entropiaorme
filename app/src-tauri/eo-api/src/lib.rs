@@ -43,6 +43,7 @@ use eo_services::skill_scan_manual::SkillScanManual;
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::tracker::HuntTracker;
+use eo_services::weapon_review::WeaponReviewService;
 
 pub mod activities;
 pub mod analytics;
@@ -63,6 +64,7 @@ pub mod scan;
 pub mod session_definitions;
 pub mod settings;
 pub mod tracking;
+pub mod weapons;
 
 pub use error::ApiError;
 pub use nullable::Nullable;
@@ -137,6 +139,9 @@ pub struct Api {
     /// Post-play healing corrections over the shared database and injected
     /// clock.
     healing_review: HealingReviewService,
+    /// Post-play weapon review and the assignment of unpriced shots, over
+    /// the shared database and injected clock.
+    weapon_review: WeaponReviewService,
     /// The session-definition service (definition + roster lifecycle), built
     /// over the facade's shared db and clock; the tracking family's
     /// selection verb validates against it.
@@ -200,6 +205,7 @@ impl Api {
         let market = MarketService::new(db.clone(), clock.clone());
         let protection = ProtectionService::new(db.clone(), clock.clone());
         let healing_review = HealingReviewService::new(db.clone(), clock.clone());
+        let weapon_review = WeaponReviewService::new(db.clone(), clock.clone());
         let session_definitions = eo_services::session_definitions::SessionDefinitionService::new(
             db.clone(),
             clock.clone(),
@@ -247,6 +253,7 @@ impl Api {
             market,
             protection,
             healing_review,
+            weapon_review,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
             map_pins,
@@ -277,6 +284,16 @@ impl Api {
         changed: eo_services::healing_review::ChangedSink,
     ) -> Self {
         self.healing_review = self.healing_review.with_changed(changed);
+        self
+    }
+
+    /// Announce every committed weapon assignment through `changed`, so
+    /// surfaces showing weapon costs re-read them.
+    pub fn with_weapons_changed(
+        mut self,
+        changed: eo_services::weapon_review::ChangedSink,
+    ) -> Self {
+        self.weapon_review = self.weapon_review.with_changed(changed);
         self
     }
 }

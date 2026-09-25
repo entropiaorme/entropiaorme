@@ -144,19 +144,6 @@
 		{/if}
 	{:else if menuState.kind === 'questHandIn'}
 		<!-- Rendered by the dedicated hand-in panel in the popup route. -->
-	{:else if menuState.kind === 'trifecta'}
-		{#each menuState.options as option}
-			<button
-				type="button"
-				class="menu-option {option.active ? 'menu-option-active' : ''}"
-				onclick={() => onSelect({ kind: 'trifecta', presetId: option.id })}
-			>
-				<span class="menu-option-name">{option.name}</span>
-				{#if option.active}
-					<span class="menu-option-badge">Active</span>
-				{/if}
-			</button>
-		{/each}
 	{:else if menuState.kind === 'definition'}
 		{#if menuState.definitions.length === 0}
 			<div class="menu-empty">Sessions unavailable; open the dashboard</div>

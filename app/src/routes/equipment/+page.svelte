@@ -15,7 +15,6 @@
 	import GuardrailsTab from './GuardrailsTab.svelte';
 	import EffectsTab from './EffectsTab.svelte';
 	import HotbarTab from './HotbarTab.svelte';
-	import TrifectaTab from './TrifectaTab.svelte';
 
 	const model = createLibraryModel();
 	const protection = createProtectionModel();
@@ -24,14 +23,11 @@
 		{ id: 'library', label: 'Library' },
 		...(inDevelopment.visible ? [{ id: 'protection', label: 'Armour' }] : []),
 		{ id: 'effects', label: 'Effects' },
-		{ id: 'trifecta', label: 'Trifecta' },
 		{ id: 'hotbar', label: 'Hotbar' },
 		{ id: 'guardrails', label: 'Guardrails' }
 	]);
 	let activeTab = $state('library');
 
-	// Guide-mode demo state for the hotbar/trifecta mutex (only consulted when guideState.isActive)
-	let demoHotbarEnabled = $state(true);
 	let guideSeen = $state(true);
 
 	// Reload data on initial mount and whenever guide-mode toggles.
@@ -59,9 +55,6 @@
 			},
 			closeAddModal: () => {
 				model.showAddModal = false;
-			},
-			setDemoHotbarEnabled: (value: boolean) => {
-				demoHotbarEnabled = value;
 			}
 		});
 		return () => {
@@ -139,21 +132,18 @@
 	</div>
 
 	{#if activeTab === 'hotbar'}
+		<!-- In the guide the hotbar is demo data, so nothing it shows is saved. -->
 		<HotbarTab
 			equipment={model.allEquipment}
 			hotbar={model.hotbar}
-			enabled={guideState.isActive ? demoHotbarEnabled : true}
+			carriedWeaponIds={model.carriedWeaponIds}
+			hotbarHooksEnabled={model.hotbarHooksEnabled}
+			enabled={!guideState.isActive}
 			onchange={(value: Hotbar) => {
 				model.hotbar = { ...value };
 			}}
-		/>
-	{:else if activeTab === 'trifecta'}
-		<TrifectaTab
-			equipment={model.allEquipment}
-			trifecta={model.trifecta}
-			enabled={guideState.isActive ? !demoHotbarEnabled : true}
-			onchange={(value) => {
-				model.trifecta = value;
+			oncarriedchange={(ids) => {
+				model.carriedWeaponIds = ids;
 			}}
 		/>
 	{:else if activeTab === 'guardrails'}

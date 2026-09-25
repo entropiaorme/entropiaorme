@@ -8,12 +8,11 @@ function anchor(key: string): HTMLElement | null {
 
 /** Equipment-surface demoApi method names (declared here for documentation). */
 type EquipmentDemoApi = {
-	setActiveTab(tab: 'library' | 'trifecta' | 'hotbar'): void;
+	setActiveTab(tab: 'library' | 'hotbar'): void;
 	expandRow(id: string): void;
 	collapseRow(): void;
 	openAddModal(type: 'weapon' | 'healing' | 'consumable'): void;
 	closeAddModal(): void;
-	setDemoHotbarEnabled(value: boolean): void;
 };
 
 function equipApi(): Partial<EquipmentDemoApi> {
@@ -26,7 +25,6 @@ export const equipmentSurface: GuideSurface = {
 	beforeStart(demoApi) {
 		const api = demoApi as Partial<EquipmentDemoApi>;
 		api.setActiveTab?.('library');
-		api.setDemoHotbarEnabled?.(true);
 		api.collapseRow?.();
 		api.closeAddModal?.();
 	},
@@ -35,7 +33,7 @@ export const equipmentSurface: GuideSurface = {
 			id: 'narrative-intro',
 			prose: {
 				title: 'Equipment',
-				body: 'The Equipment tab sets up the loadout used for hunting cost tracking.',
+				body: 'The Equipment tab sets up the gear used for hunting cost tracking.',
 				note: 'Note: Guide uses demo data.',
 			},
 		},
@@ -43,15 +41,15 @@ export const equipmentSurface: GuideSurface = {
 			id: 'three-subtabs-overview',
 			anchor: () => anchor('equipment-tabs'),
 			prose: {
-				title: 'Library, Trifecta, Hotbar',
+				title: 'Library and Hotbar',
 				body: [
 					{
 						kind: 'p',
-						text: 'There are two cost-tracking modes: Trifecta and Hotbar.',
+						text: 'The Library tab is where you add your equipment.',
 					},
 					{
 						kind: 'p',
-						text: 'The Library tab is where you add new equipment used by both.',
+						text: 'The Hotbar tab says which of it you carry, and how costs follow the weapon in your hand.',
 					},
 				],
 			},
@@ -91,68 +89,59 @@ export const equipmentSurface: GuideSurface = {
 			},
 		},
 		{
-			id: 'trifecta-selectors',
-			anchor: () => anchor('trifecta-selectors'),
-			prose: {
-				title: 'Trifecta mode',
-				body: 'In Trifecta mode, you create presets of a small (tagger) weapon, a big (main) weapon, and your primary healing tool.',
-				note: 'More healing tools, like restoration chip + FAP at the same time, coming soon.',
-			},
-			async play({ demoApi, wait }) {
-				const api = demoApi as Partial<EquipmentDemoApi>;
-				api.setDemoHotbarEnabled?.(false);
-				api.setActiveTab?.('trifecta');
-				await wait(500);
-			},
-			resetDemo() {
-				const api = equipApi();
-				api.setActiveTab?.('library');
-				api.setDemoHotbarEnabled?.(true);
-			},
-		},
-		{
-			id: 'trifecta-damage-ranges',
-			anchor: () => anchor('trifecta-chart'),
-			prose: {
-				title: 'Range-based attribution',
-				body: "This chart shows each weapon's damage range. With non-overlapping ranges, every hit logged in chat.log is attributed to the weapon whose range contains it.",
-				note: 'If small crits overlap big-weapon hits, the big weapon wins. This introduces some cost-attribution inaccuracy; use Hotbar mode to avoid it.',
-			},
-			async play({ demoApi, wait }) {
-				const api = demoApi as Partial<EquipmentDemoApi>;
-				api.setDemoHotbarEnabled?.(false);
-				api.setActiveTab?.('trifecta');
-				await wait(500);
-			},
-			resetDemo() {
-				const api = equipApi();
-				api.setActiveTab?.('library');
-				api.setDemoHotbarEnabled?.(true);
-			},
-		},
-		{
 			id: 'hotbar-slot-list',
 			anchor: () => anchor('hotbar-slot-list'),
 			prose: {
-				title: 'Hotbar mode',
-				body: 'When Hotbar mode is active, keyboard presses in your number hotbar assign costs.',
+				title: 'Your hotbar',
+				body: 'Bind each slot to the item it holds in game. With the hotbar key listener on, a press tells the app which weapon is in hand, so each shot costs what that weapon costs.',
 			},
 			async play({ demoApi, wait }) {
 				const api = demoApi as Partial<EquipmentDemoApi>;
-				api.setDemoHotbarEnabled?.(true);
 				api.setActiveTab?.('hotbar');
 				await wait(500);
 			},
 			resetDemo() {
-				const api = equipApi();
-				api.setActiveTab?.('library');
+				equipApi().setActiveTab?.('library');
 			},
 		},
 		{
-			id: 'trifecta-default',
+			id: 'carried-weapons',
+			anchor: () => anchor('carried-weapons'),
 			prose: {
-				title: 'Trifecta by default',
-				body: 'Trifecta mode is on by default; you can switch to Hotbar mode in Settings.',
+				title: 'Weapons without a hotkey',
+				body: 'Add a weapon you switch to from the inventory here, so its hits are still recognised when no hotbar press announced it.',
+			},
+			async play({ demoApi, wait }) {
+				const api = demoApi as Partial<EquipmentDemoApi>;
+				api.setActiveTab?.('hotbar');
+				await wait(500);
+			},
+			resetDemo() {
+				equipApi().setActiveTab?.('library');
+			},
+		},
+		{
+			id: 'damage-ranges',
+			anchor: () => anchor('damage-ranges-chart'),
+			prose: {
+				title: 'Damage ranges',
+				body: 'Every hit is checked against these ranges. A hit only another carried weapon explains is recorded to that weapon, and the overlay asks you to confirm the switch.',
+				note: 'Where two ranges overlap, only the hotbar tells the weapons apart. A hit there with neither in hand is kept unpriced until you assign it after the session.',
+			},
+			async play({ demoApi, wait }) {
+				const api = demoApi as Partial<EquipmentDemoApi>;
+				api.setActiveTab?.('hotbar');
+				await wait(500);
+			},
+			resetDemo() {
+				equipApi().setActiveTab?.('library');
+			},
+		},
+		{
+			id: 'damage-alone',
+			prose: {
+				title: 'Without the hotbar listener',
+				body: 'With the listener off in Settings, the damage ranges alone attribute each shot: a hit only one weapon explains is priced to it, and the rest wait for you in the session record.',
 			},
 		},
 	],

@@ -100,3 +100,4 @@ export {
 	toggleOverlay,
 } from './shell';
 export * from './tracking';
+export * from './weapons';

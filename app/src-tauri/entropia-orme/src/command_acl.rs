@@ -229,6 +229,12 @@ pub const APP_COMMANDS: &[&str] = &[
     "tracking_snapshot",
     "tracking_start",
     "tracking_stop",
+    "tracking_weapon_decide",
+    "weapon_assign",
+    "weapon_assignment_undo",
+    "weapon_correction_weapons",
+    "weapon_shots",
+    "weapon_unpriced_sessions",
 ];
 
 /// The capture overlay does one thing: read the sale window and take

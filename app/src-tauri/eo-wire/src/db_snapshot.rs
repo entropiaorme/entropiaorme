@@ -192,6 +192,31 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM healing_outputs",
         order_by: &["observed_at", "rowid"],
     },
+    // Weapon attribution evidence: the shots kept one by one (evidence that
+    // overrode the hotbar, unpriced shots, effect ticks), the live decisions
+    // on a mismatch, and each session's final tallies. Appended last, like
+    // the healing tables, so no earlier table's symbol assignment moves.
+    TableSpec {
+        name: "weapon_attribution_reviews",
+        query: "SELECT id, session_id, decision, hotbar_tool, evidence_tool, mismatch_since, \
+                decided_at, repriced_shots, cost_delta_ped \
+                FROM weapon_attribution_reviews",
+        order_by: &["decided_at", "rowid"],
+    },
+    TableSpec {
+        name: "weapon_shot_evidence",
+        query: "SELECT id, session_id, kill_id, context_id, observed_at, amount, critical, \
+                attribution, hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
+                effect_window_id, review_id, correction_id \
+                FROM weapon_shot_evidence",
+        order_by: &["observed_at", "rowid"],
+    },
+    TableSpec {
+        name: "weapon_attribution_tallies",
+        query: "SELECT id AS session_id, weapon_shots_agreed, weapon_shots_evidenced \
+                FROM tracking_sessions",
+        order_by: &["rowid"],
+    },
 ];
 
 /// Normalise the pre-fetched catalogue rows, returning the snapshot value.

@@ -11,6 +11,7 @@
 		PROTECTION_TOPIC,
 		renameSessionMob,
 		restoreSessionMob,
+		WEAPONS_TOPIC,
 	} from '$lib/api';
 	import type {
 		SessionDetail,
@@ -24,6 +25,9 @@
 	import DataTable from '$lib/components/DataTable.svelte';
 	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
 	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
+	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
+	import { hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
+	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
 
 	let {
 		detail = $bindable(),
@@ -60,9 +64,18 @@
 		},
 	});
 
+	// Weapon assignments answer with the refreshed detail too.
+	const weaponReview = createWeaponReviewModel({
+		detail: () => detail,
+		apply: (fresh) => {
+			detail = fresh;
+		},
+	});
+
 	// A recording or undo from the overlay moves this session's armour cost,
-	// and a healing correction from another window its heal cost: re-read the
-	// detail (and the armour standing) rather than showing the old figure.
+	// and a healing correction or weapon assignment from another window its
+	// heal or weapon cost: re-read the detail (and the armour standing)
+	// rather than showing the old figure.
 	onMount(() => {
 		const stops: Array<() => void> = [];
 		let disposed = false;
@@ -87,6 +100,7 @@
 				},
 			],
 			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
+			[WEAPONS_TOPIC, () => reread(() => void weaponReview.refresh())],
 		];
 		for (const [topic, handler] of subscriptions) {
 			void listen(topic, handler).then((unlisten) => {
@@ -100,13 +114,15 @@
 		};
 	});
 	const costBreakdown = $derived(detail.summary.costBreakdown);
+	const unpricedShots = $derived(detail.weaponAttribution?.unpriced ?? 0);
 	const showCostBreakdown = $derived(
 		!!costBreakdown &&
 			(costBreakdown.healCost > 0 ||
 				costBreakdown.enhancerCost > 0 ||
 				costBreakdown.armourCost > 0 ||
 				costBreakdown.harvestCost > 0 ||
-				unrecordedHits > 0),
+				unrecordedHits > 0 ||
+				unpricedShots > 0),
 	);
 
 	// ── Weapon cycle (unchanged) ──────────────────────────────────────
@@ -408,7 +424,13 @@
 	<!-- 1b. Cost breakdown (shown when non-weapon costs exist) -->
 	{#if showCostBreakdown && detail.summary.costBreakdown}
 		<div class="mt-2 pl-1 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-secondary">
-			<span>Weapon: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.weaponCost)}</span></span>
+			<span>
+				Weapon: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.weaponCost)}</span>{#if unpricedShots > 0}<span
+						class="text-warning"
+						title="These shots could not be priced to one weapon; assign them in Weapon attribution below"
+					>, without {unpricedShots} unpriced {unpricedShots === 1 ? 'shot' : 'shots'}</span
+					>{/if}
+			</span>
 			{#if detail.summary.costBreakdown.healCost > 0}
 				<span>Healing: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.healCost)}</span></span>
 			{/if}
@@ -426,6 +448,10 @@
 				<span>Harvesting: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.harvestCost)}</span></span>
 			{/if}
 		</div>
+	{/if}
+
+	{#if detail.weaponAttribution && hasWeaponEvidence(detail.weaponAttribution)}
+		<WeaponEvidence model={weaponReview} />
 	{/if}
 
 	{#if detail.healing && (detail.healing.outputCount > 0 || detail.healing.activations.length > 0)}

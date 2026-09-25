@@ -72,7 +72,7 @@ use eo_services::chatlog_time::ChatLogClock;
 use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::clock::{Clock, RealClock};
 use eo_services::config_service::{
-    active_trifecta_preset, load_config_readonly, AppConfig, ConfigReader, ConfigService,
+    load_config_readonly, AppConfig, ConfigReader, ConfigService, HOTBAR_SLOTS,
 };
 use eo_services::db::{AdoptError, Db};
 use eo_services::equipment_pricing::{
@@ -106,10 +106,9 @@ use eo_services::skill_tracker::SkillTracker;
 pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::time::naive_to_epoch;
 use eo_services::tracker::{
-    ActivityKey, EquipmentLibrary, EquipmentProfile, GuardrailTool, HarvestGuardrailTools,
-    HuntTracker, Providers, TrackingConfig,
+    damage_band_from_props, ActivityKey, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary,
+    EquipmentProfile, GuardrailTool, HarvestGuardrailTools, HuntTracker, Providers, TrackingConfig,
 };
-use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
 use eo_wire::bus::DomainBus;
 use eo_wire::domain_events::DomainEvent;
 use serde_json::{Map, Value};
@@ -955,6 +954,24 @@ async fn compose_with(
                     payload: HealingUpdatedPayload {},
                 }));
             })
+        })
+        .with_weapons_changed({
+            // Assigning an unpriced shot in History moves an ended session's
+            // weapon cost while its detail and the session list may be open:
+            // every open surface re-reads on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    WeaponsUpdated, WeaponsUpdatedPayload, WeaponsUpdatedTag,
+                };
+                bus.publish(&BusEvent::WeaponsUpdated(WeaponsUpdated {
+                    topic: WeaponsUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: WeaponsUpdatedPayload {},
+                }));
+            })
         }),
     );
     Composition::Ready(Composed {
@@ -1569,6 +1586,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::NavigationUpdated,
         Topic::ProtectionUpdated,
         Topic::HealingUpdated,
+        Topic::WeaponsUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1590,6 +1608,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             BusEvent::HealingUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::HealingUpdated(envelope.clone()));
             }
+            BusEvent::WeaponsUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::WeaponsUpdated(envelope.clone()));
+            }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.
             _ => {}
@@ -1598,8 +1619,8 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
 }
 
 /// The live equipment library behind the tracker's equipment seam:
-/// profile and cost lookups over the equipment tables, and the
-/// trifecta resolution over the live config plus those tables. The
+/// profile and cost lookups over the equipment tables, and the carried
+/// weapons resolved over the live config plus those tables. The
 /// lookups bridge onto the runtime from the synchronous trait calls
 /// (the tracker invokes them inline on its own task).
 struct LiveEquipmentLibrary {
@@ -1639,38 +1660,62 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
         }
     }
 
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>> {
-        // Resolve the active preset's attribution map off the live
-        // config and the equipment library; the resolver discards the
-        // validation reason and yields just the data.
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        // The hotbar's weapons in slot order, then the weapons carried
+        // without a slot, each once. A slot holding a healer, harvesting
+        // tool, or consumable, and an id no longer in the library, carry
+        // nothing. Offensive efficiencies ride the current catalogue, as
+        // the profile lookup's do.
         let config = self.reader.current();
-        let preset = active_trifecta_preset(&config).map(|p| TrifectaPreset {
-            small_weapon_id: p.small_weapon_id,
-            big_weapon_id: p.big_weapon_id,
-            heal_id: p.heal_id,
-        });
-        let db = self.db.clone();
-        let mut resolved = block_on_pool(&self.runtime, async move {
-            describe_trifecta(&db, preset.as_ref())
-                .await
-                .ok()
-                .and_then(|(data, _error)| data)
-        })?;
-        if let Some(game_data) = self.game_data.as_ref() {
-            for key in ["small_weapon", "big_weapon"] {
-                let Some(weapon) = resolved.get_mut(key).and_then(Value::as_object_mut) else {
-                    continue;
-                };
-                let Some(props) = weapon.get("weapon_props").cloned() else {
-                    continue;
-                };
-                weapon.insert(
-                    "weapon_props".into(),
-                    with_current_offensive_efficiencies(&props, game_data),
-                );
+        let mut ids: Vec<i64> = Vec::new();
+        let slotted = HOTBAR_SLOTS
+            .iter()
+            .filter_map(|slot| config.hotbar.get(*slot).and_then(Value::as_i64));
+        for id in slotted.chain(config.carried_weapon_ids.iter().copied()) {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
-        Some(resolved)
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let db = self.db.clone();
+        let rows = block_on_pool(&self.runtime, async move {
+            db.with_reader(move |conn| {
+                let mut rows = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Some((name, item_type, properties_json)) =
+                        hotbar_equipment_row_sync(conn, id)?
+                    {
+                        if item_type == "weapon" {
+                            rows.push((id, name, properties_json));
+                        }
+                    }
+                }
+                Ok(rows)
+            })
+            .await
+            .ok()
+        })
+        .unwrap_or_default();
+        rows.into_iter()
+            .filter_map(|(id, name, properties_json)| {
+                let props = serde_json::from_str::<Value>(&properties_json).ok()?;
+                let props = match self.game_data.as_ref() {
+                    Some(game_data) => with_current_offensive_efficiencies(&props, game_data),
+                    None => props,
+                };
+                let band = damage_band_from_props(&props);
+                Some(CarriedWeaponProfile {
+                    weapon: CarriedWeapon {
+                        equipment_id: id,
+                        name,
+                        band,
+                    },
+                    props: props.as_object().cloned().unwrap_or_default(),
+                })
+            })
+            .collect()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -1778,12 +1823,6 @@ impl TrackingConfig for LiveTrackingConfig {
             return None;
         }
         Some((species, maturity))
-    }
-
-    fn weapon_attribution_trifecta(&self) -> bool {
-        // `not hotbar_hooks_enabled`: hotbar hooks off selects
-        // trifecta attribution.
-        !self.reader.current().hotbar_hooks_enabled
     }
 
     fn loot_filter_blacklist(&self) -> Vec<String> {
@@ -2547,8 +2586,9 @@ mod tests {
     ///   and `/`->`*` mutants.
     /// - the facet reads carry the stored values through unchanged
     ///   (session_name verbatim, declared_skill_boost_percent as stored).
-    /// - weapon_attribution_trifecta is `!hotbar_hooks_enabled`: false when
-    ///   hooks are on, true when off (kills the deleted `!`, which flips both).
+    /// - carried_weapons reads the hotbar's weapons in slot order, then the
+    ///   carried ones, each once, skipping non-weapons and absent rows, with
+    ///   each weapon's damage band from its stored props.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_providers_transforms_pin_their_exact_outputs() {
         let dir = tempfile::tempdir().unwrap();
@@ -2573,14 +2613,36 @@ mod tests {
         )
         .await;
 
+        // A second weapon with a damage figure, and a healer.
+        seed_weapon(
+            &db,
+            2,
+            "Opalo",
+            &serde_json::json!({"weapon_entity": {"damage": {"impact": 20.0}}}).to_string(),
+        )
+        .await;
+        db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO equipment_library (id, name, item_type, properties_json) \
+                 VALUES (3, 'FAP', 'healing', '{}')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("healer seeds");
+
         // First on-disk config: a named session with a boost, hotbar
-        // hooks ENABLED.
+        // hooks ENABLED, the Korss and the healer bound, and the Opalo,
+        // the Korss again, and a sold weapon carried without a slot.
         write_settings(
             &data_dir,
             &serde_json::json!({
                 "session_name": "ARIS Dailies",
                 "declared_skill_boost_percent": 50,
                 "hotbar_hooks_enabled": true,
+                "hotbar": {"2": 1, "3": 3},
+                "carried_weapon_ids": [2, 1, 99],
             }),
         );
         let config = load_config_readonly(&data_dir).expect("config reads");
@@ -2616,32 +2678,53 @@ mod tests {
              (% would be 50.0, * would be 25000.0)"
         );
 
-        // The config seam reads the live snapshot: the facets come
-        // through verbatim, and hooks-on means no trifecta attribution.
-        assert_eq!(providers.config.session_name(), "ARIS Dailies");
-        assert_eq!(providers.config.declared_skill_boost_percent(), Some(50));
-        assert!(
-            !providers.config.weapon_attribution_trifecta(),
-            "trifecta attribution is off when hotbar hooks are enabled"
+        // The carried weapons: the slotted Korss, then the carried Opalo;
+        // the healer, the repeat, and the sold weapon carry nothing.
+        let carried: Vec<(i64, String, Option<eo_services::tracker::DamageBand>)> = providers
+            .equipment
+            .carried_weapons()
+            .into_iter()
+            .map(|profile| {
+                (
+                    profile.weapon.equipment_id,
+                    profile.weapon.name,
+                    profile.weapon.band,
+                )
+            })
+            .collect();
+        assert_eq!(
+            carried,
+            vec![
+                (1, "Korss H400 (L)".to_string(), None),
+                (
+                    2,
+                    "Opalo".to_string(),
+                    Some(eo_services::tracker::DamageBand {
+                        min: 10.0,
+                        max: 20.0
+                    })
+                ),
+            ]
         );
 
+        // The config seam reads the live snapshot: the facets come
+        // through verbatim.
+        assert_eq!(providers.config.session_name(), "ARIS Dailies");
+        assert_eq!(providers.config.declared_skill_boost_percent(), Some(50));
+
         // A config-service write publishes a new snapshot, and the SAME
-        // seam follows it: the facets move and hooks-off turns trifecta
-        // attribution on.
+        // seams follow it.
         let mut updates = serde_json::Map::new();
         updates.insert("session_name".into(), serde_json::json!("Solo Run"));
         updates.insert(
             "declared_skill_boost_percent".into(),
             serde_json::json!(100),
         );
-        updates.insert("hotbar_hooks_enabled".into(), serde_json::json!(false));
+        updates.insert("carried_weapon_ids".into(), serde_json::json!([]));
         config_service.update(&updates).expect("settings write");
         assert_eq!(providers.config.session_name(), "Solo Run");
         assert_eq!(providers.config.declared_skill_boost_percent(), Some(100));
-        assert!(
-            providers.config.weapon_attribution_trifecta(),
-            "trifecta attribution is on when hotbar hooks are disabled"
-        );
+        assert_eq!(providers.equipment.carried_weapons().len(), 1);
     }
 
     /// REGRESSION: the equipment seam must resolve from a plain OS

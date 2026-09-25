@@ -17,7 +17,7 @@ use super::{GLOBAL_CORRELATION_WINDOW_SECONDS, LOOT_DEDUP_WINDOW_SECONDS};
 
 /// Where one loot group lands: a mob kill, or a harvesting swing.
 enum RoutedLoot {
-    Kill(Kill),
+    Kill(Kill, Vec<super::weapon_evidence::ShotEvidence>),
     Harvest(HarvestEvent),
 }
 
@@ -335,22 +335,26 @@ impl TrackerActor {
                     context_id,
                 };
 
+                // The kill's stored weapon evidence is written with it.
+                let evidence = std::mem::take(&mut accumulator.evidence);
                 // Reset accumulator for next kill (tool_stats moved into
                 // the kill above, exactly the original's shallow copy
                 // followed by a fresh dict).
                 accumulator.reset();
+                // The regime's shots now sit in this kill.
+                active.weapons.attribution.settle_kill(&kill.id);
 
                 // Append the finalised kill to the session; the list tail
                 // doubles as the original's `_last_kill` alias.
                 active.session.kills.push(kill.clone());
-                (RoutedLoot::Kill(kill), Vec::new(), Vec::new())
+                (RoutedLoot::Kill(kill, evidence), Vec::new(), Vec::new())
             }
         };
 
         // The routed record is a detached value by here; the borrow of
         // the live session ended with the block above.
         match routed {
-            RoutedLoot::Kill(kill) => self.persist_kill(&kill).await,
+            RoutedLoot::Kill(kill, evidence) => self.persist_kill(&kill, evidence).await,
             RoutedLoot::Harvest(harvest) => {
                 self.persist_harvest(&harvest).await;
                 if !restamps.is_empty() {

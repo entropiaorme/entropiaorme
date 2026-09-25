@@ -220,9 +220,9 @@ async fn the_idle_snapshot_serialises_the_dashboard_way() {
     let api = make_api(dir.path(), false, None).await;
     // The resting idle dashboard over a default config: the exclude-none
     // projection drops the present-null mob / tool fields (the ratified
-    // movement), while the trifecta summary (a fixed-shape nested object,
-    // present because the default config ships a `default` preset) keeps
-    // its own null bindings on the wire. The session facets are present
+    // movement), and weapon attribution carries no idle field: it has no
+    // mode to report, and its cue and unpriced tally ride only an active
+    // session. The session facets are present
     // even with nothing configured: an unconfigured install resolves to
     // the protected default, so the readout shows what a start would
     // stamp, and the Activities block rides idle too: the seeded default
@@ -234,17 +234,15 @@ async fn the_idle_snapshot_serialises_the_dashboard_way() {
     let snapshot = api.tracking_snapshot().await.unwrap();
     assert_eq!(
         serde_json::to_string(&snapshot).unwrap(),
-        "{\"status\":\"idle\",\"hotbarListenerActive\":false,\"weaponAttribution\":\"trifecta\",\
+        "{\"status\":\"idle\",\"hotbarListenerActive\":false,\"hotbarKeysEnabled\":false,\
          \"repairOcrEnabled\":false,\
          \"sessionName\":\"Default Tracking\",\"sessionDefinitionId\":\"1\",\
          \"trackProtectionCosts\":true,\
          \"activities\":{\"visible\":false,\"adHocSegments\":false,\"readyCount\":0,\
          \"active\":[]},\
          \"lifetime\":{\"instanceCount\":0,\"cycled\":0.0,\"lootTt\":0.0,\"net\":0.0,\
-         \"returnRate\":0.0,\"pes\":0.0,\"durationSeconds\":0.0},\
-         \"trifectaAttribution\":{\"activePresetId\":\"default\",\
-         \"presetName\":\"Default\",\"presets\":[{\"id\":\"default\",\"name\":\"Default\"}],\
-         \"smallWeapon\":null,\"bigWeapon\":null,\"healTool\":null},\"recentEvents\":[]}"
+         \"returnRate\":0.0,\"pes\":0.0,\"durationSeconds\":0.0,\"unpricedShots\":0},\
+         \"recentEvents\":[]}"
     );
 }
 
@@ -368,15 +366,14 @@ async fn the_lifecycle_guards_hold() {
     let stop = api.tracking_stop().await.unwrap_err();
     assert_eq!(serde_json::to_value(&stop).unwrap()["kind"], "conflict");
 
-    // Start under the default config (trifecta mode, the default preset
-    // present but its weapon / heal slots unbound) fails the attribution
-    // gate with `validate_trifecta`'s verbatim reason.
+    // Start under the default config (no hotbar slot bound, no weapon
+    // carried) fails the tool gate: no shot could ever be priced.
     let start = api.tracking_start().await.unwrap_err();
     assert_eq!(
         serde_json::to_value(&start).unwrap(),
         serde_json::json!({
             "kind": "badRequest",
-            "message": "Trifecta attribution requires a configured small weapon, big weapon, and healing tool"
+            "message": "Bind a hotbar slot or add a carried weapon in Equipment before tracking."
         })
     );
 }
@@ -586,8 +583,7 @@ async fn the_idle_snapshot_carries_the_declared_facets() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_active_snapshot_carries_the_declared_boost() {
     let dir = tempfile::tempdir().unwrap();
-    // Hotbar attribution with one slot bound, so the start satisfies
-    // that gate rather than the trifecta loadout one.
+    // One slot bound, so the start satisfies the tool gate.
     let api = make_api(
         dir.path(),
         false,
@@ -1087,9 +1083,6 @@ impl eo_services::tracker::TrackingConfig for ScriptedSessionConfig {
     }
     fn manual_mob(&self) -> Option<(String, String)> {
         None
-    }
-    fn weapon_attribution_trifecta(&self) -> bool {
-        false
     }
     fn loot_filter_blacklist(&self) -> Vec<String> {
         Vec::new()
@@ -2038,4 +2031,120 @@ async fn healing_corrections_answer_with_the_refreshed_detail_and_undo_exactly()
         .await
         .unwrap_err();
     assert_eq!(kind(paging), "badRequest");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() {
+    use eo_api::weapons::{WeaponMismatchDecision, WeaponShotGroup};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            r#"INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,dangling_cost,
+                 mob_tracking_mode,updated_at,weapon_shots_agreed,weapon_shots_evidenced)
+               VALUES('shot',1000.0,4600.0,0,0.0,'mob',4600.0,5,0);
+               INSERT INTO equipment_library(id,name,item_type,properties_json)
+               VALUES(2,'Cannon','weapon',
+                 '{"weapon_entity":{"damage":{"impact":40},"economy":{"decay":20.0,"ammo_burn":0}}}');
+               INSERT INTO weapon_shot_evidence(id,session_id,kill_id,observed_at,amount,critical,
+                 attribution,hotbar_tool,tool_name,cost_per_shot,candidates_json,reason)
+               VALUES('u1','shot',NULL,1200.0,90.0,0,'unresolved','Pistol',NULL,0,
+                 '[{"equipmentId":2,"name":"Cannon","fits":false}]','exceeds every carried weapon''s reach');"#,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        api.weapon_unpriced_sessions(vec!["none".into(), "shot".into()])
+            .await
+            .unwrap(),
+        vec!["shot".to_string()]
+    );
+    let page = api
+        .weapon_shots("shot".into(), WeaponShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&page).unwrap(),
+        serde_json::json!({
+            "shots": [{
+                "id": "u1", "observedAt": 1200.0, "amount": 90.0, "critical": false,
+                "reason": "exceeds every carried weapon's reach", "hotbarTool": "Pistol",
+                "toolName": null, "costPerShot": 0.0,
+                "candidates": [{"equipmentId": 2, "name": "Cannon", "fits": false}],
+                "correctionId": null, "reviewDecision": null, "correctable": true,
+            }],
+            "total": 1,
+        })
+    );
+    let weapons = api.weapon_correction_weapons("u1".into()).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&weapons).unwrap(),
+        serde_json::json!([{ "equipmentId": 2, "name": "Cannon", "costPerShotPed": 0.2, "fits": false }])
+    );
+
+    // A shot after the last kill is the session's dangling cost.
+    let assigned = api.weapon_assign("u1".into(), 2).await.unwrap();
+    let block = serde_json::to_value(&assigned.weapon_attribution).unwrap();
+    assert_eq!(block["unpriced"], 0);
+    assert_eq!(block["assigned"], 1);
+    assert_eq!(block["agreed"], 5);
+    assert!((assigned.summary.cost - 0.2).abs() < 1e-9);
+    let listed = api
+        .weapon_shots("shot".into(), WeaponShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap();
+    let correction_id = listed.shots[0]
+        .correction_id
+        .0
+        .clone()
+        .expect("a live correction");
+
+    let restored = api
+        .weapon_assignment_undo(correction_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&restored.weapon_attribution).unwrap()["unpriced"],
+        1
+    );
+    assert!(restored.summary.cost.abs() < 1e-9);
+
+    let kind = |error: ApiError| serde_json::to_value(&error).unwrap()["kind"].clone();
+    assert_eq!(
+        kind(api.weapon_assignment_undo(correction_id).await.unwrap_err()),
+        "conflict"
+    );
+    assert_eq!(
+        kind(
+            api.weapon_correction_weapons("nope".into())
+                .await
+                .unwrap_err()
+        ),
+        "notFound"
+    );
+    assert_eq!(
+        kind(
+            api.weapon_shots("shot".into(), WeaponShotGroup::Evidence, 0, 0)
+                .await
+                .unwrap_err()
+        ),
+        "badRequest"
+    );
+    // No session runs, so there is no mismatch to decide.
+    assert_eq!(
+        kind(
+            api.tracking_weapon_decide(WeaponMismatchDecision::Confirm)
+                .await
+                .unwrap_err()
+        ),
+        "conflict"
+    );
+    // The decision crosses the wire as its lowercase literal.
+    let decision: WeaponMismatchDecision =
+        serde_json::from_value(serde_json::json!("keep")).unwrap();
+    assert_eq!(decision, WeaponMismatchDecision::Keep);
 }

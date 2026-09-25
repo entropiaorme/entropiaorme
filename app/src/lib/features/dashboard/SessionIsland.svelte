@@ -310,8 +310,13 @@
 					<Skeleton class="h-[17px] w-14" />
 				{:else}
 					<span class="truncate text-[17px] font-semibold tabular-nums leading-none tracking-tight
-						{r.value === '\u2014' ? 'text-text-tertiary' : r.color}">
-						{r.value}
+						{r.value === '\u2014' ? 'text-text-tertiary' : r.color}"
+						title={'incomplete' in r ? r.incomplete : undefined}
+					>
+						{r.value}{#if 'incomplete' in r && r.incomplete}<span
+								class="ml-0.5 align-super text-[10px] font-normal text-warning"
+								aria-hidden="true">*</span
+							><span class="sr-only">, {r.incomplete}</span>{/if}
 					</span>
 				{/if}
 			</div>
@@ -319,7 +324,7 @@
 	</div>
 
 	{#if status?.status === 'active'}
-		{#if status.weaponAttribution === 'hotbar' && status.hotbarListenerActive === false}
+		{#if status.hotbarKeysEnabled === true && status.hotbarListenerActive === false}
 			<div class="relative flex items-start gap-3 px-3.5 py-3 rounded-md border border-warning/30 bg-warning/[0.06]">
 				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4.5 w-4.5 mt-0.5 text-warning shrink-0">
 					<path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
@@ -327,7 +332,7 @@
 				<div class="flex flex-col gap-0.5">
 					<p class="text-sm font-medium text-warning tracking-tight">Hotbar key listener not active</p>
 					<p class="text-xs text-text-secondary leading-relaxed">
-						Cost attribution is using the hotbar but the listener isn't running. Check that the hotbar key listener is enabled in Settings.
+						Your hotbar presses are not reaching the app, so weapon costs follow damage ranges alone. Check the hotbar key listener in Settings.
 					</p>
 				</div>
 			</div>

@@ -73,6 +73,9 @@ use eo_api::tracking::{
     SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
     TrackingSnapshot,
 };
+use eo_api::weapons::{
+    WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
+};
 use eo_api::ApiError;
 use eo_api::Nullable;
 use tauri::Emitter;
@@ -285,6 +288,52 @@ pub async fn healing_correction_undo(
     correction_id: String,
 ) -> Result<SessionDetail, ApiError> {
     facade(&app)?.healing_correction_undo(correction_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_shots(
+    app: tauri::AppHandle,
+    session_id: String,
+    group: WeaponShotGroup,
+    offset: i64,
+    limit: i64,
+) -> Result<WeaponShotPage, ApiError> {
+    facade(&app)?
+        .weapon_shots(session_id, group, offset, limit)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_unpriced_sessions(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+) -> Result<Vec<String>, ApiError> {
+    facade(&app)?.weapon_unpriced_sessions(session_ids).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_correction_weapons(
+    app: tauri::AppHandle,
+    evidence_id: String,
+) -> Result<Vec<WeaponCorrectionWeapon>, ApiError> {
+    facade(&app)?.weapon_correction_weapons(evidence_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assign(
+    app: tauri::AppHandle,
+    evidence_id: String,
+    equipment_id: i64,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_assign(evidence_id, equipment_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assignment_undo(
+    app: tauri::AppHandle,
+    correction_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_assignment_undo(correction_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1302,6 +1351,14 @@ pub async fn tracking_stop(app: tauri::AppHandle) -> Result<StopResult, ApiError
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_weapon_decide(
+    app: tauri::AppHandle,
+    decision: WeaponMismatchDecision,
+) -> Result<bool, ApiError> {
+    facade(&app)?.tracking_weapon_decide(decision).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_release_mob(app: tauri::AppHandle) -> Result<ReleaseResult, ApiError> {
     facade(&app)?.tracking_release_mob().await
 }
@@ -1895,6 +1952,11 @@ mod tests {
         "healing_correction_tools",
         "healing_correct",
         "healing_correction_undo",
+        "weapon_shots",
+        "weapon_unpriced_sessions",
+        "weapon_correction_weapons",
+        "weapon_assign",
+        "weapon_assignment_undo",
         "character_calibration",
         "character_stats",
         "character_skills",
@@ -2013,6 +2075,7 @@ mod tests {
         "tracking_snapshot",
         "tracking_start",
         "tracking_stop",
+        "tracking_weapon_decide",
         "tracking_release_mob",
         "tracking_manual_mob_lock",
         "tracking_session_config",

@@ -20,17 +20,18 @@ use crate::mob_lookup_service::python_whitespace;
 use crate::ped::Ped;
 use crate::tracking_models::{
     ActiveSessionView, HarvestGuardrailMismatchView, HealingRuntimeView, TrackingReadout,
-    TrackingSession,
+    TrackingSession, WeaponGuardrailMismatchView,
 };
 
 use super::actor::TrackerActor;
+use super::attribution::WeaponMismatch;
 use super::combat::Accumulator;
 use super::harvest::GuardrailMismatch;
 use super::healing::HealingRuntime;
 use super::mob::DeclaredMob;
 use super::time::{instant_to_epoch, local_isoformat, resolve_local};
 use super::weapons::WeaponRuntime;
-use super::{HealTool, HuntTracker, SessionState, TrackerCommandError};
+use super::{HuntTracker, SessionState, TrackerCommandError};
 
 /// A loot group's dedup identity: (total, item count, first item name).
 pub(super) type LootFingerprint = (f64, usize, String);
@@ -73,7 +74,6 @@ pub(super) struct ActiveSession {
     /// Heal cost accrued this session (the equipped tool's per-use
     /// cost per counted activation).
     pub(super) heal_cost: Ped,
-    pub(super) heal_warning_emitted: bool,
     pub(super) harvest_warning_emitted: bool,
     pub(super) protection_evidence_warning_emitted: bool,
     pub(super) warnings: Vec<String>,
@@ -90,7 +90,6 @@ pub(super) struct ActiveSession {
     /// The last recorded loot group's dedup identity and instant,
     /// always stamped together.
     pub(super) last_loot: Option<(LootFingerprint, DateTime<Utc>)>,
-    pub(super) trifecta_unmatched_warning_emitted: bool,
     /// The standing harvest-guardrail disagreement, when loot evidence
     /// last contradicted the hotbar-equipped tool (see `harvest.rs`).
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
@@ -112,7 +111,6 @@ impl ActiveSession {
             accumulator: Accumulator::default(),
             dirty: false,
             heal_cost: Ped::ZERO,
-            heal_warning_emitted: false,
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
             warnings: Vec::new(),
@@ -121,7 +119,6 @@ impl ActiveSession {
             intervals: IntervalState::default(),
             healing: HealingRuntime::default(),
             last_loot: None,
-            trifecta_unmatched_warning_emitted: false,
             guardrail_mismatch: None,
             guardrail_warning_emitted: false,
             harvest_press_floor: 0,
@@ -202,6 +199,8 @@ pub(super) struct SessionAggregate {
     pub(super) harvest_loot: Ped,
     pub(super) harvest_cost: Ped,
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
+    pub(super) weapon_mismatch: Option<WeaponMismatch>,
+    pub(super) unpriced_shots: i64,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
 }
@@ -223,11 +222,13 @@ impl TrackerActor {
                 None,
             );
         };
+        // With no hotbar press yet (or the listener off), the weapon being
+        // recorded is the best answer to "what is in hand".
         let current_tool = self
             .held_item
             .as_ref()
             .map(|item| item.0.clone())
-            .or_else(|| active.weapons.hotbar_tool.clone());
+            .or_else(|| active.weapons.attribution.recording().map(str::to_string));
         let current_tool_kind = self.held_item.as_ref().map(|item| item.1).or_else(|| {
             current_tool
                 .as_ref()
@@ -454,6 +455,8 @@ impl TrackerActor {
             harvest_loot,
             harvest_cost,
             guardrail_mismatch: active.guardrail_mismatch.clone(),
+            weapon_mismatch: active.weapons.attribution.mismatch().cloned(),
+            unpriced_shots: active.weapons.attribution.counts().unresolved,
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
                 tool_name,
@@ -692,35 +695,23 @@ impl TrackerActor {
         Ok(active_activities(active))
     }
 
-    /// Refresh trifecta-attribution state after config changes. The
-    /// providers may read the database; the actor simply runs them
-    /// inline (nothing else can touch its state meanwhile).
+    /// Refresh the config-derived tracker state after a settings change:
+    /// the carried weapons (a regime in progress carries on over the new
+    /// set), the harvest guardrail, and the loot filter. The providers may
+    /// read the database; the actor simply runs them inline (nothing else
+    /// can touch its state meanwhile).
     pub(super) fn reload_config(&mut self) {
-        let trifecta_mode = self.providers.config.weapon_attribution_trifecta();
-        let trifecta = if trifecta_mode {
-            self.providers.equipment.resolve_trifecta()
-        } else {
-            None
-        };
         self.harvest_guardrail = self.providers.equipment.resolve_harvest_guardrail();
         self.refresh_loot_filter();
         let Self {
-            session,
-            heal_tool,
-            providers,
-            ..
+            session, providers, ..
         } = self;
         let Some(active) = session.active_mut() else {
             return;
         };
-        if trifecta_mode {
-            Self::load_trifecta_weapon_profiles(active, heal_tool, trifecta.as_ref());
-        } else {
-            active.weapons.attributor.clear();
-            *heal_tool = HealTool::default();
-            active.heal_warning_emitted = false;
-            active.weapons.reset_runtime();
-        }
+        active
+            .weapons
+            .load_carried(providers.equipment.carried_weapons());
 
         // Sync the declared mob with the live config (the declare and
         // release commands write the config first, so this also covers
@@ -786,12 +777,7 @@ impl TrackerActor {
             skill_boost_percent: declared_boost.filter(|percent| *percent > 0),
         };
         let session_id = uuid::Uuid::new_v4().to_string();
-        let trifecta_mode = self.providers.config.weapon_attribution_trifecta();
-        let trifecta = if trifecta_mode {
-            self.providers.equipment.resolve_trifecta()
-        } else {
-            None
-        };
+        let carried = self.providers.equipment.carried_weapons();
         self.harvest_guardrail = self.providers.equipment.resolve_harvest_guardrail();
 
         self.refresh_loot_filter();
@@ -846,18 +832,10 @@ impl TrackerActor {
 
         // The fresh ActiveSession IS the session reset: every
         // session-scoped field starts at its documented initial
-        // state by construction. (The equipped heal tool
-        // deliberately persists; it lives outside the typestate.)
+        // state by construction.
         let mut active = ActiveSession::new(session.clone(), facets);
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
-
-        if trifecta_mode {
-            Self::load_trifecta_weapon_profiles(
-                &mut active,
-                &mut self.heal_tool,
-                trifecta.as_ref(),
-            );
-        }
+        active.weapons.load_carried(carried);
 
         // Seed the declared mob from the configured declaration, when
         // one is set (the same seeding the declare command performs).
@@ -923,11 +901,25 @@ impl TrackerActor {
     /// summary, and the stop events; then the in-memory clear
     /// (dropping the whole `ActiveSession`).
     pub(super) async fn stop_session(&mut self) -> Result<Option<TrackingSession>, DbError> {
-        let (session, session_id, end_time, heal_cost, dangling_cost, session_name, session_boost) = {
+        let (
+            session,
+            session_id,
+            end_time,
+            heal_cost,
+            dangling_cost,
+            session_name,
+            session_boost,
+            dangling_evidence,
+            attribution_counts,
+        ) = {
             let Some(active) = self.session.active_mut() else {
                 return Ok(None);
             };
             let dangling_cost = active.accumulator.total_cost();
+            // Evidence of the shots after the last kill settles with the
+            // session's dangling cost.
+            let dangling_evidence = active.accumulator.evidence.clone();
+            let attribution_counts = active.weapons.attribution.counts();
             active.session.end_time = Some(resolve_local(self.clock.now()));
             active.session.dangling_cost = dangling_cost;
             let snapshot = active.session.clone();
@@ -944,6 +936,8 @@ impl TrackerActor {
                 dangling_cost,
                 session_name,
                 session_boost,
+                dangling_evidence,
+                attribution_counts,
             )
         };
         // Close every still-open interval before the session record is
@@ -977,16 +971,22 @@ impl TrackerActor {
                 tx.execute(
                     "UPDATE tracking_sessions SET ended_at = ?, is_active = 0, \
                      heal_cost = ?, dangling_cost = ?, session_name = ?, \
-                     skill_boost_percent = ? WHERE id = ?",
+                     skill_boost_percent = ?, weapon_shots_agreed = ?, \
+                     weapon_shots_evidenced = ? WHERE id = ?",
                     rusqlite::params![
                         end_epoch,
                         heal_value,
                         dangling_value,
                         session_name,
                         session_boost,
+                        attribution_counts.agreed,
+                        attribution_counts.evidenced,
                         sid
                     ],
                 )?;
+                for row in &dangling_evidence {
+                    row.insert(&tx, None)?;
+                }
                 // Enhancer-break Shrapnel is an immediate cost rebate. Ordinary
                 // Shrapnel remains stock until the player explicitly converts it.
                 Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_time)?;
@@ -1189,6 +1189,15 @@ impl HuntTracker {
                     at_epoch: mismatch.at_epoch,
                 }
             }),
+            weapon_guardrail_mismatch: aggregated.weapon_mismatch.map(|mismatch| {
+                WeaponGuardrailMismatchView {
+                    hotbar_tool: mismatch.declared,
+                    recording_tool: mismatch.evidence,
+                    since: mismatch.since,
+                    shots: mismatch.shots,
+                }
+            }),
+            unpriced_shots: aggregated.unpriced_shots,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,
             healing: aggregated.healing,

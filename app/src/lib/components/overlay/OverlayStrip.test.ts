@@ -226,18 +226,9 @@ describe('derived activity feedback', () => {
 		render(OverlayStrip, {
 			props: {
 				data: liveData({
-					weaponAttribution: 'trifecta',
 					currentTool: 'Restoration Chip 10',
 					currentToolKind: 'healing',
 					currentActivity: null,
-					trifectaAttribution: {
-						activePresetId: 'p1',
-						presetName: 'Hunting Set',
-						presets: [{ id: 'p1', name: 'Hunting Set' }],
-						smallWeapon: null,
-						bigWeapon: null,
-						healTool: null,
-					},
 					healing: {
 						toolName: 'Restoration Chip 10',
 						state: 'cooldown',
@@ -254,7 +245,6 @@ describe('derived activity feedback', () => {
 		});
 
 		expect(screen.getByText('Restoration Chip 10')).toBeTruthy();
-		expect(screen.queryByText('Hunting Set')).toBeNull();
 		expect(screen.queryByTestId('activity-feedback')).toBeNull();
 		expect(screen.queryByTestId('healing-state')).toBeNull();
 		expect(screen.queryByText(/passive heal/i)).toBeNull();
@@ -288,68 +278,74 @@ describe('customisable stat pills', () => {
 	});
 });
 
-describe('trifecta selector', () => {
-	const trifecta = {
-		activePresetId: 'p1',
-		presetName: 'Hunting Set',
-		presets: [
-			{ id: 'p1', name: 'Hunting Set' },
-			{ id: 'p2', name: 'Mining Set' },
-		],
-		smallWeapon: null,
-		bigWeapon: null,
-		healTool: null,
+describe('the weapon guardrail cue', () => {
+	const cue = {
+		hotbarTool: 'Sollomate Opalo',
+		recordingTool: 'Korss H400 (L)',
+		since: 1_784_600_000,
+		shots: 3,
 	};
 
-	it('renders the active preset name and forwards the trigger click with its anchor', () => {
-		const onTrifectaTrigger = vi.fn();
+	it('shows the current weapon while the evidence agrees', () => {
 		render(OverlayStrip, {
-			props: {
-				data: liveData({
-					status: 'active',
-					weaponAttribution: 'trifecta',
-					trifectaAttribution: trifecta,
-				}),
-				onTrifectaTrigger,
-			},
-		});
-
-		const trigger = screen.getByTitle('Hunting Set') as HTMLButtonElement;
-		expect(trigger.getAttribute('aria-expanded')).toBe('false');
-		trigger.click();
-		expect(onTrifectaTrigger).toHaveBeenCalledWith(trigger);
-	});
-
-	it('reflects the open menu and saving state on the trigger', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ weaponAttribution: 'trifecta', trifectaAttribution: trifecta }),
-				trifectaMenuOpen: true,
-				trifectaSaving: true,
-			},
-		});
-
-		const trigger = screen.getByTitle('Hunting Set') as HTMLButtonElement;
-		expect(trigger.getAttribute('aria-expanded')).toBe('true');
-		expect(trigger.disabled).toBe(true);
-	});
-
-	it('falls back to the current tool readout under hotbar attribution', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ weaponAttribution: 'hotbar', currentTool: 'Sollomate Opalo' }),
-			},
+			props: { data: liveData({ status: 'active', currentTool: 'Sollomate Opalo' }) },
 		});
 		expect(screen.getByText('Sollomate Opalo')).toBeTruthy();
-		expect(screen.queryByTitle('Hunting Set')).toBeNull();
+		expect(screen.queryByTestId('weapon-guardrail-alert')).toBeNull();
 	});
 
+	it('shows the doubted hotbar weapon, what is recorded, and the two decisions', async () => {
+		const onWeaponDecision = vi.fn();
+		render(OverlayStrip, {
+			props: {
+				data: liveData({ status: 'active', currentTool: 'Sollomate Opalo', weaponGuardrail: cue }),
+				onWeaponDecision,
+			},
+		});
+		const alert = screen.getByTestId('weapon-guardrail-alert');
+		expect(alert).toBeTruthy();
+		expect(screen.getByText('Sollomate Opalo').className).toContain('text-red-400');
+		const recording = screen.getByText('Recording: Korss H400 (L)');
+		expect(recording.className).toContain('whitespace-nowrap');
+		expect(recording.className).not.toContain('truncate');
+
+		(screen.getByLabelText('Confirm Korss H400 (L)') as HTMLButtonElement).click();
+		expect(onWeaponDecision).toHaveBeenLastCalledWith('confirm');
+		(screen.getByLabelText('Keep Sollomate Opalo') as HTMLButtonElement).click();
+		expect(onWeaponDecision).toHaveBeenLastCalledWith('keep');
+	});
+
+	it('holds both decisions while one is saving', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({ status: 'active', weaponGuardrail: cue }),
+				decidingWeapon: true,
+			},
+		});
+		expect((screen.getByLabelText('Confirm Korss H400 (L)') as HTMLButtonElement).disabled).toBe(
+			true,
+		);
+		expect((screen.getByLabelText('Keep Sollomate Opalo') as HTMLButtonElement).disabled).toBe(
+			true,
+		);
+	});
+
+	it('marks a cost pill incomplete while shots are unpriced', () => {
+		overlayStats.current = [{ id: 'cycled' as StatId, enabled: true }];
+		const status = activeStatus({ cost: 10, returns: 12.5, unpricedShots: 2 });
+		render(OverlayStrip, { props: { data: liveData({ status: 'active' }), status } });
+		const value = screen.getByText('10.00');
+		expect(value.title).toBe('Leaves out 2 shots that could not be priced');
+		expect(value.textContent).toContain('*');
+	});
+});
+
+describe('the harvest guardrail cue', () => {
 	it('shows the guardrail alert in place of the tool readout on a mismatch', () => {
 		render(OverlayStrip, {
 			props: {
 				data: liveData({
 					status: 'active',
-					weaponAttribution: 'hotbar',
 					currentTool: 'Terratech PH-4 (L)',
 					harvestGuardrail: {
 						expectedTool: 'Terratech PH-1 (L)',
@@ -379,7 +375,6 @@ describe('trifecta selector', () => {
 			props: {
 				data: liveData({
 					status: 'active',
-					weaponAttribution: 'hotbar',
 					harvestGuardrail: {
 						expectedTool: 'Terratech PH-1 (L)',
 						observedTool: null,

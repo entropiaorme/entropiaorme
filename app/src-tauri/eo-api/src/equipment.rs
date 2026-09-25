@@ -1,6 +1,5 @@
-//! The equipment family: catalogue search, the library CRUD (including
-//! the trifecta-reference delete guard), the expanded detail, and the
-//! cost shaping behind both.
+//! The equipment family: catalogue search, the library CRUD, the
+//! expanded detail, and the cost shaping behind both.
 //!
 //! The stored `properties_json` bytes are an owned on-disk contract:
 //! the writes serialise with the canonical spacing the DB-state goldens
@@ -10,7 +9,6 @@
 //! JSON values through untyped, the DTOs pin the number/string types
 //! the writes have always produced.
 
-use eo_services::config_service::load_config_readonly;
 use eo_services::cost_engine::{
     cost_per_shot_from_props, get_weapon_damage_profile, heal_cost_per_use,
     heal_cost_per_use_with_implant, heal_reload_seconds, is_limited,
@@ -983,19 +981,10 @@ impl Api {
         summary_from_parts(id, &name, &item_type, &raw_props, &self.game_data)
     }
 
-    /// Delete a stored entry; refused while a trifecta preset references
-    /// it. Idempotent over a missing row.
+    /// Delete a stored entry. Idempotent over a missing row. A hotbar slot
+    /// or carried-weapon entry naming it simply stops resolving: the
+    /// tracker skips ids the library no longer holds.
     pub async fn equipment_delete(&self, item_id: i64) -> Result<(), ApiError> {
-        let config = load_config_readonly(&self.data_dir)
-            .map_err(ApiError::internal("settings read for the delete guard"))?;
-        let referenced = config.trifecta_presets.iter().any(|preset| {
-            [preset.small_weapon_id, preset.big_weapon_id, preset.heal_id].contains(&Some(item_id))
-        });
-        if referenced {
-            return Err(ApiError::conflict(
-                "Cannot remove equipment selected in a trifecta preset",
-            ));
-        }
         self.db
             .delete_equipment(item_id)
             .await

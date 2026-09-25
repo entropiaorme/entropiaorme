@@ -75,6 +75,9 @@ use crate::tracking::{
     SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
     TrackingSnapshot,
 };
+use crate::weapons::{
+    WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
+};
 use crate::ApiError;
 use crate::Nullable;
 
@@ -289,6 +292,66 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "healing_correction_undo",
+            args: vec![ArgSpec {
+                name: "correction_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "weapon_shots",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "group",
+                    schema: schema(schema_for!(WeaponShotGroup)),
+                },
+                ArgSpec {
+                    name: "offset",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "limit",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(WeaponShotPage))),
+        },
+        CommandSpec {
+            name: "weapon_unpriced_sessions",
+            args: vec![ArgSpec {
+                name: "session_ids",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<String>))),
+        },
+        CommandSpec {
+            name: "weapon_correction_weapons",
+            args: vec![ArgSpec {
+                name: "evidence_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<WeaponCorrectionWeapon>))),
+        },
+        CommandSpec {
+            name: "weapon_assign",
+            args: vec![
+                ArgSpec {
+                    name: "evidence_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "weapon_assignment_undo",
             args: vec![ArgSpec {
                 name: "correction_id",
                 schema: schema(schema_for!(String)),
@@ -1264,6 +1327,14 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "tracking_stop",
             args: Vec::new(),
             returns: Some(schema(schema_for!(StopResult))),
+        },
+        CommandSpec {
+            name: "tracking_weapon_decide",
+            args: vec![ArgSpec {
+                name: "decision",
+                schema: schema(schema_for!(WeaponMismatchDecision)),
+            }],
+            returns: Some(schema(schema_for!(bool))),
         },
         CommandSpec {
             name: "tracking_release_mob",

@@ -208,6 +208,27 @@
       ],
       "title": "TrackingSessionUpdatedPayload",
       "type": "object"
+    },
+    "WeaponsUpdated": {
+      "additionalProperties": false,
+      "description": "An unpriced shot of an ended session was assigned to a weapon, or the assignment undone.",
+      "properties": {
+        "event_version": { "default": 1, "title": "Event Version", "type": "integer" },
+        "occurred_at": { "title": "Occurred At", "type": "string" },
+        "payload": { "$ref": "#/$defs/WeaponsUpdatedPayload" },
+        "type": { "const": "weapons.updated", "default": "weapons.updated", "title": "Type", "type": "string" }
+      },
+      "required": ["occurred_at", "payload"],
+      "title": "WeaponsUpdated",
+      "type": "object"
+    },
+    "WeaponsUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "A content-free invalidation that prompts consumers to re-read weapon costs and weapon evidence.",
+      "properties": {},
+      "required": [],
+      "title": "WeaponsUpdatedPayload",
+      "type": "object"
     }
   },
   "discriminator": {
@@ -217,7 +238,8 @@
       "navigation.updated": "#/$defs/NavigationUpdated",
       "protection.updated": "#/$defs/ProtectionUpdated",
       "scan.status.changed": "#/$defs/ScanStatusChanged",
-      "tracking.session.updated": "#/$defs/TrackingSessionUpdated"
+      "tracking.session.updated": "#/$defs/TrackingSessionUpdated",
+      "weapons.updated": "#/$defs/WeaponsUpdated"
     },
     "propertyName": "type"
   },
@@ -239,6 +261,9 @@
     },
     {
       "$ref": "#/$defs/HealingUpdated"
+    },
+    {
+      "$ref": "#/$defs/WeaponsUpdated"
     }
   ]
 }

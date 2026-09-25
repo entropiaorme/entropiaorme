@@ -52,6 +52,11 @@ const seams = vi.hoisted(() => {
 		}),
 		emit: vi.fn(async () => {}),
 		getTrackingSnapshot: vi.fn(),
+		getSessionDefinitions: vi.fn(async () => [
+			{ id: '1', name: 'ARIS Dailies' },
+			{ id: '2', name: 'Solo Run' },
+		]),
+		decideWeaponMismatch: vi.fn(async () => true),
 		getOverlayPosition: vi.fn(async () => ({ x: null, y: null })),
 		saveOverlayPosition: vi.fn(async () => {}),
 		updateSettings: vi.fn(async () => ({})),
@@ -84,7 +89,7 @@ vi.mock('$lib/api', () => {
 		getOverlayPosition: seams.getOverlayPosition,
 		saveOverlayPosition: seams.saveOverlayPosition,
 		setSessionConfig: vi.fn(),
-		getSessionDefinitions: vi.fn(async () => []),
+		getSessionDefinitions: seams.getSessionDefinitions,
 		selectDefinition: vi.fn(),
 		getManualMobSuggestions: vi.fn(async () => []),
 		lockManualMob: vi.fn(),
@@ -107,6 +112,7 @@ vi.mock('$lib/api', () => {
 		})),
 		getQuests: vi.fn(async () => []),
 		updateSettings: seams.updateSettings,
+		decideWeaponMismatch: seams.decideWeaponMismatch,
 	};
 });
 
@@ -178,21 +184,21 @@ const activeSnapshot = {
 	session_id: 's1',
 	elapsed: 60,
 	kill_count: 2,
-	weaponAttribution: 'trifecta',
 	sessionName: 'ARIS Dailies',
+	sessionDefinitionId: '1',
 	currentMob: 'Atrox',
-	trifectaAttribution: {
-		activePresetId: 'p1',
-		presetName: 'Hunting Set',
-		presets: [
-			{ id: 'p1', name: 'Hunting Set' },
-			{ id: 'p2', name: 'Mining Set' },
-		],
-		smallWeapon: null,
-		bigWeapon: null,
-		healTool: null,
-	},
+	currentTool: 'Sollomate Opalo',
 };
+
+// Idle, so the session picker is a live control: the popup vehicle for the
+// readiness handshake below.
+const idleSnapshot = {
+	status: 'idle',
+	sessionName: 'ARIS Dailies',
+	sessionDefinitionId: '1',
+};
+
+const PICKER_TITLE = 'ARIS Dailies; pick the session for the next run';
 
 function fireReady(topic: string, label: string): void {
 	for (const cb of seams.listeners.get(topic) ?? []) {
@@ -201,8 +207,9 @@ function fireReady(topic: string, label: string): void {
 }
 
 async function mountAndClickTrigger(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
+	seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
 	render(OverlayPage);
-	const trigger = await screen.findByTitle('Hunting Set');
+	const trigger = await screen.findByTitle(PICKER_TITLE);
 	trigger.click();
 
 	// The popup webview is created hidden.
@@ -215,7 +222,7 @@ async function mountAndClickTrigger(): Promise<InstanceType<typeof seams.FakeWeb
 	return popup;
 }
 
-async function mountAndOpenTrifectaMenu(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
+async function mountAndOpenSessionMenu(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
 	const popup = await mountAndClickTrigger();
 	// Complete Tauri's creation handshake.
 	await act(async () => {
@@ -237,7 +244,7 @@ afterEach(() => {
 
 describe('overlay popup readiness handshake', () => {
 	it('withholds the show sequence until the popup route reports ready', async () => {
-		const popup = await mountAndOpenTrifectaMenu();
+		const popup = await mountAndOpenSessionMenu();
 
 		// Created but not ready: the show payload must not have been emitted and
 		// the window must remain hidden.
@@ -262,14 +269,14 @@ describe('overlay popup readiness handshake', () => {
 		expect(popup.emit).toHaveBeenCalledWith(
 			'overlay-menu:show',
 			expect.objectContaining({
-				kind: 'trifecta',
-				options: [
-					{ id: 'p1', name: 'Hunting Set', active: true },
-					{ id: 'p2', name: 'Mining Set', active: false },
+				kind: 'definition',
+				definitions: [
+					{ id: '1', name: 'ARIS Dailies', selected: true },
+					{ id: '2', name: 'Solo Run', selected: false },
 				],
 			}),
 		);
-		// The trifecta open path requests focus for keyboard navigation.
+		// The picker's open path requests focus for keyboard navigation.
 		expect(popup.setFocus).toHaveBeenCalled();
 		// The sequence ORDER is the contract: size and position settle before
 		// the show payload goes out, and the window is revealed only after it.
@@ -280,7 +287,7 @@ describe('overlay popup readiness handshake', () => {
 		expect(order(popup.emit)).toBeLessThan(order(popup.show));
 		expect(order(popup.show)).toBeLessThan(order(popup.setFocus));
 		// The trigger reflects the open menu.
-		expect(screen.getByTitle('Hunting Set').getAttribute('aria-expanded')).toBe('true');
+		expect(screen.getByTitle(PICKER_TITLE).getAttribute('aria-expanded')).toBe('true');
 	});
 
 	it('times out into a rendered launch error when readiness never arrives', async () => {
@@ -301,7 +308,7 @@ describe('overlay popup readiness handshake', () => {
 
 		expect(popup.show).not.toHaveBeenCalled();
 		expect(screen.getByText('Popup route did not become ready')).toBeTruthy();
-		expect(screen.getByTitle('Hunting Set').getAttribute('aria-expanded')).toBe('false');
+		expect(screen.getByTitle(PICKER_TITLE).getAttribute('aria-expanded')).toBe('false');
 	});
 
 	it('reuses the existing popup window and skips the handshake when already created', async () => {
@@ -309,8 +316,9 @@ describe('overlay popup readiness handshake', () => {
 		seams.FakeWebviewWindow.instances = [];
 		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
 
+		seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
 		render(OverlayPage);
-		const trigger = await screen.findByTitle('Hunting Set');
+		const trigger = await screen.findByTitle(PICKER_TITLE);
 		trigger.click();
 
 		await waitFor(() => {
@@ -320,8 +328,57 @@ describe('overlay popup readiness handshake', () => {
 		expect(seams.FakeWebviewWindow.instances).toHaveLength(0);
 		expect(existing.emit).toHaveBeenCalledWith(
 			'overlay-menu:show',
-			expect.objectContaining({ kind: 'trifecta' }),
+			expect.objectContaining({ kind: 'definition' }),
 		);
+	});
+});
+
+describe('the weapon guardrail cue', () => {
+	it('sends the decision and re-reads the readout', async () => {
+		const withCue = {
+			...activeSnapshot,
+			weaponGuardrail: {
+				hotbarTool: 'Sollomate Opalo',
+				recordingTool: 'Korss H400 (L)',
+				since: 1_784_600_000,
+				shots: 2,
+			},
+		};
+		seams.getTrackingSnapshot.mockResolvedValue(withCue);
+		render(OverlayPage);
+		const confirm = await screen.findByLabelText('Confirm Korss H400 (L)');
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			currentTool: 'Korss H400 (L)',
+		});
+		confirm.click();
+		await waitFor(() => {
+			expect(seams.decideWeaponMismatch).toHaveBeenCalledWith('confirm');
+		});
+		await waitFor(() => {
+			expect(screen.queryByTestId('weapon-guardrail-alert')).toBeNull();
+		});
+		expect(screen.getByText('Korss H400 (L)')).toBeTruthy();
+	});
+
+	it('reports a decision that could not be saved', async () => {
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			weaponGuardrail: {
+				hotbarTool: 'Sollomate Opalo',
+				recordingTool: 'Korss H400 (L)',
+				since: 1_784_600_000,
+				shots: 2,
+			},
+		});
+		seams.decideWeaponMismatch.mockRejectedValueOnce(
+			new Error('The decision could not be saved; nothing changed'),
+		);
+		render(OverlayPage);
+		(await screen.findByLabelText('Keep Sollomate Opalo')).click();
+		expect(
+			await screen.findByText('The decision could not be saved; nothing changed'),
+		).toBeTruthy();
 	});
 });
 

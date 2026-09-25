@@ -1,5 +1,5 @@
 import type { Equipment, EquipmentDetail } from '$lib/types';
-import type { Hotbar, TrifectaSettings } from '$lib/types/settings';
+import type { Hotbar } from '$lib/types/settings';
 
 /**
  * Inline demo data for the equipment surface guide-mode mount.
@@ -253,23 +253,9 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 	},
 };
 
-export const equipmentDemoTrifecta: TrifectaSettings = {
-	activePresetId: 'preset-default',
-	activePresetName: 'Caboria hunt',
-	presets: [
-		{
-			id: 'preset-default',
-			name: 'Caboria hunt',
-			smallWeaponId: 1,
-			bigWeaponId: 2,
-			healId: 4,
-			ready: true,
-			message: null,
-		},
-	],
-	ready: true,
-	message: null,
-};
+/** The demo's weapon carried without a hotkey: the Marksman, switched to
+ * from the inventory, which damage evidence can still recognise. */
+export const equipmentDemoCarriedWeaponIds: number[] = [3];
 
 export const equipmentDemoHotbar: Hotbar = {
 	'1': 1,

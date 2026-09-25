@@ -67,13 +67,7 @@ function settings(): AppSettings {
 	return {
 		hotbarHooksEnabled: false,
 		hotbar: {},
-		trifecta: {
-			activePresetId: 'p1',
-			activePresetName: 'Preset',
-			presets: [],
-			ready: true,
-			message: null,
-		},
+		carriedWeaponIds: [7],
 	} as unknown as AppSettings;
 }
 
@@ -125,7 +119,7 @@ describe('loadData', () => {
 		});
 		expect(model.consumables.map((c) => c.name)).toEqual(['Oil']);
 		expect(model.hotbarHooksEnabled).toBe(false);
-		expect(model.trifecta.activePresetId).toBe('p1');
+		expect(model.carriedWeaponIds).toEqual([7]);
 		expect(model.hotbar).toEqual({ '1': null });
 	});
 

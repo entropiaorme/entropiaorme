@@ -17,8 +17,8 @@
 use std::collections::HashMap;
 
 use crate::bus_events::{
-    ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, ActiveToolChangedPayload,
-    BusEvent, HotbarIntentPayload, HotbarItemKind,
+    ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, BusEvent, HotbarIntentPayload,
+    HotbarItemKind,
 };
 use crate::db::DbError;
 use crate::healing_profile::HealingProfile;
@@ -327,10 +327,7 @@ impl TrackerActor {
         let source = Some(format!("hotbar:{}", payload.slot));
         match payload.item_kind {
             HotbarItemKind::Weapon => {
-                self.on_tool_changed(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
-                    tool_name: payload.item_name.clone(),
-                    source,
-                }));
+                self.on_weapon_press(&payload.item_name, payload.occurred_at);
             }
             HotbarItemKind::Healing => {
                 self.on_heal_tool_changed(&BusEvent::ActiveHealToolChanged(

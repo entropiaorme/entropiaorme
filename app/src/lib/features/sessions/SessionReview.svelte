@@ -50,6 +50,7 @@
 
 	/** Some row on this page nets without an armour cost still to be recorded. */
 	const armourPendingOnPage = $derived(table.pageRows.some((session) => instances.armourPending(session.id)));
+	const unpricedOnPage = $derived(table.pageRows.some((session) => instances.unpriced(session.id)));
 
 	// An armour recording from the overlay, or a healing correction in a
 	// session's detail, moves session figures: follow both while open.
@@ -210,7 +211,11 @@
 												class="ml-0.5 align-super text-[10px] font-normal text-warning"
 												title="Armour cost not recorded yet: this net leaves it out"
 												aria-hidden="true">*</span
-											><span class="sr-only">, armour cost not recorded yet</span>{/if}
+											><span class="sr-only">, armour cost not recorded yet</span>{/if}{#if instances.unpriced(session.id)}<span
+												class="ml-0.5 align-super text-[10px] font-normal text-warning"
+												title="Some shots could not be priced: this net leaves them out"
+												aria-hidden="true">&dagger;</span
+											><span class="sr-only">, some shots could not be priced</span>{/if}
 									</td>
 									<td class="border-b border-border/50 px-4 py-3">
 										<div class="flex items-center justify-end gap-1">
@@ -358,6 +363,11 @@
 				{#if armourPendingOnPage}
 					<p class="px-2 text-xs text-text-tertiary">
 						<span class="text-warning">*</span> Armour cost not recorded yet. It is added when you record a repair or reading from the overlay's Cost button.
+					</p>
+				{/if}
+				{#if unpricedOnPage}
+					<p class="px-2 text-xs text-text-tertiary">
+						<span class="text-warning">&dagger;</span> Some shots could not be priced to one weapon. Open the session to assign them.
 					</p>
 				{/if}
 

@@ -212,7 +212,7 @@ export const dashboardSurface: GuideSurface = {
 					// handler) so the strip lands in its no-session state first.
 					api.setOverlayDemoVisible?.(true);
 					// 1.5s dwell so the idle affordances (TRACK button, session
-					// facet controls, mob input, trifecta dropdown, em-dash
+					// facet controls, mob input, weapon readout, em-dash
 					// stat pills) dwell on screen before the cursor moves to TRACK.
 					if (!(await abortableWait(1500, stillActive))) break;
 
@@ -354,12 +354,12 @@ export const dashboardSurface: GuideSurface = {
 					{
 						kind: 'ul',
 						items: [
-							'Hotbar mode: shows the currently active tool',
-							'Trifecta mode: choose which preset to use',
+							'Shows the weapon your costs follow right now',
+							'If the damage says you switched without the hotbar, it shows what is being recorded instead, with one tap to confirm or keep your hotbar weapon',
 						],
 					},
 				],
-				note: 'Note: See the equipment area for an intro to the Hotbar and Trifecta.',
+				note: 'Note: See the equipment area for an intro to the hotbar and damage ranges.',
 			},
 			async play({ demoApi }) {
 				const api = demoApi as Partial<DashboardDemoApi>;

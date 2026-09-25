@@ -22,6 +22,9 @@
 //! read there).
 
 mod actor;
+mod attribution;
+#[cfg(test)]
+mod attribution_tests;
 mod combat;
 mod harvest;
 mod healing;
@@ -36,16 +39,22 @@ mod session;
 #[cfg(test)]
 mod tests;
 mod time;
+mod weapon_evidence;
 mod weapons;
 
+pub use attribution::{
+    damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, CRITICAL_REACH,
+    DISPLAY_TOLERANCE,
+};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
 };
 pub use mob::{DeclaredMob, MobStampSource};
 pub use providers::{
-    DefaultTrackingConfig, EquipmentLibrary, EquipmentProfile, GuardrailTool,
+    CarriedWeaponProfile, DefaultTrackingConfig, EquipmentLibrary, EquipmentProfile, GuardrailTool,
     HarvestGuardrailTools, InertEquipment, Providers, TrackingConfig, TreeSize,
 };
+pub use weapon_evidence::{MismatchDecision, WeaponDecisionError};
 
 use std::sync::Arc;
 
@@ -118,32 +127,8 @@ impl SessionState {
     }
 }
 
-/// The equipped heal tool. Hotbar-equipment state, NOT session state:
-/// a heal tool equipped during one session stays equipped into the
-/// next (the original never reset these fields at start or stop; only
-/// a heal-tool change or a trifecta reload moves them).
-pub(super) struct HealTool {
-    pub(super) name: Option<String>,
-    pub(super) cost_per_use: Ped,
-    pub(super) reload_seconds: f64,
-    pub(super) amount_min: Option<f64>,
-    pub(super) amount_max: Option<f64>,
-}
-
-impl Default for HealTool {
-    fn default() -> Self {
-        Self {
-            name: None,
-            cost_per_use: Ped::ZERO,
-            reload_seconds: 2.5,
-            amount_min: None,
-            amount_max: None,
-        }
-    }
-}
-
-/// The equipped harvesting tool. Hotbar-equipment state like
-/// `HealTool`, NOT session state: a tool equipped during one session
+/// The equipped harvesting tool. Hotbar-equipment state, NOT session
+/// state: a tool equipped during one session
 /// stays known into the next. Whether it is currently the *hand* item
 /// (versus a weapon equipped after it) is tracked separately on the
 /// actor, because loot routing follows the hand item.
@@ -224,10 +209,21 @@ impl HuntTracker {
         self.call(TrackerMsg::Stop).await
     }
 
-    /// Refresh trifecta-attribution and loot-filter state after config
-    /// changes.
+    /// Refresh the carried weapons, the harvest guardrail, and the loot
+    /// filter after config changes.
     pub async fn reload_config(&self) {
         self.call(TrackerMsg::ReloadConfig).await
+    }
+
+    /// Decide the standing weapon mismatch: confirm the weapon the damage
+    /// evidence names, or keep the hotbar's. False when no mismatch stands
+    /// (a stale control), which changes nothing.
+    pub async fn decide_weapon_mismatch(
+        &self,
+        decision: MismatchDecision,
+    ) -> Result<bool, WeaponDecisionError> {
+        self.call(|reply| TrackerMsg::DecideWeaponMismatch(decision, reply))
+            .await
     }
 
     /// Declare the skill boost now in force; the session row keeps

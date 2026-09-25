@@ -1,8 +1,7 @@
 /**
  * Settings-surface types. The wire shapes re-export from the generated
  * bindings (the authoritative contract); only genuinely frontend-owned
- * names live here. `TrifectaPreset` is the historical consumer-facing
- * name of the generated `TrifectaPresetView`.
+ * names live here.
  */
 
 export type {
@@ -11,8 +10,6 @@ export type {
 	HarvestGuardrailInput,
 	HarvestGuardrailSettings,
 	PassiveEffectSourceView,
-	TrifectaPresetView as TrifectaPreset,
-	TrifectaSettings,
 } from '$lib/api/commands.gen';
 
 /** Hotbar slot mapping: key "1"-"9" (and "0", stored last) to an

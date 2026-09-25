@@ -10,6 +10,8 @@ use serde_json::{Map, Value};
 use crate::expected_hunting::HuntingLooterLevels;
 use crate::harvest_yield::HarvestYieldTier;
 
+use super::attribution::CarriedWeapon;
+
 /// An equipment profile from the library lookup, when the tool is
 /// known.
 pub type EquipmentProfile = Option<Map<String, Value>>;
@@ -52,8 +54,16 @@ impl HarvestGuardrailTools {
     }
 }
 
-/// The equipment-library seam: profile and cost lookups plus the
-/// trifecta-preset resolution the attribution mode needs.
+/// One carried weapon resolved for the tracker: what the guardrail sees
+/// (its name and damage band) and the stored properties that price it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CarriedWeaponProfile {
+    pub weapon: CarriedWeapon,
+    pub props: Map<String, Value>,
+}
+
+/// The equipment-library seam: profile and cost lookups plus the carried
+/// weapons weapon attribution chooses among.
 pub trait EquipmentLibrary: Send + Sync {
     /// The weapon profile whose name matches the tool fragment, when
     /// the library knows it.
@@ -62,9 +72,9 @@ pub trait EquipmentLibrary: Send + Sync {
     /// The per-shot cost in PED, `0.0` when the tool is unknown.
     fn cost_per_shot(&self, tool_name: &str) -> f64;
 
-    /// Resolve the active trifecta preset's attribution map (weapons,
-    /// damage bands, heal tool), when one is configured and complete.
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>>;
+    /// The weapons the player carries: every weapon bound to a hotbar slot
+    /// and every weapon carried without a hotkey, each once.
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile>;
 
     /// Resolve the harvest guardrail's intended tools, when the
     /// guardrail is enabled and at least one board class names a tool the
@@ -102,9 +112,6 @@ pub trait TrackingConfig: Send + Sync {
     /// The declared (species, maturity), when one is configured.
     fn manual_mob(&self) -> Option<(String, String)>;
 
-    /// Whether weapon attribution runs in trifecta mode (vs hotbar).
-    fn weapon_attribution_trifecta(&self) -> bool;
-
     /// The loot-filter blacklist.
     fn loot_filter_blacklist(&self) -> Vec<String>;
 }
@@ -129,7 +136,7 @@ impl Default for Providers {
     }
 }
 
-/// The inert equipment library: no profiles, no costs, no trifecta.
+/// The inert equipment library: no profiles, no costs, no carried weapons.
 pub struct InertEquipment;
 
 impl EquipmentLibrary for InertEquipment {
@@ -141,8 +148,8 @@ impl EquipmentLibrary for InertEquipment {
         0.0
     }
 
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>> {
-        None
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        Vec::new()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -159,7 +166,7 @@ impl EquipmentLibrary for InertEquipment {
 }
 
 /// The inert configuration fallbacks: no declared facets, manual mob
-/// declaration enabled, hotbar attribution, empty blacklist.
+/// declaration enabled, empty blacklist.
 pub struct DefaultTrackingConfig;
 
 impl TrackingConfig for DefaultTrackingConfig {
@@ -179,10 +186,6 @@ impl TrackingConfig for DefaultTrackingConfig {
         None
     }
 
-    fn weapon_attribution_trifecta(&self) -> bool {
-        false
-    }
-
     fn loot_filter_blacklist(&self) -> Vec<String> {
         Vec::new()
     }
@@ -197,7 +200,7 @@ mod tests {
         let equipment = InertEquipment;
         assert_eq!(equipment.weapon_profile("Opalo"), None);
         assert_eq!(equipment.cost_per_shot("Opalo"), 0.0);
-        assert_eq!(equipment.resolve_trifecta(), None);
+        assert!(equipment.carried_weapons().is_empty());
         assert_eq!(equipment.resolve_harvest_guardrail(), None);
         assert_eq!(
             equipment.hunting_looter_levels(),
@@ -215,7 +218,6 @@ mod tests {
         assert_eq!(config.session_name(), "");
         assert_eq!(config.declared_skill_boost_percent(), None);
         assert_eq!(config.manual_mob(), None);
-        assert!(!config.weapon_attribution_trifecta());
         assert!(config.loot_filter_blacklist().is_empty());
     }
 }

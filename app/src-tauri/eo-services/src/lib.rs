@@ -70,12 +70,11 @@ pub mod skill_tracker;
 pub mod spacebar_capture_listener;
 pub mod stock_allocation;
 pub mod time;
-pub mod tool_inference;
 pub mod tracker;
 pub mod tracking_models;
 pub mod tracking_reads;
-pub mod trifecta_service;
 pub mod tt_value_curve;
+pub mod weapon_review;
 
 /// Identifies this crate in diagnostics and smoke checks.
 pub fn crate_name() -> &'static str {

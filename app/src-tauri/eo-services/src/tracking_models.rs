@@ -200,6 +200,12 @@ pub struct ActiveSessionView {
     /// The standing harvest-guardrail disagreement, when the loot
     /// evidence last contradicted the hotbar-equipped tool.
     pub harvest_guardrail_mismatch: Option<HarvestGuardrailMismatchView>,
+    /// The standing weapon mismatch: the damage evidence says another
+    /// carried weapon is being fired than the one the hotbar declared.
+    pub weapon_guardrail_mismatch: Option<WeaponGuardrailMismatchView>,
+    /// Shots recorded without a price because no single carried weapon
+    /// explains them: the session's cost leaves them out.
+    pub unpriced_shots: i64,
     pub healing: HealingRuntimeView,
     /// Raw rows (event_type, mob_or_item, value_ped, timestamp): the
     /// presentation mapping lives in the HTTP layer.
@@ -231,6 +237,18 @@ pub struct HarvestGuardrailMismatchView {
     pub observed_tool: Option<String>,
     pub tree_size: String,
     pub at_epoch: f64,
+}
+
+/// The weapon guardrail's live cue: the weapon the hotbar declared, the
+/// weapon the damage evidence says is being fired (and what is recorded),
+/// when the evidence first disagreed, and how many shots it has recorded
+/// since.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeaponGuardrailMismatchView {
+    pub hotbar_tool: String,
+    pub recording_tool: String,
+    pub since: f64,
+    pub shots: i64,
 }
 
 /// Immutable view of the whole tracking readout: `active` is the

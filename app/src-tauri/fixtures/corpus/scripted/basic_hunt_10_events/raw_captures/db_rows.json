@@ -119,5 +119,105 @@
     }
   ],
   "ledger_entries": [],
-  "notable_events": []
+  "notable_events": [],
+  "weapon_attribution_reviews": [],
+  "weapon_shot_evidence": [
+    {
+      "id": "0b7c6f1e-5a52-4f1e-9d6e-1f3a2c4b5d61",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "context_id": 1,
+      "observed_at": 1767225600.0,
+      "amount": 10.5,
+      "critical": 0,
+      "attribution": "unresolved",
+      "hotbar_tool": null,
+      "tool_name": null,
+      "cost_per_shot": 0.0,
+      "candidates_json": "[]",
+      "reason": "fits no carried weapon",
+      "effect_window_id": null,
+      "review_id": null,
+      "correction_id": null
+    },
+    {
+      "id": "1c8d7a2f-6b63-4a2f-8e7f-2a4b3d5c6e72",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "context_id": 1,
+      "observed_at": 1767225600.0,
+      "amount": 15.0,
+      "critical": 0,
+      "attribution": "unresolved",
+      "hotbar_tool": null,
+      "tool_name": null,
+      "cost_per_shot": 0.0,
+      "candidates_json": "[]",
+      "reason": "fits no carried weapon",
+      "effect_window_id": null,
+      "review_id": null,
+      "correction_id": null
+    },
+    {
+      "id": "2d9e8b3a-7c74-4b3a-9f8a-3b5c4e6d7f83",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "kill_id": "f1fec4a3-a7d3-4f8b-b975-6037ec40aa48",
+      "context_id": 1,
+      "observed_at": 1767225600.0,
+      "amount": 30.0,
+      "critical": 0,
+      "attribution": "unresolved",
+      "hotbar_tool": null,
+      "tool_name": null,
+      "cost_per_shot": 0.0,
+      "candidates_json": "[]",
+      "reason": "fits no carried weapon",
+      "effect_window_id": null,
+      "review_id": null,
+      "correction_id": null
+    },
+    {
+      "id": "3eaf9c4b-8d85-4c4b-8a9b-4c6d5f7e8a94",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "kill_id": "ab9406e7-1f59-410a-9520-afce6d773530",
+      "context_id": 1,
+      "observed_at": 1767225600.0,
+      "amount": 20.0,
+      "critical": 0,
+      "attribution": "unresolved",
+      "hotbar_tool": null,
+      "tool_name": null,
+      "cost_per_shot": 0.0,
+      "candidates_json": "[]",
+      "reason": "fits no carried weapon",
+      "effect_window_id": null,
+      "review_id": null,
+      "correction_id": null
+    },
+    {
+      "id": "4fb0ad5c-9e96-4d5c-9bac-5d7e6a8f9ba5",
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "kill_id": "ffd13408-4c54-4faf-be8f-0c104ad64222",
+      "context_id": 1,
+      "observed_at": 1767225600.0,
+      "amount": 25.0,
+      "critical": 0,
+      "attribution": "unresolved",
+      "hotbar_tool": null,
+      "tool_name": null,
+      "cost_per_shot": 0.0,
+      "candidates_json": "[]",
+      "reason": "fits no carried weapon",
+      "effect_window_id": null,
+      "review_id": null,
+      "correction_id": null
+    }
+  ],
+  "weapon_attribution_tallies": [
+    {
+      "session_id": "d6ab5855-27a7-47fc-be37-767711d1047a",
+      "weapon_shots_agreed": 0,
+      "weapon_shots_evidenced": 0
+    }
+  ]
 }

@@ -6,6 +6,8 @@ import { createReviewModel } from './reviewModel.svelte';
 vi.mock('$lib/api', () => ({
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
+	getUnrecordedArmourSessions: vi.fn(async () => []),
+	getUnpricedShotSessions: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
 	getAllSessionDefinitions: vi.fn(),

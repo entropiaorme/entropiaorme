@@ -31,7 +31,8 @@ use super::intervals::{ActiveActivity, ActivityKey, ActivityRef};
 use super::mob::DeclaredMob;
 use super::providers::Providers;
 use super::session::{SessionAggregate, SessionFacets};
-use super::{HarvestTool, HealTool, SessionState, TrackerCommandError};
+use super::weapon_evidence::{MismatchDecision, WeaponDecisionError};
+use super::{HarvestTool, SessionState, TrackerCommandError};
 
 /// The cheap, always-current readout of the actor's session phase,
 /// published on every transition so callers answer `is_tracking`
@@ -54,6 +55,11 @@ pub(super) enum TrackerMsg {
     /// reads run on the caller's side, off the actor.
     Aggregate(Box<AggregateReply>),
     ReloadConfig(oneshot::Sender<()>),
+    /// The player's decision on a standing weapon mismatch.
+    DecideWeaponMismatch(
+        MismatchDecision,
+        oneshot::Sender<Result<bool, WeaponDecisionError>>,
+    ),
     SetSkillBoost(
         Option<i64>,
         oneshot::Sender<Result<(), TrackerCommandError>>,
@@ -133,7 +139,6 @@ pub(super) struct TrackerActor {
     pub(super) providers: Providers,
     pub(super) session: SessionState,
     pub(super) loot_blacklist: BTreeSet<String>,
-    pub(super) heal_tool: HealTool,
     /// The last harvesting tool seen (hotbar-equipment state). Wood
     /// loot groups and failed swings price against it; routing itself
     /// is by the wood taxonomy, so it works with no hotbar signal.
@@ -176,7 +181,6 @@ impl TrackerActor {
             providers,
             session: SessionState::Idle,
             loot_blacklist: BTreeSet::new(),
-            heal_tool: HealTool::default(),
             harvest_tool: None,
             harvest_guardrail: None,
             held_item: None,
@@ -219,6 +223,9 @@ impl TrackerActor {
             TrackerMsg::ReloadConfig(reply) => {
                 self.reload_config();
                 let _ = reply.send(());
+            }
+            TrackerMsg::DecideWeaponMismatch(decision, reply) => {
+                let _ = reply.send(self.decide_weapon_mismatch(decision).await);
             }
             TrackerMsg::SetSkillBoost(percent, reply) => {
                 let _ = reply.send(self.set_skill_boost(percent).await);

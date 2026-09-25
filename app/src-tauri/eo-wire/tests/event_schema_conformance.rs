@@ -52,7 +52,7 @@ fn enum_values(definition: &Value, property: &str) -> Vec<String> {
 }
 
 /// The native union's variants, as (topic, envelope def, payload def).
-const VARIANTS: [(&str, &str, &str); 6] = [
+const VARIANTS: [(&str, &str, &str); 7] = [
     (
         "tracking.session.updated",
         "TrackingSessionUpdated",
@@ -79,6 +79,7 @@ const VARIANTS: [(&str, &str, &str); 6] = [
         "ProtectionUpdatedPayload",
     ),
     ("healing.updated", "HealingUpdated", "HealingUpdatedPayload"),
+    ("weapons.updated", "WeaponsUpdated", "WeaponsUpdatedPayload"),
 ];
 
 #[test]
@@ -239,6 +240,15 @@ fn protection_payload_definition_matches_the_native_type() {
 fn healing_payload_definition_matches_the_native_type() {
     let doc = snapshot();
     let def = &doc["$defs"]["HealingUpdatedPayload"];
+    assert_eq!(def["additionalProperties"], false);
+    assert!(property_names(def).is_empty());
+    assert!(required_set(def).is_empty());
+}
+
+#[test]
+fn weapons_payload_definition_matches_the_native_type() {
+    let doc = snapshot();
+    let def = &doc["$defs"]["WeaponsUpdatedPayload"];
     assert_eq!(def["additionalProperties"], false);
     assert!(property_names(def).is_empty());
     assert!(required_set(def).is_empty());

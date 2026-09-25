@@ -375,3 +375,72 @@ describe('uses_tree', () => {
 		expect(STAT_DEFS.uses_tree.shortLabel).toBe('Uses (T)');
 	});
 });
+
+describe('figures built on a cost with unpriced shots in it', () => {
+	const COST_BUILT: StatId[] = [
+		'cycled',
+		'net',
+		'rate',
+		'pes_per_100',
+		'avg_cost_per_kill',
+		'multiplier_last',
+		'multiplier_avg',
+		'multiplier_max',
+		'dpp',
+	];
+	const status = active({
+		cost: 10,
+		returns: 12,
+		pes: 1,
+		kill_count: 2,
+		multiplierLast: 1.2,
+		multiplierAvg: 1.1,
+		multiplierMax: 2,
+		weaponCost: 5,
+		weaponDamageDealt: 500,
+		damageDealtTotal: 500,
+		unpricedShots: 3,
+	});
+
+	it('are marked incomplete, saying what they leave out', () => {
+		for (const id of COST_BUILT) {
+			expect(render(id, status).incomplete, id).toBe('Leaves out 3 shots that could not be priced');
+		}
+		expect(render('cycled', active({ cost: 1, unpricedShots: 1 })).incomplete).toBe(
+			'Leaves out 1 shot that could not be priced',
+		);
+	});
+
+	it('leave everything else, and every figure of a fully priced session, unmarked', () => {
+		for (const id of ALL_STAT_IDS.filter((id) => !COST_BUILT.includes(id))) {
+			expect(render(id, status).incomplete, id).toBeUndefined();
+		}
+		for (const id of COST_BUILT) {
+			expect(render(id, { ...status, unpricedShots: 0 }).incomplete, id).toBeUndefined();
+		}
+	});
+
+	it('never mark an empty reading', () => {
+		expect(render('avg_cost_per_kill', active({ kill_count: 0, unpricedShots: 2 }))).toEqual(EMPTY);
+	});
+
+	it('mark the lifetime figures a family with unpriced shots adds up', () => {
+		const lifetime = {
+			instanceCount: 2,
+			cycled: 100,
+			lootTt: 90,
+			net: -10,
+			returnRate: 0.9,
+			pes: 2,
+			durationSeconds: 60,
+			unpricedShots: 4,
+		};
+		for (const id of ['cycled', 'net', 'rate', 'pes_per_100'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime?.(lifetime).incomplete, id).toBe(
+				'Leaves out 4 shots that could not be priced',
+			);
+		}
+		expect(STAT_DEFS.loot_tt.renderLifetime?.(lifetime).incomplete).toBeUndefined();
+		expect(STAT_DEFS.cycled.renderLifetime?.({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);
+	});
+});

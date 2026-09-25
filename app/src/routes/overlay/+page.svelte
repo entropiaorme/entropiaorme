@@ -16,11 +16,12 @@
 		activateActivity,
 		deactivateActivity,
 		beginQuestHandIn,
-		updateSettings,
+		decideWeaponMismatch,
 		type TrackingLive,
 		type TrackingStatus,
 		type TrackingSnapshot,
-		type ManualMobSuggestion
+		type ManualMobSuggestion,
+		type WeaponMismatchDecision
 	} from '$lib/api';
 	import { untrack } from 'svelte';
 	import { useVisiblePoll, windowGeometryPoll } from '$lib/realtime/useVisiblePoll';
@@ -79,7 +80,7 @@
 	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
 	let mobInput: HTMLInputElement | null = $state(null);
 	let mobInputFocused = $state(false);
-	let trifectaSaving = $state(false);
+	let decidingWeapon = $state(false);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
@@ -233,21 +234,6 @@
 		};
 	}
 
-	function buildTrifectaMenuState(anchorWidth: number): OverlayMenuState | null {
-		const trifecta = data.trifectaAttribution;
-		if (!trifecta || trifecta.presets.length === 0) return null;
-
-		return {
-			kind: 'trifecta',
-			width: computeMenuWidth(anchorWidth, trifecta.presets.map((preset) => preset.name), 88),
-			options: trifecta.presets.map((preset) => ({
-				id: preset.id,
-				name: preset.name,
-				active: preset.id === trifecta.activePresetId
-			}))
-		};
-	}
-
 	async function showOverlayMenu(
 		kind: OverlayMenuKind,
 		anchor: HTMLElement,
@@ -324,17 +310,6 @@
 		await openDefinitionMenu(anchor);
 	}
 
-	async function toggleTrifectaMenu(anchor: HTMLButtonElement) {
-		if (overlayMenuKind === 'trifecta') {
-			await hideOverlayMenu();
-			return;
-		}
-
-		const state = buildTrifectaMenuState(anchor.getBoundingClientRect().width);
-		if (!state) return;
-		await showOverlayMenu('trifecta', anchor, state, { focusPopup: true });
-	}
-
 	// The Activities control's anchor, kept so an action can re-present
 	// the still-open menu with the refreshed rows. It is the section
 	// element rather than the chip clicked, because a declaration swaps
@@ -390,22 +365,23 @@
 		repairOcrEnabled: () => data.repairOcrEnabled === true
 	});
 
-	async function handleTrifectaPresetSelection(presetId: string) {
-		const trifecta = data.trifectaAttribution;
-		if (!trifecta || trifectaSaving || presetId === trifecta.activePresetId) return;
-
-		trifectaSaving = true;
+	/** The player's call on a standing weapon mismatch. A stale control (the
+	 * cue already resolved by a press) changes nothing; either way the
+	 * readout re-reads. */
+	async function handleWeaponDecision(decision: WeaponMismatchDecision) {
+		if (decidingWeapon) return;
+		decidingWeapon = true;
 		try {
-			await updateSettings({ active_trifecta_preset_id: presetId });
+			await decideWeaponMismatch(decision);
 			await snapshot.hydrate();
 		} catch (error) {
 			notices.push(
 				error instanceof ApiError || error instanceof Error
 					? error.message
-					: 'Failed to switch trifecta preset'
+					: 'The weapon decision could not be saved'
 			);
 		}
-		trifectaSaving = false;
+		decidingWeapon = false;
 	}
 
 	// Restore saved overlay position; periodically persist if moved
@@ -518,8 +494,8 @@
 	// The overlay is a hidden pre-spawned window shown (not focused) by
 	// toggle_overlay, so no focus/visibility event fires on the frontend when it
 	// appears. The shell emits `overlay-shown` from the show path; re-read on it
-	// to refresh config/runtime fields no tracking frame announces (weapon
-	// attribution, trifecta presets, mob-entry mode, repair-OCR), which would
+	// to refresh config/runtime fields no tracking frame announces (the
+	// hotbar key setting, mob-entry mode, repair-OCR), which would
 	// otherwise stay stale and wedge a control after a settings change made
 	// while the overlay was hidden.
 	$effect(() => {
@@ -566,12 +542,6 @@
 		void (async () => {
 			unlistenSelect = await listen<OverlayMenuSelection>(OVERLAY_MENU_SELECT_EVENT, async (event) => {
 				if (disposed) return;
-
-				if (event.payload.kind === 'trifecta') {
-					overlayMenuKind = null;
-					await handleTrifectaPresetSelection(event.payload.presetId);
-					return;
-				}
 
 				if (event.payload.kind === 'definition') {
 					overlayMenuKind = null;
@@ -678,7 +648,7 @@
 			pes: snap.pes,
 			net: snap.net,
 			returnRate: snap.returnRate,
-			weaponAttribution: snap.weaponAttribution,
+			hotbarKeysEnabled: snap.hotbarKeysEnabled,
 			repairOcrEnabled: snap.repairOcrEnabled,
 			sessionName: snap.sessionName,
 			sessionDefinitionId: snap.sessionDefinitionId,
@@ -689,8 +659,9 @@
 			currentToolKind: snap.currentToolKind,
 			currentActivity: snap.currentActivity,
 			activities: snap.activities,
-			trifectaAttribution: snap.trifectaAttribution,
 			harvestGuardrail: snap.harvestGuardrail,
+			weaponGuardrail: snap.weaponGuardrail,
+			unpricedShots: snap.unpricedShots,
 			warnings: snap.warnings,
 		};
 		const startedMs = snap.started_at ? new Date(snap.started_at).getTime() : NaN;
@@ -716,8 +687,6 @@
 	notices.follow(() => activities.error);
 	notices.follow(() => armourCost.error);
 	$effect(() => () => notices.destroy());
-
-	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
 
 	const showManualInput = $derived(
 		(data.status === 'active' || data.status === 'idle') && !data.currentMob
@@ -800,8 +769,8 @@
 			await startTracking();
 			await snapshot.hydrate();
 		} catch (error) {
-			// A refused start (no hotbar slot bound, trifecta not configured)
-			// says what to set up; TRACK stays in place for the retry.
+			// A refused start (no tool configured) says what to set up;
+			// TRACK stays in place for the retry.
 			if (error instanceof ApiError && error.kind === 'badRequest') {
 				notices.push(error.message, 'warning');
 			}
@@ -879,10 +848,9 @@
 		{toggling}
 		{releasing}
 		{selectingMob}
-		{trifectaSaving}
+		{decidingWeapon}
 		armourCostOpen={armourCost.open}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
-		trifectaMenuOpen={overlayMenuKind === 'trifecta'}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
 		savingBoost={facets.savingBoost}
@@ -900,7 +868,7 @@
 		onDefinitionTrigger={toggleDefinitionMenu}
 		onBoostCommit={facets.commitBoost}
 		onActivitiesTrigger={toggleActivitiesMenu}
-		onTrifectaTrigger={toggleTrifectaMenu}
+		onWeaponDecision={handleWeaponDecision}
 		onArmourCostToggle={armourCost.toggle}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />

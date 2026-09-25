@@ -110,8 +110,12 @@ impl TrackerActor {
             // retro pass may not reach back past this point. Clearing
             // a cue is a readout change, so it nudges even for a
             // re-press of the same tool.
-            let cleared_mismatch = active.guardrail_mismatch.take().is_some();
+            let cleared_mismatch = active.guardrail_mismatch.take().is_some()
+                | active.weapons.attribution.mismatch().is_some();
             active.harvest_press_floor = active.session.harvests.len();
+            // The same press re-syncs weapon attribution: no weapon
+            // evidence may reach back past it either.
+            active.weapons.attribution.resync();
             if changed || hand_changed || cleared_mismatch {
                 Some(active.session.id.clone())
             } else {

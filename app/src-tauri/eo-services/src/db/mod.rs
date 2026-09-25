@@ -1391,9 +1391,11 @@ mod tests {
         // + healing corrections' table with its session index and the
         // expiry, observation, confirming-output, activation, and correction
         // indexes on the evidence
-        // = 81 tables, 111 indexes, 10 triggers.
-        assert_eq!(count("table").await, 81);
-        assert_eq!(count("index").await, 111);
+        // + weapon attribution's review, shot-evidence, and correction
+        // tables with their session indexes and the evidence's kill index
+        // = 84 tables, 115 indexes, 10 triggers.
+        assert_eq!(count("table").await, 84);
+        assert_eq!(count("index").await, 115);
         assert_eq!(count("trigger").await, 10);
 
         let version = db
@@ -1871,11 +1873,12 @@ mod tests {
         // attribution's 3 activation, effect-window, and output tables with
         // 3 session indexes + expected-hunting's offensive-evidence rollup
         // table and 2 indexes + session-grain protection costs' 2 indexes
-        // + healing corrections' table and 6 indexes
+        // + healing corrections' table and 6 indexes + weapon attribution's
+        // 3 tables and 4 indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 203);
+        assert_eq!(master.len(), 210);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

@@ -30,7 +30,7 @@ async fn definitions_api(dir: &Path) -> (Api, Db) {
 
 /// [`definitions_api`] with a seeded `settings.json` (the conflict pin
 /// starts a real session, which needs a bound hotbar slot so the start
-/// satisfies that gate rather than the trifecta loadout one).
+/// satisfies the tool gate).
 async fn definitions_api_with_settings(dir: &Path, settings: Option<&str>) -> (Api, Db) {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();

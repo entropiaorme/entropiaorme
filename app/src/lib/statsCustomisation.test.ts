@@ -415,6 +415,7 @@ describe('the lifetime-capable set', () => {
 			returnRate: 0.6863,
 			pes: 5.5,
 			durationSeconds: 11_040,
+			unpricedShots: 0,
 		};
 		// One decimal, exactly as the instance figure renders it.
 		expect(STAT_DEFS.rate.renderLifetime?.(lifetime).value).toBe('68.6%');
@@ -445,6 +446,7 @@ describe('a family with no instances behind it', () => {
 		returnRate: 0,
 		pes: 0,
 		durationSeconds: 0,
+		unpricedShots: 0,
 	};
 
 	it('reads empty rather than as a measured zero', () => {

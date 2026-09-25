@@ -58,17 +58,13 @@
 				{#if overlayStripPhase === 'active'}
 					<OverlayStrip data={demoTrackingLive} {status} />
 				{:else}
-					<!-- Idle synth: status='idle' + nulled session fields. Carries
-						 the snapshot's trifectaAttribution + weaponAttribution
-						 so the trifecta dropdown stays populated (the Calypso preset
-						 reads as waiting-to-be-selected, not an em-dash placeholder).
+					<!-- Idle synth: status='idle' + nulled session fields.
 						 status={null} passed to OverlayStrip so stat pills render as
 						 em-dashes until tracking actually starts. -->
 					<OverlayStrip
 						data={{
 							status: 'idle',
-							weaponAttribution: demoTrackingLive.weaponAttribution,
-							trifectaAttribution: demoTrackingLive.trifectaAttribution,
+							hotbarKeysEnabled: demoTrackingLive.hotbarKeysEnabled,
 							repairOcrEnabled: demoTrackingLive.repairOcrEnabled,
 							sessionName: 'Guide Demo',
 							currentMob: null,

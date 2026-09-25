@@ -268,7 +268,8 @@ export interface AppSettings {
 	declaredSkillBoostPercent?: number | null;
 	/** The slot-to-equipment map, carried through in its stored insertion order (`serde_json`'s `preserve_order`), so slot "0" stays last. */
 	hotbar: Record<string, unknown>;
-	trifecta: TrifectaSettings;
+	/** Weapons carried without a hotbar slot: with the slotted weapons, the candidates weapon attribution chooses among. */
+	carriedWeaponIds: number[];
 	passiveEffectSources: PassiveEffectSourceView[];
 	harvestGuardrail: HarvestGuardrailSettings;
 	lootFilterBlacklist: string[];
@@ -1401,6 +1402,8 @@ export interface LifetimeStats {
 	returnRate: number;
 	pes: number;
 	durationSeconds: number;
+	/** Shots across these instances recorded without a price: the cycled figure (and everything derived from it) leaves them out. */
+	unpricedShots: number;
 }
 
 /**
@@ -2871,6 +2874,7 @@ export interface SessionDetail {
 	effectiveLoot: number;
 	toolStats: ToolStat[];
 	skillGains: SkillGain[];
+	weaponAttribution: WeaponAttributionSummary;
 	healing: HealingSessionSummary;
 }
 
@@ -2987,10 +2991,10 @@ export interface SessionSummary {
 /**
  * The partial settings update: every field optional, only the present
  * ones applied (the `exclude_unset` semantics the pydantic model had).
- * `active_trifecta_preset_id` is a double option so an explicit `null`
- * (clear the active preset) stays distinct from an absent field (leave
- * it untouched); every other field is nullless, so a plain `Option`
- * carries the present/absent distinction.
+ * `declared_skill_boost_percent` is a double option so an explicit
+ * `null` (withdraw the declaration) stays distinct from an absent field
+ * (leave it untouched); every other field is nullless, so a plain
+ * `Option` carries the present/absent distinction.
  */
 export interface SettingsPatch {
 	chatlog_path?: string | null;
@@ -3002,8 +3006,7 @@ export interface SettingsPatch {
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
 	declared_skill_boost_percent?: number | null;
 	hotbar?: Record<string, unknown> | null;
-	active_trifecta_preset_id?: string | null;
-	trifecta_presets?: TrifectaPresetInput[] | null;
+	carried_weapon_ids?: number[] | null;
 	passive_effect_sources?: PassiveEffectSourceInput[] | null;
 	harvest_guardrail?: HarvestGuardrailInput | null;
 	loot_filter_blacklist?: string[] | null;
@@ -3194,7 +3197,8 @@ export interface TrackingSession {
 export interface TrackingSnapshot {
 	status?: TrackingState | null;
 	hotbarListenerActive?: boolean | null;
-	weaponAttribution?: WeaponAttribution | null;
+	/** Whether the player enabled the hotbar key listener: hotbar presses then declare the weapon in hand. Without it, costs follow the carried weapons' damage ranges alone. */
+	hotbarKeysEnabled?: boolean | null;
 	repairOcrEnabled?: boolean | null;
 	/** The session-name facet: the active session's when tracking, the configured next-session value when idle. */
 	sessionName?: string | null;
@@ -3212,7 +3216,6 @@ export interface TrackingSnapshot {
 	activities?: ActivitySummary | null;
 	/** The lifetime figures of the definition this session runs (or would run) under, for the instance-versus-family flip. Carried on every frame, idle included, over the definition a start would stamp, so the flip is available while picking a session rather than only once tracking begins. Absent when no definition is in force: a legacy or unattached session has no family to flip to, and the surfaces read that absence as "offer no control". */
 	lifetime?: LifetimeStats | null;
-	trifectaAttribution?: TrifectaAttribution | null;
 	recentEvents?: RecentEvent[] | null;
 	session_id?: string | null;
 	started_at?: string | null;
@@ -3247,6 +3250,10 @@ export interface TrackingSnapshot {
 	harvestCost?: number | null;
 	/** The standing harvest-guardrail disagreement; present only while the loot evidence contradicts the hotbar-equipped tool. */
 	harvestGuardrail?: HarvestGuardrailAlert | null;
+	/** The standing weapon mismatch; present only while the damage evidence contradicts the weapon the hotbar declared. */
+	weaponGuardrail?: WeaponGuardrailAlert | null;
+	/** Shots this session recorded without a price because no single carried weapon explains them: the cost leaves them out. */
+	unpricedShots?: number | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 }
@@ -3268,66 +3275,6 @@ export type TreeSizeName = 'short' | 'long' | 'huge';
  * serialised forms are byte-identical to the strings they replace.
  */
 export type Trend = 'improving' | 'declining' | 'stable';
-
-/**
- * The trifecta attribution summary (present when trifecta mode is active
- * and a preset or binding exists). Its members are always emitted (a
- * null binding stays on the wire), so none skip.
- */
-export interface TrifectaAttribution {
-	activePresetId: string | null;
-	presetName: string | null;
-	presets: TrifectaPresetRef[];
-	smallWeapon: string | null;
-	bigWeapon: string | null;
-	healTool: string | null;
-}
-
-/**
- * One trifecta preset in a settings update. Field names stay in the
- * stored snake_case the config writer re-normalises.
- */
-export interface TrifectaPresetInput {
-	id: string;
-	name: string;
-	small_weapon_id?: number | null;
-	big_weapon_id?: number | null;
-	heal_id?: number | null;
-}
-
-/**
- * One preset reference inside the trifecta attribution summary.
- */
-export interface TrifectaPresetRef {
-	id: string;
-	name: string;
-}
-
-/**
- * One trifecta preset in the settings view: the stored equipment ids
- * plus the live readiness validation against the library.
- */
-export interface TrifectaPresetView {
-	id: string;
-	name: string;
-	smallWeaponId: number | null;
-	bigWeaponId: number | null;
-	healId: number | null;
-	ready: boolean;
-	message: string | null;
-}
-
-/**
- * The trifecta block: every preset validated, with the active preset's
- * readiness lifted to the top level.
- */
-export interface TrifectaSettings {
-	activePresetId: string | null;
-	activePresetName: string | null;
-	presets: TrifectaPresetView[];
-	ready: boolean;
-	message: string | null;
-}
 
 /**
  * The undo verb's result: the status after the pop, plus the popped
@@ -3378,9 +3325,128 @@ export interface Warning {
 }
 
 /**
- * Which attribution source prices weapon shots.
+ * How a session's shots were attributed. The two tallies were kept from
+ * this app version on and are null for an older session; the counts of
+ * stored shots and the decisions exist for every session.
  */
-export type WeaponAttribution = 'hotbar' | 'trifecta';
+export interface WeaponAttributionSummary {
+	/** The session has ended, so its unpriced shots can be assigned. */
+	correctable: boolean;
+	/** Shots priced to the weapon the hotbar declared. */
+	agreed: number | null;
+	/** Shots priced to the weapon their damage named. */
+	evidenced: number | null;
+	/** Stored shots whose damage overrode the hotbar's weapon. */
+	evidenceShots: number;
+	/** Shots no single carried weapon explained. */
+	unresolved: number;
+	/** Of those, the ones still without a price. */
+	unpriced: number;
+	/** Of those, the ones assigned a weapon after play. */
+	assigned: number;
+	/** Ticks of an effect an earlier paid activation owns. */
+	effectTicks: number;
+	reviews: WeaponReviewRow[];
+}
+
+/**
+ * A weapon an unpriced shot could be assigned to.
+ */
+export interface WeaponCorrectionWeapon {
+	equipmentId: number;
+	name: string;
+	/** The per-shot cost an assignment would book, at today's pricing. */
+	costPerShotPed: number;
+	/** Its damage band fitted the shot when it landed. */
+	fits: boolean;
+}
+
+/**
+ * A weapon-guardrail disagreement on the snapshot: the weapon the hotbar
+ * declared, the weapon the damage evidence says is being fired (and what is
+ * being recorded), when the evidence first disagreed, and the shots it has
+ * recorded since.
+ */
+export interface WeaponGuardrailAlert {
+	hotbarTool: string;
+	recordingTool: string;
+	since: number;
+	shots: number;
+}
+
+/**
+ * What the player decided about a standing weapon mismatch.
+ */
+export type WeaponMismatchDecision = 'confirm' | 'keep';
+
+/**
+ * How a live decision went.
+ */
+export type WeaponReviewDecision = 'confirmed' | 'kept';
+
+/**
+ * A decision the player made on a weapon mismatch while the session ran.
+ */
+export interface WeaponReviewRow {
+	id: string;
+	decision: WeaponReviewDecision;
+	/** The weapon the hotbar declared. */
+	hotbarTool: string;
+	/** The weapon the damage evidence named. */
+	evidenceTool: string;
+	/** When the evidence first disagreed. */
+	since: number;
+	decidedAt: number;
+	repricedShots: number;
+	/** What the repricing moved the session's weapon cost by. */
+	costDelta: number;
+}
+
+/**
+ * One stored shot, as review lists it.
+ */
+export interface WeaponShot {
+	id: string;
+	observedAt: number;
+	/** Null for a jam, dodge, or evade: a shot with no damage figure. */
+	amount: number | null;
+	critical: boolean;
+	reason: string;
+	/** The weapon the hotbar declared when it landed. */
+	hotbarTool: string | null;
+	/** The weapon it is priced to; null while unpriced. */
+	toolName: string | null;
+	costPerShot: number;
+	/** The weapons carried when it landed. */
+	candidates: WeaponShotCandidate[];
+	/** The live assignment that priced it, which can be undone. */
+	correctionId: string | null;
+	/** The decision on a mismatch that repriced it while the session ran. */
+	reviewDecision: WeaponReviewDecision | null;
+	/** It can be assigned to a weapon: unpriced, in an ended session. */
+	correctable: boolean;
+}
+
+/**
+ * One carried weapon as a stored shot remembers it.
+ */
+export interface WeaponShotCandidate {
+	equipmentId: number;
+	name: string;
+	/** Its damage band fitted the shot. */
+	fits: boolean;
+}
+
+/**
+ * Which stored shots a review page lists.
+ */
+export type WeaponShotGroup = 'unresolved' | 'evidence';
+
+export interface WeaponShotPage {
+	shots: WeaponShot[];
+	/** Every stored shot of the requested group in the session. */
+	total: number;
+}
 
 export async function equipmentSearch(q: string, kind: SearchKind): Promise<EquipmentSearchHit[]> {
 	return invokeCommand('equipment_search', { q, kind });
@@ -3486,6 +3552,26 @@ export async function healingCorrect(target: {
 
 export async function healingCorrectionUndo(correctionId: string): Promise<SessionDetail> {
 	return invokeCommand('healing_correction_undo', { correction_id: correctionId });
+}
+
+export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence', offset: number, limit: number): Promise<WeaponShotPage> {
+	return invokeCommand('weapon_shots', { session_id: sessionId, group, offset, limit });
+}
+
+export async function weaponUnpricedSessions(sessionIds: string[]): Promise<string[]> {
+	return invokeCommand('weapon_unpriced_sessions', { session_ids: sessionIds });
+}
+
+export async function weaponCorrectionWeapons(evidenceId: string): Promise<WeaponCorrectionWeapon[]> {
+	return invokeCommand('weapon_correction_weapons', { evidence_id: evidenceId });
+}
+
+export async function weaponAssign(evidenceId: string, equipmentId: number): Promise<SessionDetail> {
+	return invokeCommand('weapon_assign', { evidence_id: evidenceId, equipment_id: equipmentId });
+}
+
+export async function weaponAssignmentUndo(correctionId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_assignment_undo', { correction_id: correctionId });
 }
 
 export async function characterCalibration(): Promise<CalibrationStatus> {
@@ -3958,6 +4044,10 @@ export async function trackingStart(): Promise<StartResult> {
 
 export async function trackingStop(): Promise<StopResult> {
 	return invokeCommand('tracking_stop', {});
+}
+
+export async function trackingWeaponDecide(decision: 'confirm' | 'keep'): Promise<boolean> {
+	return invokeCommand('tracking_weapon_decide', { decision });
 }
 
 export async function trackingReleaseMob(): Promise<ReleaseResult> {

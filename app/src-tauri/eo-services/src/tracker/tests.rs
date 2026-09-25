@@ -8,7 +8,7 @@ use crate::harvest_yield::{HarvestYieldSource, HarvestYieldTier};
 
 use super::actor::TrackerActor;
 use super::time::{epoch_to_naive, parse_bus_timestamp, python_total_seconds};
-use super::weapons::{value_truthy, DamageEnhancerState};
+use super::weapons::DamageEnhancerState;
 use super::*;
 use crate::bus_events::{
     ActiveHealToolChangedPayload, ActiveToolChangedPayload, EnhancerBreakPayload, EnhancerBreakTag,
@@ -25,7 +25,6 @@ use std::sync::Mutex as StdMutex;
 
 type CostScript = Arc<dyn Fn(&str) -> f64 + Send + Sync>;
 type ProfileScript = Arc<dyn Fn(&str) -> EquipmentProfile + Send + Sync>;
-type TrifectaScript = Arc<dyn Fn() -> Option<serde_json::Map<String, Value>> + Send + Sync>;
 type ManualMobScript = Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>;
 
 /// Closure-scripted equipment library for tests.
@@ -33,7 +32,7 @@ type ManualMobScript = Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>;
 struct ScriptedEquipment {
     cost: Option<CostScript>,
     profile: Option<ProfileScript>,
-    trifecta: Option<TrifectaScript>,
+    carried: Vec<CarriedWeaponProfile>,
     harvest_guardrail: Option<HarvestGuardrailTools>,
     looters: Option<crate::expected_hunting::HuntingLooterLevels>,
 }
@@ -50,8 +49,8 @@ impl EquipmentLibrary for ScriptedEquipment {
             .unwrap_or(0.0)
     }
 
-    fn resolve_trifecta(&self) -> Option<serde_json::Map<String, Value>> {
-        self.trifecta.as_ref().and_then(|resolve| resolve())
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        self.carried.clone()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -76,7 +75,6 @@ struct ScriptedConfig {
     session_definition_id: Option<i64>,
     skill_boost_percent: Option<i64>,
     manual_mob: Option<ManualMobScript>,
-    trifecta_mode: bool,
     blacklist: Vec<String>,
 }
 
@@ -95,10 +93,6 @@ impl TrackingConfig for ScriptedConfig {
 
     fn manual_mob(&self) -> Option<(String, String)> {
         self.manual_mob.as_ref().and_then(|f| f())
-    }
-
-    fn weapon_attribution_trifecta(&self) -> bool {
-        self.trifecta_mode
     }
 
     fn loot_filter_blacklist(&self) -> Vec<String> {
@@ -254,6 +248,45 @@ pub(super) fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) ->
         reload_seconds: 0.0,
         healing_profile: None,
         lifesteal_percent,
+    })
+}
+
+/// A carried weapon whose stored props give it a regular band of half to
+/// all of `damage`, and a per-shot cost derived from `decay` (PEC).
+pub(super) fn carried(id: i64, name: &str, damage: f64, decay: f64) -> CarriedWeaponProfile {
+    let props = json!({
+        "weapon_entity": {
+            "name": name,
+            "damage": {"impact": damage},
+            "economy": {"decay": decay, "ammo_burn": 0}
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    CarriedWeaponProfile {
+        weapon: CarriedWeapon {
+            equipment_id: id,
+            name: name.to_string(),
+            band: damage_band_from_props(&Value::Object(props.clone())),
+        },
+        props,
+    }
+}
+
+/// The per-shot PED cost a `carried` weapon books.
+pub(super) fn carried_cost(damage: f64, decay: f64) -> f64 {
+    let profile = carried(0, "x", damage, decay);
+    cost_per_shot_from_props(&Value::Object(profile.props), Some(0))["totalCostPerUse"]
+        .as_f64()
+        .unwrap()
+        / 100.0
+}
+
+pub(super) fn hit(amount: f64) -> BusEvent {
+    BusEvent::Combat(CombatPayload::DamageDealt {
+        amount,
+        timestamp: "2026-01-01T00:00:01".into(),
     })
 }
 
@@ -1325,7 +1358,7 @@ fn snapshot_aggregates_and_rounds_the_readout() {
 }
 
 #[test]
-fn unknown_tool_stats_merge_on_identification() {
+fn shots_before_the_first_press_are_never_repriced_by_it() {
     let rig = rig();
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
@@ -1336,27 +1369,20 @@ fn unknown_tool_stats_merge_on_identification() {
     });
     rig.wait(tracker.start_session()).unwrap();
 
-    // Shots before any tool is known accumulate under "Unknown".
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 9.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
+    // No weapon is carried or declared yet: these shots stay unpriced.
+    rig.bus.publish(&hit(9.0));
     rig.bus
         .publish(&BusEvent::Combat(CombatPayload::CriticalHit {
             amount: 4.0,
             timestamp: "2026-01-01T00:00:01".into(),
         }));
+    // The press starts a regime; it may not reach back.
     rig.bus
         .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
             tool_name: "Pistol".into(),
             source: None,
         }));
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 6.0,
-            timestamp: "2026-01-01T00:00:02".into(),
-        }));
+    rig.bus.publish(&hit(6.0));
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
@@ -1369,7 +1395,7 @@ fn unknown_tool_stats_merge_on_identification() {
         .wait(rig.db.with_reader(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT tool_name, shots_fired, damage_dealt, critical_hits, cost_per_shot \
-                     FROM kill_tool_stats",
+                     FROM kill_tool_stats ORDER BY id",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -1383,12 +1409,17 @@ fn unknown_tool_stats_merge_on_identification() {
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }))
         .unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0], ("Pistol".to_string(), 3, 19.0, 1, 0.02));
+    assert_eq!(
+        rows,
+        vec![
+            ("Unknown".to_string(), 2, 13.0, 1, 0.0),
+            ("Pistol".to_string(), 1, 6.0, 0, 0.02),
+        ]
+    );
 }
 
 #[test]
-fn late_tool_identification_does_not_backfill_expected_evidence() {
+fn a_shot_before_the_first_press_stays_unpriced_and_outside_expected_evidence() {
     let rig = rig();
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
@@ -1440,13 +1471,17 @@ fn late_tool_identification_does_not_backfill_expected_evidence() {
             timestamp: "2026-01-01T00:00:02".into(),
         }));
 
+    // The unpriced shot books no raw TT, so the model covers everything
+    // that was priced; the unpriced shot is disclosed on its own.
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
-    assert_eq!(active.expected_return_coverage, Some(0.5));
+    assert_eq!(active.expected_return_coverage, Some(1.0));
+    assert_eq!(active.unpriced_shots, 1);
     rig.probe(&tracker, |actor| {
         let phases = &actor.session.active().unwrap().accumulator.tool_stats;
         assert_eq!(phases.len(), 2);
-        assert_eq!(phases[0].1.tool_name, "MyGun");
+        assert_eq!(phases[0].1.tool_name, "Unknown");
         assert_eq!(phases[0].1.shots_fired, 1);
+        assert_eq!(phases[0].1.cost_per_shot, Ped::ZERO);
         assert!(phases[0].1.expected_economics.is_none());
         assert_eq!(phases[1].1.tool_name, "MyGun");
         assert_eq!(phases[1].1.shots_fired, 1);
@@ -1462,19 +1497,60 @@ fn phased_tool_stats_split_on_cost_change() {
 
     rig.probe(&tracker, |actor| {
         let accumulator = &mut actor.session.active_mut().unwrap().accumulator;
-        TrackerActor::tool_stats_for_phase(accumulator, "Rifle", Ped(0.05), None).shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Rifle",
+            Ped(0.05),
+            None,
+        )
+        .shots_fired += 1;
         // Within the tolerance: the same phase.
-        TrackerActor::tool_stats_for_phase(accumulator, "Rifle", Ped(0.05 + 1e-12), None)
-            .shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Rifle",
+            Ped(0.05 + 1e-12),
+            None,
+        )
+        .shots_fired += 1;
         // A real cost change: a second phase keyed `Rifle#2`.
-        TrackerActor::tool_stats_for_phase(accumulator, "Rifle", Ped(0.04), None).shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Rifle",
+            Ped(0.04),
+            None,
+        )
+        .shots_fired += 1;
         // A third: `Rifle#3`; a different tool keeps its bare key.
-        TrackerActor::tool_stats_for_phase(accumulator, "Rifle", Ped(0.03), None).shots_fired += 1;
-        TrackerActor::tool_stats_for_phase(accumulator, "Pistol", Ped(0.02), None).shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Rifle",
+            Ped(0.03),
+            None,
+        )
+        .shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Pistol",
+            Ped(0.02),
+            None,
+        )
+        .shots_fired += 1;
         // A cost difference of exactly the tolerance opens a phase:
         // the comparison is strict (2e-9 - 1e-9 is exactly 1e-9).
-        TrackerActor::tool_stats_for_phase(accumulator, "Laser", Ped(1e-9), None).shots_fired += 1;
-        TrackerActor::tool_stats_for_phase(accumulator, "Laser", Ped(2e-9), None).shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Laser",
+            Ped(1e-9),
+            None,
+        )
+        .shots_fired += 1;
+        TrackerActor::tool_stats_for_phase(
+            &mut accumulator.tool_stats,
+            "Laser",
+            Ped(2e-9),
+            None,
+        )
+        .shots_fired += 1;
 
         let keys: Vec<(String, String, i64)> = accumulator
             .tool_stats
@@ -1713,10 +1789,12 @@ fn stale_session_hotbar_intents_cannot_mutate_equipment_state() {
 
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
-        assert_eq!(active.weapons.hotbar_tool.as_deref(), Some("Current rifle"));
+        assert_eq!(active.weapons.attribution.declared(), Some("Current rifle"));
         assert_eq!(active.healing.weapon_lifesteal_percent, None);
-        assert_eq!(actor.heal_tool.name.as_deref(), Some("Current FAP"));
-        assert_eq!(actor.heal_tool.cost_per_use, Ped(0.02));
+        assert_eq!(
+            actor.held_item.as_ref().map(|(name, _)| name.as_str()),
+            Some("Current FAP")
+        );
         assert!(actor.harvest_tool.is_none());
         assert_eq!(
             actor.held_item.as_ref().map(|(_, kind)| *kind),
@@ -2365,81 +2443,40 @@ fn damage_enhancer_state_arithmetic() {
 }
 
 #[test]
-fn trifecta_attribution_and_heal_filtering() {
+fn carried_weapons_attribute_shots_without_the_hotbar_and_heals_stay_uncosted() {
     let rig = rig();
-    let trifecta = json!({
-        "small_weapon": {"name": "Pistol", "damage_min": 5.0, "damage_max": 10.0,
-                         "total_damage": 0.0, "cost_per_shot_ped": 0.05,
-                         "role": "small_weapon"},
-        "big_weapon": {"name": "Cannon", "damage_min": 20.0, "damage_max": 40.0,
-                       "total_damage": 0.0, "cost_per_shot_ped": 0.2,
-                       "role": "big_weapon"},
-        "heal_tool": {"name": "FAP", "cost_per_use_ped": 0.02, "reload_seconds": 2.5,
-                      "heal_min": 10.0, "heal_max": 20.0},
-    });
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
-            trifecta: Some(Arc::new(move || {
-                Some(trifecta.as_object().unwrap().clone())
-            })),
-            ..Default::default()
-        }),
-        config: Arc::new(ScriptedConfig {
-            trifecta_mode: true,
+            carried: vec![
+                carried(1, "Pistol", 10.0, 0.05),
+                carried(2, "Cannon", 40.0, 0.2),
+            ],
             ..Default::default()
         }),
         ..Providers::default()
     });
     rig.wait(tracker.start_session()).unwrap();
+    let pistol = carried_cost(10.0, 0.05);
+    let cannon = carried_cost(40.0, 0.2);
 
-    // Hotbar-driven changes are ignored in trifecta mode.
-    rig.bus
-        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
-            tool_name: "Sword".into(),
-            source: None,
-        }));
-    rig.bus.publish(&BusEvent::ActiveHealToolChanged(
-        ActiveHealToolChangedPayload {
-            tool_name: "Other".into(),
-            cost_per_use_ped: 9.9,
-            reload_seconds: 2.5,
-            source: None,
-        },
-    ));
-    rig.probe(&tracker, |actor| {
-        assert_eq!(actor.session.active().unwrap().weapons.hotbar_tool, None);
-        assert_eq!(actor.heal_tool.name.as_deref(), Some("FAP"));
-        assert_eq!(actor.heal_tool.cost_per_use, Ped(0.02));
-    });
-
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 7.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    // Unmatched damage warns once and lands under "Unknown".
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 0.5,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 0.5,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    // A critical inside the big weapon's regular band prefers the
-    // big regular explanation.
+    // Only the pistol's band (5-10) explains 7.
+    rig.bus.publish(&hit(7.0));
+    // Nothing explains 0.5 or 90: recorded, never priced.
+    rig.bus.publish(&hit(0.5));
+    rig.bus.publish(&hit(90.0));
+    // A critical 25 fits the pistol's critical reach (up to 30) and the
+    // cannon's regular band (20-40): two sources, so no guess.
     rig.bus
         .publish(&BusEvent::Combat(CombatPayload::CriticalHit {
             amount: 25.0,
             timestamp: "2026-01-01T00:00:02".into(),
         }));
-    // A countered shot attributes to the last offensive tool.
+    // Only the cannon explains 35; a countered shot inherits it.
+    rig.bus.publish(&hit(35.0));
     rig.bus.publish(&BusEvent::Combat(CombatPayload::TargetJam {
         timestamp: "2026-01-01T00:00:02".into(),
     }));
-    rig.probe(&tracker, |actor| {
+    rig.probe(&tracker, move |actor| {
         let active = actor.session.active().unwrap();
         let stats: Vec<(String, i64, f64)> = active
             .accumulator
@@ -2450,34 +2487,37 @@ fn trifecta_attribution_and_heal_filtering() {
         assert_eq!(
             stats,
             vec![
-                ("Pistol".to_string(), 1, 0.05),
-                ("Unknown".to_string(), 2, 0.0),
-                ("Cannon".to_string(), 2, 0.2),
+                ("Pistol".to_string(), 1, pistol),
+                ("Unknown".to_string(), 3, 0.0),
+                ("Cannon".to_string(), 2, cannon),
             ]
         );
-        assert_eq!(
-            active.warnings,
-            vec!["Trifecta attribution: damage fell outside both weapon ranges".to_string()]
+        assert!(
+            active.warnings.is_empty(),
+            "unpriced shots are disclosed, not warned"
         );
+        assert!(
+            active.weapons.attribution.mismatch().is_none(),
+            "nothing declared, nothing to disagree with"
+        );
+        assert_eq!(active.weapons.attribution.recording(), Some("Cannon"));
     });
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(active.unpriced_shots, 3);
+    assert!(active.weapon_guardrail_mismatch.is_none());
+    let readout = rig.wait(tracker.snapshot()).unwrap();
+    assert_eq!(readout.current_tool.as_deref(), Some("Cannon"));
 
-    // Healing no longer bills from trifecta inference: chat outputs stay
+    // Healing never bills from damage-range inference: chat outputs stay
     // zero-cost without a hotbar activation intent.
     rig.bus.publish(&BusEvent::Combat(CombatPayload::SelfHeal {
-        amount: 50.0,
+        amount: 15.0,
         timestamp: "2026-01-01T00:00:03".into(),
     }));
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
         assert_eq!(active.heal_cost, Ped::ZERO);
         assert_eq!(active.healing.activation_count, 0);
-    });
-    rig.bus.publish(&BusEvent::Combat(CombatPayload::SelfHeal {
-        amount: 15.0,
-        timestamp: "2026-01-01T00:00:04".into(),
-    }));
-    rig.probe(&tracker, |actor| {
-        assert_eq!(actor.session.active().unwrap().heal_cost, Ped::ZERO);
     });
 }
 
@@ -3321,12 +3361,10 @@ fn reload_config_transitions_manual_mob_and_heal_state() {
             actor.session.active().unwrap().stamped_mob_name(),
             Some("Young Atrox")
         );
-        assert_eq!(actor.heal_tool.cost_per_use, Ped(0.03));
     });
 
-    // The provider switching mobs re-stamps; switching to None
-    // clears a manual stamp; the non-trifecta branch resets the
-    // heal scalars.
+    // The provider switching mobs re-stamps; switching to None clears a
+    // manual stamp.
     *scripted_mob.lock().unwrap() = Some(("Feffoid".to_string(), String::new()));
     rig.wait(tracker.reload_config());
     rig.probe(&tracker, |actor| {
@@ -3334,8 +3372,6 @@ fn reload_config_transitions_manual_mob_and_heal_state() {
             actor.session.active().unwrap().stamped_mob_name(),
             Some("Feffoid")
         );
-        assert_eq!(actor.heal_tool.cost_per_use, Ped::ZERO);
-        assert_eq!(actor.heal_tool.reload_seconds, 2.5);
     });
     *scripted_mob.lock().unwrap() = None;
     rig.wait(tracker.reload_config());
@@ -3641,18 +3677,6 @@ fn helper_pins() {
         super::time::epoch_to_instant(naive_to_epoch(instant)),
         resolved
     );
-
-    assert!(value_truthy(&json!(true)));
-    assert!(value_truthy(&json!(1.5)));
-    assert!(value_truthy(&json!("x")));
-    assert!(value_truthy(&json!([0])));
-    assert!(value_truthy(&json!({"k": 0})));
-    assert!(!value_truthy(&json!(null)));
-    assert!(!value_truthy(&json!(false)));
-    assert!(!value_truthy(&json!(0)));
-    assert!(!value_truthy(&json!("")));
-    assert!(!value_truthy(&json!([])));
-    assert!(!value_truthy(&json!({})));
 }
 #[test]
 fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
@@ -3718,48 +3742,29 @@ fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
 }
 
 #[test]
-fn inferred_cost_outranks_the_equipment_lookup() {
+fn a_carried_weapon_prices_from_its_stored_props_before_the_library_lookup() {
     let rig = rig();
-    let trifecta = json!({
-        "small_weapon": {"name": "Pistol", "damage_min": 5.0, "damage_max": 10.0,
-                         "total_damage": 0.0, "cost_per_shot_ped": 0.05,
-                         "role": "small_weapon"},
-        "big_weapon": {"name": "Cannon", "damage_min": 20.0, "damage_max": 40.0,
-                       "total_damage": 0.0, "cost_per_shot_ped": 0.2,
-                       "role": "big_weapon"},
-    });
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
-            trifecta: Some(Arc::new(move || {
-                Some(trifecta.as_object().unwrap().clone())
-            })),
+            carried: vec![
+                carried(1, "Pistol", 10.0, 0.05),
+                carried(2, "Cannon", 40.0, 0.2),
+            ],
+            // The name lookup would price everything at 0.9.
             cost: Some(Arc::new(|_| 0.9)),
-            ..Default::default()
-        }),
-        config: Arc::new(ScriptedConfig {
-            trifecta_mode: true,
             ..Default::default()
         }),
         ..Providers::default()
     });
     rig.wait(tracker.start_session()).unwrap();
-
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 7.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::CriticalHit {
-            amount: 25.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    // The countered shot carries no inferred cost, so the static
-    // equipment cost prices it: a new phase of the last tool.
+    rig.bus.publish(&hit(7.0));
+    rig.bus.publish(&hit(35.0));
     rig.bus.publish(&BusEvent::Combat(CombatPayload::TargetJam {
         timestamp: "2026-01-01T00:00:02".into(),
     }));
-    rig.probe(&tracker, |actor| {
+    let pistol = carried_cost(10.0, 0.05);
+    let cannon = carried_cost(40.0, 0.2);
+    rig.probe(&tracker, move |actor| {
         let stats: Vec<(String, f64, i64)> = actor
             .session
             .active()
@@ -3772,35 +3777,27 @@ fn inferred_cost_outranks_the_equipment_lookup() {
         assert_eq!(
             stats,
             vec![
-                ("Pistol".to_string(), 0.05, 1),
-                ("Cannon".to_string(), 0.2, 1),
-                ("Cannon#2".to_string(), 0.9, 1),
+                ("Pistol".to_string(), pistol, 1),
+                ("Cannon".to_string(), cannon, 2),
             ]
         );
     });
 }
 
 #[test]
-fn the_unknown_entry_backfills_its_cost_once() {
+fn an_unpriced_shot_never_borrows_a_library_cost() {
     let rig = rig();
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
+            // Any name lookup would answer 0.7, including "Unknown".
             cost: Some(Arc::new(|_| 0.7)),
             ..Default::default()
         }),
         ..Providers::default()
     });
-    rig.wait(tracker.start_session()).unwrap();
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 9.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 6.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
+    let session = rig.wait(tracker.start_session()).unwrap();
+    rig.bus.publish(&hit(9.0));
+    rig.bus.publish(&hit(6.0));
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
@@ -3815,7 +3812,7 @@ fn the_unknown_entry_backfills_its_cost_once() {
         .unwrap();
     assert_eq!(
         rig.scalar_f64("SELECT cost_ped FROM kills WHERE id = ?", &[&kill_id]),
-        1.4
+        0.0
     );
     assert_eq!(
         rig.scalar_f64(
@@ -3823,7 +3820,16 @@ fn the_unknown_entry_backfills_its_cost_once() {
                  AND tool_name = 'Unknown'",
             &[&kill_id],
         ),
-        0.7
+        0.0
+    );
+    // Each unpriced shot is kept for review, settled into its kill.
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM weapon_shot_evidence WHERE session_id = ? \
+                 AND attribution = 'unresolved' AND tool_name IS NULL AND kill_id IS NOT NULL",
+            &[&session.id],
+        ),
+        2
     );
 }
 
@@ -3967,7 +3973,7 @@ fn an_unresolved_offensive_phase_narrows_live_expected_return_coverage() {
 }
 
 #[test]
-fn a_costless_tool_merges_unknown_into_its_bare_entry() {
+fn a_costless_declared_tool_keys_its_own_entry_and_leaves_earlier_shots_unpriced() {
     let rig = rig();
     let tracker = rig.tracker(Providers::default());
     rig.wait(tracker.start_session()).unwrap();
@@ -4007,7 +4013,13 @@ fn a_costless_tool_merges_unknown_into_its_bare_entry() {
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }))
         .unwrap();
-    assert_eq!(rows, vec![("Stick".to_string(), 2, 15.0)]);
+    assert_eq!(
+        rows,
+        vec![
+            ("Unknown".to_string(), 1, 9.0),
+            ("Stick".to_string(), 1, 6.0)
+        ]
+    );
 }
 
 #[test]
@@ -4258,43 +4270,28 @@ fn epoch_helpers_carry_and_keep_fractions() {
     assert_eq!(epoch_to_naive(naive_to_epoch(fractional)), fractional);
 }
 #[test]
-fn a_zero_priced_weapon_state_still_prefers_the_inferred_cost() {
+fn a_carried_weapon_priced_at_zero_falls_back_to_the_library_cost() {
     let rig = rig();
-    let trifecta = json!({
-        "small_weapon": {"name": "Pistol", "damage_min": 5.0, "damage_max": 10.0,
-                         "total_damage": 0.0, "cost_per_shot_ped": 0.05,
-                         "role": "small_weapon",
-                         "weapon_props": {"weapon_entity": {"economy": {
-                             "decay": 0, "ammo_burn": 0}}}},
-    });
+    let mut free = carried(1, "Pistol", 10.0, 0.0);
+    free.props = json!({"weapon_entity": {"damage": {"impact": 10.0},
+                                          "economy": {"decay": 0, "ammo_burn": 0}}})
+    .as_object()
+    .unwrap()
+    .clone();
     let tracker = rig.tracker(Providers {
         equipment: Arc::new(ScriptedEquipment {
-            trifecta: Some(Arc::new(move || {
-                Some(trifecta.as_object().unwrap().clone())
-            })),
+            carried: vec![free],
             cost: Some(Arc::new(|_| 0.3)),
-            ..Default::default()
-        }),
-        config: Arc::new(ScriptedConfig {
-            trifecta_mode: true,
             ..Default::default()
         }),
         ..Providers::default()
     });
     rig.wait(tracker.start_session()).unwrap();
-    rig.bus
-        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
-            amount: 7.0,
-            timestamp: "2026-01-01T00:00:01".into(),
-        }));
+    rig.bus.publish(&hit(7.0));
     rig.probe(&tracker, |actor| {
         let (key, stats) = &actor.session.active().unwrap().accumulator.tool_stats[0];
         assert_eq!(key, "Pistol");
-        assert_eq!(
-            stats.cost_per_shot,
-            Ped(0.05),
-            "the attribution's cost backfills ahead of the equipment lookup"
-        );
+        assert_eq!(stats.cost_per_shot, Ped(0.3));
     });
 }
 
@@ -4410,7 +4407,7 @@ fn prime_demo_activates_a_demo_session_and_stamps_its_mob() {
 }
 
 #[test]
-fn on_tool_changed_ensures_a_bucket_before_merging_the_unknown_stats() {
+fn a_weapon_press_leaves_the_shots_already_accumulated_alone() {
     let rig = rig();
     let tracker = rig.tracker(Providers::default());
     // A demo session gives an active session without the bus wiring; the
@@ -4426,57 +4423,37 @@ fn on_tool_changed_ensures_a_bucket_before_merging_the_unknown_stats() {
     rig.wait(tracker.prime_demo(session, None, SessionFacets::default()));
 
     rig.probe(&tracker, |actor| {
-        {
-            let active = actor.session.active_mut().unwrap();
-            active.weapons.hotbar_tool = None;
-            // An accumulated 'Unknown' bucket plus an unrelated named
-            // bucket: the identified tool has no bucket yet, so the merge
-            // must create one before folding 'Unknown' in.
-            active.accumulator.tool_stats = vec![
-                (
-                    "Unknown".to_string(),
-                    crate::tracking_models::ToolStats {
-                        tool_name: "Unknown".to_string(),
-                        shots_fired: 5,
-                        damage_dealt: 12.0,
-                        critical_hits: 1,
-                        cost_per_shot: Ped::ZERO,
-                        expected_economics: None,
-                    },
-                ),
-                (
-                    "Other".to_string(),
-                    crate::tracking_models::ToolStats::new("Other", Ped::ZERO, None),
-                ),
-            ];
-        }
-        // The inert equipment gives Rifle no cost, so the else-branch that
-        // ensures the bucket (rather than the positive-cost phase path) runs.
-        actor.on_tool_changed(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
-            tool_name: "Rifle".to_string(),
-            source: None,
-        }));
+        let unknown = crate::tracking_models::ToolStats {
+            tool_name: "Unknown".to_string(),
+            shots_fired: 5,
+            damage_dealt: 12.0,
+            critical_hits: 1,
+            cost_per_shot: Ped::ZERO,
+            expected_economics: None,
+        };
+        actor.session.active_mut().unwrap().accumulator.tool_stats =
+            vec![("Unknown".to_string(), unknown.clone())];
+        actor.on_weapon_press("Rifle", 1_001.0);
 
         let active = actor.session.active().unwrap();
-        let keys: Vec<&str> = active
-            .accumulator
-            .tool_stats
-            .iter()
-            .map(|(key, _)| key.as_str())
-            .collect();
-        assert!(
-            keys.contains(&"Rifle"),
-            "the identified tool ensured its bucket"
+        assert_eq!(
+            active.accumulator.tool_stats,
+            vec![("Unknown".to_string(), unknown)],
+            "no evidence reaches back across the press"
         );
-        assert!(keys.contains(&"Other"), "the unrelated bucket survives");
-        assert!(!keys.contains(&"Unknown"), "the Unknown bucket merged away");
-        let rifle = active
-            .accumulator
-            .tool_stats
-            .iter()
-            .find(|(key, _)| key == "Rifle")
-            .unwrap();
-        assert_eq!(rifle.1.shots_fired, 5, "Unknown shots folded into Rifle");
+        assert_eq!(active.weapons.attribution.declared(), Some("Rifle"));
+        // An empty name is no press at all.
+        actor.on_weapon_press("", 1_002.0);
+        assert_eq!(
+            actor
+                .session
+                .active()
+                .unwrap()
+                .weapons
+                .attribution
+                .declared(),
+            Some("Rifle")
+        );
     });
 }
 
@@ -5481,17 +5458,11 @@ fn the_cumulative_net_history_includes_harvest_swings() {
 }
 
 #[test]
-fn a_weapon_equip_clears_the_harvest_hand_even_in_trifecta_mode() {
+fn a_weapon_equip_clears_the_harvest_hand() {
     use crate::bus_events::ActiveHarvestToolChangedPayload;
 
     let rig = rig();
-    let tracker = rig.tracker(Providers {
-        config: Arc::new(ScriptedConfig {
-            trifecta_mode: true,
-            ..Default::default()
-        }),
-        ..Providers::default()
-    });
+    let tracker = rig.tracker(Providers::default());
     rig.wait(tracker.start_session()).unwrap();
 
     rig.bus.publish(&BusEvent::ActiveHarvestToolChanged(
@@ -5508,7 +5479,6 @@ fn a_weapon_equip_clears_the_harvest_hand_even_in_trifecta_mode() {
         )
     });
 
-    // The trifecta early-return must not preserve the stale hand flag.
     rig.bus
         .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
             tool_name: "Rifle".into(),

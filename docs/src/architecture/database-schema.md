@@ -623,8 +623,8 @@ facets, and an optional session-definition identity.
 | `definition_id` | INTEGER | Optional reference to `session_definitions(id)` (migration `0022`; indexed `idx_tracking_sessions_definition`). Null is valid for legacy or deliberately unattached sessions. |
 | `track_protection_costs` | INTEGER | Not null; defaults to 1 (migration `0054`). Immutable policy stamped from the selected definition at session start. When 0, the session records no defensive evidence, so no protection recording can reach it. |
 | `track_protection_by_segment` | INTEGER | Not null; migration `0053`. Retired (ADR-0031): new sessions record 0 and nothing reads it. |
-| `weapon_shots_agreed` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon the hotbar declared, as they stood after any live decision. Null for a session recorded before the tally was kept. |
-| `weapon_shots_evidenced` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon their damage named (including those a confirmed decision repriced). Null for a session recorded before the tally was kept. |
+| `weapon_shots_agreed` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon the hotbar declared, as they stood after any live decision. Null for a session recorded before the tally was kept, or closed by crash recovery (the live counts died with the process). |
+| `weapon_shots_evidenced` | INTEGER | Migration `0058`; written at stop. Shots priced to the weapon their damage named (including those a confirmed decision repriced). Null for a session recorded before the tally was kept, or closed by crash recovery. |
 | `updated_at` | REAL | Back-filled by an `AFTER INSERT` trigger when left null. |
 
 #### Healing attribution evidence

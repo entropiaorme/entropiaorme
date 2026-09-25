@@ -79,3 +79,18 @@ describe('manualSkillScanCapturePng', () => {
 		expect(url).toBe('data:image/png;base64,aGVsbG8=');
 	});
 });
+
+describe('startup readiness', () => {
+	it('awaits the settled outcome through substrate_ready', async () => {
+		const { awaitSubstrate } = await loadModule();
+		invokeMock.mockResolvedValue({ state: 'ready' });
+		await expect(awaitSubstrate()).resolves.toEqual({ state: 'ready' });
+		expect(invokeMock).toHaveBeenCalledWith('substrate_ready');
+	});
+
+	it('relaunches through restart_app', async () => {
+		const { restartApp } = await loadModule();
+		await restartApp();
+		expect(invokeMock).toHaveBeenCalledWith('restart_app');
+	});
+});

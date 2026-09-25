@@ -115,3 +115,28 @@ export async function planetMapImage(planet: string, mime: string): Promise<stri
 	const encoded = await invoke<string>('planet_map_image', { planet });
 	return `data:${mime};base64,${encoded}`;
 }
+
+/** Why the backend declined to start (mirrors the Rust `DeclineReason`). */
+export type SubstrateDeclineReason =
+	| 'data_dir_unavailable'
+	| 'database_below_baseline'
+	| 'database_unreadable'
+	| 'game_data_unavailable'
+	| 'tracking_unavailable'
+	| 'unexpected';
+
+/** The settled startup outcome (mirrors the Rust `SubstrateOutcome`). */
+export type SubstrateOutcome =
+	| { state: 'ready' }
+	| { state: 'failed'; reason: SubstrateDeclineReason; detail: string };
+
+/** Wait for the backend to finish starting and answer how it went. Resolves
+ * at once when startup has already settled, so a late caller cannot miss it. */
+export async function awaitSubstrate(): Promise<SubstrateOutcome> {
+	return invoke('substrate_ready');
+}
+
+/** Relaunch the app (the startup failure surface's recovery action). */
+export async function restartApp(): Promise<void> {
+	await invoke('restart_app');
+}

@@ -3,19 +3,22 @@
  * doctrine, for any window that renders a backend snapshot.
  *
  * Hydration-only and event-driven. `hydrate()` runs the snapshot read once;
- * `subscribe()` listens for the backend frames the event relay re-emits on
- * the given Tauri-bus topic and re-reads the snapshot on each, so a consumer
+ * `subscribe()` listens for the backend frames the shell's event bridge emits
+ * on the given Tauri-bus topic and re-reads the snapshot on each, so a consumer
  * updates by subscription rather than by polling.
  *
- * Routing discipline (the load-bearing constraint): a relayed frame is a pure
+ * Routing discipline (the load-bearing constraint): a bridged frame is a pure
  * trigger. We never fold a frame field into rendered state; every
  * render-shaping value comes from the snapshot read. That keeps the snapshot
- * the single source of shape and makes the store reconnect-safe by
- * construction. The relay's reconnect nudge carries no payload, and because
- * we re-read rather than reduce, an absent payload can never be mistaken for
- * an idle state (which would blank an active view on an EventSource
- * reconnect). A state transition arrives as an ordinary frame and re-reads to
- * the new snapshot.
+ * the single source of shape: because we re-read rather than reduce, a
+ * payload-less frame can never be mistaken for an idle state (which would
+ * blank an active view). A state transition arrives as an ordinary frame and
+ * re-reads to the new snapshot.
+ *
+ * Startup needs no special case here: the typed transport holds a read made
+ * while the backend is still starting and sends it once the backend is ready
+ * (`lib/api/readiness.svelte.ts`), so the initial `hydrate` lands on live
+ * state rather than failing.
  *
  * Consumers attach the listener FIRST and hydrate after (`subscribe` then
  * `hydrate`), so a frame arriving during subscription setup is not lost: it
@@ -36,7 +39,7 @@ export interface SnapshotStore<T> {
 
 /**
  * Build a snapshot store over a Tauri-bus `topic` (the colon form of the wire
- * topic; Tauri event names forbid dots, see `lib/realtime/eventRelay.ts`) and
+ * topic; Tauri event names forbid dots) and
  * a `read` that fetches the consolidated snapshot.
  */
 export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): SnapshotStore<T> {
@@ -49,7 +52,7 @@ export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): S
 	 * arriving mid-read queues exactly one follow-up read, so the store always
 	 * settles on the latest state and two reads can never race to write out of
 	 * order. A failed read leaves the last good snapshot in place; the next
-	 * frame (or the relay's reconnect nudge) re-reads.
+	 * frame re-reads.
 	 */
 	async function hydrate(): Promise<void> {
 		if (inFlight) {
@@ -76,9 +79,8 @@ export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): S
 	}
 
 	/**
-	 * Subscribe to the relayed backend frames and keep the snapshot current.
-	 * Returns a teardown that detaches the listener. Each frame (a state
-	 * change or the relay's payload-less reconnect nudge) triggers one
+	 * Subscribe to the bridged backend frames and keep the snapshot current.
+	 * Returns a teardown that detaches the listener. Each frame triggers one
 	 * snapshot read; see the routing discipline in the module header.
 	 */
 	function subscribe(): Promise<UnlistenFn> {

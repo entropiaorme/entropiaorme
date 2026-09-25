@@ -192,6 +192,41 @@ describe('useVisiblePoll', () => {
 		expect(tick).toHaveBeenCalledTimes(1);
 	});
 
+	it('skips a tick that falls due while the previous async tick is in flight', async () => {
+		const { source } = fakeSource(true);
+		let settle!: () => void;
+		const tick = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					settle = resolve;
+				}),
+		);
+		const stop = useVisiblePoll(tick, { intervalMs: 1000, source });
+		expect(tick).toHaveBeenCalledTimes(1);
+
+		// Three intervals pass with the first tick still outstanding (a read the
+		// transport holds while the backend starts): none of them doubles it up.
+		vi.advanceTimersByTime(3000);
+		expect(tick).toHaveBeenCalledTimes(1);
+
+		settle();
+		await vi.advanceTimersByTimeAsync(0);
+		vi.advanceTimersByTime(1000);
+		expect(tick).toHaveBeenCalledTimes(2);
+		stop();
+	});
+
+	it('frees the next tick after an async tick rejects', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const { source } = fakeSource(true);
+		const tick = vi.fn(() => Promise.reject(new Error('tick boom')));
+		const stop = useVisiblePoll(tick, { intervalMs: 1000, source });
+		await vi.advanceTimersByTimeAsync(0);
+		vi.advanceTimersByTime(1000);
+		expect(tick).toHaveBeenCalledTimes(2);
+		stop();
+	});
+
 	it('logs an async tick rejection instead of leaving it unhandled', async () => {
 		const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const { source } = fakeSource(true);

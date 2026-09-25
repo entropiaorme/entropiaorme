@@ -2,7 +2,7 @@
  * Consolidated scan store: the single source of the manual skill-scan status
  * for any window that passively observes it (the character view today).
  *
- * A `createSnapshotStore` instance over the relayed scan topic: hydration-only
+ * A `createSnapshotStore` instance over the bridged scan topic: hydration-only
  * and event-driven, with the coalesced re-read, keep-last-good-on-failure, and
  * pure-trigger frame semantics implemented (and tested) by the factory; see
  * `lib/realtime/snapshotStore.svelte.ts` for the routing discipline. The
@@ -15,9 +15,9 @@ import { getManualSkillScanStatus, type ScanManualStatus } from '$lib/api';
 import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 
 /**
- * The Tauri-bus topic the event relay re-emits each backend scan frame on: the
- * colon form of the `scan.status.changed` wire topic (Tauri event names forbid
- * dots). See `lib/realtime/eventRelay.ts`.
+ * The Tauri-bus topic the shell's event bridge emits each backend scan frame on:
+ * the colon form of the `scan.status.changed` wire topic (Tauri event names
+ * forbid dots). See `spawn_domain_event_bridge` in the shell.
  */
 export const SCAN_TOPIC = 'scan:status:changed';
 
@@ -31,7 +31,7 @@ export const scanStatus = createSnapshotStore<ScanManualStatus>(
 export const hydrate = scanStatus.hydrate;
 
 /**
- * Subscribe to the relayed backend scan frames and keep the status current.
+ * Subscribe to the bridged backend scan frames and keep the status current.
  * Returns a teardown that detaches the listener.
  */
 export const subscribeScan = scanStatus.subscribe;

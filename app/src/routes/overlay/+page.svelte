@@ -68,9 +68,9 @@
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 
-	// The colon-form Tauri topic the event relay re-emits each backend tracking
-	// frame on (the wire topic `tracking.session.updated`; Tauri event names
-	// forbid dots). See lib/realtime/eventRelay.ts.
+	// The colon-form Tauri topic the shell's event bridge emits each backend
+	// tracking frame on (the wire topic `tracking.session.updated`; Tauri event
+	// names forbid dots).
 	const TRACKING_TOPIC = 'tracking:session:updated';
 	// Emitted by the shell (toggle_overlay) when this hidden window is shown, so
 	// the overlay can re-read config/runtime fields no tracking frame announces.
@@ -508,7 +508,7 @@
 	// Re-read the consolidated snapshot on each backend tracking frame. The
 	// listener attaches FIRST and the initial hydrate runs after it settles,
 	// so a frame arriving during subscription setup is not lost (it simply
-	// re-triggers a read). A payload-less reconnect nudge on this topic
+	// re-triggers a read). A payload-less frame on this topic
 	// re-hydrates the same way, so it can never be mistaken for an idle
 	// session.
 	$effect(() => {

@@ -18,7 +18,8 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0a0e17"
       },
       {
         "label": "overlay",

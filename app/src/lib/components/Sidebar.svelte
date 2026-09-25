@@ -15,6 +15,7 @@
 		onnavigate,
 		footerItems = [],
 		settingsItem,
+		disabled = false,
 		class: className = ''
 	}: {
 		items: NavItem[];
@@ -22,6 +23,8 @@
 		onnavigate: (id: string) => void;
 		footerItems?: NavItem[];
 		settingsItem?: NavItem;
+		/** Inert and dimmed: nothing behind the nav can load (a failed start). */
+		disabled?: boolean;
 		class?: string;
 	} = $props();
 
@@ -35,7 +38,9 @@
 		bg-surface/40 backdrop-blur-[2px]
 		transition-[width] duration-[var(--duration-slow)] ease-[var(--ease-out)]
 		{expanded ? 'w-[200px]' : 'w-12'}
+		{disabled ? 'opacity-40' : ''}
 		{className}"
+	inert={disabled}
 	onmouseenter={() => (expanded = true)}
 	onmouseleave={() => (expanded = false)}
 	onfocusin={() => (expanded = true)}

@@ -45,11 +45,12 @@ const noopUnsubscribe = (): void => {};
  * tick, so a future one that does not should still be debuggable rather than
  * fail silently. A synchronous throw propagates as usual.
  */
-function runTick(tick: () => void | Promise<void>, label: string): void {
+function runTick(tick: () => void | Promise<void>, label: string): Promise<void> | undefined {
 	const result = tick();
 	if (result instanceof Promise) {
-		result.catch((err) => console.error(`${label}: tick failed`, err));
+		return result.catch((err) => console.error(`${label}: tick failed`, err));
 	}
+	return undefined;
 }
 
 /**
@@ -77,6 +78,11 @@ export function documentVisibility(): VisibilitySource {
  * Start a visibility-gated poll. Returns a `stop()` that clears the timer and
  * detaches the visibility subscription: hand it straight back as the `$effect`
  * teardown.
+ *
+ * Ticks never overlap: a tick that falls due while the previous async tick is
+ * still in flight is skipped, not queued. A slow read (or one the typed
+ * transport holds while the backend starts) therefore costs one outstanding
+ * call, never a pile of identical ones resolving in a burst.
  */
 export function useVisiblePoll(
 	tick: () => void | Promise<void>,
@@ -86,8 +92,20 @@ export function useVisiblePoll(
 	const source = options.source ?? documentVisibility();
 
 	let timer: ReturnType<typeof setInterval> | null = null;
+	let inFlight = false;
 
-	const run = (): void => runTick(tick, 'useVisiblePoll');
+	const run = (): void => {
+		if (inFlight) {
+			return;
+		}
+		const pending = runTick(tick, 'useVisiblePoll');
+		if (pending) {
+			inFlight = true;
+			void pending.finally(() => {
+				inFlight = false;
+			});
+		}
+	};
 
 	const arm = (runNow: boolean): void => {
 		if (timer !== null) {
@@ -138,6 +156,6 @@ export function windowGeometryPoll(
 	tick: () => void | Promise<void>,
 	intervalMs: number,
 ): () => void {
-	const timer = setInterval(() => runTick(tick, 'windowGeometryPoll'), intervalMs);
+	const timer = setInterval(() => void runTick(tick, 'windowGeometryPoll'), intervalMs);
 	return () => clearInterval(timer);
 }

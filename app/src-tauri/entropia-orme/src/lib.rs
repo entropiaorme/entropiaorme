@@ -4,6 +4,7 @@ mod commands;
 mod composition;
 mod crash;
 mod resources;
+mod substrate;
 mod telemetry;
 mod updater;
 
@@ -390,6 +391,9 @@ pub fn run() {
     resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()
+        // The startup readiness record, managed on the builder so it exists
+        // before any window can ask for it.
+        .manage(substrate::SubstrateReadiness::default())
         .manage(SaleCaptureAuthority::default())
         // The shell plugin stays for its `open` API (external links route to
         // the OS browser via `$lib/utils/openExternal`); the sidecar/execute
@@ -622,7 +626,9 @@ pub fn run() {
             updater::download_update,
             updater::install_update,
             updater::get_update_channel,
-            updater::set_update_channel
+            updater::set_update_channel,
+            substrate::substrate_ready,
+            substrate::restart_app
         ])
         .setup(|app| {
             // `app` is unused on a non-Windows debug build (the runtime icon
@@ -647,7 +653,8 @@ pub fn run() {
             // through the in-process IPC command (no inbound socket) and every
             // route is served natively (the Python sidecar has been
             // decommissioned). Startup composes the native spine off
-            // the setup path and publishes it to the IPC command when ready.
+            // the setup path, publishes it to the IPC command when ready,
+            // and settles the readiness record every window awaits.
             // Dev and release compose identically; the resource dir (the
             // bundled snapshot / model / demo assets) resolves only in the
             // installed build, dev falling back to the repository copies.
@@ -792,33 +799,75 @@ fn destroy_runtime_window_icons(app: &tauri::AppHandle) {
 /// The single pure-Rust binary serves every backend call over a typed Tauri
 /// command dispatched into the composed facade: there is no socket, no
 /// sidecar, and no proxy. This composes the native service spine off the setup
-/// path, and on success installs the services, publishes the facade to the
-/// typed commands, and signals the frontend (see [`install_native_services`]).
-/// Until composition lands the typed commands answer their not-ready contract;
-/// the frontend's initial reads are re-driven by the
-/// `substrate:native-installed` event the install emits (there is no
-/// transport-level retry). A declined composition is logged and the backend
-/// does not come up for the session (an unopenable database, or one below the
-/// supported baseline the retired sidecar used to migrate forward).
+/// path, and on success installs the services and publishes the facade to the
+/// typed commands (see [`install_native_services`]).
+///
+/// Either way it then settles the startup readiness record exactly once
+/// ([`substrate::SubstrateReadiness`]): the webview's typed transport holds
+/// every facade command until that answer, so no command dispatches while the
+/// facade is still composing. A declined composition settles as a failure
+/// carrying its reason (an unopenable database, one below the supported
+/// baseline, missing game data) and the backend does not come up for the
+/// session. Composition and installation run in their own task so that even a
+/// panic inside either settles the record rather than leaving every window
+/// waiting (the facade is published last, so a panic before it leaves the
+/// typed commands answering their not-ready contract, and `failed` is true).
 fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::PathBuf>) {
     tauri::async_runtime::spawn(async move {
-        match composition::compose_native(resource_dir).await {
-            composition::Composition::Ready(composed) => {
-                install_native_services(&app, composed);
-            }
-            composition::Composition::Declined => {
+        #[cfg(debug_assertions)]
+        simulate_slow_start().await;
+        let installing = {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match composition::compose_native(resource_dir).await {
+                    composition::Composition::Ready(composed) => {
+                        install_native_services(&app, composed);
+                        substrate::SubstrateOutcome::Ready
+                    }
+                    composition::Composition::Declined(decline) => {
+                        tracing::error!(
+                            target: "eo::substrate",
+                            "native services did not compose; the backend is unavailable for this session"
+                        );
+                        decline.into()
+                    }
+                }
+            })
+        };
+        let outcome = match installing.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
                 tracing::error!(
                     target: "eo::substrate",
-                    "native services did not compose; the backend is unavailable for this session"
+                    %error,
+                    "native composition stopped unexpectedly; the backend is unavailable for this session"
                 );
+                substrate::Decline::new(substrate::DeclineReason::Unexpected, error.to_string())
+                    .into()
             }
-        }
+        };
+        app.state::<substrate::SubstrateReadiness>().settle(outcome);
     });
+}
+
+/// Debug builds only: hold startup back by `ENTROPIAORME_STARTUP_DELAY_MS`
+/// milliseconds, so the slow-start path (the startup indicator and the pages'
+/// loading placeholders) can be exercised on a machine that composes quickly.
+/// Release builds compile this out and ignore the variable.
+#[cfg(debug_assertions)]
+async fn simulate_slow_start() {
+    let delay = std::env::var("ENTROPIAORME_STARTUP_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+    if let Some(ms) = delay {
+        tracing::info!(target: "eo::substrate", ms, "simulating a slow start");
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
 }
 
 /// Install the composed services into the Tauri-managed exit seam, then publish
 /// the facade to the typed commands (so they answer only once every service is
-/// present) and signal the frontend that the backend is live.
+/// present). The caller settles the readiness record after this returns.
 fn install_native_services(app: &tauri::AppHandle, composed: composition::Composed) {
     // Clones for the exit seam, taken before the originals move into the
     // installed bundle below: the spacebar listener detaches its share of
@@ -858,10 +907,8 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     // Publish the composed facade to the typed commands LAST: until now the
     // typed commands answer their not-ready contract, so by the time any
     // request dispatches every native service is present (there is no
-    // absent-service window to fall back from). Then signal the frontend that
-    // the backend is live so it (re-)hydrates its initial reads.
+    // absent-service window to fall back from).
     app.manage(commands::ApiFacade(composed_api));
-    let _ = app.emit("substrate:native-installed", ());
 }
 
 /// Map a dotted domain wire topic to its colon-form Tauri event name (Tauri
@@ -878,10 +925,10 @@ fn domain_topic_to_tauri_event(topic: &str) -> String {
 /// identical envelope JSON the wire contract pins (`eo-wire`'s serde shape),
 /// so the topic-aware consumers are unchanged. A lagging receiver skips
 /// ahead to live events (drop-oldest, the same shedding the frame queues
-/// applied); the channel closing ends the task with the spine. The hydrate
-/// nudge (a payload-less frame on start) stays frontend-owned: it must fire
-/// after the webview is listening, which an emit at install time cannot
-/// guarantee on a cold load.
+/// applied); the channel closing ends the task with the spine. Initial state
+/// is not this bridge's concern: every consumer attaches its listener and then
+/// reads its snapshot itself, a read the typed transport holds until the
+/// facade is ready.
 fn spawn_domain_event_bridge(
     app: &tauri::AppHandle,
     domain_bus: &std::sync::Arc<eo_wire::bus::DomainBus>,
@@ -1172,15 +1219,19 @@ mod tests {
             );
         }
         // A button that reads the screen and dismisses itself needs those two
-        // commands. Anything else here would be a window on the whole ledger
-        // reachable from a surface that floats over the game.
+        // commands, plus the startup readiness answer its typed transport
+        // awaits (whether the backend is up and, if not, the closed reason;
+        // the logged detail goes to the main window alone). Anything else
+        // here would be a window on the whole ledger reachable from a surface
+        // that floats over the game.
         assert_eq!(
             crate::command_acl::SALE_CAPTURE_COMMANDS,
             [
                 "capture_sale_from_overlay",
                 "dev_auction_fee_research_capture",
                 "dev_auction_fee_research_overlay_status",
-                "hide_sale_capture_overlay"
+                "hide_sale_capture_overlay",
+                "substrate_ready"
             ]
         );
         // Notably not the collect verb: the form takes the waiting read, the
@@ -1232,7 +1283,8 @@ mod tests {
                 "map_views_list",
                 "maps_scan_coordinates",
                 "pin_configs_list",
-                "planet_maps_list"
+                "planet_maps_list",
+                "substrate_ready"
             ]
         );
         assert!(!crate::command_acl::CARTOGRAPHY_COMMANDS.contains(&"map_pin_delete"));
@@ -1271,6 +1323,7 @@ mod tests {
                 "navigation_undo",
                 "navigation_end",
                 "hide_navigation_overlays",
+                "substrate_ready",
             ]
         );
     }

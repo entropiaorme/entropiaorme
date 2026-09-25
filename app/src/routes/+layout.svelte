@@ -18,7 +18,9 @@
 	import { initMarketData, MARKET_DATA_PREFERENCE_KEYS } from '$lib/marketData.svelte';
 	import { maybeRefreshMarketSnapshotOnMount } from '$lib/marketDataFetch';
 	import { getPreference } from '$lib/preferences';
-	import { startEventRelay } from '$lib/realtime/eventRelay';
+	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
+	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
+	import StartupIndicator from '$lib/features/startup/StartupIndicator.svelte';
 	import {
 		NavDashboard,
 		NavAnalytics,
@@ -35,9 +37,12 @@
 
 	let { children } = $props();
 
-	// Open the backend event stream once for the app. Guarded to the main
-	// window inside the relay; the returned stopper runs on window teardown.
-	onMount(() => startEventRelay());
+	// Ask whether the backend has started as soon as this window exists, not
+	// when its first page happens to read something: the startup indicator
+	// and the failure surface follow this answer. Pages mount straight away
+	// either way; the typed transport holds their reads until it is ready.
+	// A failed start is shown by the failure surface, not thrown here.
+	void whenSubstrateReady().catch(() => {});
 
 	// The stats scope is shared with the overlay window, so a flip made
 	// there moves this window's figures too.
@@ -186,11 +191,19 @@
 			onnavigate={handleNavigate}
 			footerItems={footerNavItems}
 			{settingsItem}
+			disabled={substrate.phase === 'failed'}
 		/>
-		<div class="flex flex-col flex-1 overflow-hidden">
+		<div class="relative flex flex-col flex-1 overflow-hidden">
 			<Titlebar />
+			{#if substrate.phase === 'starting'}
+				<StartupIndicator />
+			{/if}
 			<main class="flex-1 min-h-0 overflow-y-auto">
-				{@render children()}
+				{#if substrate.failure}
+					<StartupFailure failure={substrate.failure} />
+				{:else}
+					{@render children()}
+				{/if}
 			</main>
 		</div>
 	</div>

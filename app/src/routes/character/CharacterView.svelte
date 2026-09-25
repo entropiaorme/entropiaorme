@@ -92,7 +92,7 @@
 	// Scan status from the shared event-driven store, suppressed while the guide
 	// is active (the guide owns this view then). The effect below hydrates once
 	// and subscribes when the guide is inactive; the store re-reads on each
-	// backend scan frame the relay re-emits, replacing the retired 500ms poll.
+	// backend scan frame the shell bridges, replacing the retired 500ms poll.
 	let scanStatus = $derived(guideState.isActive ? null : scanStatusStore.current);
 	let scanInFlight = $derived(scanStatus !== null && scanStatus.phase !== 'idle');
 

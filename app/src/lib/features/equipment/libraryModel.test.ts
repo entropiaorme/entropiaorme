@@ -156,6 +156,28 @@ describe('loadData', () => {
 		const model = createLibraryModel();
 		await model.loadData(false);
 		expect(model.error).toBe('backend unreachable');
+		expect(model.loading).toBe(false);
+	});
+
+	it('reads as loading until the first load settles, and not again on a reload', async () => {
+		let answer!: (library: Equipment[]) => void;
+		mocked.getEquipmentLibrary.mockReturnValue(
+			new Promise<Equipment[]>((resolve) => {
+				answer = resolve;
+			}),
+		);
+		const model = createLibraryModel();
+		expect(model.loading).toBe(true);
+		const first = model.loadData(false);
+		expect(model.loading).toBe(true);
+		answer([]);
+		await first;
+		expect(model.loading).toBe(false);
+
+		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
+		const reload = model.loadData(false);
+		expect(model.loading).toBe(false);
+		await reload;
 	});
 });
 

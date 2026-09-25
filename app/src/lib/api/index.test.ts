@@ -31,6 +31,10 @@ vi.mock('./client', () => ({
 
 vi.mock('$lib/guide/state.svelte', () => ({ guideState }));
 
+// Startup readiness has its own suite; here the backend is already up, so
+// the transport dispatches straight through.
+vi.mock('./readiness.svelte', () => ({ whenSubstrateReady: () => Promise.resolve() }));
+
 // The typed-command transport under the generated bindings: the equipment
 // family invokes Tauri commands rather than the HTTP-shaped client.
 vi.mock('@tauri-apps/api/core', () => ({

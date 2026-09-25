@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button, Card, Divider } from '$lib/components';
+	import { Button, Card, Divider, Skeleton } from '$lib/components';
 	import { IconConsumables, IconHealing, IconWeapons } from '$lib/icons';
 	import { formatPec } from './display';
 	import type { LibraryModel } from './libraryModel.svelte';
@@ -16,7 +16,13 @@
 	</span>
 </div>
 
-{#if model.sortedEquipment.length === 0}
+{#if model.loading}
+	<div class="space-y-1" aria-busy="true" data-testid="equipment-pending">
+		{#each [0, 1, 2] as row (row)}
+			<Skeleton class="h-14 w-full rounded-md" />
+		{/each}
+	</div>
+{:else if model.sortedEquipment.length === 0}
 	<Card class="p-8">
 		<div class="flex flex-col items-center text-center gap-3">
 			<svg
@@ -55,7 +61,13 @@
 		</span>
 	</div>
 
-	{#if model.consumables.length === 0}
+	{#if model.loading}
+		<div class="space-y-1" aria-busy="true">
+			{#each [0, 1] as row (row)}
+				<Skeleton class="h-14 w-full rounded-md" />
+			{/each}
+		</div>
+	{:else if model.consumables.length === 0}
 		<p class="text-sm text-text-tertiary py-4">
 			No consumables configured.
 		</p>

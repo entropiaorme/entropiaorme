@@ -19,6 +19,10 @@ export default defineConfig({
 	resolve: {
 		alias: {
 			$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
+			// SvelteKit's runtime modules, stubbed so a suite can mount a route
+			// (or a component that navigates) without the plugin.
+			'$app/navigation': fileURLToPath(new URL('./test-stubs/app-navigation.ts', import.meta.url)),
+			'$app/state': fileURLToPath(new URL('./test-stubs/app-state.ts', import.meta.url)),
 		},
 	},
 	test: {

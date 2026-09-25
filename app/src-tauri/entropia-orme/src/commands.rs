@@ -2081,6 +2081,8 @@ mod tests {
             "install_update",
             "get_update_channel",
             "set_update_channel",
+            "substrate_ready",
+            "restart_app",
         ]);
         expected.sort_unstable();
         expected.dedup();

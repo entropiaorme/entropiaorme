@@ -4,6 +4,8 @@
 - Context: reflects the landed implementation
 
 > **Later development.** This ADR records the collapse to a single process, which kept the in-process HTTP router (`eo-http`) alive behind the `api_request` IPC command. That router was subsequently retired in favour of typed Tauri commands over a service facade, and the `eo-http` crate was deleted; see [ADR-0019](0019-typed-command-facade.md). The single-process topology this ADR established is unchanged; only the transport inside the process moved on from an in-process HTTP dispatch to typed commands.
+>
+> **Startup recovery superseded.** The re-hydrate on the one-shot `substrate:native-installed` event described below was replaced by a level-triggered readiness boundary: the shell answers a `substrate_ready` command, and the frontend's typed transport holds commands until it reports ready. See [ADR-0030](0030-startup-readiness-boundary.md).
 
 ## Context and problem statement
 

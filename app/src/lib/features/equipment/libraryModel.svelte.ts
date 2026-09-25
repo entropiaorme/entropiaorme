@@ -58,6 +58,9 @@ export function createLibraryModel() {
 		hugeToolId: null,
 	});
 	let passiveEffectSources = $state<PassiveEffectSourceView[]>([]);
+	// True until the first load settles: an empty library before then means
+	// "not read yet", not "nothing added", so the views hold their empty states.
+	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// ── Rows ──
@@ -220,6 +223,8 @@ export function createLibraryModel() {
 			}
 		} catch (e) {
 			error = describeError(e, 'Failed to load equipment');
+		} finally {
+			loading = false;
 		}
 	}
 
@@ -529,6 +534,9 @@ export function createLibraryModel() {
 
 	return {
 		// ── Data ──
+		get loading() {
+			return loading;
+		},
 		get allEquipment() {
 			return allEquipment;
 		},

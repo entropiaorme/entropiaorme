@@ -92,12 +92,11 @@
 	});
 
 	// Event-driven status, replacing the retired 500ms poll: re-read on each
-	// backend scan frame the relay re-emits (a change driven by this overlay's
+	// backend scan frame the shell bridges (a change driven by this overlay's
 	// own actions, a spacebar capture, or background OCR progress). The producer
 	// coalesces, so this fires once per discrete change rather than on a timer.
 	// The webview keeps listening while the window is hidden, so the status stays
-	// current without a poll; the relay's reconnect nudge re-reads after a stream
-	// drop.
+	// current without a poll.
 	$effect(() => {
 		let unlisten: UnlistenFn | undefined;
 		let disposed = false;

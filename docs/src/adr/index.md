@@ -37,3 +37,4 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0027](0027-intent-led-healing-attribution.md) | Intent-led healing attribution with durable output evidence |
 | [ADR-0028](0028-versioned-expected-hunting-economics.md) | Versioned expected-hunting economics over immutable offensive evidence |
 | [ADR-0029](0029-two-line-development.md) | Two-line development: `next` integrates, `main` is promoted to after soak; the merge queue retired |
+| [ADR-0030](0030-startup-readiness-boundary.md) | An explicit startup readiness boundary: a level-triggered shell answer, commands held in the typed transport, the frame painted first |

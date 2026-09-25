@@ -171,6 +171,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "radar_calibration_start",
     "radar_calibration_status",
     "radar_geometry",
+    "restart_app",
     "scan_accept",
     "scan_cancel",
     "scan_capture",
@@ -200,6 +201,7 @@ pub const APP_COMMANDS: &[&str] = &[
     "stock_removal_undo",
     "stock_remove",
     "stock_shrapnel_convert",
+    "substrate_ready",
     "toggle_cartography_overlay",
     "toggle_overlay",
     "tracking_activity_activate",
@@ -227,12 +229,14 @@ pub const APP_COMMANDS: &[&str] = &[
 ];
 
 /// The capture overlay does one thing: read the sale window and take
-/// itself off screen. It gets those two and nothing else.
+/// itself off screen. It gets those commands, the fee-research capture
+/// pair, and the startup readiness answer every window awaits.
 pub const SALE_CAPTURE_COMMANDS: &[&str] = &[
     "capture_sale_from_overlay",
     "dev_auction_fee_research_capture",
     "dev_auction_fee_research_overlay_status",
     "hide_sale_capture_overlay",
+    "substrate_ready",
 ];
 
 pub const CARTOGRAPHY_COMMANDS: &[&str] = &[
@@ -242,6 +246,7 @@ pub const CARTOGRAPHY_COMMANDS: &[&str] = &[
     "maps_scan_coordinates",
     "pin_configs_list",
     "planet_maps_list",
+    "substrate_ready",
 ];
 
 #[allow(dead_code)]
@@ -257,7 +262,9 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
     "navigation_undo",
     "navigation_end",
     "hide_navigation_overlays",
+    "substrate_ready",
 ];
 
 #[allow(dead_code)]
-pub const RADAR_GUIDANCE_COMMANDS: &[&str] = &["navigation_snapshot", "radar_geometry"];
+pub const RADAR_GUIDANCE_COMMANDS: &[&str] =
+    &["navigation_snapshot", "radar_geometry", "substrate_ready"];

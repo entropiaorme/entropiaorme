@@ -6,11 +6,17 @@
  * with the backend's serialised `ApiErrorPayload` (`kind` + `message`).
  * This wrapper maps that payload onto the thrown `ApiError` contract,
  * carrying the kind and the message verbatim.
+ *
+ * Every command first awaits startup readiness (`./readiness.svelte`): a
+ * call made while the backend is still starting is held, not sent, and
+ * dispatches once it is ready. This is the one place that wait lives, so no
+ * feature retries or suppresses a startup `unavailable`.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { ApiError } from './client';
 import { API_ERROR_KINDS, type ApiErrorKind } from './commands.gen';
+import { whenSubstrateReady } from './readiness.svelte';
 
 /** The display message for the kinds that deliberately carry none. */
 const MESSAGE_FOR_KIND: Partial<Record<ApiErrorKind, string>> = {
@@ -23,6 +29,7 @@ function isContractKind(kind: string): kind is ApiErrorKind {
 }
 
 export async function invokeCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
+	await whenSubstrateReady();
 	try {
 		return await invoke<T>(command, args);
 	} catch (raw) {

@@ -11,6 +11,7 @@
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
 	import { getCooldownRemaining } from '$lib/features/quests/cooldown';
 	import { getActivityOptions, type ActivityOptionsResult } from '$lib/api';
+	import { Skeleton } from '$lib/components';
 	import { closeGuide, openGuide } from '$lib/guide/engine';
 	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 	import { dashboardSurface } from '$lib/guide/surfaces/dashboard';
@@ -77,7 +78,7 @@
 		void (async () => {
 			guideSeen = await getPreference<boolean>('guide_seen_dashboard', false);
 		})();
-		// Keep the consolidated snapshot current by subscribing to the relayed
+		// Keep the consolidated snapshot current by subscribing to the bridged
 		// backend tracking events: each one re-reads the snapshot, so the session
 		// island and stats grid update by subscription rather than by polling.
 		let unsubscribeTracking: (() => void) | undefined;
@@ -166,10 +167,21 @@
 
 	{#if !(guideState.isActive && guideDemo.demoOverlayVisible)}
 		<!-- ═══ Island: Recent Events ═══ -->
-		<section class="panel p-4 flex-shrink-0" data-guide-anchor="dashboard-recent-events">
+		<section
+			class="panel p-4 flex-shrink-0"
+			data-guide-anchor="dashboard-recent-events"
+			aria-busy={status === null}
+		>
 			<h3 class="eyebrow mb-3">Recent events</h3>
 
-			{#if recentEvents.length > 0}
+			{#if status === null}
+				<!-- Not read yet: an empty list here would claim there are none. -->
+				<ul class="space-y-2" data-testid="recent-events-pending">
+					{#each ['w-3/5', 'w-2/5', 'w-1/2'] as width}
+						<li class="flex items-center h-5"><Skeleton class="h-3 {width}" /></li>
+					{/each}
+				</ul>
+			{:else if recentEvents.length > 0}
 				<ul class="relative space-y-2">
 					{#each recentEvents.slice(0, 3) as event}
 						<li class="flex items-center gap-2.5 text-sm">
@@ -196,6 +208,7 @@
 		</section>
 
 			<DashboardWidgets
+				trackingPending={status === null}
 				sessionId={status?.session_id ?? null}
 				multiplierHistory={status?.multiplierHistory ?? null}
 				cumulativeNetHistory={status?.cumulativeNetHistory ?? null}

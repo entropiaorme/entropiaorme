@@ -114,6 +114,8 @@ use eo_wire::bus::DomainBus;
 use eo_wire::domain_events::DomainEvent;
 use serde_json::{Map, Value};
 
+use crate::substrate::{Decline, DeclineReason};
+
 /// The repository root, compiled into dev builds (the manifest dir is
 /// `app/src-tauri/entropia-orme`). Release builds never read it.
 fn dev_project_root() -> PathBuf {
@@ -540,8 +542,9 @@ pub enum Composition {
     /// A terminal decline (a missing/empty snapshot, a producer fault, or a
     /// database that cannot be opened or adopted, including one whose schema
     /// predates the supported baseline, which the retired sidecar used to
-    /// migrate forward). Logged loudly; the backend does not come up.
-    Declined,
+    /// migrate forward). Logged loudly; the backend does not come up. The
+    /// reason is what the startup failure surface tells the user.
+    Declined(Decline),
 }
 
 /// Compose the native services, or decline with a logged reason. The ONNX
@@ -615,12 +618,9 @@ async fn compose_with(
     game_focus: Option<GameFocusProbe>,
 ) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
-        tracing::error!(
-            target: "eo::composition",
-            "data dir {} not creatable ({err}); native services stand down",
-            data_dir.display()
-        );
-        return Composition::Declined;
+        let detail = format!("data dir {} not creatable ({err})", data_dir.display());
+        tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+        return Composition::Declined(Decline::new(DeclineReason::DataDirUnavailable, detail));
     }
     let db_path = data_dir.join(DB_FILE_NAME);
     let db = match Db::open_adopted(&db_path).await {
@@ -637,20 +637,24 @@ async fn compose_with(
                 target: "eo::composition",
                 "{err}; the backend cannot serve until the database is at the supported baseline"
             );
-            return Composition::Declined;
+            return Composition::Declined(Decline::new(
+                DeclineReason::DatabaseBelowBaseline,
+                err.to_string(),
+            ));
         }
         Err(err @ AdoptError::Quarantined { .. }) => {
             // An existing database we cannot adopt (for any other reason) is
             // surfaced loudly and left untouched for diagnosis.
             tracing::error!(target: "eo::composition", "{err}");
-            return Composition::Declined;
+            return Composition::Declined(Decline::new(
+                DeclineReason::DatabaseUnreadable,
+                err.to_string(),
+            ));
         }
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "database open failed ({err}); native services stand down"
-            );
-            return Composition::Declined;
+            let detail = format!("database open failed ({err})");
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::DatabaseUnreadable, detail));
         }
     };
     // A bounded corruption probe: PRAGMA quick_check on a reader connection,
@@ -686,12 +690,12 @@ async fn compose_with(
     let game_data = match GameDataStore::new(&snapshot) {
         Ok(store) => Arc::new(store),
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "game-data snapshot at {} unreadable ({err}); native services stand down",
+            let detail = format!(
+                "game-data snapshot at {} unreadable ({err})",
                 snapshot.display()
             );
-            return Composition::Declined;
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::GameDataUnavailable, detail));
         }
     };
     // The store tolerates a missing directory (warn-and-continue), but an
@@ -700,12 +704,9 @@ async fn compose_with(
     // silently diverge from the reference's embedded copy. Stand down
     // (a terminal decline) rather than serve divergent data.
     if game_data.total_entities() == 0 {
-        tracing::error!(
-            target: "eo::composition",
-            "game-data snapshot at {} is empty; native services stand down",
-            snapshot.display()
-        );
-        return Composition::Declined;
+        let detail = format!("game-data snapshot at {} is empty", snapshot.display());
+        tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+        return Composition::Declined(Decline::new(DeclineReason::GameDataUnavailable, detail));
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
 
@@ -729,11 +730,9 @@ async fn compose_with(
     ) {
         Ok(producers) => producers,
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "producer spine failed ({err}); native services stand down"
-            );
-            return Composition::Declined;
+            let detail = format!("producer spine failed ({err})");
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::TrackingUnavailable, detail));
         }
     };
 
@@ -1882,7 +1881,13 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::DatabaseUnreadable,
+                    ..
+                })
+            ),
             "quarantine declines composition"
         );
         assert_eq!(std::fs::read(&db_path).unwrap(), b"not a database");
@@ -1923,7 +1928,13 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::DatabaseBelowBaseline,
+                    ..
+                })
+            ),
             "a below-baseline database declines (nothing migrates it without the sidecar)"
         );
     }
@@ -1942,7 +1953,13 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::GameDataUnavailable,
+                    ..
+                })
+            ),
             "missing snapshot declines composition"
         );
     }

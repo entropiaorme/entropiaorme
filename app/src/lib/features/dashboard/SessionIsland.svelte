@@ -3,7 +3,7 @@
 	import { quintOut } from 'svelte/easing';
 	import { startTracking, toggleOverlay } from '$lib/api';
 	import type { TrackingSnapshot } from '$lib/api';
-	import { Button, ErrorNotice } from '$lib/components';
+	import { Button, ErrorNotice, Skeleton } from '$lib/components';
 	import DefinitionPicker from '$lib/features/sessions/DefinitionPicker.svelte';
 	import type { DefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
 	import { shouldSettleInstantly } from '$lib/motion/testMotion';
@@ -90,6 +90,10 @@
 	}
 
 	const isActive = $derived(status?.status === 'active');
+	// No snapshot read has answered yet (the first read, which the transport
+	// holds while the backend starts). Until one does, the island cannot say
+	// whether a session is running, so it shows neither state.
+	const pending = $derived(status === null);
 	const selectedDefinitionId = $derived(status?.sessionDefinitionId ?? null);
 
 	let starting = $state(false);
@@ -145,7 +149,7 @@
 {/snippet}
 
 <!-- Island: Session -->
-<section class="panel p-4 flex flex-col gap-3 flex-shrink-0">
+<section class="panel p-4 flex flex-col gap-3 flex-shrink-0" aria-busy={pending}>
 	<!-- Session strip -->
 	<div class="relative flex items-center justify-between">
 		{#if status?.status === 'active'}
@@ -175,6 +179,10 @@
 					</span>
 				{/if}
 				{@render reviewChip()}
+			</div>
+		{:else if pending}
+			<div class="flex items-center min-w-0" data-testid="session-strip-pending">
+				<Skeleton class="h-4 w-44" />
 			</div>
 		{:else}
 			<!-- At rest the island is titled by the session it will run as;
@@ -244,7 +252,7 @@
 			<!-- The overlay is the surface play actually happens on, so it
 				 carries the emphasis; starting is the once-per-session act
 				 beside it. -->
-			{#if !isActive}
+			{#if !isActive && !pending}
 				<Button size="sm" variant="secondary" disabled={starting} onclick={handleStart}>
 					{#snippet children()}{starting ? 'Starting...' : 'Start tracking'}{/snippet}
 				</Button>
@@ -298,10 +306,14 @@
 				<span class="flex min-w-0 items-center gap-1 eyebrow">
 					<span class="truncate">{def?.shortLabel ?? def?.label ?? pref.id}</span>
 				</span>
-				<span class="truncate text-[17px] font-semibold tabular-nums leading-none tracking-tight
-					{r.value === '\u2014' ? 'text-text-tertiary' : r.color}">
-					{r.value}
-				</span>
+				{#if pending}
+					<Skeleton class="h-[17px] w-14" />
+				{:else}
+					<span class="truncate text-[17px] font-semibold tabular-nums leading-none tracking-tight
+						{r.value === '\u2014' ? 'text-text-tertiary' : r.color}">
+						{r.value}
+					</span>
+				{/if}
 			</div>
 		{/each}
 	</div>

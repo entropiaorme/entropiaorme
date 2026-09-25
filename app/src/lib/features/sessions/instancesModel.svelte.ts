@@ -27,6 +27,7 @@ import {
 	getSessionDetail,
 	getTrackingSessions,
 	getUnrecordedArmourSessions,
+	HEALING_TOPIC,
 	PROTECTION_TOPIC,
 	reassignSession,
 } from '$lib/api';
@@ -87,9 +88,10 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		}
 	}
 
-	/** After a protection write: re-read the loaded rows' figures in place,
-	 * keeping the page and any open row, then their marks. */
-	async function refreshAfterProtection(): Promise<void> {
+	/** After an armour recording or a healing correction: re-read the loaded
+	 * rows' figures in place, keeping the page and any open row, then their
+	 * marks. */
+	async function refreshCosts(): Promise<void> {
 		if (loading || sessions.length === 0) return;
 		try {
 			const limit = Math.min(sessions.length, REFRESH_LIMIT);
@@ -102,9 +104,15 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		await refreshArmourMarks();
 	}
 
-	/** Follow protection writes from any window; returns the detach function. */
-	function subscribeProtection(): Promise<UnlistenFn> {
-		return listen(PROTECTION_TOPIC, () => void refreshAfterProtection());
+	/** Follow armour recordings and healing corrections from any window,
+	 * both of which move session costs; returns the detach function. */
+	async function subscribeCostChanges(): Promise<UnlistenFn> {
+		const stops = await Promise.all(
+			[PROTECTION_TOPIC, HEALING_TOPIC].map((topic) => listen(topic, () => void refreshCosts())),
+		);
+		return () => {
+			for (const stop of stops) stop();
+		};
 	}
 
 	async function loadSessions() {
@@ -298,8 +306,8 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 
 		loadSessions,
 		loadMoreSessions,
-		refreshAfterProtection,
-		subscribeProtection,
+		refreshCosts,
+		subscribeCostChanges,
 		nextPage,
 		prevPage,
 		toggleSession,

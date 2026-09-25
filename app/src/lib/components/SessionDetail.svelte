@@ -7,6 +7,7 @@
 		deactivateLootItem,
 		getProtectionSessionStatus,
 		getSessionDetail,
+		HEALING_TOPIC,
 		PROTECTION_TOPIC,
 		renameSessionMob,
 		restoreSessionMob,
@@ -21,6 +22,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Divider from '$lib/components/Divider.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
+	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
 
 	let {
 		detail = $bindable(),
@@ -49,28 +52,51 @@
 		};
 	});
 
-	// A recording or undo from the overlay moves this session's armour cost:
-	// re-read the detail and its standing rather than showing the old figure.
+	// Healing corrections answer with the refreshed detail, applied here.
+	const healingReview = createHealingReviewModel({
+		detail: () => detail,
+		apply: (fresh) => {
+			detail = fresh;
+		},
+	});
+
+	// A recording or undo from the overlay moves this session's armour cost,
+	// and a healing correction from another window its heal cost: re-read the
+	// detail (and the armour standing) rather than showing the old figure.
 	onMount(() => {
-		let stop: (() => void) | undefined;
+		const stops: Array<() => void> = [];
 		let disposed = false;
-		void listen(PROTECTION_TOPIC, () => {
+		function reread(after?: () => void) {
 			const sessionId = detail.sessionId;
-			protectionRevision += 1;
 			getSessionDetail(sessionId)
 				.then((fresh) => {
-					if (!disposed && detail.sessionId === sessionId) detail = fresh;
+					if (disposed || detail.sessionId !== sessionId) return;
+					detail = fresh;
+					after?.();
 				})
 				.catch(() => {
 					// Keep the detail shown; the next write re-reads.
 				});
-		}).then((unlisten) => {
-			if (disposed) unlisten();
-			else stop = unlisten;
-		});
+		}
+		const subscriptions: Array<[string, () => void]> = [
+			[
+				PROTECTION_TOPIC,
+				() => {
+					protectionRevision += 1;
+					reread();
+				},
+			],
+			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
+		];
+		for (const [topic, handler] of subscriptions) {
+			void listen(topic, handler).then((unlisten) => {
+				if (disposed) unlisten();
+				else stops.push(unlisten);
+			});
+		}
 		return () => {
 			disposed = true;
-			stop?.();
+			for (const stop of stops) stop();
 		};
 	});
 	const costBreakdown = $derived(detail.summary.costBreakdown);
@@ -112,10 +138,6 @@
 		if (type === 'hof') return 'accent';
 		if (type === 'quest') return 'positive';
 		return 'warning';
-	}
-
-	function activationTime(epoch: number): string {
-		return new Date(epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	}
 
 	// ── Loot breakdown (aggregate-by-item with wholesale archive) ────
@@ -406,34 +428,8 @@
 		</div>
 	{/if}
 
-	{#if detail.healing && detail.healing.outputCount > 0}
-		<Divider />
-		<div>
-			<div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-				<h3 class="eyebrow">Healing evidence</h3>
-				<div class="text-xs text-text-tertiary">
-					{detail.healing.activationCount} paid activation{detail.healing.activationCount === 1 ? '' : 's'} ·
-					{detail.healing.directOutputs} direct · {detail.healing.passiveOutputs} passive ·
-					{detail.healing.effectOutputs} effect ·
-					{detail.healing.unattributedOutputs} unresolved
-				</div>
-			</div>
-			{#if detail.healing.activations.length > 0}
-				<div class="divide-y divide-border/40">
-					{#each detail.healing.activations as activation (activation.id)}
-						<div class="flex items-center gap-4 py-2 text-sm">
-							<span class="w-20 shrink-0 text-xs text-text-tertiary tabular-nums">{activationTime(activation.observedAt)}</span>
-							<span class="min-w-0 flex-1 truncate text-text">{activation.toolName}</span>
-							{#if activation.effectUntil !== null}
-								<span class="text-xs text-positive">Effect window</span>
-							{/if}
-							<span class="text-xs text-text-tertiary">{activation.outputCount} output{activation.outputCount === 1 ? '' : 's'}</span>
-							<span class="tabular-nums text-text">{formatPed(activation.cost)} PED</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</div>
+	{#if detail.healing && (detail.healing.outputCount > 0 || detail.healing.activations.length > 0)}
+		<HealingEvidence {detail} model={healingReview} />
 	{/if}
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->

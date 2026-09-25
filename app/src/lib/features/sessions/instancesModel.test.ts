@@ -4,6 +4,7 @@ import { createInstancesModel, PAGE_SIZE } from './instancesModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	PROTECTION_TOPIC: 'protection:updated',
+	HEALING_TOPIC: 'healing:updated',
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
 	getUnrecordedArmourSessions: vi.fn(async () => []),
@@ -11,10 +12,15 @@ vi.mock('$lib/api', () => ({
 	reassignSession: vi.fn(),
 }));
 
-const protectionListeners: Array<() => void> = [];
+const costListeners: Array<{ topic: string; handler: () => void }> = [];
+const emit = (topic: string) =>
+	costListeners
+		.filter((listener) => listener.topic === topic)
+		.at(-1)
+		?.handler();
 vi.mock('@tauri-apps/api/event', () => ({
-	listen: vi.fn(async (_topic: string, handler: () => void) => {
-		protectionListeners.push(handler);
+	listen: vi.fn(async (topic: string, handler: () => void) => {
+		costListeners.push({ topic, handler });
 		return () => {};
 	}),
 }));
@@ -506,8 +512,8 @@ describe('armour still to record', () => {
 			page([...sessions.slice(0, 11), session({ id: 's11', net: -3 })]),
 		);
 		mocked.getUnrecordedArmourSessions.mockResolvedValue([]);
-		await model.subscribeProtection();
-		protectionListeners.at(-1)?.();
+		await model.subscribeCostChanges();
+		emit('protection:updated');
 		await vi.waitFor(() => expect(model.armourPending('s11')).toBe(false));
 
 		expect(mocked.getTrackingSessions).toHaveBeenLastCalledWith(undefined, 12, '7');
@@ -516,13 +522,24 @@ describe('armour still to record', () => {
 		expect(model.expandedSessionId).toBe('s11');
 	});
 
+	it('re-reads row figures after a healing correction too', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1', net: 1 })]));
+		const model = createInstancesModel();
+		await model.loadSessions();
+		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1', net: 1.04 })]));
+		const stop = await model.subscribeCostChanges();
+		emit('healing:updated');
+		await vi.waitFor(() => expect(model.sessions[0]?.net).toBe(1.04));
+		stop();
+	});
+
 	it('keeps the marks it had when the re-read fails', async () => {
 		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1' })]));
 		mocked.getUnrecordedArmourSessions.mockResolvedValueOnce(['s1']);
 		const model = createInstancesModel();
 		await model.loadSessions();
 		mocked.getUnrecordedArmourSessions.mockRejectedValueOnce(new Error('offline'));
-		await model.refreshAfterProtection();
+		await model.refreshCosts();
 		expect(model.armourPending('s1')).toBe(true);
 	});
 });

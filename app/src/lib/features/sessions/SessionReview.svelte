@@ -51,14 +51,14 @@
 	/** Some row on this page nets without an armour cost still to be recorded. */
 	const armourPendingOnPage = $derived(table.pageRows.some((session) => instances.armourPending(session.id)));
 
-	// A recording or undo from the overlay moves session figures: follow it
-	// while the surface is open.
+	// An armour recording from the overlay, or a healing correction in a
+	// session's detail, moves session figures: follow both while open.
 	$effect(() => {
 		if (!model.open) return;
 		const current = instances;
 		let stop: (() => void) | undefined;
 		let disposed = false;
-		void current.subscribeProtection().then((unlisten) => {
+		void current.subscribeCostChanges().then((unlisten) => {
 			if (disposed) unlisten();
 			else stop = unlisten;
 		});

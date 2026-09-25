@@ -9,7 +9,12 @@ import SessionDetail from './SessionDetail.svelte';
 vi.mock('$lib/api', () => ({
 	ApiError: class ApiError extends Error {},
 	PROTECTION_TOPIC: 'protection:updated',
+	HEALING_TOPIC: 'healing:updated',
 	activateLootItem: vi.fn(),
+	correctHealing: vi.fn(),
+	getHealingCorrectionTools: vi.fn(),
+	getHealingOutputs: vi.fn(),
+	undoHealingCorrection: vi.fn(),
 	deactivateLootItem: vi.fn(),
 	getProtectionSessionStatus: vi.fn(async () => ({ unrecordedHits: 0 })),
 	getSessionDetail: vi.fn(),

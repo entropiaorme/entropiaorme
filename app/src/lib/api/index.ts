@@ -74,6 +74,7 @@ export type {
 } from './commands.gen';
 export * from './dev';
 export * from './equipment';
+export * from './healing';
 export * from './inventory';
 export * from './maps';
 export * from './market';

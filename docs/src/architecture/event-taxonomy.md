@@ -167,7 +167,8 @@ publishes nothing.
 ### `healing.updated`
 
 `HealingUpdated` is a content-free push-to-pull invalidation that fires after
-a healing correction or its undo commits. A correction moves an ended
+a healing correction or its undo commits, and after a session deletion (which
+takes its healing evidence with it). A correction moves an ended
 session's heal cost, and may take back (or give back) an effect window a
 running session is still matching ticks against. The session review list and
 an open session detail re-read what they show, and the tracker re-reads its

@@ -576,6 +576,140 @@ async fn review_pages_outputs_by_classification_and_offers_fitting_items_first()
     ));
 }
 
+/// A second session holding ticks of the first session's restoration, the
+/// way a carried-over effect window records them.
+async fn seed_carried_ticks(db: &Db, session_id: &'static str, active: bool) {
+    db.with_writer(move |conn| {
+        conn.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost) \
+             VALUES (?1, 1210, ?2, ?3, 0)",
+            rusqlite::params![session_id, (!active).then_some(1300.0), active as i64],
+        )?;
+        for (name, at) in [("tick", 1212.0), ("tick2", 1214.0)] {
+            conn.execute(
+                "INSERT INTO healing_outputs \
+                 (id, session_id, activation_id, effect_window_id, observed_at, chat_timestamp, \
+                  amount, classification, reason) \
+                 VALUES (?1, ?2, 's-resto', 's-w', ?3, 't', 10, 'effect', 'seeded')",
+                rusqlite::params![format!("{session_id}-{name}"), session_id, at],
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+async fn set_active(db: &Db, session_id: &'static str, active: bool) {
+    db.with_writer(move |conn| {
+        conn.execute(
+            "UPDATE tracking_sessions SET is_active = ?1 WHERE id = ?2",
+            rusqlite::params![active as i64, session_id],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_correction_waits_for_a_running_session_that_shows_its_effect() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_carried_ticks(&h.db, "t", true).await;
+    let before = evidence(&h.db, "t").await;
+
+    assert!(matches!(
+        h.service
+            .correct(CorrectionTarget::NotPaidUse {
+                activation_id: "s-resto".into(),
+            })
+            .await,
+        Err(HealingReviewError::Conflict(_))
+    ));
+    assert_eq!(evidence(&h.db, "t").await, before);
+    assert_eq!(h.announced.load(Ordering::SeqCst), 0);
+
+    // Once that session has stopped, the correction reaches its ticks too.
+    set_active(&h.db, "t", false).await;
+    let correction = h
+        .service
+        .correct(CorrectionTarget::NotPaidUse {
+            activation_id: "s-resto".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(output_state(&h.db, "t-tick").await.0, "unattributed");
+
+    set_active(&h.db, "t", true).await;
+    assert!(matches!(
+        h.service.undo(&correction.id).await,
+        Err(HealingReviewError::Conflict(_))
+    ));
+    set_active(&h.db, "t", false).await;
+    h.service.undo(&correction.id).await.unwrap();
+    assert_eq!(evidence(&h.db, "t").await, before);
+}
+
+#[tokio::test]
+async fn deleting_a_session_leaves_no_heal_elsewhere_pointing_at_its_evidence() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    seed_carried_ticks(&h.db, "t", false).await;
+    // A correction in the carried session bills its second tick,
+    // remembering the use it was a tick of; one in the paying session then
+    // takes that use back, moving the first carried tick.
+    let paid = h
+        .service
+        .correct(CorrectionTarget::PaidUse {
+            output_id: "t-tick2".into(),
+            equipment_id: FAP,
+        })
+        .await
+        .unwrap();
+    h.service
+        .correct(CorrectionTarget::NotPaidUse {
+            activation_id: "s-resto".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(output_state(&h.db, "t-tick").await.0, "unattributed");
+
+    crate::tracking_reads::delete_session_impl(&h.db, "s")
+        .await
+        .unwrap();
+
+    let dangling: i64 =
+        h.db.with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM healing_outputs o WHERE \
+                   (o.activation_id IS NOT NULL AND NOT EXISTS \
+                     (SELECT 1 FROM healing_activations a WHERE a.id = o.activation_id)) \
+                   OR (o.prior_activation_id IS NOT NULL AND NOT EXISTS \
+                     (SELECT 1 FROM healing_activations a WHERE a.id = o.prior_activation_id)) \
+                   OR (o.correction_id IS NOT NULL AND NOT EXISTS \
+                     (SELECT 1 FROM healing_corrections c WHERE c.id = o.correction_id))",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(dangling, 0);
+    // The tick the deleted session's correction had moved is free again.
+    assert_eq!(
+        output_state(&h.db, "t-tick").await,
+        ("unattributed".to_string(), None, None)
+    );
+    // The billed tick stays billed, and its undo no longer restores a link
+    // to a deleted use.
+    h.service.undo(&paid.id).await.unwrap();
+    assert_eq!(
+        output_state(&h.db, "t-tick2").await,
+        ("unattributed".to_string(), None, None)
+    );
+}
+
 mod sequences {
     use proptest::prelude::*;
 

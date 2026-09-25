@@ -10,8 +10,10 @@
 -- keeps the checked provenance 'direct' (the player confirmed the output as
 -- a direct paid use) and is recognised by its correction_id.
 --
--- Effect windows are read back by their absolute expiry, so the expiry index
--- serves the read that restores open windows when a session starts.
+-- Effect windows are read back by their absolute expiry, and each healer's
+-- latest paid use by observation time, when a session starts; the expiry and
+-- observation indexes serve those reads. The confirming-output index serves
+-- the "already a paid use" check, and the activation index the backfill below.
 
 CREATE TABLE healing_corrections (
     id TEXT PRIMARY KEY,
@@ -45,6 +47,9 @@ ALTER TABLE healing_outputs ADD COLUMN prior_activation_id TEXT;
 ALTER TABLE healing_outputs ADD COLUMN prior_effect_window_id TEXT;
 ALTER TABLE healing_outputs ADD COLUMN prior_reason TEXT;
 
+CREATE INDEX idx_healing_outputs_activation
+    ON healing_outputs(activation_id);
+
 -- Link every existing activation to the output that confirmed it: the output
 -- written with it, or the earlier output a delayed hotbar occurrence
 -- reconciled.
@@ -62,7 +67,9 @@ SET confirming_output_id = (
 
 CREATE INDEX idx_healing_effect_windows_expiry
     ON healing_effect_windows(expires_at);
-CREATE INDEX idx_healing_outputs_activation
-    ON healing_outputs(activation_id);
+CREATE INDEX idx_healing_activations_observed
+    ON healing_activations(observed_at);
+CREATE INDEX idx_healing_activations_confirming_output
+    ON healing_activations(confirming_output_id);
 CREATE INDEX idx_healing_outputs_correction
     ON healing_outputs(correction_id);

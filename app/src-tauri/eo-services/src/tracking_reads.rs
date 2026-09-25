@@ -1552,6 +1552,46 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
             )?;
             // SQLite foreign keys are deliberately disabled for this schema,
             // so healing evidence must participate in the explicit cascade.
+            // An effect window outlives the session that paid for it, so
+            // another session can hold ticks of this session's activations,
+            // or heals this session's corrections moved. Those heals first
+            // return to what they were before such a correction, then lose
+            // their explanation by a deleted activation, now and in the
+            // state any later undo would restore: nothing may point at a
+            // deleted row.
+            tx.execute(
+                "UPDATE healing_outputs SET \
+                     classification = COALESCE(prior_classification, classification), \
+                     activation_id = prior_activation_id, \
+                     effect_window_id = prior_effect_window_id, \
+                     reason = COALESCE(prior_reason, reason), \
+                     correction_id = NULL, prior_classification = NULL, \
+                     prior_activation_id = NULL, prior_effect_window_id = NULL, \
+                     prior_reason = NULL \
+                 WHERE session_id <> ?1 AND correction_id IN \
+                     (SELECT id FROM healing_corrections WHERE session_id = ?1)",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
+                "UPDATE healing_outputs SET \
+                     activation_id = NULL, effect_window_id = NULL, \
+                     classification = CASE WHEN classification = 'effect' \
+                         THEN 'unattributed' ELSE classification END, \
+                     reason = 'its paying session was deleted' \
+                 WHERE session_id <> ?1 AND activation_id IN \
+                     (SELECT id FROM healing_activations WHERE session_id = ?1)",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
+                "UPDATE healing_outputs SET \
+                     prior_activation_id = NULL, prior_effect_window_id = NULL, \
+                     prior_classification = CASE WHEN prior_classification = 'effect' \
+                         THEN 'unattributed' ELSE prior_classification END, \
+                     prior_reason = 'its paying session was deleted' \
+                 WHERE session_id <> ?1 AND prior_activation_id IN \
+                     (SELECT id FROM healing_activations WHERE session_id = ?1)",
+                rusqlite::params![sid],
+            )?;
             tx.execute(
                 "DELETE FROM healing_corrections WHERE session_id = ?",
                 rusqlite::params![sid],

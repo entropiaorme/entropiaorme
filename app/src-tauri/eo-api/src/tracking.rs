@@ -1370,11 +1370,15 @@ impl Api {
 
     /// Delete a session and all of its data (an active session cannot be
     /// deleted; a missing one is a not-found). The rollups are repaired for
-    /// the days it touched.
+    /// the days it touched. Its healing evidence can explain another
+    /// session's heals and a running session's effect windows, so the
+    /// deletion is announced as a healing change.
     pub async fn tracking_session_delete(&self, session_id: String) -> Result<(), ApiError> {
         delete_session_impl(&self.db, &session_id)
             .await
-            .map_err(edit_error("tracking session delete"))
+            .map_err(edit_error("tracking session delete"))?;
+        self.healing_review.announce_changed();
+        Ok(())
     }
 
     // ── Private snapshot assembly ────────────────────────────────────

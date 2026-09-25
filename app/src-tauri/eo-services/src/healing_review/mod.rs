@@ -220,6 +220,12 @@ impl HealingReviewService {
         }
     }
 
+    /// Announce a healing change another service committed (a session
+    /// deletion takes its healing evidence with it).
+    pub fn announce_changed(&self) {
+        self.notify_changed();
+    }
+
     /// The injected clock as the tracker stamps healing evidence.
     fn now(&self) -> f64 {
         instant_to_epoch(resolve_local(self.clock.now()))

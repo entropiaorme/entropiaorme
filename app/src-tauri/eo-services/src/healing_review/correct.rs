@@ -55,6 +55,29 @@ fn session_refusal(
     })
 }
 
+/// Refuse a correction that would move evidence a running session recorded.
+/// An effect window outlives the session that paid for it, so a running
+/// session can hold ticks of an ended session's activation; rewriting them
+/// under the tracker would leave its live readout stale. Stopping the
+/// session makes the same correction possible.
+fn running_session_refusal(
+    tx: &rusqlite::Transaction<'_>,
+    activation_id: &str,
+    correction_id: Option<&str>,
+) -> Result<Option<HealingReviewError>, DbError> {
+    let touches_running: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM healing_outputs o \
+                        JOIN tracking_sessions s ON s.id = o.session_id \
+                        WHERE s.is_active = 1 \
+                          AND (o.activation_id = ?1 OR o.correction_id = ?2))",
+        rusqlite::params![activation_id, correction_id],
+        |row| row.get(0),
+    )?;
+    Ok(touches_running.then_some(HealingReviewError::Conflict(
+        "A running session still shows this heal's effect; stop it before correcting",
+    )))
+}
+
 /// Move a session's heal cost by `delta` and repair everything derived from
 /// it: the summary, the days it touches, and its settled cells.
 fn adjust_session_heal(
@@ -76,6 +99,9 @@ fn adjust_session_heal(
 }
 
 /// Record what an output was before a correction moves it, then move it.
+/// Only an output no live correction owns can move, so its recorded prior
+/// state is always the uncorrected one an undo must restore; anything else
+/// fails the whole correction.
 #[allow(clippy::too_many_arguments)]
 fn move_output(
     tx: &rusqlite::Transaction<'_>,
@@ -86,7 +112,7 @@ fn move_output(
     reason: &str,
     correction_id: &str,
 ) -> Result<(), DbError> {
-    tx.execute(
+    let moved = tx.execute(
         "UPDATE healing_outputs SET \
              prior_classification = classification, \
              prior_activation_id = activation_id, \
@@ -94,7 +120,7 @@ fn move_output(
              prior_reason = reason, \
              classification = ?1, activation_id = ?2, effect_window_id = ?3, \
              reason = ?4, correction_id = ?5 \
-         WHERE id = ?6",
+         WHERE id = ?6 AND correction_id IS NULL",
         rusqlite::params![
             classification,
             activation_id,
@@ -104,6 +130,9 @@ fn move_output(
             output_id
         ],
     )?;
+    if moved != 1 {
+        return Err(DbError::from(rusqlite::Error::QueryReturnedNoRows));
+    }
     Ok(())
 }
 
@@ -166,6 +195,9 @@ fn not_paid_use(
         )));
     }
     if let Some(refusal) = session_refusal(tx, &session_id)? {
+        return Ok(Err(refusal));
+    }
+    if let Some(refusal) = running_session_refusal(tx, activation_id, None)? {
         return Ok(Err(refusal));
     }
 
@@ -433,6 +465,9 @@ pub(super) fn undo(
         Err(error) => return Ok(Err(error)),
     };
     if let Some(refusal) = session_refusal(tx, &session_id)? {
+        return Ok(Err(refusal));
+    }
+    if let Some(refusal) = running_session_refusal(tx, &activation_id, Some(correction_id))? {
         return Ok(Err(refusal));
     }
 

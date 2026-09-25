@@ -2002,9 +2002,15 @@ async fn healing_corrections_answer_with_the_refreshed_detail_and_undo_exactly()
     let minted_json = serde_json::to_value(minted).unwrap();
     assert_eq!(minted_json["provenance"], "corrected");
     assert_eq!(minted_json["correction"]["kind"], "paidUse");
-    let correction_id = minted_json["correction"]["id"].as_str().unwrap().to_string();
+    let correction_id = minted_json["correction"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    let restored = api.healing_correction_undo(correction_id.clone()).await.unwrap();
+    let restored = api
+        .healing_correction_undo(correction_id.clone())
+        .await
+        .unwrap();
     assert!((restored.summary.cost_breakdown.heal_cost - 0.03).abs() < 1e-9);
     assert_eq!(restored.healing.activation_count, 1);
     assert_eq!(restored.healing.activations.len(), 1);
@@ -2022,7 +2028,10 @@ async fn healing_corrections_answer_with_the_refreshed_detail_and_undo_exactly()
         .await
         .unwrap_err();
     assert_eq!(kind(running), "conflict");
-    let missing = api.healing_correction_tools("nope".into()).await.unwrap_err();
+    let missing = api
+        .healing_correction_tools("nope".into())
+        .await
+        .unwrap_err();
     assert_eq!(kind(missing), "notFound");
     let paging = api
         .healing_outputs("healed".into(), HealingOutputClassification::Direct, 0, 0)

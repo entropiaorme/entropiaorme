@@ -676,8 +676,11 @@ The evidence tables gain the columns corrections need:
 | `healing_outputs` | `correction_id` | The live correction that last moved the output. Indexed. |
 | `healing_outputs` | `prior_classification`, `prior_activation_id`, `prior_effect_window_id`, `prior_reason` | What the output was before that correction moved it, so its undo restores it exactly. |
 
-`healing_outputs` is also indexed by activation. Each output and activation is
-moved by at most one live correction, and only an ended session is corrected:
+`healing_outputs` is also indexed by activation, and `healing_activations` by
+observation time (the read-back of each healer's latest use) and by confirming
+output. Each output and activation is moved by at most one live correction,
+and only an ended session is corrected, never while a running session still
+holds ticks of the corrected use:
 every correction and undo moves `tracking_sessions.heal_cost` by its delta and
 repairs the session summary, daily rollup, and settled session cells in the
 same transaction, so a session's heal cost stays equal to its live
@@ -685,7 +688,12 @@ activations' costs (plus any legacy aggregate from before migration `0047`).
 
 Foreign-key enforcement remains disabled for the application database, so
 session deletion removes these four tables explicitly in correction, output,
-window, activation order before deleting the session.
+window, activation order before deleting the session. Because an effect
+window outlives its session, another session can hold ticks of the deleted
+session's activations, or heals its corrections moved: in the same
+transaction those heals first return to their uncorrected state, then any
+explanation by a deleted activation (current, or recorded for a later undo)
+becomes unattributed, so no row points at a deleted one.
 
 #### `session_intervals`
 

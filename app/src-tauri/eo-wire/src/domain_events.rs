@@ -19,6 +19,7 @@ pub const TOPIC_SCAN_STATUS_CHANGED: &str = "scan.status.changed";
 pub const TOPIC_HARVEST_RECORDED: &str = "harvest.recorded";
 pub const TOPIC_NAVIGATION_UPDATED: &str = "navigation.updated";
 pub const TOPIC_PROTECTION_UPDATED: &str = "protection.updated";
+pub const TOPIC_HEALING_UPDATED: &str = "healing.updated";
 
 /// A field that serialises to exactly one topic literal and refuses any
 /// other input: the discriminator the union routes on, kept closed so a
@@ -52,6 +53,7 @@ topic_tag!(ScanStatusChangedTag, "scan.status.changed");
 topic_tag!(HarvestRecordedTag, "harvest.recorded");
 topic_tag!(NavigationUpdatedTag, "navigation.updated");
 topic_tag!(ProtectionUpdatedTag, "protection.updated");
+topic_tag!(HealingUpdatedTag, "healing.updated");
 
 fn default_event_version() -> i64 {
     1
@@ -179,6 +181,24 @@ pub struct ProtectionUpdated {
     pub payload: ProtectionUpdatedPayload,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealingUpdatedPayload {}
+
+/// A session's healing evidence was corrected, or a correction undone:
+/// session heal costs, their summaries, and the live effect windows may
+/// have moved. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealingUpdated {
+    #[serde(rename = "type")]
+    pub topic: HealingUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: HealingUpdatedPayload,
+}
+
 /// The discriminated union of every frontend-facing domain event. The
 /// untagged dispatch is made exact by the closed topic-tag fields: a
 /// frame routes to the one variant whose `type` literal it carries, and
@@ -192,6 +212,7 @@ pub enum DomainEvent {
     HarvestRecorded(HarvestRecorded),
     NavigationUpdated(NavigationUpdated),
     ProtectionUpdated(ProtectionUpdated),
+    HealingUpdated(HealingUpdated),
 }
 
 impl DomainEvent {
@@ -203,6 +224,7 @@ impl DomainEvent {
             DomainEvent::HarvestRecorded(_) => TOPIC_HARVEST_RECORDED,
             DomainEvent::NavigationUpdated(_) => TOPIC_NAVIGATION_UPDATED,
             DomainEvent::ProtectionUpdated(_) => TOPIC_PROTECTION_UPDATED,
+            DomainEvent::HealingUpdated(_) => TOPIC_HEALING_UPDATED,
         }
     }
 
@@ -297,6 +319,22 @@ mod tests {
         assert_eq!(wire, "{\"type\":\"protection.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
         let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
         assert_eq!(restored.topic(), TOPIC_PROTECTION_UPDATED);
+    }
+
+    #[test]
+    fn healing_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::HealingUpdated(HealingUpdated {
+            topic: HealingUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-09-25T08:00:00+00:00".into(),
+            payload: HealingUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"healing.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_HEALING_UPDATED);
+        let foreign = wire.replace("{}", "{\"sessionId\":\"s\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
     }
 
     #[test]

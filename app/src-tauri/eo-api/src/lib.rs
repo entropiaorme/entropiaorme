@@ -32,6 +32,7 @@ use eo_services::codex::CodexService;
 use eo_services::config_service::{load_config_readonly, ConfigService};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
+use eo_services::healing_review::HealingReviewService;
 use eo_services::hotbar_listener::HotbarListener;
 use eo_services::market_service::MarketService;
 use eo_services::protection::ProtectionService;
@@ -51,6 +52,7 @@ pub mod demo;
 pub mod dev;
 pub mod equipment;
 mod error;
+pub mod healing;
 pub mod manifest;
 pub mod maps;
 pub mod market;
@@ -132,6 +134,9 @@ pub struct Api {
     /// Protection catalogue, live default, and limited-layer
     /// reconciliation over the shared database and injected clock.
     protection: ProtectionService,
+    /// Post-play healing corrections over the shared database and injected
+    /// clock.
+    healing_review: HealingReviewService,
     /// The session-definition service (definition + roster lifecycle), built
     /// over the facade's shared db and clock; the tracking family's
     /// selection verb validates against it.
@@ -194,6 +199,7 @@ impl Api {
         let analytics = AnalyticsService::new(db.clone(), clock.clone());
         let market = MarketService::new(db.clone(), clock.clone());
         let protection = ProtectionService::new(db.clone(), clock.clone());
+        let healing_review = HealingReviewService::new(db.clone(), clock.clone());
         let session_definitions = eo_services::session_definitions::SessionDefinitionService::new(
             db.clone(),
             clock.clone(),
@@ -240,6 +246,7 @@ impl Api {
             analytics,
             market,
             protection,
+            healing_review,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
             map_pins,
@@ -259,6 +266,17 @@ impl Api {
         changed: eo_services::protection::ChangedSink,
     ) -> Self {
         self.protection = self.protection.with_changed(changed);
+        self
+    }
+
+    /// Announce every committed healing correction through `changed`, so
+    /// the tracker re-reads its live effect windows and surfaces showing
+    /// heal costs re-read them.
+    pub fn with_healing_changed(
+        mut self,
+        changed: eo_services::healing_review::ChangedSink,
+    ) -> Self {
+        self.healing_review = self.healing_review.with_changed(changed);
         self
     }
 }

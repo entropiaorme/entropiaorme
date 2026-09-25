@@ -956,17 +956,93 @@ export interface HarvestTierComparison {
  */
 export type HarvestYieldTier = 'short' | 'long' | 'huge' | 'unknown';
 
+/**
+ * How a paid healing activation was established.
+ */
+export type HealingActivationProvenance = 'direct' | 'healthCapped' | 'retrospective' | 'corrected';
+
 export interface HealingActivationRow {
 	id: string;
 	toolName: string;
 	observedAt: number;
 	cost: number;
-	provenance: string;
+	provenance: HealingActivationProvenance;
 	effectUntil: number | null;
 	outputCount: number;
+	/** The heal amount that confirmed it. */
+	amount: number | null;
+	/** It was marked as not a paid use: it costs nothing and stays listed only until that correction is undone. */
+	superseded: boolean;
+	/** The live correction that minted or superseded it, which can be undone. */
+	correction: HealingCorrectionRef | null;
+}
+
+/**
+ * What a correction asserts.
+ */
+export type HealingCorrectionKind = 'notPaidUse' | 'paidUse';
+
+/**
+ * The live correction that moved an activation or output, which can be
+ * undone.
+ */
+export interface HealingCorrectionRef {
+	id: string;
+	kind: HealingCorrectionKind;
+}
+
+/**
+ * One correction to make.
+ */
+export type HealingCorrectionTarget = {
+		activationId: string;
+		kind: 'notPaidUse';
+	} | {
+		outputId: string;
+		equipmentId: number;
+		kind: 'paidUse';
+	};
+
+/**
+ * A healing item an output could be marked as a paid use of.
+ */
+export interface HealingCorrectionTool {
+	equipmentId: number;
+	name: string;
+	/** The per-use cost the correction would book, at today's pricing. */
+	costPerUsePed: number;
+	/** The item's configured interval explains the heal's amount. */
+	fits: boolean;
 }
 
 export type HealingMode = 'direct' | 'over_time' | 'compound';
+
+/**
+ * One healing output, as review lists it.
+ */
+export interface HealingOutput {
+	id: string;
+	observedAt: number;
+	amount: number;
+	classification: HealingOutputClassification;
+	reason: string;
+	/** The healing item whose activation it confirmed or ticked for. */
+	toolName: string | null;
+	correction: HealingCorrectionRef | null;
+	/** It can be marked as a paid use: nothing bills it already and no live correction moved it. */
+	correctable: boolean;
+}
+
+/**
+ * How one healing output is explained.
+ */
+export type HealingOutputClassification = 'direct' | 'effect' | 'passive' | 'unattributed';
+
+export interface HealingOutputPage {
+	outputs: HealingOutput[];
+	/** Every output of the requested classification in the session. */
+	total: number;
+}
 
 export interface HealingProfileDto {
 	mode: HealingMode;
@@ -979,6 +1055,8 @@ export interface HealingProfileDto {
 }
 
 export interface HealingSessionSummary {
+	/** The session has ended, so its healing evidence can be corrected. */
+	correctable: boolean;
 	activations: HealingActivationRow[];
 	activationCount: number;
 	outputCount: number;
@@ -3385,6 +3463,29 @@ export async function protectionRepairConfirm(input: ProtectionRepairInput): Pro
 
 export async function protectionTradeTerminalScan(): Promise<ProtectionScanResult> {
 	return invokeCommand('protection_trade_terminal_scan', {});
+}
+
+export async function healingOutputs(sessionId: string, classification: 'direct' | 'effect' | 'passive' | 'unattributed', offset: number, limit: number): Promise<HealingOutputPage> {
+	return invokeCommand('healing_outputs', { session_id: sessionId, classification, offset, limit });
+}
+
+export async function healingCorrectionTools(outputId: string): Promise<HealingCorrectionTool[]> {
+	return invokeCommand('healing_correction_tools', { output_id: outputId });
+}
+
+export async function healingCorrect(target: {
+		activationId: string;
+		kind: 'notPaidUse';
+	} | {
+		outputId: string;
+		equipmentId: number;
+		kind: 'paidUse';
+	}): Promise<SessionDetail> {
+	return invokeCommand('healing_correct', { target });
+}
+
+export async function healingCorrectionUndo(correctionId: string): Promise<SessionDetail> {
+	return invokeCommand('healing_correction_undo', { correction_id: correctionId });
 }
 
 export async function characterCalibration(): Promise<CalibrationStatus> {

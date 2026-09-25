@@ -313,6 +313,20 @@ pub struct HarvestSummary {
     pub cost: f64,
 }
 
+/// How a paid healing activation was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HealingActivationProvenance {
+    /// A fresh healer intent met a compatible heal.
+    Direct,
+    /// A below-interval heal a health cap explains.
+    HealthCapped,
+    /// A heal reconciled with a hotbar press that arrived after it.
+    Retrospective,
+    /// The player marked the heal as a paid use.
+    Corrected,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HealingActivationRow {
@@ -320,14 +334,23 @@ pub struct HealingActivationRow {
     pub tool_name: String,
     pub observed_at: f64,
     pub cost: f64,
-    pub provenance: String,
+    pub provenance: HealingActivationProvenance,
     pub effect_until: Nullable<f64>,
     pub output_count: i64,
+    /// The heal amount that confirmed it.
+    pub amount: Nullable<f64>,
+    /// It was marked as not a paid use: it costs nothing and stays listed
+    /// only until that correction is undone.
+    pub superseded: bool,
+    /// The live correction that minted or superseded it, which can be undone.
+    pub correction: Nullable<crate::healing::HealingCorrectionRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HealingSessionSummary {
+    /// The session has ended, so its healing evidence can be corrected.
+    pub correctable: bool,
     pub activations: Vec<HealingActivationRow>,
     pub activation_count: i64,
     pub output_count: i64,

@@ -276,6 +276,7 @@ impl TrackerActor {
             BusEvent::Global(_) => self.on_global(event).await,
             BusEvent::EnhancerBreak(_) => self.on_enhancer_break(event),
             BusEvent::TickFlushed(_) => self.on_tick_flushed(event),
+            BusEvent::HealingUpdated(_) => self.on_healing_updated().await,
             _ => {}
         }
     }
@@ -309,6 +310,7 @@ impl TrackerActor {
             Topic::Global,
             Topic::EnhancerBreak,
             Topic::TickFlushed,
+            Topic::HealingUpdated,
         ] {
             let sender = self.sender.clone();
             let registration = self.bus.subscribe(topic, move |event| {

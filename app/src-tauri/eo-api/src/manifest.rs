@@ -40,6 +40,9 @@ use crate::dev::{
 use crate::equipment::{
     EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
 };
+use crate::healing::{
+    HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
+};
 use crate::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
@@ -245,6 +248,52 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "protection_trade_terminal_scan",
             args: Vec::new(),
             returns: Some(schema(schema_for!(ProtectionScanResult))),
+        },
+        CommandSpec {
+            name: "healing_outputs",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "classification",
+                    schema: schema(schema_for!(HealingOutputClassification)),
+                },
+                ArgSpec {
+                    name: "offset",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "limit",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(HealingOutputPage))),
+        },
+        CommandSpec {
+            name: "healing_correction_tools",
+            args: vec![ArgSpec {
+                name: "output_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<HealingCorrectionTool>))),
+        },
+        CommandSpec {
+            name: "healing_correct",
+            args: vec![ArgSpec {
+                name: "target",
+                schema: schema(schema_for!(HealingCorrectionTarget)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "healing_correction_undo",
+            args: vec![ArgSpec {
+                name: "correction_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
         },
         CommandSpec {
             name: "character_calibration",

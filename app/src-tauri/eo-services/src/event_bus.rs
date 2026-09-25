@@ -44,6 +44,7 @@ pub enum Topic {
     HarvestRecorded,
     NavigationUpdated,
     ProtectionUpdated,
+    HealingUpdated,
 }
 
 impl Topic {
@@ -69,6 +70,7 @@ impl Topic {
             Topic::HarvestRecorded => eo_wire::domain_events::TOPIC_HARVEST_RECORDED,
             Topic::NavigationUpdated => eo_wire::domain_events::TOPIC_NAVIGATION_UPDATED,
             Topic::ProtectionUpdated => eo_wire::domain_events::TOPIC_PROTECTION_UPDATED,
+            Topic::HealingUpdated => eo_wire::domain_events::TOPIC_HEALING_UPDATED,
         }
     }
 }

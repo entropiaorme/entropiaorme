@@ -5,6 +5,14 @@
 //! an already-open effect window, or remain passive/unattributed at zero
 //! cost. Cross-producer ordering is handled by retaining a short unresolved
 //! output tail and reconciling it when the earlier OS key occurrence arrives.
+//!
+//! Persisted absolute expiry is the truth for effect windows: a session starts
+//! from every live window whose expiry is still ahead, whichever session paid
+//! for it, so a restart or a new session never loses a running heal-over-time
+//! effect. Its later ticks keep the paying activation's provenance at zero
+//! cost while stamping the context they land in. Expiry closes a window by
+//! comparison with the injected clock, so it closes once however often the
+//! state is read back.
 
 use std::collections::HashMap;
 
@@ -12,6 +20,7 @@ use crate::bus_events::{
     ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, ActiveToolChangedPayload,
     BusEvent, HotbarIntentPayload, HotbarItemKind,
 };
+use crate::db::DbError;
 use crate::healing_profile::HealingProfile;
 use crate::ped::Ped;
 
@@ -20,6 +29,10 @@ use super::time::{instant_to_epoch, resolve_local};
 
 const DELIVERY_TAIL_SECONDS: f64 = 1.25;
 const DAMAGE_CORRELATION_SECONDS: f64 = 1.0;
+/// How far back a starting session looks for each healer's latest paid use.
+/// Reloads are seconds long, so an hour bounds the read without ever cutting
+/// a cooldown short.
+const COOLDOWN_LOOKBACK_SECONDS: f64 = 3600.0;
 
 #[derive(Debug, Clone)]
 pub(super) struct HealingIntent {
@@ -36,7 +49,8 @@ pub(super) struct HealingIntent {
 pub(super) struct HealingEffectWindow {
     pub(super) id: String,
     pub(super) activation_id: String,
-    pub(super) equipment_id: i64,
+    /// Absent once the paying item was deleted from the equipment library.
+    pub(super) equipment_id: Option<i64>,
     pub(super) tool_name: String,
     pub(super) profile: HealingProfile,
     pub(super) started_at: f64,
@@ -83,7 +97,100 @@ struct ActivationWrite {
     retrospective: bool,
 }
 
+/// The healing state persisted beyond any one session: every live effect
+/// window whose absolute expiry is still ahead, and each healer's latest live
+/// paid use.
+#[derive(Debug, Default)]
+pub(super) struct PersistedHealing {
+    windows: Vec<HealingEffectWindow>,
+    last_activation: HashMap<i64, f64>,
+}
+
+/// Read the persisted healing state as of `now`. Superseded windows and
+/// activations are corrections' provenance, never live state. A window whose
+/// stored profile cannot be read is skipped rather than guessed at: its later
+/// ticks then stay zero-cost unattributed evidence.
+pub(super) fn read_persisted_healing(
+    conn: &rusqlite::Connection,
+    now: f64,
+) -> Result<PersistedHealing, DbError> {
+    let mut windows = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT w.id, w.activation_id, w.equipment_id, w.tool_name, \
+                    w.started_at, w.expires_at, a.profile_json \
+             FROM healing_effect_windows w \
+             JOIN healing_activations a ON a.id = w.activation_id \
+             WHERE w.superseded_at IS NULL AND a.superseded_at IS NULL \
+               AND w.expires_at >= ?1 \
+             ORDER BY w.started_at, w.id",
+        )?;
+        let rows = stmt.query_map([now - DELIVERY_TAIL_SECONDS], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, activation_id, equipment_id, tool_name, started_at, expires_at, profile) =
+                row?;
+            match serde_json::from_str::<HealingProfile>(&profile) {
+                Ok(profile) => windows.push(HealingEffectWindow {
+                    id,
+                    activation_id,
+                    equipment_id,
+                    tool_name,
+                    profile,
+                    started_at,
+                    expires_at,
+                }),
+                Err(error) => tracing::warn!(
+                    target: "eo::tracker",
+                    window = %id,
+                    %error,
+                    "healing effect window has an unreadable profile; not restored",
+                ),
+            }
+        }
+    }
+    let mut last_activation = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT equipment_id, MAX(observed_at) FROM healing_activations \
+             WHERE superseded_at IS NULL AND equipment_id IS NOT NULL \
+               AND observed_at >= ?1 \
+             GROUP BY equipment_id",
+        )?;
+        let rows = stmt.query_map([now - COOLDOWN_LOOKBACK_SECONDS], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        for row in rows {
+            let (equipment_id, observed_at) = row?;
+            last_activation.insert(equipment_id, observed_at);
+        }
+    }
+    Ok(PersistedHealing {
+        windows,
+        last_activation,
+    })
+}
+
 impl HealingRuntime {
+    /// Adopt the persisted state as the live effect windows and cooldowns.
+    /// Every live activation is written before memory changes, so the
+    /// persisted state already holds this session's own windows; replacing
+    /// wholesale is what lets a correction elsewhere take a window away or
+    /// give one back.
+    pub(super) fn restore(&mut self, persisted: PersistedHealing) {
+        self.effect_windows = persisted.windows;
+        self.last_activation = persisted.last_activation;
+    }
+
     pub(super) fn last_activation_at(&self, equipment_id: i64) -> Option<f64> {
         self.last_activation.get(&equipment_id).copied()
     }
@@ -166,13 +273,10 @@ impl HealingRuntime {
     }
 
     fn activation_match(&self, intent: &HealingIntent, amount: f64) -> Option<&'static str> {
-        if intent.profile.direct_matches(amount) {
-            return Some("direct");
-        }
-        if !intent.profile.mode.has_direct() && intent.profile.tick_matches(amount) {
-            return Some("direct");
-        }
-        None
+        intent
+            .profile
+            .confirms_activation(amount)
+            .then_some("direct")
     }
 }
 
@@ -252,6 +356,50 @@ impl TrackerActor {
 
         if should_reconcile {
             self.reconcile_pending_heal(payload.occurred_at).await;
+        }
+    }
+
+    /// Adopt the persisted healing state as of `now`: the session start's
+    /// read-back, and the re-read after a correction elsewhere committed. A
+    /// failed read leaves the live state as it was; the session keeps
+    /// tracking, and ticks no window explains stay zero-cost evidence.
+    pub(super) async fn restore_persisted_healing(&mut self, now: f64) -> bool {
+        if self.session.active().is_none() {
+            return false;
+        }
+        match self
+            .db
+            .with_reader(move |conn| read_persisted_healing(conn, now))
+            .await
+        {
+            Ok(persisted) => match self.session.active_mut() {
+                Some(active) => {
+                    active.healing.restore(persisted);
+                    true
+                }
+                None => false,
+            },
+            Err(error) => {
+                tracing::warn!(
+                    target: "eo::tracker",
+                    %error,
+                    "persisted healing state could not be read; live effect windows unchanged",
+                );
+                false
+            }
+        }
+    }
+
+    /// A correction superseded or restored an activation: re-read the live
+    /// windows so a taken-back effect stops explaining ticks and an undone
+    /// correction's effect explains them again. The readout's effect state
+    /// may have moved, so the next tick announces it.
+    pub(super) async fn on_healing_updated(&mut self) {
+        let now = instant_to_epoch(resolve_local(self.clock.now()));
+        if self.restore_persisted_healing(now).await {
+            if let Some(active) = self.session.active_mut() {
+                active.dirty = true;
+            }
         }
     }
 
@@ -451,8 +599,9 @@ impl TrackerActor {
                         tx.execute(
                             "INSERT INTO healing_activations \
                              (id, session_id, equipment_id, tool_name, intent_at, observed_at, \
-                              chat_timestamp, context_id, cost_ped, profile_json, provenance) \
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              chat_timestamp, context_id, cost_ped, profile_json, provenance, \
+                              confirming_output_id) \
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rusqlite::params![
                                 db_write.activation_id,
                                 sid,
@@ -465,6 +614,7 @@ impl TrackerActor {
                                 db_write.intent.cost_per_use.value(),
                                 profile_json,
                                 db_write.provenance,
+                                db_write.output_id,
                             ],
                         )?;
                         if let Some(window) = &db_write.effect {
@@ -728,7 +878,7 @@ fn activation_write(
         .map(|duration| HealingEffectWindow {
             id: uuid::Uuid::new_v4().to_string(),
             activation_id: activation_id.clone(),
-            equipment_id: intent.equipment_id,
+            equipment_id: Some(intent.equipment_id),
             tool_name: intent.tool_name.clone(),
             profile: intent.profile.clone(),
             started_at: observed_at,

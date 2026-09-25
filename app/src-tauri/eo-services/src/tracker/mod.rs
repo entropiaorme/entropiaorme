@@ -25,6 +25,8 @@ mod actor;
 mod combat;
 mod harvest;
 mod healing;
+#[cfg(test)]
+mod healing_tests;
 mod intervals;
 mod loot;
 mod mob;

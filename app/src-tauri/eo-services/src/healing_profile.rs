@@ -71,6 +71,13 @@ impl HealingProfile {
         }
     }
 
+    /// Whether `amount` can confirm a paid use: a direct heal inside the
+    /// direct interval or, for an item with no direct part, the first tick
+    /// of its effect.
+    pub fn confirms_activation(&self, amount: f64) -> bool {
+        self.direct_matches(amount) || (!self.mode.has_direct() && self.tick_matches(amount))
+    }
+
     pub fn tick_matches(&self, amount: f64) -> bool {
         self.mode.has_effect() && range_matches(self.tick_min, self.tick_max, amount)
     }

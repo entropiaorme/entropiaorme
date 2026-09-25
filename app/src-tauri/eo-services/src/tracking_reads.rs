@@ -678,29 +678,66 @@ pub fn get_session_read(
 
     let skill_gains = session_skill_gains(conn, session_id)?;
 
+    // Every live activation, plus each one a live correction marked as not a
+    // paid use (listed so the correction can be undone). An activation a
+    // correction minted and its undo then superseded is provenance only.
     let healing_activations: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT a.id, a.tool_name, a.observed_at, a.cost_ped, a.provenance, \
                     (SELECT MAX(w.expires_at) FROM healing_effect_windows w \
                      WHERE w.activation_id = a.id), \
                     (SELECT COUNT(*) FROM healing_outputs o \
-                     WHERE o.activation_id = a.id) \
-             FROM healing_activations a WHERE a.session_id = ? \
+                     WHERE o.activation_id = a.id), \
+                    (SELECT o.amount FROM healing_outputs o \
+                     WHERE o.id = a.confirming_output_id), \
+                    a.superseded_at IS NOT NULL, a.correction_id IS NOT NULL, \
+                    c.id, c.kind \
+             FROM healing_activations a \
+             LEFT JOIN healing_corrections c \
+                    ON c.activation_id = a.id AND c.undone_at IS NULL \
+             WHERE a.session_id = ? AND (a.superseded_at IS NULL OR c.id IS NOT NULL) \
              ORDER BY a.observed_at, a.id",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            let minted = row.get::<_, bool>(9)?;
+            let provenance = if minted {
+                "corrected".to_string()
+            } else {
+                match row.get::<_, String>(4)?.as_str() {
+                    "health_capped" => "healthCapped".to_string(),
+                    other => other.to_string(),
+                }
+            };
+            let correction = match (
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+            ) {
+                (Some(id), Some(kind)) => json!({
+                    "id": id,
+                    "kind": if kind == "paid_use" { "paidUse" } else { "notPaidUse" },
+                }),
+                _ => Value::Null,
+            };
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "toolName": row.get::<_, String>(1)?,
                 "observedAt": row.get::<_, f64>(2)?,
                 "cost": row.get::<_, f64>(3)?,
-                "provenance": row.get::<_, String>(4)?,
+                "provenance": provenance,
                 "effectUntil": row.get::<_, Option<f64>>(5)?,
                 "outputCount": row.get::<_, i64>(6)?,
+                "amount": row.get::<_, Option<f64>>(7)?,
+                "superseded": row.get::<_, bool>(8)?,
+                "correction": correction,
             }))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    let healing_correctable: bool = conn.query_row(
+        "SELECT COALESCE(is_active, 0) = 0 FROM tracking_sessions WHERE id = ?",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
     let (healing_outputs, direct_outputs, effect_outputs, passive_outputs, unattributed_outputs) =
         conn.query_row(
             "SELECT COUNT(*), \
@@ -720,7 +757,10 @@ pub fn get_session_read(
                 ))
             },
         )?;
-    let healing_activation_count = healing_activations.len();
+    let healing_activation_count = healing_activations
+        .iter()
+        .filter(|activation| activation["superseded"] == json!(false))
+        .count();
 
     Ok(Some(json!({
         "sessionId": session_id,
@@ -756,6 +796,7 @@ pub fn get_session_read(
         "toolStats": tool_stats,
         "skillGains": skill_gains,
         "healing": {
+            "correctable": healing_correctable,
             "activations": healing_activations,
             "activationCount": healing_activation_count,
             "outputCount": healing_outputs,
@@ -1511,6 +1552,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
             )?;
             // SQLite foreign keys are deliberately disabled for this schema,
             // so healing evidence must participate in the explicit cascade.
+            tx.execute(
+                "DELETE FROM healing_corrections WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
             tx.execute(
                 "DELETE FROM healing_outputs WHERE session_id = ?",
                 rusqlite::params![sid],
@@ -2439,6 +2484,7 @@ mod tests {
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 20, "damageDealt": 200.0, "crits": 1, "costAttributed": 10.0}],
                 "skillGains": [{"skillName": "Laser Weaponry Technology", "level": 42.5, "ttValueGained": 0.5}],
                 "healing": {
+                    "correctable": true,
                     "activations": [{
                         "id": "ha1",
                         "toolName": "Restoration Chip",
@@ -2447,6 +2493,9 @@ mod tests {
                         "provenance": "direct",
                         "effectUntil": 1030.0,
                         "outputCount": 2,
+                        "amount": null,
+                        "superseded": false,
+                        "correction": null,
                     }],
                     "activationCount": 1,
                     "outputCount": 3,
@@ -2566,6 +2615,7 @@ mod tests {
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 10, "damageDealt": 100.0, "crits": 0, "costAttributed": 5.0}],
                 "skillGains": [],
                 "healing": {
+                    "correctable": true,
                     "activations": [],
                     "activationCount": 0,
                     "outputCount": 0,
@@ -3213,7 +3263,11 @@ mod tests {
                  ) VALUES (
                     'ho1', 's1', 'ha1', 'hw1', 1000,
                     '2026-01-01 00:00:00', 30, 'direct', 'intent_confirmed'
-                 );",
+                 );
+                 INSERT INTO healing_corrections (
+                    id, session_id, kind, activation_id, output_id, cost_delta_ped,
+                    corrected_at, undone_at
+                 ) VALUES ('hc1', 's1', 'not_paid_use', 'ha1', 'ho1', -0.01, 1100, 1200);",
             )?;
             seed_session(conn, "active", 1000.0, None, true, "mob", 0.0, 0.0, 0.0)?;
             Ok(())
@@ -3250,7 +3304,8 @@ mod tests {
                     "SELECT
                          (SELECT COUNT(*) FROM healing_activations WHERE session_id = 's1') +
                          (SELECT COUNT(*) FROM healing_effect_windows WHERE session_id = 's1') +
-                         (SELECT COUNT(*) FROM healing_outputs WHERE session_id = 's1')",
+                         (SELECT COUNT(*) FROM healing_outputs WHERE session_id = 's1') +
+                         (SELECT COUNT(*) FROM healing_corrections WHERE session_id = 's1')",
                     [],
                     |row| row.get::<_, i64>(0),
                 )?)

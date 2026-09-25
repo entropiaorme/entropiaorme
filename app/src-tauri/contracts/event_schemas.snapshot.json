@@ -24,6 +24,27 @@
       "title": "HarvestRecordedPayload",
       "type": "object"
     },
+    "HealingUpdated": {
+      "additionalProperties": false,
+      "description": "A session's healing evidence was corrected, or a correction undone.",
+      "properties": {
+        "event_version": { "default": 1, "title": "Event Version", "type": "integer" },
+        "occurred_at": { "title": "Occurred At", "type": "string" },
+        "payload": { "$ref": "#/$defs/HealingUpdatedPayload" },
+        "type": { "const": "healing.updated", "default": "healing.updated", "title": "Type", "type": "string" }
+      },
+      "required": ["occurred_at", "payload"],
+      "title": "HealingUpdated",
+      "type": "object"
+    },
+    "HealingUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "A content-free invalidation that prompts consumers to re-read heal costs and healing evidence.",
+      "properties": {},
+      "required": [],
+      "title": "HealingUpdatedPayload",
+      "type": "object"
+    },
     "NavigationUpdated": {
       "additionalProperties": false,
       "description": "The persisted navigation run changed.",
@@ -192,6 +213,7 @@
   "discriminator": {
     "mapping": {
       "harvest.recorded": "#/$defs/HarvestRecorded",
+      "healing.updated": "#/$defs/HealingUpdated",
       "navigation.updated": "#/$defs/NavigationUpdated",
       "protection.updated": "#/$defs/ProtectionUpdated",
       "scan.status.changed": "#/$defs/ScanStatusChanged",
@@ -214,6 +236,9 @@
     },
     {
       "$ref": "#/$defs/ProtectionUpdated"
+    },
+    {
+      "$ref": "#/$defs/HealingUpdated"
     }
   ]
 }

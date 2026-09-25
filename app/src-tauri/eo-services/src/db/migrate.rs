@@ -318,6 +318,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "protection recording undo",
         sql: include_str!("../../migrations/0056_protection_recording_undo.sql"),
     },
+    Migration {
+        version: 57,
+        description: "healing corrections",
+        sql: include_str!("../../migrations/0057_healing_corrections.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -382,6 +387,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "DE89CC822BFD6A6BB728B669B2F198DB7DD80048D60ACE1957B03F54CF58C5403F5C74C5B6B423899513AB389742C435",
     "828E7C8B43DFA748063DFFF3AE648B9E9DEF29432B6CDA627558FE42B9DC8209B19B14392F495D16C9B014BFF53BCCFF",
     "36A5E18AF53F84859A0F2CECAF44335F37EF5F9159649871D91DE8D65E1CCC6CC50CE5DDB5F1AD3B844AF49EAE0AA56F",
+    "F02AAAECFD69A4ED0416CD0B149CC56C5E4149780ED39158BD63A5568F0944899C518692F55896319889DB7D60E56F34",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -647,6 +653,88 @@ mod tests {
         assert!((rows[1].3 - 7.5).abs() < 1e-12);
         assert!((rows[1].4 - 7.5).abs() < 1e-12);
         assert!((rows.iter().map(|row| row.3).sum::<f64>() - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn healing_corrections_upgrade_links_each_activation_to_its_confirming_output() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..56] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost) \
+                 VALUES ('s', 1, 100, 0, 0.07); \
+                 INSERT INTO healing_activations \
+                 (id, session_id, tool_name, intent_at, observed_at, chat_timestamp, cost_ped, \
+                  profile_json, provenance) VALUES \
+                 ('live', 's', 'Chip', 10, 10, 't', 0.04, '{}', 'direct'), \
+                 ('late', 's', 'FAP', 21, 20, 't', 0.03, '{}', 'retrospective'); \
+                 INSERT INTO healing_outputs \
+                 (id, session_id, activation_id, observed_at, chat_timestamp, amount, \
+                  classification, reason) VALUES \
+                 ('tick', 's', 'live', 12, 't', 10, 'effect', \
+                  'matched an active healing effect window'), \
+                 ('confirm', 's', 'live', 10, 't', 30, 'direct', \
+                  'confirmed a paid healing activation'), \
+                 ('reconciled', 's', 'late', 20, 't', 80, 'direct', \
+                  'reconciled with an earlier hotbar occurrence'), \
+                 ('loose', 's', NULL, 30, 't', 5, 'unattributed', \
+                  'no compatible paid-healer activation');",
+            )
+            .expect("historic healing evidence");
+
+        run(&mut connection).expect("healing corrections upgrade");
+
+        let links = connection
+            .prepare(
+                "SELECT id, confirming_output_id, superseded_at, correction_id \
+                 FROM healing_activations ORDER BY id",
+            )
+            .expect("link query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .expect("link rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect links");
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "late".to_string(),
+                    Some("reconciled".to_string()),
+                    None,
+                    None
+                ),
+                ("live".to_string(), Some("confirm".to_string()), None, None),
+            ]
+        );
+        let corrections: i64 = connection
+            .query_row("SELECT COUNT(*) FROM healing_corrections", [], |row| {
+                row.get(0)
+            })
+            .expect("correction count");
+        assert_eq!(corrections, 0);
     }
 
     #[test]

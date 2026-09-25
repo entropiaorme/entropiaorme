@@ -38,6 +38,9 @@ use eo_api::dev::{
 use eo_api::equipment::{
     EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
 };
+use eo_api::healing::{
+    HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
+};
 use eo_api::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
@@ -245,6 +248,43 @@ pub async fn protection_trade_terminal_scan(
     app: tauri::AppHandle,
 ) -> Result<ProtectionScanResult, ApiError> {
     facade(&app)?.protection_trade_terminal_scan()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_outputs(
+    app: tauri::AppHandle,
+    session_id: String,
+    classification: HealingOutputClassification,
+    offset: i64,
+    limit: i64,
+) -> Result<HealingOutputPage, ApiError> {
+    facade(&app)?
+        .healing_outputs(session_id, classification, offset, limit)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correction_tools(
+    app: tauri::AppHandle,
+    output_id: String,
+) -> Result<Vec<HealingCorrectionTool>, ApiError> {
+    facade(&app)?.healing_correction_tools(output_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correct(
+    app: tauri::AppHandle,
+    target: HealingCorrectionTarget,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.healing_correct(target).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correction_undo(
+    app: tauri::AppHandle,
+    correction_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.healing_correction_undo(correction_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1851,6 +1891,10 @@ mod tests {
         "protection_observation_confirm",
         "protection_repair_confirm",
         "protection_trade_terminal_scan",
+        "healing_outputs",
+        "healing_correction_tools",
+        "healing_correct",
+        "healing_correction_undo",
         "character_calibration",
         "character_stats",
         "character_skills",

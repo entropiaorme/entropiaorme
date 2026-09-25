@@ -936,6 +936,25 @@ async fn compose_with(
                     payload: ProtectionUpdatedPayload {},
                 }));
             })
+        })
+        .with_healing_changed({
+            // A correction in History moves a session's heal cost while the
+            // review list may be open, and may take back or restore an effect
+            // window a running session is still matching ticks against: the
+            // tracker and every open surface re-read on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    HealingUpdated, HealingUpdatedPayload, HealingUpdatedTag,
+                };
+                bus.publish(&BusEvent::HealingUpdated(HealingUpdated {
+                    topic: HealingUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: HealingUpdatedPayload {},
+                }));
+            })
         }),
     );
     Composition::Ready(Composed {
@@ -1549,6 +1568,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::HarvestRecorded,
         Topic::NavigationUpdated,
         Topic::ProtectionUpdated,
+        Topic::HealingUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1566,6 +1586,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             }
             BusEvent::ProtectionUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::ProtectionUpdated(envelope.clone()));
+            }
+            BusEvent::HealingUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::HealingUpdated(envelope.clone()));
             }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.

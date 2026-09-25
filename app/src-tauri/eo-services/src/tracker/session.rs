@@ -866,6 +866,10 @@ impl TrackerActor {
         }
 
         self.session = SessionState::Active(Box::new(active));
+        // A heal-over-time effect paid for before this session (in the
+        // previous session, or before a restart) keeps running in the game:
+        // its window carries over by its absolute expiry.
+        self.restore_persisted_healing(start_ts).await;
         self.subscribe_handlers();
         self.publish_status();
 

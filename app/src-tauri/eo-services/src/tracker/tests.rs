@@ -106,15 +106,15 @@ impl TrackingConfig for ScriptedConfig {
     }
 }
 
-struct Rig {
+pub(super) struct Rig {
     _dir: tempfile::TempDir,
-    runtime: tokio::runtime::Runtime,
-    bus: Arc<EventBus>,
-    clock: Arc<MockClock>,
-    db: Db,
+    pub(super) runtime: tokio::runtime::Runtime,
+    pub(super) bus: Arc<EventBus>,
+    pub(super) clock: Arc<MockClock>,
+    pub(super) db: Db,
 }
 
-fn rig() -> Rig {
+pub(super) fn rig() -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -134,7 +134,7 @@ fn rig() -> Rig {
 }
 
 impl Rig {
-    fn tracker(&self, providers: Providers) -> Arc<HuntTracker> {
+    pub(super) fn tracker(&self, providers: Providers) -> Arc<HuntTracker> {
         self.tracker_on_chatlog_clock(providers, ChatLogClock::host_local())
     }
 
@@ -159,12 +159,12 @@ impl Rig {
 
     /// Drive one tracker command (or any future) to completion on the
     /// rig's runtime.
-    fn wait<F: std::future::Future>(&self, future: F) -> F::Output {
+    pub(super) fn wait<F: std::future::Future>(&self, future: F) -> F::Output {
         self.runtime.block_on(future)
     }
 
     /// Structural probe against the actor's owned state.
-    fn probe<R, F>(&self, tracker: &HuntTracker, probe: F) -> R
+    pub(super) fn probe<R, F>(&self, tracker: &HuntTracker, probe: F) -> R
     where
         R: Send + 'static,
         F: FnOnce(&mut super::actor::TrackerActor) -> R + Send + 'static,
@@ -183,7 +183,7 @@ impl Rig {
         captured
     }
 
-    fn scalar_f64(&self, sql: &'static str, binds: &[&str]) -> f64 {
+    pub(super) fn scalar_f64(&self, sql: &'static str, binds: &[&str]) -> f64 {
         let binds: Vec<String> = binds.iter().map(|bind| bind.to_string()).collect();
         self.wait(self.db.with_reader(move |conn| {
             Ok(
@@ -195,7 +195,7 @@ impl Rig {
         .unwrap()
     }
 
-    fn scalar_i64(&self, sql: &'static str, binds: &[&str]) -> i64 {
+    pub(super) fn scalar_i64(&self, sql: &'static str, binds: &[&str]) -> i64 {
         let binds: Vec<String> = binds.iter().map(|bind| bind.to_string()).collect();
         self.wait(self.db.with_reader(move |conn| {
             Ok(
@@ -216,11 +216,11 @@ impl Rig {
     }
 }
 
-fn naive(text: &str) -> NaiveDateTime {
+pub(super) fn naive(text: &str) -> NaiveDateTime {
     NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S").unwrap()
 }
 
-fn healer_intent(
+pub(super) fn healer_intent(
     equipment_id: i64,
     name: &str,
     cost: f64,
@@ -242,7 +242,7 @@ fn healer_intent(
     })
 }
 
-fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) -> BusEvent {
+pub(super) fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) -> BusEvent {
     BusEvent::HotbarIntent(HotbarIntentPayload {
         session_id: None,
         slot: "1".into(),

@@ -1925,3 +1925,108 @@ async fn an_archived_definition_keeps_its_instances_reachable() {
         .unwrap();
     assert_eq!(scoped.total, 2);
 }
+
+/// Healing review over the facade: the review reads, a correction answered
+/// with the refreshed detail, its undo, and the typed error kinds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn healing_corrections_answer_with_the_refreshed_detail_and_undo_exactly() {
+    use eo_api::healing::{HealingCorrectionTarget, HealingOutputClassification};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            r#"INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,heal_cost,
+                 mob_tracking_mode,updated_at)
+               VALUES('healed',1000.0,4600.0,0,0.03,'mob',4600.0),
+                     ('running',5000.0,NULL,1,0.03,'mob',5000.0);
+               INSERT INTO equipment_library(id,name,item_type,properties_json)
+               VALUES(1,'FAP','healing',
+                 '{"tool_entity":{"economy":{"decay":3.0},"min_heal":60,"max_heal":100},"markup":100}');
+               INSERT INTO healing_activations(id,session_id,equipment_id,tool_name,intent_at,
+                 observed_at,chat_timestamp,cost_ped,profile_json,provenance,confirming_output_id)
+               VALUES('fap','healed',1,'FAP',1100,1100,'t',0.03,'{}','direct','o1'),
+                     ('live-fap','running',1,'FAP',5100,5100,'t',0.03,'{}','direct','lo1');
+               INSERT INTO healing_outputs(id,session_id,activation_id,observed_at,chat_timestamp,
+                 amount,classification,reason)
+               VALUES('o1','healed','fap',1100,'t',80,'direct','seeded'),
+                     ('u1','healed',NULL,1200,'t',75,'unattributed','seeded'),
+                     ('lo1','running','live-fap',5100,'t',80,'direct','seeded');"#,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let page = api
+        .healing_outputs(
+            "healed".into(),
+            HealingOutputClassification::Unattributed,
+            0,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&page).unwrap(),
+        serde_json::json!({
+            "outputs": [{
+                "id": "u1", "observedAt": 1200.0, "amount": 75.0,
+                "classification": "unattributed", "reason": "seeded",
+                "toolName": null, "correction": null, "correctable": true,
+            }],
+            "total": 1,
+        })
+    );
+    let tools = api.healing_correction_tools("u1".into()).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&tools).unwrap(),
+        serde_json::json!([{ "equipmentId": 1, "name": "FAP", "costPerUsePed": 0.03, "fits": true }])
+    );
+
+    // The wire shape of a target is the tagged camelCase union the
+    // generated bindings send.
+    let target: HealingCorrectionTarget = serde_json::from_value(serde_json::json!({
+        "kind": "paidUse", "outputId": "u1", "equipmentId": 1,
+    }))
+    .unwrap();
+    let corrected = api.healing_correct(target).await.unwrap();
+    assert!((corrected.summary.cost_breakdown.heal_cost - 0.06).abs() < 1e-9);
+    assert_eq!(corrected.healing.activation_count, 2);
+    let minted = corrected
+        .healing
+        .activations
+        .iter()
+        .find(|row| row.amount.0 == Some(75.0))
+        .expect("the minted activation is listed");
+    let minted_json = serde_json::to_value(minted).unwrap();
+    assert_eq!(minted_json["provenance"], "corrected");
+    assert_eq!(minted_json["correction"]["kind"], "paidUse");
+    let correction_id = minted_json["correction"]["id"].as_str().unwrap().to_string();
+
+    let restored = api.healing_correction_undo(correction_id.clone()).await.unwrap();
+    assert!((restored.summary.cost_breakdown.heal_cost - 0.03).abs() < 1e-9);
+    assert_eq!(restored.healing.activation_count, 1);
+    assert_eq!(restored.healing.activations.len(), 1);
+
+    let kind = |error: ApiError| serde_json::to_value(&error).unwrap()["kind"].clone();
+    let again = api
+        .healing_correction_undo(correction_id)
+        .await
+        .unwrap_err();
+    assert_eq!(kind(again), "conflict");
+    let running = api
+        .healing_correct(HealingCorrectionTarget::NotPaidUse {
+            activation_id: "live-fap".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(running), "conflict");
+    let missing = api.healing_correction_tools("nope".into()).await.unwrap_err();
+    assert_eq!(kind(missing), "notFound");
+    let paging = api
+        .healing_outputs("healed".into(), HealingOutputClassification::Direct, 0, 0)
+        .await
+        .unwrap_err();
+    assert_eq!(kind(paging), "badRequest");
+}

@@ -45,6 +45,22 @@ impl Refusal {
     }
 }
 
+/// Whether a later live recording measured its loss from `observation_id`.
+/// Checked directly rather than inferred from reading times, so a clock
+/// that stepped backwards can never let an undo pull a baseline out from
+/// under a recording built on it.
+fn reading_is_built_on(
+    tx: &rusqlite::Transaction<'_>,
+    observation_id: i64,
+) -> Result<bool, DbError> {
+    Ok(tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM protection_cost_windows \
+                        WHERE opening_observation_id = ?1 AND superseded_at IS NULL)",
+        [observation_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// Supersede one cost window and hand its shares back to their sessions.
 fn supersede_window(
     tx: &rusqlite::Transaction<'_>,
@@ -114,7 +130,9 @@ fn undo_recording(
             }
         }
         ("limited_decay", Some(set_id), Some(closing)) => {
-            if latest_live_observation_id(tx, set_id)? != Some(closing) {
+            if latest_live_observation_id(tx, set_id)? != Some(closing)
+                || reading_is_built_on(tx, closing)?
+            {
                 return Ok(Err(Refusal::NotLatest));
             }
             supersede_observation(tx, closing, now)?;
@@ -144,7 +162,9 @@ fn undo_reading(
     if superseded {
         return Ok(Err(Refusal::AlreadyUndone));
     }
-    if latest_live_observation_id(tx, set_id)? != Some(observation_id) {
+    if latest_live_observation_id(tx, set_id)? != Some(observation_id)
+        || reading_is_built_on(tx, observation_id)?
+    {
         return Ok(Err(Refusal::NotLatest));
     }
     let measured: bool = tx.query_row(

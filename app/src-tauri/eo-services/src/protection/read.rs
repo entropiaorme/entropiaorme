@@ -21,9 +21,14 @@ const RECENT_COST_WINDOWS: i64 = 12;
 /// How many removed sets Equipment offers to restore.
 const REMOVED_SETS: i64 = 20;
 
+/// How many session ids one unrecorded-hits query binds; longer lists are
+/// read in chunks, well inside SQLite's bound-parameter limit.
+const SESSION_ID_CHUNK: usize = 500;
+
 /// A subquery selecting any live recording's share of the session named by
-/// the SQL expression `session`: wrap it in `EXISTS (...)`.
-pub(super) fn live_allocation(session: &str) -> String {
+/// the column `session`: wrap it in `EXISTS (...)`. Only a fixed column name
+/// is accepted, so no runtime text can reach the SQL.
+pub(super) fn live_allocation(session: &'static str) -> String {
     format!(
         "SELECT 1 FROM protection_cost_allocations a \
          JOIN protection_cost_windows w ON w.id = a.window_id \
@@ -357,20 +362,21 @@ pub(super) fn sessions_with_unrecorded_hits(
     conn: &rusqlite::Connection,
     session_ids: &[String],
 ) -> Result<HashSet<String>, rusqlite::Error> {
-    if session_ids.is_empty() {
-        return Ok(HashSet::new());
-    }
-    let placeholders = vec!["?"; session_ids.len()].join(", ");
-    let sql = format!(
-        "SELECT DISTINCT d.session_id FROM protection_defence_events d \
-         WHERE d.session_id IN ({placeholders}) AND NOT EXISTS ({})",
-        live_allocation("d.session_id")
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let ids = stmt
-        .query_map(rusqlite::params_from_iter(session_ids), |row| {
+    let mut unrecorded = HashSet::new();
+    for chunk in session_ids.chunks(SESSION_ID_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT DISTINCT d.session_id FROM protection_defence_events d \
+             WHERE d.session_id IN ({placeholders}) AND NOT EXISTS ({})",
+            live_allocation("d.session_id")
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
             row.get::<_, String>(0)
-        })?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    Ok(ids)
+        })?;
+        for id in ids {
+            unrecorded.insert(id?);
+        }
+    }
+    Ok(unrecorded)
 }

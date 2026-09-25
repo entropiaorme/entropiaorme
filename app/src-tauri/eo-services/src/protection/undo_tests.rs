@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::tests::{close, context_costs, harness, ids, limited, play, session_armour, Played};
 use super::*;
+use crate::clock::Clock;
 
 /// The materialised summary's armour cost; a session never summarised
 /// reads as zero, as the list does.
@@ -356,6 +357,14 @@ async fn a_session_list_learns_which_sessions_await_a_recording() {
         .await
         .unwrap()
         .is_empty());
+
+    // A page far longer than one query binds is read in chunks.
+    let mut long: Vec<String> = (0..1_200).map(|i| format!("absent-{i}")).collect();
+    long.push("b".into());
+    assert_eq!(
+        service.sessions_with_unrecorded_hits(long).await.unwrap(),
+        ["b"]
+    );
 }
 
 #[tokio::test]
@@ -409,6 +418,27 @@ async fn every_committed_write_is_announced_and_a_refusal_is_not() {
     service.archive_set(set.id).await.unwrap();
     service.restore_set(set.id).await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 7);
+}
+
+#[tokio::test]
+async fn a_reading_a_later_recording_stands_on_cannot_be_undone_even_if_the_clock_stepped_back() {
+    let (_dir, db, clock, service) = harness().await;
+    let set = limited(&service, "Hyperion", 200.0).await;
+    clock.advance(100.0).unwrap();
+    let base = reading(&service, set.id, "base", 50.0, &[]).await;
+    play(&db, Played::new("a", 10.0, &[(None, 10)])).await;
+    // The clock steps back, so the measuring reading sorts before its baseline.
+    clock.freeze_at(clock.now() - chrono::Duration::seconds(50));
+    let measured = reading(&service, set.id, "close", 45.0, &["a"]).await;
+    assert!(measured.cost_window.is_some());
+
+    let refused = service
+        .undo(UndoTarget::Reading {
+            observation_id: base.observation.id,
+        })
+        .await;
+    assert!(matches!(refused, Err(ProtectionError::Conflict(_))));
+    assert!(close(session_armour(&db, "a").await, 10.0), "nothing moved");
 }
 
 mod reversal {

@@ -3,6 +3,7 @@
 	import {
 		activateLootItem,
 		deactivateLootItem,
+		getProtectionSessionStatus,
 		getSessionDetail,
 		renameSessionMob,
 		restoreSessionMob,
@@ -21,6 +22,35 @@
 	let {
 		detail = $bindable(),
 	}: { detail: SessionDetail } = $props();
+
+	// ── Armour standing ───────────────────────────────────────────────
+	// Armour cost is recorded when the player repairs, possibly sessions
+	// later, so a session with hits and no recording yet reads as "not
+	// recorded" rather than as a zero it has not earned.
+	let unrecordedHits = $state(0);
+	$effect(() => {
+		const sessionId = detail.sessionId;
+		let current = true;
+		getProtectionSessionStatus(sessionId)
+			.then((status) => {
+				if (current) unrecordedHits = status.unrecordedHits;
+			})
+			.catch(() => {
+				if (current) unrecordedHits = 0;
+			});
+		return () => {
+			current = false;
+		};
+	});
+	const costBreakdown = $derived(detail.summary.costBreakdown);
+	const showCostBreakdown = $derived(
+		!!costBreakdown &&
+			(costBreakdown.healCost > 0 ||
+				costBreakdown.enhancerCost > 0 ||
+				costBreakdown.armourCost > 0 ||
+				costBreakdown.harvestCost > 0 ||
+				unrecordedHits > 0),
+	);
 
 	// ── Weapon cycle (unchanged) ──────────────────────────────────────
 	const weaponCycleRows = $derived.by(() => {
@@ -323,7 +353,7 @@
 	</div>
 
 	<!-- 1b. Cost breakdown (shown when non-weapon costs exist) -->
-	{#if detail.summary.costBreakdown && (detail.summary.costBreakdown.healCost > 0 || detail.summary.costBreakdown.enhancerCost > 0 || detail.summary.costBreakdown.armourCost > 0 || detail.summary.costBreakdown.harvestCost > 0)}
+	{#if showCostBreakdown && detail.summary.costBreakdown}
 		<div class="mt-2 pl-1 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-secondary">
 			<span>Weapon: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.weaponCost)}</span></span>
 			{#if detail.summary.costBreakdown.healCost > 0}
@@ -334,6 +364,10 @@
 			{/if}
 			{#if detail.summary.costBreakdown.armourCost > 0}
 				<span>Armour: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.armourCost)}</span></span>
+			{:else if unrecordedHits > 0}
+				<span title={`${unrecordedHits} ${unrecordedHits === 1 ? 'hit awaits' : 'hits await'} an armour repair or reading, recorded from the overlay's Cost button`}>
+					Armour: <span class="text-warning">not recorded yet</span>
+				</span>
 			{/if}
 			{#if detail.summary.costBreakdown.harvestCost > 0}
 				<span>Harvesting: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.harvestCost)}</span></span>

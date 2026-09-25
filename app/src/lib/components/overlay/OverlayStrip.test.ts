@@ -34,7 +34,7 @@ vi.mock('$lib/statsScope.svelte', () => ({
 	setStatsScope,
 }));
 
-import type { ProtectionOverview, TrackingLive, TrackingStatus } from '$lib/api';
+import type { TrackingLive, TrackingStatus } from '$lib/api';
 import OverlayStrip from './OverlayStrip.svelte';
 
 function liveData(overrides: Partial<TrackingLive> = {}): TrackingLive {
@@ -44,48 +44,6 @@ function liveData(overrides: Partial<TrackingLive> = {}): TrackingLive {
 function activeStatus(overrides: Partial<TrackingStatus> = {}): TrackingStatus {
 	return { status: 'active', ...overrides };
 }
-
-const mixedProtection: ProtectionOverview = {
-	sets: [
-		{
-			id: '1',
-			kind: 'armour',
-			name: 'UL armour',
-			economyKind: 'unlimited',
-			markupPercent: null,
-			latestObservation: null,
-			pendingReconciliations: 0,
-			basisLocked: false,
-			unsettledDamage: 0,
-			unsettledDeflections: 0,
-			unsettledSessions: 0,
-		},
-		{
-			id: '2',
-			kind: 'plates',
-			name: 'L plates',
-			economyKind: 'limited',
-			markupPercent: 125,
-			latestObservation: null,
-			pendingReconciliations: 0,
-			basisLocked: false,
-			unsettledDamage: 0,
-			unsettledDeflections: 0,
-			unsettledSessions: 0,
-		},
-	],
-	loadouts: [
-		{
-			id: 'loadout',
-			name: 'Mixed',
-			armour: { id: '1', name: 'UL armour', economyKind: 'unlimited', markupPercent: null },
-			plates: { id: '2', name: 'L plates', economyKind: 'limited', markupPercent: 125 },
-		},
-	],
-	activeLoadoutId: 'loadout',
-	recentReconciliations: [],
-	recentCostWindows: [],
-};
 
 beforeEach(() => {
 	overlayStats.current = [];
@@ -126,35 +84,6 @@ describe('track / stop control', () => {
 		const button = screen.getByTitle('Start tracking') as HTMLButtonElement;
 		expect(button.disabled).toBe(true);
 		expect(button.textContent).toContain('...');
-	});
-});
-
-describe('armour track decision prompt', () => {
-	it('replaces the stop control during an active session and forwards the decision', () => {
-		const onArmourTrackDecision = vi.fn();
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active' }),
-				awaitingArmourTrackDecision: true,
-				onArmourTrackDecision,
-			},
-		});
-
-		expect(screen.getByText('Record armour costs?')).toBeTruthy();
-		expect(screen.queryByTitle('Stop tracking')).toBeNull();
-
-		screen.getByText('Record').click();
-		expect(onArmourTrackDecision).toHaveBeenCalledWith('yes');
-		screen.getByText('Later').click();
-		expect(onArmourTrackDecision).toHaveBeenCalledWith('no');
-	});
-
-	it('does not interpose when the session is not active', () => {
-		render(OverlayStrip, {
-			props: { data: liveData(), awaitingArmourTrackDecision: true },
-		});
-		expect(screen.queryByText('Record protection?')).toBeNull();
-		expect(screen.getByTitle('Start tracking')).toBeTruthy();
 	});
 });
 
@@ -333,31 +262,6 @@ describe('derived activity feedback', () => {
 	});
 });
 
-describe('protection declaration policy', () => {
-	it('hides segment protection selectors when the definition records whole-session cost only', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ trackProtectionBySegment: false }),
-				protection: mixedProtection,
-			},
-		});
-		expect(screen.queryByTestId('protection-facet')).toBeNull();
-	});
-
-	it('removes armour controls altogether when armour-cost tracking is disabled', () => {
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active', trackProtectionCosts: false }),
-				armourSessionId: 'session-1',
-				protection: mixedProtection,
-			},
-		});
-
-		expect(screen.queryByTestId('protection-facet')).toBeNull();
-		expect(document.querySelector('[data-guide-anchor="overlay-armour-section"]')).toBeNull();
-	});
-});
-
 describe('customisable stat pills', () => {
 	it('renders only the enabled overlay stats, through the real registry render', () => {
 		overlayStats.current = [
@@ -492,81 +396,30 @@ describe('trifecta selector', () => {
 	});
 });
 
+// Armour is recorded when the player repairs, and spread back over the
+// sessions it covers, so nothing about it is declared during play and the
+// control never waits on a running session.
 describe('armour cost control', () => {
-	it('is disabled without a session id', () => {
-		render(OverlayStrip, { props: { data: liveData() } });
-		const button = screen.getByText('Cost') as HTMLButtonElement;
-		expect(button.disabled).toBe(true);
-	});
-
-	it('toggles through the callback when a session id exists', () => {
+	it('is available with no session running and toggles through the callback', () => {
 		const onArmourCostToggle = vi.fn();
-		render(OverlayStrip, {
-			props: { data: liveData({ status: 'active' }), armourSessionId: 's1', onArmourCostToggle },
-		});
+		render(OverlayStrip, { props: { data: liveData(), onArmourCostToggle } });
 		const button = screen.getByText('Cost') as HTMLButtonElement;
 		expect(button.disabled).toBe(false);
 		button.click();
 		expect(onArmourCostToggle).toHaveBeenCalledTimes(1);
 	});
 
-	it('describes a mixed active loadout as a two-step protection flow', () => {
+	it('stays offered under a session type that records no hits', () => {
 		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active' }),
-				armourSessionId: 's1',
-				protection: mixedProtection,
-			},
+			props: { data: liveData({ status: 'active', trackProtectionCosts: false }) },
 		});
-		expect(screen.getByTitle('Record 2 armour costs')).toBeTruthy();
+		expect(screen.getByText('Cost')).toBeTruthy();
 	});
 
-	it('disables cost recording for an explicit no-protection loadout', () => {
-		const protection: ProtectionOverview = {
-			sets: [],
-			loadouts: [{ id: 'none', name: 'No protection', armour: null, plates: null }],
-			activeLoadoutId: 'none',
-			recentReconciliations: [],
-			recentCostWindows: [],
-		};
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active' }),
-				armourSessionId: 's1',
-				protection,
-			},
-		});
-		expect((screen.getByTitle('No armour cost to record') as HTMLButtonElement).disabled).toBe(
-			true,
-		);
-	});
-
-	it('stays available under whole-session attribution with no live selection', () => {
-		// Whole-session attribution asks which setup was worn rather than reading
-		// the live selection, so the control must not go dark just because
-		// nothing is selected.
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active', trackProtectionBySegment: false }),
-				armourSessionId: 's1',
-				protection: { ...mixedProtection, activeLoadoutId: null },
-			},
-		});
-		const button = screen.getByTitle('Record armour cost') as HTMLButtonElement;
-		expect(button.disabled).toBe(false);
-	});
-
-	it('keeps the generic repair reading when the catalogue holds no setups', () => {
-		// Nothing to choose between: the control offers the reading that needs no
-		// composition rather than promising a flow it would refuse.
-		render(OverlayStrip, {
-			props: {
-				data: liveData({ status: 'active', trackProtectionBySegment: false }),
-				armourSessionId: 's1',
-			},
-		});
-		const button = screen.getByTitle('Record repair cost') as HTMLButtonElement;
-		expect(button.disabled).toBe(false);
+	it('offers no armour selector and asks nothing when a session stops', () => {
+		render(OverlayStrip, { props: { data: liveData({ status: 'active' }) } });
+		expect(screen.queryByTestId('protection-facet')).toBeNull();
+		expect(screen.getByTitle('Stop tracking')).toBeTruthy();
 	});
 });
 

@@ -43,14 +43,12 @@ export interface TrackingLive {
 	returnRate?: number | null;
 	weaponAttribution?: WeaponAttribution | null;
 	repairOcrEnabled?: boolean | null;
-	endOfSessionArmourReminderEnabled?: boolean | null;
 	sessionName?: string | null;
 	/** The selected session definition (stringified id): the active
 	 * session's stamped reference when tracking, the configured
 	 * selection when idle. */
 	sessionDefinitionId?: string | null;
 	trackProtectionCosts?: boolean | null;
-	trackProtectionBySegment?: boolean | null;
 	skillBoostPercent?: number | null;
 	currentMob?: string | null;
 	currentTool?: string | null;

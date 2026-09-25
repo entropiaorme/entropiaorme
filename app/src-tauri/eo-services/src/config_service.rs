@@ -77,7 +77,6 @@ pub struct AppConfig {
     pub player_name: String,
     pub hotbar_hooks_enabled: bool,
     pub repair_ocr_enabled: bool,
-    pub end_of_session_armour_reminder_enabled: bool,
     pub developer_mode_enabled: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
@@ -130,7 +129,6 @@ impl Default for AppConfig {
             player_name: String::new(),
             hotbar_hooks_enabled: false,
             repair_ocr_enabled: false,
-            end_of_session_armour_reminder_enabled: false,
             developer_mode_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
@@ -397,7 +395,6 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         player_name: string_or("player_name", ""),
         hotbar_hooks_enabled: toggle("hotbar_hooks_enabled"),
         repair_ocr_enabled: toggle("repair_ocr_enabled"),
-        end_of_session_armour_reminder_enabled: toggle("end_of_session_armour_reminder_enabled"),
         developer_mode_enabled: toggle("developer_mode_enabled"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
@@ -468,12 +465,15 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // facet splits into "not declared" and "declared zero". Reading it
 // forward would turn every existing store's default into a claim the
 // user never made, so it stays unknown and carries through untouched.
-const KNOWN_KEYS: [&str; 20] = [
+//
+// `end_of_session_armour_reminder_enabled` retired with the stop prompt it
+// armed: protection costs are recorded when the player repairs, not when a
+// session ends. A stored value carries through untouched like the others.
+const KNOWN_KEYS: [&str; 19] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
     "repair_ocr_enabled",
-    "end_of_session_armour_reminder_enabled",
     "developer_mode_enabled",
     "manual_mob_species",
     "manual_mob_maturity",
@@ -669,9 +669,6 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
             "player_name" => assign_string(&mut config.player_name, value),
             "hotbar_hooks_enabled" => assign_bool(&mut config.hotbar_hooks_enabled, value),
             "repair_ocr_enabled" => assign_bool(&mut config.repair_ocr_enabled, value),
-            "end_of_session_armour_reminder_enabled" => {
-                assign_bool(&mut config.end_of_session_armour_reminder_enabled, value)
-            }
             "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
@@ -1056,7 +1053,6 @@ mod tests {
             serde_json::json!({
                 "hotbar_hooks_enabled": 1,
                 "repair_ocr_enabled": "yes",
-                "end_of_session_armour_reminder_enabled": 0,
                 "developer_mode_enabled": null,
             })
             .to_string(),
@@ -1065,7 +1061,6 @@ mod tests {
         let svc = service(dir.path());
         assert!(svc.get().hotbar_hooks_enabled);
         assert!(svc.get().repair_ocr_enabled);
-        assert!(!svc.get().end_of_session_armour_reminder_enabled);
         assert!(!svc.get().developer_mode_enabled);
     }
 
@@ -1126,7 +1121,6 @@ mod tests {
             "player_name": "Each",
             "hotbar_hooks_enabled": true,
             "repair_ocr_enabled": true,
-            "end_of_session_armour_reminder_enabled": true,
             "developer_mode_enabled": true,
             "manual_mob_species": "Atrox",
             "manual_mob_maturity": "Old",
@@ -1145,7 +1139,6 @@ mod tests {
         assert_eq!(config.player_name, "Each");
         assert!(config.hotbar_hooks_enabled);
         assert!(config.repair_ocr_enabled);
-        assert!(config.end_of_session_armour_reminder_enabled);
         assert!(config.developer_mode_enabled);
         assert_eq!(config.manual_mob_species, "Atrox");
         assert_eq!(config.manual_mob_maturity, "Old");

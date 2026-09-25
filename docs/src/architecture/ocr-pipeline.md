@@ -343,8 +343,8 @@ The limited-protection read uses the same one-number service against the Trade
 Terminal total. The player places either all seven armour pieces or all seven
 plates in the terminal, without selling them, and reviews the recognised value
 before confirming it. Successive confirmed readings measure consumed TT; the
-protection service, not OCR, applies the configured average markup and decides
-whether the result can be booked or must remain pending.
+protection service, not OCR, applies the set's frozen average markup and spreads
+the result over the sessions the player ticks (ADR-0031).
 
 Both rectangles use the live game window's bottom-right docking convention.
 The repair rectangle has a shipped fallback. The Trade Terminal rectangle is

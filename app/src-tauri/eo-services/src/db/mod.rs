@@ -1387,9 +1387,10 @@ mod tests {
         // indexes on the rebuilt movement ledger + healing attribution's 3
         // activation, effect-window, and output tables with 3 session indexes
         // + expected-hunting's offensive-evidence rollup table and 2 indexes
-        // = 80 tables, 103 indexes, 10 triggers.
+        // + session-grain protection costs' 2 session-lookup indexes
+        // = 80 tables, 105 indexes, 10 triggers.
         assert_eq!(count("table").await, 80);
-        assert_eq!(count("index").await, 103);
+        assert_eq!(count("index").await, 105);
         assert_eq!(count("trigger").await, 10);
 
         let version = db
@@ -1866,10 +1867,11 @@ mod tests {
         // 3 tables and 5 attribution and provenance indexes + healing
         // attribution's 3 activation, effect-window, and output tables with
         // 3 session indexes + expected-hunting's offensive-evidence rollup
-        // table and 2 indexes (only SQLite's own bookkeeping is excluded; the
+        // table and 2 indexes + session-grain protection costs' 2 indexes
+        // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 194);
+        assert_eq!(master.len(), 196);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

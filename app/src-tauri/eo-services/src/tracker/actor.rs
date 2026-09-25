@@ -25,7 +25,6 @@ use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::loot_filter::normalize_blacklist;
-use crate::protection::ProtectionSelection;
 use crate::tracking_models::TrackingSession;
 
 use super::intervals::{ActiveActivity, ActivityKey, ActivityRef};
@@ -86,16 +85,6 @@ pub(super) enum TrackerMsg {
         source_id: String,
         reply: oneshot::Sender<Result<bool, DbError>>,
     },
-    SetProtection {
-        selection: ProtectionSelection,
-        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
-    },
-    DeclareWholeSessionProtection {
-        session_id: String,
-        selection: ProtectionSelection,
-        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
-    },
-    ActiveSessionId(oneshot::Sender<Option<String>>),
     ReleaseMob(oneshot::Sender<Option<String>>),
     PrimeDemo {
         session: TrackingSession,
@@ -246,26 +235,6 @@ impl TrackerActor {
             }
             TrackerMsg::ReconcileLootSource { source_id, reply } => {
                 let _ = reply.send(self.reconcile_loot_source(&source_id).await);
-            }
-            TrackerMsg::SetProtection { selection, reply } => {
-                let _ = reply.send(self.set_protection(selection).await);
-            }
-            TrackerMsg::DeclareWholeSessionProtection {
-                session_id,
-                selection,
-                reply,
-            } => {
-                let _ = reply.send(
-                    self.declare_whole_session_protection(&session_id, selection)
-                        .await,
-                );
-            }
-            TrackerMsg::ActiveSessionId(reply) => {
-                let _ = reply.send(
-                    self.session
-                        .active()
-                        .map(|active| active.session.id.clone()),
-                );
             }
             TrackerMsg::SetDeclaredMob {
                 name,

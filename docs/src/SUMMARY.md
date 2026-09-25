@@ -44,3 +44,4 @@
   - [ADR-0028: Versioned expected-hunting economics over immutable evidence](adr/0028-versioned-expected-hunting-economics.md)
   - [ADR-0029: Two-line development with promotion after soak](adr/0029-two-line-development.md)
   - [ADR-0030: An explicit startup readiness boundary](adr/0030-startup-readiness-boundary.md)
+  - [ADR-0031: Protection costs recorded at session grain](adr/0031-session-grain-protection-costs.md)

@@ -56,7 +56,7 @@
 				data-guide-anchor={demoOverlayVisible ? 'dashboard-overlay-spawn' : undefined}
 			>
 				{#if overlayStripPhase === 'active'}
-					<OverlayStrip data={demoTrackingLive} {status} armourSessionId="demo-session" />
+					<OverlayStrip data={demoTrackingLive} {status} />
 				{:else}
 					<!-- Idle synth: status='idle' + nulled session fields. Carries
 						 the snapshot's trifectaAttribution + weaponAttribution
@@ -84,7 +84,7 @@
 
 <!--
 	Guide-only: fake protection-cost popup. Mirrors ProtectionCostPanel's
-	legacy unlimited step styled to match the OverlayStrip's
+	unlimited repair step styled to match the OverlayStrip's
 	glassmorphic look. Positioned dynamically below the strip's Cost
 	button via syncArmourPopupPosition(). pointer-events-none on the
 	wrapper so the live cursor never interacts with the stand-in;
@@ -103,10 +103,10 @@
 			data-guide-anchor="overlay-armour-popup"
 		>
 			{#if demoArmourPopupRecorded}
-				<span class="text-xs text-white/60 shrink-0">Cost recorded:</span>
-				<span class="text-sm font-semibold text-emerald-400 tabular-nums">1.23 PED</span>
+				<span class="text-xs text-white/60 shrink-0">1.23 PED recorded</span>
+				<span class="text-xs text-white/40 shrink-0">over 2 sessions</span>
 			{:else}
-				<span class="text-xs text-white/50 shrink-0">Armour + plates:</span>
+				<span class="text-xs text-white/50 shrink-0">Unlimited repair:</span>
 				<button
 					type="button"
 					class="fake-armour-record-btn"

@@ -18,7 +18,6 @@ use crate::expected_hunting::{
 };
 use crate::mob_lookup_service::python_whitespace;
 use crate::ped::Ped;
-use crate::protection::{active_selection, ProtectionSelection};
 use crate::tracking_models::{
     ActiveSessionView, HarvestGuardrailMismatchView, HealingRuntimeView, TrackingReadout,
     TrackingSession,
@@ -54,8 +53,8 @@ pub struct SessionFacets {
     /// validated against an ACTIVE definition at start and immutable
     /// for the session's life (it rides the name facet's selection).
     pub definition_id: Option<i64>,
+    /// Whether defensive hits are recorded for later armour costing.
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
     /// The skill-boost configuration the session runs under, as the
     /// pill's labelled percentage.
     pub skill_boost_percent: Option<i64>,
@@ -196,7 +195,6 @@ pub(super) struct SessionAggregate {
     pub(super) session_name: Option<String>,
     pub(super) definition_id: Option<i64>,
     pub(super) track_protection_costs: bool,
-    pub(super) track_protection_by_segment: bool,
     pub(super) skill_boost_percent: Option<i64>,
     pub(super) active_activities: Vec<ActiveActivity>,
     pub(super) harvest_swings: i64,
@@ -440,7 +438,6 @@ impl TrackerActor {
             session_name: active.facets.name.clone(),
             definition_id: active.facets.definition_id,
             track_protection_costs: active.facets.track_protection_costs,
-            track_protection_by_segment: active.facets.track_protection_by_segment,
             // Read from the interval state, not the row mirror: the row's
             // scalar cannot hold a declared zero (0019's `> 0 OR NULL`),
             // and the readout is what the overlay renders the facet from.
@@ -779,23 +776,13 @@ impl TrackerActor {
             crate::session_definitions::resolve_selection(&self.db, configured_selection).await?;
         let track_protection_costs = resolved
             .as_ref()
-            .is_none_or(|(_, _, track_costs, _)| *track_costs);
-        let track_protection_by_segment = track_protection_costs
-            && resolved
-                .as_ref()
-                .is_some_and(|(_, _, _, track_by_segment)| *track_by_segment);
-        let protection = if track_protection_by_segment {
-            active_selection(&self.db).await?
-        } else {
-            None
-        };
+            .is_none_or(|(_, _, track_costs)| *track_costs);
         let facets = SessionFacets {
             name: Some(configured_name)
                 .filter(|name| !name.is_empty())
-                .or_else(|| resolved.as_ref().map(|(_, name, _, _)| name.clone())),
-            definition_id: resolved.as_ref().map(|(id, _, _, _)| *id),
+                .or_else(|| resolved.as_ref().map(|(_, name, _)| name.clone())),
+            definition_id: resolved.as_ref().map(|(id, _, _)| *id),
             track_protection_costs,
-            track_protection_by_segment,
             skill_boost_percent: declared_boost.filter(|percent| *percent > 0),
         };
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -833,7 +820,6 @@ impl TrackerActor {
         let insert_definition = facets.definition_id;
         let insert_boost = facets.skill_boost_percent;
         let insert_track_protection_costs = facets.track_protection_costs;
-        let insert_track_protection = facets.track_protection_by_segment;
         let opening_boost = declared_boost;
         self.db
             .with_writer(move |conn| {
@@ -841,7 +827,10 @@ impl TrackerActor {
                     "INSERT INTO tracking_sessions \
                      (id, started_at, is_active, session_name, definition_id, \
                       skill_boost_percent, track_protection_costs, track_protection_by_segment) \
-                     VALUES (?, ?, 1, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, 1, ?, ?, ?, ?, 0)",
+                    // The per-segment armour flag is retired: protection
+                    // costs are spread by hits at recording time, so every
+                    // new session records 0 for it.
                     rusqlite::params![
                         insert_id,
                         start_ts,
@@ -849,7 +838,6 @@ impl TrackerActor {
                         insert_definition,
                         insert_boost,
                         insert_track_protection_costs as i64,
-                        insert_track_protection as i64,
                     ],
                 )?;
                 Ok(())
@@ -914,20 +902,6 @@ impl TrackerActor {
                             )
                             .await;
                     }
-                    if let Some(selection) = protection {
-                        let _ = active
-                            .intervals
-                            .open_interval(
-                                &db,
-                                &session_id,
-                                start_ts,
-                                IntervalSpec::new(IntervalKind::Protection)
-                                    .label(Some(selection.loadout_name.clone()))
-                                    .ref_id(Some(selection.loadout_id))
-                                    .protection(selection, false),
-                            )
-                            .await;
-                    }
                 }
             }
         }
@@ -938,138 +912,6 @@ impl TrackerActor {
             Some(&session_id),
         );
         Ok(session)
-    }
-
-    /// Adopt one protection loadout from this point onward. This is an
-    /// intent boundary: the interval transition mints the context future
-    /// defensive evidence stamps, and never reaches back into prior play.
-    pub(super) async fn set_protection(
-        &mut self,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        if !active.facets.track_protection_by_segment {
-            return Err(TrackerCommandError::ProtectionBySegmentDisabled);
-        }
-        let now = instant_to_epoch(resolve_local(self.clock.now()));
-        let session_id = active.session.id.clone();
-        active
-            .intervals
-            .open_interval(
-                &self.db,
-                &session_id,
-                now,
-                IntervalSpec::new(IntervalKind::Protection)
-                    .label(Some(selection.loadout_name.clone()))
-                    .ref_id(Some(selection.loadout_id))
-                    .protection(selection, true),
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "protection selection failed");
-                TrackerCommandError::Persistence
-            })?;
-        active.dirty = true;
-        self.emit_session_event(
-            TrackingReason::Updated,
-            TrackingStatus::Active,
-            now,
-            Some(&session_id),
-        );
-        Ok(())
-    }
-
-    /// Declare the one setup worn for the whole of the running session.
-    ///
-    /// A session that opted out of per-segment attribution still needs
-    /// to say what it was wearing, and waiting for the session to end
-    /// to ask made recording armour cost a post-session ceremony rather
-    /// than something done as part of the session. The declaration
-    /// carries identity only: allocation for such a session collapses
-    /// every context to session grain regardless of how many protection
-    /// intervals stand, so opening one here cannot smuggle in the
-    /// per-segment attribution the user opted out of.
-    ///
-    /// Whether the declaration reaches backwards is decided by what has
-    /// already been paid for. With nothing settled, the user is naming
-    /// what they have been wearing all along and the session's recorded
-    /// hits are adopted, which is also how a mistaken declaration is
-    /// corrected. Once a cost has settled, the hits it paid for belong
-    /// to the setup that was declared then, so a new declaration takes
-    /// effect from now and the next recording covers only what follows.
-    pub(super) async fn declare_whole_session_protection(
-        &mut self,
-        for_session: &str,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        if active.session.id != for_session {
-            return Err(TrackerCommandError::SessionNoLongerActive);
-        }
-        if !active.facets.track_protection_costs {
-            return Err(TrackerCommandError::ProtectionCostsDisabled);
-        }
-        if active.facets.track_protection_by_segment {
-            return Err(TrackerCommandError::ProtectionBySegmentEnabled);
-        }
-        let session_id = active.session.id.clone();
-        let standing = active
-            .intervals
-            .open_of_kind(super::IntervalKind::Protection)
-            .and_then(|interval| interval.ref_id);
-        if standing == Some(selection.loadout_id) {
-            return Ok(());
-        }
-
-        let settled_session = session_id.clone();
-        let settled = self
-            .db
-            .with_reader(move |conn| {
-                Ok(conn.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM protection_cost_evidence ce \
-                     JOIN protection_defence_events d ON d.id = ce.defence_event_id \
-                     WHERE d.session_id = ?1)",
-                    rusqlite::params![settled_session],
-                    |row| row.get::<_, i64>(0),
-                )? != 0)
-            })
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "settled armour evidence read failed");
-                TrackerCommandError::Persistence
-            })?;
-
-        let now = instant_to_epoch(resolve_local(self.clock.now()));
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        let mut spec = IntervalSpec::new(super::IntervalKind::Protection)
-            .label(Some(selection.loadout_name.clone()))
-            .ref_id(Some(selection.loadout_id))
-            .protection(selection, true);
-        if !settled {
-            spec = spec.adopting_unsettled_defence();
-        }
-        active
-            .intervals
-            .open_interval(&self.db, &session_id, now, spec)
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "whole-session armour declaration failed");
-                TrackerCommandError::Persistence
-            })?;
-        active.dirty = true;
-        self.emit_session_event(
-            TrackingReason::Updated,
-            TrackingStatus::Active,
-            now,
-            Some(&session_id),
-        );
-        Ok(())
     }
 
     /// Stop the active session: dangling cost, the handler
@@ -1326,7 +1168,6 @@ impl HuntTracker {
             session_name: aggregated.session_name.clone(),
             definition_id: aggregated.definition_id,
             track_protection_costs: aggregated.track_protection_costs,
-            track_protection_by_segment: aggregated.track_protection_by_segment,
             skill_boost_percent: aggregated.skill_boost_percent,
             active_activities: aggregated.active_activities.clone(),
             harvest_swings: aggregated.harvest_swings,

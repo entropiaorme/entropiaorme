@@ -1,17 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProtectionObservationOutcome, ProtectionOverview, ProtectionSet } from '$lib/api';
+import type { ProtectionOverview, ProtectionSet } from '$lib/api';
 import { createProtectionModel } from './protectionModel.svelte';
 
 vi.mock('$lib/api', () => ({
-	archiveProtectionLoadout: vi.fn(),
 	archiveProtectionSet: vi.fn(),
-	confirmProtectionObservation: vi.fn(),
-	createProtectionLoadout: vi.fn(),
 	createProtectionSet: vi.fn(),
 	getProtectionOverview: vi.fn(),
-	scanTradeTerminalValue: vi.fn(),
-	selectProtectionLoadout: vi.fn(),
-	updateProtectionLoadout: vi.fn(),
 	updateProtectionSet: vi.fn(),
 }));
 
@@ -22,38 +16,16 @@ const mocked = vi.mocked(api);
 const set: ProtectionSet = {
 	id: '7',
 	kind: 'armour',
-	name: 'Limited armour',
-	economyKind: 'limited',
+	name: 'Hyperion',
 	markupPercent: 120,
 	latestObservation: null,
-	pendingReconciliations: 0,
 	basisLocked: false,
-	unsettledDamage: 0,
-	unsettledDeflections: 0,
-	unsettledSessions: 0,
 };
 
 const overview: ProtectionOverview = {
 	sets: [set],
-	loadouts: [],
-	activeLoadoutId: null,
-	recentReconciliations: [],
 	recentCostWindows: [],
-};
-
-const outcome: ProtectionObservationOutcome = {
-	observation: {
-		id: '11',
-		setId: set.id,
-		ttValuePed: 10,
-		source: 'manual',
-		rawText: null,
-		observedAt: 1,
-		resetReason: null,
-		defenceEventCursor: '0',
-	},
-	reconciliation: null,
-	costWindow: null,
+	unrecorded: { sessions: 3, hits: 120 },
 };
 
 beforeEach(() => {
@@ -61,30 +33,64 @@ beforeEach(() => {
 	mocked.getProtectionOverview.mockResolvedValue(overview);
 });
 
-describe('protection observation idempotency', () => {
-	it('reuses one token when an ambiguous write failure is retried', async () => {
-		mocked.confirmProtectionObservation
-			.mockRejectedValueOnce(new Error('connection lost'))
-			.mockResolvedValueOnce(outcome);
+describe('the limited-set catalogue', () => {
+	it('adds a limited set with its markup', async () => {
+		mocked.createProtectionSet.mockResolvedValue(overview);
 		const model = createProtectionModel();
-		model.openObservation(set);
-
-		expect(await model.confirmObservation({ valuePed: 10, source: 'manual' })).toBeNull();
-		expect(await model.confirmObservation({ valuePed: 10, source: 'manual' })).toBe(outcome);
-
-		const first = mocked.confirmProtectionObservation.mock.calls[0][0].clientToken;
-		const second = mocked.confirmProtectionObservation.mock.calls[1][0].clientToken;
-		expect(second).toBe(first);
+		model.openSet('plates');
+		model.setName = ' 5B plates ';
+		model.setMarkup = '135.5';
+		await model.saveSet();
+		expect(mocked.createProtectionSet).toHaveBeenCalledWith({
+			kind: 'plates',
+			name: '5B plates',
+			markupPercent: 135.5,
+		});
+		expect(model.setModalOpen).toBe(false);
 	});
 
-	it('reports a committed observation even when the follow-up overview refresh fails', async () => {
-		mocked.confirmProtectionObservation.mockResolvedValue(outcome);
-		mocked.getProtectionOverview.mockRejectedValue(new Error('offline'));
+	it('refuses a markup below 100 percent before asking the backend', async () => {
 		const model = createProtectionModel();
-		model.openObservation(set);
+		model.openSet('armour');
+		model.setName = 'Hyperion';
+		model.setMarkup = '95';
+		expect(model.setSaveDisabled).toBe(true);
+		await model.saveSet();
+		expect(mocked.createProtectionSet).not.toHaveBeenCalled();
+	});
 
-		expect(await model.confirmObservation({ valuePed: 10, source: 'manual' })).toBe(outcome);
-		expect(model.lastOutcome).toBe(outcome);
-		expect(model.error).toContain('TT value recorded');
+	it('edits a set by id and keeps the modal open on a refusal', async () => {
+		mocked.updateProtectionSet.mockRejectedValue(
+			new Error("A set's markup cannot change after its first reading"),
+		);
+		const model = createProtectionModel();
+		await model.load();
+		model.editSet(set);
+		model.setMarkup = '130';
+		await model.saveSet();
+		expect(mocked.updateProtectionSet).toHaveBeenCalledWith('7', {
+			name: 'Hyperion',
+			markupPercent: 130,
+		});
+		expect(model.setModalOpen).toBe(true);
+		expect(model.error).toContain('cannot change');
+	});
+
+	it('removes a set through the confirmation', async () => {
+		mocked.archiveProtectionSet.mockResolvedValue({ ...overview, sets: [] });
+		const model = createProtectionModel();
+		await model.load();
+		model.askRemoveSet(set);
+		expect(model.removalModalOpen).toBe(true);
+		await model.confirmRemoval();
+		expect(mocked.archiveProtectionSet).toHaveBeenCalledWith('7');
+		expect(model.removalModalOpen).toBe(false);
+		expect(model.overview.sets).toEqual([]);
+	});
+
+	it('carries what is still unrecorded', async () => {
+		const model = createProtectionModel();
+		await model.load();
+		expect(model.overview.unrecorded).toEqual({ sessions: 3, hits: 120 });
 	});
 });

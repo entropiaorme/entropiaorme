@@ -262,7 +262,6 @@ export interface AppSettings {
 	gameConnection: GameConnection;
 	hotbarHooksEnabled: boolean;
 	repairOcrEnabled: boolean;
-	endOfSessionArmourReminderEnabled: boolean;
 	developerModeEnabled: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
@@ -1934,19 +1933,6 @@ export interface PendingHarvest {
 }
 
 /**
- * One session whose defence evidence has no setup named for it yet, so
- * no cost naming an armour or plate set can settle it.
- */
-export interface PendingProtectionSession {
-	sessionId: string;
-	name: string | null;
-	startedAt: number;
-	/** Absent while the session is still running. */
-	endedAt: number | null;
-	defenceEventCount: number;
-}
-
-/**
  * One palette entry: a pin *type* scoped to a `(planet, map view)` preset.
  * `category` is `generic` or `special`; the only special `kind` so far is
  * `tree`, which carries a `cooldownColour`. `colour` is the generic colour or
@@ -2168,6 +2154,23 @@ export interface ProspectSample {
  */
 export type ProspectSliceType = 'global' | 'tag' | 'mob' | 'weapon';
 
+/**
+ * One session a recording could be spread over.
+ */
+export interface ProtectionCandidateSession {
+	sessionId: string;
+	sessionName: string | null;
+	/** The session type it was played under; absent for none. */
+	definitionId: string | null;
+	definitionName: string | null;
+	startedAt: number;
+	/** Absent while the session is still running. */
+	endedAt: number | null;
+	hitCount: number;
+	/** An earlier recording of the same stream already covers it. */
+	covered: boolean;
+}
+
 export interface ProtectionCostAllocation {
 	sessionId: string;
 	hitCount: number;
@@ -2175,35 +2178,23 @@ export interface ProtectionCostAllocation {
 	costPed: number;
 }
 
+export type ProtectionCostKind = 'limitedDecay' | 'repair';
+
+export type ProtectionCostStatus = 'booked' | 'pending';
+
 export interface ProtectionCostWindow {
 	id: string;
-	kind: string;
+	kind: ProtectionCostKind;
 	setId: string | null;
-	armourSetId: string | null;
-	plateSetId: string | null;
+	setName: string | null;
 	consumedTtPed: number | null;
 	markupPercent: number | null;
 	costPed: number;
 	costKnown: boolean;
-	status: ProtectionReconciliationStatus;
+	status: ProtectionCostStatus;
 	reason: string | null;
 	createdAt: number;
 	allocations: ProtectionCostAllocation[];
-}
-
-export type ProtectionEconomyKind = 'limited' | 'unlimited';
-
-export interface ProtectionLoadout {
-	id: string;
-	name: string;
-	armour: ProtectionSetRef | null;
-	plates: ProtectionSetRef | null;
-}
-
-export interface ProtectionLoadoutInput {
-	name: string;
-	armourSetId?: number | null;
-	plateSetId?: number | null;
 }
 
 export interface ProtectionObservation {
@@ -2214,7 +2205,6 @@ export interface ProtectionObservation {
 	rawText: string | null;
 	observedAt: number;
 	resetReason: string | null;
-	defenceEventCursor: string;
 }
 
 export interface ProtectionObservationInput {
@@ -2224,11 +2214,12 @@ export interface ProtectionObservationInput {
 	source: ProtectionObservationSource;
 	rawText?: string | null;
 	resetReason?: string | null;
+	/** The sessions a measured loss is spread over; ignored for a baseline or a reset, which measure nothing. */
+	sessionIds?: string[];
 }
 
 export interface ProtectionObservationOutcome {
 	observation: ProtectionObservation;
-	reconciliation: ProtectionReconciliation | null;
 	costWindow: ProtectionCostWindow | null;
 }
 
@@ -2236,33 +2227,29 @@ export type ProtectionObservationSource = 'ocr' | 'manual';
 
 export interface ProtectionOverview {
 	sets: ProtectionSet[];
-	loadouts: ProtectionLoadout[];
-	activeLoadoutId: string | null;
-	recentReconciliations: ProtectionReconciliation[];
 	recentCostWindows: ProtectionCostWindow[];
+	unrecorded: UnrecordedProtection;
 }
 
-export interface ProtectionReconciliation {
-	id: string;
-	setId: string;
-	openingObservationId: string;
-	closingObservationId: string;
-	consumedTtPed: number;
-	markupPercent: number;
-	costPed: number;
-	status: ProtectionReconciliationStatus;
-	sessionId: string | null;
-	reason: string | null;
-	createdAt: number;
+/**
+ * What a recording of one stream would look back over.
+ */
+export interface ProtectionRecordingCandidates {
+	stream: ProtectionStream;
+	/** When the stream was last recorded (a limited set's baseline reading); absent before the first. */
+	since: number | null;
+	baselineTtPed: number | null;
+	/** Sessions with hits since the previous recording, oldest first. */
+	sessions: ProtectionCandidateSession[];
+	/** Unlimited only: recent sessions from before the previous recording, which may be re-included. Oldest first. */
+	earlier: ProtectionCandidateSession[];
 }
-
-export type ProtectionReconciliationStatus = 'booked' | 'pending';
 
 export interface ProtectionRepairInput {
 	clientToken: string;
-	armourSetId?: number | null;
-	plateSetId?: number | null;
 	costPed: number;
+	/** The sessions the repair is spread over. */
+	sessionIds?: string[];
 }
 
 export interface ProtectionRepairOutcome {
@@ -2277,35 +2264,50 @@ export interface ProtectionScanResult {
 	calibrated: boolean;
 }
 
+/**
+ * One session's protection-cost standing.
+ */
+export interface ProtectionSessionStatus {
+	/** Recorded hits no protection cost reaches yet; zero once any recording covers the session. */
+	unrecordedHits: number;
+}
+
+/**
+ * A limited armour or plate set.
+ */
 export interface ProtectionSet {
 	id: string;
 	kind: ProtectionSetKind;
 	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent: number | null;
+	markupPercent: number;
 	latestObservation: ProtectionObservation | null;
-	pendingReconciliations: number;
+	/** The markup is frozen once the set has a reading. */
 	basisLocked: boolean;
-	unsettledDamage: number;
-	unsettledDeflections: number;
-	unsettledSessions: number;
 }
 
 export interface ProtectionSetInput {
 	kind: ProtectionSetKind;
 	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent?: number | null;
+	markupPercent: number;
 }
 
 export type ProtectionSetKind = 'armour' | 'plates';
 
-export interface ProtectionSetRef {
-	id: string;
+export interface ProtectionSetUpdateInput {
 	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent: number | null;
+	markupPercent: number;
 }
+
+/**
+ * One independently recorded protection cost stream: the pooled
+ * unlimited repairs, or one limited set.
+ */
+export type ProtectionStream = {
+		kind: 'unlimited';
+	} | {
+		setId: number;
+		kind: 'limited';
+	};
 
 /**
  * A quest in the wire shape (`_format_quest` key for key). Ids are
@@ -2699,7 +2701,6 @@ export interface SessionDefinition {
 	name: string;
 	adHocSegments: boolean;
 	trackProtectionCosts: boolean;
-	trackProtectionBySegment: boolean;
 	/** A session that cannot be archived, because tracking always needs one to run under. It renames and takes a roster like any other. */
 	isProtected: boolean;
 	/** False for an archived definition: no longer offered for new sessions, but its recorded instances still reference it, so the review surface can still reach them. Only ever false in a listing that asked for the inactive ones. */
@@ -2720,7 +2721,6 @@ export interface SessionDefinitionInput {
 	name: string;
 	ad_hoc_segments?: boolean;
 	track_protection_costs?: boolean;
-	track_protection_by_segment?: boolean;
 	roster?: SessionRosterEntryInput[];
 }
 
@@ -2867,7 +2867,6 @@ export interface SettingsPatch {
 	player_name?: string | null;
 	hotbar_hooks_enabled?: boolean | null;
 	repair_ocr_enabled?: boolean | null;
-	end_of_session_armour_reminder_enabled?: boolean | null;
 	developer_mode_enabled?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
@@ -3067,13 +3066,11 @@ export interface TrackingSnapshot {
 	hotbarListenerActive?: boolean | null;
 	weaponAttribution?: WeaponAttribution | null;
 	repairOcrEnabled?: boolean | null;
-	endOfSessionArmourReminderEnabled?: boolean | null;
 	/** The session-name facet: the active session's when tracking, the configured next-session value when idle. */
 	sessionName?: string | null;
 	/** The selected session definition (stringified id): the active session's stamped reference when tracking, the configured selection (re-validated against an active definition) when idle. Absent when no definition is in force. */
 	sessionDefinitionId?: string | null;
 	trackProtectionCosts?: boolean | null;
-	trackProtectionBySegment?: boolean | null;
 	/** The skill-boost facet (labelled percent), same idle/active sourcing as the session name. */
 	skillBoostPercent?: number | null;
 	currentMob?: string | null;
@@ -3222,6 +3219,14 @@ export interface UndoResult {
 	undone_page?: number | null;
 }
 
+/**
+ * Recorded hits no protection cost covers yet.
+ */
+export interface UnrecordedProtection {
+	sessions: number;
+	hits: number;
+}
+
 export interface UnresolvedQuestReward {
 	completionId: number;
 	questId: string;
@@ -3279,36 +3284,25 @@ export async function protectionSetCreate(input: ProtectionSetInput): Promise<Pr
 	return invokeCommand('protection_set_create', { input });
 }
 
-export async function protectionSetUpdate(setId: number, input: ProtectionSetInput): Promise<ProtectionOverview> {
+export async function protectionSetUpdate(setId: number, input: ProtectionSetUpdateInput): Promise<ProtectionOverview> {
 	return invokeCommand('protection_set_update', { set_id: setId, input });
-}
-
-export async function protectionLoadoutCreate(input: ProtectionLoadoutInput): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_create', { input });
-}
-
-export async function protectionLoadoutUpdate(loadoutId: number, input: ProtectionLoadoutInput): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_update', { loadout_id: loadoutId, input });
 }
 
 export async function protectionSetArchive(setId: number): Promise<ProtectionOverview> {
 	return invokeCommand('protection_set_archive', { set_id: setId });
 }
 
-export async function protectionLoadoutArchive(loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_archive', { loadout_id: loadoutId });
+export async function protectionSessionStatus(sessionId: string): Promise<ProtectionSessionStatus> {
+	return invokeCommand('protection_session_status', { session_id: sessionId });
 }
 
-export async function protectionSelect(loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_select', { loadout_id: loadoutId });
-}
-
-export async function protectionPendingAttribution(): Promise<PendingProtectionSession[]> {
-	return invokeCommand('protection_pending_attribution', {});
-}
-
-export async function protectionAssignSessionLoadout(sessionId: string, loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_assign_session_loadout', { session_id: sessionId, loadout_id: loadoutId });
+export async function protectionRecordingCandidates(stream: {
+		kind: 'unlimited';
+	} | {
+		setId: number;
+		kind: 'limited';
+	}): Promise<ProtectionRecordingCandidates> {
+	return invokeCommand('protection_recording_candidates', { stream });
 }
 
 export async function protectionObservationConfirm(input: ProtectionObservationInput): Promise<ProtectionObservationOutcome> {

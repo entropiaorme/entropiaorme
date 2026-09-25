@@ -10,6 +10,7 @@ vi.mock('$lib/api', () => ({
 	ApiError: class ApiError extends Error {},
 	activateLootItem: vi.fn(),
 	deactivateLootItem: vi.fn(),
+	getProtectionSessionStatus: vi.fn(async () => ({ unrecordedHits: 0 })),
 	getSessionDetail: vi.fn(),
 	renameSessionMob: vi.fn(),
 	restoreSessionMob: vi.fn(),
@@ -72,5 +73,24 @@ describe('the recorded session name', () => {
 		render(SessionDetail, { props: { detail: detail({ sessionName: 'Wrong Name' }) } });
 		expect(screen.queryByText('Rename')).toBeNull();
 		expect(screen.queryByLabelText('Session name')).toBeNull();
+	});
+});
+
+// Armour is recorded when the player repairs, possibly sessions later, so a
+// session with hits and no recording yet must not read as zero armour cost.
+describe('the armour standing', () => {
+	it('reads as not recorded while hits await a recording', async () => {
+		const api = await import('$lib/api');
+		vi.mocked(api.getProtectionSessionStatus).mockResolvedValueOnce({ unrecordedHits: 42 });
+		render(SessionDetail, { props: { detail: detail() } });
+		expect(await screen.findByText('not recorded yet')).toBeTruthy();
+	});
+
+	it('shows the recorded cost once a recording covers the session', async () => {
+		const recorded = detail();
+		recorded.summary.costBreakdown.armourCost = 1.5;
+		render(SessionDetail, { props: { detail: recorded } });
+		expect(await screen.findByText('1.50')).toBeTruthy();
+		expect(screen.queryByText('not recorded yet')).toBeNull();
 	});
 });

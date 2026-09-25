@@ -156,20 +156,6 @@
 		}
 	}
 
-	async function handleArmourReminder(checked: boolean) {
-		if (!settings) return;
-		savingField = 'armourReminder';
-		capabilityError = null;
-		try {
-			settings = await updateSettings({ end_of_session_armour_reminder_enabled: checked });
-			flashSaved('armourReminder');
-		} catch (e) {
-			capabilityError = e instanceof Error ? e.message : 'Failed to update armour reminder';
-		} finally {
-			savingField = null;
-		}
-	}
-
 	async function handleDeveloperMode(checked: boolean) {
 		if (!settings) return;
 		savingField = 'developerMode';
@@ -342,29 +328,6 @@
 					disabled={savingField !== null}
 					onchange={handleRepairOcr}
 					label="Enable repair-cost OCR"
-				/>
-			</div>
-
-			<Divider />
-
-			<!-- End-of-session armour reminder -->
-			<div class="py-5 flex items-start justify-between gap-6">
-				<div>
-					<p class="text-sm text-text">End-of-session armour reminder</p>
-					<p class="text-xs text-text-tertiary mt-0.5">
-						When you stop a session that has an armour cost to record, the Stop button becomes a yellow "Record armour costs?"
-						prompt. Record opens the armour-cost popup; Later carries recorded defensive evidence forward.
-						Turn off to stop sessions in one click.
-					</p>
-					{#if savedIndicator === 'armourReminder'}
-						<p class="text-xs text-success mt-1">Saved</p>
-					{/if}
-				</div>
-				<Toggle
-					checked={settings.endOfSessionArmourReminderEnabled}
-					disabled={savingField !== null}
-					onchange={handleArmourReminder}
-					label="Enable end-of-session armour reminder"
 				/>
 			</div>
 

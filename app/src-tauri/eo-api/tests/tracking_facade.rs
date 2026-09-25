@@ -235,9 +235,9 @@ async fn the_idle_snapshot_serialises_the_dashboard_way() {
     assert_eq!(
         serde_json::to_string(&snapshot).unwrap(),
         "{\"status\":\"idle\",\"hotbarListenerActive\":false,\"weaponAttribution\":\"trifecta\",\
-         \"repairOcrEnabled\":false,\"endOfSessionArmourReminderEnabled\":false,\
+         \"repairOcrEnabled\":false,\
          \"sessionName\":\"Default Tracking\",\"sessionDefinitionId\":\"1\",\
-         \"trackProtectionCosts\":true,\"trackProtectionBySegment\":false,\
+         \"trackProtectionCosts\":true,\
          \"activities\":{\"visible\":false,\"adHocSegments\":false,\"readyCount\":0,\
          \"active\":[]},\
          \"lifetime\":{\"instanceCount\":0,\"cycled\":0.0,\"lootTt\":0.0,\"net\":0.0,\
@@ -1657,7 +1657,6 @@ async fn the_session_list_scopes_to_one_definitions_instances() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await
@@ -1715,7 +1714,6 @@ async fn re_filing_moves_the_instance_and_restamps_its_name() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await
@@ -1772,7 +1770,6 @@ async fn re_filing_replaces_a_legacy_free_text_name() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await
@@ -1811,7 +1808,6 @@ async fn re_filing_refuses_an_active_session() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await
@@ -1861,7 +1857,6 @@ async fn re_filing_refuses_an_archived_definition() {
             name: "Retired".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await
@@ -1902,7 +1897,6 @@ async fn an_archived_definition_keeps_its_instances_reachable() {
             name: "Retired".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
-            track_protection_by_segment: true,
             roster: Vec::new(),
         })
         .await

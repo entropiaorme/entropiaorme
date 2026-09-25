@@ -55,7 +55,6 @@ use crate::db::{Db, DbError};
 use crate::event_bus::EventBus;
 use crate::mob_lookup_service::python_whitespace;
 use crate::ped::Ped;
-use crate::protection::ProtectionSelection;
 use crate::tracking_models::TrackingSession;
 
 use actor::{TrackerActor, TrackerMsg, TrackerStatus};
@@ -90,16 +89,6 @@ const HARVEST_YIELD_WINDOW_SECONDS: f64 = 30.0;
 pub enum TrackerCommandError {
     #[error("No active session")]
     NoActiveSession,
-    #[error("That session is no longer the running one")]
-    SessionNoLongerActive,
-    #[error("Armour costs are not tracked by segment for this session")]
-    ProtectionBySegmentDisabled,
-    #[error("Armour costs are tracked by segment for this session")]
-    ProtectionBySegmentEnabled,
-    #[error("Armour costs are not tracked for this session")]
-    ProtectionCostsDisabled,
-    #[error("Protection selection could not be persisted")]
-    Persistence,
 }
 
 /// The session typestate: everything session-scoped lives inside the
@@ -288,49 +277,6 @@ impl HuntTracker {
             reply,
         })
         .await
-    }
-
-    /// Declare the protection loadout in force from now onward. The
-    /// actor writes the persisted default, interval, resolved layer
-    /// snapshot, and fresh event context as one transition.
-    pub async fn set_protection(
-        &self,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        self.call(|reply| TrackerMsg::SetProtection { selection, reply })
-            .await
-    }
-
-    /// Declare the one setup worn for the whole of the running session.
-    /// The counterpart of [`Self::set_protection`] for a session that
-    /// opted out of per-segment attribution: the declaration carries
-    /// identity only, since allocation for such a session collapses to
-    /// session grain whatever intervals exist, and it can be made while
-    /// the session is still running rather than only after it ends.
-    /// The caller names the session it meant: the session it read may
-    /// have stopped and another started before this message is handled,
-    /// and a declaration is refused rather than landing on whichever
-    /// session happens to be running by then.
-    pub async fn declare_whole_session_protection(
-        &self,
-        session_id: &str,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        let session_id = session_id.to_owned();
-        self.call(|reply| TrackerMsg::DeclareWholeSessionProtection {
-            session_id,
-            selection,
-            reply,
-        })
-        .await
-    }
-
-    /// The id of the session the tracker is running, if any. The
-    /// armour-cost route asks this to tell a declaration about the
-    /// running session (which the actor owns) from one about a session
-    /// that has already ended (which it does not).
-    pub async fn active_session_id(&self) -> Option<String> {
-        self.call(TrackerMsg::ActiveSessionId).await
     }
 
     /// Immediately set the declared mob for kill stamping.

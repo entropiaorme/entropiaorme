@@ -1,49 +1,24 @@
-//! Protection setup, live selection, and limited-layer observations.
+//! Protection cost recording: the limited-set catalogue, the sessions a
+//! recording could be spread over, and the two recording commands.
 //!
 //! These DTOs keep the armour/plate vocabulary closed at the IPC
-//! boundary. The service owns persistence and reconciliation; this
-//! facade maps domain outcomes into the generated frontend contract.
+//! boundary. The service owns persistence and allocation; this facade
+//! maps domain outcomes into the generated frontend contract.
 
 use eo_services::protection::{
-    ObservationOutcome as ServiceObservationOutcome, ObservationSource as ServiceObservationSource,
-    PendingProtectionSession as ServicePendingSession,
+    CandidateSession as ServiceCandidate, CostKind as ServiceCostKind,
+    CostStatus as ServiceCostStatus, ObservationOutcome as ServiceObservationOutcome,
+    ObservationSource as ServiceObservationSource,
     ProtectionCostAllocation as ServiceCostAllocation, ProtectionCostWindow as ServiceCostWindow,
-    ProtectionEconomyKind as ServiceEconomyKind, ProtectionError,
-    ProtectionLoadout as ServiceLoadout, ProtectionObservation as ServiceObservation,
-    ProtectionOverview as ServiceOverview, ProtectionReconciliation as ServiceReconciliation,
-    ProtectionSet as ServiceSet, ProtectionSetKind as ServiceSetKind,
-    ProtectionSetRef as ServiceSetRef, ReconciliationStatus as ServiceReconciliationStatus,
-    RepairOutcome as ServiceRepairOutcome,
+    ProtectionError, ProtectionObservation as ServiceObservation,
+    ProtectionOverview as ServiceOverview, ProtectionSet as ServiceSet,
+    ProtectionSetKind as ServiceSetKind, ProtectionStream as ServiceStream,
+    RecordingCandidates as ServiceCandidates, RepairOutcome as ServiceRepairOutcome,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{Api, ApiError, Nullable};
-
-/// One session whose defence evidence has no setup named for it yet, so
-/// no cost naming an armour or plate set can settle it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PendingProtectionSession {
-    pub session_id: String,
-    pub name: Nullable<String>,
-    pub started_at: f64,
-    /// Absent while the session is still running.
-    pub ended_at: Nullable<f64>,
-    pub defence_event_count: i64,
-}
-
-impl From<ServicePendingSession> for PendingProtectionSession {
-    fn from(value: ServicePendingSession) -> Self {
-        Self {
-            session_id: value.session_id,
-            name: value.name.into(),
-            started_at: value.started_at,
-            ended_at: value.ended_at.into(),
-            defence_event_count: value.defence_event_count,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -66,31 +41,6 @@ impl From<ServiceSetKind> for ProtectionSetKind {
         match value {
             ServiceSetKind::Armour => Self::Armour,
             ServiceSetKind::Plates => Self::Plates,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ProtectionEconomyKind {
-    Limited,
-    Unlimited,
-}
-
-impl From<ProtectionEconomyKind> for ServiceEconomyKind {
-    fn from(value: ProtectionEconomyKind) -> Self {
-        match value {
-            ProtectionEconomyKind::Limited => Self::Limited,
-            ProtectionEconomyKind::Unlimited => Self::Unlimited,
-        }
-    }
-}
-
-impl From<ServiceEconomyKind> for ProtectionEconomyKind {
-    fn from(value: ServiceEconomyKind) -> Self {
-        match value {
-            ServiceEconomyKind::Limited => Self::Limited,
-            ServiceEconomyKind::Unlimited => Self::Unlimited,
         }
     }
 }
@@ -120,6 +70,52 @@ impl From<ServiceObservationSource> for ProtectionObservationSource {
     }
 }
 
+/// One independently recorded protection cost stream: the pooled
+/// unlimited repairs, or one limited set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ProtectionStream {
+    Unlimited,
+    #[serde(rename_all = "camelCase")]
+    Limited {
+        set_id: i64,
+    },
+}
+
+impl From<ProtectionStream> for ServiceStream {
+    fn from(value: ProtectionStream) -> Self {
+        match value {
+            ProtectionStream::Unlimited => Self::Unlimited,
+            ProtectionStream::Limited { set_id } => Self::Limited { set_id },
+        }
+    }
+}
+
+impl From<ServiceStream> for ProtectionStream {
+    fn from(value: ServiceStream) -> Self {
+        match value {
+            ServiceStream::Unlimited => Self::Unlimited,
+            ServiceStream::Limited { set_id } => Self::Limited { set_id },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtectionCostKind {
+    LimitedDecay,
+    Repair,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtectionCostStatus {
+    /// Spread over at least one session.
+    Booked,
+    /// Kept as an explicit amount no session carries.
+    Pending,
+}
+
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionObservation {
@@ -130,74 +126,19 @@ pub struct ProtectionObservation {
     pub raw_text: Nullable<String>,
     pub observed_at: f64,
     pub reset_reason: Nullable<String>,
-    pub defence_event_cursor: String,
 }
 
+/// A limited armour or plate set.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionSet {
     pub id: String,
     pub kind: ProtectionSetKind,
     pub name: String,
-    pub economy_kind: ProtectionEconomyKind,
-    pub markup_percent: Nullable<f64>,
-    pub latest_observation: Nullable<ProtectionObservation>,
-    pub pending_reconciliations: i64,
-    pub basis_locked: bool,
-    pub unsettled_damage: f64,
-    pub unsettled_deflections: i64,
-    pub unsettled_sessions: i64,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtectionSetRef {
-    pub id: String,
-    pub name: String,
-    pub economy_kind: ProtectionEconomyKind,
-    pub markup_percent: Nullable<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtectionLoadout {
-    pub id: String,
-    pub name: String,
-    pub armour: Nullable<ProtectionSetRef>,
-    pub plates: Nullable<ProtectionSetRef>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum ProtectionReconciliationStatus {
-    Booked,
-    Pending,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtectionReconciliation {
-    pub id: String,
-    pub set_id: String,
-    pub opening_observation_id: String,
-    pub closing_observation_id: String,
-    pub consumed_tt_ped: f64,
     pub markup_percent: f64,
-    pub cost_ped: f64,
-    pub status: ProtectionReconciliationStatus,
-    pub session_id: Nullable<String>,
-    pub reason: Nullable<String>,
-    pub created_at: f64,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ProtectionOverview {
-    pub sets: Vec<ProtectionSet>,
-    pub loadouts: Vec<ProtectionLoadout>,
-    pub active_loadout_id: Nullable<String>,
-    pub recent_reconciliations: Vec<ProtectionReconciliation>,
-    pub recent_cost_windows: Vec<ProtectionCostWindow>,
+    pub latest_observation: Nullable<ProtectionObservation>,
+    /// The markup is frozen once the set has a reading.
+    pub basis_locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -213,18 +154,75 @@ pub struct ProtectionCostAllocation {
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionCostWindow {
     pub id: String,
-    pub kind: String,
+    pub kind: ProtectionCostKind,
     pub set_id: Nullable<String>,
-    pub armour_set_id: Nullable<String>,
-    pub plate_set_id: Nullable<String>,
+    pub set_name: Nullable<String>,
     pub consumed_tt_ped: Nullable<f64>,
     pub markup_percent: Nullable<f64>,
     pub cost_ped: f64,
     pub cost_known: bool,
-    pub status: ProtectionReconciliationStatus,
+    pub status: ProtectionCostStatus,
     pub reason: Nullable<String>,
     pub created_at: f64,
     pub allocations: Vec<ProtectionCostAllocation>,
+}
+
+/// Recorded hits no protection cost covers yet.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UnrecordedProtection {
+    pub sessions: i64,
+    pub hits: i64,
+}
+
+/// One session's protection-cost standing.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionSessionStatus {
+    /// Recorded hits no protection cost reaches yet; zero once any
+    /// recording covers the session.
+    pub unrecorded_hits: i64,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionOverview {
+    pub sets: Vec<ProtectionSet>,
+    pub recent_cost_windows: Vec<ProtectionCostWindow>,
+    pub unrecorded: UnrecordedProtection,
+}
+
+/// One session a recording could be spread over.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionCandidateSession {
+    pub session_id: String,
+    pub session_name: Nullable<String>,
+    /// The session type it was played under; absent for none.
+    pub definition_id: Nullable<String>,
+    pub definition_name: Nullable<String>,
+    pub started_at: f64,
+    /// Absent while the session is still running.
+    pub ended_at: Nullable<f64>,
+    pub hit_count: i64,
+    /// An earlier recording of the same stream already covers it.
+    pub covered: bool,
+}
+
+/// What a recording of one stream would look back over.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionRecordingCandidates {
+    pub stream: ProtectionStream,
+    /// When the stream was last recorded (a limited set's baseline
+    /// reading); absent before the first.
+    pub since: Nullable<f64>,
+    pub baseline_tt_ped: Nullable<f64>,
+    /// Sessions with hits since the previous recording, oldest first.
+    pub sessions: Vec<ProtectionCandidateSession>,
+    /// Unlimited only: recent sessions from before the previous
+    /// recording, which may be re-included. Oldest first.
+    pub earlier: Vec<ProtectionCandidateSession>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -232,24 +230,15 @@ pub struct ProtectionCostWindow {
 pub struct ProtectionSetInput {
     pub kind: ProtectionSetKind,
     pub name: String,
-    pub economy_kind: ProtectionEconomyKind,
-    #[serde(default)]
-    pub markup_percent: Option<f64>,
+    pub markup_percent: f64,
 }
-
-pub type ProtectionSetUpdateInput = ProtectionSetInput;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProtectionLoadoutInput {
+pub struct ProtectionSetUpdateInput {
     pub name: String,
-    #[serde(default)]
-    pub armour_set_id: Option<i64>,
-    #[serde(default)]
-    pub plate_set_id: Option<i64>,
+    pub markup_percent: f64,
 }
-
-pub type ProtectionLoadoutUpdateInput = ProtectionLoadoutInput;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -262,13 +251,16 @@ pub struct ProtectionObservationInput {
     pub raw_text: Option<String>,
     #[serde(default)]
     pub reset_reason: Option<String>,
+    /// The sessions a measured loss is spread over; ignored for a
+    /// baseline or a reset, which measure nothing.
+    #[serde(default)]
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionObservationOutcome {
     pub observation: ProtectionObservation,
-    pub reconciliation: Nullable<ProtectionReconciliation>,
     pub cost_window: Nullable<ProtectionCostWindow>,
 }
 
@@ -276,11 +268,10 @@ pub struct ProtectionObservationOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionRepairInput {
     pub client_token: String,
-    #[serde(default)]
-    pub armour_set_id: Option<i64>,
-    #[serde(default)]
-    pub plate_set_id: Option<i64>,
     pub cost_ped: f64,
+    /// The sessions the repair is spread over.
+    #[serde(default)]
+    pub session_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -313,12 +304,7 @@ impl Api {
         input: &ProtectionSetInput,
     ) -> Result<ProtectionOverview, ApiError> {
         self.protection
-            .create_set(
-                input.kind.into(),
-                &input.name,
-                input.economy_kind.into(),
-                input.markup_percent,
-            )
+            .create_set(input.kind.into(), &input.name, input.markup_percent)
             .await
             .map_err(protection_error)?;
         self.protection_overview().await
@@ -329,65 +315,8 @@ impl Api {
         set_id: i64,
         input: &ProtectionSetUpdateInput,
     ) -> Result<ProtectionOverview, ApiError> {
-        let overview = self.protection.overview().await.map_err(protection_error)?;
-        let active_uses_set = overview
-            .active_loadout_id
-            .and_then(|active_id| {
-                overview
-                    .loadouts
-                    .iter()
-                    .find(|loadout| loadout.id == active_id)
-            })
-            .is_some_and(|loadout| {
-                loadout.armour.as_ref().is_some_and(|set| set.id == set_id)
-                    || loadout.plates.as_ref().is_some_and(|set| set.id == set_id)
-            });
-        if active_uses_set && self.tracker.is_tracking() {
-            return Err(ApiError::conflict(
-                "Switch protection or stop the session before editing an active set",
-            ));
-        }
         self.protection
-            .update_set(
-                set_id,
-                &input.name,
-                input.economy_kind.into(),
-                input.markup_percent,
-            )
-            .await
-            .map_err(protection_error)?;
-        self.protection_overview().await
-    }
-
-    pub async fn protection_loadout_create(
-        &self,
-        input: &ProtectionLoadoutInput,
-    ) -> Result<ProtectionOverview, ApiError> {
-        self.protection
-            .create_loadout(&input.name, input.armour_set_id, input.plate_set_id)
-            .await
-            .map_err(protection_error)?;
-        self.protection_overview().await
-    }
-
-    pub async fn protection_loadout_update(
-        &self,
-        loadout_id: i64,
-        input: &ProtectionLoadoutUpdateInput,
-    ) -> Result<ProtectionOverview, ApiError> {
-        let overview = self.protection.overview().await.map_err(protection_error)?;
-        if overview.active_loadout_id == Some(loadout_id) && self.tracker.is_tracking() {
-            return Err(ApiError::conflict(
-                "Switch protection or stop the session before editing the active loadout",
-            ));
-        }
-        self.protection
-            .update_loadout(
-                loadout_id,
-                &input.name,
-                input.armour_set_id,
-                input.plate_set_id,
-            )
+            .update_set(set_id, &input.name, input.markup_percent)
             .await
             .map_err(protection_error)?;
         self.protection_overview().await
@@ -404,110 +333,26 @@ impl Api {
         self.protection_overview().await
     }
 
-    pub async fn protection_loadout_archive(
+    pub async fn protection_session_status(
         &self,
-        loadout_id: i64,
-    ) -> Result<ProtectionOverview, ApiError> {
-        let overview = self.protection.overview().await.map_err(protection_error)?;
-        if overview.active_loadout_id == Some(loadout_id) && self.tracker.is_tracking() {
-            return Err(ApiError::conflict(
-                "Switch protection or stop the session before removing the active loadout",
-            ));
-        }
+        session_id: String,
+    ) -> Result<ProtectionSessionStatus, ApiError> {
         self.protection
-            .archive_loadout(loadout_id)
+            .session_unrecorded_hits(&session_id)
             .await
-            .map_err(protection_error)?;
-        self.protection_overview().await
+            .map(|unrecorded_hits| ProtectionSessionStatus { unrecorded_hits })
+            .map_err(protection_error)
     }
 
-    pub async fn protection_select(&self, loadout_id: i64) -> Result<ProtectionOverview, ApiError> {
-        let selection = self
-            .protection
-            .selection(loadout_id)
-            .await
-            .map_err(protection_error)?;
-        if self.tracker.is_tracking() {
-            match self.tracker.set_protection(selection).await {
-                Ok(()) => {}
-                Err(eo_services::tracker::TrackerCommandError::NoActiveSession) => {
-                    self.protection
-                        .persist_active_loadout(loadout_id)
-                        .await
-                        .map_err(protection_error)?;
-                }
-                Err(
-                    error @ (eo_services::tracker::TrackerCommandError::ProtectionBySegmentDisabled
-                    | eo_services::tracker::TrackerCommandError::ProtectionBySegmentEnabled
-                    | eo_services::tracker::TrackerCommandError::ProtectionCostsDisabled
-                    | eo_services::tracker::TrackerCommandError::SessionNoLongerActive),
-                ) => {
-                    return Err(ApiError::conflict(error.to_string()));
-                }
-                Err(eo_services::tracker::TrackerCommandError::Persistence) => {
-                    return Err(ApiError::invalid_state(
-                        "live protection selection persistence failed",
-                    ));
-                }
-            }
-        } else {
-            self.protection
-                .persist_active_loadout(loadout_id)
-                .await
-                .map_err(protection_error)?;
-        }
-        self.protection_overview().await
-    }
-
-    /// Name the setup worn for one session that opted out of
-    /// per-segment attribution.
-    ///
-    /// The running session is routed through the tracker, which owns
-    /// the live interval and context state: writing that session's
-    /// intervals from here would leave the actor stamping incoming hits
-    /// against a picture the database no longer holds. A session that
-    /// has already ended has no live state to keep in step, so the
-    /// service writes it directly.
-    pub async fn protection_assign_session_loadout(
+    pub async fn protection_recording_candidates(
         &self,
-        session_id: &str,
-        loadout_id: i64,
-    ) -> Result<ProtectionOverview, ApiError> {
-        if self.tracker.active_session_id().await.as_deref() == Some(session_id) {
-            let selection = self
-                .protection
-                .selection(loadout_id)
-                .await
-                .map_err(protection_error)?;
-            self.tracker
-                .declare_whole_session_protection(session_id, selection)
-                .await
-                .map_err(|error| match error {
-                    eo_services::tracker::TrackerCommandError::Persistence => {
-                        ApiError::invalid_state("Armour setup could not be saved")
-                    }
-                    other => ApiError::conflict(other.to_string()),
-                })?;
-        } else {
-            self.protection
-                .assign_session_loadout(session_id, loadout_id)
-                .await
-                .map_err(protection_error)?;
-        }
-        self.protection_overview().await
-    }
-
-    pub async fn protection_pending_attribution(
-        &self,
-    ) -> Result<Vec<PendingProtectionSession>, ApiError> {
-        Ok(self
-            .protection
-            .pending_attribution()
+        stream: ProtectionStream,
+    ) -> Result<ProtectionRecordingCandidates, ApiError> {
+        self.protection
+            .recording_candidates(stream.into())
             .await
-            .map_err(protection_error)?
-            .into_iter()
-            .map(PendingProtectionSession::from)
-            .collect())
+            .map(Into::into)
+            .map_err(protection_error)
     }
 
     pub async fn protection_observation_confirm(
@@ -522,6 +367,7 @@ impl Api {
                 input.source.into(),
                 input.raw_text.as_deref(),
                 input.reset_reason.as_deref(),
+                input.session_ids.clone(),
             )
             .await
             .map(Into::into)
@@ -535,9 +381,8 @@ impl Api {
         self.protection
             .confirm_repair_cost(
                 &input.client_token,
-                input.armour_set_id,
-                input.plate_set_id,
                 input.cost_ped,
+                input.session_ids.clone(),
             )
             .await
             .map(Into::into)
@@ -594,7 +439,6 @@ impl From<ServiceObservation> for ProtectionObservation {
             raw_text: value.raw_text.into(),
             observed_at: value.observed_at,
             reset_reason: value.reset_reason.into(),
-            defence_event_cursor: value.defence_event_cursor.to_string(),
         }
     }
 }
@@ -605,57 +449,9 @@ impl From<ServiceSet> for ProtectionSet {
             id: value.id.to_string(),
             kind: value.kind.into(),
             name: value.name,
-            economy_kind: value.economy_kind.into(),
-            markup_percent: value.markup_percent.into(),
-            latest_observation: value.latest_observation.map(Into::into).into(),
-            pending_reconciliations: value.pending_reconciliations,
-            basis_locked: value.basis_locked,
-            unsettled_damage: value.unsettled_damage,
-            unsettled_deflections: value.unsettled_deflections,
-            unsettled_sessions: value.unsettled_sessions,
-        }
-    }
-}
-
-impl From<ServiceSetRef> for ProtectionSetRef {
-    fn from(value: ServiceSetRef) -> Self {
-        Self {
-            id: value.id.to_string(),
-            name: value.name,
-            economy_kind: value.economy_kind.into(),
-            markup_percent: value.markup_percent.into(),
-        }
-    }
-}
-
-impl From<ServiceLoadout> for ProtectionLoadout {
-    fn from(value: ServiceLoadout) -> Self {
-        Self {
-            id: value.id.to_string(),
-            name: value.name,
-            armour: value.armour.map(Into::into).into(),
-            plates: value.plates.map(Into::into).into(),
-        }
-    }
-}
-
-impl From<ServiceReconciliation> for ProtectionReconciliation {
-    fn from(value: ServiceReconciliation) -> Self {
-        Self {
-            id: value.id.to_string(),
-            set_id: value.set_id.to_string(),
-            opening_observation_id: value.opening_observation_id.to_string(),
-            closing_observation_id: value.closing_observation_id.to_string(),
-            consumed_tt_ped: value.consumed_tt_ped,
             markup_percent: value.markup_percent,
-            cost_ped: value.cost_ped,
-            status: match value.status {
-                ServiceReconciliationStatus::Booked => ProtectionReconciliationStatus::Booked,
-                ServiceReconciliationStatus::Pending => ProtectionReconciliationStatus::Pending,
-            },
-            session_id: value.session_id.into(),
-            reason: value.reason.into(),
-            created_at: value.created_at,
+            latest_observation: value.latest_observation.map(Into::into).into(),
+            basis_locked: value.basis_locked,
         }
     }
 }
@@ -664,7 +460,6 @@ impl From<ServiceObservationOutcome> for ProtectionObservationOutcome {
     fn from(value: ServiceObservationOutcome) -> Self {
         Self {
             observation: value.observation.into(),
-            reconciliation: value.reconciliation.map(Into::into).into(),
             cost_window: value.cost_window.map(Into::into).into(),
         }
     }
@@ -685,17 +480,19 @@ impl From<ServiceCostWindow> for ProtectionCostWindow {
     fn from(value: ServiceCostWindow) -> Self {
         Self {
             id: value.id.to_string(),
-            kind: value.kind,
+            kind: match value.kind {
+                ServiceCostKind::LimitedDecay => ProtectionCostKind::LimitedDecay,
+                ServiceCostKind::Repair => ProtectionCostKind::Repair,
+            },
             set_id: value.set_id.map(|id| id.to_string()).into(),
-            armour_set_id: value.armour_set_id.map(|id| id.to_string()).into(),
-            plate_set_id: value.plate_set_id.map(|id| id.to_string()).into(),
+            set_name: value.set_name.into(),
             consumed_tt_ped: value.consumed_tt_ped.into(),
             markup_percent: value.markup_percent.into(),
             cost_ped: value.cost_ped,
             cost_known: value.cost_known,
             status: match value.status {
-                ServiceReconciliationStatus::Booked => ProtectionReconciliationStatus::Booked,
-                ServiceReconciliationStatus::Pending => ProtectionReconciliationStatus::Pending,
+                ServiceCostStatus::Booked => ProtectionCostStatus::Booked,
+                ServiceCostStatus::Pending => ProtectionCostStatus::Pending,
             },
             reason: value.reason.into(),
             created_at: value.created_at,
@@ -712,22 +509,46 @@ impl From<ServiceRepairOutcome> for ProtectionRepairOutcome {
     }
 }
 
+impl From<ServiceCandidate> for ProtectionCandidateSession {
+    fn from(value: ServiceCandidate) -> Self {
+        Self {
+            session_id: value.session_id,
+            session_name: value.session_name.into(),
+            definition_id: value.definition_id.map(|id| id.to_string()).into(),
+            definition_name: value.definition_name.into(),
+            started_at: value.started_at,
+            ended_at: value.ended_at.into(),
+            hit_count: value.hit_count,
+            covered: value.covered,
+        }
+    }
+}
+
+impl From<ServiceCandidates> for ProtectionRecordingCandidates {
+    fn from(value: ServiceCandidates) -> Self {
+        Self {
+            stream: value.stream.into(),
+            since: value.since.into(),
+            baseline_tt_ped: value.baseline_tt_ped.into(),
+            sessions: value.sessions.into_iter().map(Into::into).collect(),
+            earlier: value.earlier.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl From<ServiceOverview> for ProtectionOverview {
     fn from(value: ServiceOverview) -> Self {
         Self {
             sets: value.sets.into_iter().map(Into::into).collect(),
-            loadouts: value.loadouts.into_iter().map(Into::into).collect(),
-            active_loadout_id: value.active_loadout_id.map(|id| id.to_string()).into(),
-            recent_reconciliations: value
-                .recent_reconciliations
-                .into_iter()
-                .map(Into::into)
-                .collect(),
             recent_cost_windows: value
                 .recent_cost_windows
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            unrecorded: UnrecordedProtection {
+                sessions: value.unrecorded.sessions,
+                hits: value.unrecorded.hits,
+            },
         }
     }
 }

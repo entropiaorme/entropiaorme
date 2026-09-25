@@ -49,10 +49,10 @@ use eo_api::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use eo_api::protection::{
-    PendingProtectionSession, ProtectionLoadoutInput, ProtectionLoadoutUpdateInput,
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
-    ProtectionRepairInput, ProtectionRepairOutcome, ProtectionScanResult, ProtectionSetInput,
-    ProtectionSetUpdateInput,
+    ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
+    ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
+    ProtectionStream,
 };
 use eo_api::quests::{
     Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
@@ -175,25 +175,6 @@ pub async fn protection_set_update(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_create(
-    app: tauri::AppHandle,
-    input: ProtectionLoadoutInput,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_loadout_create(&input).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_update(
-    app: tauri::AppHandle,
-    loadout_id: i64,
-    input: ProtectionLoadoutUpdateInput,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?
-        .protection_loadout_update(loadout_id, &input)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
 pub async fn protection_set_archive(
     app: tauri::AppHandle,
     set_id: i64,
@@ -202,37 +183,19 @@ pub async fn protection_set_archive(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_archive(
-    app: tauri::AppHandle,
-    loadout_id: i64,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_loadout_archive(loadout_id).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn protection_select(
-    app: tauri::AppHandle,
-    loadout_id: i64,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_select(loadout_id).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn protection_assign_session_loadout(
+pub async fn protection_session_status(
     app: tauri::AppHandle,
     session_id: String,
-    loadout_id: i64,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?
-        .protection_assign_session_loadout(&session_id, loadout_id)
-        .await
+) -> Result<ProtectionSessionStatus, ApiError> {
+    facade(&app)?.protection_session_status(session_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_pending_attribution(
+pub async fn protection_recording_candidates(
     app: tauri::AppHandle,
-) -> Result<Vec<PendingProtectionSession>, ApiError> {
-    facade(&app)?.protection_pending_attribution().await
+    stream: ProtectionStream,
+) -> Result<ProtectionRecordingCandidates, ApiError> {
+    facade(&app)?.protection_recording_candidates(stream).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1853,13 +1816,9 @@ mod tests {
         "protection_overview",
         "protection_set_create",
         "protection_set_update",
-        "protection_loadout_create",
-        "protection_loadout_update",
         "protection_set_archive",
-        "protection_loadout_archive",
-        "protection_select",
-        "protection_pending_attribution",
-        "protection_assign_session_loadout",
+        "protection_session_status",
+        "protection_recording_candidates",
         "protection_observation_confirm",
         "protection_repair_confirm",
         "protection_trade_terminal_scan",

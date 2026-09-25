@@ -32,7 +32,6 @@ pub(super) struct Accumulator {
 struct DefenceEvidence {
     session_id: String,
     context_id: Option<i64>,
-    protection_interval_id: Option<i64>,
     damage: Option<f64>,
     deflected: bool,
 }
@@ -252,10 +251,6 @@ impl TrackerActor {
                 defence = Some(DefenceEvidence {
                     session_id: active.session.id.clone(),
                     context_id: active.intervals.context_id(),
-                    protection_interval_id: active
-                        .intervals
-                        .open_of_kind(super::IntervalKind::Protection)
-                        .map(|interval| interval.id),
                     damage: Some(*amount),
                     deflected: false,
                 });
@@ -272,10 +267,6 @@ impl TrackerActor {
                 defence = Some(DefenceEvidence {
                     session_id: active.session.id.clone(),
                     context_id: active.intervals.context_id(),
-                    protection_interval_id: active
-                        .intervals
-                        .open_of_kind(super::IntervalKind::Protection)
-                        .map(|interval| interval.id),
                     damage: None,
                     deflected: true,
                 });
@@ -293,12 +284,11 @@ impl TrackerActor {
                 .with_writer(move |conn| {
                     conn.execute(
                         "INSERT INTO protection_defence_events \
-                         (session_id, context_id, protection_interval_id, damage, deflected) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                         (session_id, context_id, damage, deflected) \
+                         VALUES (?1, ?2, ?3, ?4)",
                         rusqlite::params![
                             defence.session_id,
                             defence.context_id,
-                            defence.protection_interval_id,
                             defence.damage,
                             defence.deflected as i64
                         ],

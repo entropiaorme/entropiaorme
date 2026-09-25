@@ -34,8 +34,6 @@ pub struct SessionDefinitionInput {
     #[serde(default = "default_true")]
     pub track_protection_costs: bool,
     #[serde(default)]
-    pub track_protection_by_segment: bool,
-    #[serde(default)]
     pub roster: Vec<SessionRosterEntryInput>,
 }
 
@@ -88,7 +86,6 @@ impl SessionDefinitionInput {
             name: self.name.clone(),
             ad_hoc_segments: self.ad_hoc_segments,
             track_protection_costs: self.track_protection_costs,
-            track_protection_by_segment: self.track_protection_by_segment,
             roster: self
                 .roster
                 .iter()
@@ -130,7 +127,6 @@ pub struct SessionDefinition {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
     /// A session that cannot be archived, because tracking always needs
     /// one to run under. It renames and takes a roster like any other.
     pub is_protected: bool,
@@ -155,7 +151,6 @@ impl SessionDefinition {
             name: definition.name.clone(),
             ad_hoc_segments: definition.ad_hoc_segments,
             track_protection_costs: definition.track_protection_costs,
-            track_protection_by_segment: definition.track_protection_by_segment,
             is_protected: definition.is_protected,
             is_active: definition.is_active,
             instance_count: definition.instance_count,

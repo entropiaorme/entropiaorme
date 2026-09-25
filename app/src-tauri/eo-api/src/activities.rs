@@ -556,7 +556,7 @@ impl Api {
                 )
                 .await
                 .map_err(ApiError::internal("activity options selection"))?
-                .map(|(id, _, _, _)| id)
+                .map(|(id, _, _)| id)
             }
         };
         let now = eo_services::time::naive_to_epoch(self.clock.now());

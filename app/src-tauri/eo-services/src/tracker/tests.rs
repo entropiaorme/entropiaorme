@@ -5551,12 +5551,17 @@ fn a_selected_definition_stamps_the_session_row_at_start() {
     assert_eq!(active.session_name.as_deref(), Some("ARIS Dailies"));
 }
 
+/// Nothing about protection is declared during play: a session records
+/// its hits with their context and no protection identity, even under a
+/// definition authored when per-segment declaration existed, and stamps
+/// the retired per-segment flag off.
 #[test]
-fn a_whole_session_protection_definition_stamps_and_surfaces_its_policy() {
+fn hits_carry_their_context_and_no_declared_protection() {
     let rig = rig();
     rig.execute(
         "INSERT INTO session_definitions \
-         (id, name, track_protection_by_segment) VALUES (7, 'Whole session', 0)",
+         (id, name, track_protection_costs, track_protection_by_segment) \
+         VALUES (7, 'Authored by segment', 1, 1)",
     );
     let tracker = rig.tracker(Providers {
         config: Arc::new(ScriptedConfig {
@@ -5574,261 +5579,25 @@ fn a_whole_session_protection_definition_stamps_and_surfaces_its_policy() {
         ),
         0
     );
-    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
-    assert!(!active.track_protection_by_segment);
     assert_eq!(
-        rig.wait(tracker.set_protection(ProtectionSelection {
-            loadout_id: 1,
-            loadout_name: "Segment-disabled setup".into(),
-            armour: None,
-            plates: None,
-        })),
-        Err(TrackerCommandError::ProtectionBySegmentDisabled)
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM session_intervals WHERE session_id = ? AND kind = 'protection'",
+            &[&session.id],
+        ),
+        0,
+        "no protection interval opens"
     );
-}
-
-fn whole_session_rig() -> (Rig, Arc<HuntTracker>) {
-    let rig = rig();
-    rig.execute(
-        "INSERT INTO session_definitions \
-         (id, name, track_protection_costs, track_protection_by_segment) \
-         VALUES (7, 'Whole session', 1, 0)",
-    );
-    let tracker = rig.tracker(Providers {
-        config: Arc::new(ScriptedConfig {
-            session_definition_id: Some(7),
-            ..Default::default()
-        }),
-        ..Providers::default()
-    });
-    (rig, tracker)
-}
-
-fn worn(loadout_id: i64, name: &str) -> ProtectionSelection {
-    ProtectionSelection {
-        loadout_id,
-        loadout_name: name.to_string(),
-        armour: None,
-        plates: None,
-    }
-}
-
-fn deflect(rig: &Rig, at: &str) {
     rig.bus.publish(&BusEvent::Combat(CombatPayload::Deflect {
-        timestamp: at.into(),
+        timestamp: "2026-01-01T00:00:01".into(),
     }));
-}
-
-/// Naming the setup part-way through a session is the user saying what
-/// they have been wearing all along, so the hits already recorded are
-/// its own. Until they are, no cost naming an armour set can settle
-/// them: the layer filter has nothing to match.
-#[test]
-fn a_mid_session_armour_declaration_adopts_the_hits_already_recorded() {
-    let (rig, tracker) = whole_session_rig();
-    let session = rig.wait(tracker.start_session()).unwrap();
-    deflect(&rig, "2026-01-01T00:00:01");
-    deflect(&rig, "2026-01-01T00:00:02");
     assert_eq!(
         rig.scalar_i64(
             "SELECT COUNT(*) FROM protection_defence_events \
-             WHERE session_id = ? AND protection_interval_id IS NULL",
-            &[&session.id],
-        ),
-        2,
-        "nothing is attributed before a setup is named"
-    );
-
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(1, "Hyperion + 5B")))
-        .unwrap();
-
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(*) FROM protection_defence_events \
-             WHERE session_id = ? AND protection_interval_id IS NULL",
-            &[&session.id],
-        ),
-        0,
-        "the declaration reaches back over the session's own evidence"
-    );
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(DISTINCT protection_interval_id) \
-             FROM protection_defence_events WHERE session_id = ?",
+             WHERE session_id = ? AND context_id IS NOT NULL \
+               AND protection_interval_id IS NULL",
             &[&session.id],
         ),
         1
-    );
-}
-
-/// A hit recorded after the declaration stamps it through the ordinary
-/// open-interval path, with no second declaration needed.
-#[test]
-fn hits_after_a_declaration_carry_it_without_being_asked_again() {
-    let (rig, tracker) = whole_session_rig();
-    let session = rig.wait(tracker.start_session()).unwrap();
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(1, "Hyperion + 5B")))
-        .unwrap();
-    deflect(&rig, "2026-01-01T00:00:03");
-
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(*) FROM protection_defence_events \
-             WHERE session_id = ? AND protection_interval_id IS NOT NULL",
-            &[&session.id],
-        ),
-        1
-    );
-}
-
-/// Nothing has been paid for yet, so a second answer is a correction of
-/// the first rather than a change of armour: every hit follows it.
-#[test]
-fn redeclaring_before_anything_settles_corrects_the_whole_session() {
-    let (rig, tracker) = whole_session_rig();
-    let session = rig.wait(tracker.start_session()).unwrap();
-    deflect(&rig, "2026-01-01T00:00:01");
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(1, "Hyperion + 5B")))
-        .unwrap();
-    deflect(&rig, "2026-01-01T00:00:02");
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(2, "Pegasus 6B")))
-        .unwrap();
-
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(DISTINCT i.ref_id) FROM protection_defence_events d \
-             JOIN session_intervals i ON i.id = d.protection_interval_id \
-             WHERE d.session_id = ?",
-            &[&session.id],
-        ),
-        1,
-        "one standing answer, not two"
-    );
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT DISTINCT i.ref_id FROM protection_defence_events d \
-             JOIN session_intervals i ON i.id = d.protection_interval_id \
-             WHERE d.session_id = ?",
-            &[&session.id],
-        ),
-        2,
-        "the corrected answer"
-    );
-}
-
-/// Once a cost has settled, the hits it paid for belong to the setup
-/// that was declared then. A new declaration takes effect from now, so
-/// the next recording covers only what follows it.
-#[test]
-fn redeclaring_after_a_settled_cost_leaves_what_it_paid_for_alone() {
-    let (rig, tracker) = whole_session_rig();
-    let session = rig.wait(tracker.start_session()).unwrap();
-    deflect(&rig, "2026-01-01T00:00:01");
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(1, "Hyperion + 5B")))
-        .unwrap();
-    let settled_interval = rig.scalar_i64(
-        "SELECT protection_interval_id FROM protection_defence_events WHERE session_id = ?",
-        &[&session.id],
-    );
-    rig.execute(
-        "INSERT INTO protection_cost_windows (kind, cost_ped, status, created_at)          VALUES ('repair', 1.55, 'booked', 0)",
-    );
-    rig.execute(
-        "INSERT INTO protection_cost_evidence (window_id, set_id, defence_event_id)          SELECT 1, NULL, id FROM protection_defence_events",
-    );
-
-    rig.wait(tracker.declare_whole_session_protection(&session.id, worn(2, "Pegasus 6B")))
-        .unwrap();
-
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT protection_interval_id FROM protection_defence_events WHERE session_id = ?",
-            &[&session.id],
-        ),
-        settled_interval,
-        "the settled hit keeps the setup its cost was recorded against"
-    );
-
-    deflect(&rig, "2026-01-01T00:00:04");
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(DISTINCT protection_interval_id) \
-             FROM protection_defence_events WHERE session_id = ?",
-            &[&session.id],
-        ),
-        2,
-        "the hit after the change is the new setup's"
-    );
-}
-
-/// The session a declaration names is the session it lands on. A stop
-/// and a fresh start can happen between reading which session is running
-/// and asking for the setup to be recorded, and the setup meant for the
-/// finished session must not be recorded against its successor.
-#[test]
-fn a_declaration_naming_a_session_that_has_since_stopped_is_refused() {
-    let (rig, tracker) = whole_session_rig();
-    let first = rig.wait(tracker.start_session()).unwrap();
-    deflect(&rig, "2026-01-01T00:00:01");
-    rig.wait(tracker.stop_session()).unwrap();
-    let second = rig.wait(tracker.start_session()).unwrap();
-    assert_ne!(first.id, second.id);
-
-    assert_eq!(
-        rig.wait(tracker.declare_whole_session_protection(&first.id, worn(1, "Hyperion + 5B"))),
-        Err(TrackerCommandError::SessionNoLongerActive),
-        "the finished session is no longer the tracker's to write"
-    );
-    assert_eq!(
-        rig.scalar_i64(
-            "SELECT COUNT(*) FROM protection_defence_events              WHERE session_id = ? AND protection_interval_id IS NOT NULL",
-            &[&second.id],
-        ),
-        0,
-        "nothing was recorded against the session that happens to be running"
-    );
-}
-
-/// The two attribution modes stay disjoint: a session tracking by
-/// segment declares through the per-segment route, and one not tracking
-/// armour cost at all has nothing to declare.
-#[test]
-fn a_whole_session_declaration_refuses_the_modes_it_does_not_belong_to() {
-    let rig = rig();
-    rig.execute(
-        "INSERT INTO session_definitions \
-         (id, name, track_protection_costs, track_protection_by_segment) \
-         VALUES (7, 'By segment', 1, 1), (8, 'No armour cost', 0, 0)",
-    );
-    let by_segment = rig.tracker(Providers {
-        config: Arc::new(ScriptedConfig {
-            session_definition_id: Some(7),
-            ..Default::default()
-        }),
-        ..Providers::default()
-    });
-    let segmented = rig.wait(by_segment.start_session()).unwrap();
-    assert_eq!(
-        rig.wait(
-            by_segment.declare_whole_session_protection(&segmented.id, worn(1, "Hyperion + 5B"))
-        ),
-        Err(TrackerCommandError::ProtectionBySegmentEnabled)
-    );
-    rig.wait(by_segment.stop_session()).unwrap();
-
-    let opted_out = rig.tracker(Providers {
-        config: Arc::new(ScriptedConfig {
-            session_definition_id: Some(8),
-            ..Default::default()
-        }),
-        ..Providers::default()
-    });
-    let untracked = rig.wait(opted_out.start_session()).unwrap();
-    assert_eq!(
-        rig.wait(
-            opted_out.declare_whole_session_protection(&untracked.id, worn(1, "Hyperion + 5B"))
-        ),
-        Err(TrackerCommandError::ProtectionCostsDisabled)
     );
 }
 
@@ -5837,8 +5606,8 @@ fn an_armour_cost_opt_out_stamps_policy_and_records_no_defence_evidence() {
     let rig = rig();
     rig.execute(
         "INSERT INTO session_definitions \
-         (id, name, track_protection_costs, track_protection_by_segment) \
-         VALUES (7, 'Offensive costs only', 0, 0)",
+         (id, name, track_protection_costs) \
+         VALUES (7, 'Offensive costs only', 0)",
     );
     let tracker = rig.tracker(Providers {
         config: Arc::new(ScriptedConfig {
@@ -5851,7 +5620,6 @@ fn an_armour_cost_opt_out_stamps_policy_and_records_no_defence_evidence() {
     let session = rig.wait(tracker.start_session()).unwrap();
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
     assert!(!active.track_protection_costs);
-    assert!(!active.track_protection_by_segment);
     assert_eq!(
         rig.scalar_i64(
             "SELECT track_protection_costs FROM tracking_sessions WHERE id = ?",

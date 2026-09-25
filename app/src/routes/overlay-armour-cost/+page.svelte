@@ -183,18 +183,14 @@
 </script>
 
 {#if panelState}
-	<!-- This workflow stays open while the player returns to the game to exchange armour and plates between steps. -->
+	<!-- The recording stays open while the player returns to the game to place items in a terminal. -->
 	<div class="armour-cost-shell" bind:this={shellEl}>
 		<div
 			class="armour-cost-panel"
 			class:armour-cost-panel-visible={panelVisible}
 		>
 			<ProtectionCostPanel
-				sessionId={panelState.sessionId}
 				repairOcrEnabled={panelState.repairOcrEnabled}
-				steps={panelState.steps}
-				protection={panelState.protection}
-				requiresLoadoutSelection={panelState.requiresLoadoutSelection}
 				onClose={() => void requestClose()}
 			/>
 		</div>

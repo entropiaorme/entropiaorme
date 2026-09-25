@@ -85,7 +85,6 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "gameConnection",
             "hotbarHooksEnabled",
             "repairOcrEnabled",
-            "endOfSessionArmourReminderEnabled",
             "developerModeEnabled",
             "sessionName",
             "declaredSkillBoostPercent",

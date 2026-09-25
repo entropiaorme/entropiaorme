@@ -51,10 +51,10 @@ use crate::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::protection::{
-    PendingProtectionSession, ProtectionLoadoutInput, ProtectionLoadoutUpdateInput,
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
-    ProtectionRepairInput, ProtectionRepairOutcome, ProtectionScanResult, ProtectionSetInput,
-    ProtectionSetUpdateInput,
+    ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
+    ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
+    ProtectionStream,
 };
 use crate::quests::{
     Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
@@ -178,28 +178,6 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_loadout_create",
-            args: vec![ArgSpec {
-                name: "input",
-                schema: schema(schema_for!(ProtectionLoadoutInput)),
-            }],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
-        },
-        CommandSpec {
-            name: "protection_loadout_update",
-            args: vec![
-                ArgSpec {
-                    name: "loadout_id",
-                    schema: schema(schema_for!(i64)),
-                },
-                ArgSpec {
-                    name: "input",
-                    schema: schema(schema_for!(ProtectionLoadoutUpdateInput)),
-                },
-            ],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
-        },
-        CommandSpec {
             name: "protection_set_archive",
             args: vec![ArgSpec {
                 name: "set_id",
@@ -208,39 +186,20 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_loadout_archive",
+            name: "protection_session_status",
             args: vec![ArgSpec {
-                name: "loadout_id",
-                schema: schema(schema_for!(i64)),
+                name: "session_id",
+                schema: schema(schema_for!(String)),
             }],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
+            returns: Some(schema(schema_for!(ProtectionSessionStatus))),
         },
         CommandSpec {
-            name: "protection_select",
+            name: "protection_recording_candidates",
             args: vec![ArgSpec {
-                name: "loadout_id",
-                schema: schema(schema_for!(i64)),
+                name: "stream",
+                schema: schema(schema_for!(ProtectionStream)),
             }],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
-        },
-        CommandSpec {
-            name: "protection_pending_attribution",
-            args: vec![],
-            returns: Some(schema(schema_for!(Vec<PendingProtectionSession>))),
-        },
-        CommandSpec {
-            name: "protection_assign_session_loadout",
-            args: vec![
-                ArgSpec {
-                    name: "session_id",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "loadout_id",
-                    schema: schema(schema_for!(i64)),
-                },
-            ],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
+            returns: Some(schema(schema_for!(ProtectionRecordingCandidates))),
         },
         CommandSpec {
             name: "protection_observation_confirm",

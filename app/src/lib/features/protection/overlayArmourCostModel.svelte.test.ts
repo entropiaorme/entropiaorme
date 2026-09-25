@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
-import type { ProtectionOverview } from '$lib/api';
 import type { SatelliteWindow } from '$lib/windows/satellite';
 import { createOverlayArmourCostModel } from './overlayArmourCostModel.svelte';
 
@@ -9,23 +8,8 @@ import { createOverlayArmourCostModel } from './overlayArmourCostModel.svelte';
 // these cover, so it stands in as a fixed point.
 vi.mock('$lib/windows/anchor', () => ({
 	anchorCentreBelow: vi.fn(async () => ({ centerX: 0, top: 0 })),
-	createAnchorTracker: () => ({ schedule: () => {}, stop: () => {} }),
+	createAnchorTracker: () => ({ schedule: () => {}, cancel: () => {}, stop: () => {} }),
 }));
-
-const overview: ProtectionOverview = {
-	sets: [],
-	loadouts: [
-		{
-			id: '10',
-			name: 'Hyperion + 5B',
-			armour: { id: '1', name: 'Hyperion', economyKind: 'unlimited', markupPercent: null },
-			plates: null,
-		},
-	],
-	activeLoadoutId: '10',
-	recentReconciliations: [],
-	recentCostWindows: [],
-};
 
 function satellite(): SatelliteWindow {
 	return {
@@ -43,46 +27,59 @@ function anchorElement(): HTMLElement {
 	return button;
 }
 
-function model(anchor: () => HTMLElement | null, sessionId: string | null = 's1') {
+function model(window: SatelliteWindow = satellite(), repairOcrEnabled = false) {
 	return createOverlayArmourCostModel({
-		window: satellite(),
+		window,
 		anchorGap: 4,
-		sessionId: () => sessionId,
-		repairOcrEnabled: () => false,
-		bySegment: () => false,
-		protection: () => overview,
-		inSessionAnchor: anchor,
+		repairOcrEnabled: () => repairOcrEnabled,
 	});
 }
 
-describe('overlay armour cost model', () => {
-	it('opens against an anchor the host renders a few flushes late', async () => {
-		let target: HTMLElement | null = null;
-		// The host renders its Cost control only once the readout has, which
-		// is not guaranteed to be the flush the workflow is asked in, and a
-		// readout that arrives off a timer settles after every flush alone
-		// could observe.
-		setTimeout(() => {
-			target = anchorElement();
-		}, 0);
+function click(target: HTMLElement): MouseEvent {
+	const event = new MouseEvent('click');
+	Object.defineProperty(event, 'currentTarget', { value: target });
+	return event;
+}
 
-		const armour = model(() => target);
-		expect(await armour.showInSession()).toBe(true);
+describe('overlay armour cost model', () => {
+	it('opens against the Cost control with no session running', async () => {
+		const window = satellite();
+		const armour = model(window, true);
+		await armour.toggle(click(anchorElement()));
 		expect(armour.open).toBe(true);
 		expect(armour.error).toBeNull();
+		expect(window.show).toHaveBeenCalledWith(
+			{ repairOcrEnabled: true, anchor: { centerX: 0, top: 0 } },
+			undefined,
+			{ reveal: false },
+		);
 	});
 
-	it('says so rather than failing quietly when the anchor never arrives', async () => {
-		const armour = model(() => null);
-		expect(await armour.showInSession()).toBe(false);
+	it('does not open against a control that has left the document', async () => {
+		const armour = model();
+		const detached = document.createElement('button');
+		expect(await armour.show(detached)).toBe(false);
 		expect(armour.open).toBe(false);
-		expect(armour.error).toBe('The armour cost window could not be opened');
 	});
 
-	it('says so when there is no session left to record against', async () => {
+	it('closes on a second press', async () => {
+		const window = satellite();
+		const armour = model(window);
 		const target = anchorElement();
-		const armour = model(() => target, null);
-		expect(await armour.showInSession()).toBe(false);
-		expect(armour.error).toBe('There is no session left to record an armour cost against');
+		await armour.toggle(click(target));
+		await armour.toggle(click(target));
+		expect(armour.open).toBe(false);
+		expect(window.hide).toHaveBeenCalledTimes(1);
+	});
+
+	it('does not reopen from the press that its own close raced', async () => {
+		const window = satellite();
+		const armour = model(window);
+		const target = anchorElement();
+		await armour.toggle(click(target));
+		armour.noteClosed();
+		await armour.toggle(click(target));
+		expect(armour.open).toBe(false);
+		expect(window.show).toHaveBeenCalledTimes(1);
 	});
 });

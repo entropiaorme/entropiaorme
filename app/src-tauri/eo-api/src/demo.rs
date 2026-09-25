@@ -607,7 +607,6 @@ impl DemoState {
         Ok(AppConfig {
             hotbar_hooks_enabled: false,
             repair_ocr_enabled: false,
-            end_of_session_armour_reminder_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
             trifecta_presets: vec![preset],

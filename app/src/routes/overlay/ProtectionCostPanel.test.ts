@@ -2,305 +2,313 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProtectionCostStep } from '$lib/features/protection/protectionCostFlow';
+import type {
+	ProtectionCandidateSession,
+	ProtectionCostWindow,
+	ProtectionRecordingCandidates,
+	ProtectionSet,
+} from '$lib/api';
 
 const api = vi.hoisted(() => ({
-	assignSessionProtectionLoadout: vi.fn(),
-	pendingProtectionAttribution: vi.fn(),
+	confirmProtectionObservation: vi.fn(),
 	confirmProtectionRepair: vi.fn(),
+	getProtectionOverview: vi.fn(),
+	getProtectionRecordingCandidates: vi.fn(),
 	scanRepairCost: vi.fn(),
 	scanTradeTerminalValue: vi.fn(),
-	confirmProtectionObservation: vi.fn(),
 }));
 
 vi.mock('$lib/api', () => api);
 
 import ProtectionCostPanel from './ProtectionCostPanel.svelte';
 
-const mixedSteps: ProtectionCostStep[] = [
-	{
-		layer: 'armour',
-		method: 'repair',
-		name: 'UL armour',
-		setId: '1',
-		armourSetId: '1',
-		plateSetId: null,
+function session(
+	id: string,
+	startedAt: number,
+	hitCount: number,
+	definition: [string, string] | null = null,
+	covered = false,
+): ProtectionCandidateSession {
+	return {
+		sessionId: id,
+		sessionName: definition?.[1] ?? null,
+		definitionId: definition?.[0] ?? null,
+		definitionName: definition?.[1] ?? null,
+		startedAt,
+		endedAt: startedAt + 3600,
+		hitCount,
+		covered,
+	};
+}
+
+const ARIS: [string, string] = ['2', 'ARIS Dailies'];
+const TREES: [string, string] = ['3', 'Tree Cutting'];
+
+function candidates(
+	sessions: ProtectionCandidateSession[],
+	overrides: Partial<ProtectionRecordingCandidates> = {},
+): ProtectionRecordingCandidates {
+	return {
+		stream: { kind: 'unlimited' },
+		since: null,
+		baselineTtPed: null,
+		sessions,
+		earlier: [],
+		...overrides,
+	};
+}
+
+function costWindow(costPed: number, sessionIds: string[]): ProtectionCostWindow {
+	return {
+		id: 'w',
+		kind: 'repair',
+		setId: null,
+		setName: null,
+		consumedTtPed: null,
 		markupPercent: null,
-		baselineTtPed: null,
-	},
-	{
-		layer: 'plates',
-		method: 'limited',
-		name: 'L plates',
-		setId: '2',
-		armourSetId: null,
-		plateSetId: '2',
-		markupPercent: 125,
-		baselineTtPed: null,
-	},
-];
+		costPed,
+		costKnown: true,
+		status: sessionIds.length > 0 ? 'booked' : 'pending',
+		reason: null,
+		createdAt: 1,
+		allocations: sessionIds.map((sessionId) => ({
+			sessionId,
+			hitCount: 1,
+			allocationShare: 1 / sessionIds.length,
+			costPed: costPed / sessionIds.length,
+		})),
+	};
+}
+
+const hyperion: ProtectionSet = {
+	id: '9',
+	kind: 'armour',
+	name: 'Hyperion',
+	markupPercent: 200,
+	latestObservation: null,
+	basisLocked: false,
+};
+
+function renderPanel(onClose = vi.fn()) {
+	render(ProtectionCostPanel, { props: { repairOcrEnabled: false, onClose } });
+	return onClose;
+}
+
+async function enterAmount(value: string) {
+	await fireEvent.click(await screen.findByText('Enter manually'));
+	await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value } });
+}
+
+function lastRepairInput() {
+	return api.confirmProtectionRepair.mock.calls.at(-1)?.[0];
+}
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	api.confirmProtectionRepair.mockResolvedValue({
-		costWindow: {
-			id: 'window',
-			kind: 'repair',
-			setId: null,
-			armourSetId: '1',
-			plateSetId: null,
-			consumedTtPed: null,
-			markupPercent: null,
-			costPed: 1.5,
-			costKnown: true,
-			status: 'booked',
-			reason: null,
-			createdAt: 1,
-			allocations: [{ sessionId: 's1', hitCount: 1, allocationShare: 1, costPed: 1.5 }],
-		},
+	api.getProtectionOverview.mockResolvedValue({
+		sets: [],
+		recentCostWindows: [],
+		unrecorded: { sessions: 0, hits: 0 },
 	});
-	api.scanTradeTerminalValue.mockResolvedValue({
-		valuePed: 10,
-		rawText: '10.00',
-		confidence: 0.99,
-		error: null,
-		calibrated: true,
+	api.confirmProtectionRepair.mockImplementation(
+		async (input: { costPed: number; sessionIds: string[] }) => ({
+			costWindow: costWindow(input.costPed, input.sessionIds),
+		}),
+	);
+});
+
+describe('recording an unlimited repair', () => {
+	it('spreads over the one session since the last repair without asking which', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 80, ARIS)]),
+		);
+		renderPanel();
+
+		await enterAmount('8');
+		expect(await screen.findByText(/Covers ARIS Dailies/)).toBeTruthy();
+		expect(screen.queryByTestId('armour-session-picker')).toBeNull();
+		await fireEvent.click(screen.getByText('Record'));
+
+		await waitFor(() =>
+			expect(lastRepairInput()).toMatchObject({ costPed: 8, sessionIds: ['s1'] }),
+		);
+		expect(await screen.findByText('8.00 PED recorded')).toBeTruthy();
 	});
-	api.confirmProtectionObservation.mockResolvedValue({
-		observation: {
-			id: 'observation',
-			setId: '2',
-			ttValuePed: 10,
-			source: 'ocr',
-			rawText: '10.00',
-			observedAt: 1,
-			resetReason: null,
-		},
-		reconciliation: null,
-		costWindow: null,
+
+	it('drops a whole session type in one tick', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([
+				session('a1', 1_700_000_000, 30, ARIS),
+				session('t1', 1_700_100_000, 50, TREES),
+				session('a2', 1_700_200_000, 10, ARIS),
+			]),
+		);
+		renderPanel();
+		await enterAmount('4');
+
+		expect(await screen.findByTestId('armour-session-picker')).toBeTruthy();
+		await fireEvent.click(screen.getByLabelText('Include Tree Cutting'));
+		expect(screen.getByText('2 sessions · 40 hits')).toBeTruthy();
+		// Hit-weighted preview: 30 and 10 of 40 hits.
+		expect(screen.getByText('4.00')).toBeTruthy();
+
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()?.sessionIds).toEqual(['a1', 'a2']));
+	});
+
+	it('drops a single session through its open session type', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('a1', 1_700_000_000, 30, ARIS), session('a2', 1_700_200_000, 10, ARIS)]),
+		);
+		renderPanel();
+		await enterAmount('4');
+
+		await fireEvent.click(await screen.findByText('ARIS Dailies'));
+		const singles = screen.getAllByLabelText(/Include the session of/);
+		expect(singles).toHaveLength(2);
+		await fireEvent.click(singles[1]);
+		expect((screen.getByLabelText('Include ARIS Dailies') as HTMLInputElement).indeterminate).toBe(
+			true,
+		);
+
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()?.sessionIds).toEqual(['a1']));
+	});
+
+	it('moves the look-back start later from the since line', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates(
+				[
+					session('july', 1_689_000_000, 20, ARIS),
+					session('sept-1', 1_694_000_000, 15, ARIS),
+					session('sept-2', 1_694_100_000, 5, ARIS),
+				],
+				{ since: 1_688_000_000 },
+			),
+		);
+		renderPanel();
+		await enterAmount('2');
+
+		const since = (await screen.findByLabelText('Cover sessions from')) as HTMLSelectElement;
+		await fireEvent.change(since, { target: { value: 'sept-1' } });
+		expect(screen.getByText('2 sessions · 20 hits')).toBeTruthy();
+
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()?.sessionIds).toEqual(['sept-1', 'sept-2']));
+	});
+
+	it('re-includes an earlier session only when asked to', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('new', 1_700_200_000, 30, ARIS)], {
+				since: 1_700_100_000,
+				earlier: [session('old', 1_700_000_000, 10, ARIS, true)],
+			}),
+		);
+		renderPanel();
+		await enterAmount('4');
+
+		await fireEvent.click(await screen.findByText('Include sessions from before the last repair'));
+		const earlier = screen.getByLabelText(/Include the earlier session of/) as HTMLInputElement;
+		expect(earlier.checked).toBe(false);
+		expect(screen.getByText('recorded')).toBeTruthy();
+		await fireEvent.click(earlier);
+
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()?.sessionIds).toEqual(['old', 'new']));
+	});
+
+	it('says a repair with no hits behind it counts toward overall costs only', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([], { since: 1_700_000_000 }),
+		);
+		renderPanel();
+		await enterAmount('1');
+		expect(await screen.findByText(/No hits recorded since the last repair/)).toBeTruthy();
+		await fireEvent.click(screen.getByText('Record'));
+		expect(await screen.findByText(/counts toward your overall costs only/)).toBeTruthy();
+	});
+
+	it('retries a failed recording under the same token', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)]),
+		);
+		api.confirmProtectionRepair.mockRejectedValueOnce(new Error('connection lost'));
+		renderPanel();
+		await enterAmount('1');
+
+		await fireEvent.click(screen.getByText('Record'));
+		expect(await screen.findByText('connection lost')).toBeTruthy();
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(api.confirmProtectionRepair).toHaveBeenCalledTimes(2));
+		const [first, second] = api.confirmProtectionRepair.mock.calls.map(
+			(call) => call[0].clientToken,
+		);
+		expect(second).toBe(first);
 	});
 });
 
-describe('protection cost panel', () => {
-	it('lets the user defer recording without consuming defensive evidence', async () => {
-		const onClose = vi.fn();
-		render(ProtectionCostPanel, {
-			props: { sessionId: 's1', repairOcrEnabled: false, steps: mixedSteps, onClose },
+describe('recording a limited set', () => {
+	beforeEach(() => {
+		api.getProtectionOverview.mockResolvedValue({
+			sets: [hyperion],
+			recentCostWindows: [],
+			unrecorded: { sessions: 0, hits: 0 },
 		});
-
-		await fireEvent.click(screen.getByText('Later'));
-		expect(onClose).toHaveBeenCalledTimes(1);
-		expect(api.confirmProtectionRepair).not.toHaveBeenCalled();
-		expect(api.confirmProtectionObservation).not.toHaveBeenCalled();
 	});
 
-	it('records mixed protection armour-first and then establishes the limited plate baseline', async () => {
-		const onClose = vi.fn();
-		render(ProtectionCostPanel, {
-			props: {
-				sessionId: 's1',
-				repairOcrEnabled: false,
-				steps: mixedSteps,
-				onClose,
-			},
-		});
-
-		expect(screen.getByText('Armour')).toBeTruthy();
-		expect(screen.getByText('Unlimited')).toBeTruthy();
-		await fireEvent.click(screen.getByText('Enter manually'));
-		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), {
-			target: { value: '1.50' },
-		});
-		await fireEvent.click(screen.getByText('Confirm'));
-
-		await waitFor(() =>
-			expect(api.confirmProtectionRepair).toHaveBeenCalledWith(
-				expect.objectContaining({ armourSetId: 1, plateSetId: null, costPed: 1.5 }),
-			),
+	it('takes a first reading as a baseline that spreads nothing', async () => {
+		api.getProtectionRecordingCandidates.mockImplementation(async (stream: { kind: string }) =>
+			stream.kind === 'limited'
+				? candidates([], { stream: { kind: 'limited', setId: 9 } })
+				: candidates([session('s1', 1_700_000_000, 5)]),
 		);
-		await fireEvent.click(screen.getByText('Continue to plates'));
+		api.confirmProtectionObservation.mockResolvedValue({
+			observation: {
+				id: '1',
+				setId: '9',
+				ttValuePed: 30,
+				source: 'manual',
+				rawText: null,
+				observedAt: 1,
+				resetReason: null,
+			},
+			costWindow: null,
+		});
+		renderPanel();
 
-		expect(screen.getByText('Plates')).toBeTruthy();
-		expect(screen.getByText('Limited')).toBeTruthy();
-		await fireEvent.click(screen.getByText('Scan Trade Terminal'));
-		await waitFor(() => expect(screen.getByText('Set baseline')).toBeTruthy());
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await enterAmount('30');
+		expect(screen.getByText(/first reading/)).toBeTruthy();
 		await fireEvent.click(screen.getByText('Set baseline'));
 
 		await waitFor(() =>
 			expect(api.confirmProtectionObservation).toHaveBeenCalledWith(
-				expect.objectContaining({ setId: 2, ttValuePed: 10, source: 'ocr' }),
+				expect.objectContaining({ setId: 9, ttValuePed: 30, sessionIds: [] }),
 			),
 		);
-		expect(screen.getByText('Baseline established')).toBeTruthy();
-		await fireEvent.click(screen.getByText('Done'));
-		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(await screen.findByText('Baseline set at 30.00 PED')).toBeTruthy();
 	});
 
-	it('names a whole-session setup for a session owed one', async () => {
-		api.assignSessionProtectionLoadout.mockResolvedValue({});
-		api.pendingProtectionAttribution
-			.mockResolvedValueOnce([
-				{
-					sessionId: 's1',
-					name: 'Caly AI Dailies',
-					startedAt: 1,
-					endedAt: null,
-					defenceEventCount: 3,
-				},
-			])
-			.mockResolvedValue([]);
-		render(ProtectionCostPanel, {
-			props: {
-				sessionId: 's1',
-				repairOcrEnabled: false,
-				steps: [],
-				requiresLoadoutSelection: true,
-				protection: {
-					sets: [],
-					loadouts: [
-						{
-							id: '10',
-							name: 'Jaguar and plates',
-							armour: { id: '1', name: 'Jaguar', economyKind: 'unlimited', markupPercent: null },
-							plates: null,
-						},
-					],
-					activeLoadoutId: null,
-					recentReconciliations: [],
-					recentCostWindows: [],
-				},
-				onClose: vi.fn(),
-			},
-		});
-
-		await waitFor(() => expect(screen.getByRole('combobox')).toBeTruthy());
-		await fireEvent.change(screen.getByRole('combobox'), { target: { value: '10' } });
-		await waitFor(() =>
-			expect(api.assignSessionProtectionLoadout).toHaveBeenCalledWith('s1', '10'),
+	it('previews the markup-priced loss and needs a reason for a higher reading', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)], {
+				stream: { kind: 'limited', setId: 9 },
+				baselineTtPed: 30,
+				since: 1_699_000_000,
+			}),
 		);
-		// Naming the setup takes the session off the owed list, which must not
-		// read as the hits it just attributed having gone away.
-		await waitFor(() => expect(screen.getByText(/Recording under/)).toBeTruthy());
-		expect(screen.queryByText(/hits/)).toBeNull();
-	});
+		renderPanel();
+		await fireEvent.click(await screen.findByText('Hyperion'));
 
-	it('waits for a named setup before it will carry one forward', async () => {
-		// A session that has taken no hits is owed no setup, so it is absent
-		// from the pending list. Nothing may be carried forward on its behalf
-		// until a setup is actually named.
-		api.assignSessionProtectionLoadout.mockResolvedValue({});
-		api.pendingProtectionAttribution.mockResolvedValue([]);
-		render(ProtectionCostPanel, {
-			props: {
-				sessionId: 's1',
-				repairOcrEnabled: false,
-				steps: [],
-				requiresLoadoutSelection: true,
-				protection: {
-					sets: [],
-					loadouts: [
-						{
-							id: '10',
-							name: 'Jaguar and plates',
-							armour: { id: '1', name: 'Jaguar', economyKind: 'unlimited', markupPercent: null },
-							plates: null,
-						},
-					],
-					activeLoadoutId: null,
-					recentReconciliations: [],
-					recentCostWindows: [],
-				},
-				onClose: vi.fn(),
-			},
+		await enterAmount('28');
+		expect(await screen.findByText('4.00 PED cost')).toBeTruthy();
+
+		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value: '31' } });
+		const reset = screen.getByText('Reset baseline') as HTMLButtonElement;
+		expect(reset.disabled).toBe(true);
+		await fireEvent.input(screen.getByPlaceholderText('Pieces replaced or reading corrected'), {
+			target: { value: 'Replaced the helmet' },
 		});
-
-		await waitFor(() => expect(screen.getByRole('combobox')).toBeTruthy());
-		expect(screen.queryByText('Continue')).toBeNull();
-		expect(screen.queryByText('Armour setup saved')).toBeNull();
-
-		await fireEvent.change(screen.getByRole('combobox'), { target: { value: '10' } });
-		await waitFor(() =>
-			expect(api.assignSessionProtectionLoadout).toHaveBeenCalledWith('s1', '10'),
-		);
-		await fireEvent.click(await screen.findByText('Continue'));
-		expect(screen.queryByText('Choose armour setup')).toBeNull();
-	});
-
-	it('offers a session left without a setup alongside the running one', async () => {
-		// A session put off for later carries unattributed evidence, which no
-		// cost naming an armour set can settle. If the recording surface does
-		// not say so, it stays unpriced silently.
-		api.assignSessionProtectionLoadout.mockResolvedValue({});
-		api.pendingProtectionAttribution.mockResolvedValue([
-			{
-				sessionId: 's1',
-				name: 'Caly AI Dailies',
-				startedAt: 2,
-				endedAt: null,
-				defenceEventCount: 3,
-			},
-			{
-				sessionId: 'postponed',
-				name: 'Caly AI Dailies',
-				startedAt: 1,
-				endedAt: 2,
-				defenceEventCount: 123,
-			},
-		]);
-		render(ProtectionCostPanel, {
-			props: {
-				sessionId: 's1',
-				repairOcrEnabled: false,
-				steps: [],
-				requiresLoadoutSelection: true,
-				protection: {
-					sets: [],
-					loadouts: [
-						{
-							id: '10',
-							name: 'Hyperion + 5B',
-							armour: { id: '1', name: 'Hyperion', economyKind: 'unlimited', markupPercent: null },
-							plates: null,
-						},
-					],
-					activeLoadoutId: null,
-					recentReconciliations: [],
-					recentCostWindows: [],
-				},
-				onClose: vi.fn(),
-			},
-		});
-
-		await waitFor(() => expect(screen.getAllByRole('combobox')).toHaveLength(2));
-		expect(screen.getByText('This session')).toBeTruthy();
-		expect(screen.getByText(/123 hits/)).toBeTruthy();
-
-		await fireEvent.change(screen.getByLabelText('Armour setup for Caly AI Dailies'), {
-			target: { value: '10' },
-		});
-		await waitFor(() =>
-			expect(api.assignSessionProtectionLoadout).toHaveBeenCalledWith('postponed', '10'),
-		);
-	});
-
-	it('accepts a lower limited-armour reading without an implementation assertion', async () => {
-		render(ProtectionCostPanel, {
-			props: {
-				sessionId: 's1',
-				repairOcrEnabled: false,
-				steps: [{ ...mixedSteps[1], baselineTtPed: 10 }],
-				onClose: vi.fn(),
-			},
-		});
-
-		await fireEvent.click(screen.getByText('Enter manually'));
-		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value: '9' } });
-		expect(screen.queryByText(/This set was not replaced/)).toBeNull();
-		await fireEvent.click(screen.getByText('Confirm'));
-		await waitFor(() =>
-			expect(api.confirmProtectionObservation).toHaveBeenCalledWith(
-				expect.objectContaining({ setId: 2, ttValuePed: 9 }),
-			),
-		);
+		expect((screen.getByText('Reset baseline') as HTMLButtonElement).disabled).toBe(false);
 	});
 });

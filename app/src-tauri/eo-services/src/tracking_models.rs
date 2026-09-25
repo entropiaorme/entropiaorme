@@ -185,7 +185,6 @@ pub struct ActiveSessionView {
     /// stamped at start; None for a session outside any definition.
     pub definition_id: Option<i64>,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
     /// The skill-boost facet the session runs under (percent), when set.
     pub skill_boost_percent: Option<i64>,
     /// The activities standing on the session, in the order they were

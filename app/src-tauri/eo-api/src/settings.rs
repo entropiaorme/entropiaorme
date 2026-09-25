@@ -128,7 +128,6 @@ pub struct AppSettings {
     pub game_connection: GameConnection,
     pub hotbar_hooks_enabled: bool,
     pub repair_ocr_enabled: bool,
-    pub end_of_session_armour_reminder_enabled: bool,
     pub developer_mode_enabled: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
@@ -202,8 +201,6 @@ pub struct SettingsPatch {
     #[serde(default)]
     pub repair_ocr_enabled: Option<bool>,
     #[serde(default)]
-    pub end_of_session_armour_reminder_enabled: Option<bool>,
-    #[serde(default)]
     pub developer_mode_enabled: Option<bool>,
     #[serde(default)]
     pub session_name: Option<String>,
@@ -255,12 +252,6 @@ impl SettingsPatch {
         }
         if let Some(value) = self.repair_ocr_enabled {
             updates.insert("repair_ocr_enabled".into(), Value::Bool(value));
-        }
-        if let Some(value) = self.end_of_session_armour_reminder_enabled {
-            updates.insert(
-                "end_of_session_armour_reminder_enabled".into(),
-                Value::Bool(value),
-            );
         }
         if let Some(value) = self.developer_mode_enabled {
             updates.insert("developer_mode_enabled".into(), Value::Bool(value));
@@ -327,7 +318,6 @@ impl Api {
             },
             hotbar_hooks_enabled: config.hotbar_hooks_enabled,
             repair_ocr_enabled: config.repair_ocr_enabled,
-            end_of_session_armour_reminder_enabled: config.end_of_session_armour_reminder_enabled,
             developer_mode_enabled: config.developer_mode_enabled,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config

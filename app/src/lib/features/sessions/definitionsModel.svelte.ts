@@ -100,7 +100,6 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 	let name = $state('');
 	let adHocSegments = $state(false);
 	let trackProtectionCosts = $state(true);
-	let trackProtectionBySegment = $state(false);
 	let roster = $state<RosterDraftEntry[]>([]);
 	let saving = $state(false);
 	let authoringError = $state<string | null>(null);
@@ -232,7 +231,6 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		name = '';
 		adHocSegments = false;
 		trackProtectionCosts = true;
-		trackProtectionBySegment = false;
 		roster = [];
 		authoringError = null;
 		archiveArmed = false;
@@ -248,7 +246,6 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		name = definition.name;
 		adHocSegments = definition.adHocSegments;
 		trackProtectionCosts = definition.trackProtectionCosts;
-		trackProtectionBySegment = definition.trackProtectionBySegment;
 		roster = definition.roster
 			.map((entry) => ({
 				key: rosterKey(),
@@ -321,7 +318,6 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 			name: name.trim(),
 			ad_hoc_segments: adHocSegments,
 			track_protection_costs: trackProtectionCosts,
-			track_protection_by_segment: trackProtectionCosts && trackProtectionBySegment,
 			// A dead reference is dropped on save: keeping it would fail
 			// the server's active-target validation, and the editor showed
 			// the hole explicitly before this point.
@@ -437,18 +433,11 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		set adHocSegments(value: boolean) {
 			adHocSegments = value;
 		},
-		get trackProtectionBySegment() {
-			return trackProtectionBySegment;
-		},
-		set trackProtectionBySegment(value: boolean) {
-			trackProtectionBySegment = value;
-		},
 		get trackProtectionCosts() {
 			return trackProtectionCosts;
 		},
 		set trackProtectionCosts(value: boolean) {
 			trackProtectionCosts = value;
-			if (!value) trackProtectionBySegment = false;
 		},
 		get roster() {
 			return roster;

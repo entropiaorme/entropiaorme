@@ -125,7 +125,13 @@ fn generate() -> Result<String, String> {
         if let Some(description) = schema.get("description").and_then(Value::as_str) {
             out.push_str(&doc_comment(description));
         }
-        if schema.get("enum").is_some() {
+        // A string enum, or a oneOf/anyOf union (an enum whose variants
+        // carry their own documentation, or an internally tagged enum),
+        // is a type alias; only a plain object is an interface.
+        if schema.get("enum").is_some()
+            || schema.get("oneOf").is_some()
+            || schema.get("anyOf").is_some()
+        {
             let mut scratch = Vec::new();
             let body = union_or_type(schema, &mut scratch)?;
             out.push_str(&format!("export type {name} = {body};\n\n"));
@@ -462,6 +468,20 @@ mod tests {
         assert!(
             generated.contains("ledgerGains: Record<string, number>"),
             "the timeline ledgerGains map field should emit a Record type"
+        );
+    }
+
+    /// A named union (an enum whose variants carry documentation, or an
+    /// internally tagged enum) is a type alias, never an empty interface
+    /// the frontend could satisfy with anything.
+    #[test]
+    fn named_unions_emit_type_aliases() {
+        let generated = generate().expect("bindings generate");
+        assert!(generated.contains("export type ProtectionCostStatus = 'booked' | 'pending';"));
+        assert!(generated.contains("export type ProtectionStream = {"));
+        assert!(
+            !generated.contains("{\n}\n"),
+            "no named type may emit as an empty interface"
         );
     }
 

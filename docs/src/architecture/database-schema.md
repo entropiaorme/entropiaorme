@@ -98,8 +98,10 @@ same-name, same-cost phases when their captured loadout evidence differs),
 `0052_protection_hit_allocation.sql` (equal-hit protection allocation and the
 historical reweighting of settled evidence), and
 `0053_session_protection_policy.sql` (definition-authored, session-stamped
-segment-protection policy), and `0054_session_armour_cost_policy.sql` (the
-parent armour-cost policy and whole-session default). The
+segment-protection policy), `0054_session_armour_cost_policy.sql` (the
+parent armour-cost policy and whole-session default), and
+`0055_session_grain_protection_costs.sql` (each protection recording's stream
+position, and the session lookups the recording surface reads). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -568,7 +570,7 @@ protected fallback guarantees an active choice without making historical
 | `name` | TEXT | Not null. Active names are enforced case-insensitively by the service. |
 | `ad_hoc_segments` | INTEGER | Not null; defaults to 0. Opts the definition into naming segments during play. |
 | `track_protection_costs` | INTEGER | Not null; defaults to 1 (migration `0054`). Controls whether the session records defensive evidence and offers armour-cost accounting at all. |
-| `track_protection_by_segment` | INTEGER | Not null; introduced by migration `0053`; authored definitions default to 0 after migration `0054`. Controls whether the overlay offers live armour declarations and context-grain cost attribution. Meaningful only when `track_protection_costs` is 1. |
+| `track_protection_by_segment` | INTEGER | Not null; introduced by migration `0053`. Retired (ADR-0031): new and edited definitions write 0 and nothing reads it. |
 | `is_active` | INTEGER | Not null; defaults to 1. Archived definitions retain 0. |
 | `is_protected` | INTEGER | Not null; defaults to 0 (migration `0023`). Protected definitions cannot be archived. |
 | `created_at` | REAL | Not null; defaults to `unixepoch('now')`. |
@@ -612,8 +614,8 @@ facets, and an optional session-definition identity.
 | `session_name` | TEXT | Optional designated session-name stamp (migration `0018`). It remains the recorded name even if an attached definition is later renamed. |
 | `skill_boost_percent` | INTEGER | Optional positive boost declaration (migration `0018`). Null means not captured. |
 | `definition_id` | INTEGER | Optional reference to `session_definitions(id)` (migration `0022`; indexed `idx_tracking_sessions_definition`). Null is valid for legacy or deliberately unattached sessions. |
-| `track_protection_costs` | INTEGER | Not null; defaults to 1 (migration `0054`). Immutable parent policy stamped from the selected definition at session start. When 0, defensive evidence and armour-cost UI are omitted. |
-| `track_protection_by_segment` | INTEGER | Not null; defaults to 1 for historical compatibility (migration `0053`). Immutable subordinate policy stamped at session start. When 0 while armour costs remain enabled, a post-session loadout is attached at whole-session grain instead. |
+| `track_protection_costs` | INTEGER | Not null; defaults to 1 (migration `0054`). Immutable policy stamped from the selected definition at session start. When 0, the session records no defensive evidence, so no protection recording can reach it. |
+| `track_protection_by_segment` | INTEGER | Not null; migration `0053`. Retired (ADR-0031): new sessions record 0 and nothing reads it. |
 | `updated_at` | REAL | Back-filled by an `AFTER INSERT` trigger when left null. |
 
 #### Healing attribution evidence
@@ -670,91 +672,80 @@ event timestamps for attribution.
 
 #### Protection catalogue and limited-item accounting
 
-Migration `0043` keeps armour and plates as separate economic layers. A named
-loadout composes at most one of each, including mixed limited and unlimited
-configurations. Limited layers carry an average acquisition markup and are
-measured through successive Trade Terminal TT-value observations. Unlimited
-layers continue to use the existing raw repair-cost path.
+Protection costs are recorded at session grain when the player repairs or
+scans (ADR-0031). Nothing about protection is declared during play: the
+tracker records defensive hits, and each recording is spread over the sessions
+the player ticks when recording it. There are two kinds of cost stream. The
+pooled unlimited stream records confirmed Repair Terminal totals at raw TT.
+Each limited armour or plate set is its own stream, measured through
+successive Trade Terminal TT-value observations at its frozen markup.
 
-`protection_sets` owns the reusable layer catalogue:
+`protection_sets` owns the limited-set catalogue:
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | INTEGER | Primary key, autoincrement. |
 | `kind` | TEXT | Not null; `armour` or `plates`. |
 | `name` | TEXT | Not null. Active names are unique case-insensitively within a kind. |
-| `economy_kind` | TEXT | Not null; `limited` or `unlimited`. |
-| `markup_percent` | REAL | Required and at least 100 for limited sets; null for unlimited sets. This is the average acquisition basis across the seven pieces. |
+| `economy_kind` | TEXT | Not null; `limited` or `unlimited`. New sets are always `limited`; `unlimited` rows are history from before the pooled stream and are no longer read as sets. |
+| `markup_percent` | REAL | Required and at least 100 for limited sets; null for unlimited sets. The approximate average acquisition basis across the set, frozen once the set has a reading. |
 | `created_at` | REAL | Not null. |
 | `archived_at` | REAL | Optional archive stamp. |
 
-`protection_loadouts` composes the layers shown as one choice in the overlay:
+`protection_loadouts`, the `protection_state` singleton, and
+`session_protection_intervals` (the snapshot beside each
+`session_intervals(kind = 'protection')` row) are retired history from the
+declared-loadout model of migration `0043`. Nothing writes them any more; their
+rows stay readable.
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | INTEGER | Primary key, autoincrement. |
-| `name` | TEXT | Not null; active names are unique case-insensitively. |
-| `armour_set_id` | INTEGER | Optional reference to `protection_sets(id)`. |
-| `plate_set_id` | INTEGER | Optional reference to `protection_sets(id)`. |
-| `created_at` | REAL | Not null. |
-| `archived_at` | REAL | Optional archive stamp. |
+`protection_observations` records one confirmed total TT reading of one
+limited set. Its client token is unique, making confirmation idempotent.
+`source` is `ocr` or `manual`; `raw_text` preserves the recognised text when
+present. A non-null `reset_reason` establishes a new baseline instead of
+claiming decay, which is required when a reading rises, and books nothing.
+Each observation also stores `defence_event_cursor`, the latest defensive-event
+identifier visible at confirmation. That durable cursor is the limited
+stream's position: the next reading of the set covers only hits after it.
 
-An empty loadout is permitted only as the explicit `No protection` declaration.
-`protection_state` is a singleton containing the active loadout and its update
-time. The tracker snapshots that default when a session begins and updates it
-atomically when the player changes protection during a session.
+`protection_reconciliations` preserves the initial single-session
+implementation and is no longer written; `protection_cost_windows` supersedes
+it.
 
-`protection_observations` records one confirmed total TT reading for exactly
-seven armour pieces or exactly seven plates. Its client token is unique, making
-confirmation idempotent. `source` is `ocr` or `manual`; `raw_text` preserves the
-recognised text when present. A non-null `reset_reason` establishes a new
-baseline instead of claiming decay, which is required when a reading rises.
-Each observation also stores the latest defensive-event identifier visible at
-confirmation time. That durable cursor bounds limited decay without comparing
-game event time to wall-clock capture time.
+`protection_cost_windows` is the authoritative record of every protection
+cost. A `limited_decay` window references the set, its opening and closing
+observations, the frozen markup, TT consumed, and the effective PED cost. A
+`repair` window records a pooled unlimited repair; `armour_set_id` and
+`plate_set_id` are set only on history from before the pool. Each window
+carries an idempotency token where the interaction can be repeated, a `booked`
+or `pending` status (`pending` with the reason "Not attributed to any session"
+when no session was ticked), and `evidence_cursor` (migration `0055`): the
+latest defensive-event identifier the recording covered. The latest repair
+window's cursor is the unlimited stream's position. Migration `0055`
+backfilled the cursor for history from each limited window's closing
+observation, and for each repair window from the hits it claimed and every
+session that had ended before it.
 
-`protection_reconciliations` joins an opening and closing observation. It stores
-TT consumed, the frozen markup basis, resulting PED cost, and either a booked
-session identity or a pending reason. Automatic booking is deliberately narrow:
-the observation window must contain exactly one completed session and the
-measured layer identity must remain unambiguous throughout it. Every broader
-case is retained as pending rather than guessed. This table preserves the
-initial single-session implementation; new settlement uses the general cost
-windows below.
+`protection_cost_allocations` stores the conserved per-session split and
+`protection_cost_context_allocations` the finer split over each session's
+immutable activity contexts. Both carry `hit_count` (migration `0052`): every
+defensive event is one equal-weight hit, whether the game reported numeric
+damage or a deflection. A recording's cost is split across its ticked
+sessions by hit count, then within each session across its contexts by hit
+count, and the last context takes the rounding residual so the stored rows sum
+to the recorded cost exactly. Each allocated session's `armour_cost`, summary,
+and daily rollup are repaired in the same transaction. A session with
+defensive hits and no allocation row reads as having no protection cost
+recorded yet.
 
-`protection_cost_windows` is the authoritative settlement record for limited
-decay and unlimited repair readings. A limited window references its opening
-and closing observations, frozen markup, TT consumed, and effective PED cost.
-A repair window instead records the configured unlimited armour and plate
-scope. Both carry an idempotency token where the interaction can be repeated,
-plus a booked or pending status and an explanatory reason.
-
-`protection_cost_evidence` claims each defensive event consumed by a window.
-Claims are unique per configured physical layer; the legacy unconfigured repair
-path uses a global claim. This allows one incoming hit to support both its
-armour and plate cost while preventing either layer from charging that hit
-twice. `protection_cost_allocations` stores the conserved per-session split.
-`protection_cost_context_allocations` stores the finer split over the immutable
-activity contexts within those sessions. Migration `0052` adds `hit_count` to
-both allocation tables: every defensive event is one equal-weight hit, whether
-the game reported numeric damage or a deflection. Damage and deflection totals
-remain raw evidence but do not estimate absorbed damage. The migration
-reweights historical claimed evidence and repairs each affected session's
-conserved armour cost. Sessions whose stamped segment-protection policy is off
-collapse their allocation to whole-session grain.
-
-`session_protection_intervals` is the immutable economic snapshot beside each
-`session_intervals(kind = 'protection')` row. It retains the loadout identity and
-the resolved armour and plate names, economy kinds, and markup bases, so later
-catalogue changes cannot rewrite recorded play.
+`protection_cost_evidence` holds the per-hit claims written by the
+declared-loadout model. Recordings no longer write it: which hits a recording
+covers follows from its sessions and the stream positions.
 
 `protection_defence_events` retains each numeric damage-taken event and each
-deflection, stamped with its session, attribution context, and protection
-interval. Deflection deliberately has no invented damage amount. This evidence
-supports equal-hit allocation even when the user postpones recording across
-several sessions. A later compatible limited observation or unlimited repair
-reading consumes all still-unsettled evidence in its bounded layer scope and
-repairs the affected session summaries and daily projections transactionally.
+deflection, stamped with its session and attribution context. Deflection
+deliberately has no invented damage amount. `protection_interval_id` is set
+only on history from the declared-loadout model. Migration `0055` indexes the
+events by session and identifier for the recording surface's reads.
 
 #### `session_contexts`
 

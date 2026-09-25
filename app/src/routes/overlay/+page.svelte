@@ -29,8 +29,6 @@
 	import { createSessionFacets } from '$lib/features/tracking/sessionFacets.svelte';
 	import { createActivitiesModel } from '$lib/features/tracking/activitiesModel.svelte';
 	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
-	import { protectionCostAction } from '$lib/features/protection/protectionCostFlow';
-	import { createOverlayProtectionModel } from '$lib/features/protection/overlayProtectionModel.svelte';
 	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
 	import { createTypeahead } from '$lib/view/typeahead.svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -79,7 +77,6 @@
 
 	let overlayRoot: HTMLDivElement | null = $state(null);
 	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
-	let inSessionArmourButton: HTMLButtonElement | null = $state(null);
 	let mobInput: HTMLInputElement | null = $state(null);
 	let mobInputFocused = $state(false);
 	let trifectaSaving = $state(false);
@@ -135,22 +132,14 @@
 	// factory). Each webview is its own JS context, so the overlay keeps its
 	// own store instance beside the dashboard's.
 	const snapshot = createSnapshotStore<TrackingSnapshot>(TRACKING_TOPIC, getTrackingSnapshot);
-	const protection = createOverlayProtectionModel(() => snapshot.hydrate());
 
-	// The stop flow: the armour prompt gating the stop (see the module for
-	// the state machine). Render state comes off `flow`; the deps close over
-	// this window's snapshot and armour-cost popup.
+	// The stop flow (see the module). Render state comes off `flow`; the deps
+	// close over this window's snapshot.
 	const flow = createPostSessionFlow({
 		isSessionActive: () => data.status === 'active',
 		isBusy: () => toggling,
-		armourReminderEnabled: () =>
-			data.trackProtectionCosts !== false &&
-			data.endOfSessionArmourReminderEnabled === true &&
-			protectionCostAction(protection.overview, data.trackProtectionBySegment !== false)
-				.enabled,
 		refresh: () => snapshot.hydrate(),
-		stopTracking,
-		showArmourWorkflowInSession: () => armourCost.showInSession()
+		stopTracking
 	});
 	const toggling = $derived(starting || flow.stopping);
 
@@ -398,11 +387,7 @@
 	const armourCost = createOverlayArmourCostModel({
 		window: armourCostWindow,
 		anchorGap: OVERLAY_MENU_VERTICAL_GAP,
-		sessionId: () => armourSessionId,
-		repairOcrEnabled: () => data.repairOcrEnabled === true,
-		bySegment: () => data.trackProtectionBySegment !== false,
-		protection: () => protection.overview,
-		inSessionAnchor: () => inSessionArmourButton
+		repairOcrEnabled: () => data.repairOcrEnabled === true
 	});
 
 	async function handleTrifectaPresetSelection(presetId: string) {
@@ -522,7 +507,6 @@
 			}
 			unlisten = fn;
 			void snapshot.hydrate();
-			void protection.refresh();
 		});
 
 		return () => {
@@ -535,9 +519,9 @@
 	// toggle_overlay, so no focus/visibility event fires on the frontend when it
 	// appears. The shell emits `overlay-shown` from the show path; re-read on it
 	// to refresh config/runtime fields no tracking frame announces (weapon
-	// attribution, trifecta presets, mob-entry mode, repair-OCR, the armour
-	// reminder), which would otherwise stay stale and wedge a control after a
-	// settings change made while the overlay was hidden.
+	// attribution, trifecta presets, mob-entry mode, repair-OCR), which would
+	// otherwise stay stale and wedge a control after a settings change made
+	// while the overlay was hidden.
 	$effect(() => {
 		let disposed = false;
 		let unlisten: (() => void) | undefined;
@@ -546,7 +530,6 @@
 			unlisten = await listen(OVERLAY_SHOWN_EVENT, () => {
 				if (disposed) return;
 				void snapshot.hydrate();
-				void protection.refresh();
 			});
 		})();
 
@@ -665,7 +648,6 @@
 			unlistenClosed = await listen(OVERLAY_ARMOUR_COST_CLOSED_EVENT, () => {
 				if (disposed) return;
 				armourCost.noteClosed();
-				void protection.refresh();
 			});
 		})();
 
@@ -698,10 +680,8 @@
 			returnRate: snap.returnRate,
 			weaponAttribution: snap.weaponAttribution,
 			repairOcrEnabled: snap.repairOcrEnabled,
-			endOfSessionArmourReminderEnabled: snap.endOfSessionArmourReminderEnabled,
 			sessionName: snap.sessionName,
 			sessionDefinitionId: snap.sessionDefinitionId,
-			trackProtectionBySegment: snap.trackProtectionBySegment,
 			trackProtectionCosts: snap.trackProtectionCosts,
 			skillBoostPercent: snap.skillBoostPercent,
 			currentMob: snap.currentMob,
@@ -734,13 +714,11 @@
 	// The feature models' failure channels: each new message is a notice.
 	notices.follow(() => facets.facetError);
 	notices.follow(() => activities.error);
-	notices.follow(() => protection.error);
 	notices.follow(() => armourCost.error);
 	$effect(() => () => notices.destroy());
 
 	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
 
-	const armourSessionId = $derived(data.sessionId ?? null);
 	const showManualInput = $derived(
 		(data.status === 'active' || data.status === 'idle') && !data.currentMob
 	);
@@ -903,9 +881,6 @@
 		{selectingMob}
 		{trifectaSaving}
 		armourCostOpen={armourCost.open}
-		{armourSessionId}
-		protection={protection.overview}
-		protectionSaving={protection.saving}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
 		trifectaMenuOpen={overlayMenuKind === 'trifecta'}
 		savingDefinition={facets.savingDefinition}
@@ -916,11 +891,8 @@
 		bind:mobQuery
 		bind:mobInput
 		bind:boostDraft={facets.boostDraft}
-		bind:inSessionArmourButton
 		onStart={handleStart}
 		onStop={flow.requestStop}
-		awaitingArmourTrackDecision={flow.awaitingArmourDecision}
-		onArmourTrackDecision={flow.decideArmourTrack}
 		onReleaseMob={handleReleaseMob}
 		onMobFocus={handleMobFocus}
 		onMobBlur={handleMobBlur}
@@ -930,7 +902,6 @@
 		onActivitiesTrigger={toggleActivitiesMenu}
 		onTrifectaTrigger={toggleTrifectaMenu}
 		onArmourCostToggle={armourCost.toggle}
-		onProtectionSelect={protection.select}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

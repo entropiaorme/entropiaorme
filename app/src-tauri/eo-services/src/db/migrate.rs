@@ -308,6 +308,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session armour cost policy",
         sql: include_str!("../../migrations/0054_session_armour_cost_policy.sql"),
     },
+    Migration {
+        version: 55,
+        description: "session grain protection costs",
+        sql: include_str!("../../migrations/0055_session_grain_protection_costs.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -370,6 +375,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "3D056CDB492EEC513AE2AB50F1FC3F5A5D4E1060A8E4080E8525ABB2E349EFDAA3D976F3FC3B189342D7B5369B0EBDFC",
     "44F7DCA5C01DE16671062A14175F318FB4EB7720327303E5F9438DD957130F60CF42D3C47910BCA27816B0F05422202A",
     "DE89CC822BFD6A6BB728B669B2F198DB7DD80048D60ACE1957B03F54CF58C5403F5C74C5B6B423899513AB389742C435",
+    "E05974E08DB9D0C3B5DEE44401D748FBC7CF83E537317EC5C08D7534FDAE1086906F9F9DF2905FBAABDE4142918F38FB",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -719,6 +725,75 @@ mod tests {
             armour_cost, 2.5,
             "the migration must not book the cost twice"
         );
+    }
+
+    /// Every recording remembers how far along the defence-event stream it
+    /// reached, so the next recording of its stream offers only the
+    /// sessions after it. History gets the position it would have had.
+    #[test]
+    fn session_grain_upgrade_gives_every_recording_its_stream_position() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..54] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) VALUES \
+                    ('ended-before', 1, 2, 0), ('still-running', 3, NULL, 1); \
+                 INSERT INTO protection_defence_events (id, session_id, damage, deflected) VALUES \
+                    (1, 'ended-before', 10, 0), (2, 'ended-before', NULL, 1), \
+                    (3, 'still-running', 10, 0), (4, 'still-running', 10, 0); \
+                 INSERT INTO protection_sets \
+                    (id, kind, name, economy_kind, markup_percent, created_at) \
+                    VALUES (1, 'armour', 'Limited', 'limited', 125, 1); \
+                 INSERT INTO protection_observations \
+                    (id, set_id, client_token, tt_value_ped, source, observed_at, \
+                     defence_event_cursor) \
+                    VALUES (1, 1, 'open', 10, 'manual', 1, 0), \
+                           (2, 1, 'close', 8, 'manual', 5, 3); \
+                 INSERT INTO protection_cost_windows \
+                    (id, kind, set_id, opening_observation_id, closing_observation_id, \
+                     consumed_tt_ped, markup_percent, cost_ped, status, created_at) \
+                    VALUES (1, 'limited_decay', 1, 1, 2, 2, 125, 2.5, 'booked', 5); \
+                 INSERT INTO protection_cost_windows (id, kind, cost_ped, status, created_at) \
+                    VALUES (2, 'repair', 1.0, 'booked', 4), (3, 'repair', 0.5, 'pending', 0.5); \
+                 INSERT INTO protection_cost_evidence (window_id, set_id, defence_event_id) \
+                    VALUES (2, NULL, 3);",
+            )
+            .expect("pre-session-grain history");
+
+        run(&mut connection).expect("v55 upgrade");
+
+        let cursor = |id: i64| -> i64 {
+            connection
+                .query_row(
+                    "SELECT evidence_cursor FROM protection_cost_windows WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("cursor")
+        };
+        assert_eq!(cursor(1), 3, "a limited window reached its closing reading");
+        assert_eq!(
+            cursor(2),
+            3,
+            "a repair reached past its own hits and every session ended before it"
+        );
+        assert_eq!(cursor(3), 0, "a repair before any play reached nothing");
     }
 
     #[test]

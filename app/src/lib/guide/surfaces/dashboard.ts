@@ -24,7 +24,7 @@ type DashboardDemoApi = {
 	setOverlayDemoTrackingStarted(started: boolean): void;
 	/**
 	 * Toggle the guide-only fake protection-cost popup that mirrors
-	 * ProtectionCostPanel's initial legacy step. Real
+	 * ProtectionCostPanel's unlimited repair step. Real
 	 * popup lives in a separate Tauri webview window which the inline
 	 * dashboard strip cannot reach, so the guide renders a styled
 	 * stand-in positioned below the strip's Cost button. Setting to
@@ -35,7 +35,7 @@ type DashboardDemoApi = {
 	setOverlayArmourPopupVisible(visible: boolean): void;
 	/**
 	 * Flip the popup's body between initial scan actions and the
-	 * post-record confirmation ("Cost recorded: 1.23 PED"). Fires
+	 * post-record confirmation ("1.23 PED recorded"). Fires
 	 * synchronised with the SVG flash so the screen-capture and the
 	 * recorded value read as one beat on screen.
 	 */
@@ -404,11 +404,11 @@ export const dashboardSurface: GuideSurface = {
 				body: [
 					{
 						kind: 'p',
-						text: 'Cost follows the active armour loadout. Two unlimited layers use one combined repair reading; mixed or limited layers are recorded armour first, then plates.',
+						text: 'Record armour when you repair, not while you play. Unlimited armour and plates are one repair total; a limited set is measured by its Trade Terminal value at its own markup.',
 					},
 					{
 						kind: 'p',
-						text: 'For an unlimited step, place the requested items in the bottom-right repair terminal and scan or enter the value manually.',
+						text: 'The cost is spread over the sessions since your last recording, by hits taken. Untick a session type, or a single session, that did not use that armour.',
 					},
 					{
 						kind: 'svg',
@@ -439,7 +439,7 @@ export const dashboardSurface: GuideSurface = {
 </svg>`,
 					},
 				],
-				note: 'Repair OCR applies to unlimited steps. Limited steps read the calibrated Trade Terminal total.',
+				note: 'Repair OCR reads the bottom-right Repair Terminal. Limited sets read the calibrated Trade Terminal total.',
 			},
 			async play({ cursor, demoApi }) {
 				// Looped sync: cursor → Cost click → fake popup mounts + SVG
@@ -452,8 +452,8 @@ export const dashboardSurface: GuideSurface = {
 				const stillActive = () => guideState.isActive && guideState.currentStepIndex === stepIdx;
 				const api = demoApi as Partial<DashboardDemoApi>;
 				// Re-establish lifecycle state (same handoff as overlay-mob /
-				// overlay-equipment cards). Strip must be active so the Cost
-				// button is enabled + the armour-section anchor resolves.
+				// overlay-equipment cards), so the strip reads as it would mid-hunt
+				// and the armour-section anchor resolves.
 				api.setOverlayDemoVisible?.(true);
 				api.setOverlayDemoTrackingStarted?.(true);
 				// Give the strip a tick to mount before the anchor lookup
@@ -515,7 +515,7 @@ export const dashboardSurface: GuideSurface = {
 					api.triggerArmourFlash?.();
 					api.setOverlayArmourPopupRecorded?.(true);
 					cursor.hide();
-					// 2s dwell on the "Cost recorded: 1.23 PED" confirmation.
+					// 2s dwell on the "1.23 PED recorded" confirmation.
 					// The 500ms SVG flash fades during this window so the user
 					// reads the capture + recorded value as a single beat.
 					if (!(await abortableWait(2000, stillActive))) break;

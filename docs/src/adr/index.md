@@ -40,3 +40,4 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0030](0030-startup-readiness-boundary.md) | An explicit startup readiness boundary: a level-triggered shell answer, commands held in the typed transport, the frame painted first |
 | [ADR-0031](0031-session-grain-protection-costs.md) | Protection costs recorded at session grain, when the player repairs: nothing declared during play, hit-weighted over the sessions the player ticks |
 | [ADR-0032](0032-unified-weapon-attribution.md) | Unified weapon attribution: hotbar intent validated by each carried weapon's damage band, with bounded, player-decided correction and no mode to choose |
+| [ADR-0033](0033-damage-over-time-effect-windows.md) | Damage-over-time effects as persisted windows of one paid activation: ticks cost nothing, concurrent explanations stay unresolved, and windows outlive their session |

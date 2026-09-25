@@ -46,3 +46,4 @@
   - [ADR-0030: An explicit startup readiness boundary](adr/0030-startup-readiness-boundary.md)
   - [ADR-0031: Protection costs recorded at session grain](adr/0031-session-grain-protection-costs.md)
   - [ADR-0032: Unified weapon attribution](adr/0032-unified-weapon-attribution.md)
+  - [ADR-0033: Damage-over-time effect windows](adr/0033-damage-over-time-effect-windows.md)

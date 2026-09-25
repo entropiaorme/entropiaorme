@@ -100,6 +100,13 @@ its own. Without hotbar intent the bands alone attribute each hit. A decision
 on the mismatch is a command, not an event: it reprices the regime's shots and
 announces itself through `tracking.session.updated`. See ADR-0032.
 
+A priced hit of a weapon with a declared damage-over-time effect opens an
+effect window in the tracker, persisted as it lands; no event announces it.
+While it is open, an offensive `Combat` line its tick range holds is a tick of
+that paid hit (no shot, no cost), and it never raises the mismatch. A line
+both the declared weapon and another weapon's open effect could have printed
+stays unpriced. See ADR-0033.
+
 ### The tick_flushed settling boundary
 
 `Topic::TickFlushed` is special. chat.log timestamps have one-second precision, so all recognised lines sharing a timestamp are treated as one application "tick". The chat-log watcher (`app/src-tauri/eo-services/src/chatlog_watcher.rs`) buffers a tick's events and, when the timestamp advances or the file goes idle, flushes them: loot lines become a single `Topic::LootGroup`, other events are published individually. After **every** per-event publish for that tick has been dispatched (and its subscribers have mutated state synchronously), the watcher publishes `Topic::TickFlushed` last, carrying the tick's timestamp.
@@ -194,13 +201,14 @@ well as a producer. A refused correction publishes nothing.
 ### `weapons.updated`
 
 `WeaponsUpdated` is a content-free push-to-pull invalidation that fires after
-an unpriced shot of an ended session is assigned to a weapon, or the
-assignment is undone. The assignment moves that session's weapon cost (the
-kill's, or the dangling cost for a shot after the last kill), so the session
-review list re-reads its rows and their marks, and an open session detail
-re-reads its cost and its weapon attribution evidence. Assignments touch only
-ended sessions, so the tracker does not consume it. A refused assignment
-publishes nothing. (A decision on a live mismatch is part of the running
+a stored shot of an ended session is corrected (an unpriced shot or an effect
+tick assigned to a weapon, or an unresolved hit marked as an effect's tick),
+or the correction is undone. The correction moves that session's weapon cost
+or shot count (the kill's, or the dangling cost for a shot after the last
+kill), so the session review list re-reads its rows and their marks, and an
+open session detail re-reads its cost and its weapon attribution evidence.
+Corrections touch only ended sessions and never an effect window, so the
+tracker does not consume it. A refused correction publishes nothing. (A decision on a live mismatch is part of the running
 session and announces itself as `tracking.session.updated` instead.)
 
 ### The discriminated union

@@ -106,9 +106,11 @@ lookups the recording surface reads), and
 `0056_protection_recording_undo.sql` (when a protection recording or reading
 was undone), `0057_healing_corrections.sql` (post-play healing corrections,
 their supersession and exact-undo provenance, and the effect-window expiry
-read), and `0058_weapon_attribution_evidence.sql` (stored weapon evidence, live
+read), `0058_weapon_attribution_evidence.sql` (stored weapon evidence, live
 mismatch decisions, post-play assignments of unpriced shots, and each
-session's attribution tallies). The
+session's attribution tallies), and `0059_weapon_effect_windows.sql` (the
+persisted damage-over-time windows paid weapon hits open, each stored shot's
+effect candidates, and the kind of each post-play weapon correction). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -710,15 +712,20 @@ is counted there under the `Unknown` phase at no cost.
 `weapon_shot_evidence` records one stored shot: its session, the kill it
 settled into (null for a shot after the session's last kill, whose cost is the
 session's dangling cost), its attributed context, local observation time,
-printed amount (null for a jam, dodge, or evade), whether it was a critical,
+printed amount (null for a jam, dodge, evade, or miss), whether it was a critical,
 its classification (`evidence` when its damage overrode the weapon the hotbar
 declared, `unresolved` when no single carried weapon explains it,
 `effect_tick` when an earlier activation's effect window explains it), the
 weapon the hotbar declared, the weapon it is priced to and the per-shot cost
 booked (null and 0 while unpriced), the carried weapons at the time as JSON
 (each with whether its band fitted the shot), an explanatory reason, the
-effect window that explained a tick, the live decision that repriced it, and
-the live assignment that priced it. A row is written in the same transaction as
+effect window that explained a tick (null when several overlapping windows
+explained it, or when its paying session was deleted), every open window that
+explained it as JSON in `effect_candidates_json` (migration `0059`; each with
+its window, the weapon that opened it, and when; for an unresolved hit, the
+effects it could equally have been a tick of), the live decision that repriced
+it, and the live correction that priced it or marked it a tick. A row is
+written in the same transaction as
 the kill its shot settled into, or with the session's stop, so a row exists
 exactly when its shot's cost does. It is indexed by session, classification,
 and observation time, and by kill.
@@ -732,20 +739,46 @@ shots were repriced, and the signed cost delta. The repriced kills' phases and
 costs are rewritten in the same transaction. It is indexed by session and
 decision time.
 
-`weapon_attribution_corrections` records each post-play assignment of an
-unpriced shot: its session and shot, the chosen weapon's equipment identity and
-name, the per-shot cost booked from the weapon as configured at correction
-time, when it was made, and when it was undone (null while it stands). An
-assignment moves the shot out of its kill's `Unknown` phase into the weapon's
-(a corrected phase carries no expected-return evidence) and adds its cost to
-the kill (or to the dangling cost), summed at twelve decimals so an undo lands
-on the exact figure it started from; the summary, daily rollup, and settled
-session cells are repaired in the same transaction. A shot carries at most one
-live assignment, and only an ended session is corrected. It is indexed by
-session and correction time.
+`weapon_attribution_corrections` records each post-play correction of a stored
+shot: its session and shot, its `kind` (migration `0059`; earlier rows are all
+`priced`), the equipment identity and name of the weapon it names, the per-shot
+cost booked, the effect window an `effect_tick` correction names
+(`effect_window_id`, migration `0059`), when it was made, and when it was undone
+(null while it stands). A `priced` correction prices an unresolved shot, or an
+effect tick the player says was a paid shot after all, from a carried weapon as
+configured at correction time: an unresolved shot moves out of its kill's
+`Unknown` phase into the weapon's, while a tick (which counted no shot) is
+added to the weapon's phase and to the kill's shot count. An `effect_tick`
+correction marks an unresolved hit as a tick of one of its candidate effects
+at no cost: it leaves the `Unknown` phase and the kill's shot count. A
+corrected phase carries no expected-return evidence; cost moves are summed at
+twelve decimals so an undo lands on the exact figure it started from; the
+kill (or the dangling cost), summary, daily rollup, and settled session cells
+are repaired in the same transaction. A shot carries at most one live
+correction, and only an ended session is corrected. It is indexed by session
+and correction time.
+
+`weapon_effect_windows` (migration `0059`) records each damage-over-time
+effect a paid hit opened (see ADR-0033): its session, the weapon's equipment
+identity and name, the context the hit landed in, the absolute start (the hit's
+observation time) and expiry, the hit's printed amount and whether it was a
+critical, the per-shot cost the hit was booked at (provenance only: the cost
+lives with the shot, in its kill), the tick range, the declared effect
+profile as JSON as it stood when the window opened, and, for a window opened
+by a hit damage evidence named, when a live decision to keep the hotbar's
+weapon took it back and which decision did (`withdrawn_at`,
+`withdrawn_by_review_id`; null while it stands). A window is written as the
+hit lands and outlives its session: every session start reads back each window
+whose expiry (plus the short delivery tail) is still ahead and that no decision
+took back, whichever session paid for it. It is indexed by expiry and by
+session and start.
 
 Foreign-key enforcement remains disabled, so session deletion removes these
-three tables explicitly before deleting the session.
+four tables explicitly before deleting the session. Because an effect window
+outlives its session, another session's ticks, and corrections marking a hit
+as its tick, may name a deleted session's window: in the same transaction
+they lose that pointer (the ticks stay ticks, since the hit that paid for them
+was paid).
 
 #### `session_intervals`
 
@@ -1441,7 +1474,8 @@ migrations (`0002_analytical_indexes.sql`,
 `0051_context_offensive_evidence.sql`, `0052_protection_hit_allocation.sql`,
 `0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`,
 `0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`,
-`0057_healing_corrections.sql`, `0058_weapon_attribution_evidence.sql`); the runner
+`0057_healing_corrections.sql`, `0058_weapon_attribution_evidence.sql`,
+`0059_weapon_effect_windows.sql`); the runner
 records applied migrations in the `_sqlx_migrations` ledger (the table name,
 column shapes, and SHA-384 checksum accounting are inherited unchanged from
 the previous runner, so existing databases reconcile byte for byte) and never

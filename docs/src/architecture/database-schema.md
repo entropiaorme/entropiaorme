@@ -104,7 +104,9 @@ parent armour-cost policy and whole-session default), and
 position, the retirement of unlimited sets and loadouts, and the session
 lookups the recording surface reads), and
 `0056_protection_recording_undo.sql` (when a protection recording or reading
-was undone). The
+was undone), and `0057_healing_corrections.sql` (post-play healing corrections,
+their supersession and exact-undo provenance, and the effect-window expiry
+read). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -638,7 +640,12 @@ delivery-order inversion. It is indexed by session and observation time.
 confirmed activation. Each row names its parent activation, session, equipment,
 tool, time bounds, optional tick interval and cadence, and attribution context.
 Effect outputs within that window remain evidence but never create another
-cost. It is indexed by session and start time.
+cost. It is indexed by session and start time, and by expiry (migration
+`0057`): the persisted absolute expiry is the truth for a running effect, so
+every session start reads back each live window whose expiry is still ahead,
+whichever session paid for it. A heal-over-time effect therefore keeps
+explaining its ticks across a new session or an application restart, while
+its cost stays with the activation that paid for it.
 
 `healing_outputs` retains every positive self-heal line observed during a
 session. A row can reference the activation and effect window that explain it,
@@ -650,9 +657,35 @@ is `effect` and confirms its activation. Subsequent `effect` outputs and every
 `passive` or `unattributed` output are zero-cost evidence. It is indexed by
 session and observation time.
 
+Migration `0057` makes this evidence correctable after a session ends, without
+deleting any of it. `healing_corrections` records each correction: its session,
+its kind (`not_paid_use` takes a billed activation back; `paid_use` bills an
+uncosted output as one use of a chosen healing item), the activation it
+superseded or minted, the output it started from, its signed cost delta, when
+it was made, and when it was undone (null while it stands). It is indexed by
+session and correction time.
+
+The evidence tables gain the columns corrections need:
+
+| Table | Column | Notes |
+| --- | --- | --- |
+| `healing_activations` | `superseded_at` | When a correction took the activation back, or when the undo of the correction that minted it did. A superseded activation costs nothing and stays as provenance. |
+| `healing_activations` | `confirming_output_id` | The output that confirmed the activation. Back-filled for existing rows from the output written with it, or the earlier output a delayed hotbar occurrence reconciled. |
+| `healing_activations` | `correction_id` | The `paid_use` correction that minted the activation, if any. Such an activation keeps the checked provenance `direct` and is reported as corrected. |
+| `healing_effect_windows` | `superseded_at` | Set with its activation's; a superseded window is never read back. |
+| `healing_outputs` | `correction_id` | The live correction that last moved the output. Indexed. |
+| `healing_outputs` | `prior_classification`, `prior_activation_id`, `prior_effect_window_id`, `prior_reason` | What the output was before that correction moved it, so its undo restores it exactly. |
+
+`healing_outputs` is also indexed by activation. Each output and activation is
+moved by at most one live correction, and only an ended session is corrected:
+every correction and undo moves `tracking_sessions.heal_cost` by its delta and
+repairs the session summary, daily rollup, and settled session cells in the
+same transaction, so a session's heal cost stays equal to its live
+activations' costs (plus any legacy aggregate from before migration `0047`).
+
 Foreign-key enforcement remains disabled for the application database, so
-session deletion removes these three tables explicitly in output, window,
-activation order before deleting the session.
+session deletion removes these four tables explicitly in correction, output,
+window, activation order before deleting the session.
 
 #### `session_intervals`
 
@@ -1347,7 +1380,8 @@ migrations (`0002_analytical_indexes.sql`,
 `0050_session_offensive_evidence_rollups.sql`,
 `0051_context_offensive_evidence.sql`, `0052_protection_hit_allocation.sql`,
 `0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`,
-`0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`); the runner
+`0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`,
+`0057_healing_corrections.sql`); the runner
 records applied migrations in the `_sqlx_migrations` ledger (the table name,
 column shapes, and SHA-384 checksum accounting are inherited unchanged from
 the previous runner, so existing databases reconcile byte for byte) and never

@@ -80,6 +80,20 @@ clock:
 
 The plan defines a frozen, driver-advanced clock for the replay: the scenario clock starts frozen at `start` and only the replay driver advances it, by `step_seconds`, canonically once after the replay has fully drained and before the session stops, so the session boundaries are distinct deterministic instants. Production code under test only ever reads the clock; reads never advance it, so the instants a scenario produces are independent of how many times the implementation reads time. That is what keeps timestamp-bearing output comparable across runs. The replay injects a `MockClock` (`eo_services::clock`) built from the plan; production composes a `RealClock` and is unaffected.
 
+### Scripted scenario steps
+
+A scenario can also commit a `steps.jsonl` script, for behaviour the chat log alone cannot drive (hotbar-led healing, context changes, restarts). Each line is one step, run in order, and the script must consume every tick group of `chat_replay.log`:
+
+```jsonl
+{"chat": 1}
+{"advance": 1.0}
+{"hotbar": {"slot": "3", "equipment_id": 9, "item_name": "FAP", "item_kind": "healing", "cost_per_use_ped": 0.03, "reload_seconds": 3.0, "healing_profile": {"mode": "direct", "direct_min": 60.0, "direct_max": 100.0}}}
+{"segment": "Boss"}
+"restart"
+```
+
+`chat` streams the next N tick groups and drains them; `advance` moves the frozen clock by that many seconds; `hotbar` publishes a resolved hotbar press stamped at the clock's current instant (`item_kind` is `healing` or `weapon`); `segment` declares a segment, or ends the standing one when `null`; `restart` is a crash, in which the old process's bus and chat-log tail go quiet and a fresh bus, tail, and tracker open the same database, recovering the orphaned session before the next one starts. Every producer publish completes its tracker dispatch before returning, so each step observes the effects of the ones before it. A scenario without a script streams its whole chat log exactly as before. The `healing_effect_rotation` scenario is the reference script.
+
 This is the durable discipline behind every golden: the system under test must be a pure function of its declared inputs. Wall-clock time, randomness, environment, and machine timing are not declared inputs; where production needs such a value it is injected as an explicit dependency that defaults to the real source (the clock seam above; the capture and keystroke-source seams for OCR and input). A value that leaks into a golden makes the suite non-deterministic by construction and only accidentally passing.
 
 ## Mutation testing

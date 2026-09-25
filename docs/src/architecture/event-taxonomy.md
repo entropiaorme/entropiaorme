@@ -24,7 +24,7 @@ The **low-level bus** is intra-core wiring. As the domain-events module puts it,
 
 The **domain event layer** is the coarse, frontend-facing subset. Each domain event is a typed envelope carrying a `type` discriminator, so the wire format is a serde-compatible tagged JSON object. The set of domain events is small and curated; the low-level topics stay inside the process and are never forwarded.
 
-The two layers share one piece of plumbing: the five domain envelopes ride the *same* `EventBus` instance as the low-level topics, as typed variants of the `BusEvent` enum. They carry the `eo-wire` envelope types (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, and `ProtectionUpdated`) directly. `EventBus::publish` takes a `&BusEvent` and derives the topic from the variant, so "a typed envelope on a domain topic" is enforced by construction at the bus seam: a foreign value on a domain topic is unrepresentable, and no runtime re-validation exists because none is needed. `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`) republishes those five variants' envelopes, still typed, onto the broadcast channel the shell's bridge consumes.
+The two layers share one piece of plumbing: the six domain envelopes ride the *same* `EventBus` instance as the low-level topics, as typed variants of the `BusEvent` enum. They carry the `eo-wire` envelope types (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, `ProtectionUpdated`, and `HealingUpdated`) directly. `EventBus::publish` takes a `&BusEvent` and derives the topic from the variant, so "a typed envelope on a domain topic" is enforced by construction at the bus seam: a foreign value on a domain topic is unrepresentable, and no runtime re-validation exists because none is needed. `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`) republishes those six variants' envelopes, still typed, onto the broadcast channel the shell's bridge consumes.
 
 ### The bus mechanics
 
@@ -56,7 +56,7 @@ The variants of the `Topic` enum in `app/src-tauri/eo-services/src/event_bus.rs`
 | `MissionReceived` | `mission_received` | A mission was received. |
 | `TickFlushed` | `tick_flushed` | The settling boundary: a parse tick has closed and every per-event subscriber write for that tick has completed. |
 
-The same enum also carries the five frontend-facing domain topics (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, and `ProtectionUpdated`), whose `as_str()` returns the dotted constants from `app/src-tauri/eo-wire/src/domain_events.rs`, because the typed envelopes ride this same bus before the bridge republishes them onto the broadcast channel.
+The same enum also carries the six frontend-facing domain topics (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, `ProtectionUpdated`, and `HealingUpdated`), whose `as_str()` returns the dotted constants from `app/src-tauri/eo-wire/src/domain_events.rs`, because the typed envelopes ride this same bus before the bridge republishes them onto the broadcast channel.
 
 ### Healing intent and chat evidence
 
@@ -164,9 +164,21 @@ show them, so the Equipment armour tab, the session review list, and an open
 session detail each re-read what they show on every event. A refused write
 publishes nothing.
 
+### `healing.updated`
+
+`HealingUpdated` is a content-free push-to-pull invalidation that fires after
+a healing correction or its undo commits. A correction moves an ended
+session's heal cost, and may take back (or give back) an effect window a
+running session is still matching ticks against. The session review list and
+an open session detail re-read what they show, and the tracker re-reads its
+live effect windows from their persisted expiry, so a taken-back effect stops
+explaining ticks at once. Like the navigation service's use of
+`harvest.recorded`, this makes the tracker a consumer of a domain topic as
+well as a producer. A refused correction publishes nothing.
+
 ### The discriminated union
 
-The five envelopes form a discriminated union:
+The six envelopes form a discriminated union:
 
 ```rust
 #[serde(untagged)]
@@ -176,10 +188,11 @@ pub enum DomainEvent {
     HarvestRecorded(HarvestRecorded),
     NavigationUpdated(NavigationUpdated),
     ProtectionUpdated(ProtectionUpdated),
+    HealingUpdated(HealingUpdated),
 }
 ```
 
-The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel, the schema snapshot) routes through this union unchanged. The schema snapshot records the union as a `oneOf` over the five `$def`s with a `discriminator` mapping keyed on `type`. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
+The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel, the schema snapshot) routes through this union unchanged. The schema snapshot records the union as a `oneOf` over the six `$def`s with a `discriminator` mapping keyed on `type`. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
 
 ## The typed broadcast channel
 
@@ -187,7 +200,7 @@ Domain events leave the producer spine through a typed broadcast channel and rea
 
 ### The channel: typed fan-out
 
-`DomainBus` wraps a tokio `broadcast::Sender<DomainEvent>`. It is fed by `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`), which subscribes the five domain topics on the bus and republishes each typed envelope onto the channel. The low-level topics stay intra-core and are deliberately not forwarded.
+`DomainBus` wraps a tokio `broadcast::Sender<DomainEvent>`. It is fed by `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`), which subscribes the six domain topics on the bus and republishes each typed envelope onto the channel. The low-level topics stay intra-core and are deliberately not forwarded.
 
 The work spans a thread boundary. `EventBus::publish` runs synchronously on whatever thread mutated state (for the tick-coalesced tracking event, that is the chat-log watcher's OS thread). The channel crosses the boundary in one place and one direction: the bus subscriber closure runs on the **publisher** thread and calls `DomainBus::publish` (a non-blocking broadcast send), and the bridge task consumes its `subscribe()` receiver asynchronously on the runtime. The envelope stays typed end to end; nothing is serialised until the bridge hands it to the Tauri emitter.
 
@@ -233,6 +246,12 @@ for 30 seconds so tool swings cannot advance several closely spaced stops.
 The protection service takes a change sink at composition, the same shape as
 navigation's, and calls it after each committed write. The sink publishes
 `protection.updated` stamped from the injected clock.
+
+### Healing corrections
+
+The healing review service takes the same kind of change sink and calls it
+after each committed correction or undo. The sink publishes `healing.updated`
+stamped from the injected clock.
 
 ### Why the payloads are minimal: push-to-pull
 

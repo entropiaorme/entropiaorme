@@ -389,7 +389,16 @@ async fn every_committed_write_is_announced_and_a_refusal_is_not() {
         .undo(UndoTarget::Recording { window_id: 9_999 })
         .await
         .is_err());
-    assert_eq!(count.load(Ordering::SeqCst), 4, "refusals change nothing");
+    service
+        .confirm_repair_cost("r1", 1.0, vec!["a".into()])
+        .await
+        .unwrap();
+    reading(&service, set.id, "base", 50.0, &[]).await;
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        4,
+        "refusals and replays change nothing"
+    );
 
     service
         .undo(UndoTarget::Recording {

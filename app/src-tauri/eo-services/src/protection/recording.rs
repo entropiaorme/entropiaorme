@@ -461,6 +461,8 @@ pub(super) fn adjust_session_armour(
 
 enum Written<T> {
     Saved(T),
+    /// A confirmation repeated with its token: nothing was written.
+    Replayed(T),
     Refused(Refusal),
 }
 
@@ -533,7 +535,7 @@ impl ProtectionService {
                     )
                     .optional()?
                 {
-                    return Ok(Written::Saved(existing));
+                    return Ok(Written::Replayed(existing));
                 }
                 let stream = ProtectionStream::Limited { set_id };
                 let position = stream_position(conn, stream)?;
@@ -590,8 +592,10 @@ impl ProtectionService {
             })
             .await?;
         match written {
-            Written::Saved(observation_id) => {
-                self.notify_changed();
+            Written::Saved(observation_id) | Written::Replayed(observation_id) => {
+                if matches!(written, Written::Saved(_)) {
+                    self.notify_changed();
+                }
                 self.db
                     .with_reader(move |conn| {
                         read_observation_outcome(conn, observation_id)
@@ -635,7 +639,7 @@ impl ProtectionService {
                     )
                     .optional()?
                 {
-                    return Ok(Written::Saved(id));
+                    return Ok(Written::Replayed(id));
                 }
                 let tx = conn.transaction()?;
                 let position = stream_position(&tx, ProtectionStream::Unlimited)?;
@@ -661,8 +665,10 @@ impl ProtectionService {
             })
             .await?;
         match written {
-            Written::Saved(id) => {
-                self.notify_changed();
+            Written::Saved(id) | Written::Replayed(id) => {
+                if matches!(written, Written::Saved(_)) {
+                    self.notify_changed();
+                }
                 let cost_window = self
                     .db
                     .with_reader(move |conn| {

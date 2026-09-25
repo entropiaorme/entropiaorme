@@ -1,0 +1,257 @@
+{
+  "codex_claims": [],
+  "codex_progress": [],
+  "harvest_events": [],
+  "harvest_loot_items": [],
+  "healing_activations": [],
+  "healing_effect_windows": [],
+  "healing_outputs": [],
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_2>",
+      "quantity": 500,
+      "value_ped": 5.0
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_3>",
+      "quantity": 700,
+      "value_ped": 7.0
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.05,
+      "critical_hits": 0,
+      "damage_dealt": 7.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 1,
+      "tool_name": "Pistol"
+    },
+    {
+      "cost_per_shot": 0.2,
+      "critical_hits": 0,
+      "damage_dealt": 30.0,
+      "kill_id": "<UUID_2>",
+      "shots_fired": 2,
+      "tool_name": "Cannon"
+    },
+    {
+      "cost_per_shot": 0.2,
+      "critical_hits": 0,
+      "damage_dealt": 58.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 3,
+      "tool_name": "Cannon"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 1,
+      "damage_dealt": 103.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 2,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.45,
+      "critical_hits": 0,
+      "damage_dealt": 37.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 5.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 3,
+      "timestamp": "<TS_37>"
+    },
+    {
+      "cost_ped": 0.6,
+      "critical_hits": 1,
+      "damage_dealt": 161.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_3>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 7.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_1>",
+      "shots_fired": 5,
+      "timestamp": "<TS_38>"
+    }
+  ],
+  "ledger_entries": [],
+  "map_pins": [],
+  "notable_events": [],
+  "quest_claims": [],
+  "quest_mobs": [],
+  "quest_playlist_items": [],
+  "quest_playlists": [],
+  "quests": [],
+  "session_quest_analytics_links": [],
+  "session_quest_completions": [],
+  "skill_calibrations": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.35,
+      "ended_at": "<TS_36>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_2>"
+    }
+  ],
+  "weapon_attribution_reviews": [
+    {
+      "cost_delta_ped": 0.15,
+      "decided_at": "<TS_39>",
+      "decision": "confirmed",
+      "evidence_tool": "Cannon",
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_4>",
+      "mismatch_since": "<TS_39>",
+      "repriced_shots": 1,
+      "session_id": "<UUID_1>"
+    },
+    {
+      "cost_delta_ped": -0.05,
+      "decided_at": "<TS_40>",
+      "decision": "kept",
+      "evidence_tool": "Rifle",
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_5>",
+      "mismatch_since": "<TS_40>",
+      "repriced_shots": 1,
+      "session_id": "<UUID_1>"
+    }
+  ],
+  "weapon_attribution_tallies": [
+    {
+      "session_id": "<UUID_1>",
+      "weapon_shots_agreed": 6,
+      "weapon_shots_evidenced": 4
+    }
+  ],
+  "weapon_shot_evidence": [
+    {
+      "amount": 30.0,
+      "attribution": "evidence",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":true},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":false}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.2,
+      "critical": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_6>",
+      "kill_id": "<UUID_2>",
+      "observed_at": "<TS_39>",
+      "reason": "fits only Cannon, not the hotbar's Pistol",
+      "review_id": null,
+      "session_id": "<UUID_1>",
+      "tool_name": "Cannon"
+    },
+    {
+      "amount": 33.0,
+      "attribution": "evidence",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":true},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":false}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.2,
+      "critical": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_7>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_39>",
+      "reason": "fits only Cannon, not the hotbar's Pistol",
+      "review_id": null,
+      "session_id": "<UUID_1>",
+      "tool_name": "Cannon"
+    },
+    {
+      "amount": null,
+      "attribution": "evidence",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":false}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.2,
+      "critical": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_8>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_39>",
+      "reason": "a countered shot while Cannon is recorded",
+      "review_id": null,
+      "session_id": "<UUID_1>",
+      "tool_name": "Cannon"
+    },
+    {
+      "amount": 90.0,
+      "attribution": "unresolved",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":false}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_9>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_39>",
+      "reason": "exceeds every carried weapon's reach",
+      "review_id": null,
+      "session_id": "<UUID_1>",
+      "tool_name": null
+    },
+    {
+      "amount": 13.0,
+      "attribution": "unresolved",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":true},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":true}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 1,
+      "effect_window_id": null,
+      "hotbar_tool": "Cannon",
+      "id": "<UUID_10>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_24>",
+      "reason": "fits several carried weapons other than the hotbar's",
+      "review_id": null,
+      "session_id": "<UUID_1>",
+      "tool_name": null
+    },
+    {
+      "amount": 14.0,
+      "attribution": "evidence",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Cannon\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Rifle\",\"fits\":true}]",
+      "context_id": 1,
+      "correction_id": null,
+      "cost_per_shot": 0.05,
+      "critical": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_11>",
+      "kill_id": null,
+      "observed_at": "<TS_40>",
+      "reason": "fits only Rifle, not the hotbar's Pistol",
+      "review_id": "<UUID_5>",
+      "session_id": "<UUID_1>",
+      "tool_name": "Pistol"
+    }
+  ]
+}

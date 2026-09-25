@@ -1,0 +1,39 @@
+name: weapon_attribution_mismatch
+flavour: scripted
+description: >
+  Hotbar intent and the carried weapons' damage bands working as one
+  engine. A pistol is pressed; hits in its band agree, and a hit only
+  the cannon's band explains records to the cannon and raises the
+  mismatch. Confirming it reprices the countered shot a settled kill
+  holds since the last proof of the pistol, and makes the cannon the
+  weapon in hand. A hit past every weapon's reach and a critical two
+  weapons explain stay unpriced. After a switch back to the pistol the
+  cannon's shot still landing is the cannon's; a rifle-only hit raises
+  a mismatch that keeping the pistol reprices back and silences.
+surfaces:
+  - tracking-weapon-attribution-agreement
+  - tracking-weapon-attribution-mismatch
+  - tracking-weapon-attribution-confirm
+  - tracking-weapon-attribution-keep
+  - tracking-weapon-attribution-unresolved
+  - tracking-weapon-attribution-in-flight
+  - tracking-kill-creation
+events: 14
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. carried.json names the three carried weapons (pistol
+  5-10, cannon 20-40, rifle 8-16 regular bands); steps.jsonl interleaves
+  the chat log's tick groups with the hotbar presses, clock steps, and
+  the two decisions the chat log cannot carry.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

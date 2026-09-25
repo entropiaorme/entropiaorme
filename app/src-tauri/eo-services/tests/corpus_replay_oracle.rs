@@ -49,7 +49,11 @@ use eo_services::event_bus::EventBus;
 use eo_services::fingerprint_recorder::FingerprintRecorder;
 use eo_services::healing_profile::HealingProfile;
 use eo_services::time::naive_to_epoch;
-use eo_services::tracker::{ActivityKey, ActivityRef, HuntTracker, Providers};
+use eo_services::tracker::{
+    damage_band_from_props, ActivityKey, ActivityRef, CarriedWeapon, CarriedWeaponProfile,
+    EquipmentLibrary, EquipmentProfile, HarvestGuardrailTools, HuntTracker, MismatchDecision,
+    Providers,
+};
 use eo_wire::db_snapshot::{capture, serialize};
 use eo_wire::normalizer::Normalizer;
 
@@ -177,6 +181,85 @@ enum Step {
     Segment(Option<String>),
     /// The process dies; a new one starts over the same database.
     Restart,
+    /// The player's call on the standing weapon mismatch.
+    Decide(ScriptedDecision),
+}
+
+/// A weapon-mismatch decision a script makes.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScriptedDecision {
+    Confirm,
+    Keep,
+}
+
+/// One weapon a scenario carries (its optional `carried.json`): a stored
+/// weapon with a single impact damage figure and a per-shot decay in PEC.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedWeapon {
+    equipment_id: i64,
+    name: String,
+    damage: f64,
+    decay: f64,
+}
+
+/// The equipment library a scenario's carried weapons make up.
+struct ScenarioEquipment(Vec<CarriedWeaponProfile>);
+
+impl EquipmentLibrary for ScenarioEquipment {
+    fn weapon_profile(&self, tool_name: &str) -> EquipmentProfile {
+        self.0
+            .iter()
+            .find(|profile| profile.weapon.name == tool_name)
+            .map(|profile| profile.props.clone())
+    }
+
+    fn cost_per_shot(&self, _tool_name: &str) -> f64 {
+        0.0
+    }
+
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        self.0
+            .iter()
+            .map(|profile| CarriedWeaponProfile {
+                weapon: profile.weapon.clone(),
+                props: profile.props.clone(),
+            })
+            .collect()
+    }
+
+    fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
+        None
+    }
+}
+
+fn load_carried(scenario: &Path) -> Vec<CarriedWeaponProfile> {
+    let Ok(raw) = std::fs::read_to_string(scenario.join("carried.json")) else {
+        return Vec::new();
+    };
+    let weapons: Vec<ScriptedWeapon> =
+        serde_json::from_str(&raw).expect("a well-formed carried.json");
+    weapons
+        .into_iter()
+        .map(|weapon| {
+            let props = serde_json::json!({
+                "weapon_entity": {
+                    "name": weapon.name,
+                    "damage": {"impact": weapon.damage},
+                    "economy": {"decay": weapon.decay, "ammo_burn": 0}
+                }
+            });
+            CarriedWeaponProfile {
+                weapon: CarriedWeapon {
+                    equipment_id: weapon.equipment_id,
+                    name: weapon.name,
+                    band: damage_band_from_props(&props),
+                },
+                props: props.as_object().cloned().expect("an object"),
+            }
+        })
+        .collect()
 }
 
 /// What the hotbar listener publishes for a resolved slot, minus the
@@ -225,6 +308,7 @@ fn boot(
     chatlog: &Path,
     recorder: &FingerprintRecorder,
     player_name: &str,
+    carried: &[CarriedWeaponProfile],
 ) -> Process {
     let bus = Arc::new(EventBus::new());
     let watcher = ChatlogWatcher::new(bus.clone(), chatlog, None, ChatLogClock::host_local());
@@ -238,6 +322,15 @@ fn boot(
             ChatLogClock::host_local(),
             Providers {
                 player_name: player_name.to_string(),
+                equipment: Arc::new(ScenarioEquipment(
+                    carried
+                        .iter()
+                        .map(|profile| CarriedWeaponProfile {
+                            weapon: profile.weapon.clone(),
+                            props: profile.props.clone(),
+                        })
+                        .collect(),
+                )),
                 ..Providers::default()
             },
         ))
@@ -316,7 +409,16 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     // The recorder installs before the session starts, so the start
     // events are the fingerprint's opening lines.
     let recorder = FingerprintRecorder::new();
-    let mut process = boot(&runtime, &db, &clock, &chatlog, &recorder, player_name);
+    let carried = load_carried(&scenario);
+    let mut process = boot(
+        &runtime,
+        &db,
+        &clock,
+        &chatlog,
+        &recorder,
+        player_name,
+        &carried,
+    );
 
     // Stream the replay one tick per flush, then drain on the line
     // count (the watcher counts every line it has read whole); a
@@ -365,8 +467,26 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
                     Step::Restart => {
                         recorder.uninstall(&process.bus);
                         process.watcher.stop();
-                        process = boot(&runtime, &db, &clock, &chatlog, &recorder, player_name);
+                        process = boot(
+                            &runtime,
+                            &db,
+                            &clock,
+                            &chatlog,
+                            &recorder,
+                            player_name,
+                            &carried,
+                        );
                         segment = None;
+                    }
+                    Step::Decide(decision) => {
+                        let decision = match decision {
+                            ScriptedDecision::Confirm => MismatchDecision::Confirm,
+                            ScriptedDecision::Keep => MismatchDecision::Keep,
+                        };
+                        let decided = runtime
+                            .block_on(process.tracker.decide_weapon_mismatch(decision))
+                            .expect("the decision saves");
+                        assert!(decided, "{name}: the script decides a standing mismatch");
                     }
                 }
             }
@@ -504,6 +624,11 @@ fn placeholder_recorded_hunt_matches_the_goldens() {
 #[test]
 fn healing_effect_rotation_matches_the_goldens() {
     replay_against_goldens("scripted", "healing_effect_rotation", "");
+}
+
+#[test]
+fn weapon_attribution_mismatch_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_attribution_mismatch", "");
 }
 
 #[test]

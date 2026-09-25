@@ -30,6 +30,7 @@ function session(
 		endedAt: null,
 		hitCount,
 		covered: false,
+		unrecorded: true,
 	};
 }
 

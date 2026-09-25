@@ -132,6 +132,11 @@ pub(super) fn read_set_row(
         return Ok(None);
     };
     let latest_observation = read::read_latest_observation(conn, id)?;
+    let backlog = if latest_observation.is_some() {
+        super::recording::read_backlog(conn, super::ProtectionStream::Limited { set_id: id })?
+    } else {
+        super::StreamBacklog::default()
+    };
     Ok(Some(ProtectionSet {
         id,
         kind: ProtectionSetKind::parse(&kind)?,
@@ -141,5 +146,6 @@ pub(super) fn read_set_row(
         archived_at,
         basis_locked: latest_observation.is_some(),
         latest_observation,
+        backlog,
     }))
 }

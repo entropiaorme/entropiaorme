@@ -42,6 +42,19 @@ UPDATE protection_cost_windows
 SET evidence_cursor = 0
 WHERE evidence_cursor IS NULL;
 
+-- Unlimited protection is one pooled repair stream with nothing to set up, so
+-- the unlimited sets created for the declared-loadout model are retired. They
+-- are archived rather than deleted: the repairs and intervals that name them
+-- stay readable, and an archived set releases its name for a new limited one.
+UPDATE protection_sets
+SET archived_at = unixepoch('now')
+WHERE economy_kind = 'unlimited' AND archived_at IS NULL;
+
+-- Loadouts composed sets for live declaration, which no longer exists.
+UPDATE protection_loadouts
+SET archived_at = unixepoch('now')
+WHERE archived_at IS NULL;
+
 CREATE INDEX idx_protection_defence_session_event
     ON protection_defence_events(session_id, id);
 CREATE INDEX idx_protection_cost_allocations_session

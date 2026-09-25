@@ -375,7 +375,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "3D056CDB492EEC513AE2AB50F1FC3F5A5D4E1060A8E4080E8525ABB2E349EFDAA3D976F3FC3B189342D7B5369B0EBDFC",
     "44F7DCA5C01DE16671062A14175F318FB4EB7720327303E5F9438DD957130F60CF42D3C47910BCA27816B0F05422202A",
     "DE89CC822BFD6A6BB728B669B2F198DB7DD80048D60ACE1957B03F54CF58C5403F5C74C5B6B423899513AB389742C435",
-    "E05974E08DB9D0C3B5DEE44401D748FBC7CF83E537317EC5C08D7534FDAE1086906F9F9DF2905FBAABDE4142918F38FB",
+    "828E7C8B43DFA748063DFFF3AE648B9E9DEF29432B6CDA627558FE42B9DC8209B19B14392F495D16C9B014BFF53BCCFF",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -772,7 +772,9 @@ mod tests {
                  INSERT INTO protection_cost_windows (id, kind, cost_ped, status, created_at) \
                     VALUES (2, 'repair', 1.0, 'booked', 4), (3, 'repair', 0.5, 'pending', 0.5); \
                  INSERT INTO protection_cost_evidence (window_id, set_id, defence_event_id) \
-                    VALUES (2, NULL, 3);",
+                    VALUES (2, NULL, 3); \
+                 INSERT INTO protection_sets (id, kind, name, economy_kind, created_at) \
+                    VALUES (2, 'armour', 'Hyperion', 'unlimited', 1);",
             )
             .expect("pre-session-grain history");
 
@@ -794,6 +796,29 @@ mod tests {
             "a repair reached past its own hits and every session ended before it"
         );
         assert_eq!(cursor(3), 0, "a repair before any play reached nothing");
+
+        let archived = |id: i64| -> bool {
+            connection
+                .query_row(
+                    "SELECT archived_at IS NOT NULL FROM protection_sets WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("set")
+        };
+        assert!(
+            archived(2),
+            "an unlimited set retires with the pooled stream"
+        );
+        assert!(!archived(1), "a limited set stays in the catalogue");
+        connection
+            .execute(
+                "INSERT INTO protection_sets \
+                 (kind, name, economy_kind, markup_percent, created_at) \
+                 VALUES ('armour', 'hyperion', 'limited', 140, 2)",
+                [],
+            )
+            .expect("the retired set's name is free for a limited set");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use rusqlite::OptionalExtension;
 use super::read::{read_cost_window, read_observation};
 use super::{
     CandidateSession, CostKind, ObservationOutcome, ObservationSource, ProtectionError,
-    ProtectionService, ProtectionStream, RecordingCandidates, RepairOutcome,
+    ProtectionService, ProtectionStream, RecordingCandidates, RepairOutcome, StreamBacklog,
 };
 use crate::db::DbError;
 
@@ -130,6 +130,7 @@ fn candidate_row(row: &rusqlite::Row<'_>) -> Result<CandidateSession, rusqlite::
         ended_at: row.get(5)?,
         hit_count: row.get(6)?,
         covered: row.get::<_, i64>(7)? != 0,
+        unrecorded: row.get::<_, i64>(8)? != 0,
     })
 }
 
@@ -152,7 +153,9 @@ pub(super) fn read_candidates(
     let covered = format!(
         "EXISTS (SELECT 1 FROM protection_cost_allocations a \
                  JOIN protection_cost_windows w ON w.id = a.window_id \
-                 WHERE a.session_id = s.id AND {})",
+                 WHERE a.session_id = s.id AND {}), \
+         NOT EXISTS (SELECT 1 FROM protection_cost_allocations a \
+                     WHERE a.session_id = s.id)",
         stream_filter(stream)
     );
 
@@ -204,6 +207,29 @@ pub(super) fn read_candidates(
         baseline_tt_ped,
         sessions,
         earlier,
+    })
+}
+
+/// How far behind one stream is: when it was last recorded, and the
+/// sessions (and their hits) played since.
+pub(super) fn read_backlog(
+    conn: &rusqlite::Connection,
+    stream: ProtectionStream,
+) -> Result<StreamBacklog, ProtectionError> {
+    let position = stream_position(conn, stream)?;
+    // id-order: cursor (hits on the far side of the stream's position).
+    let (sessions, hits) = conn.query_row(
+        "SELECT COUNT(DISTINCT d.session_id), COUNT(d.id) \
+         FROM protection_defence_events d \
+         JOIN tracking_sessions s ON s.id = d.session_id \
+         WHERE d.id > ?1",
+        [position.cursor],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(StreamBacklog {
+        last_recorded_at: position.since,
+        sessions,
+        hits,
     })
 }
 

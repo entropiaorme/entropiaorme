@@ -19,6 +19,11 @@
 	const since = $derived(
 		recording.candidates?.since ?? recording.sessions[0]?.startedAt ?? null,
 	);
+	/** Earlier sessions no recording of any kind reaches: worth surfacing,
+	 * since they are otherwise only behind the faint earlier-sessions toggle. */
+	const earlierUnrecorded = $derived(
+		recording.earlier.filter((session) => session.unrecorded).length,
+	);
 	const sinceLabel = $derived(
 		recording.stream.kind === 'unlimited' ? 'last repair' : 'last reading',
 	);
@@ -157,7 +162,11 @@
 									onchange={() => recording.toggleEarlier(session.sessionId)}
 								/>
 								<span class="flex-1 truncate {ticked ? 'text-white/65' : 'text-white/30'}">{sessionLabel(session, group)}</span>
-								{#if session.covered}<span class="picker-meta">recorded</span>{/if}
+								{#if session.unrecorded}
+									<span class="picker-meta picker-unrecorded">not recorded</span>
+								{:else if session.covered}
+									<span class="picker-meta">recorded</span>
+								{/if}
 								<span class="picker-meta w-14 text-right">{session.hitCount} {session.hitCount === 1 ? 'hit' : 'hits'}</span>
 								<span class="picker-share">{ticked ? (share(session.hitCount) ?? '') : ''}</span>
 							</li>
@@ -169,8 +178,21 @@
 	</ul>
 
 	{#if recording.earlier.length > 0}
-		<button type="button" class="earlier-toggle" aria-expanded={recording.earlierOpen} onclick={recording.toggleEarlierOpen}>
-			{recording.earlierOpen ? 'Hide earlier sessions' : 'Include sessions from before the last repair'}
+		<button
+			type="button"
+			class="earlier-toggle"
+			class:earlier-toggle-attention={earlierUnrecorded > 0 && !recording.earlierOpen}
+			aria-expanded={recording.earlierOpen}
+			onclick={recording.toggleEarlierOpen}
+		>
+			{#if recording.earlierOpen}
+				Hide earlier sessions
+			{:else if earlierUnrecorded > 0}
+				Include sessions from before the last repair · {earlierUnrecorded}
+				{earlierUnrecorded === 1 ? 'has' : 'have'} no armour cost
+			{:else}
+				Include sessions from before the last repair
+			{/if}
 		</button>
 	{/if}
 </div>
@@ -275,6 +297,14 @@
 		font-size: 10px;
 		color: rgba(255, 255, 255, 0.3);
 		cursor: pointer;
+	}
+
+	.earlier-toggle-attention {
+		color: rgba(252, 211, 77, 0.7);
+	}
+
+	.picker-unrecorded {
+		color: rgba(252, 211, 77, 0.75);
 	}
 
 	.earlier-toggle:hover,

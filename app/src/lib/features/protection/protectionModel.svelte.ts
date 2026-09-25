@@ -18,6 +18,7 @@ import { describeError } from '$lib/view/errorState';
 
 const EMPTY: ProtectionOverview = {
 	sets: [],
+	unlimited: { lastRecordedAt: null, sessions: 0, hits: 0 },
 	recentCostWindows: [],
 	unrecorded: { sessions: 0, hits: 0 },
 };

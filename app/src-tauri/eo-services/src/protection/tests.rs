@@ -631,6 +631,131 @@ async fn a_set_markup_freezes_at_its_first_reading() {
     ));
 }
 
+/// A session no recording of any stream reaches is flagged as such in the
+/// earlier list, apart from being uncovered by the stream at hand.
+#[tokio::test]
+async fn earlier_sessions_say_whether_any_recording_reaches_them() {
+    let (_dir, db, clock, service) = harness().await;
+    let set = limited(&service, "Hyperion", 150.0).await;
+    service
+        .confirm_observation(
+            set.id,
+            "b",
+            20.0,
+            ObservationSource::Manual,
+            None,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    play(&db, Played::new("limited-only", 10.0, &[(None, 4)])).await;
+    play(&db, Played::new("forgotten", 20.0, &[(None, 6)])).await;
+    play(&db, Played::new("repaired", 30.0, &[(None, 2)])).await;
+    clock.advance(10.0).unwrap();
+    service
+        .confirm_observation(
+            set.id,
+            "c",
+            19.0,
+            ObservationSource::Manual,
+            None,
+            None,
+            vec!["limited-only".into()],
+        )
+        .await
+        .unwrap();
+    service
+        .confirm_repair_cost("r1", 1.0, vec!["repaired".into()])
+        .await
+        .unwrap();
+    clock.advance(10.0).unwrap();
+    play(&db, Played::new("new", 100.0, &[(None, 3)])).await;
+
+    let candidates = service
+        .recording_candidates(ProtectionStream::Unlimited)
+        .await
+        .unwrap();
+    assert_eq!(ids(&candidates.sessions), ["new"]);
+    assert!(candidates.sessions[0].unrecorded);
+    let flags: Vec<(&str, bool, bool)> = candidates
+        .earlier
+        .iter()
+        .map(|c| (c.session_id.as_str(), c.covered, c.unrecorded))
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            ("limited-only", false, false),
+            ("forgotten", false, true),
+            ("repaired", true, false),
+        ]
+    );
+}
+
+/// Each stream says how far behind it is, so Equipment can show when it
+/// was last recorded and what has been played since.
+#[tokio::test]
+async fn every_stream_reports_the_play_since_its_last_recording() {
+    let (_dir, db, clock, service) = harness().await;
+    play(&db, Played::new("a", 10.0, &[(None, 3)])).await;
+    play(&db, Played::new("b", 20.0, &[(None, 4)])).await;
+
+    let before = service.overview().await.unwrap().unlimited;
+    assert_eq!(
+        before,
+        StreamBacklog {
+            last_recorded_at: None,
+            sessions: 2,
+            hits: 7
+        }
+    );
+
+    service
+        .confirm_repair_cost("r1", 1.0, vec!["a".into(), "b".into()])
+        .await
+        .unwrap();
+    let after = service.overview().await.unwrap().unlimited;
+    assert!(after.last_recorded_at.is_some());
+    assert_eq!((after.sessions, after.hits), (0, 0));
+
+    let set = limited(&service, "Hyperion", 150.0).await;
+    let unread = service.overview().await.unwrap();
+    assert_eq!(
+        unread.sets[0].backlog,
+        StreamBacklog::default(),
+        "no reading, no backlog"
+    );
+    service
+        .confirm_observation(
+            set.id,
+            "b",
+            20.0,
+            ObservationSource::Manual,
+            None,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    clock.advance(10.0).unwrap();
+    play(&db, Played::new("c", 100.0, &[(None, 5)])).await;
+
+    let overview = service.overview().await.unwrap();
+    assert_eq!(
+        (overview.unlimited.sessions, overview.unlimited.hits),
+        (1, 5)
+    );
+    assert_eq!(
+        (
+            overview.sets[0].backlog.sessions,
+            overview.sets[0].backlog.hits
+        ),
+        (1, 5)
+    );
+    assert!(overview.sets[0].backlog.last_recorded_at.is_some());
+}
+
 mod conservation {
     use proptest::prelude::*;
 

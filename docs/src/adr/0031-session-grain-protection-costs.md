@@ -31,7 +31,7 @@ Living with that model showed that its cost fell on the player, not the code. A 
 
 - Session and account protection totals are exact. A segment's share is a hit-weighted estimate, which is the accepted trade for never asking during play.
 - Sessions are knowingly imprecise between playing and recording, and say so.
-- Loadouts, protection intervals, the per-segment session flag, and the end-of-session reminder setting fall out of use. Their tables and columns stay readable history; nothing is dropped or rewritten.
+- Loadouts, protection intervals, the per-segment session flag, and the end-of-session reminder setting fall out of use. The migration archives the unlimited sets and loadouts, which releases their names for new limited sets; their rows, like the retired tables and columns, stay readable history. Nothing is dropped or rewritten.
 - The pooled unlimited stream cannot tell apart two unlimited items repaired on different days. The re-include option exists for that case, and the account total is right either way.
 
 See also the [database schema](../architecture/database-schema.md), the [service map](../architecture/service-map.md), and the [ADR index](index.md).

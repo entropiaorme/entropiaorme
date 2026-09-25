@@ -4,6 +4,7 @@ import type { ProtectionSetUpdateInput } from './commands.gen';
 import * as commands from './commands.gen';
 
 export type {
+	ProtectionBacklog,
 	ProtectionCandidateSession,
 	ProtectionCostAllocation,
 	ProtectionCostKind,

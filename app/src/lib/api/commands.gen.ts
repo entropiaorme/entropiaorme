@@ -2155,6 +2155,17 @@ export interface ProspectSample {
 export type ProspectSliceType = 'global' | 'tag' | 'mob' | 'weapon';
 
 /**
+ * How far one stream's recordings lag the play since them.
+ */
+export interface ProtectionBacklog {
+	/** When the stream was last recorded (a limited set's latest reading); absent before the first. */
+	lastRecordedAt: number | null;
+	/** Sessions with hits since then. */
+	sessions: number;
+	hits: number;
+}
+
+/**
  * One session a recording could be spread over.
  */
 export interface ProtectionCandidateSession {
@@ -2169,6 +2180,8 @@ export interface ProtectionCandidateSession {
 	hitCount: number;
 	/** An earlier recording of the same stream already covers it. */
 	covered: boolean;
+	/** No recording of any stream covers it yet. */
+	unrecorded: boolean;
 }
 
 export interface ProtectionCostAllocation {
@@ -2227,6 +2240,8 @@ export type ProtectionObservationSource = 'ocr' | 'manual';
 
 export interface ProtectionOverview {
 	sets: ProtectionSet[];
+	/** The pooled unlimited repair stream's lag. */
+	unlimited: ProtectionBacklog;
 	recentCostWindows: ProtectionCostWindow[];
 	unrecorded: UnrecordedProtection;
 }
@@ -2283,6 +2298,8 @@ export interface ProtectionSet {
 	latestObservation: ProtectionObservation | null;
 	/** The markup is frozen once the set has a reading. */
 	basisLocked: boolean;
+	/** Play since the set's latest reading; empty before its first. */
+	backlog: ProtectionBacklog;
 }
 
 export interface ProtectionSetInput {

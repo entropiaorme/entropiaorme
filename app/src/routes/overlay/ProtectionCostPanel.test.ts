@@ -28,6 +28,7 @@ function session(
 	hitCount: number,
 	definition: [string, string] | null = null,
 	covered = false,
+	unrecorded = !covered,
 ): ProtectionCandidateSession {
 	return {
 		sessionId: id,
@@ -38,6 +39,7 @@ function session(
 		endedAt: startedAt + 3600,
 		hitCount,
 		covered,
+		unrecorded,
 	};
 }
 
@@ -87,7 +89,10 @@ const hyperion: ProtectionSet = {
 	markupPercent: 200,
 	latestObservation: null,
 	basisLocked: false,
+	backlog: { lastRecordedAt: null, sessions: 0, hits: 0 },
 };
+
+const EMPTY_BACKLOG = { lastRecordedAt: null, sessions: 0, hits: 0 };
 
 function renderPanel(onClose = vi.fn()) {
 	render(ProtectionCostPanel, { props: { repairOcrEnabled: false, onClose } });
@@ -107,6 +112,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	api.getProtectionOverview.mockResolvedValue({
 		sets: [],
+		unlimited: EMPTY_BACKLOG,
 		recentCostWindows: [],
 		unrecorded: { sessions: 0, hits: 0 },
 	});
@@ -217,6 +223,25 @@ describe('recording an unlimited repair', () => {
 		await waitFor(() => expect(lastRepairInput()?.sessionIds).toEqual(['old', 'new']));
 	});
 
+	it('draws attention to earlier sessions no recording has reached', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('new', 1_700_200_000, 30, ARIS)], {
+				since: 1_700_100_000,
+				earlier: [
+					session('forgotten', 1_699_000_000, 12, ['4', 'Caly AI Dailies'], false, true),
+					session('repaired', 1_700_000_000, 10, ARIS, true, false),
+				],
+			}),
+		);
+		renderPanel();
+		await enterAmount('4');
+
+		const toggle = await screen.findByText(/1 has no armour cost/);
+		await fireEvent.click(toggle);
+		expect(screen.getByText('not recorded')).toBeTruthy();
+		expect(screen.getByText('recorded')).toBeTruthy();
+	});
+
 	it('says a repair with no hits behind it counts toward overall costs only', async () => {
 		api.getProtectionRecordingCandidates.mockResolvedValue(
 			candidates([], { since: 1_700_000_000 }),
@@ -251,6 +276,7 @@ describe('recording a limited set', () => {
 	beforeEach(() => {
 		api.getProtectionOverview.mockResolvedValue({
 			sets: [hyperion],
+			unlimited: EMPTY_BACKLOG,
 			recentCostWindows: [],
 			unrecorded: { sessions: 0, hits: 0 },
 		});

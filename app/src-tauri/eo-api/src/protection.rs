@@ -14,6 +14,7 @@ use eo_services::protection::{
     ProtectionOverview as ServiceOverview, ProtectionSet as ServiceSet,
     ProtectionSetKind as ServiceSetKind, ProtectionStream as ServiceStream,
     RecordingCandidates as ServiceCandidates, RepairOutcome as ServiceRepairOutcome,
+    StreamBacklog as ServiceBacklog,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -128,6 +129,28 @@ pub struct ProtectionObservation {
     pub reset_reason: Nullable<String>,
 }
 
+/// How far one stream's recordings lag the play since them.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionBacklog {
+    /// When the stream was last recorded (a limited set's latest reading);
+    /// absent before the first.
+    pub last_recorded_at: Nullable<f64>,
+    /// Sessions with hits since then.
+    pub sessions: i64,
+    pub hits: i64,
+}
+
+impl From<ServiceBacklog> for ProtectionBacklog {
+    fn from(value: ServiceBacklog) -> Self {
+        Self {
+            last_recorded_at: value.last_recorded_at.into(),
+            sessions: value.sessions,
+            hits: value.hits,
+        }
+    }
+}
+
 /// A limited armour or plate set.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +162,8 @@ pub struct ProtectionSet {
     pub latest_observation: Nullable<ProtectionObservation>,
     /// The markup is frozen once the set has a reading.
     pub basis_locked: bool,
+    /// Play since the set's latest reading; empty before its first.
+    pub backlog: ProtectionBacklog,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -188,6 +213,8 @@ pub struct ProtectionSessionStatus {
 #[serde(rename_all = "camelCase")]
 pub struct ProtectionOverview {
     pub sets: Vec<ProtectionSet>,
+    /// The pooled unlimited repair stream's lag.
+    pub unlimited: ProtectionBacklog,
     pub recent_cost_windows: Vec<ProtectionCostWindow>,
     pub unrecorded: UnrecordedProtection,
 }
@@ -207,6 +234,8 @@ pub struct ProtectionCandidateSession {
     pub hit_count: i64,
     /// An earlier recording of the same stream already covers it.
     pub covered: bool,
+    /// No recording of any stream covers it yet.
+    pub unrecorded: bool,
 }
 
 /// What a recording of one stream would look back over.
@@ -452,6 +481,7 @@ impl From<ServiceSet> for ProtectionSet {
             markup_percent: value.markup_percent,
             latest_observation: value.latest_observation.map(Into::into).into(),
             basis_locked: value.basis_locked,
+            backlog: value.backlog.into(),
         }
     }
 }
@@ -520,6 +550,7 @@ impl From<ServiceCandidate> for ProtectionCandidateSession {
             ended_at: value.ended_at.into(),
             hit_count: value.hit_count,
             covered: value.covered,
+            unrecorded: value.unrecorded,
         }
     }
 }
@@ -540,6 +571,7 @@ impl From<ServiceOverview> for ProtectionOverview {
     fn from(value: ServiceOverview) -> Self {
         Self {
             sets: value.sets.into_iter().map(Into::into).collect(),
+            unlimited: value.unlimited.into(),
             recent_cost_windows: value
                 .recent_cost_windows
                 .into_iter()

@@ -101,7 +101,8 @@ historical reweighting of settled evidence), and
 segment-protection policy), `0054_session_armour_cost_policy.sql` (the
 parent armour-cost policy and whole-session default), and
 `0055_session_grain_protection_costs.sql` (each protection recording's stream
-position, and the session lookups the recording surface reads). The
+position, the retirement of unlimited sets and loadouts, and the session
+lookups the recording surface reads). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -687,7 +688,7 @@ successive Trade Terminal TT-value observations at its frozen markup.
 | `id` | INTEGER | Primary key, autoincrement. |
 | `kind` | TEXT | Not null; `armour` or `plates`. |
 | `name` | TEXT | Not null. Active names are unique case-insensitively within a kind. |
-| `economy_kind` | TEXT | Not null; `limited` or `unlimited`. New sets are always `limited`; `unlimited` rows are history from before the pooled stream and are no longer read as sets. |
+| `economy_kind` | TEXT | Not null; `limited` or `unlimited`. New sets are always `limited`. Migration `0055` archived every `unlimited` row, releasing its name; those rows are history from before the pooled stream and are no longer read as sets. |
 | `markup_percent` | REAL | Required and at least 100 for limited sets; null for unlimited sets. The approximate average acquisition basis across the set, frozen once the set has a reading. |
 | `created_at` | REAL | Not null. |
 | `archived_at` | REAL | Optional archive stamp. |
@@ -695,8 +696,8 @@ successive Trade Terminal TT-value observations at its frozen markup.
 `protection_loadouts`, the `protection_state` singleton, and
 `session_protection_intervals` (the snapshot beside each
 `session_intervals(kind = 'protection')` row) are retired history from the
-declared-loadout model of migration `0043`. Nothing writes them any more; their
-rows stay readable.
+declared-loadout model of migration `0043`. Nothing writes them any more;
+migration `0055` archived every loadout, and their rows stay readable.
 
 `protection_observations` records one confirmed total TT reading of one
 limited set. Its client token is unique, making confirmation idempotent.

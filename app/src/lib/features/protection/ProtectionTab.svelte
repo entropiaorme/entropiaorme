@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button, Divider, ErrorNotice, Input, Modal } from '$lib/components';
-	import type { ProtectionCostWindow } from '$lib/api';
+	import type { ProtectionBacklog, ProtectionCostWindow } from '$lib/api';
 	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { formatPed } from '$lib/utils/format';
 	import { formatDay, formatSessionStart } from './armourRecording';
@@ -9,6 +9,13 @@
 	let { model }: { model: ProtectionModel } = $props();
 
 	const unrecorded = $derived(model.overview.unrecorded);
+	const unlimited = $derived(model.overview.unlimited);
+
+	/** Play since a stream was last recorded, e.g. "3 sessions, 262 hits since". */
+	function backlogText(backlog: ProtectionBacklog): string {
+		if (backlog.sessions === 0) return 'Nothing played since';
+		return `${backlog.sessions} ${backlog.sessions === 1 ? 'session' : 'sessions'}, ${backlog.hits.toLocaleString()} ${backlog.hits === 1 ? 'hit' : 'hits'} since`;
+	}
 
 	function windowTitle(window: ProtectionCostWindow): string {
 		if (window.kind === 'repair') return 'Unlimited repair';
@@ -53,10 +60,27 @@
 	{#if model.loading}
 		<div class="py-14 text-center text-sm text-text-tertiary animate-pulse">Loading armour...</div>
 	{:else}
+		<section aria-labelledby="protection-unlimited-heading" class="flex items-baseline justify-between gap-6 border-y border-border/70 py-3.5">
+			<div>
+				<h3 id="protection-unlimited-heading" class="text-sm font-semibold text-text">Unlimited armour and plates</h3>
+				<p class="mt-0.5 text-xs text-text-tertiary">No setup needed: every repair is recorded as one total.</p>
+			</div>
+			<div class="shrink-0 text-right" data-testid="unlimited-backlog">
+				<div class="text-sm text-text">
+					{unlimited.lastRecordedAt === null ? 'No repair recorded yet' : `Last repair ${formatDay(unlimited.lastRecordedAt)}`}
+				</div>
+				<div class="text-[10px] tabular-nums {unlimited.sessions > 0 ? 'text-text-secondary' : 'text-text-tertiary'}">
+					{unlimited.lastRecordedAt === null && unlimited.sessions > 0
+						? `${unlimited.sessions} ${unlimited.sessions === 1 ? 'session' : 'sessions'} with hits so far`
+						: backlogText(unlimited)}
+				</div>
+			</div>
+		</section>
+
 		<section aria-labelledby="protection-sets-heading">
 			<h3 id="protection-sets-heading" class="text-sm font-semibold text-text">Limited sets</h3>
 			<p class="mt-0.5 mb-3 text-xs text-text-tertiary">
-				Limited armour and plates carry their own markup, so each is recorded on its own. Unlimited protection needs no setup: its repairs are recorded as one.
+				Limited armour and plates carry their own markup, so each is measured on its own by its Trade Terminal value.
 			</p>
 			<div class="grid grid-cols-2 gap-10">
 				{#each [{ title: 'Armour', kind: 'armour' as const, sets: model.armourSets }, { title: 'Plates', kind: 'plates' as const, sets: model.plateSets }] as group (group.kind)}
@@ -75,7 +99,9 @@
 										<div class="shrink-0 text-right">
 											{#if set.latestObservation}
 												<div class="text-sm tabular-nums text-text">{formatPed(set.latestObservation.ttValuePed)} PED</div>
-												<div class="text-[10px] text-text-tertiary">{formatSessionStart(set.latestObservation.observedAt)}</div>
+												<div class="text-[10px] text-text-tertiary" title={`Read ${formatSessionStart(set.latestObservation.observedAt)}`}>
+													{formatDay(set.latestObservation.observedAt)} · {backlogText(set.backlog)}
+												</div>
 											{:else}
 												<span class="text-[10px] text-text-tertiary">No reading yet</span>
 											{/if}

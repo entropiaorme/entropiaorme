@@ -20,10 +20,12 @@ const set: ProtectionSet = {
 	markupPercent: 120,
 	latestObservation: null,
 	basisLocked: false,
+	backlog: { lastRecordedAt: null, sessions: 0, hits: 0 },
 };
 
 const overview: ProtectionOverview = {
 	sets: [set],
+	unlimited: { lastRecordedAt: null, sessions: 3, hits: 120 },
 	recentCostWindows: [],
 	unrecorded: { sessions: 3, hits: 120 },
 };

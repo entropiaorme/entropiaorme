@@ -153,6 +153,8 @@ pub struct ProtectionSet {
     pub latest_observation: Option<ProtectionObservation>,
     /// The markup is frozen once the set has a reading.
     pub basis_locked: bool,
+    /// Play since the set's latest reading; empty before its first.
+    pub backlog: StreamBacklog,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +222,8 @@ pub struct CandidateSession {
     pub hit_count: i64,
     /// An earlier recording of the same stream already covers it.
     pub covered: bool,
+    /// No recording of any stream covers it yet.
+    pub unrecorded: bool,
 }
 
 /// What a recording of one stream would look back over.
@@ -239,6 +243,17 @@ pub struct RecordingCandidates {
     pub earlier: Vec<CandidateSession>,
 }
 
+/// How far one stream's recordings lag the play since them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StreamBacklog {
+    /// When the stream was last recorded (for a limited set, its current
+    /// reading); absent before the first.
+    pub last_recorded_at: Option<f64>,
+    /// Sessions with hits since then.
+    pub sessions: i64,
+    pub hits: i64,
+}
+
 /// Recorded hits that no protection cost covers yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UnrecordedProtection {
@@ -249,6 +264,8 @@ pub struct UnrecordedProtection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtectionOverview {
     pub sets: Vec<ProtectionSet>,
+    /// The pooled unlimited repair stream's lag.
+    pub unlimited: StreamBacklog,
     pub recent_cost_windows: Vec<ProtectionCostWindow>,
     pub unrecorded: UnrecordedProtection,
 }

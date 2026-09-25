@@ -182,6 +182,7 @@ pub(super) fn read_overview(
 
     Ok(ProtectionOverview {
         sets,
+        unlimited: super::recording::read_backlog(conn, super::ProtectionStream::Unlimited)?,
         recent_cost_windows,
         unrecorded: read_unrecorded(conn)?,
     })

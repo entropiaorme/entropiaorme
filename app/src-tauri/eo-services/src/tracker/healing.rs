@@ -321,10 +321,13 @@ impl TrackerActor {
                     active.healing.weapon_lifesteal_percent = payload.lifesteal_percent;
                     false
                 }
-                HotbarItemKind::Harvesting | HotbarItemKind::Consumable => {
+                HotbarItemKind::Harvesting => {
                     close_healing_intent(&mut active.healing, payload.occurred_at);
                     false
                 }
+                // A consumable is used, never held: the tool in hand before
+                // the press is still the one a heal came from.
+                HotbarItemKind::Consumable => false,
             }
         };
 

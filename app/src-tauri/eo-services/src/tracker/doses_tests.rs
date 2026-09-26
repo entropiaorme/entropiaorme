@@ -372,28 +372,32 @@ fn a_dose_outlives_a_restart_by_its_persisted_expiry() {
     assert_eq!(live_reload(&rig, &restarted), 10.0);
 }
 
+/// A hotbar press of a consumable, as the listener resolves it.
+fn consumable_press(start: DoseStart, occurred_at: f64) -> BusEvent {
+    BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
+        session_id: None,
+        slot: "5".into(),
+        occurred_at,
+        equipment_id: start.equipment_id,
+        item_name: start.item_name,
+        item_kind: HotbarItemKind::Consumable,
+        cost_per_use_ped: 0.0,
+        reload_seconds: 0.0,
+        healing_profile: None,
+        lifesteal_percent: None,
+        consumable_profile: Some(start.profile),
+    }))
+}
+
 #[test]
 fn a_consumable_hotbar_press_is_the_dose() {
     let rig = rig();
     let board = board(&rig);
     let tracker = tracker_with(&rig, &board);
     let session = rig.wait(tracker.start_session()).unwrap();
-    let start = adrenaline(true);
 
     rig.bus
-        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
-            session_id: None,
-            slot: "5".into(),
-            occurred_at: now(&rig),
-            equipment_id: start.equipment_id,
-            item_name: start.item_name.clone(),
-            item_kind: HotbarItemKind::Consumable,
-            cost_per_use_ped: 0.0,
-            reload_seconds: 0.0,
-            healing_profile: None,
-            lifesteal_percent: None,
-            consumable_profile: Some(start.profile),
-        })));
+        .publish(&consumable_press(adrenaline(true), now(&rig)));
 
     assert_eq!(
         rig.scalar_i64(
@@ -404,6 +408,50 @@ fn a_consumable_hotbar_press_is_the_dose() {
     );
     assert!((session_cost(&rig, &session.id) - 4.5).abs() < 1e-12);
     assert_eq!(live_reload(&rig, &tracker), 10.0);
+}
+
+#[test]
+fn a_consumable_press_leaves_the_held_tool_in_hand() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    let session = rig.wait(tracker.start_session()).unwrap();
+    rig.bus.publish(&healer_intent(
+        7,
+        "FAP",
+        0.03,
+        2.5,
+        now(&rig),
+        HealingProfile {
+            direct_min: Some(8.0),
+            direct_max: Some(12.0),
+            ..HealingProfile::default()
+        },
+    ));
+    rig.clock.advance(0.5).unwrap();
+    rig.bus
+        .publish(&consumable_press(adrenaline(true), now(&rig)));
+    // Well past the tail a switched-away healer is still credited within:
+    // the heal lands only if the healer never left the hand.
+    rig.clock.advance(5.0).unwrap();
+    rig.bus.publish(&BusEvent::Combat(CombatPayload::SelfHeal {
+        amount: 10.0,
+        timestamp: "2026-01-01T00:00:05".into(),
+    }));
+
+    rig.probe(&tracker, |actor| {
+        let (tool, kind, _) = actor.aggregate();
+        assert_eq!(tool.as_deref(), Some("FAP"));
+        assert_eq!(kind, Some(HotbarItemKind::Healing));
+        assert_eq!(actor.session.active().unwrap().healing.activation_count, 1);
+    });
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM consumable_doses WHERE source = 'hotbar' AND session_id = ?",
+            &[&session.id]
+        ),
+        1
+    );
 }
 
 #[test]

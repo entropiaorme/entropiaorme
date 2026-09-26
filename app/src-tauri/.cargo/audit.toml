@@ -20,23 +20,6 @@
 
 [advisories]
 ignore = [
-    # GTK3 bindings: unmaintained advisories on the entire gtk-rs GTK3 family,
-    # transitive deps pulled by Tauri via webkit2gtk. The Linux build runs this
-    # stack (Tauri's Linux backend is GTK3-bound, so every Tauri Linux app
-    # carries these); the advisories are maintenance-status warnings, not
-    # vulnerabilities. Not actionable until Tauri migrates off GTK3; re-walk
-    # on every Tauri bump.
-    "RUSTSEC-2024-0411", # gdkwayland-sys
-    "RUSTSEC-2024-0412", # gdk
-    "RUSTSEC-2024-0413", # atk
-    "RUSTSEC-2024-0414", # gdkx11-sys
-    "RUSTSEC-2024-0415", # gtk
-    "RUSTSEC-2024-0416", # atk-sys
-    "RUSTSEC-2024-0417", # gdkx11
-    "RUSTSEC-2024-0418", # gdk-sys
-    "RUSTSEC-2024-0419", # gtk3-macros
-    "RUSTSEC-2024-0420", # gtk-sys
-
     # glib: Iterator/DoubleEndedIterator unsoundness on `VariantStrIter`.
     # Transitive dep of the GTK stack the Linux build runs; the unsound
     # iterator is not on any first-party code path (we call no VariantStrIter

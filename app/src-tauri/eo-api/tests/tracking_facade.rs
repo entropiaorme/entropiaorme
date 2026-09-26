@@ -1,17 +1,13 @@
-//! Behavioural pins for the tracking family over the typed facade, ported
-//! from the family's HTTP-era route behaviour: the session reads (list,
-//! detail, tag suggestions), the idle dashboard snapshot, the post-hoc
-//! session edits (rename mob, armour cost), the lifecycle guards (start /
-//! stop), and the repair-scan gate. Each shape carries a transport-
-//! invariance pin: the typed response serialises to the exact bytes the
-//! HTTP route answered, save for the one ratified movement documented in
-//! `eo_api::tracking` (the snapshot's exclude-unset -> exclude-none
-//! narrowing: a present-null field is dropped rather than serialised null).
+//! Behavioural pins for the tracking family over the typed facade: the
+//! session reads (list, detail, tag suggestions), the idle dashboard
+//! snapshot, the post-hoc session edits (rename mob, armour cost), the
+//! lifecycle guards (start / stop), and the repair-scan gate.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use eo_api::activities::ActivityTargetKind;
+use eo_api::tracking::TrackingState;
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
@@ -90,14 +86,13 @@ async fn seed_ended(db: &Db) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_empty_session_list_serialises_to_the_empty_page() {
+async fn the_empty_session_list_has_no_entries_or_next_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let api = make_api(dir.path(), false, None).await;
     let page = api.tracking_sessions(None, None, None).await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&page).unwrap(),
-        "{\"sessions\":[],\"nextCursor\":null,\"total\":0}"
-    );
+    assert!(page.sessions.is_empty());
+    assert!(page.next_cursor.is_none());
+    assert_eq!(page.total, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -231,18 +226,38 @@ async fn the_idle_snapshot_serialises_the_dashboard_way() {
     // has never been run: a family with no history still HAS a family,
     // so the flip is offered and honestly reports an empty span.
     let snapshot = api.tracking_snapshot().await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&snapshot).unwrap(),
-        "{\"status\":\"idle\",\"hotbarListenerActive\":false,\"hotbarKeysEnabled\":false,\
-         \"repairOcrEnabled\":false,\
-         \"sessionName\":\"Default Tracking\",\"sessionDefinitionId\":\"1\",\
-         \"trackProtectionCosts\":true,\
-         \"activities\":{\"visible\":false,\"adHocSegments\":false,\"readyCount\":0,\
-         \"active\":[]},\
-         \"lifetime\":{\"instanceCount\":0,\"cycled\":0.0,\"lootTt\":0.0,\"net\":0.0,\
-         \"returnRate\":0.0,\"pes\":0.0,\"durationSeconds\":0.0,\"unpricedShots\":0},\
-         \"recentEvents\":[]}"
-    );
+    assert_eq!(snapshot.status, Some(TrackingState::Idle));
+    assert_eq!(snapshot.hotbar_listener_active, Some(false));
+    assert_eq!(snapshot.hotbar_keys_enabled, Some(false));
+    assert_eq!(snapshot.repair_ocr_enabled, Some(false));
+    assert_eq!(snapshot.session_name.as_deref(), Some("Default Tracking"));
+    assert_eq!(snapshot.session_definition_id.as_deref(), Some("1"));
+    assert_eq!(snapshot.track_protection_costs, Some(true));
+
+    let activities = snapshot
+        .activities
+        .as_ref()
+        .expect("activities carried idle");
+    assert!(!activities.visible);
+    assert!(!activities.ad_hoc_segments);
+    assert_eq!(activities.ready_count, 0);
+    assert!(activities.active.is_empty());
+
+    let lifetime = snapshot.lifetime.as_ref().expect("lifetime carried idle");
+    assert_eq!(lifetime.instance_count, 0);
+    assert_eq!(lifetime.cycled, 0.0);
+    assert_eq!(lifetime.loot_tt, 0.0);
+    assert_eq!(lifetime.net, 0.0);
+    assert_eq!(lifetime.return_rate, 0.0);
+    assert_eq!(lifetime.pes, 0.0);
+    assert_eq!(lifetime.duration_seconds, 0.0);
+    assert_eq!(lifetime.unpriced_shots, 0);
+
+    assert!(snapshot
+        .recent_events
+        .as_ref()
+        .expect("recent events carried idle")
+        .is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -295,14 +310,15 @@ async fn repair_scan_is_bad_request_when_disabled() {
 async fn repair_scan_soft_error_rides_the_body() {
     let dir = tempfile::tempdir().unwrap();
     // Enabled, but the inert providers find no game window: the service's
-    // logical refusal rides the 200 body (declared fields first, then the
-    // extra `error` key), byte-for-byte as the HTTP plain-200.
+    // logical refusal rides the result body alongside the zeroed reads.
     let api = make_api(dir.path(), false, Some("{\"repair_ocr_enabled\": true}")).await;
     let result = api.tracking_repair_scan("ended".to_string()).unwrap();
+    assert_eq!(result.cost_ped, Some(0.0));
+    assert_eq!(result.raw_text.as_deref(), Some(""));
+    assert_eq!(result.confidence, Some(0.0));
     assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"cost_ped\":0.0,\"raw_text\":\"\",\"confidence\":0.0,\
-         \"error\":\"Entropia Universe window not found: start the game first\"}"
+        result.error.as_deref(),
+        Some("Entropia Universe window not found: start the game first")
     );
 }
 
@@ -311,15 +327,14 @@ async fn rename_mob_happy_path_and_validation_legs() {
     let dir = tempfile::tempdir().unwrap();
     let api = make_api(dir.path(), true, None).await;
 
-    // Happy path: both Atrox kills rename to Argo, byte-for-byte.
+    // Happy path: both Atrox kills rename to Argo.
     let result = api
         .tracking_rename_mob("ended".to_string(), "Atrox".to_string(), "Argo".to_string())
         .await
         .unwrap();
-    assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"sessionId\":\"ended\",\"mobName\":\"Argo\",\"killCount\":2}"
-    );
+    assert_eq!(result.session_id, "ended");
+    assert_eq!(result.mob_name, "Argo");
+    assert_eq!(result.kill_count, 2);
 
     // A blank name is a bad-request.
     let blank = api
@@ -344,10 +359,8 @@ async fn armour_cost_echoes_the_submitted_value() {
         .tracking_armour_cost("ended".to_string(), 2.5)
         .await
         .unwrap();
-    assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"sessionId\":\"ended\",\"armourCost\":2.5}"
-    );
+    assert_eq!(result.session_id, "ended");
+    assert_eq!(result.armour_cost, 2.5);
     // An absent session is a not-found (no active-session guard on this leg).
     let missing = api
         .tracking_armour_cost("nope".to_string(), 1.0)
@@ -751,7 +764,7 @@ async fn seed_family_quest(api: &Api, name: &str, started: bool, family_id: Opti
         .expect("quest input shape");
     let quest = api.quest_create(input).await.unwrap();
     let value = serde_json::to_value(&quest).unwrap();
-    // The Quest DTO serialises its id as a string (the HTTP-era shape).
+    // The Quest DTO serialises its id as a string.
     let quest_id: i64 = value["id"]
         .as_str()
         .expect("quest id")

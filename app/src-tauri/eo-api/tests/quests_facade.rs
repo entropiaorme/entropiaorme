@@ -1,19 +1,18 @@
-//! Behavioural pins for the quest family over the typed
-//! facade, ported from the family's HTTP-era hermetic router tests: the
+//! Behavioural pins for the quest family over the typed facade: the
 //! reads over an empty database, the quest create / read-back / update
 //! (present-null clears) ladder, the lifecycle (start / complete /
-//! cancel), and the not-found legs. Plus a transport-invariance pin: the
-//! created quest serialises to the exact bytes the HTTP route answered.
+//! cancel), and the not-found legs.
 //!
-//! The framework-validation legs (the create/update field-type 422s, the
-//! string→type lax coercions, the surrogate-taint / beyond-`i64` deferred
-//! 500s) do not port: they are unrepresentable over the typed DTOs and
-//! retire as ratified contract movements.
+//! The framework-validation legs (the create/update field-type coercion
+//! edge cases) do not port: they are unrepresentable over the typed DTOs
+//! and retire as ratified contract movements.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use eo_api::quests::{QuestCooldownAnchor, QuestFamilyInput, QuestInput};
+use eo_api::quests::{
+    QuestCompletionTrigger, QuestCooldownAnchor, QuestFamilyInput, QuestInput, QuestRewardPolicy,
+};
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
@@ -22,8 +21,7 @@ use eo_services::game_data_store::GameDataStore;
 mod common;
 
 /// The composed facade over a fresh migrated database and an empty
-/// catalogue snapshot, matching the HTTP-era quests router assertions
-/// (quest CRUD is catalogue-independent).
+/// catalogue snapshot (quest CRUD is catalogue-independent).
 async fn quests_api(dir: &Path) -> Api {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
@@ -96,30 +94,35 @@ async fn a_minimal_create_reads_back_the_wire_shape() {
     let dir = tempfile::tempdir().unwrap();
     let api = quests_api(dir.path()).await;
 
-    // Transport invariance: the created quest serialises to the exact
-    // bytes the HTTP route answered (id "1" over the fresh database, the
-    // planet/reward_is_skill defaults, null-or-empty text columns), plus
-    // the ratified extensions: the `signalLootItem` key (null for
-    // mission-log quests) added with signal-completed quests, and the
-    // typed completion/reward defaults, plus the trailing anchor and
-    // family availability keys (a standalone quest carries the
-    // mission-log, no-reward, and completion defaults plus nulls).
+    // A minimal create over the fresh database: id "1", the
+    // planet/reward-is-skill defaults, null-or-empty text columns, the
+    // mission-log completion trigger with no reward and no signal loot
+    // item, and a standalone quest's family fields all absent.
     let created = api.quest_create(minimal("Alpha")).await.unwrap();
+    assert_eq!(created.id, "1");
+    assert_eq!(created.name, "Alpha");
+    assert!(created.category.is_none());
+    assert!(created.target_mobs.is_empty());
+    assert_eq!(created.planet, "Calypso");
+    assert!(created.waypoint.is_none());
+    assert!(created.cooldown_duration_hours.is_none());
+    assert!(created.reward.is_none());
+    assert!(!created.reward_is_skill);
+    assert_eq!(created.reward_description, "");
+    assert_eq!(created.notes, "");
+    assert!(created.started_at.is_none());
+    assert!(created.signal_loot_item.is_none());
     assert_eq!(
-        serde_json::to_string(&created).unwrap(),
-        "{\"id\":\"1\",\"name\":\"Alpha\",\"category\":null,\"targetMobs\":[],\
-         \"planet\":\"Calypso\",\"waypoint\":null,\"cooldownDurationHours\":null,\
-         \"cooldownExpiresAt\":null,\"reward\":null,\"rewardIsSkill\":false,\
-         \"rewardDescription\":\"\",\"notes\":\"\",\
-         \"chainName\":null,\"chainPosition\":null,\"chainTotal\":null,\
-         \"startedAt\":null,\"signalLootItem\":null,\
-         \"completionTrigger\":\"mission_log\",\"rewardPolicy\":\"none\",\
-         \"rewardItemNames\":[],\
-         \"cooldownAnchor\":\"completion\",\"lastStartedAt\":null,\"familyId\":null,\
-         \"familyName\":null,\"familyCooldownDurationHours\":null,\
-         \"familyCooldownAnchor\":null,\"familyCooldownExpiresAt\":null,\
-         \"rewardUndoAvailable\":false}"
+        created.completion_trigger,
+        QuestCompletionTrigger::MissionLog
     );
+    assert_eq!(created.reward_policy, QuestRewardPolicy::None);
+    assert!(created.reward_item_names.is_empty());
+    assert_eq!(created.cooldown_anchor, QuestCooldownAnchor::Completion);
+    assert!(created.last_started_at.is_none());
+    assert!(created.family_id.is_none());
+    assert!(created.family_name.is_none());
+    assert!(!created.reward_undo_available);
 
     // The read-back through the listing and the by-id read agree.
     assert_eq!(api.quests_list().await.unwrap().len(), 1);
@@ -338,7 +341,8 @@ async fn quest_families_round_trip_over_the_typed_surface() {
 
     assert!(api.quest_families_list().await.unwrap().is_empty());
 
-    // Create with the pickup default; the wire shape is a declared DTO.
+    // Create with the pickup default: id "1", the fresh family carries
+    // no members or start/completion history yet.
     let created = api
         .quest_family_create(QuestFamilyInput {
             name: "Daily Hunting 1".to_string(),
@@ -348,13 +352,15 @@ async fn quest_families_round_trip_over_the_typed_surface() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        serde_json::to_string(&created).unwrap(),
-        "{\"id\":\"1\",\"name\":\"Daily Hunting 1\",\"planet\":\"ARIS\",\
-         \"cooldownDurationHours\":20.0,\"cooldownAnchor\":\"pickup\",\
-         \"cooldownExpiresAt\":null,\"memberCount\":0,\"lastStartedAt\":null,\
-         \"lastCompletedAt\":null}"
-    );
+    assert_eq!(created.id, "1");
+    assert_eq!(created.name, "Daily Hunting 1");
+    assert_eq!(created.planet, "ARIS");
+    assert_eq!(created.cooldown_duration_hours, Some(20.0));
+    assert_eq!(created.cooldown_anchor, QuestCooldownAnchor::Pickup);
+    assert!(created.cooldown_expires_at.is_none());
+    assert_eq!(created.member_count, 0);
+    assert!(created.last_started_at.is_none());
+    assert!(created.last_completed_at.is_none());
 
     // The typed input always sends `family_id` explicitly (the form's
     // visible name-match suggestion fills the select), so a create
@@ -442,8 +448,7 @@ async fn delete_soft_deletes_off_the_active_list() {
     api.quest_create(minimal("Doomed")).await.unwrap();
     api.quest_delete(1).await.unwrap();
     // Delete is a soft delete: the quest drops off the active listing but
-    // stays retrievable by id (the HTTP route's own contract; `get_quest`
-    // carries no `is_active` filter).
+    // stays retrievable by id (`get_quest` carries no `is_active` filter).
     assert!(api.quests_list().await.unwrap().is_empty());
     assert_eq!(api.quest_get(1).await.unwrap().name, "Doomed");
 

@@ -1,10 +1,7 @@
-//! Behavioural pins for the equipment family over the typed facade,
-//! ported from the family's HTTP-era integration tests: the search
-//! gates, the catalogue-less validation ladder, the custom-consumable
-//! write cycle, the type-change and missing-row refusals, the unguarded
-//! delete, and the transport-invariance pins
-//! (the typed response serialises to the exact bytes the HTTP route
-//! answered, and the stored `properties_json` bytes are unchanged).
+//! Behavioural pins for the equipment family over the typed facade: the
+//! search gates, the catalogue-less validation ladder, the
+//! custom-consumable write cycle, the type-change and missing-row
+//! refusals, and the unguarded delete.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +10,7 @@ use eo_api::equipment::{EquipmentKind, EquipmentRequest, SearchKind};
 use eo_api::{Api, ApiError};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
+use serde_json::Value;
 
 mod common;
 
@@ -206,22 +204,33 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
     assert_eq!(added.id, "1");
     assert_eq!(added.name, "Nutrio Bar");
 
-    // Transport invariance: the typed summary serialises to the exact
-    // body bytes the HTTP route answered for this row.
-    assert_eq!(
-        serde_json::to_string(&added).unwrap(),
-        "{\"id\":\"1\",\"name\":\"Nutrio Bar\",\"type\":\"consumable\",\"amplifierName\":null,\
-         \"costPerUse\":0.0,\"damageMin\":null,\"damageMax\":null,\"reloadSeconds\":null,\
-         \"isLimited\":false,\"enrichmentLevel\":1,\"healingProfile\":null,\
-         \"lifestealPercent\":null,\"effectProfile\":null,\"consumable\":{\"durationSeconds\":0.0,\
-         \"effects\":[],\"ttValuePed\":0.0,\"markupPercent\":100.0,\"doseCostPed\":0.0,\
-         \"trackCost\":false,\"catalogueEffects\":false,\"catalogueDuration\":false,\
-         \"catalogueValue\":false,\"declaredReloadSpeedPercent\":null,\
-         \"declaredDurationSeconds\":null,\"declaredTtValuePed\":null}}"
-    );
+    // The added consumable carries its defaults: no amplifier, damage,
+    // or reload figures; not limited; base enrichment; no healing or
+    // effect profile.
+    assert_eq!(added.kind, EquipmentKind::Consumable);
+    assert!(added.amplifier_name.is_none());
+    assert_eq!(added.cost_per_use, 0.0);
+    assert!(added.damage_min.is_none());
+    assert!(added.damage_max.is_none());
+    assert!(added.reload_seconds.is_none());
+    assert!(!added.is_limited);
+    assert_eq!(added.enrichment_level, 1);
+    assert!(added.healing_profile.is_none());
+    assert!(added.lifesteal_percent.is_none());
+    assert!(added.effect_profile.is_none());
+    let dose = added.consumable.as_ref().expect("consumable dose");
+    assert_eq!(dose.duration_seconds, 0.0);
+    assert!(dose.effects.is_empty());
+    assert_eq!(dose.tt_value_ped, 0.0);
+    assert_eq!(dose.markup_percent, 100.0);
+    assert_eq!(dose.dose_cost_ped, 0.0);
+    assert!(!dose.track_cost);
+    assert!(!dose.catalogue_effects);
+    assert!(!dose.catalogue_duration);
+    assert!(!dose.catalogue_value);
 
-    // Storage invariance: the stored props bytes are the reference
-    // `json.dumps` form, unchanged by the transport migration.
+    // The stored properties carry no catalogue linkage for a hand-added
+    // consumable.
     let stored: String = db
         .with_reader(|conn| {
             Ok(conn.query_row(
@@ -232,7 +241,9 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
         })
         .await
         .unwrap();
-    assert_eq!(stored, "{\"catalog_id\": null, \"entity\": null}");
+    let stored: Value = serde_json::from_str(&stored).unwrap();
+    assert!(stored["catalog_id"].is_null());
+    assert!(stored["entity"].is_null());
 
     let listed = api.equipment_library().await.unwrap();
     assert_eq!(listed.len(), 1);

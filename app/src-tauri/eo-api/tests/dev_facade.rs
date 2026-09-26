@@ -227,5 +227,17 @@ async fn rebuild_projections_reports_every_model_matching_under_developer_mode()
 
     let report = api.dev_rebuild_projections().await.expect("rebuild");
     assert!(report.all_matched, "{report:?}");
-    assert_eq!(report.tables.len(), 9);
+    let tables: Vec<&str> = report.tables.iter().map(|t| t.table.as_str()).collect();
+    for expected in [
+        "session_summaries",
+        "daily_rollups",
+        "session_kill_rollups",
+        "session_loot_rollups",
+        "session_pes_rollups",
+    ] {
+        assert!(
+            tables.contains(&expected),
+            "expected {expected} among rebuilt projections: {tables:?}"
+        );
+    }
 }

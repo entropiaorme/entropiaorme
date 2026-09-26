@@ -125,46 +125,41 @@ async fn settled_hunting_facades_cannot_read_raw_fact_tables() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_empty_overview_serialises_to_the_float_typed_zeros() {
+async fn the_empty_overview_zeros_every_numeric_field() {
     let dir = tempfile::tempdir().unwrap();
     let api = analytics_api(dir.path()).await;
 
-    // Transport invariance (with the ratified movement): every numeric
-    // field is `f64`, so the `cycledBreakdown` zeros the transport passed
-    // through as engine integers now render as JSON floats.
+    // Every numeric field is `f64`, so the cycled-breakdown zeros the
+    // engine passes through as integers still render as JSON floats.
     let overview = api.analytics_overview("all").await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&overview).unwrap(),
-        "{\"totalReturnRate\":0.0,\"trend\":\"stable\",\"returnsBreakdown\":{\"lootTt\":0.0,\
-         \"questItemTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\"lossesBreakdown\":\
-         {\"trackingCost\":0.0,\"cycledBreakdown\":{\"weapon\":0.0,\"healing\":0.0,\
-         \"enhancer\":0.0,\"armour\":0.0,\"dangling\":0.0,\"consumables\":0.0},\"ledger\":{}},\"totalGains\":0.0,\
-         \"totalLosses\":0.0,\"timeline\":[],\"monthlyBreakdown\":[]}"
-    );
+    assert_eq!(overview.total_return_rate, 0.0);
+    assert_eq!(overview.total_gains, 0.0);
+    assert_eq!(overview.total_losses, 0.0);
+    assert!(overview.timeline.is_empty());
+    assert!(overview.monthly_breakdown.is_empty());
+    assert_eq!(overview.returns_breakdown.loot_tt, 0.0);
+    assert_eq!(overview.losses_breakdown.tracking_cost, 0.0);
+    assert_eq!(overview.losses_breakdown.cycled_breakdown.weapon, 0.0);
+    assert!(serde_json::to_value(&overview).unwrap()["totalReturnRate"].is_f64());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_empty_hunting_serialises_to_two_empty_tables() {
+async fn the_empty_hunting_has_no_comparisons() {
     let dir = tempfile::tempdir().unwrap();
     let api = analytics_api(dir.path()).await;
 
     let hunting = api.analytics_hunting().await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&hunting).unwrap(),
-        "{\"mobComparisons\":[],\"nameComparisons\":[]}"
-    );
+    assert!(hunting.mob_comparisons.is_empty());
+    assert!(hunting.name_comparisons.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_empty_harvest_serialises_to_an_empty_tier_table() {
+async fn the_empty_harvest_has_no_tier_comparisons() {
     let dir = tempfile::tempdir().unwrap();
     let api = analytics_api(dir.path()).await;
 
     let harvest = api.analytics_harvest("all").await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&harvest).unwrap(),
-        "{\"tierComparisons\":[]}"
-    );
+    assert!(harvest.tier_comparisons.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

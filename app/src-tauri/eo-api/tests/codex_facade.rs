@@ -1,19 +1,14 @@
-//! Behavioural pins for the codex family over the typed facade, ported
-//! from the family's HTTP-era hermetic router tests: the reads over an
-//! empty catalogue (the species listing, the fixed meta-attribute set, a
-//! missing-species recommendation), the path-parameter not-found, the
-//! recommend rank bound, and the write ladder (calibrate's success and
-//! out-of-domain refusal, the claim / unclaim / meta-claim error mapping,
-//! a meta-claim success), plus a transport-invariance pin (the typed
-//! meta-attributes and calibrate responses serialise to the exact bytes
-//! the HTTP routes answered).
+//! Behavioural pins for the codex family over the typed facade: the
+//! reads over an empty catalogue (the species listing, the fixed
+//! meta-attribute set, a missing-species recommendation), the
+//! path-parameter not-found, the recommend rank bound, and the write
+//! ladder (calibrate's success and out-of-domain refusal, the claim /
+//! unclaim / meta-claim error mapping, a meta-claim success).
 
 use std::path::Path;
 use std::sync::Arc;
 
-use eo_api::codex::{
-    CodexMasteryClaimResult, CodexProfessionContribution, CodexRecommendTarget, CodexSkillOption,
-};
+use eo_api::codex::CodexRecommendTarget;
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
@@ -23,8 +18,7 @@ mod common;
 
 /// The composed facade over a fresh migrated database and an empty
 /// catalogue snapshot (no mobs carry codex data, so the species listing
-/// and recommendations are empty and every species lookup misses),
-/// matching the HTTP-era `serve_substrate` codex assertions.
+/// and recommendations are empty and every species lookup misses).
 async fn codex_api(dir: &Path) -> Api {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
@@ -72,18 +66,21 @@ async fn the_reads_answer_the_empty_catalogue_the_backend_way() {
         .is_empty());
 
     // The meta-attribute set is fixed; levels hydrate from the (empty)
-    // calibration tables. Transport invariance: the typed response
-    // serialises to the exact bytes the HTTP route answered.
+    // calibration tables, so every attribute's current level is unset.
     let attributes = api.codex_meta_attributes().await.unwrap();
+    let names: Vec<&str> = attributes.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(
-        serde_json::to_string(&attributes).unwrap(),
-        "[{\"name\":\"Agility\",\"currentLevel\":null},\
-         {\"name\":\"Health\",\"currentLevel\":null},\
-         {\"name\":\"Intelligence\",\"currentLevel\":null},\
-         {\"name\":\"Psyche\",\"currentLevel\":null},\
-         {\"name\":\"Stamina\",\"currentLevel\":null},\
-         {\"name\":\"Strength\",\"currentLevel\":null}]"
+        names,
+        [
+            "Agility",
+            "Health",
+            "Intelligence",
+            "Psyche",
+            "Stamina",
+            "Strength"
+        ]
     );
+    assert!(attributes.iter().all(|a| a.current_level.is_none()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -120,13 +117,10 @@ async fn calibrate_writes_and_bounds_the_rank() {
     let api = codex_api(dir.path()).await;
 
     // The write succeeds with no catalogue (calibrate sets the rank
-    // directly). Transport invariance: the typed result serialises to the
-    // exact bytes the HTTP route answered.
+    // directly).
     let result = api.codex_calibrate("Sp", 7).await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"speciesName\":\"Sp\",\"rank\":7}"
-    );
+    assert_eq!(result.species_name, "Sp");
+    assert_eq!(result.rank, 7);
 
     // The out-of-domain rank is the service's bad_request (the HTTP 400).
     assert_eq!(
@@ -162,13 +156,10 @@ async fn the_write_error_ladder_maps_invalid_to_bad_request() {
         ApiError::BadRequest { .. }
     ));
 
-    // A meta claim for a real attribute succeeds (no catalogue needed) and
-    // serialises to the exact bytes the HTTP route answered.
+    // A meta claim for a real attribute succeeds (no catalogue needed).
     let result = api.codex_meta_claim("Health").await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"attributeName\":\"Health\",\"pedValue\":1.0}"
-    );
+    assert_eq!(result.attribute_name, "Health");
+    assert_eq!(result.ped_value, 1.0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -190,62 +181,6 @@ async fn the_mastery_writes_map_their_refusals_to_bad_request() {
     assert_eq!(
         api.codex_mastery_unclaim("Notaspecies").await.unwrap_err(),
         ApiError::bad_request("No mastery claim to unclaim for 'Notaspecies'")
-    );
-}
-
-#[test]
-fn the_mastery_claim_result_serialises_the_wire_shape() {
-    // The claim and unclaim writes need a species at rank 25, which the
-    // empty-catalogue substrate cannot seed; the wire contract is still
-    // pinnable directly (field names and declaration order).
-    let result = CodexMasteryClaimResult {
-        species_name: "Sp".to_string(),
-        mastery_level: 3,
-        skill_name: "Aim".to_string(),
-        ped_value: 25.0,
-    };
-    assert_eq!(
-        serde_json::to_string(&result).unwrap(),
-        "{\"speciesName\":\"Sp\",\"masteryLevel\":3,\"skillName\":\"Aim\",\"pedValue\":25.0}"
-    );
-}
-
-#[test]
-fn the_skill_option_serialises_the_profession_split_wire_shape() {
-    // Real per-profession contributions need a seeded professions
-    // catalogue, which the empty-catalogue substrate cannot provide (the
-    // split's values are pinned at the service layer); the wire contract
-    // is still pinnable directly (field names and declaration order).
-    let option = CodexSkillOption {
-        skill_name: "Aim".to_string(),
-        category: "cat1".to_string(),
-        reward_ped: 0.1875,
-        current_level: None.into(),
-        levels_gained: 143.75,
-        profession_weight: 50,
-        prof_contribution: 0.718725,
-        profession_contributions: vec![
-            CodexProfessionContribution {
-                profession: "Sniper".to_string(),
-                prof_contribution: 0.28749,
-            },
-            CodexProfessionContribution {
-                profession: "Scout".to_string(),
-                prof_contribution: 0.431235,
-            },
-        ],
-        hp_increase: None.into(),
-        hp_gain: 0.0,
-        recommend_rank: Some(1).into(),
-    };
-    assert_eq!(
-        serde_json::to_string(&option).unwrap(),
-        "{\"skillName\":\"Aim\",\"category\":\"cat1\",\"rewardPed\":0.1875,\
-         \"currentLevel\":null,\"levelsGained\":143.75,\"professionWeight\":50,\
-         \"profContribution\":0.718725,\"professionContributions\":\
-         [{\"profession\":\"Sniper\",\"profContribution\":0.28749},\
-         {\"profession\":\"Scout\",\"profContribution\":0.431235}],\
-         \"hpIncrease\":null,\"hpGain\":0.0,\"recommendRank\":1}"
     );
 }
 

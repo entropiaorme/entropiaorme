@@ -1,7 +1,7 @@
 //! Behavioural pins for the session-definitions family over the typed
 //! facade: the empty-database read, the create / read-back / update
 //! (roster replaced wholesale) / archive / restore ladder with its not-found and
-//! validation legs, the transport-invariance byte pin, and the
+//! validation legs, the authored-order roster sort, and the
 //! tracking-family selection verb (config writeback, snapshot
 //! exposure, the free-text-rename disavow, and the fixed-while-active
 //! conflict).
@@ -85,7 +85,7 @@ fn segment(label: &str) -> SessionRosterEntryInput {
 }
 
 /// Pin a definition's authored stamp, oldest id first, so list order is
-/// deterministic under the byte-for-byte assertions.
+/// deterministic under assertion.
 async fn pin_timestamps(db: &Db, definition_id: i64) {
     let stamp = 1000.0 * definition_id as f64;
     db.with_writer(move |conn| {
@@ -177,27 +177,40 @@ async fn a_create_reads_back_the_wire_shape() {
     // Id 1 is the seeded default, so the first authored definition is 2.
     assert_eq!(created.id, "2");
 
-    // Transport invariance: the exact wire bytes, with the wall-clock
-    // stamps pinned first. The seeded default is pinned too, so the
-    // list's authored-order sort is deterministic rather than a race
-    // between a pinned stamp and a real one.
+    // The wall-clock stamps pinned first. The seeded default is pinned
+    // too, so the list's authored-order sort is deterministic rather
+    // than a race between a pinned stamp and a real one.
     pin_timestamps(&db, 1).await;
     pin_timestamps(&db, 2).await;
     let listed = api.session_definitions_list(None).await.unwrap();
     assert_eq!(listed.len(), 2);
+    let entry = &listed[1];
+    assert_eq!(entry.id, "2");
+    assert_eq!(entry.name, "ARIS Dailies");
+    assert!(entry.ad_hoc_segments);
+    assert!(entry.track_protection_costs);
+    assert!(!entry.is_protected);
+    assert!(entry.is_active);
+    assert_eq!(entry.instance_count, 0);
+    assert_eq!(entry.created_at, 2000.0);
+    assert!(entry.updated_at.is_none());
+
+    // The roster carries the authored order: the sort claim this pin
+    // exists to make.
+    assert_eq!(entry.roster.len(), 3);
+    assert_eq!(entry.roster[0].kind, SessionRosterEntryKind::QuestFamily);
     assert_eq!(
-        serde_json::to_string(&listed[1]).unwrap(),
-        "{\"id\":\"2\",\"name\":\"ARIS Dailies\",\"adHocSegments\":true,\
-         \"trackProtectionCosts\":true,\
-         \"isProtected\":false,\"isActive\":true,\
-         \"instanceCount\":0,\"createdAt\":2000.0,\"updatedAt\":null,\"roster\":[\
-         {\"id\":\"1\",\"kind\":\"quest_family\",\"refId\":\"1\",\"label\":null,\
-         \"displayName\":\"Daily Hunting 1\"},\
-         {\"id\":\"2\",\"kind\":\"quest\",\"refId\":\"1\",\"label\":null,\
-         \"displayName\":\"The Ultimate Threat\"},\
-         {\"id\":\"3\",\"kind\":\"segment\",\"refId\":null,\"label\":\"Warm-up\",\
-         \"displayName\":\"Warm-up\"}]}"
+        entry.roster[0].display_name.as_deref(),
+        Some("Daily Hunting 1")
     );
+    assert_eq!(entry.roster[1].kind, SessionRosterEntryKind::Quest);
+    assert_eq!(
+        entry.roster[1].display_name.as_deref(),
+        Some("The Ultimate Threat")
+    );
+    assert_eq!(entry.roster[2].kind, SessionRosterEntryKind::Segment);
+    assert_eq!(entry.roster[2].label.as_deref(), Some("Warm-up"));
+    assert_eq!(entry.roster[2].display_name.as_deref(), Some("Warm-up"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

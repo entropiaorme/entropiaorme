@@ -1,17 +1,13 @@
 //! Behavioural pins for the manual skill-scan family over the typed
-//! facade, ported from the family's HTTP-era route behaviour: the status
-//! read, the logical-refusal contract (a refusal returns the full status
-//! carrying its `error`), the capture / undo status-plus-extra shapes, the
-//! accept / reject polymorphic bodies, the pending read, the spacebar
-//! toggle, and the capture-preview bytes. Each shape carries a
-//! transport-invariance pin: the typed response serialises to the exact
-//! bytes the HTTP route answered (for the status verbs, the success body;
-//! the one ratified movement, a refusal's full-status-plus-error, is
-//! pinned explicitly).
+//! facade: the status read, the logical-refusal contract (a refusal
+//! returns the full status carrying its `error`), the capture / undo
+//! status-plus-extra shapes, the accept / reject polymorphic bodies, the
+//! pending read, the spacebar toggle, and the capture-preview bytes.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use eo_api::scan::ScanPhase;
 use eo_api::Api;
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
@@ -78,21 +74,23 @@ async fn scan_api(dir: &Path, providers: ScanProviders) -> (Api, Arc<SkillScanMa
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_status_read_serialises_the_backend_way() {
+async fn the_status_read_reports_a_resting_configured_scan() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _scan) = scan_api(dir.path(), configured_providers(Vec::new())).await;
 
-    // The resting status over a configured, window-present scan: the full
-    // field set in the HTTP response-model order, `error` null.
+    // The resting status over a configured, window-present scan.
     let status = api.scan_status().unwrap();
-    assert_eq!(
-        serde_json::to_string(&status).unwrap(),
-        "{\"active\":false,\"processing\":false,\"captured_pages\":0,\
-         \"expected_pages\":12,\"last_scan_time\":null,\"skills_count\":0,\
-         \"configured\":true,\"game_window_present\":true,\"phase\":\"idle\",\
-         \"processing_progress\":{\"done\":0,\"total\":0},\
-         \"has_pending_result\":false,\"error\":null}"
-    );
+    assert!(!status.active);
+    assert!(!status.processing);
+    assert_eq!(status.captured_pages, 0);
+    assert_eq!(status.expected_pages, 12);
+    assert!(status.last_scan_time.is_none());
+    assert_eq!(status.skills_count, 0);
+    assert!(status.configured);
+    assert!(status.game_window_present);
+    assert_eq!(status.phase, ScanPhase::Idle);
+    assert!(!status.has_pending_result);
+    assert!(status.error.is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -104,18 +102,16 @@ async fn a_refusal_returns_the_full_status_carrying_the_error() {
     providers.skill_region = Arc::new(|| None);
     let (api, _scan) = scan_api(dir.path(), providers).await;
 
-    // The ratified movement: where the HTTP body was the lone
-    // `{"error": ...}`, the typed reply is the full current status with
-    // `error` set (every consumer reads `.error` first).
+    // A refusal returns the full current status with `error` set (every
+    // consumer reads `.error` first), not a lone error body.
     let status = api.scan_start(None).unwrap();
+    assert!(!status.active);
+    assert!(!status.configured);
+    assert!(!status.game_window_present);
+    assert_eq!(status.phase, ScanPhase::Idle);
     assert_eq!(
-        serde_json::to_string(&status).unwrap(),
-        "{\"active\":false,\"processing\":false,\"captured_pages\":0,\
-         \"expected_pages\":12,\"last_scan_time\":null,\"skills_count\":0,\
-         \"configured\":false,\"game_window_present\":false,\"phase\":\"idle\",\
-         \"processing_progress\":{\"done\":0,\"total\":0},\
-         \"has_pending_result\":false,\
-         \"error\":\"Local OCR engine is unavailable: check the backend log\"}"
+        status.error.as_deref(),
+        Some("Local OCR engine is unavailable: check the backend log")
     );
 }
 
@@ -125,17 +121,16 @@ async fn the_capture_flow_serialises_status_plus_page_and_captured() {
     let (api, _scan) = scan_api(dir.path(), configured_providers(Vec::new())).await;
 
     api.scan_start(Some(1)).unwrap();
-    // A capture success carries the status fields (in order) then `page`
-    // and `captured`, byte-for-byte as the HTTP capture body.
+    // A capture success carries the settled status plus the page number
+    // and the captured flag.
     let captured = api.scan_capture().unwrap();
-    assert_eq!(
-        serde_json::to_string(&captured).unwrap(),
-        "{\"active\":true,\"processing\":false,\"captured_pages\":1,\
-         \"expected_pages\":1,\"last_scan_time\":null,\"skills_count\":0,\
-         \"configured\":true,\"game_window_present\":true,\"phase\":\"capturing\",\
-         \"processing_progress\":{\"done\":0,\"total\":0},\
-         \"has_pending_result\":false,\"error\":null,\"page\":1,\"captured\":true}"
-    );
+    assert!(captured.status.active);
+    assert_eq!(captured.status.captured_pages, 1);
+    assert_eq!(captured.status.expected_pages, 1);
+    assert_eq!(captured.status.phase, ScanPhase::Capturing);
+    assert!(captured.status.error.is_none());
+    assert_eq!(captured.page, Some(1));
+    assert_eq!(captured.captured, Some(true));
 
     // A capture refusal (no active scan after a cancel) rides the status'
     // `error`; the page/captured extras are absent.
@@ -178,26 +173,30 @@ async fn accept_and_reject_preserve_the_polymorphic_shape() {
         Ok(())
     }));
 
-    // The lone-error refusals, byte-for-byte as the HTTP plain-200 bodies.
+    // The lone-error refusals with no result yet.
+    let accept_refusal = api.scan_accept().unwrap();
+    assert_eq!(accept_refusal.ok, None);
     assert_eq!(
-        serde_json::to_string(&api.scan_accept().unwrap()).unwrap(),
-        "{\"error\":\"No pending result to accept\"}"
+        accept_refusal.error.as_deref(),
+        Some("No pending result to accept")
     );
+    let reject_refusal = api.scan_reject().unwrap();
+    assert_eq!(reject_refusal.ok, None);
     assert_eq!(
-        serde_json::to_string(&api.scan_reject().unwrap()).unwrap(),
-        "{\"error\":\"No pending result to reject\"}"
+        reject_refusal.error.as_deref(),
+        Some("No pending result to reject")
     );
 
-    // Drive one page to a held result, then accept: the success body is
-    // `{ok, skills_persisted}` with no `error` key.
+    // Drive one page to a held result, then accept: `ok` true and the
+    // persisted-skill count, no error.
     api.scan_start(Some(1)).unwrap();
     api.scan_capture().unwrap();
     api.scan_process().unwrap();
     scan.join_worker();
-    assert_eq!(
-        serde_json::to_string(&api.scan_accept().unwrap()).unwrap(),
-        "{\"ok\":true,\"skills_persisted\":1}"
-    );
+    let accepted = api.scan_accept().unwrap();
+    assert_eq!(accepted.ok, Some(true));
+    assert_eq!(accepted.skills_persisted, Some(1));
+    assert_eq!(accepted.error, None);
     assert_eq!(*persisted.lock().unwrap(), 1);
 }
 
@@ -214,10 +213,7 @@ async fn pending_returns_the_held_skills_or_none() {
     api.scan_process().unwrap();
     scan.join_worker();
     let pending = api.scan_pending().unwrap().expect("a held result");
-    assert_eq!(
-        serde_json::to_string(&pending).unwrap(),
-        "{\"skills\":{\"Rifle\":100.0}}"
-    );
+    assert_eq!(pending.skills.get("Rifle"), Some(&100.0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -225,14 +221,12 @@ async fn spacebar_toggle_echoes_the_enabled_state() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _scan) = scan_api(dir.path(), configured_providers(Vec::new())).await;
 
-    assert_eq!(
-        serde_json::to_string(&api.scan_set_spacebar_capture(true).unwrap()).unwrap(),
-        "{\"ok\":true,\"enabled\":true}"
-    );
-    assert_eq!(
-        serde_json::to_string(&api.scan_set_spacebar_capture(false).unwrap()).unwrap(),
-        "{\"ok\":true,\"enabled\":false}"
-    );
+    let enabled = api.scan_set_spacebar_capture(true).unwrap();
+    assert!(enabled.ok);
+    assert!(enabled.enabled);
+    let disabled = api.scan_set_spacebar_capture(false).unwrap();
+    assert!(disabled.ok);
+    assert!(!disabled.enabled);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

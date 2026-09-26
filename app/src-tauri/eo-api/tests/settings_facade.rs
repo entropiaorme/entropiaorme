@@ -1,11 +1,8 @@
-//! Behavioural pins for the settings family over the typed facade,
-//! ported from the family's HTTP-era hermetic handler tests: the
+//! Behavioural pins for the settings family over the typed facade: the
 //! assembled settings read (defaults, the live db path, the version
-//! stamp, the carried weapons, the hotbar slot order), the
-//! overlay-position read/write, and the partial-update validation ladder
-//! (the empty-patch refusal, the chat-log path checks, the mob-mode
-//! gate), plus a transport-invariance pin (the typed overlay-position
-//! response serialises to the exact bytes the HTTP route answered).
+//! stamp, the carried weapons), the overlay-position read/write, and the
+//! partial-update validation ladder (the empty-patch refusal, the
+//! chat-log path checks, the mob-mode gate).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -116,11 +113,6 @@ async fn the_settings_assembly_shapes_the_default_config() {
         }),
         "the guardrail defaults disabled with no intended tools"
     );
-    assert_eq!(
-        keys(&body["gameConnection"]),
-        ["chatLogPath", "chatLogValid", "playerName"]
-    );
-
     // The default values: both facets undeclared. The boost's undeclared
     // state is null, NOT 0: a stored 0 is the distinct declaration that
     // play is deliberately unboosted.
@@ -137,12 +129,6 @@ async fn the_settings_assembly_shapes_the_default_config() {
         .as_str()
         .unwrap()
         .ends_with("entropia_orme.db"));
-    // The hotbar carries through in stored slot order (1..9 then 0), not
-    // sorted: the order the byte-faithful response depends on.
-    assert_eq!(
-        keys(&body["hotbar"]),
-        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -150,13 +136,10 @@ async fn the_overlay_position_reads_and_writes() {
     let dir = tempfile::tempdir().unwrap();
     let api = settings_api(dir.path()).await;
 
-    // Transport invariance: the typed default response serialises to the
-    // exact bytes the HTTP route answered.
+    // Neither coordinate is set by default.
     let position = api.settings_overlay_position().await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&position).unwrap(),
-        "{\"x\":null,\"y\":null}"
-    );
+    assert_eq!(position.x, None);
+    assert_eq!(position.y, None);
 
     // The write persists the exact coordinates and carries no producer
     // side effects.

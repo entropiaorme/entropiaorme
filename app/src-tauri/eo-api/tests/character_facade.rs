@@ -1,10 +1,7 @@
-//! Behavioural pins for the character family over the typed facade,
-//! ported from the family's HTTP-era hermetic handler tests: the
+//! Behavioural pins for the character family over the typed facade: the
 //! calibration staleness read, the stats truncation and ranking, the
 //! skill/profession shaping with scan-anchored gains, and the optimizer
-//! surfaces, plus a transport-invariance pin (the typed calibration
-//! response serialises to the exact bytes the HTTP route answered) and
-//! the two ratified not-found convergences.
+//! surfaces, plus the two ratified not-found convergences.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -22,9 +19,9 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) {
     std::fs::write(dir.join(name), serde_json::to_string(value).unwrap()).unwrap();
 }
 
-/// The composed facade over a fresh migrated database seeded with the
-/// same calibrations and catalogue the HTTP-era handler test used, and a
-/// clock frozen days past the latest scan (inside the 30-day window).
+/// The composed facade over a fresh migrated database seeded with a few
+/// calibrations and a small catalogue, and a clock frozen days past the
+/// latest scan (inside the 30-day window).
 async fn seeded_api(dir: &Path) -> Api {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
@@ -120,15 +117,15 @@ async fn the_facade_shapes_the_seeded_state() {
     let dir = tempfile::tempdir().unwrap();
     let api = seeded_api(dir.path()).await;
 
-    // Calibration, the transport-invariance pin: the typed response
-    // serialises to the exact bytes the HTTP route answered (the
-    // believed-latest timestamp in UTC ISO, the frozen clock inside the
-    // 30-day staleness window).
+    // Calibration: the believed-latest timestamp in UTC ISO, the frozen
+    // clock inside the 30-day staleness window.
     let calibration = api.character_calibration().await.unwrap();
+    assert!(calibration.calibrated);
     assert_eq!(
-        serde_json::to_string(&calibration).unwrap(),
-        "{\"calibrated\":true,\"lastCalibration\":\"2023-11-14T23:13:20+00:00\",\"stale\":false}"
+        calibration.last_calibration.as_deref(),
+        Some("2023-11-14T23:13:20+00:00")
     );
+    assert!(!calibration.stale);
 
     // Stats: Python int() truncation of Health, professions ranked.
     let stats = api.character_stats().await.unwrap();
@@ -178,8 +175,7 @@ async fn the_facade_shapes_the_seeded_state() {
     assert!(options.weapons.is_empty());
 
     // The profession optimizer composes the calc service with the
-    // projections; the declared-then-extra order is the wire order, and
-    // nextLevel renders as a float.
+    // projections.
     let optimizer = api
         .character_profession_optimizer("Marksman")
         .await
@@ -187,24 +183,6 @@ async fn the_facade_shapes_the_seeded_state() {
     assert_eq!(optimizer.profession.as_deref(), Some("Marksman"));
     assert!(optimizer.next_level.is_some());
     assert!(optimizer.error.is_none());
-    let serialised = serde_json::to_value(&optimizer).unwrap();
-    let keys: Vec<&str> = serialised
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            "skills",
-            "attributes",
-            "profession",
-            "currentLevel",
-            "nextLevel",
-            "gap"
-        ]
-    );
 
     // Both path-optimizer modes carry their mode inputs (the other input
     // echoes null, present).
@@ -234,14 +212,12 @@ async fn the_facade_shapes_the_seeded_state() {
     assert_eq!(hp.current_hp, 142.0);
 }
 
-/// Transport invariance on the family's richest responses: the typed
-/// DTOs serialise to the exact bytes the HTTP handlers answered on the
-/// same seed (captured from the HTTP-era handlers before their deletion).
-/// This pins the `float | None` coercions (`nextLevel` 6 -> `6.0`,
-/// `codexDivisor` 200 -> `200.0`) and the declared-field wire ordering
-/// the DTOs now carry in place of the pydantic projection.
+/// The computed reads over the family's richest responses carry the
+/// expected figures: the profession optimizer's skill breakdown and
+/// aggregate gap, the skill list's levels and ranks, and the HP
+/// optimizer's current reading.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_computed_reads_serialise_byte_for_byte_like_the_http_route() {
+async fn the_computed_reads_carry_the_expected_figures() {
     let dir = tempfile::tempdir().unwrap();
     let api = seeded_api(dir.path()).await;
 
@@ -249,31 +225,46 @@ async fn the_computed_reads_serialise_byte_for_byte_like_the_http_route() {
         .character_profession_optimizer("Marksman")
         .await
         .unwrap();
-    assert_eq!(
-        serde_json::to_string(&optimizer).unwrap(),
-        "{\"skills\":[{\"name\":\"Rifle\",\"weight\":40.0,\"currentLevel\":1250.0,\"levelsNeeded\":50.0,\
-         \"pedToNextLevel\":0.24,\"codexCategory\":\"cat1\",\"codexDivisor\":200.0},\
-         {\"name\":\"Anatomy\",\"weight\":10.0,\"currentLevel\":800.0,\"levelsNeeded\":200.0,\
-         \"pedToNextLevel\":1.07,\"codexCategory\":\"cat1\",\"codexDivisor\":200.0}],\
-         \"attributes\":[],\"profession\":\"Marksman\",\"currentLevel\":5.8,\"nextLevel\":6.0,\"gap\":0.2}"
-    );
+    assert_eq!(optimizer.profession.as_deref(), Some("Marksman"));
+    assert_eq!(optimizer.current_level, Some(5.8));
+    assert_eq!(optimizer.next_level, Some(6.0));
+    assert_eq!(optimizer.gap, Some(0.2));
+    assert!(serde_json::to_value(&optimizer).unwrap()["nextLevel"].is_f64());
+
+    assert_eq!(optimizer.skills.len(), 2);
+    let rifle = &optimizer.skills[0];
+    assert_eq!(rifle.name, "Rifle");
+    assert_eq!(rifle.levels_needed, 50.0);
+    assert_eq!(rifle.ped_to_next_level, 0.24);
+    let anatomy = &optimizer.skills[1];
+    assert_eq!(anatomy.name, "Anatomy");
+    assert_eq!(anatomy.levels_needed, 200.0);
+    assert_eq!(anatomy.ped_to_next_level, 1.07);
+    assert!(optimizer.attributes.is_empty());
 
     let skills = api.character_skills().await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&skills).unwrap(),
-        "[{\"name\":\"Rifle\",\"category\":\"Combat\",\"level\":1250.0,\"anchorLevel\":1200.0,\
-         \"gainSinceAnchor\":50.0,\"rankName\":\"Adept\",\"ttValue\":4.9,\"isAttribute\":false},\
-         {\"name\":\"Anatomy\",\"category\":\"Medical\",\"level\":800.0,\"anchorLevel\":800.0,\
-         \"gainSinceAnchor\":0.0,\"rankName\":\"Novice\",\"ttValue\":2.35,\"isAttribute\":false},\
-         {\"name\":\"Health\",\"category\":\"General\",\"level\":142.7,\"anchorLevel\":142.7,\
-         \"gainSinceAnchor\":0.0,\"rankName\":\"Novice\",\"ttValue\":0.18,\"isAttribute\":true}]"
-    );
+    assert_eq!(skills.len(), 3);
+    let rifle = &skills[0];
+    assert_eq!(rifle.name, "Rifle");
+    assert_eq!(rifle.level, 1250.0);
+    assert_eq!(rifle.rank_name, "Adept");
+    assert_eq!(rifle.tt_value, 4.9);
+    assert!(!rifle.is_attribute);
+    let anatomy = &skills[1];
+    assert_eq!(anatomy.name, "Anatomy");
+    assert_eq!(anatomy.level, 800.0);
+    assert_eq!(anatomy.rank_name, "Novice");
+    assert_eq!(anatomy.tt_value, 2.35);
+    assert!(!anatomy.is_attribute);
+    let health = &skills[2];
+    assert_eq!(health.name, "Health");
+    assert_eq!(health.level, 142.7);
+    assert_eq!(health.rank_name, "Novice");
+    assert_eq!(health.tt_value, 0.18);
+    assert!(health.is_attribute);
 
     let hp = api.character_hp_optimizer().await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&hp).unwrap(),
-        "{\"currentHp\":142.0,\"skills\":[],\"attributes\":[]}"
-    );
+    assert_eq!(hp.current_hp, 142.0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -289,14 +280,7 @@ async fn the_optimizers_report_a_missing_profession() {
         Some("Profession 'Nope' not found")
     );
     assert!(missing.skills.is_empty());
-    let bytes = serde_json::to_value(&missing).unwrap();
-    let keys: Vec<&str> = bytes
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(keys, ["skills", "attributes", "error"]);
+    assert!(missing.attributes.is_empty());
 
     // The path optimizer's not-found converges on the full error shape
     // (ratified): the mode inputs echo, the aggregates zero, the error

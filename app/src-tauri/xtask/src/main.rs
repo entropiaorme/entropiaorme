@@ -7,7 +7,6 @@
 //! Usage:
 //!
 //! ```text
-//! xtask ratify-check        --range <BASE>..<HEAD>
 //! xtask authoring-lint      --range <BASE>..<HEAD>
 //! xtask version-stamps
 //! xtask mutation-floors     --outcomes <PATH> [--outcomes <PATH> ...]
@@ -29,7 +28,6 @@ mod market_isolation;
 mod mutation_floors;
 mod no_bare_setinterval;
 mod no_new_writable;
-mod ratify;
 mod route_ceilings;
 mod version_stamps;
 mod vocabulary;
@@ -43,7 +41,6 @@ USAGE:
     xtask <subcommand> [options]
 
 SUBCOMMANDS:
-    ratify-check    --range <BASE>..<HEAD>   guard golden changes behind a recorded ratification verdict
     authoring-lint  --range <BASE>..<HEAD>   flag em dashes, US spellings, and stray references in what a change adds
     version-stamps                            assert the app version stamps agree across the tree
     mutation-floors --outcomes <PATH>...      enforce per-file cargo-mutants score floors (flag repeats to merge campaign shards)
@@ -66,7 +63,6 @@ fn main() -> ExitCode {
     let rest = &args[1..];
 
     let result: Result<i32, String> = match subcommand.as_str() {
-        "ratify-check" => ratify::run(rest),
         "authoring-lint" => authoring::run(rest),
         "version-stamps" => version_stamps::run(rest),
         "mutation-floors" => mutation_floors::run(rest),

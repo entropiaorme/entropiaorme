@@ -1,6 +1,6 @@
 # ADR-0017: Own the behavioural contract in this codebase
 
-- Status: Accepted
+- Status: Accepted; its enforcement is amended by [ADR-0037](0037-retire-golden-ratification-guard.md), which retires the ratification guard
 - Context: the cross-language equivalence oracle is retired ([ADR-0016](0016-retire-equivalence-oracle.md), which superseded [ADR-0005](0005-cross-language-equivalence-oracle.md)), and the equivalence evidence survives as frozen, hermetically asserted Rust-side goldens. Those goldens have until now doubled as a byte-fidelity pin to the retired reference implementation. This record redefines what they are pinned to, without changing how the pin is enforced.
 
 ## Context and problem statement

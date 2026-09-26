@@ -18,7 +18,7 @@ The proof survives the retirement. The frozen goldens the port was graded agains
 - **The contract snapshot** (`contracts/`): the frontend-facing domain-event schema snapshot (`event_schemas.snapshot.json`).
 - **The wire fixtures** (`eo-wire/tests/fixtures/`): the normaliser conformance table and the listener / quest-automation projection mirrors.
 
-These goldens are frozen evidence: the tests below only read and assert them. Changing one is a deliberate re-ratification, governed by the discipline under "Goldens regeneration" below.
+These goldens are frozen evidence: the tests below only read and assert them. Changing one is a deliberate, reviewed change (see "Goldens regeneration" below).
 
 ### The safety net and the proof it holds
 
@@ -120,49 +120,11 @@ cargo run -p xtask -- mutation-floors --outcomes mutants.out/outcomes.json
 
 ## Goldens regeneration
 
-The equivalence goldens (the corpus fingerprints, DB-state snapshots, and HTTP-response goldens under `fixtures/corpus/`; the contract snapshots under `contracts/`; the wire fixtures under `eo-wire/tests/fixtures/`) assert by default. A deliberate behaviour change is re-ratified by regenerating the affected goldens and reviewing the resulting diff, then recording that the diff is a genuine intended change rather than a regression.
+The equivalence goldens (the corpus fingerprints, DB-state snapshots, and HTTP-response goldens under `fixtures/corpus/`; the contract snapshots under `contracts/`; the wire fixtures under `eo-wire/tests/fixtures/`) assert by default. What they pin is this codebase's own contract, not fidelity to the retired reference implementation: a golden whose bytes encoded an artefact of that reference (a representation detail, a transport-envelope shape, an error-message text) may be changed as a deliberate behaviour decision. See [ADR-0017](docs/src/adr/0017-behavioural-contract-ownership.md).
 
-What the goldens pin going forward is this codebase's own ratified contract, not fidelity to the retired reference implementation: they move only through ratification, and a golden whose bytes encoded an artefact of that reference (a representation detail, a transport-envelope shape, an error-message text) may be changed as a ratifiable behaviour decision. See [ADR-0017](docs/src/adr/0017-behavioural-contract-ownership.md). The equivalence evidence banked at the crossing is untouched by this: it records what was proven equal at the port, and the byte-for-byte re-assertions above still hold it.
+A deliberate behaviour change regenerates the affected goldens, and the diff is reviewed in the commit that moves them; the commit message names the sets that moved and why. Regenerating re-pins whatever the pipeline currently produces, so an unscrutinised regeneration can lock in a regression: the expected output moves to match the regressed code and every assertion passes again. Treat a golden diff as a behaviour-change review, never a mechanical step. The first generation of a new golden deserves the closest look, because no prior golden fails to force the review.
 
-Regenerating a golden re-ratifies whatever the pipeline currently produces, so an unmarked, unscrutinised change can silently lock in a regression: the expected output simply moves to match the regressed code, and every assertion passes again. The first generation of a new golden is the most dangerous case, because no prior golden means no assertion fails, so an over-emission can be pinned as "expected" and pass silently. Treat any golden diff as a behaviour-change review, never a mechanical step.
-
-### Adversarial ratification (the review step)
-
-Regenerating a golden makes you at once the author of the change, the regenerator of the expected output, and its would-be approver: a structural conflict of interest. The honest tell that you owe a second opinion is that you are reaching to change what *correct* means rather than to make the code meet it.
-
-This project is solo, so what stands in for a second pair of eyes is a structural self-review discipline, not a claim that a different person reviewed the change. Before committing any expected-output change, subject it to a recorded adversarial review pass that judges the one question the marker cannot: is this delta a genuine intended behaviour change, or a regression being laundered into the goldens as the new "correct"? The review records a fenced verdict block, committed verbatim:
-
-```text
-ORACLE-RATIFICATION
-range: <commit-range>
-goldens: <comma-separated sets reviewed>
-VERDICT: ratification-sound | regression-suspected | needs-user-judgement
-```
-
-Commit that report to `app/src-tauri/ratifications/<slug>.md` alongside the golden change, naming the changed sets in its `goldens:` field. It lives outside any `expected/` directory so the guard never treats the report itself as a golden. Proceed only on `ratification-sound`; a `regression-suspected` or `needs-user-judgement` verdict means fix the code (or settle the product question) rather than pin the diff. A committed report is required rather than a bare commit trailer on purpose: fabricating a plausible adversarial report that cites real diff elements is a high bar and is reviewer-visible, where a trailer is not.
-
-### Commit-message convention
-
-A regeneration commit takes the subject prefix `test: regenerate goldens` and lists the regenerated sets in the body, so a reviewer sees at a glance which goldens moved and why:
-
-```
-test: regenerate goldens for the basic-hunt loot rounding change
-
-Regenerated alongside the loot-value rounding fix:
-- basic_hunt_10_events: fingerprint.jsonl, db_state.json
-- basic_hunt_10_events: http_responses/ (tracking + quests endpoints)
-
-The contract snapshots are unchanged.
-```
-
-### Ratification guard
-
-Both the marker and the recorded verdict are enforced, not merely a courtesy to reviewers. `cargo run -p xtask -- ratify-check --range <BASE>..<HEAD>` runs on every pull request and push (`Golden ratification guard` in `.github/workflows/ci.yml`). It inspects the diff against the base; a golden file is anything matching the committed-golden paths above. If any commit modifies a golden, the guard requires **both**:
-
-- the `test: regenerate goldens` subject prefix on the relevant commit(s); and
-- a ratification report added or modified in the same range, carrying a fenced `ORACLE-RATIFICATION` block whose `VERDICT` is `ratification-sound` and whose `goldens:` field names every changed set, committed no earlier than the last golden change in the range.
-
-Three properties make the verdict hard to satisfy by accident. Tying the report to the range stops a sound verdict from a prior regeneration blessing a fresh golden change. The ordering requirement stops a verdict that reviewed an earlier state from blessing a golden edited in a later commit. And the per-set `goldens:` check stops a verdict recorded for one set blessing another. A change missing any of these fails and surfaces the golden diff for review; a change that touches no golden file is ignored, so the guard is inert for ordinary work. The guard fails closed on any range it cannot resolve. What it cannot do is prove the review actually happened or that it was rigorous; that residual is closed by the report being reviewer-visible and by the human merge to `main`.
+There is no CI guard over golden moves ([ADR-0037](docs/src/adr/0037-retire-golden-ratification-guard.md)). The reports under `app/src-tauri/ratifications/` record the reviews carried out while one was in force.
 
 ## Frontend tests
 
@@ -230,7 +192,6 @@ This layer runs on Windows in CI (the `Frontend e2e + visual (native shell, Wind
 Every pull request and every push to the two development branches executes the workflow in `.github/workflows/ci.yml`. `next` is the integration branch work lands on directly; `main` is the stable branch releases are cut from, reached by a promotion pull request from `next` (merged as a merge commit, so both lines keep the same commits) or by a squash hotfix pull request. On a documentation-only change (every changed file is Markdown) the compiling jobs are skipped, as described under "Documentation-only changes" below.
 
 - **Change scope and CI gate**: a quick detection job classifies whether the change touches code or only documentation, and the compiling jobs run only for a code change. A small always-running `CI gate` sentinel is the single required check in their place: it passes when the change is documentation-only (those jobs were legitimately skipped) or when every gated job succeeded, and fails closed otherwise, so a skip can never let an untested change merge. Branch protection requires only this one context, so the required-check list never drifts as individual jobs are added or renamed.
-- **Golden ratification** (every pull request and push): the `ratify-check` guard, failing when a commit moves a golden without both the marker and a recorded `ratification-sound` verdict for the changed sets (see "Ratification guard" above).
 - **Authoring lint** (every pull request and push): the `authoring-lint` guard flags em dashes and US spellings on the lines a change adds, and references to absent files, iteration tokens, and tool-attribution lines in the added prose and the commit messages; a `version-stamps` step asserts the three application version stamps stay in lock-step (see "Authoring lint" below).
 - **Frontend**: the generated-client freshness check, the production build, the type-check, the Biome lint, and the Vitest suites.
 - **Frontend e2e + visual** (Windows): the native-shell IPC and visual-regression suites (see above).

@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { ConsumableDose, ReloadSpeedNow } from '$lib/api';
+import type { ConsumableDose } from '$lib/api';
 import {
 	describeDoseCost,
 	describeEffect,
 	describeEffects,
-	describeReloadSpeed,
 	doseState,
 	formatCountdown,
 	formatDuration,
@@ -74,13 +73,12 @@ describe('the live readout', () => {
 	const buff = dose({ id: 'f', equipmentId: 9, source: 'on_use', endsAt: 2005 });
 
 	it('lists running doses soonest first, then the just ended', () => {
-		const rows = liveRows([running, justEnded, longEnded, sooner, removed], now, true);
+		const rows = liveRows([running, justEnded, longEnded, sooner, removed], now);
 		expect(rows.map((row) => row.id)).toEqual(['b', 'a', 'c']);
 	});
 
-	it('leaves a heal buff to the readouts that ask for it', () => {
-		expect(liveRows([buff], now, true).map((row) => row.id)).toEqual(['f']);
-		expect(liveRows([buff], now, false)).toEqual([]);
+	it('leaves out a heal buff, which the player does not take', () => {
+		expect(liveRows([buff], now)).toEqual([]);
 	});
 
 	it('knows when the next row changes', () => {
@@ -107,23 +105,5 @@ describe('wording', () => {
 		expect(describeDoseCost(dose({ costPed: 0, costTracked: false }))).toBe('cost not tracked');
 		expect(describeDoseCost(dose({ costPed: 0, sessionId: null }))).toBe('outside a session');
 		expect(describeDoseCost(dose({ costPed: 0, source: 'on_use' }))).toBe('paid with the heal');
-	});
-
-	it('explains the reload speed only when it needs explaining', () => {
-		const base: ReloadSpeedNow = {
-			equippedPercent: 0,
-			consumedPercent: 10,
-			inEffectPercent: 10,
-			itemLimitPercent: 15,
-			consumedLimitPercent: 20,
-			totalLimitPercent: 30,
-		};
-		expect(describeReloadSpeed(base)).toBe('Reload speed +10%');
-		expect(describeReloadSpeed({ ...base, equippedPercent: 14, inEffectPercent: 24 })).toBe(
-			'Reload speed +24% (items +14%, doses +10%)',
-		);
-		expect(describeReloadSpeed({ ...base, consumedPercent: 25, inEffectPercent: 20 })).toBe(
-			'Reload speed +20% (doses +25%, held at the limit)',
-		);
 	});
 });

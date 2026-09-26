@@ -1,8 +1,7 @@
 /**
- * Runes-native state for a live dose readout (the overlay's doses and the
- * dashboard's panel): the persisted doses read on every `consumables:updated`
- * frame, a local display tick for the countdowns, and the start, remove, and
- * restore actions.
+ * Runes-native state for the overlay's live dose readout: the persisted doses
+ * read on every `consumables:updated` frame, a local display tick for the
+ * countdowns, and the start, remove, and restore actions.
  *
  * The tick is display only: which dose is running, and how long it has left,
  * is always measured from the dose's stored end. A removal can be taken back
@@ -27,14 +26,11 @@ import { liveRows } from './doses';
 export const UNDO_SECONDS = 8;
 
 export interface DosesModelOptions {
-	/** Show a healing tool's automatic buffs (the dashboard does; the
-	 * overlay, which is for actions, does not). */
-	includeOnUse: boolean;
 	/** The display clock, epoch seconds; injectable for tests. */
 	clock?: () => number;
 }
 
-export function createDosesModel(options: DosesModelOptions) {
+export function createDosesModel(options: DosesModelOptions = {}) {
 	const clock = options.clock ?? (() => Date.now() / 1000);
 	const store = createSnapshotStore<ConsumableDoses>(CONSUMABLES_TOPIC, getConsumableDoses);
 	let now = $state(clock());
@@ -43,7 +39,7 @@ export function createDosesModel(options: DosesModelOptions) {
 	let removed = $state<{ dose: ConsumableDose; at: number } | null>(null);
 
 	const readout = $derived(store.current);
-	const rows = $derived(readout ? liveRows(readout.doses, now, options.includeOnUse) : []);
+	const rows = $derived(readout ? liveRows(readout.doses, now) : []);
 	const options_ = $derived(readout?.options ?? []);
 	const undoable = $derived(removed !== null && now - removed.at <= UNDO_SECONDS ? removed : null);
 

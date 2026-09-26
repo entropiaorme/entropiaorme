@@ -21,7 +21,7 @@ use super::profile::{effects_reload_speed_percent, DoseEffect};
 pub enum DoseSource {
     /// The item's hotbar key, pressed in game.
     Hotbar,
-    /// Started by hand, on the overlay or the dashboard.
+    /// Started by hand, on the overlay.
     Manual,
     /// A healing tool's buff, opened by a paid heal.
     OnUse,

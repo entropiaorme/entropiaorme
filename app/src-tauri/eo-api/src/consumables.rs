@@ -31,7 +31,7 @@ use crate::{Api, ApiError, Nullable};
 pub enum ConsumableDoseSource {
     /// The item's hotbar key, pressed in game.
     Hotbar,
-    /// Started by hand, on the overlay or the dashboard.
+    /// Started by hand, on the overlay.
     Manual,
     /// A healing tool's buff, opened by a paid heal.
     OnUse,

@@ -80,7 +80,7 @@ describe('the live dose readout', () => {
 	it('reads on connect and re-reads on every doses frame', async () => {
 		let clock = 1100;
 		mocked.getConsumableDoses.mockResolvedValue(readout([dose()]));
-		const model = createDosesModel({ includeOnUse: false, clock: () => clock });
+		const model = createDosesModel({ clock: () => clock });
 		const detach = model.connect();
 		await settle();
 		expect(model.rows.map((row) => row.id)).toEqual(['d1']);
@@ -97,7 +97,7 @@ describe('the live dose readout', () => {
 	it('counts down from the stored end with its own tick', async () => {
 		let clock = 1100;
 		mocked.getConsumableDoses.mockResolvedValue(readout([dose()]));
-		const model = createDosesModel({ includeOnUse: false, clock: () => clock });
+		const model = createDosesModel({ clock: () => clock });
 		model.connect();
 		await settle();
 		clock = 1700;
@@ -112,7 +112,7 @@ describe('the live dose readout', () => {
 		mocked.getConsumableDoses.mockResolvedValue(readout([dose()]));
 		mocked.removeConsumableDose.mockResolvedValue(readout([]));
 		mocked.restoreConsumableDose.mockResolvedValue(readout([dose()]));
-		const model = createDosesModel({ includeOnUse: false, clock: () => clock });
+		const model = createDosesModel({ clock: () => clock });
 		model.connect();
 		await settle();
 
@@ -133,7 +133,7 @@ describe('the live dose readout', () => {
 	it('says why an action failed and keeps the readout', async () => {
 		mocked.getConsumableDoses.mockResolvedValue(readout([dose()]));
 		mocked.startConsumableDose.mockRejectedValue(new Error('Consumable not found'));
-		const model = createDosesModel({ includeOnUse: false, clock: () => 1100 });
+		const model = createDosesModel({ clock: () => 1100 });
 		model.connect();
 		await settle();
 		expect(await model.start(40)).toBe(false);

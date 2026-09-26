@@ -25,8 +25,8 @@ a buff on every use (Eir Mk 1: reload speed +10% for eight seconds).
   it starts (its item, its effects as they stood, what it booked, the session
   and context it was taken in) and read back when the tracker starts, so it
   outlives a restart and a session boundary. A dose starts from the item's
-  hotbar key (the press is the dose), from a manual start on the overlay or
-  the dashboard, or, for a tool with an on-use buff, from each paid heal.
+  hotbar key (the press is the dose), from a manual start on the overlay,
+  or, for a tool with an on-use buff, from each paid heal.
 - **The tracker owns the lifecycle.** Starts, re-doses, removals, restores,
   and expiries are serialised with the shots and heals they reprice. Expiry is
   a comparison with the injected clock made before every message the tracker

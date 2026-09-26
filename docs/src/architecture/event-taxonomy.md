@@ -217,9 +217,9 @@ session and announces itself as `tracking.session.updated` instead.)
 publishes whenever the running doses change: a dose started (from a hotbar
 key, a manual start, or a heal's on-use buff), ended at its expiry, or was
 removed or restored (see ADR-0036). Any of these may move the reload speed in
-effect and a session's consumed-dose cost, so the overlay's and the
-dashboard's dose readouts, Equipment's prices, the session review list, and
-an open session detail re-read what they show. The expiry announcement comes
+effect and a session's consumed-dose cost, so the overlay's dose readout,
+Equipment's prices, the session review list, and an open session detail
+re-read what they show. The expiry announcement comes
 from the tracker's sweep at the dose's expiry, however it was woken; a
 refused start, removal, or restore publishes nothing. A healing correction
 that takes a heal's buff away announces `healing.updated`, which the tracker

@@ -4,7 +4,7 @@
  * ticking, so nothing here keeps time of its own.
  */
 
-import type { ConsumableDose, ConsumableEffect, ConsumableOption, ReloadSpeedNow } from '$lib/api';
+import type { ConsumableDose, ConsumableEffect, ConsumableOption } from '$lib/api';
 
 /** How long an ended dose stays on the readouts, offering a re-dose. */
 export const RECENTLY_ENDED_SECONDS = 60;
@@ -69,17 +69,10 @@ export function describeEffects(effects: readonly ConsumableEffect[]): string {
 
 /** The rows a live readout shows at `now`: running doses soonest-ending first,
  * then doses that ended within the last minute (offered for a re-dose), most
- * recent first. Removed doses never show here. `includeOnUse` keeps a
- * healing tool's automatic buffs (the dashboard shows them; the overlay,
- * which is for actions, does not). */
-export function liveRows(
-	doses: readonly ConsumableDose[],
-	now: number,
-	includeOnUse: boolean,
-): ConsumableDose[] {
-	const shown = doses.filter(
-		(dose) => dose.removedAt === null && (includeOnUse || dose.source !== 'on_use'),
-	);
+ * recent first. Removed doses and a healing tool's automatic buffs never
+ * show here: the readout is for the doses a player takes. */
+export function liveRows(doses: readonly ConsumableDose[], now: number): ConsumableDose[] {
+	const shown = doses.filter((dose) => dose.removedAt === null && dose.source !== 'on_use');
 	const running = shown
 		.filter((dose) => doseState(dose, now) === 'running')
 		.sort((a, b) => a.endsAt - b.endsAt);
@@ -88,8 +81,7 @@ export function liveRows(
 			(dose) =>
 				doseState(dose, now) === 'ended' &&
 				!dose.replaced &&
-				now - dose.endsAt <= RECENTLY_ENDED_SECONDS &&
-				dose.source !== 'on_use',
+				now - dose.endsAt <= RECENTLY_ENDED_SECONDS,
 		)
 		.sort((a, b) => b.endsAt - a.endsAt);
 	return [...running, ...ended];
@@ -131,18 +123,4 @@ export function describeSource(dose: ConsumableDose): string {
 		case 'on_use':
 			return 'Heal buff';
 	}
-}
-
-/** The reload speed in effect as one line, with where it comes from when
- * both sources contribute or a limit holds it back. */
-export function describeReloadSpeed(reload: ReloadSpeedNow): string {
-	const inEffect = `${formatSigned(reload.inEffectPercent)}%`;
-	const parts: string[] = [];
-	if (reload.equippedPercent !== 0) parts.push(`items ${formatSigned(reload.equippedPercent)}%`);
-	if (reload.consumedPercent !== 0) parts.push(`doses ${formatSigned(reload.consumedPercent)}%`);
-	const printed = reload.equippedPercent + reload.consumedPercent;
-	const held = Math.abs(printed - reload.inEffectPercent) > 1e-9;
-	const detail =
-		parts.length > 1 || held ? ` (${parts.join(', ')}${held ? ', held at the limit' : ''})` : '';
-	return `Reload speed ${inEffect}${detail}`;
 }

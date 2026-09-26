@@ -342,7 +342,7 @@
 
 	// The doses in force, read on each consumables frame and ticked for
 	// their countdowns while any is on show.
-	const doses = createDosesModel({ includeOnUse: false });
+	const doses = createDosesModel();
 	$effect(() => doses.connect());
 	$effect(() => {
 		if (!doses.ticking) return;

@@ -71,7 +71,7 @@ function readout(doses: ConsumableDose[], withOptions = true): ConsumableDoses {
 
 async function renderWith(data: ConsumableDoses, clock: () => number, onStartTrigger = vi.fn()) {
 	mocked.getConsumableDoses.mockResolvedValue(data);
-	const model = createDosesModel({ includeOnUse: false, clock });
+	const model = createDosesModel({ clock });
 	model.connect();
 	for (let i = 0; i < 5; i++) await Promise.resolve();
 	render(OverlayDoses, { props: { model, onStartTrigger } });

@@ -65,6 +65,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use eo_services::attack_rate::with_attack_rate;
 use eo_services::bus_events::BusEvent;
 use eo_services::bus_events::HotbarItemKind;
 use eo_services::character_calc::all_profession_levels;
@@ -1544,7 +1545,10 @@ fn build_hotbar_resolver(
                     }
                 }
                 _ => {
-                    let cost = weapon_cost_by_name(conn, &name);
+                    let reload_speed = reload_speed_percent(&config.passive_effect_sources);
+                    let cost = weapon_cost_by_name(conn, &name, &|props| {
+                        with_attack_rate(props, game_data.as_deref(), reload_speed)
+                    });
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1630,6 +1634,21 @@ struct LiveEquipmentLibrary {
     game_data: Option<Arc<GameDataStore>>,
 }
 
+impl LiveEquipmentLibrary {
+    /// A stored weapon's props as tracking prices and attributes them:
+    /// offensive efficiencies from the current catalogue, and the attack
+    /// rate under the reload speed the declared passive effects put in force.
+    fn current_weapon_props(&self, props: &Value) -> Value {
+        let game_data = self.game_data.as_deref();
+        let props = game_data.map_or_else(
+            || props.clone(),
+            |game_data| with_current_offensive_efficiencies(props, game_data),
+        );
+        let reload_speed = reload_speed_percent(&self.reader.current().passive_effect_sources);
+        with_attack_rate(&props, game_data, reload_speed)
+    }
+}
+
 impl EquipmentLibrary for LiveEquipmentLibrary {
     fn weapon_profile(&self, tool_name: &str) -> EquipmentProfile {
         let tool_name = tool_name.to_string();
@@ -1641,12 +1660,7 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
                 .flatten()
         })?;
         match serde_json::from_str::<Value>(&json) {
-            Ok(props @ Value::Object(_)) => {
-                let current = self.game_data.as_ref().map_or(props.clone(), |game_data| {
-                    with_current_offensive_efficiencies(&props, game_data)
-                });
-                current.as_object().cloned()
-            }
+            Ok(props @ Value::Object(_)) => self.current_weapon_props(&props).as_object().cloned(),
             _ => None,
         }
     }
@@ -1664,8 +1678,8 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
         // The hotbar's weapons in slot order, then the weapons carried
         // without a slot, each once. A slot holding a healer, harvesting
         // tool, or consumable, and an id no longer in the library, carry
-        // nothing. Offensive efficiencies ride the current catalogue, as
-        // the profile lookup's do.
+        // nothing. Each weapon's props are prepared as the profile lookup's
+        // are, so its band carries the same attack rate its cost does.
         let config = self.reader.current();
         let mut ids: Vec<i64> = Vec::new();
         let slotted = HOTBAR_SLOTS
@@ -1701,10 +1715,7 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
         rows.into_iter()
             .filter_map(|(id, name, properties_json)| {
                 let props = serde_json::from_str::<Value>(&properties_json).ok()?;
-                let props = match self.game_data.as_ref() {
-                    Some(game_data) => with_current_offensive_efficiencies(&props, game_data),
-                    None => props,
-                };
+                let props = self.current_weapon_props(&props);
                 Some(CarriedWeaponProfile {
                     weapon: CarriedWeapon::from_props(id, name, &props),
                     props: props.as_object().cloned().unwrap_or_default(),

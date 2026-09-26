@@ -13,7 +13,7 @@ beforeEach(() => vi.clearAllMocks());
 describe('persistent effects', () => {
 	it('saves a named reload-speed source through the typed settings boundary', async () => {
 		const onchange = vi.fn();
-		api.updateSettings.mockResolvedValue({
+		const saved = {
 			passiveEffectSources: [
 				{
 					id: 'ares-perfect',
@@ -22,7 +22,9 @@ describe('persistent effects', () => {
 					effects: [{ kind: 'reload_speed', magnitudePercent: 14 }],
 				},
 			],
-		});
+			reloadSpeed: { declaredPercent: 14, effectivePercent: 14, itemLimitPercent: 15 },
+		};
+		api.updateSettings.mockResolvedValue(saved);
 		render(EffectsTab, { props: { sources: [], onchange } });
 
 		await fireEvent.click(screen.getByText('Add effect'));
@@ -43,9 +45,43 @@ describe('persistent effects', () => {
 				],
 			}),
 		);
-		expect(onchange).toHaveBeenCalledWith([
-			expect.objectContaining({ name: 'Ares Ring, Perfected', enabled: true }),
-		]);
+		// The owner gets the saved settings: their reload speed reprices weapons.
+		expect(onchange).toHaveBeenCalledWith(saved);
+	});
+
+	it('discloses when the declared reload speed passes the item limit', () => {
+		render(EffectsTab, {
+			props: {
+				sources: [
+					{
+						id: 'a',
+						name: 'Ares Ring, Perfected',
+						enabled: true,
+						effects: [{ kind: 'reload_speed', magnitudePercent: 14 }],
+					},
+					{
+						id: 'b',
+						name: 'Mayhem armour',
+						enabled: true,
+						effects: [{ kind: 'reload_speed', magnitudePercent: 10 }],
+					},
+				],
+				reloadSpeed: { declaredPercent: 24, effectivePercent: 15, itemLimitPercent: 15 },
+			},
+		});
+		expect(screen.getByTestId('reload-limit-note').textContent).toBe(
+			'Equipped items add at most 15% reload speed, so 15% of the 24% declared is in effect.',
+		);
+	});
+
+	it('stays quiet while the declaration is within the limit', () => {
+		render(EffectsTab, {
+			props: {
+				sources: [],
+				reloadSpeed: { declaredPercent: 14, effectivePercent: 14, itemLimitPercent: 15 },
+			},
+		});
+		expect(screen.queryByTestId('reload-limit-note')).toBeNull();
 	});
 
 	it('does not save an unnamed source', async () => {

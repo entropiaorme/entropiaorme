@@ -157,9 +157,8 @@
 	{:else if activeTab === 'effects'}
 		<EffectsTab
 			sources={model.passiveEffectSources}
-			onchange={(value) => {
-				model.passiveEffectSources = value;
-			}}
+			reloadSpeed={model.reloadSpeed}
+			onchange={(settings) => model.effectsSaved(settings)}
 		/>
 	{:else if activeTab === 'protection' && inDevelopment.visible}
 		<ProtectionTab model={protection} />

@@ -16,7 +16,9 @@
 //!   as that effect's tick, and stops counting as a shot.
 //!
 //! An assignment prices the shot from the chosen weapon as it is configured
-//! now (the correction's pricing snapshot). Every correction moves the shot
+//! now (the correction's pricing snapshot), prepared by the same `pricing`
+//! the live tracker's props pass through, so a review never prices a shot
+//! differently from how play would have. Every correction moves the shot
 //! between its kill's phases (or in or out of them), and repairs the kill's
 //! cost and shot count (or the session's dangling cost, for a shot after
 //! the last kill), the session summary, its days, and its settled cells in
@@ -33,6 +35,7 @@ mod tests;
 
 use std::sync::Arc;
 
+use crate::attack_rate::WeaponPricing;
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::time::{instant_to_epoch, resolve_local};
@@ -210,6 +213,7 @@ pub struct WeaponReviewService {
     db: Db,
     clock: Arc<dyn Clock>,
     changed: Option<ChangedSink>,
+    pricing: Option<WeaponPricing>,
 }
 
 impl WeaponReviewService {
@@ -218,7 +222,15 @@ impl WeaponReviewService {
             db,
             clock,
             changed: None,
+            pricing: None,
         }
+    }
+
+    /// Prepare every weapon's props through `pricing` before pricing them;
+    /// unset, stored props price as they are.
+    pub fn with_pricing(mut self, pricing: WeaponPricing) -> Self {
+        self.pricing = Some(pricing);
+        self
     }
 
     /// Announce every committed correction through `changed`.
@@ -246,11 +258,13 @@ impl WeaponReviewService {
     ) -> Result<WeaponCorrection, WeaponReviewError> {
         let now = self.now();
         let evidence_id = evidence_id.to_string();
+        let pricing = self.pricing.clone();
         let correction = self
             .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let outcome = correct::assign(&tx, &evidence_id, equipment_id, now)?;
+                let outcome =
+                    correct::assign(&tx, &evidence_id, equipment_id, now, pricing.as_ref())?;
                 if outcome.is_ok() {
                     tx.commit()?;
                 }
@@ -354,8 +368,15 @@ impl WeaponReviewService {
         evidence_id: &str,
     ) -> Result<Vec<CorrectionWeapon>, WeaponReviewError> {
         let evidence_id = evidence_id.to_string();
+        let pricing = self.pricing.clone();
         self.db
-            .with_reader(move |conn| Ok(read::correction_weapons(conn, &evidence_id)))
+            .with_reader(move |conn| {
+                Ok(read::correction_weapons(
+                    conn,
+                    &evidence_id,
+                    pricing.as_ref(),
+                ))
+            })
             .await?
     }
 }

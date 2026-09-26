@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use eo_services::analytics::AnalyticsService;
+use eo_services::attack_rate::WeaponPricing;
 use eo_services::auction_fee_research::AuctionFeeResearchService;
 use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::clock::Clock;
@@ -117,6 +118,11 @@ pub struct Api {
     /// once and cleared, and never persisted, because a capture nobody came
     /// back for is one worth taking again.
     last_sale_capture: std::sync::Mutex<Option<analytics::SaleWindowCapture>>,
+    /// How a stored weapon's props are prepared before pricing or showing
+    /// them: the attack rate under the reload speed the declared passive
+    /// effects put in force. Shared with the weapon review service, so
+    /// Equipment, review, and live tracking price a weapon alike.
+    weapon_pricing: WeaponPricing,
     /// The codex service (species / ranks / recommendations / claims),
     /// built over the facade's shared db, catalogue, and clock.
     codex: CodexService,
@@ -178,6 +184,26 @@ pub struct Api {
     demo: tokio::sync::OnceCell<Option<Arc<demo::DemoState>>>,
 }
 
+/// Weapon pricing over the live config: the reload speed the declared
+/// passive effects put in force, read at each pricing. A poisoned config
+/// lock leaves no reload speed, which prices every weapon at its own rate.
+fn weapon_pricing(
+    config_service: &Arc<Mutex<ConfigService>>,
+    game_data: Arc<GameDataStore>,
+) -> WeaponPricing {
+    let reader = config_service.lock().ok().map(|service| service.reader());
+    WeaponPricing::new(
+        Some(game_data),
+        Arc::new(move || {
+            reader.as_ref().map_or(0.0, |reader| {
+                eo_services::passive_effects::reload_speed_percent(
+                    &reader.current().passive_effect_sources,
+                )
+            })
+        }),
+    )
+}
+
 impl Api {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -205,7 +231,9 @@ impl Api {
         let market = MarketService::new(db.clone(), clock.clone());
         let protection = ProtectionService::new(db.clone(), clock.clone());
         let healing_review = HealingReviewService::new(db.clone(), clock.clone());
-        let weapon_review = WeaponReviewService::new(db.clone(), clock.clone());
+        let weapon_pricing = weapon_pricing(&config_service, game_data.clone());
+        let weapon_review = WeaponReviewService::new(db.clone(), clock.clone())
+            .with_pricing(weapon_pricing.clone());
         let session_definitions = eo_services::session_definitions::SessionDefinitionService::new(
             db.clone(),
             clock.clone(),
@@ -254,6 +282,7 @@ impl Api {
             protection,
             healing_review,
             weapon_review,
+            weapon_pricing,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
             map_pins,

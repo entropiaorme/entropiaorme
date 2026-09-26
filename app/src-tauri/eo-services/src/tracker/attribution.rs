@@ -54,7 +54,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::cost_engine::get_weapon_damage_profile;
+use crate::cost_engine::weapon_damage_profile_from_props;
 use crate::weapon_effect::{effect_profile_from_props, WeaponEffectProfile};
 
 /// A critical hit reaches at most this multiple of a weapon's maximum.
@@ -95,24 +95,16 @@ impl DamageBand {
 }
 
 /// A stored weapon's regular-hit band at full skill: the outcome its
-/// declared effect's activation prints, when it declares one, else its
-/// catalogue damage with its amplifier and configured damage enhancers.
-/// None when neither gives a usable figure.
+/// declared effect's activation prints, when it declares one (observed, so
+/// already whatever the attack rate made it), else its catalogue damage
+/// with its amplifier and configured damage enhancers, scaled by the
+/// attack-rate factor the props carry. None when neither gives a usable
+/// figure.
 pub fn damage_band_from_props(props: &Value) -> Option<DamageBand> {
     if let Some(effect) = effect_profile_from_props(props) {
         return Some(effect.activation_band());
     }
-    let weapon = props.get("weapon_entity")?;
-    let enhancers = (props
-        .get("damage_enhancers")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0) as i64)
-        .max(0);
-    let profile = get_weapon_damage_profile(
-        weapon,
-        props.get("amp_entity").filter(|amp| !amp.is_null()),
-        enhancers,
-    )?;
+    let profile = weapon_damage_profile_from_props(props)?;
     let min = profile.get("damageMin")?.as_f64()?;
     let max = profile.get("damageMax")?.as_f64()?;
     (max > 0.0).then_some(DamageBand { min, max })
@@ -1897,6 +1889,46 @@ mod tests {
         assert_eq!(
             damage_band_from_props(&serde_json::json!({"weapon_entity": {"economy": {}}})),
             None
+        );
+    }
+
+    #[test]
+    fn a_band_past_the_attack_rate_limit_scales_with_its_cost() {
+        let props = serde_json::json!({
+            "weapon_entity": {"uses_per_minute": 90, "damage": {"impact": 20.0}},
+        });
+        let own = damage_band_from_props(&props).unwrap();
+        let rated =
+            damage_band_from_props(&crate::attack_rate::with_attack_rate(&props, None, 30.0))
+                .unwrap();
+        assert!((rated.min - 11.7).abs() < 1e-9 && (rated.max - 23.4).abs() < 1e-9);
+        // A full hit of the buffed weapon is out of its own-rate profile, and
+        // fits once the band carries the rate the server compressed.
+        assert!(!own.fits(23.4, false));
+        assert!(rated.fits(23.4, false));
+        // Within the limit the band is the weapon's own.
+        let within =
+            damage_band_from_props(&crate::attack_rate::with_attack_rate(&props, None, 10.0))
+                .unwrap();
+        assert_eq!(within, own);
+    }
+
+    #[test]
+    fn a_declared_effect_band_is_observed_so_the_attack_rate_leaves_it_alone() {
+        let props = serde_json::json!({
+            "weapon_entity": {"uses_per_minute": 90, "damage": {"electric": 2000.0}},
+            "effect_profile": {
+                "mode": "compound",
+                "hit_min": 100.0,
+                "hit_max": 160.0,
+                "duration_seconds": 25.0,
+                "tick_min": 35.0,
+                "tick_max": 75.0,
+            },
+        });
+        assert_eq!(
+            damage_band_from_props(&crate::attack_rate::with_attack_rate(&props, None, 30.0)),
+            damage_band_from_props(&props)
         );
     }
 

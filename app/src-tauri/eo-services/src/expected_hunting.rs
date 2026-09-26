@@ -315,11 +315,15 @@ fn component_from_props(
     damage_enhancers: i64,
 ) -> Option<OffensiveComponentEvidence> {
     let entity = props.get(entity_key).filter(|value| !value.is_null())?;
-    let multiplier = if kind == OffensiveComponentKind::Weapon {
+    // Past the server's attack-rate limit every component of an attack
+    // consumes the carried factor more (1 on props never enriched), so the
+    // per-use figures agree with the cost engine's; ratios are unchanged.
+    let enhancement = if kind == OffensiveComponentKind::Weapon {
         1.0 + 0.1 * damage_enhancers.max(0) as f64
     } else {
         1.0
     };
+    let multiplier = enhancement * crate::attack_rate::factor_from_props(props);
     let decay_pec = economy_number(entity, "decay") * multiplier;
     let ammo_pec = economy_number(entity, "ammo_burn") / 100.0 * multiplier;
 
@@ -425,6 +429,40 @@ mod tests {
             mutant: level,
             robot: level,
         }
+    }
+
+    #[test]
+    fn the_attack_rate_scales_per_use_evidence_and_leaves_every_rate_alone() {
+        let props = json!({
+            "weapon_entity": {
+                "name": "Rapid (L)",
+                "uses_per_minute": 90,
+                "economy": {"decay": 2.0, "ammo_burn": 200, "efficiency": 60.0},
+            },
+            "weapon_markup": 120,
+            "amp_entity": {
+                "name": "Amp",
+                "economy": {"decay": 0.5, "ammo_burn": 50, "efficiency": 70.0},
+            },
+        });
+        let own = evaluate(&evidence_from_equipment_props(&props, None, looters(20.0))).unwrap();
+        let rated_props = crate::attack_rate::with_attack_rate(&props, None, 30.0);
+        let rated = evaluate(&evidence_from_equipment_props(
+            &rated_props,
+            None,
+            looters(20.0),
+        ))
+        .unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(rated.modelled_raw_tt, own.modelled_raw_tt * 1.17));
+        assert!(close(
+            rated.eligible_offensive_cost,
+            own.eligible_offensive_cost * 1.17
+        ));
+        assert!(close(rated.expected_loot_tt, own.expected_loot_tt * 1.17));
+        assert_eq!(rated.expected_tt_rate, own.expected_tt_rate);
+        assert_eq!(rated.break_even_loot_markup, own.break_even_loot_markup);
+        assert_eq!(rated.weighted_efficiency_pct, own.weighted_efficiency_pct);
     }
 
     #[test]

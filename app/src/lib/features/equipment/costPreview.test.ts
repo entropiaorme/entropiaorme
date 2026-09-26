@@ -38,6 +38,7 @@ function input(overrides: Partial<CostPreviewInput> = {}): CostPreviewInput {
 		absorberMarkupPercent: 100,
 		implantMarkupPercent: 100,
 		damageEnhancers: 0,
+		reloadSpeedPercent: 0,
 		...overrides,
 	};
 }
@@ -127,5 +128,23 @@ describe('previewCostPerUse', () => {
 			1.0,
 			10,
 		);
+	});
+
+	it('grows every line by the attack-rate factor past the server limit', () => {
+		const fast: PreviewComponent = { ...weapon, usesPerMinute: 90 };
+		// 2.0 decay + 1.0 ammo + 0.5 amp decay + 0.2 amp ammo = 3.7, then x1.17.
+		expect(previewCostPerUse(input({ weapon: fast, amp, reloadSpeedPercent: 30 }))).toBeCloseTo(
+			3.7 * 1.17,
+			10,
+		);
+	});
+
+	it('leaves a weapon within the limit, or without a rate, at its own cost', () => {
+		expect(
+			previewCostPerUse(
+				input({ weapon: { ...weapon, usesPerMinute: 60 }, reloadSpeedPercent: 30 }),
+			),
+		).toBeCloseTo(3.0, 10);
+		expect(previewCostPerUse(input({ reloadSpeedPercent: 30 }))).toBeCloseTo(3.0, 10);
 	});
 });

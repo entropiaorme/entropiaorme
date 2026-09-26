@@ -3,20 +3,31 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
-	import type { PassiveEffectSourceView } from '$lib/types/settings';
+	import { describeReloadLimit } from '$lib/features/equipment/attackRate';
+	import type {
+		AppSettings,
+		PassiveEffectSourceView,
+		ReloadSpeedInEffect,
+	} from '$lib/types/settings';
 
 	let {
 		sources: initialSources,
+		reloadSpeed = null,
 		onchange,
 	}: {
 		sources: PassiveEffectSourceView[];
-		onchange?: (value: PassiveEffectSourceView[]) => void;
+		/** The reload speed the saved sources put in force. */
+		reloadSpeed?: ReloadSpeedInEffect | null;
+		onchange?: (settings: AppSettings) => void;
 	} = $props();
 
 	let sources = $state<PassiveEffectSourceView[]>([]);
 	let saving = $state(false);
 	let dirty = $state(false);
 	let error = $state<string | null>(null);
+
+	// Describes the saved sources, so it stands aside while edits are unsaved.
+	const limitNote = $derived(dirty ? null : describeReloadLimit(reloadSpeed));
 
 	$effect(() => {
 		sources = initialSources.map((source) => ({
@@ -91,7 +102,7 @@
 				effects: source.effects.map((effect) => ({ ...effect })),
 			}));
 			dirty = false;
-			onchange?.(sources);
+			onchange?.(updated);
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : 'Passive effects could not be saved';
 		} finally {
@@ -106,7 +117,8 @@
 			<h2 class="text-sm font-medium text-text">Passive effects</h2>
 			<p class="mt-1 max-w-xl text-sm leading-6 text-text-secondary">
 				Declare persistent effects from equipped clothing or accessories. Reload speed shortens
-				the interval used to recognise paid healing-tool activations.
+				the interval used to recognise paid healing-tool activations, and past the server's
+				100 attacks a minute it makes each weapon attack land harder and cost more.
 			</p>
 		</div>
 		<Button size="sm" variant="secondary" onclick={addSource}>Add effect</Button>
@@ -118,7 +130,7 @@
 
 	{#if sources.length === 0}
 		<p class="py-5 text-sm text-text-tertiary">
-			No passive effects declared. Healing tools use their catalogue reload timing.
+			No passive effects declared. Weapons and healing tools use their catalogue rates.
 		</p>
 	{:else}
 		<div class="border-t border-border/70">
@@ -154,6 +166,10 @@
 				</div>
 			{/each}
 		</div>
+	{/if}
+
+	{#if limitNote}
+		<p class="text-xs leading-5 text-text-secondary" data-testid="reload-limit-note">{limitNote}</p>
 	{/if}
 
 	<div class="flex items-center justify-end gap-3">

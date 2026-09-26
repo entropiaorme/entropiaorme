@@ -114,10 +114,26 @@ pub struct AppSettings {
     /// the candidates weapon attribution chooses among.
     pub carried_weapon_ids: Vec<i64>,
     pub passive_effect_sources: Vec<PassiveEffectSourceView>,
+    /// The reload speed those sources put in force.
+    pub reload_speed: ReloadSpeedInEffect,
     pub harvest_guardrail: HarvestGuardrailSettings,
     pub loot_filter_blacklist: Vec<String>,
     pub db_path: String,
     pub app_version: String,
+}
+
+/// The reload speed the enabled passive effects put in force.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadSpeedInEffect {
+    /// What the enabled sources declare, summed.
+    pub declared_percent: f64,
+    /// What reaches healing reloads and weapon attack rates: the declared
+    /// increases held at the game's limit for equipped items, plus any
+    /// declared slowing.
+    pub effective_percent: f64,
+    /// The game's limit on reload speed from equipped items.
+    pub item_limit_percent: f64,
 }
 
 /// GET overlay-position: the persisted overlay window coordinates (null
@@ -297,6 +313,15 @@ impl Api {
                         .collect(),
                 })
                 .collect(),
+            reload_speed: ReloadSpeedInEffect {
+                declared_percent: eo_services::passive_effects::declared_reload_speed_percent(
+                    &config.passive_effect_sources,
+                ),
+                effective_percent: eo_services::passive_effects::reload_speed_percent(
+                    &config.passive_effect_sources,
+                ),
+                item_limit_percent: eo_services::passive_effects::RELOAD_SPEED_ITEM_LIMIT_PERCENT,
+            },
             harvest_guardrail: HarvestGuardrailSettings {
                 enabled: config.harvest_guardrail.enabled,
                 short_tool_id: config.harvest_guardrail.short_tool_id.into(),

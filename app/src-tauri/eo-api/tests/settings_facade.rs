@@ -91,11 +91,21 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "hotbar",
             "carriedWeaponIds",
             "passiveEffectSources",
+            "reloadSpeed",
             "harvestGuardrail",
             "lootFilterBlacklist",
             "dbPath",
             "appVersion",
         ]
+    );
+    assert_eq!(
+        body["reloadSpeed"],
+        serde_json::json!({
+            "declaredPercent": 0.0,
+            "effectivePercent": 0.0,
+            "itemLimitPercent": 15.0,
+        }),
+        "no declared effects put no reload speed in force"
     );
     assert_eq!(
         body["harvestGuardrail"],

@@ -147,6 +147,13 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		attackRate: {
+			basePerMinute: 46,
+			reloadSpeedPercent: 0,
+			buffedPerMinute: 46,
+			effectivePerMinute: 46,
+			factor: 1,
+		},
 	},
 	'2': {
 		id: '2',
@@ -219,6 +226,13 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		attackRate: {
+			basePerMinute: 57,
+			reloadSpeedPercent: 0,
+			buffedPerMinute: 57,
+			effectivePerMinute: 57,
+			factor: 1,
+		},
 	},
 	'4': {
 		id: '4',
@@ -258,6 +272,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		},
 		lifestealPercent: null,
 		effectProfile: null,
+		attackRate: null,
 	},
 };
 

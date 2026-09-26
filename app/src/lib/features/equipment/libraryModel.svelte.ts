@@ -24,12 +24,15 @@ import {
 } from '$lib/guide/fixtures/equipment';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
+	AppSettings,
 	HarvestGuardrailSettings,
 	Hotbar,
 	PassiveEffectSourceView,
+	ReloadSpeedInEffect,
 } from '$lib/types/settings';
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead } from '$lib/view/typeahead.svelte';
+import { attackRateFactor } from './attackRate';
 import { previewCostPerUse } from './costPreview';
 import {
 	effectFields,
@@ -39,6 +42,13 @@ import {
 } from './weaponEffect';
 
 export type EquipmentFormType = 'weapon' | 'healing' | 'consumable' | 'tool';
+
+function cloneSources(sources: PassiveEffectSourceView[]): PassiveEffectSourceView[] {
+	return sources.map((source) => ({
+		...source,
+		effects: source.effects.map((effect) => ({ ...effect })),
+	}));
+}
 
 export function createLibraryModel() {
 	// ── Data ──
@@ -57,6 +67,9 @@ export function createLibraryModel() {
 		hugeToolId: null,
 	});
 	let passiveEffectSources = $state<PassiveEffectSourceView[]>([]);
+	// The reload speed those sources put in force: it sets every weapon's
+	// attack rate, so the form's preview prices with it.
+	let reloadSpeed = $state<ReloadSpeedInEffect | null>(null);
 	// True until the first load settles: an empty library before then means
 	// "not read yet", not "nothing added", so the views hold their empty states.
 	let loading = $state(true);
@@ -180,7 +193,11 @@ export function createLibraryModel() {
 			absorberMarkupPercent,
 			implantMarkupPercent,
 			damageEnhancers,
+			reloadSpeedPercent: reloadSpeed?.effectivePercent ?? 0,
 		}),
+	);
+	const liveAttackRateFactor = $derived(
+		attackRateFactor(weaponPicker.selected?.usesPerMinute, reloadSpeed?.effectivePercent ?? 0),
 	);
 
 	// Split the flat library into the per-kind lists the view renders. Weapons
@@ -216,6 +233,7 @@ export function createLibraryModel() {
 				hotbarHooksEnabled = true;
 				carriedWeaponIds = [...equipmentDemoCarriedWeaponIds];
 				passiveEffectSources = [];
+				reloadSpeed = null;
 				detailCache = Object.fromEntries(
 					Object.entries(equipmentDemoDetails).map(([k, v]) => [k, { ...v }]),
 				);
@@ -227,10 +245,8 @@ export function createLibraryModel() {
 				hotbarHooksEnabled = settings.hotbarHooksEnabled;
 				carriedWeaponIds = [...settings.carriedWeaponIds];
 				harvestGuardrail = settings.harvestGuardrail;
-				passiveEffectSources = (settings.passiveEffectSources ?? []).map((source) => ({
-					...source,
-					effects: source.effects.map((effect) => ({ ...effect })),
-				}));
+				passiveEffectSources = cloneSources(settings.passiveEffectSources ?? []);
+				reloadSpeed = settings.reloadSpeed;
 				detailCache = {};
 			}
 		} catch (e) {
@@ -298,6 +314,7 @@ export function createLibraryModel() {
 			healMax: detail.healingProfile?.directMax ?? null,
 			reloadSeconds: null,
 			lifestealPercent: detail.lifestealPercent,
+			usesPerMinute: detail.attackRate?.basePerMinute ?? null,
 		};
 		if (detail.type === 'healing') healerPicker.select(primary);
 		else weaponPicker.select(primary);
@@ -320,6 +337,7 @@ export function createLibraryModel() {
 				healMax: null,
 				reloadSeconds: null,
 				lifestealPercent: null,
+				usesPerMinute: null,
 			});
 		} else {
 			scopePicker.clear();
@@ -389,6 +407,7 @@ export function createLibraryModel() {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
 		});
 	}
 
@@ -438,7 +457,25 @@ export function createLibraryModel() {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
 		});
+	}
+
+	/** Adopt saved passive effects. The reload speed they put in force
+	 * reprices every weapon past the attack-rate limit, so the library and
+	 * the open detail re-read. */
+	async function effectsSaved(settings: AppSettings) {
+		passiveEffectSources = cloneSources(settings.passiveEffectSources);
+		reloadSpeed = settings.reloadSpeed;
+		try {
+			const library = await getEquipmentLibrary();
+			allEquipment = library;
+			splitByKind(library);
+			detailCache = {};
+			if (expandedId) detailCache[expandedId] = await getEquipmentDetail(expandedId);
+		} catch (e) {
+			error = describeError(e, 'Failed to refresh equipment');
+		}
 	}
 
 	async function toggleExpand(id: string) {
@@ -611,9 +648,10 @@ export function createLibraryModel() {
 		get passiveEffectSources() {
 			return passiveEffectSources;
 		},
-		set passiveEffectSources(value: PassiveEffectSourceView[]) {
-			passiveEffectSources = value;
+		get reloadSpeed() {
+			return reloadSpeed;
 		},
+		effectsSaved,
 		get error() {
 			return error;
 		},
@@ -682,6 +720,9 @@ export function createLibraryModel() {
 		},
 		get liveCostPreview() {
 			return liveCostPreview;
+		},
+		get liveAttackRateFactor() {
+			return liveAttackRateFactor;
 		},
 		get implantMarkupPercent() {
 			return implantMarkupPercent;

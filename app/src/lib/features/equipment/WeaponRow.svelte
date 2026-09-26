@@ -6,6 +6,7 @@
 	import { enrichmentColor, enrichmentLabel, formatPec } from './display';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';
+	import { describeAttackRate } from './attackRate';
 	import { describeEffectProfile } from './weaponEffect';
 
 	let { model, item }: { model: LibraryModel; item: Equipment } = $props();
@@ -189,6 +190,19 @@
 						{formatPec(detail.totalCostPerUse)} PEC
 					</span>
 				</div>
+				{#if detail.attackRate}
+					{@const attack = describeAttackRate(detail.attackRate)}
+					<div
+						class="flex items-center justify-between gap-4 text-sm px-3 pb-2.5"
+						data-testid="weapon-attack-rate"
+					>
+						<span class="text-text-secondary">Attack rate</span>
+						<span class="tabular-nums text-text-secondary">{attack.value}</span>
+					</div>
+					{#if attack.note}
+						<p class="px-3 pb-2 text-xs leading-5 text-text-tertiary">{attack.note}</p>
+					{/if}
+				{/if}
 			</div>
 
 			{#if detail.expectedReturn}

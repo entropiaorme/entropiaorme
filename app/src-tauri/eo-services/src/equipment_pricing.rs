@@ -27,17 +27,22 @@ pub fn cost_per_shot_ped(props: &Value) -> f64 {
 }
 
 /// The per-shot weapon cost in PED for a tool by name fragment
-/// (`totalCostPerUse / 100`), or 0 when the tool is unknown. A read
-/// failure degrades to 0 (the tool-unknown value), so a weapon slot
-/// still resolves rather than dropping the tool change.
-pub fn weapon_cost_by_name(conn: &rusqlite::Connection, name: &str) -> f64 {
+/// (`totalCostPerUse / 100`), its stored props prepared by `pricing` (the
+/// attack rate in force, see [`crate::attack_rate`]), or 0 when the tool is
+/// unknown. A read failure degrades to 0 (the tool-unknown value), so a
+/// weapon slot still resolves rather than dropping the tool change.
+pub fn weapon_cost_by_name(
+    conn: &rusqlite::Connection,
+    name: &str,
+    pricing: &dyn Fn(&Value) -> Value,
+) -> f64 {
     match weapon_properties_by_name_fragment_sync(conn, name)
         .ok()
         .flatten()
     {
         Some(properties_json) => {
             let props: Value = serde_json::from_str(&properties_json).unwrap_or(Value::Null);
-            cost_per_shot_ped(&props)
+            cost_per_shot_ped(&pricing(&props))
         }
         None => 0.0,
     }
@@ -343,14 +348,28 @@ mod tests {
         .await;
 
         let cost = db
-            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Opalo")))
+            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Opalo", &Value::clone)))
             .await
             .unwrap();
         assert_eq!(cost, 2.05 / 100.0);
 
+        // Pricing sees the props after preparation: a weapon held at the
+        // attack-rate limit costs its factor more per attack.
+        let limited = db
+            .with_reader(|conn| {
+                Ok(weapon_cost_by_name(conn, "Opalo", &|props| {
+                    let mut props = props.clone();
+                    props["weapon_entity"]["uses_per_minute"] = serde_json::json!(90);
+                    crate::attack_rate::with_attack_rate(&props, None, 30.0)
+                }))
+            })
+            .await
+            .unwrap();
+        assert!((limited - 2.05 * 1.17 / 100.0).abs() < 1e-9);
+
         // An unknown tool prices to zero rather than dropping the tool change.
         let unknown = db
-            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Nonexistent")))
+            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Nonexistent", &Value::clone)))
             .await
             .unwrap();
         assert_eq!(unknown, 0.0);

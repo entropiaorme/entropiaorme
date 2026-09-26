@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use super::*;
+use crate::attack_rate::WeaponPricing;
 use crate::clock::MockClock;
 
 /// A pistol costing 0.05 PED a shot (5 PEC decay), band 5-10.
@@ -607,6 +608,36 @@ async fn correction_weapons_offer_the_carried_weapons_still_in_equipment_fitting
     assert!(matches!(
         h.service.correction_weapons("nope").await,
         Err(WeaponReviewError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn review_prices_through_the_same_preparation_as_play() {
+    let h = harness().await;
+    seed_session(&h.db, "s", false).await;
+    // Both candidates run at the server limit; 50% reload speed asks for 150
+    // attacks a minute, so each attack costs 1.5 times its own-rate price.
+    h.db.with_writer(|conn| {
+        conn.execute_batch(
+            r#"UPDATE equipment_library
+               SET properties_json = json_set(properties_json, '$.weapon_entity.uses_per_minute', 100)
+               WHERE id IN (1, 2);"#,
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let rated = WeaponReviewService::new(h.db.clone(), Arc::new(MockClock::new(None, 0.0)))
+        .with_pricing(WeaponPricing::new(None, Arc::new(|| 50.0)));
+    let weapons = rated.correction_weapons("s-u1").await.unwrap();
+    assert!(close(weapons[0].cost_per_shot_ped, 0.3));
+    assert!(close(weapons[1].cost_per_shot_ped, 0.075));
+    let correction = rated.assign("s-u1", CANNON).await.unwrap();
+    assert!(close(correction.cost_per_shot, 0.3));
+    // Without the preparation, the same rows price at their own rate.
+    assert!(close(
+        h.service.correction_weapons("s-u1").await.unwrap()[0].cost_per_shot_ped,
+        0.2
     ));
 }
 

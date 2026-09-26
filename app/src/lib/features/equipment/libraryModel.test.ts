@@ -61,6 +61,7 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		attackRate: null,
 		...overrides,
 	};
 }
@@ -84,6 +85,7 @@ const weaponHit = {
 	healMax: null,
 	reloadSeconds: null,
 	lifestealPercent: null,
+	usesPerMinute: null,
 };
 
 beforeEach(() => {
@@ -216,6 +218,7 @@ describe('form open and reset', () => {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
 		});
 		model.markupPercent = 150;
 		model.damageEnhancers = 3;
@@ -346,6 +349,7 @@ describe('setAddType clearing', () => {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
 		});
 		return model;
 	}

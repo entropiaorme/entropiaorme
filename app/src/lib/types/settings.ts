@@ -10,6 +10,7 @@ export type {
 	HarvestGuardrailInput,
 	HarvestGuardrailSettings,
 	PassiveEffectSourceView,
+	ReloadSpeedInEffect,
 } from '$lib/api/commands.gen';
 
 /** Hotbar slot mapping: key "1"-"9" (and "0", stored last) to an

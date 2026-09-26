@@ -9,9 +9,10 @@
 //! JSON values through untyped, the DTOs pin the number/string types
 //! the writes have always produced.
 
+use eo_services::attack_rate::{AttackRate, WeaponPricing};
 use eo_services::cost_engine::{
-    cost_per_shot_from_props, get_weapon_damage_profile, heal_cost_per_use,
-    heal_cost_per_use_with_implant, heal_reload_seconds, is_limited,
+    cost_per_shot_from_props, heal_cost_per_use, heal_cost_per_use_with_implant,
+    heal_reload_seconds, is_limited, weapon_damage_profile_from_props,
 };
 use eo_services::equipment_pricing::{
     healing_profile_from_props, lifesteal_percent_from_props,
@@ -105,6 +106,9 @@ pub struct EquipmentSearchHit {
     pub heal_max: Nullable<f64>,
     pub reload_seconds: Nullable<f64>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's catalogue attack rate, attacks a minute; null for other
+    /// items and for weapons the catalogue gives no rate.
+    pub uses_per_minute: Nullable<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -363,6 +367,38 @@ pub struct CostBreakdownLine {
     pub effective_cost_pec: f64,
 }
 
+/// A weapon's attack rate under the reload speed in effect. Past the
+/// server's limit of 100 attacks a minute, the rate the reload speed asks
+/// for turns into per-attack damage and cost instead: `factor` is that
+/// multiplier (1 within the limit), already applied to the detail's cost
+/// breakdown and to the weapon's damage range.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponAttackRate {
+    /// The catalogue rate, attacks a minute, before any effect.
+    pub base_per_minute: f64,
+    /// The reload speed in effect, after the game's stacking limit.
+    pub reload_speed_percent: f64,
+    /// The rate the reload speed asks for.
+    pub buffed_per_minute: f64,
+    /// The rate the server runs: the buffed rate, held at the limit.
+    pub effective_per_minute: f64,
+    /// Per-attack damage and cost multiplier; 1 within the limit.
+    pub factor: f64,
+}
+
+impl From<AttackRate> for WeaponAttackRate {
+    fn from(rate: AttackRate) -> Self {
+        Self {
+            base_per_minute: rate.base_per_minute,
+            reload_speed_percent: rate.reload_speed_percent,
+            buffed_per_minute: rate.buffed_per_minute,
+            effective_per_minute: rate.effective_per_minute,
+            factor: rate.factor,
+        }
+    }
+}
+
 /// The expanded library-entry detail.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -385,6 +421,8 @@ pub struct EquipmentDetail {
     pub lifesteal_percent: Nullable<f64>,
     /// A weapon's declared damage-over-time effect, when it has one.
     pub effect_profile: Nullable<WeaponEffectProfileDto>,
+    /// A weapon's attack rate, when its catalogue publishes a base rate.
+    pub attack_rate: Nullable<WeaponAttackRate>,
 }
 
 /// An add or update request. Field names stay in the request casing the
@@ -573,6 +611,10 @@ fn search_hit(row: &Value) -> EquipmentSearchHit {
             .get("lifesteal_percent")
             .and_then(Value::as_f64)
             .into(),
+        uses_per_minute: (row["endpoint"].as_str() == Some("weapons"))
+            .then(|| entity.get("uses_per_minute").and_then(Value::as_f64))
+            .flatten()
+            .into(),
     }
 }
 
@@ -615,8 +657,11 @@ fn row_to_summary(
     item_type: &str,
     props: &Value,
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
 ) -> Result<EquipmentSummary, ApiError> {
     if item_type == "weapon" {
+        let priced_props = pricing.prepare(props);
+        let props = &priced_props;
         let weapon_e = props
             .get("weapon_entity")
             .filter(|v| !v.is_null())
@@ -624,9 +669,8 @@ fn row_to_summary(
                 ApiError::invalid_state(format!("stored weapon row {id} missing weapon_entity"))
             })?;
         let amp_e = props.get("amp_entity").filter(|v| !v.is_null());
-        let enhancers = stored_enhancers(props).max(0);
         let cost_result = cost_per_shot_from_props(props, None);
-        let damage_profile = get_weapon_damage_profile(weapon_e, amp_e, enhancers);
+        let damage_profile = weapon_damage_profile_from_props(props);
         let rounded = |key: &str| -> Option<f64> {
             damage_profile
                 .as_ref()
@@ -726,6 +770,7 @@ fn row_to_summary(
 
 /// Convert a library row to the expanded detail shape. `catalog_id` is
 /// the row's own column.
+#[allow(clippy::too_many_arguments)]
 fn row_to_detail(
     id: i64,
     name: &str,
@@ -733,13 +778,15 @@ fn row_to_detail(
     catalog_id: Option<&str>,
     props: &Value,
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
     looters: HuntingLooterLevels,
 ) -> Result<EquipmentDetail, ApiError> {
     let item_id = id.to_string();
 
     if item_type == "weapon" {
-        let enriched_props =
-            expected_hunting::with_current_offensive_efficiencies(props, game_data);
+        let enriched_props = pricing.prepare(
+            &expected_hunting::with_current_offensive_efficiencies(props, game_data),
+        );
         let props = &enriched_props;
         let weapon_e = props
             .get("weapon_entity")
@@ -818,6 +865,10 @@ fn row_to_detail(
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
             effect_profile: weapon_effect_dto(props).into(),
+            attack_rate: pricing
+                .attack_rate(props)
+                .map(WeaponAttackRate::from)
+                .into(),
         });
     }
 
@@ -845,6 +896,7 @@ fn row_to_detail(
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
             effect_profile: None.into(),
+            attack_rate: None.into(),
         });
     }
 
@@ -934,6 +986,7 @@ fn row_to_detail(
             .into(),
         lifesteal_percent: None.into(),
         effect_profile: None.into(),
+        attack_rate: None.into(),
     })
 }
 
@@ -1010,6 +1063,7 @@ impl Api {
                 &item_type,
                 &raw_props,
                 &self.game_data,
+                &self.weapon_pricing,
             )?);
         }
         Ok(results)
@@ -1044,7 +1098,14 @@ impl Api {
                 "inserted equipment read-back failed",
             ));
         };
-        summary_from_parts(id, &name, &item_type, &raw_props, &self.game_data)
+        summary_from_parts(
+            id,
+            &name,
+            &item_type,
+            &raw_props,
+            &self.game_data,
+            &self.weapon_pricing,
+        )
     }
 
     /// Replace a stored entry's configuration; its class is fixed.
@@ -1084,7 +1145,14 @@ impl Api {
                 "updated equipment read-back failed",
             ));
         };
-        summary_from_parts(id, &name, &item_type, &raw_props, &self.game_data)
+        summary_from_parts(
+            id,
+            &name,
+            &item_type,
+            &raw_props,
+            &self.game_data,
+            &self.weapon_pricing,
+        )
     }
 
     /// Delete a stored entry. Idempotent over a missing row. A hotbar slot
@@ -1154,6 +1222,7 @@ impl Api {
             catalog_id.as_deref(),
             &props,
             &self.game_data,
+            &self.weapon_pricing,
             looters,
         )
     }
@@ -1426,8 +1495,9 @@ fn summary_from_parts(
     item_type: &str,
     raw_props: &str,
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
 ) -> Result<EquipmentSummary, ApiError> {
     let props = serde_json::from_str::<Value>(raw_props)
         .map_err(ApiError::internal("stored equipment props parse"))?;
-    row_to_summary(id, name, item_type, &props, game_data)
+    row_to_summary(id, name, item_type, &props, game_data, pricing)
 }

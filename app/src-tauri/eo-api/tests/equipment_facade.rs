@@ -16,13 +16,15 @@ use eo_services::game_data_store::GameDataStore;
 
 mod common;
 
-/// A minimal catalogue snapshot: one weapon (a limited one, so the
-/// `(L)` flag pins), one stimulant, one Mindforce implant, one
+/// A minimal catalogue snapshot: two weapons (a limited one, so the
+/// `(L)` flag pins, and a fast one with a catalogue attack rate), one
+/// stimulant, one Mindforce implant, one
 /// absorber/extender.
 fn write_snapshot(dir: &Path) {
     std::fs::write(
         dir.join("weapons.json"),
-        r#"[{"id": "w1", "name": "Opalo Rifle (L)", "economy": {"decay": 0.5, "ammo_burn": 300, "efficiency": 56.7}}]"#,
+        r#"[{"id": "w1", "name": "Opalo Rifle (L)", "economy": {"decay": 0.5, "ammo_burn": 300, "efficiency": 56.7}},
+            {"id": "w2", "name": "Rapid Carbine", "uses_per_minute": 90, "economy": {"decay": 1.0, "ammo_burn": 100, "efficiency": 60.0}, "damage": {"impact": 40}}]"#,
     )
     .unwrap();
     std::fs::write(
@@ -285,6 +287,76 @@ async fn a_weapon_setup_stores_and_lists_with_its_catalogue_economy() {
     assert!(detail.amplifier.is_none());
     assert!(detail.scope.is_none());
     assert!(detail.absorber.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_speed_past_the_attack_rate_limit_reprices_every_weapon_surface() {
+    use eo_api::settings::{
+        PassiveEffectInput, PassiveEffectKind, PassiveEffectSourceInput, SettingsPatch,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    let mut req = consumable("");
+    req.kind = EquipmentKind::Weapon;
+    req.name = None;
+    req.catalog_id = Some("w2".to_string());
+    let added = api.equipment_add(&req).await.unwrap();
+    let id: i64 = added.id.parse().unwrap();
+
+    // At its own 90 a minute: 1 PEC decay and 1 PEC ammo, 20-40 damage.
+    let detail = api.equipment_detail(id).await.unwrap();
+    let rate = detail
+        .attack_rate
+        .as_ref()
+        .expect("the catalogue publishes a rate");
+    assert_eq!(rate.base_per_minute, 90.0);
+    assert_eq!(rate.effective_per_minute, 90.0);
+    assert_eq!(rate.factor, 1.0);
+    assert_eq!(detail.total_cost_per_use, 2.0);
+    assert_eq!(added.damage_max.as_ref().copied(), Some(40.0));
+    // The search hit carries the rate for the form's preview.
+    let hits = api
+        .equipment_search("Rapid", SearchKind::Weapon)
+        .await
+        .unwrap();
+    assert_eq!(hits[0].uses_per_minute.as_ref().copied(), Some(90.0));
+
+    // Two rings declaring 30% between them; equipped items add at most 15%.
+    let ring = |id: &str, percent: f64| PassiveEffectSourceInput {
+        id: id.into(),
+        name: format!("Ring {id}"),
+        enabled: true,
+        effects: vec![PassiveEffectInput {
+            kind: PassiveEffectKind::ReloadSpeed,
+            magnitude_percent: percent,
+        }],
+    };
+    let settings = api
+        .settings_update(SettingsPatch {
+            passive_effect_sources: Some(vec![ring("a", 15.0), ring("b", 15.0)]),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(settings.reload_speed.declared_percent, 30.0);
+    assert_eq!(settings.reload_speed.effective_percent, 15.0);
+    assert_eq!(settings.reload_speed.item_limit_percent, 15.0);
+
+    // 90 x 1.15 = 103.5 a minute asked for; the server runs 100 and each
+    // attack deals and costs 1.035 times as much.
+    let detail = api.equipment_detail(id).await.unwrap();
+    let rate = detail.attack_rate.as_ref().unwrap();
+    assert_eq!(rate.reload_speed_percent, 15.0);
+    assert!((rate.buffed_per_minute - 103.5).abs() < 1e-9);
+    assert_eq!(rate.effective_per_minute, 100.0);
+    assert!((rate.factor - 1.035).abs() < 1e-9);
+    assert!((detail.total_cost_per_use - 2.07).abs() < 1e-9);
+    let listed = api.equipment_library().await.unwrap();
+    let row = listed.iter().find(|item| item.id == added.id).unwrap();
+    assert!((row.cost_per_use - 2.07).abs() < 1e-9);
+    assert_eq!(row.damage_max.as_ref().copied(), Some(41.4));
+    assert_eq!(row.damage_min.as_ref().copied(), Some(20.7));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -6,9 +6,13 @@
  * weapon decay and ammo, and the decay-absorption devices take their
  * catalogue shares of the weapon's decay
  * (implant first, then the absorber/extender on the remainder) at their own
- * markups. Consumables do not move it. The stored entry's authoritative cost
- * comes back from the save.
+ * markups. Past the server's attack-rate limit, every line grows by the
+ * attack-rate factor for the weapon's catalogue rate under the reload speed
+ * in effect (see `attackRate.ts`). Consumables do not move it. The stored
+ * entry's authoritative cost comes back from the save.
  */
+
+import { attackRateFactor } from './attackRate';
 
 /** The economy fields the preview reads from a catalogue selection. */
 export interface PreviewComponent {
@@ -19,6 +23,8 @@ export interface PreviewComponent {
 	isLimited: boolean;
 	/** Decay-absorption share, percent (implants and absorbers/extenders). */
 	absorptionPercent?: number | null;
+	/** Catalogue attack rate, attacks a minute (weapons only). */
+	usesPerMinute?: number | null;
 }
 
 export interface CostPreviewInput {
@@ -34,6 +40,8 @@ export interface CostPreviewInput {
 	absorberMarkupPercent: number;
 	implantMarkupPercent: number;
 	damageEnhancers: number;
+	/** The reload speed in effect, percent, after the game's stacking limit. */
+	reloadSpeedPercent: number;
 }
 
 const share = (device: PreviewComponent | null) =>
@@ -62,5 +70,5 @@ export function previewCostPerUse(input: CostPreviewInput): number | null {
 	if (scope) {
 		cost += scope.decay * limitedMult(scope, input.scopeMarkupPercent);
 	}
-	return cost;
+	return cost * attackRateFactor(weapon.usesPerMinute, input.reloadSpeedPercent);
 }

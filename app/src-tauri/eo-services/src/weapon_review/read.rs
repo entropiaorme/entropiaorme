@@ -9,14 +9,20 @@ use super::{
     CorrectionWeapon, EffectCandidate, ReviewShot, ReviewShotPage, ShotCandidate, ShotGroup,
     WeaponCorrectionKind, WeaponReviewError,
 };
+use crate::attack_rate::WeaponPricing;
 use crate::cost_engine::cost_per_shot_from_props;
 use crate::db::DbError;
 
-/// A weapon's name and its per-shot cost in PED as it is configured now, or
-/// None when the item is gone or is not a weapon.
+/// How a weapon's stored props are prepared for pricing, when configured.
+pub(super) type Pricing<'a> = Option<&'a WeaponPricing>;
+
+/// A weapon's name and its per-shot cost in PED as it is configured now,
+/// its props prepared by `pricing`, or None when the item is gone or is not
+/// a weapon.
 pub(super) fn weapon_price(
     conn: &rusqlite::Connection,
     equipment_id: i64,
+    pricing: Pricing<'_>,
 ) -> Result<Option<(String, f64)>, WeaponReviewError> {
     let row: Option<(String, String)> = conn
         .query_row(
@@ -33,6 +39,10 @@ pub(super) fn weapon_price(
         context: "weapon properties parse",
         source,
     })?;
+    let props = match pricing {
+        Some(pricing) => pricing.prepare(&props),
+        None => props,
+    };
     let cost = cost_per_shot_from_props(&props, None)
         .get("totalCostPerUse")
         .and_then(Value::as_f64)
@@ -180,6 +190,7 @@ pub(super) fn session_shots(
 pub(super) fn correction_weapons(
     conn: &rusqlite::Connection,
     evidence_id: &str,
+    pricing: Pricing<'_>,
 ) -> Result<Vec<CorrectionWeapon>, WeaponReviewError> {
     let candidates: Option<String> = conn
         .query_row(
@@ -193,7 +204,7 @@ pub(super) fn correction_weapons(
     };
     let mut weapons = Vec::new();
     for candidate in parse_candidates(&candidates)? {
-        if let Some((name, cost)) = weapon_price(conn, candidate.equipment_id)? {
+        if let Some((name, cost)) = weapon_price(conn, candidate.equipment_id, pricing)? {
             weapons.push(CorrectionWeapon {
                 equipment_id: candidate.equipment_id,
                 name,

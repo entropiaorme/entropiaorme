@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button, Input, Modal, PickerInput, SegmentedControl } from '$lib/components';
 	import type { EquipmentSearchResult } from '$lib/api';
+	import { formatFactor } from './attackRate';
 	import { formatPec } from './display';
 	import type { EquipmentFormType, LibraryModel } from './libraryModel.svelte';
 	import { WEAPON_EFFECT_OPTIONS, type WeaponEffectForm } from './weaponEffect';
@@ -395,6 +396,11 @@
 				{#if model.liveCostPreview !== null}
 					<span class="eyebrow">Estimated cost per use</span>
 					<span class="ml-2 text-lg font-semibold tabular-nums text-accent">{formatPec(model.liveCostPreview)} PEC</span>
+					{#if model.liveAttackRateFactor > 1}
+						<span class="ml-2 text-xs text-text-tertiary" data-testid="preview-attack-rate">
+							{formatFactor(model.liveAttackRateFactor)} at the server's attack-rate limit
+						</span>
+					{/if}
 				{/if}
 			</div>
 			<div class="flex items-center gap-2 shrink-0">

@@ -14,6 +14,8 @@
 use eo_wire::normalizer::round_half_even;
 use serde_json::{json, Value};
 
+use crate::attack_rate;
+
 const DAMAGE_TYPES: [&str; 9] = [
     "impact",
     "cut",
@@ -119,6 +121,27 @@ pub fn get_weapon_damage_profile(
     }))
 }
 
+/// The damage profile of a stored weapon setup (`weapon_entity`,
+/// `amp_entity`, `damage_enhancers`), per attack at the attack-rate factor
+/// the props carry: past the server's limit each attack lands that much
+/// harder. None when the weapon publishes no damage.
+pub fn weapon_damage_profile_from_props(props: &Value) -> Option<Value> {
+    let weapon = props.get("weapon_entity").filter(|v| !v.is_null())?;
+    let enhancers = (props
+        .get("damage_enhancers")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as i64)
+        .max(0);
+    let amp = props.get("amp_entity").filter(|v| !v.is_null());
+    let total_damage =
+        weapon_total_damage(weapon, amp, enhancers)? * attack_rate::factor_from_props(props);
+    Some(json!({
+        "totalDamage": total_damage,
+        "damageMin": total_damage * 0.5,
+        "damageMax": total_damage,
+    }))
+}
+
 /// Heal range at maxed skill: the tool's published `min_heal` / `max_heal`.
 pub fn heal_range_at_max_skill(tool: &Value) -> Option<Value> {
     let max_heal = tool.get("max_heal").filter(|v| !v.is_null())?;
@@ -202,6 +225,39 @@ pub fn cost_per_shot_with_implant(
     absorber_markup: f64,
     implant_markup: f64,
 ) -> Value {
+    scaled_cost_per_shot(
+        weapon,
+        amp,
+        scope,
+        absorber,
+        implant,
+        damage_enhancers,
+        [
+            weapon_markup,
+            amp_markup,
+            scope_markup,
+            absorber_markup,
+            implant_markup,
+        ],
+        1.0,
+    )
+}
+
+/// [`cost_per_shot_with_implant`] with every line scaled by
+/// `attack_rate_factor`: past the server's attack-rate limit, each attack
+/// consumes that much more decay and ammunition (see
+/// [`crate::attack_rate`]). A factor of 1 leaves every figure bit-identical.
+#[allow(clippy::too_many_arguments)]
+fn scaled_cost_per_shot(
+    weapon: &Value,
+    amp: Option<&Value>,
+    scope: Option<&Value>,
+    absorber: Option<&Value>,
+    implant: Option<&Value>,
+    damage_enhancers: i64,
+    [weapon_markup, amp_markup, scope_markup, absorber_markup, implant_markup]: [f64; 5],
+    attack_rate_factor: f64,
+) -> Value {
     let eco = economy(weapon);
     let base_decay = num_or_zero(&eco, "decay");
     let base_ammo_pec = num_or_zero(&eco, "ammo_burn") / 100.0;
@@ -238,6 +294,7 @@ pub fn cost_per_shot_with_implant(
     let mut breakdown: Vec<Value> = Vec::new();
     let mut total = 0.0;
     let mut add_line = |component: &str, cost_pec: f64, markup: f64| {
+        let cost_pec = cost_pec * attack_rate_factor;
         let effective = round4(cost_pec * markup);
         breakdown.push(json!({
             "component": component,
@@ -280,7 +337,9 @@ pub fn cost_per_shot_with_implant(
     })
 }
 
-/// Calculate weapon cost from an `equipment_library` `properties_json` payload.
+/// Calculate weapon cost from an `equipment_library` `properties_json`
+/// payload, per attack at the attack-rate factor the props carry (1 unless
+/// [`attack_rate::with_attack_rate`] enriched them).
 pub fn cost_per_shot_from_props(props: &Value, damage_enhancers: Option<i64>) -> Value {
     let configured: f64 = match damage_enhancers {
         Some(de) => de as f64,
@@ -304,18 +363,21 @@ pub fn cost_per_shot_from_props(props: &Value, damage_enhancers: Option<i64>) ->
         .filter(|v| !v.is_null())
         .expect("cost_per_shot_from_props requires a non-null weapon_entity");
 
-    cost_per_shot_with_implant(
+    scaled_cost_per_shot(
         weapon,
         opt("amp_entity"),
         opt("scope_entity"),
         opt("absorber_entity"),
         opt("implant_entity"),
         enhancers,
-        markup("weapon_markup"),
-        markup("amp_markup"),
-        markup("scope_markup"),
-        markup("absorber_markup"),
-        markup("implant_markup"),
+        [
+            markup("weapon_markup"),
+            markup("amp_markup"),
+            markup("scope_markup"),
+            markup("absorber_markup"),
+            markup("implant_markup"),
+        ],
+        attack_rate::factor_from_props(props),
     )
 }
 
@@ -756,5 +818,131 @@ mod tests {
             .map(|line| line["component"].as_str().unwrap())
             .collect();
         assert_eq!(components, ["Weapon decay", "Amp decay"]);
+    }
+
+    /// A stored weapon setup for the attack-rate cases: 60 damage, 2 PEC
+    /// decay and 100 ammo (1 PEC) per attack, amplified, at `uses_per_minute`.
+    fn rated_props(uses_per_minute: f64) -> Value {
+        json!({
+            "weapon_entity": {
+                "name": "Rated",
+                "uses_per_minute": uses_per_minute,
+                "economy": {"decay": 2.0, "ammo_burn": 100},
+                "damage": {"impact": 40, "penetration": 20},
+            },
+            "amp_entity": {
+                "name": "Amp",
+                "economy": {"decay": 0.5, "ammo_burn": 50},
+                "damage": {"burn": 10},
+            },
+        })
+    }
+
+    fn priced_at(uses_per_minute: f64, reload_speed_percent: f64) -> Value {
+        crate::attack_rate::with_attack_rate(
+            &rated_props(uses_per_minute),
+            None,
+            reload_speed_percent,
+        )
+    }
+
+    fn total(props: &Value) -> f64 {
+        cost_per_shot_from_props(props, None)["totalCostPerUse"]
+            .as_f64()
+            .unwrap()
+    }
+
+    fn damage_max(props: &Value) -> f64 {
+        weapon_damage_profile_from_props(props).unwrap()["damageMax"]
+            .as_f64()
+            .unwrap()
+    }
+
+    #[test]
+    fn unenriched_props_price_and_hit_at_the_weapons_own_rate() {
+        let props = rated_props(90.0);
+        // 2 + 1 + 0.5 + 0.5 PEC; 60 damage plus the amp's 10.
+        assert_eq!(total(&props), 4.0);
+        assert_eq!(damage_max(&props), 70.0);
+    }
+
+    #[test]
+    fn cost_and_damage_share_one_factor_across_the_limit() {
+        // Below the limit (60 x 1.15 = 69), exactly at it (80 x 1.25), and
+        // past it (90 x 1.3 = 117): cost and damage move together, and only
+        // past the limit.
+        for (base, reload, factor) in [(60.0, 15.0, 1.0), (80.0, 25.0, 1.0), (90.0, 30.0, 1.17)] {
+            let props = priced_at(base, reload);
+            assert!(
+                (total(&props) - 4.0 * factor).abs() < 1e-9,
+                "{base} at {reload}%"
+            );
+            assert!(
+                (damage_max(&props) - 70.0 * factor).abs() < 1e-9,
+                "{base} at {reload}%"
+            );
+        }
+    }
+
+    #[test]
+    fn every_breakdown_line_carries_the_factor_so_the_table_still_sums() {
+        let result = cost_per_shot_from_props(&priced_at(90.0, 30.0), None);
+        let lines = result["costBreakdown"].as_array().unwrap();
+        let sum: f64 = lines
+            .iter()
+            .map(|line| line["effectiveCostPec"].as_f64().unwrap())
+            .sum();
+        assert!((sum - result["totalCostPerUse"].as_f64().unwrap()).abs() < 1e-9);
+        assert_eq!(lines[0]["component"], "Weapon decay");
+        assert_eq!(lines[0]["costPec"], json!(2.34));
+    }
+
+    mod attack_rate_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(128))]
+
+            /// Past the server limit an attack deals and costs more, never
+            /// more efficiently: damage per PEC is the same at any rate and
+            /// reload speed, and neither figure ever shrinks.
+            #[test]
+            fn damage_per_pec_is_invariant_under_the_attack_rate(
+                base in 1.0f64..160.0,
+                reload in -50.0f64..60.0,
+                decay in 0.01f64..20.0,
+                ammo in 0.0f64..2000.0,
+                damage in 1.0f64..400.0,
+                enhancers in 0i64..10,
+            ) {
+                let props = |reload_in_force: Option<f64>| {
+                    let raw = json!({
+                        "weapon_entity": {
+                            "uses_per_minute": base,
+                            "economy": {"decay": decay, "ammo_burn": ammo},
+                            "damage": {"impact": damage},
+                        },
+                        "damage_enhancers": enhancers,
+                    });
+                    match reload_in_force {
+                        Some(reload) => crate::attack_rate::with_attack_rate(&raw, None, reload),
+                        None => raw,
+                    }
+                };
+                let own = props(None);
+                let rated = props(Some(reload));
+                let factor = crate::attack_rate::factor_from_props(&rated);
+                prop_assert!(factor >= 1.0);
+                // Damage scales exactly; cost scales to the engine's display
+                // rounding (four decimals on each of at most two lines). So
+                // damage per PEC holds, and neither figure ever shrinks.
+                prop_assert!((damage_max(&rated) - damage_max(&own) * factor).abs()
+                    <= 1e-9 * damage_max(&own));
+                prop_assert!((total(&rated) - total(&own) * factor).abs() <= 2e-4 * factor);
+                prop_assert!(damage_max(&rated) >= damage_max(&own));
+                prop_assert!(total(&rated) + 1e-4 >= total(&own));
+            }
+        }
     }
 }

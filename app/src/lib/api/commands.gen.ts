@@ -271,6 +271,8 @@ export interface AppSettings {
 	/** Weapons carried without a hotbar slot: with the slotted weapons, the candidates weapon attribution chooses among. */
 	carriedWeaponIds: number[];
 	passiveEffectSources: PassiveEffectSourceView[];
+	/** The reload speed those sources put in force. */
+	reloadSpeed: ReloadSpeedInEffect;
 	harvestGuardrail: HarvestGuardrailSettings;
 	lootFilterBlacklist: string[];
 	dbPath: string;
@@ -719,6 +721,8 @@ export interface EquipmentDetail {
 	lifestealPercent: number | null;
 	/** A weapon's declared damage-over-time effect, when it has one. */
 	effectProfile: WeaponEffectProfileDto | null;
+	/** A weapon's attack rate, when its catalogue publishes a base rate. */
+	attackRate: WeaponAttackRate | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -817,6 +821,8 @@ export interface EquipmentSearchHit {
 	healMax: number | null;
 	reloadSeconds: number | null;
 	lifestealPercent: number | null;
+	/** A weapon's catalogue attack rate, attacks a minute; null for other items and for weapons the catalogue gives no rate. */
+	usesPerMinute: number | null;
 }
 
 /**
@@ -2736,6 +2742,18 @@ export interface ReleaseResult {
 }
 
 /**
+ * The reload speed the enabled passive effects put in force.
+ */
+export interface ReloadSpeedInEffect {
+	/** What the enabled sources declare, summed. */
+	declaredPercent: number;
+	/** What reaches healing reloads and weapon attack rates: the declared increases held at the game's limit for equipped items, plus any declared slowing. */
+	effectivePercent: number;
+	/** The game's limit on reload speed from equipped items. */
+	itemLimitPercent: number;
+}
+
+/**
  * The one-shot repair-cost read (`exclude_unset`): the cost / raw text /
  * confidence on success, plus `error` on a logical refusal.
  */
@@ -3328,6 +3346,26 @@ export interface Warning {
 	type: NotableEventCategory;
 	description: string;
 	value: number;
+}
+
+/**
+ * A weapon's attack rate under the reload speed in effect. Past the
+ * server's limit of 100 attacks a minute, the rate the reload speed asks
+ * for turns into per-attack damage and cost instead: `factor` is that
+ * multiplier (1 within the limit), already applied to the detail's cost
+ * breakdown and to the weapon's damage range.
+ */
+export interface WeaponAttackRate {
+	/** The catalogue rate, attacks a minute, before any effect. */
+	basePerMinute: number;
+	/** The reload speed in effect, after the game's stacking limit. */
+	reloadSpeedPercent: number;
+	/** The rate the reload speed asks for. */
+	buffedPerMinute: number;
+	/** The rate the server runs: the buffed rate, held at the limit. */
+	effectivePerMinute: number;
+	/** Per-attack damage and cost multiplier; 1 within the limit. */
+	factor: number;
 }
 
 /**

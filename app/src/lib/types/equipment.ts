@@ -14,6 +14,7 @@ export type {
 	EquipmentSummary as Equipment,
 	HealingMode,
 	HealingProfileDto as HealingProfile,
+	WeaponAttackRate,
 } from '$lib/api/commands.gen';
 
 /** The healing-tool view row the equipment page derives from the

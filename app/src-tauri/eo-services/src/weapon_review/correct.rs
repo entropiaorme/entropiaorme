@@ -16,7 +16,7 @@
 
 use rusqlite::OptionalExtension;
 
-use super::read::{parse_candidates, parse_effect_candidates, weapon_price};
+use super::read::{parse_candidates, parse_effect_candidates, weapon_price, Pricing};
 use super::{WeaponCorrection, WeaponCorrectionKind, WeaponReviewError};
 use crate::db::DbError;
 
@@ -300,6 +300,7 @@ pub(super) fn assign(
     evidence_id: &str,
     equipment_id: i64,
     now: f64,
+    pricing: Pricing<'_>,
 ) -> Outcome<WeaponCorrection> {
     let Some(shot) = stored_shot(tx, evidence_id)? else {
         return Ok(Err(WeaponReviewError::NotFound("Shot not found")));
@@ -329,7 +330,7 @@ pub(super) fn assign(
         }
         Err(refusal) => return Ok(Err(refusal)),
     }
-    let Some((name, cost)) = (match weapon_price(tx, equipment_id) {
+    let Some((name, cost)) = (match weapon_price(tx, equipment_id, pricing) {
         Ok(price) => price,
         Err(WeaponReviewError::Db(error)) => return Err(error),
         Err(refusal) => return Ok(Err(refusal)),

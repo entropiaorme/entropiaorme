@@ -41,4 +41,4 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0031](0031-session-grain-protection-costs.md) | Protection costs recorded at session grain, when the player repairs: nothing declared during play, hit-weighted over the sessions the player ticks |
 | [ADR-0032](0032-unified-weapon-attribution.md) | Unified weapon attribution: hotbar intent validated by each carried weapon's damage band, with bounded, player-decided correction and no mode to choose |
 | [ADR-0033](0033-damage-over-time-effect-windows.md) | Damage-over-time effects as persisted windows of one paid activation: ticks cost nothing, concurrent explanations stay unresolved, and windows outlive their session |
-| [ADR-0034](0034-attack-rate-limit.md) | The server's attack-rate limit as a per-attack cost and damage factor, applied at read time through one pricing preparation; declared reload speed held at the game's item limit |
+| [ADR-0034](0034-attack-rate-limit.md) | The server's attack-rate limit as a per-attack cost and damage factor, applied at read time through one pricing preparation; reload speed held at the game's per-source stacking limits |

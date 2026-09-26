@@ -33,6 +33,12 @@ const DAMAGE_CORRELATION_SECONDS: f64 = 1.0;
 /// Reloads are seconds long, so an hour bounds the read without ever cutting
 /// a cooldown short.
 const COOLDOWN_LOOKBACK_SECONDS: f64 = 3600.0;
+/// How much sooner than its reload a healer's next paid use may be observed.
+/// Heals are timed by when their chat lines are read, and the log is read in
+/// polls and written in bursts, so a use at the healer's full rate can reach
+/// the tracker a little inside the reload. A retry during a real cooldown
+/// prints no heal at all, so the allowance cannot bill one.
+const COOLDOWN_LEEWAY_SECONDS: f64 = 0.3;
 
 #[derive(Debug, Clone)]
 pub(super) struct HealingIntent {
@@ -269,7 +275,9 @@ impl HealingRuntime {
     fn cooldown_ready(&self, intent: &HealingIntent, observed_at: f64) -> bool {
         self.last_activation
             .get(&intent.equipment_id)
-            .is_none_or(|last| observed_at - last >= intent.reload_seconds.max(0.0))
+            .is_none_or(|last| {
+                observed_at - last >= (intent.reload_seconds - COOLDOWN_LEEWAY_SECONDS).max(0.0)
+            })
     }
 
     fn activation_match(&self, intent: &HealingIntent, amount: f64) -> Option<&'static str> {

@@ -1648,6 +1648,48 @@ fn healing_cost_requires_compatible_intent_and_respects_cooldown() {
 }
 
 #[test]
+fn a_heal_read_just_inside_its_reload_still_bills_and_an_early_one_does_not() {
+    // Chat lines are read in polls and written in bursts, so a FAP used at
+    // its full rate can reach the tracker a little inside its 2.5 s reload.
+    let rig = rig();
+    let tracker = rig.tracker(Providers::default());
+    let session = rig.wait(tracker.start_session()).unwrap();
+    rig.bus.publish(&healer_intent(
+        7,
+        "FAP",
+        0.03,
+        2.5,
+        naive_to_epoch(naive("2026-01-01T00:00:00")),
+        HealingProfile {
+            direct_min: Some(8.0),
+            direct_max: Some(12.0),
+            ..HealingProfile::default()
+        },
+    ));
+    let heal = |at: &str| {
+        BusEvent::Combat(CombatPayload::SelfHeal {
+            amount: 10.0,
+            timestamp: at.into(),
+        })
+    };
+    rig.bus.publish(&heal("2026-01-01T00:00:20"));
+    // Read 0.25 s early: within the allowance, a genuine use.
+    rig.clock.advance(2.25).unwrap();
+    rig.bus.publish(&heal("2026-01-01T00:00:22"));
+    // Read 1 s after that one: far inside the reload, not a paid use.
+    rig.clock.advance(1.0).unwrap();
+    rig.bus.publish(&heal("2026-01-01T00:00:23"));
+
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM healing_activations WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2
+    );
+}
+
+#[test]
 fn effective_reload_accepts_back_to_back_heals_within_the_base_interval() {
     let rig = rig();
     let tracker = rig.tracker(Providers::default());

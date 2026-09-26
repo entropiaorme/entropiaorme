@@ -3,10 +3,12 @@
 //! A source is the durable item or condition the user has declared, while
 //! effects are typed capabilities carried by that source. Declared
 //! magnitudes are what the items print; the evaluators apply the game's
-//! stacking limit, so every consumer reads the reload speed actually in
-//! effect. Persistent clothing
-//! is the only source lifetime supported today; time-bounded consumables can
-//! later feed the same evaluator without changing its callers.
+//! stacking limits, so every consumer reads the reload speed actually in
+//! effect. The game counts reload speed by where it comes from: equipped
+//! items and consumed doses each have their own limit, and their sum has
+//! another. Declared sources here are equipped items; consumed doses have no
+//! lifecycle yet, so they reach [`reload_speed_in_effect`] as an empty input
+//! until one records them.
 
 use serde::{Deserialize, Serialize};
 
@@ -30,28 +32,52 @@ pub struct PassiveEffectSource {
     pub effects: Vec<PassiveEffect>,
 }
 
-/// The most reload speed equipped items can add, whatever their sum. The
-/// game limits each effect by where it comes from: for reload speed, 15%
-/// from equipped items, 20% from consumed actions, 30% in total. Every
-/// source declared here is persistent equipment, so only the item limit can
-/// bind; the total limit matters once consumed doses feed this evaluator.
+/// The most reload speed equipped items can add, whatever their sum.
 pub const RELOAD_SPEED_ITEM_LIMIT_PERCENT: f64 = 15.0;
+
+/// The most reload speed consumed doses can add, whatever their sum.
+pub const RELOAD_SPEED_CONSUMED_LIMIT_PERCENT: f64 = 20.0;
+
+/// The most reload speed equipped items and consumed doses add together.
+pub const RELOAD_SPEED_TOTAL_LIMIT_PERCENT: f64 = 30.0;
 
 /// The reload speed the enabled sources declare, before the game's limit.
 pub fn declared_reload_speed_percent(sources: &[PassiveEffectSource]) -> f64 {
     reload_speed_magnitudes(sources).sum()
 }
 
-/// The reload speed in effect: the enabled sources' increases, held at the
-/// item limit, plus any declared slowing.
+/// The reload speed the enabled declared sources put in force, with no
+/// consumed dose active.
 pub fn reload_speed_percent(sources: &[PassiveEffectSource]) -> f64 {
-    let increase: f64 = reload_speed_magnitudes(sources)
-        .filter(|magnitude| *magnitude > 0.0)
-        .sum();
-    let slowing: f64 = reload_speed_magnitudes(sources)
-        .filter(|magnitude| *magnitude < 0.0)
-        .sum();
-    increase.min(RELOAD_SPEED_ITEM_LIMIT_PERCENT) + slowing
+    reload_speed_in_effect(reload_speed_magnitudes(sources), std::iter::empty())
+}
+
+/// The reload speed in effect from equipped and consumed magnitudes: each
+/// group's increases held at its own limit, their sum held at the total
+/// limit, then any slowing from either group added.
+pub fn reload_speed_in_effect(
+    equipped: impl IntoIterator<Item = f64>,
+    consumed: impl IntoIterator<Item = f64>,
+) -> f64 {
+    let (equipped_increase, equipped_slowing) = split_by_sign(equipped);
+    let (consumed_increase, consumed_slowing) = split_by_sign(consumed);
+    (equipped_increase.min(RELOAD_SPEED_ITEM_LIMIT_PERCENT)
+        + consumed_increase.min(RELOAD_SPEED_CONSUMED_LIMIT_PERCENT))
+    .min(RELOAD_SPEED_TOTAL_LIMIT_PERCENT)
+        + equipped_slowing
+        + consumed_slowing
+}
+
+fn split_by_sign(magnitudes: impl IntoIterator<Item = f64>) -> (f64, f64) {
+    magnitudes
+        .into_iter()
+        .fold((0.0, 0.0), |(increase, slowing), magnitude| {
+            if magnitude > 0.0 {
+                (increase + magnitude, slowing)
+            } else {
+                (increase, slowing + magnitude)
+            }
+        })
 }
 
 fn reload_speed_magnitudes(sources: &[PassiveEffectSource]) -> impl Iterator<Item = f64> + '_ {
@@ -131,6 +157,35 @@ mod tests {
         let sources = [source(true, 14.0), source(true, 10.0), source(true, -4.0)];
         assert!((declared_reload_speed_percent(&sources) - 20.0).abs() < f64::EPSILON);
         assert!((reload_speed_percent(&sources) - 11.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_consumed_dose_adds_to_equipment_under_its_own_limit() {
+        // A 14% ring and a 10% dose: neither group reaches its limit, nor
+        // their sum the total.
+        assert!((reload_speed_in_effect([14.0], [10.0]) - 24.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn each_group_and_their_sum_stop_at_the_games_limits() {
+        assert_eq!(reload_speed_in_effect([10.0, 10.0], [4.0]), 19.0);
+        assert_eq!(reload_speed_in_effect([5.0], [15.0, 10.0]), 25.0);
+        assert_eq!(reload_speed_in_effect([15.0], [20.0]), 30.0);
+        assert_eq!(reload_speed_in_effect([40.0], [40.0]), 30.0);
+    }
+
+    #[test]
+    fn slowing_applies_after_every_limit() {
+        assert_eq!(reload_speed_in_effect([15.0, -5.0], [20.0, -3.0]), 22.0);
+    }
+
+    #[test]
+    fn declared_sources_are_equipment_with_no_dose_active() {
+        let sources = [source(true, 14.0), source(true, 10.0)];
+        assert_eq!(
+            reload_speed_percent(&sources),
+            reload_speed_in_effect([14.0, 10.0], std::iter::empty())
+        );
     }
 
     #[test]

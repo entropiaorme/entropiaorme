@@ -46,12 +46,22 @@ limit, and ignored rate entirely when pricing a weapon.
   weapon profile and carried weapons, the hotbar's weapon cost, post-play review
   assignments, and the Equipment library and detail all price a weapon through
   it. A weapon the catalogue gives no rate for keeps a factor of 1.
-- **The game's stacking limit applies to declarations.** Declared persistent
-  effects are equipped items, so their summed reload speed is held at the
-  item limit before it reaches anything: the attack rate and the healing
-  reload alike. Declared slowing applies after the limit. The declared sum
-  and the figure in effect are both shown, so the limit is disclosed where the
-  sources are edited.
+- **The game's stacking limits apply by source.** One evaluator takes
+  equipped and consumed reload speed separately, holds each group's increases
+  at its own limit (15% and 20%), holds their sum at 30%, then adds any
+  declared slowing. Declared persistent effects are equipped items; consumed
+  doses reach the evaluator as an empty input until a dose lifecycle records
+  them, so their limit and the total wait on that input rather than on a
+  second evaluator. The result reaches the attack rate and every healing
+  reload alike, including Mindforce chip cooldowns, which reload speed
+  shortens like any other tool's. The declared sum and the figure in effect
+  are both shown, so the limit is disclosed where the sources are edited.
+- **A healer's reload allows 0.3 s of reading delay.** A paid heal is refused
+  inside its effective reload, but heals are timed by when their chat lines
+  are read, and the log is polled and written in bursts. A use at the
+  healer's full rate is therefore accepted up to 0.3 s inside the reload. A
+  retry during a real cooldown prints no heal, so the allowance cannot bill
+  one.
 - **Declared damage-over-time bands are not scaled.** A weapon with a declared
   effect profile is checked against the ranges the player read off the game,
   which already include whatever the rate did to them.
@@ -66,11 +76,12 @@ of reading as another weapon's evidence or as out of profile.
 
 The factor applies to catalogue base rates above 100 without any buff too,
 which only a handful of novelty weapons publish; their catalogue damage is read
-as the per-attack figure at their own rate, as for every other weapon. Consumed
-reload-speed doses do not yet feed the evaluator, so only the item limit can
-bind today; the consumed-action and total limits apply once a dose lifecycle
-records them. The healing tools' own rate is left to their reload and cooldown
-model: the release notes describe attacks.
+as the per-attack figure at their own rate, as for every other weapon. Until
+consumed doses feed the evaluator, only the item limit can bind. Healing tools
+keep their reload and cooldown model rather than the attack-rate factor: the
+release notes describe attacks. The bundled weapon data now carries the base
+rate [ADR-0032](0032-unified-weapon-attribution.md) found missing; attribution
+still uses it for the band's magnitude, not as a timing validator.
 
 See [ADR-0032](0032-unified-weapon-attribution.md) for the damage bands this
 scales and [ADR-0033](0033-damage-over-time-effect-windows.md) for the declared

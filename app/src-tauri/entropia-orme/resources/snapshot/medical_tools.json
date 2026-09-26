@@ -577,7 +577,15 @@
     },
     "min_heal": 108,
     "max_heal": 108,
-    "uses_per_minute": 27
+    "uses_per_minute": 27,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "8077647fcdda",
@@ -587,7 +595,15 @@
     },
     "min_heal": 30,
     "max_heal": 60,
-    "uses_per_minute": 41
+    "uses_per_minute": 41,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "d688ba4077ea",
@@ -1047,7 +1063,15 @@
     },
     "min_heal": 13.5,
     "max_heal": 18,
-    "uses_per_minute": 18
+    "uses_per_minute": 18,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "de1732c9098a",
@@ -1057,7 +1081,15 @@
     },
     "min_heal": 14.3,
     "max_heal": 19,
-    "uses_per_minute": 19
+    "uses_per_minute": 19,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "7263c34dfbed",
@@ -1067,7 +1099,15 @@
     },
     "min_heal": 15,
     "max_heal": 20,
-    "uses_per_minute": 19
+    "uses_per_minute": 19,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "65502b09611e",
@@ -1077,7 +1117,15 @@
     },
     "min_heal": 15.8,
     "max_heal": 21,
-    "uses_per_minute": 19
+    "uses_per_minute": 19,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "c4eb502c1d14",
@@ -1087,7 +1135,15 @@
     },
     "min_heal": 27,
     "max_heal": 36,
-    "uses_per_minute": 22
+    "uses_per_minute": 22,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "7039110023f7",
@@ -1467,7 +1523,15 @@
     },
     "min_heal": 16.5,
     "max_heal": 22,
-    "uses_per_minute": 20
+    "uses_per_minute": 20,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "2a9a7af171f1",
@@ -1547,7 +1611,15 @@
     },
     "min_heal": 37.5,
     "max_heal": 50,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "1b9c99a7fd57",
@@ -1557,7 +1629,15 @@
     },
     "min_heal": 75.75,
     "max_heal": 101,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "dd8880ed5782",
@@ -1567,7 +1647,15 @@
     },
     "min_heal": 75.75,
     "max_heal": 101,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "67a10d4cd3f6",
@@ -1577,7 +1665,21 @@
     },
     "min_heal": 113.25,
     "max_heal": 151,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 8
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "abd9a30e58aa",
@@ -1587,7 +1689,21 @@
     },
     "min_heal": 113.25,
     "max_heal": 151,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 8
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "f7ed51449e38",
@@ -1617,7 +1733,21 @@
     },
     "min_heal": 59.3,
     "max_heal": 75,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 6,
+        "unit": "HP",
+        "duration_seconds": 2
+      }
+    ]
   },
   {
     "id": "ed44bde5c109",
@@ -1627,7 +1757,21 @@
     },
     "min_heal": 27,
     "max_heal": 36,
-    "uses_per_minute": 22
+    "uses_per_minute": 22,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "1e0b9054ec61",
@@ -1637,7 +1781,21 @@
     },
     "min_heal": 27,
     "max_heal": 36,
-    "uses_per_minute": 22
+    "uses_per_minute": 22,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Health Added",
+        "strength": 15,
+        "unit": "HP",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "0b7134194f87",
@@ -1667,7 +1825,27 @@
     },
     "min_heal": 59.3,
     "max_heal": 75,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 6,
+        "unit": "HP",
+        "duration_seconds": 2
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "2b42d5796493",
@@ -1677,7 +1855,27 @@
     },
     "min_heal": 59.3,
     "max_heal": 75,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 6,
+        "unit": "HP",
+        "duration_seconds": 2
+      },
+      {
+        "name": "Health Added",
+        "strength": 15,
+        "unit": "HP",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "587b6994e855",
@@ -1797,7 +1995,15 @@
     },
     "min_heal": 8.2,
     "max_heal": 11,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "e14050f0dd2d",
@@ -1847,7 +2053,15 @@
     },
     "min_heal": 37.5,
     "max_heal": 50,
-    "uses_per_minute": 30
+    "uses_per_minute": 30,
+    "effects_on_use": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "91b0d5dae45a",
@@ -1857,7 +2071,15 @@
     },
     "min_heal": 24,
     "max_heal": 32,
-    "uses_per_minute": 20
+    "uses_per_minute": 20,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 5
+      }
+    ]
   },
   {
     "id": "f0f385139c35",
@@ -2357,7 +2579,21 @@
     },
     "min_heal": 43.2,
     "max_heal": 55.5,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 3,
+        "unit": "HP",
+        "duration_seconds": 2
+      }
+    ]
   },
   {
     "id": "ed93739801fe",
@@ -2367,7 +2603,27 @@
     },
     "min_heal": 43.2,
     "max_heal": 55.5,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 3,
+        "unit": "HP",
+        "duration_seconds": 2
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "78336441c478",
@@ -2377,7 +2633,27 @@
     },
     "min_heal": 43.2,
     "max_heal": 55.5,
-    "uses_per_minute": 25
+    "uses_per_minute": 25,
+    "effects_on_use": [
+      {
+        "name": "Heal Over Time",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 5
+      },
+      {
+        "name": "Regeneration Per Second",
+        "strength": 3,
+        "unit": "HP",
+        "duration_seconds": 2
+      },
+      {
+        "name": "Health Added",
+        "strength": 15,
+        "unit": "HP",
+        "duration_seconds": 8
+      }
+    ]
   },
   {
     "id": "48724a0dc91c",

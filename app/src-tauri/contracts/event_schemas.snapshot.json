@@ -1,5 +1,26 @@
 {
   "$defs": {
+    "ConsumablesUpdated": {
+      "additionalProperties": false,
+      "description": "A consumable dose started, ended, was removed, or was restored.",
+      "properties": {
+        "event_version": { "default": 1, "title": "Event Version", "type": "integer" },
+        "occurred_at": { "title": "Occurred At", "type": "string" },
+        "payload": { "$ref": "#/$defs/ConsumablesUpdatedPayload" },
+        "type": { "const": "consumables.updated", "default": "consumables.updated", "title": "Type", "type": "string" }
+      },
+      "required": ["occurred_at", "payload"],
+      "title": "ConsumablesUpdated",
+      "type": "object"
+    },
+    "ConsumablesUpdatedPayload": {
+      "additionalProperties": false,
+      "description": "A content-free invalidation that prompts consumers to re-read the running doses, the reload speed in effect, and dose costs.",
+      "properties": {},
+      "required": [],
+      "title": "ConsumablesUpdatedPayload",
+      "type": "object"
+    },
     "HarvestRecorded": {
       "additionalProperties": false,
       "description": "A harvesting attempt was durably recorded.",
@@ -233,6 +254,7 @@
   },
   "discriminator": {
     "mapping": {
+      "consumables.updated": "#/$defs/ConsumablesUpdated",
       "harvest.recorded": "#/$defs/HarvestRecorded",
       "healing.updated": "#/$defs/HealingUpdated",
       "navigation.updated": "#/$defs/NavigationUpdated",
@@ -264,6 +286,9 @@
     },
     {
       "$ref": "#/$defs/WeaponsUpdated"
+    },
+    {
+      "$ref": "#/$defs/ConsumablesUpdated"
     }
   ]
 }

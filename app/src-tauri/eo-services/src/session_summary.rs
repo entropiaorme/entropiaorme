@@ -31,8 +31,9 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 // tag-or-mob capture (session name and skill boost carried onto the summary,
 // mob dominance computed over species-bearing kills only, the dominant-tag
 // pair retired to NULL/0); to 5 when protection costs were re-attributed by
-// hit count. A below-version row heals on the next read.
-pub const SUMMARY_VERSION: i64 = 5;
+// hit count; to 6 when consumed doses joined cycledPed as their own bucket.
+// A below-version row heals on the next read.
+pub const SUMMARY_VERSION: i64 = 6;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 
 /// The computed summary for one completed session, or None when the
@@ -47,7 +48,7 @@ pub fn compute_session_summary(
         .query_row(
             "SELECT started_at, ended_at, \
              COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0), \
-             session_name, skill_boost_percent \
+             session_name, skill_boost_percent, COALESCE(consumable_cost, 0) \
              FROM tracking_sessions WHERE id = ? AND ended_at IS NOT NULL",
             rusqlite::params![session_id],
             |row| {
@@ -59,6 +60,7 @@ pub fn compute_session_summary(
                     row.get::<_, f64>(4)?,
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, f64>(7)?,
                 ))
             },
         )
@@ -71,6 +73,7 @@ pub fn compute_session_summary(
         dangling_cost,
         session_name,
         skill_boost_percent,
+        consumable_cost,
     )) = session
     else {
         return Ok(None);
@@ -285,8 +288,13 @@ pub fn compute_session_summary(
     }
 
     let duration_hours = ((ended_at - started_at) / 3600.0).max(0.0);
-    let cycled_ped =
-        weapon_cost + enhancer_cost + armour_cost + heal_cost + dangling_cost + harvest_cost;
+    let cycled_ped = weapon_cost
+        + enhancer_cost
+        + armour_cost
+        + heal_cost
+        + consumable_cost
+        + dangling_cost
+        + harvest_cost;
     let regular_skill_tt: f64 = regular_skill_ped.values().filter_map(Value::as_f64).sum();
     let attribute_levels_total: f64 = attribute_levels.values().filter_map(Value::as_f64).sum();
 
@@ -301,6 +309,7 @@ pub fn compute_session_summary(
     summary.insert("durationHours".into(), Value::from(duration_hours));
     summary.insert("armourCost".into(), Value::from(armour_cost));
     summary.insert("healCost".into(), Value::from(heal_cost));
+    summary.insert("consumableCost".into(), Value::from(consumable_cost));
     summary.insert("danglingCost".into(), Value::from(dangling_cost));
     summary.insert("weaponCost".into(), Value::from(weapon_cost));
     summary.insert("enhancerCost".into(), Value::from(enhancer_cost));
@@ -402,9 +411,9 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
          dominant_weapon, dominant_mob_kills, dominant_tag_kills, activity_skill_tt, \
          primary_mobs_json, primary_weapons_json, globals, hofs, \
          harvest_swings, harvest_successes, harvest_loot_tt, harvest_cost, \
-         session_name, skill_boost_percent, computed_at) \
+         session_name, skill_boost_percent, consumable_cost, computed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             summary["id"].as_str(),
             SUMMARY_VERSION,
@@ -439,6 +448,7 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
             summary["harvestCost"].as_f64(),
             summary["sessionName"].as_str(),
             summary["skillBoostPercent"].as_i64(),
+            summary["consumableCost"].as_f64(),
         ],
     )?;
     Ok(())
@@ -502,6 +512,7 @@ pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
                AND s.ended_at > s.started_at \
                AND (COALESCE(s.armour_cost, 0) > 0 \
                  OR COALESCE(s.heal_cost, 0) > 0 \
+                 OR COALESCE(s.consumable_cost, 0) > 0 \
                  OR COALESCE(s.dangling_cost, 0) > 0 \
                  OR EXISTS (SELECT 1 FROM kills k \
                             WHERE k.session_id = s.id AND k.enhancer_cost > 0) \

@@ -375,7 +375,7 @@ fn press(process: &Process, clock: &MockClock, press: &ScriptedPress) {
     };
     process
         .bus
-        .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: press.slot.clone(),
             occurred_at: naive_to_epoch(clock.now()),
@@ -386,7 +386,8 @@ fn press(process: &Process, clock: &MockClock, press: &ScriptedPress) {
             reload_seconds: press.reload_seconds,
             healing_profile: press.healing_profile.clone(),
             lifesteal_percent: press.lifesteal_percent,
-        }));
+            consumable_profile: None,
+        })));
 }
 
 /// Replay one scenario through the full native pipeline and assert

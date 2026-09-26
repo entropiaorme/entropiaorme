@@ -26,6 +26,9 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 mod combat;
+mod doses;
+#[cfg(test)]
+mod doses_tests;
 mod harvest;
 mod healing;
 #[cfg(test)]
@@ -49,6 +52,7 @@ pub use attribution::{
     damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, CRITICAL_REACH,
     DISPLAY_TOLERANCE,
 };
+pub use doses::{DoseError, DoseStart};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
 };
@@ -147,6 +151,7 @@ pub struct HuntTracker {
     db: Db,
     sender: mpsc::UnboundedSender<TrackerMsg>,
     status: watch::Receiver<TrackerStatus>,
+    doses: crate::consumables::DoseBoard,
 }
 
 impl HuntTracker {
@@ -165,6 +170,7 @@ impl HuntTracker {
             .player_name
             .trim_matches(python_whitespace)
             .to_string();
+        let doses = providers.doses.clone();
         let (sender, inbox) = mpsc::unbounded_channel();
         let (status_tx, status_rx) = watch::channel(TrackerStatus::default());
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -184,6 +190,7 @@ impl HuntTracker {
             db,
             sender,
             status: status_rx,
+            doses,
         }))
     }
 
@@ -200,6 +207,12 @@ impl HuntTracker {
 
     pub fn is_tracking(&self) -> bool {
         self.status.borrow().tracking
+    }
+
+    /// The running doses, as the tracker last published them: what every
+    /// reader of the reload speed in effect outside the tracker reads.
+    pub fn dose_board(&self) -> crate::consumables::DoseBoard {
+        self.doses.clone()
     }
 
     /// Start a new tracking session; any prior session stops first.
@@ -299,6 +312,51 @@ impl HuntTracker {
     /// Clear the declared mob, returning the released name.
     pub async fn release_declared_mob(&self) -> Option<String> {
         self.call(TrackerMsg::ReleaseMob).await
+    }
+
+    /// Start a dose of a consumable by hand (the overlay's or dashboard's
+    /// start; a bound item's hotbar key starts one in game). A running dose
+    /// of the same item ends where this one starts.
+    pub async fn start_dose(
+        &self,
+        start: DoseStart,
+    ) -> Result<crate::consumables::DoseRecord, DoseError> {
+        self.call(|reply| TrackerMsg::StartDose(start, reply)).await
+    }
+
+    /// Remove a dose (a misclick): its effect and any cost it booked are
+    /// taken back, exactly restorable with [`Self::restore_dose`].
+    pub async fn remove_dose(&self, id: &str) -> Result<crate::consumables::DoseRecord, DoseError> {
+        self.call(|reply| TrackerMsg::CorrectDose {
+            id: id.to_string(),
+            restore: false,
+            reply,
+        })
+        .await
+    }
+
+    /// Give a removed dose back exactly.
+    pub async fn restore_dose(
+        &self,
+        id: &str,
+    ) -> Result<crate::consumables::DoseRecord, DoseError> {
+        self.call(|reply| TrackerMsg::CorrectDose {
+            id: id.to_string(),
+            restore: true,
+            reply,
+        })
+        .await
+    }
+
+    /// Run the dose expiry sweep now (what the wake-up at an expiry does).
+    #[cfg(test)]
+    async fn wake_doses(&self) {
+        self.call(|reply| {
+            TrackerMsg::Inspect(Box::new(move |_| {
+                let _ = reply.send(());
+            }))
+        })
+        .await
     }
 
     /// Prime the tracker with a fully-formed demo session (guide-mode

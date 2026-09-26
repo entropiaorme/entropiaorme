@@ -123,7 +123,7 @@ fn boot_with(rig: &Rig, weapons: Vec<CarriedWeaponProfile>) -> Process {
 fn press(rig: &Rig, process: &Process, weapon: &str) {
     process
         .bus
-        .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "1".into(),
             occurred_at: naive_to_epoch(rig.clock.now()),
@@ -134,7 +134,8 @@ fn press(rig: &Rig, process: &Process, weapon: &str) {
             reload_seconds: 0.0,
             healing_profile: None,
             lifesteal_percent: None,
-        }));
+            consumable_profile: None,
+        })));
 }
 
 fn hit(process: &Process, amount: f64) {

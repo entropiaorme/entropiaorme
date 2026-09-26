@@ -27,6 +27,9 @@ use crate::event_bus::{EventBus, Registration, Topic};
 use crate::loot_filter::normalize_blacklist;
 use crate::tracking_models::TrackingSession;
 
+use crate::consumables::{DoseRecord, DoseRemoval, DoseSource};
+
+use super::doses::{DoseError, DoseRuntime, DoseStart};
 use super::intervals::{ActiveActivity, ActivityKey, ActivityRef};
 use super::mob::DeclaredMob;
 use super::providers::Providers;
@@ -92,6 +95,17 @@ pub(super) enum TrackerMsg {
         reply: oneshot::Sender<Result<bool, DbError>>,
     },
     ReleaseMob(oneshot::Sender<Option<String>>),
+    /// Start a dose of a consumable by hand.
+    StartDose(DoseStart, oneshot::Sender<Result<DoseRecord, DoseError>>),
+    /// Remove a dose, or restore a removed one (`restore`).
+    CorrectDose {
+        id: String,
+        restore: bool,
+        reply: oneshot::Sender<Result<DoseRecord, DoseError>>,
+    },
+    /// The wake-up at a dose's expiry: nothing to do beyond the sweep every
+    /// message runs first.
+    DoseWake,
     PrimeDemo {
         session: TrackingSession,
         declared_mob: Option<DeclaredMob>,
@@ -149,9 +163,12 @@ pub(super) struct TrackerActor {
     /// The one item currently held in the game. This is display truth only;
     /// each accounting domain retains its own attribution state.
     pub(super) held_item: Option<(String, crate::bus_events::HotbarItemKind)>,
+    /// The consumable doses still running (tracker state, not session
+    /// state: a dose outlives the session it was taken in).
+    pub(super) doses: DoseRuntime,
     /// The actor's own sender, cloned into the bus forwarders it
-    /// installs at session start.
-    sender: mpsc::UnboundedSender<TrackerMsg>,
+    /// installs at session start and into the dose wake-up.
+    pub(super) sender: mpsc::UnboundedSender<TrackerMsg>,
     subscriptions: Vec<(Topic, Registration)>,
     status: watch::Sender<TrackerStatus>,
 }
@@ -184,6 +201,7 @@ impl TrackerActor {
             harvest_tool: None,
             harvest_guardrail: None,
             held_item: None,
+            doses: DoseRuntime::default(),
             sender,
             subscriptions: Vec::new(),
             status,
@@ -192,6 +210,9 @@ impl TrackerActor {
 
         let recovered = actor.recover_orphaned_sessions().await;
         let failed = recovered.is_err();
+        if !failed {
+            actor.restore_doses().await;
+        }
         let _ = ready.send(recovered);
         if failed {
             return;
@@ -206,6 +227,9 @@ impl TrackerActor {
     }
 
     async fn dispatch(&mut self, message: TrackerMsg) {
+        // A dose whose expiry passed since the last message ends first, so
+        // nothing below is priced or stamped under it.
+        self.sweep_doses().await;
         match message {
             TrackerMsg::Event(event, done) => {
                 self.on_event(&event).await;
@@ -254,6 +278,18 @@ impl TrackerActor {
             TrackerMsg::ReleaseMob(reply) => {
                 let _ = reply.send(self.release_declared_mob());
             }
+            TrackerMsg::StartDose(start, reply) => {
+                let _ = reply.send(self.start_dose(start, DoseSource::Manual, None).await);
+            }
+            TrackerMsg::CorrectDose { id, restore, reply } => {
+                let result = if restore {
+                    self.restore_dose(&id, DoseRemoval::Player).await
+                } else {
+                    self.remove_dose(&id, DoseRemoval::Player).await
+                };
+                let _ = reply.send(result);
+            }
+            TrackerMsg::DoseWake => {}
             TrackerMsg::PrimeDemo {
                 session,
                 declared_mob,

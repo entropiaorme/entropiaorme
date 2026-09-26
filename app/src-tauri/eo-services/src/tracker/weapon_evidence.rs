@@ -99,6 +99,9 @@ pub(super) struct ShotEvidence {
     /// Every open window that explained it.
     pub(super) effect_candidates: Vec<EffectCandidate>,
     pub(super) review_id: Option<String>,
+    /// The reload speed in effect the shot was priced under, so review
+    /// prices it at the rate in force when it landed.
+    pub(super) reload_speed_percent: f64,
 }
 
 impl ShotEvidence {
@@ -167,6 +170,7 @@ impl ShotEvidence {
             effect_window_id,
             effect_candidates,
             review_id: None,
+            reload_speed_percent: active.reload_speed_percent,
         }
     }
 
@@ -191,8 +195,8 @@ impl ShotEvidence {
             "INSERT INTO weapon_shot_evidence \
              (id, session_id, kill_id, context_id, observed_at, amount, critical, \
               attribution, hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
-              effect_window_id, review_id, effect_candidates_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+              effect_window_id, review_id, effect_candidates_json, reload_speed_percent) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 self.id,
                 self.session_id,
@@ -210,6 +214,7 @@ impl ShotEvidence {
                 self.effect_window_id,
                 self.review_id,
                 effect_candidates,
+                self.reload_speed_percent,
             ],
         )?;
         Ok(())

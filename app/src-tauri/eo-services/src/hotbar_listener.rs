@@ -33,6 +33,7 @@ pub struct ResolvedHotbarItem {
     pub reload_seconds: f64,
     pub healing_profile: Option<HealingProfile>,
     pub lifesteal_percent: Option<f64>,
+    pub consumable_profile: Option<crate::consumables::ConsumableProfile>,
 }
 
 /// The resolver: slot key to the current equipment snapshot, or None for an
@@ -332,7 +333,7 @@ fn resolve_hotbar_slot(
         return;
     }
     let slot = request.slot;
-    bus.publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+    bus.publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: Some(request.session_id),
         slot,
         occurred_at: request.occurred_at.timestamp_micros() as f64 / 1_000_000.0,
@@ -343,7 +344,8 @@ fn resolve_hotbar_slot(
         reload_seconds: item.reload_seconds,
         healing_profile: item.healing_profile.clone(),
         lifesteal_percent: item.lifesteal_percent,
-    }));
+        consumable_profile: item.consumable_profile.clone(),
+    })));
 }
 
 fn session_matches(gate: &Gate, session_id: &str) -> bool {
@@ -408,6 +410,7 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
             }),
             "2" => Some(ResolvedHotbarItem {
                 equipment_id: 2,
@@ -421,6 +424,7 @@ mod tests {
                     ..HealingProfile::default()
                 }),
                 lifesteal_percent: None,
+                consumable_profile: None,
             }),
             "3" => Some(ResolvedHotbarItem {
                 equipment_id: 3,
@@ -430,6 +434,7 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
             }),
             _ => None,
         })
@@ -717,6 +722,7 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
             })
         });
         let rig = rig(Some(resolver));

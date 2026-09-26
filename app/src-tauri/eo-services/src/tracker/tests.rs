@@ -234,7 +234,7 @@ pub(super) fn healer_intent(
     occurred_at: f64,
     profile: HealingProfile,
 ) -> BusEvent {
-    BusEvent::HotbarIntent(HotbarIntentPayload {
+    BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: None,
         slot: "8".into(),
         occurred_at,
@@ -245,11 +245,12 @@ pub(super) fn healer_intent(
         reload_seconds: reload,
         healing_profile: Some(profile),
         lifesteal_percent: None,
-    })
+        consumable_profile: None,
+    }))
 }
 
 pub(super) fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) -> BusEvent {
-    BusEvent::HotbarIntent(HotbarIntentPayload {
+    BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: None,
         slot: "1".into(),
         occurred_at,
@@ -260,7 +261,8 @@ pub(super) fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) ->
         reload_seconds: 0.0,
         healing_profile: None,
         lifesteal_percent,
-    })
+        consumable_profile: None,
+    }))
 }
 
 /// A carried weapon whose stored props give it a regular band of half to
@@ -1766,7 +1768,7 @@ fn an_unprofiled_healer_press_invalidates_the_previous_activation_candidate() {
         },
     ));
     rig.bus
-        .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "9".into(),
             occurred_at: now + 0.1,
@@ -1777,7 +1779,8 @@ fn an_unprofiled_healer_press_invalidates_the_previous_activation_candidate() {
             reload_seconds: 3.0,
             healing_profile: None,
             lifesteal_percent: None,
-        }));
+            consumable_profile: None,
+        })));
     rig.bus.publish(&BusEvent::Combat(CombatPayload::SelfHeal {
         amount: 10.0,
         timestamp: "2026-01-01T00:00:01".into(),
@@ -1819,7 +1822,7 @@ fn stale_session_hotbar_intents_cannot_mutate_equipment_state() {
         ("9", 13, "Stale harvester", HotbarItemKind::Harvesting),
     ] {
         rig.bus
-            .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+            .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
                 session_id: Some(stale_session_id.clone()),
                 slot: slot.into(),
                 occurred_at: now,
@@ -1834,7 +1837,8 @@ fn stale_session_hotbar_intents_cannot_mutate_equipment_state() {
                     ..HealingProfile::default()
                 }),
                 lifesteal_percent: Some(5.0),
-            }));
+                consumable_profile: None,
+            })));
     }
 
     rig.probe(&tracker, |actor| {

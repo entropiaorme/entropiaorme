@@ -45,9 +45,10 @@ use crate::db::DbError;
 /// Bump when a rollup column's meaning changes: below-version rows heal
 /// on the next read.
 // Bumped to 3 when confirmed non-ammo quest-item TT joined the projection;
-// to 4 when protection costs were re-attributed by hit count. Below-version
-// rows heal on the next read.
-pub const ROLLUP_VERSION: i64 = 4;
+// to 4 when protection costs were re-attributed by hit count; to 5 when
+// consumed doses gained their own cost bucket. Below-version rows heal on the
+// next read.
+pub const ROLLUP_VERSION: i64 = 5;
 
 /// The UTC day of an epoch second, rendered as SQLite's
 /// `date(epoch, 'unixepoch')` renders it (`YYYY-MM-DD`).
@@ -113,7 +114,7 @@ fn window_sums(
 /// hooks run this inside their transaction; the heal wraps its own).
 pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbError> {
     let mut has_rows = false;
-    let mut families: [Option<f64>; 12] = [None; 12];
+    let mut families: [Option<f64>; 13] = [None; 13];
 
     if let Some(date) = canonical_day(day) {
         let (start, end) = day_bounds(date);
@@ -137,11 +138,12 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         )?;
         let (session_count, session_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost) \
+            "SELECT COUNT(*), SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
+             SUM(consumable_cost) \
              FROM tracking_sessions WHERE started_at >= ? AND started_at < ?",
             start,
             end,
-            3,
+            4,
         )?;
         let (skill_count, skill_sums) = window_sums(
             conn,
@@ -206,6 +208,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             harvest_sums[0], // harvest_loot_tt
             harvest_sums[1], // harvest_cost
             quest_item_sums[0],
+            session_sums[3], // consumable_cost
         ];
         has_rows = kill_count > 0
             || weapon_count > 0
@@ -233,8 +236,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         "INSERT OR REPLACE INTO daily_rollups (\
          day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
          enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, \
-         codex_pes, quest_pes, harvest_loot_tt, harvest_cost, quest_item_tt, computed_at) \
-         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         codex_pes, quest_pes, harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
+         computed_at) \
+         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             day,
             ROLLUP_VERSION,
@@ -251,6 +255,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             families[9],
             families[10],
             families[11],
+            families[12],
         ],
     )?;
     Ok(())

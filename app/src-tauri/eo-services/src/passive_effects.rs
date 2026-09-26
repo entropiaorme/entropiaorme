@@ -6,9 +6,9 @@
 //! stacking limits, so every consumer reads the reload speed actually in
 //! effect. The game counts reload speed by where it comes from: equipped
 //! items and consumed doses each have their own limit, and their sum has
-//! another. Declared sources here are equipped items; consumed doses have no
-//! lifecycle yet, so they reach [`reload_speed_in_effect`] as an empty input
-//! until one records them.
+//! another. Declared sources here are equipped items; consumed doses are the
+//! tracker's (see [`crate::consumables`]), and reach
+//! [`reload_speed_in_effect`] as its consumed input.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,13 +43,13 @@ pub const RELOAD_SPEED_TOTAL_LIMIT_PERCENT: f64 = 30.0;
 
 /// The reload speed the enabled sources declare, before the game's limit.
 pub fn declared_reload_speed_percent(sources: &[PassiveEffectSource]) -> f64 {
-    reload_speed_magnitudes(sources).sum()
+    equipped_reload_magnitudes(sources).sum()
 }
 
 /// The reload speed the enabled declared sources put in force, with no
 /// consumed dose active.
 pub fn reload_speed_percent(sources: &[PassiveEffectSource]) -> f64 {
-    reload_speed_in_effect(reload_speed_magnitudes(sources), std::iter::empty())
+    reload_speed_in_effect(equipped_reload_magnitudes(sources), std::iter::empty())
 }
 
 /// The reload speed in effect from equipped and consumed magnitudes: each
@@ -80,7 +80,11 @@ fn split_by_sign(magnitudes: impl IntoIterator<Item = f64>) -> (f64, f64) {
         })
 }
 
-fn reload_speed_magnitudes(sources: &[PassiveEffectSource]) -> impl Iterator<Item = f64> + '_ {
+/// The reload speed each enabled declared source adds, as printed: the
+/// equipped input to [`reload_speed_in_effect`].
+pub fn equipped_reload_magnitudes(
+    sources: &[PassiveEffectSource],
+) -> impl Iterator<Item = f64> + '_ {
     sources
         .iter()
         .filter(|source| source.enabled)
@@ -93,7 +97,14 @@ fn reload_speed_magnitudes(sources: &[PassiveEffectSource]) -> impl Iterator<Ite
 /// multiplier. Invalid legacy or hand-edited totals fail safe to the base
 /// duration; the settings boundary prevents new totals at or below -100%.
 pub fn effective_reload_seconds(base_seconds: f64, sources: &[PassiveEffectSource]) -> f64 {
-    let multiplier = 1.0 + reload_speed_percent(sources) / 100.0;
+    reload_seconds_under(base_seconds, reload_speed_percent(sources))
+}
+
+/// Convert a base reload duration into the duration under a reload speed
+/// already in effect (after the game's limits). Unusable inputs fail safe to
+/// the base duration.
+pub fn reload_seconds_under(base_seconds: f64, reload_speed_percent: f64) -> f64 {
+    let multiplier = 1.0 + reload_speed_percent / 100.0;
     if !base_seconds.is_finite()
         || base_seconds < 0.0
         || !multiplier.is_finite()

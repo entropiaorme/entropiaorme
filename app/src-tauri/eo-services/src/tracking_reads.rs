@@ -124,6 +124,7 @@ pub fn notable_event_category(event_type: &str) -> &'static str {
 struct ListSummary {
     weapon_cost: f64,
     heal_cost: f64,
+    consumable_cost: f64,
     enhancer_cost: f64,
     armour_cost: f64,
     dangling_cost: f64,
@@ -293,7 +294,8 @@ fn fetch_list_summaries(
     let placeholders = vec!["?"; ids.len()].join(", ");
     let sql = format!(
         "SELECT session_id, weapon_cost, heal_cost, enhancer_cost, armour_cost, dangling_cost, \
-         harvest_cost, loot_tt, primary_mobs_json, primary_weapons_json, globals, hofs \
+         harvest_cost, loot_tt, primary_mobs_json, primary_weapons_json, globals, hofs, \
+         consumable_cost \
          FROM session_summaries WHERE session_id IN ({placeholders})"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -315,6 +317,7 @@ fn fetch_list_summaries(
                 primary_weapons: parse_string_array(&row.get::<_, String>(9)?),
                 globals: row.get::<_, i64>(10)?,
                 hofs: row.get::<_, i64>(11)?,
+                consumable_cost: as_f64(&sql_number(row, 12)),
             },
         );
     }
@@ -335,10 +338,11 @@ fn list_row_from_summary(
 ) -> Value {
     let duration = duration_seconds(started_at, ended_at, is_active, now);
     // Cost mirrors the summary's own cycled composition (weapon + heal +
-    // enhancer + armour + dangling + harvest swing decay), matching the
-    // detail read; loot_tt already folds harvest loot in.
+    // consumed doses + enhancer + armour + dangling + harvest swing decay),
+    // matching the detail read; loot_tt already folds harvest loot in.
     let cost = summary.weapon_cost
         + summary.heal_cost
+        + summary.consumable_cost
         + summary.enhancer_cost
         + summary.armour_cost
         + summary.dangling_cost
@@ -384,15 +388,16 @@ pub fn list_row_from_raw(
         "SELECT COALESCE(SUM(k.enhancer_cost), 0) FROM kills k WHERE k.session_id = ?",
         session_id,
     )?;
-    let (armour_cost, heal_cost, dangling_cost) = conn.query_row(
-        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0) \
-         FROM tracking_sessions WHERE id = ?",
+    let (armour_cost, heal_cost, dangling_cost, consumable_cost) = conn.query_row(
+        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0), \
+         COALESCE(consumable_cost, 0) FROM tracking_sessions WHERE id = ?",
         rusqlite::params![session_id],
         |row| {
             Ok((
                 as_f64(&sql_number(row, 0)),
                 as_f64(&sql_number(row, 1)),
                 as_f64(&sql_number(row, 2)),
+                as_f64(&sql_number(row, 3)),
             ))
         },
     )?;
@@ -406,7 +411,13 @@ pub fn list_row_from_raw(
     )?;
     let weapon_cost = as_f64(&weapon_cost);
     let enhancer_cost = as_f64(&enhancer_cost);
-    let cost = weapon_cost + heal_cost + enhancer_cost + armour_cost + dangling_cost + harvest_cost;
+    let cost = weapon_cost
+        + heal_cost
+        + consumable_cost
+        + enhancer_cost
+        + armour_cost
+        + dangling_cost
+        + harvest_cost;
 
     let returns = as_f64(&scalar(
         conn,
@@ -522,15 +533,16 @@ pub fn get_session_read(
 
     let duration = duration_seconds(started_at, ended_at, is_active, now);
 
-    let (armour_cost, session_heal_cost, dangling_cost) = conn.query_row(
-        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0) \
-         FROM tracking_sessions WHERE id = ?",
+    let (armour_cost, session_heal_cost, dangling_cost, consumable_cost) = conn.query_row(
+        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0), \
+         COALESCE(consumable_cost, 0) FROM tracking_sessions WHERE id = ?",
         rusqlite::params![session_id],
         |row| {
             Ok((
                 as_f64(&sql_number(row, 0)),
                 as_f64(&sql_number(row, 1)),
                 as_f64(&sql_number(row, 2)),
+                as_f64(&sql_number(row, 3)),
             ))
         },
     )?;
@@ -617,6 +629,7 @@ pub fn get_session_read(
 
     let total_cost = weapon_cost
         + session_heal_cost
+        + consumable_cost
         + total_enhancer_cost
         + armour_cost
         + dangling_cost
@@ -775,6 +788,7 @@ pub fn get_session_read(
             "costBreakdown": {
                 "weaponCost": round(weapon_cost, 2),
                 "healCost": round(session_heal_cost, 2),
+                "consumableCost": round(consumable_cost, 2),
                 "enhancerCost": round(total_enhancer_cost, 2),
                 "armourCost": round(armour_cost, 2),
                 "harvestCost": round(harvest_cost, 2),
@@ -1639,6 +1653,7 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 "DELETE FROM healing_activations WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
+            crate::consumables::detach_session(&tx, &sid)?;
             tx.execute(
                 "DELETE FROM tracking_sessions WHERE id = ?",
                 rusqlite::params![sid],
@@ -2077,6 +2092,7 @@ mod tests {
         let summary = ListSummary {
             weapon_cost: 1.0,
             heal_cost: 2.0,
+            consumable_cost: 0.0,
             enhancer_cost: 3.0,
             armour_cost: 4.0,
             dangling_cost: 5.0,
@@ -2466,6 +2482,7 @@ mod tests {
                     "costBreakdown": {
                         "weaponCost": 10.0,
                         "healCost": 2.0,
+                        "consumableCost": 0.0,
                         "enhancerCost": 3.0,
                         "armourCost": 4.0,
                         "harvestCost": 0.0,
@@ -2610,6 +2627,7 @@ mod tests {
                     "costBreakdown": {
                         "weaponCost": 5.0,
                         "healCost": 0.0,
+                        "consumableCost": 0.0,
                         "enhancerCost": 0.0,
                         "armourCost": 0.0,
                         "harvestCost": 3.0,
@@ -3465,6 +3483,7 @@ mod tests {
         let summary = ListSummary {
             weapon_cost: 0.0,
             heal_cost: 0.0,
+            consumable_cost: 0.0,
             enhancer_cost: 0.0,
             armour_cost: 0.0,
             dangling_cost: 0.0,

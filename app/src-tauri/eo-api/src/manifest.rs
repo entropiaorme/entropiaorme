@@ -33,6 +33,7 @@ use crate::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
     CodexMetaClaimResult, CodexRecommendTarget, CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
 };
+use crate::consumables::{ConsumableDose, ConsumableDoses};
 use crate::dev::{
     AuctionFeeOverlayStatus, AuctionFeeResearchStatus, CompactResult, CrashReportingStatus,
     MetricsSnapshot, RebuildReport,
@@ -297,6 +298,43 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "consumable_doses",
+            args: vec![],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_start",
+            args: vec![ArgSpec {
+                name: "equipment_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_remove",
+            args: vec![ArgSpec {
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_restore",
+            args: vec![ArgSpec {
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_session_doses",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<ConsumableDose>))),
         },
         CommandSpec {
             name: "weapon_shots",

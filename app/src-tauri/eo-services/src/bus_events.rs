@@ -237,6 +237,10 @@ pub struct HotbarIntentPayload {
     pub reload_seconds: f64,
     pub healing_profile: Option<HealingProfile>,
     pub lifesteal_percent: Option<f64>,
+    /// One dose of the consumable the slot holds, as the item stood at the
+    /// press; absent for every other kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumable_profile: Option<crate::consumables::ConsumableProfile>,
 }
 
 /// A tracking-session lifecycle boundary (started / stopped).
@@ -277,7 +281,7 @@ pub enum BusEvent {
     ActiveToolChanged(ActiveToolChangedPayload),
     ActiveHealToolChanged(ActiveHealToolChangedPayload),
     ActiveHarvestToolChanged(ActiveHarvestToolChangedPayload),
-    HotbarIntent(HotbarIntentPayload),
+    HotbarIntent(Box<HotbarIntentPayload>),
     SessionStarted(SessionLifecyclePayload),
     SessionStopped(SessionLifecyclePayload),
     MissionReceived(MissionReceivedPayload),
@@ -289,6 +293,7 @@ pub enum BusEvent {
     ProtectionUpdated(eo_wire::domain_events::ProtectionUpdated),
     HealingUpdated(eo_wire::domain_events::HealingUpdated),
     WeaponsUpdated(eo_wire::domain_events::WeaponsUpdated),
+    ConsumablesUpdated(eo_wire::domain_events::ConsumablesUpdated),
 }
 
 impl BusEvent {
@@ -316,6 +321,7 @@ impl BusEvent {
             BusEvent::ProtectionUpdated(_) => Topic::ProtectionUpdated,
             BusEvent::HealingUpdated(_) => Topic::HealingUpdated,
             BusEvent::WeaponsUpdated(_) => Topic::WeaponsUpdated,
+            BusEvent::ConsumablesUpdated(_) => Topic::ConsumablesUpdated,
         }
     }
 

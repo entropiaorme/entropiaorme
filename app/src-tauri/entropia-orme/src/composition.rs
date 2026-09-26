@@ -75,6 +75,9 @@ use eo_services::clock::{Clock, RealClock};
 use eo_services::config_service::{
     load_config_readonly, AppConfig, ConfigReader, ConfigService, HOTBAR_SLOTS,
 };
+use eo_services::consumables::{
+    consumable_profile_from_props, on_use_effect_from_props, DoseBoard,
+};
 use eo_services::db::{AdoptError, Db};
 use eo_services::equipment_pricing::{
     cost_per_shot_ped, heal_cost_from_props, healing_profile_from_props, hotbar_equipment_row_sync,
@@ -90,7 +93,7 @@ use eo_services::hotbar_listener::{
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
 use eo_services::ocr_engine::load_bgr_png;
 pub use eo_services::ocr_engine::OcrEngine;
-use eo_services::passive_effects::{effective_reload_seconds, reload_speed_percent};
+use eo_services::passive_effects::reload_seconds_under;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
@@ -1348,6 +1351,9 @@ fn compose_producers(
     // is inert, so both listeners never run.
     let keystroke_source: Arc<dyn KeystrokeSource> =
         Arc::new(SharedKeystrokeSource::new(keystroke_source));
+    // The running doses, published by the tracker and read by every other
+    // surface that prices under the reload speed in effect.
+    let doses = DoseBoard::new(clock.clone());
     let hotbar = HotbarListener::new(
         bus.clone(),
         Some(keystroke_source.clone()),
@@ -1355,6 +1361,7 @@ fn compose_producers(
             db.clone(),
             data_dir,
             game_data.clone(),
+            doses.clone(),
         )),
         game_focus,
     );
@@ -1373,7 +1380,14 @@ fn compose_producers(
             db.clone(),
             clock.clone(),
             chatlog_clock,
-            build_providers(db, config_reader, &config, runtime.clone(), game_data),
+            build_providers(
+                db,
+                config_reader,
+                &config,
+                runtime.clone(),
+                game_data,
+                doses,
+            ),
         ),
     )?;
 
@@ -1473,13 +1487,16 @@ fn compose_producers(
 /// The hotbar slot resolver: the
 /// live config maps the slot key to an equipment-library id; the row's item
 /// type selects the outcome (a healing tool's per-use cost and reload from its
-/// entity, a consumable's zero-cost one-off, or a weapon's per-shot cost
-/// looked up by name fragment exactly as the cost provider does). An unbound
-/// slot, an absent row, or a read failure yields None (no tool change).
+/// entity, a consumable's dose, or a weapon's per-shot cost looked up by name
+/// fragment exactly as the cost provider does). Reloads and attack rates are
+/// under the reload speed in effect at the press: the equipped sources and
+/// the running doses. An unbound slot, an absent row, or a read failure
+/// yields None (no tool change).
 fn build_hotbar_resolver(
     db: Db,
     data_dir: &std::path::Path,
     game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
 ) -> HotbarResolver {
     let data_dir = data_dir.to_path_buf();
     Arc::new(move |slot: &str| {
@@ -1487,6 +1504,7 @@ fn build_hotbar_resolver(
         let equip_id = config.hotbar.get(slot).and_then(Value::as_i64)?;
         let db = db.clone();
         let game_data = game_data.clone();
+        let reload_speed = doses.reload_speed_percent(&config.passive_effect_sources);
         // The hotbar listener runs on the input listener's plain OS key
         // thread (no async runtime), so the slot lookup reads through the
         // synchronous reader core rather than bridging an async query onto
@@ -1501,15 +1519,14 @@ fn build_hotbar_resolver(
             let outcome = match item_type.as_str() {
                 "healing" => {
                     let (cost_ped, base_reload_seconds) = heal_cost_from_props(&properties_json);
-                    let speed_percent = reload_speed_percent(&config.passive_effect_sources);
-                    let reload_seconds = effective_reload_seconds(
-                        base_reload_seconds,
-                        &config.passive_effect_sources,
-                    );
+                    let reload_seconds = reload_seconds_under(base_reload_seconds, reload_speed);
                     let mut healing_profile = healing_profile_from_props(&properties_json);
                     healing_profile.base_reload_seconds = Some(base_reload_seconds);
-                    healing_profile.reload_speed_percent = Some(speed_percent);
+                    healing_profile.reload_speed_percent = Some(reload_speed);
                     healing_profile.effective_reload_seconds = Some(reload_seconds);
+                    healing_profile.on_use = serde_json::from_str::<Value>(&properties_json)
+                        .ok()
+                        .and_then(|props| on_use_effect_from_props(&props, game_data.as_deref()));
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1518,17 +1535,27 @@ fn build_hotbar_resolver(
                         reload_seconds,
                         healing_profile: Some(healing_profile),
                         lifesteal_percent: None,
+                        consumable_profile: None,
                     }
                 }
-                "consumable" => ResolvedHotbarItem {
-                    equipment_id: equip_id,
-                    name,
-                    kind: HotbarItemKind::Consumable,
-                    cost_per_use_ped: 0.0,
-                    reload_seconds: 0.0,
-                    healing_profile: None,
-                    lifesteal_percent: None,
-                },
+                "consumable" => {
+                    // One dose as the item stands at the press, over the
+                    // current catalogue.
+                    let props =
+                        serde_json::from_str::<Value>(&properties_json).unwrap_or(Value::Null);
+                    let profile =
+                        consumable_profile_from_props(&props, game_data.as_deref()).profile;
+                    ResolvedHotbarItem {
+                        equipment_id: equip_id,
+                        name,
+                        kind: HotbarItemKind::Consumable,
+                        cost_per_use_ped: profile.booked_cost_ped(),
+                        reload_seconds: 0.0,
+                        healing_profile: None,
+                        lifesteal_percent: None,
+                        consumable_profile: Some(profile),
+                    }
+                }
                 // A harvesting tool stores the same single-entity props
                 // shape as a healing tool (tool_entity + markup), so the
                 // heal per-use recipe prices it; no reload semantics.
@@ -1542,10 +1569,10 @@ fn build_hotbar_resolver(
                         reload_seconds: 0.0,
                         healing_profile: None,
                         lifesteal_percent: None,
+                        consumable_profile: None,
                     }
                 }
                 _ => {
-                    let reload_speed = reload_speed_percent(&config.passive_effect_sources);
                     let cost = weapon_cost_by_name(conn, &name, &|props| {
                         with_attack_rate(props, game_data.as_deref(), reload_speed)
                     });
@@ -1565,6 +1592,7 @@ fn build_hotbar_resolver(
                                 )
                             })
                             .or_else(|| lifesteal_percent_from_props(&properties_json)),
+                        consumable_profile: None,
                     }
                 }
             };
@@ -1591,6 +1619,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::ProtectionUpdated,
         Topic::HealingUpdated,
         Topic::WeaponsUpdated,
+        Topic::ConsumablesUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1615,6 +1644,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             BusEvent::WeaponsUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::WeaponsUpdated(envelope.clone()));
             }
+            BusEvent::ConsumablesUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::ConsumablesUpdated(envelope.clone()));
+            }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.
             _ => {}
@@ -1632,19 +1664,23 @@ struct LiveEquipmentLibrary {
     reader: ConfigReader,
     runtime: tokio::runtime::Handle,
     game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
 }
 
 impl LiveEquipmentLibrary {
     /// A stored weapon's props as tracking prices and attributes them:
     /// offensive efficiencies from the current catalogue, and the attack
-    /// rate under the reload speed the declared passive effects put in force.
+    /// rate under the reload speed in effect (the declared passive effects
+    /// and the running doses).
     fn current_weapon_props(&self, props: &Value) -> Value {
         let game_data = self.game_data.as_deref();
         let props = game_data.map_or_else(
             || props.clone(),
             |game_data| with_current_offensive_efficiencies(props, game_data),
         );
-        let reload_speed = reload_speed_percent(&self.reader.current().passive_effect_sources);
+        let reload_speed = self
+            .doses
+            .reload_speed_percent(&self.reader.current().passive_effect_sources);
         with_attack_rate(&props, game_data, reload_speed)
     }
 }
@@ -1834,6 +1870,10 @@ impl TrackingConfig for LiveTrackingConfig {
     fn loot_filter_blacklist(&self) -> Vec<String> {
         self.reader.current().loot_filter_blacklist.clone()
     }
+
+    fn passive_effect_sources(&self) -> Vec<eo_services::passive_effects::PassiveEffectSource> {
+        self.reader.current().passive_effect_sources.clone()
+    }
 }
 
 /// Wire the hunt-tracker seams to their live sources: the equipment
@@ -1845,6 +1885,7 @@ fn build_providers(
     initial_config: &AppConfig,
     runtime: tokio::runtime::Handle,
     game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
 ) -> Providers {
     Providers {
         equipment: Arc::new(LiveEquipmentLibrary {
@@ -1852,9 +1893,11 @@ fn build_providers(
             reader: reader.clone(),
             runtime,
             game_data,
+            doses: doses.clone(),
         }),
         config: Arc::new(LiveTrackingConfig { reader }),
         player_name: initial_config.player_name.clone(),
+        doses,
     }
 }
 
@@ -2659,6 +2702,7 @@ mod tests {
             &config,
             tokio::runtime::Handle::current(),
             None,
+            DoseBoard::new(Arc::new(eo_services::clock::RealClock::new())),
         );
 
         // The equipment seam: the parsed property object, by fragment.
@@ -2768,6 +2812,7 @@ mod tests {
             &config,
             tokio::runtime::Handle::current(),
             None,
+            DoseBoard::new(Arc::new(eo_services::clock::RealClock::new())),
         );
 
         // Invoke the lookup AND the derived cost from a plain OS thread

@@ -185,6 +185,18 @@ impl WeaponPricing {
         with_attack_rate(props, self.game_data.as_deref(), (self.reload_speed)())
     }
 
+    /// The props enriched with the attack rate under a reload speed that was
+    /// in force at some earlier moment: how review prices a stored shot at
+    /// the rate it landed under.
+    pub fn prepare_at(&self, props: &Value, reload_speed_percent: f64) -> Value {
+        with_attack_rate(props, self.game_data.as_deref(), reload_speed_percent)
+    }
+
+    /// The reload speed in effect now.
+    pub fn reload_speed_percent(&self) -> f64 {
+        (self.reload_speed)()
+    }
+
     /// The weapon's attack rate in force now, when its base rate is known.
     pub fn attack_rate(&self, props: &Value) -> Option<AttackRate> {
         attack_rate_from_props(props, self.game_data.as_deref(), (self.reload_speed)())

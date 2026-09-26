@@ -333,6 +333,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "weapon effect windows",
         sql: include_str!("../../migrations/0059_weapon_effect_windows.sql"),
     },
+    Migration {
+        version: 60,
+        description: "consumable doses",
+        sql: include_str!("../../migrations/0060_consumable_doses.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -400,6 +405,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "5DD9ADC80F44FB2E127B00907013E69E0FB6B331A3A9419E3A5F9CB6AD155965EE7E8932695C153D6825BEC88656E7FB",
     "F23E22D844FDEF26245B1A76CBA6427B0C6FDC9019F5971F255ED58827C680388F241587C131898CC4EBCCD2FAE2A9D9",
     "1C97E38F06EEAF015ADD596B3CF9F4515527CD463144B877EDC5E4DACD2D2C7E2B05F2053F6BCFB018F6EED44A3CBBD9",
+    "CD863AA9ECBA07DB123390C444D1D17F991F3FE6BEE0145D9AB6A3809429E7A8AA9D547FFCC8D5971F3F1BE3F65D2CC2",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

@@ -31,6 +31,7 @@ use eo_api::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
     CodexMetaClaimResult, CodexRecommendTarget, CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
 };
+use eo_api::consumables::{ConsumableDose, ConsumableDoses};
 use eo_api::dev::{
     AuctionFeeOverlayStatus, AuctionFeeResearchStatus, CompactResult, CrashReportingStatus,
     MetricsSnapshot, RebuildReport,
@@ -326,6 +327,43 @@ pub async fn weapon_assign(
     equipment_id: i64,
 ) -> Result<SessionDetail, ApiError> {
     facade(&app)?.weapon_assign(evidence_id, equipment_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_doses(app: tauri::AppHandle) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_doses().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_start(
+    app: tauri::AppHandle,
+    equipment_id: i64,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_start(equipment_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_remove(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_remove(dose_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_restore(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_restore(dose_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_session_doses(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<ConsumableDose>, ApiError> {
+    facade(&app)?.consumable_session_doses(session_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1963,6 +2001,11 @@ mod tests {
         "healing_correction_tools",
         "healing_correct",
         "healing_correction_undo",
+        "consumable_doses",
+        "consumable_dose_start",
+        "consumable_dose_remove",
+        "consumable_dose_restore",
+        "consumable_session_doses",
         "weapon_shots",
         "weapon_unpriced_sessions",
         "weapon_correction_weapons",

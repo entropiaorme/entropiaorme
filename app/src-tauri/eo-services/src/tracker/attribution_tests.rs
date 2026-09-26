@@ -68,7 +68,7 @@ fn now(rig: &Rig) -> f64 {
 
 fn press(rig: &Rig, weapon: &str) {
     rig.bus
-        .publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
+        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "1".into(),
             occurred_at: now(rig),
@@ -79,7 +79,8 @@ fn press(rig: &Rig, weapon: &str) {
             reload_seconds: 0.0,
             healing_profile: None,
             lifesteal_percent: None,
-        }));
+            consumable_profile: None,
+        })));
 }
 
 fn jam(rig: &Rig) {

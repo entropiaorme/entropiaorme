@@ -10,6 +10,7 @@
 //! the writes have always produced.
 
 use eo_services::attack_rate::{AttackRate, WeaponPricing};
+use eo_services::consumables::consumable_profile_from_props;
 use eo_services::cost_engine::{
     cost_per_shot_from_props, heal_cost_per_use, heal_cost_per_use_with_implant,
     heal_reload_seconds, is_limited, weapon_damage_profile_from_props,
@@ -22,6 +23,7 @@ use eo_services::expected_hunting::{
     self, HuntingLooterLevels, LooterSource, OffensiveLoadoutEvidence,
 };
 use eo_services::game_data_store::GameDataStore;
+use eo_services::passive_effects::reload_seconds_under;
 use eo_services::weapon_effect::{
     effect_profile_from_props, WeaponEffectProfile, EFFECT_PROFILE_KEY,
 };
@@ -231,6 +233,138 @@ impl WeaponEffectRequest {
     }
 }
 
+/// A consumable's dose as Equipment configures it: what the catalogue
+/// supplies and what the player declared, and what one dose costs.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumableSettings {
+    /// How long one dose lasts, seconds; 0 for an immediate item.
+    pub duration_seconds: f64,
+    pub effects: Vec<crate::consumables::ConsumableEffect>,
+    /// One dose's TT value, PED.
+    pub tt_value_ped: f64,
+    /// The acquisition markup, percent of TT.
+    pub markup_percent: f64,
+    /// One dose at that markup, PED.
+    pub dose_cost_ped: f64,
+    /// Whether taking a dose books its cost to the session.
+    pub track_cost: bool,
+    /// Which figures the catalogue supplies (the rest are declared).
+    pub catalogue_effects: bool,
+    pub catalogue_duration: bool,
+    pub catalogue_value: bool,
+    /// What the player declared, for editing: used where the catalogue
+    /// has nothing.
+    pub declared_reload_speed_percent: Nullable<f64>,
+    pub declared_duration_seconds: Nullable<f64>,
+    pub declared_tt_value_ped: Nullable<f64>,
+}
+
+impl ConsumableSettings {
+    /// What taking one dose books, PEC.
+    fn booked_cost_pec(&self) -> f64 {
+        if self.track_cost {
+            self.dose_cost_ped * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+fn consumable_settings(props: &Value, game_data: &GameDataStore) -> ConsumableSettings {
+    let resolved = consumable_profile_from_props(props, Some(game_data));
+    let declared = |key: &str| {
+        props
+            .get("dose")
+            .and_then(|dose| dose.get(key))
+            .and_then(Value::as_f64)
+    };
+    let profile = resolved.profile;
+    ConsumableSettings {
+        duration_seconds: profile.duration_seconds,
+        effects: profile
+            .effects
+            .iter()
+            .map(crate::consumables::ConsumableEffect::from)
+            .collect(),
+        tt_value_ped: profile.tt_value_ped,
+        markup_percent: profile.markup_percent,
+        dose_cost_ped: profile.dose_cost_ped(),
+        track_cost: profile.track_cost,
+        catalogue_effects: resolved.catalogue_effects,
+        catalogue_duration: resolved.catalogue_duration,
+        catalogue_value: resolved.catalogue_value,
+        declared_reload_speed_percent: declared("reload_speed_percent").into(),
+        declared_duration_seconds: declared("duration_seconds").into(),
+        declared_tt_value_ped: declared("tt_value_ped").into(),
+    }
+}
+
+/// A consumable's dose settings as an add or update request declares them,
+/// in the request's casing. The effects, duration, and TT value are used
+/// only where the catalogue has none.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ConsumableDoseRequest {
+    /// The acquisition markup, percent of TT.
+    pub markup_percent: f64,
+    /// Whether taking a dose books its cost to the session.
+    pub track_cost: bool,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(default)]
+    pub reload_speed_percent: Option<f64>,
+    #[serde(default)]
+    pub tt_value_ped: Option<f64>,
+}
+
+impl ConsumableDoseRequest {
+    /// The stored `dose` object, or why it cannot be stored.
+    fn stored(&self) -> Result<Value, ApiError> {
+        if !self.markup_percent.is_finite()
+            || self.markup_percent < 1.0
+            || self.markup_percent > 100_000.0
+        {
+            return Err(ApiError::bad_request(
+                "Markup must be between 1% and 100000%",
+            ));
+        }
+        if let Some(duration) = self.duration_seconds {
+            if !duration.is_finite() || !(0.0..=604_800.0).contains(&duration) {
+                return Err(ApiError::bad_request(
+                    "Duration must be between 0 and 7 days",
+                ));
+            }
+        }
+        if let Some(percent) = self.reload_speed_percent {
+            if !percent.is_finite() || percent <= -100.0 || percent > 100.0 {
+                return Err(ApiError::bad_request(
+                    "Reload speed must be above -100% and at most 100%",
+                ));
+            }
+        }
+        if let Some(value) = self.tt_value_ped {
+            if !value.is_finite() || !(0.0..=100_000.0).contains(&value) {
+                return Err(ApiError::bad_request(
+                    "TT value must be between 0 and 100000 PED",
+                ));
+            }
+        }
+        let mut dose = Map::new();
+        dose.insert("markup_percent".into(), json!(self.markup_percent));
+        dose.insert("track_cost".into(), json!(self.track_cost));
+        for (key, value) in [
+            ("duration_seconds", self.duration_seconds),
+            ("reload_speed_percent", self.reload_speed_percent),
+            ("tt_value_ped", self.tt_value_ped),
+        ] {
+            if let Some(value) = value {
+                dose.insert(key.into(), json!(value));
+            }
+        }
+        Ok(Value::Object(dose))
+    }
+}
+
 /// A library entry in the list shape.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -251,6 +385,8 @@ pub struct EquipmentSummary {
     pub lifesteal_percent: Nullable<f64>,
     /// A weapon's declared damage-over-time effect, when it has one.
     pub effect_profile: Nullable<WeaponEffectProfileDto>,
+    /// A consumable's dose; null for every other kind.
+    pub consumable: Nullable<ConsumableSettings>,
 }
 
 /// One configured component of a stored weapon setup.
@@ -423,6 +559,8 @@ pub struct EquipmentDetail {
     pub effect_profile: Nullable<WeaponEffectProfileDto>,
     /// A weapon's attack rate, when its catalogue publishes a base rate.
     pub attack_rate: Nullable<WeaponAttackRate>,
+    /// A consumable's dose; null for every other kind.
+    pub consumable: Nullable<ConsumableSettings>,
 }
 
 /// An add or update request. Field names stay in the request casing the
@@ -472,6 +610,10 @@ pub struct EquipmentRequest {
     /// A weapon's damage-over-time effect; absent for every other kind.
     #[serde(default)]
     pub weapon_effect: Option<WeaponEffectRequest>,
+    /// A consumable's dose settings; absent for every other kind, and for
+    /// a consumable that keeps its dose unbooked with no declared figures.
+    #[serde(default)]
+    pub dose: Option<ConsumableDoseRequest>,
 }
 
 fn default_markup() -> i64 {
@@ -696,16 +838,19 @@ fn row_to_summary(
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
             effect_profile: weapon_effect_dto(props).into(),
+            consumable: None.into(),
         });
     }
 
     if item_type == "consumable" {
+        let settings = consumable_settings(props, game_data);
         return Ok(EquipmentSummary {
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Consumable,
             amplifier_name: None.into(),
-            cost_per_use: 0.0,
+            // What taking a dose books, PEC: the dose cost when tracked.
+            cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
             damage_min: None.into(),
             damage_max: None.into(),
             reload_seconds: None.into(),
@@ -714,6 +859,7 @@ fn row_to_summary(
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
             effect_profile: None.into(),
+            consumable: Some(settings).into(),
         });
     }
 
@@ -741,6 +887,7 @@ fn row_to_summary(
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
             effect_profile: None.into(),
+            consumable: None.into(),
         });
     }
 
@@ -759,12 +906,19 @@ fn row_to_summary(
         cost_per_use: heal_cost_with_stored_implant(props, tool_e, markup),
         damage_min: None.into(),
         damage_max: None.into(),
-        reload_seconds: Some(round_half_even(heal_reload_seconds(tool_e), 2)).into(),
+        // The reload in effect: the catalogue reload under the reload speed
+        // the equipped sources and running doses put in force.
+        reload_seconds: Some(round_half_even(
+            reload_seconds_under(heal_reload_seconds(tool_e), pricing.reload_speed_percent()),
+            2,
+        ))
+        .into(),
         is_limited: is_limited(tool_e),
         enrichment_level: 1,
         healing_profile: Some(healing_profile_dto(props)).into(),
         lifesteal_percent: None.into(),
         effect_profile: None.into(),
+        consumable: None.into(),
     })
 }
 
@@ -869,10 +1023,12 @@ fn row_to_detail(
                 .attack_rate(props)
                 .map(WeaponAttackRate::from)
                 .into(),
+            consumable: None.into(),
         });
     }
 
     if item_type == "consumable" {
+        let settings = consumable_settings(props, game_data);
         return Ok(EquipmentDetail {
             id: item_id,
             kind: EquipmentKind::Consumable,
@@ -881,7 +1037,7 @@ fn row_to_detail(
                 name: name.to_string(),
                 decay: 0.0,
                 ammo_burn: 0.0,
-                markup_percent: 100.0,
+                markup_percent: settings.markup_percent,
                 is_limited: false,
                 damage_enhancers: 0,
                 efficiency_pct: None.into(),
@@ -891,12 +1047,13 @@ fn row_to_detail(
             absorber: None.into(),
             implant: None.into(),
             cost_breakdown: Vec::new(),
-            total_cost_per_use: 0.0,
+            total_cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
             expected_return: None.into(),
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
             effect_profile: None.into(),
             attack_rate: None.into(),
+            consumable: Some(settings).into(),
         });
     }
 
@@ -987,6 +1144,7 @@ fn row_to_detail(
         lifesteal_percent: None.into(),
         effect_profile: None.into(),
         attack_rate: None.into(),
+        consumable: None.into(),
     })
 }
 
@@ -1381,12 +1539,20 @@ impl Api {
             }
             EquipmentKind::Consumable => {
                 // Catalogue pick or free-text name.
+                let dose = req
+                    .dose
+                    .as_ref()
+                    .map(ConsumableDoseRequest::stored)
+                    .transpose()?;
                 if let Some(catalog_id) = req.catalog_id.as_deref().filter(|id| !id.is_empty()) {
                     let entity = self.fetch_entity("stimulants", catalog_id)?;
                     let name = entity["name"].as_str().unwrap_or_default().to_string();
                     let mut props = Map::new();
                     props.insert("catalog_id".into(), json!(catalog_id));
                     props.insert("entity".into(), entity);
+                    if let Some(dose) = dose {
+                        props.insert("dose".into(), dose);
+                    }
                     return Ok(BuiltProps {
                         name,
                         stored_catalog_id: Some(catalog_id.to_string()),
@@ -1402,6 +1568,9 @@ impl Api {
                     let mut props = Map::new();
                     props.insert("catalog_id".into(), Value::Null);
                     props.insert("entity".into(), Value::Null);
+                    if let Some(dose) = dose {
+                        props.insert("dose".into(), dose);
+                    }
                     return Ok(BuiltProps {
                         name: name.to_string(),
                         stored_catalog_id: None,

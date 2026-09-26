@@ -46,6 +46,7 @@ pub enum Topic {
     ProtectionUpdated,
     HealingUpdated,
     WeaponsUpdated,
+    ConsumablesUpdated,
 }
 
 impl Topic {
@@ -73,6 +74,7 @@ impl Topic {
             Topic::ProtectionUpdated => eo_wire::domain_events::TOPIC_PROTECTION_UPDATED,
             Topic::HealingUpdated => eo_wire::domain_events::TOPIC_HEALING_UPDATED,
             Topic::WeaponsUpdated => eo_wire::domain_events::TOPIC_WEAPONS_UPDATED,
+            Topic::ConsumablesUpdated => eo_wire::domain_events::TOPIC_CONSUMABLES_UPDATED,
         }
     }
 }

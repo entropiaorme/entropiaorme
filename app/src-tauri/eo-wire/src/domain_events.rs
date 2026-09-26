@@ -21,6 +21,7 @@ pub const TOPIC_NAVIGATION_UPDATED: &str = "navigation.updated";
 pub const TOPIC_PROTECTION_UPDATED: &str = "protection.updated";
 pub const TOPIC_HEALING_UPDATED: &str = "healing.updated";
 pub const TOPIC_WEAPONS_UPDATED: &str = "weapons.updated";
+pub const TOPIC_CONSUMABLES_UPDATED: &str = "consumables.updated";
 
 /// A field that serialises to exactly one topic literal and refuses any
 /// other input: the discriminator the union routes on, kept closed so a
@@ -56,6 +57,7 @@ topic_tag!(NavigationUpdatedTag, "navigation.updated");
 topic_tag!(ProtectionUpdatedTag, "protection.updated");
 topic_tag!(HealingUpdatedTag, "healing.updated");
 topic_tag!(WeaponsUpdatedTag, "weapons.updated");
+topic_tag!(ConsumablesUpdatedTag, "consumables.updated");
 
 fn default_event_version() -> i64 {
     1
@@ -219,6 +221,24 @@ pub struct WeaponsUpdated {
     pub payload: WeaponsUpdatedPayload,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumablesUpdatedPayload {}
+
+/// A consumable dose started, ended, was removed, or was restored: the
+/// running doses, the reload speed in effect, and a session's dose cost may
+/// have moved. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumablesUpdated {
+    #[serde(rename = "type")]
+    pub topic: ConsumablesUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: ConsumablesUpdatedPayload,
+}
+
 /// The discriminated union of every frontend-facing domain event. The
 /// untagged dispatch is made exact by the closed topic-tag fields: a
 /// frame routes to the one variant whose `type` literal it carries, and
@@ -234,6 +254,7 @@ pub enum DomainEvent {
     ProtectionUpdated(ProtectionUpdated),
     HealingUpdated(HealingUpdated),
     WeaponsUpdated(WeaponsUpdated),
+    ConsumablesUpdated(ConsumablesUpdated),
 }
 
 impl DomainEvent {
@@ -247,6 +268,7 @@ impl DomainEvent {
             DomainEvent::ProtectionUpdated(_) => TOPIC_PROTECTION_UPDATED,
             DomainEvent::HealingUpdated(_) => TOPIC_HEALING_UPDATED,
             DomainEvent::WeaponsUpdated(_) => TOPIC_WEAPONS_UPDATED,
+            DomainEvent::ConsumablesUpdated(_) => TOPIC_CONSUMABLES_UPDATED,
         }
     }
 

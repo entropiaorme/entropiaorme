@@ -36,6 +36,9 @@ struct StoredShot {
     correction_id: Option<String>,
     candidates: String,
     effect_candidates: String,
+    /// The reload speed in effect when the shot was charged; None for a
+    /// shot stored before it was kept.
+    reload_speed_percent: Option<f64>,
 }
 
 impl StoredShot {
@@ -51,7 +54,7 @@ fn stored_shot(
     Ok(tx
         .query_row(
             "SELECT session_id, kill_id, attribution, tool_name, amount, critical, correction_id, \
-                    candidates_json, effect_candidates_json \
+                    candidates_json, effect_candidates_json, reload_speed_percent \
              FROM weapon_shot_evidence WHERE id = ?1",
             [evidence_id],
             |row| {
@@ -65,6 +68,7 @@ fn stored_shot(
                     correction_id: row.get(6)?,
                     candidates: row.get(7)?,
                     effect_candidates: row.get(8)?,
+                    reload_speed_percent: row.get(9)?,
                 })
             },
         )
@@ -330,11 +334,13 @@ pub(super) fn assign(
         }
         Err(refusal) => return Ok(Err(refusal)),
     }
-    let Some((name, cost)) = (match weapon_price(tx, equipment_id, pricing) {
-        Ok(price) => price,
-        Err(WeaponReviewError::Db(error)) => return Err(error),
-        Err(refusal) => return Ok(Err(refusal)),
-    }) else {
+    let Some((name, cost)) =
+        (match weapon_price(tx, equipment_id, pricing, shot.reload_speed_percent) {
+            Ok(price) => price,
+            Err(WeaponReviewError::Db(error)) => return Err(error),
+            Err(refusal) => return Ok(Err(refusal)),
+        })
+    else {
         return Ok(Err(WeaponReviewError::NotFound(
             "That weapon is no longer in Equipment",
         )));

@@ -67,6 +67,46 @@ impl WeaponRuntime {
     }
 }
 
+impl WeaponRuntime {
+    /// Re-price the carried weapons under a new reload speed in effect (a
+    /// dose started or ended): their props and bands move to the new
+    /// attack rate, while the enhancer stacks, the declared weapon, and
+    /// the attribution regime carry on. A weapon priced through the
+    /// library lookup rather than the carried set re-reads its props from
+    /// `lookup`, which applies the same rate.
+    pub(super) fn reprice(
+        &mut self,
+        carried: Vec<CarriedWeaponProfile>,
+        lookup: impl Fn(&str) -> Option<Arc<Value>>,
+    ) {
+        self.carried_profiles.clear();
+        let mut weapons = Vec::with_capacity(carried.len());
+        for profile in carried {
+            if !profile.props.is_empty() {
+                self.carried_profiles.insert(
+                    profile.weapon.name.clone(),
+                    Arc::new(Value::Object(profile.props)),
+                );
+            }
+            weapons.push(profile.weapon);
+        }
+        self.attribution.set_carried(weapons);
+        self.profile_cache.clear();
+        self.static_cost_cache.clear();
+        for (name, state) in &mut self.enhancer_states {
+            let props = self
+                .carried_profiles
+                .get(name)
+                .cloned()
+                .or_else(|| lookup(name));
+            if let Some(props) = props {
+                state.props = props;
+            }
+            state.cached_cost = None;
+        }
+    }
+}
+
 /// Per-weapon damage-enhancer state within the current session.
 pub(super) struct DamageEnhancerState {
     pub(super) tool_name: String,

@@ -221,6 +221,8 @@ fn not_paid_use(
          WHERE activation_id = ?2 AND superseded_at IS NULL",
         rusqlite::params![now, activation_id],
     )?;
+    // A buff the heal granted on use goes with it.
+    crate::consumables::set_activation_doses_removed(tx, activation_id, Some(now))?;
     let explained: Vec<String> = {
         let mut stmt = tx.prepare(
             "SELECT id FROM healing_outputs \
@@ -497,6 +499,7 @@ pub(super) fn undo(
         "UPDATE healing_effect_windows SET superseded_at = ?1 WHERE activation_id = ?2",
         rusqlite::params![superseded_at, activation_id],
     )?;
+    crate::consumables::set_activation_doses_removed(tx, &activation_id, superseded_at)?;
     tx.execute(
         "UPDATE healing_corrections SET undone_at = ?1 WHERE id = ?2",
         rusqlite::params![now, correction_id],

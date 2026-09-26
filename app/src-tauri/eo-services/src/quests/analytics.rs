@@ -197,6 +197,7 @@ impl QuestService {
                 "total_duration": 0,
                 "weapon_cost": 0,
                 "heal_cost": 0,
+                "consumable_cost": 0,
                 "enhancer_cost": 0,
                 "armour_cost": 0,
                 "loot_tt": 0,
@@ -210,25 +211,28 @@ impl QuestService {
         // synchronous unit on a reader-core connection.
         self.db
             .with_reader(move |conn| {
-                let (linked_sessions, total_duration, heal_cost, armour_cost) = conn.query_row(
-                    &format!(
-                        "SELECT COUNT(*), \
+                let (linked_sessions, total_duration, heal_cost, armour_cost, consumable_cost) =
+                    conn.query_row(
+                        &format!(
+                            "SELECT COUNT(*), \
                                 COALESCE(SUM(s.ended_at - s.started_at), 0), \
                                 COALESCE(SUM(s.heal_cost), 0), \
-                                COALESCE(SUM(s.armour_cost), 0) \
+                                COALESCE(SUM(s.armour_cost), 0), \
+                                COALESCE(SUM(s.consumable_cost), 0) \
                          FROM tracking_sessions s \
                          WHERE s.id IN ({placeholders}) AND s.is_active = 0"
-                    ),
-                    rusqlite::params_from_iter(session_ids.iter()),
-                    |row| {
-                        Ok((
-                            row_i64(row, 0),
-                            sql_number(row, 1),
-                            sql_number(row, 2),
-                            sql_number(row, 3),
-                        ))
-                    },
-                )?;
+                        ),
+                        rusqlite::params_from_iter(session_ids.iter()),
+                        |row| {
+                            Ok((
+                                row_i64(row, 0),
+                                sql_number(row, 1),
+                                sql_number(row, 2),
+                                sql_number(row, 3),
+                                sql_number(row, 4),
+                            ))
+                        },
+                    )?;
 
                 let weapon_cost = conn.query_row(
                     &format!(
@@ -276,6 +280,7 @@ impl QuestService {
                     "total_duration": total_duration,
                     "weapon_cost": weapon_cost,
                     "heal_cost": heal_cost,
+                    "consumable_cost": consumable_cost,
                     "enhancer_cost": enhancer_cost,
                     "armour_cost": armour_cost,
                     "loot_tt": loot_tt,

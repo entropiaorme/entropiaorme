@@ -356,7 +356,26 @@ impl TrackerActor {
                     },
                 ));
             }
-            HotbarItemKind::Consumable => {}
+            HotbarItemKind::Consumable => {
+                // The press is the dose: the item's key in game uses it.
+                if let Some(profile) = payload.consumable_profile.clone() {
+                    let start = super::doses::DoseStart {
+                        equipment_id: payload.equipment_id,
+                        item_name: payload.item_name.clone(),
+                        profile,
+                    };
+                    if let Err(error) = self
+                        .start_dose(start, crate::consumables::DoseSource::Hotbar, None)
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "eo::tracker",
+                            %error,
+                            "a consumable's hotbar dose could not be recorded",
+                        );
+                    }
+                }
+            }
         }
 
         if should_reconcile {
@@ -400,6 +419,9 @@ impl TrackerActor {
     /// correction's effect explains them again. The readout's effect state
     /// may have moved, so the next tick announces it.
     pub(super) async fn on_healing_updated(&mut self) {
+        // A correction may have taken a heal's on-use buff away or given it
+        // back.
+        self.restore_doses().await;
         let now = instant_to_epoch(resolve_local(self.clock.now()));
         if self.restore_persisted_healing(now).await {
             if let Some(active) = self.session.active_mut() {
@@ -605,8 +627,8 @@ impl TrackerActor {
                             "INSERT INTO healing_activations \
                              (id, session_id, equipment_id, tool_name, intent_at, observed_at, \
                               chat_timestamp, context_id, cost_ped, profile_json, provenance, \
-                              confirming_output_id) \
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              confirming_output_id, reload_speed_percent) \
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rusqlite::params![
                                 db_write.activation_id,
                                 sid,
@@ -620,6 +642,7 @@ impl TrackerActor {
                                 profile_json,
                                 db_write.provenance,
                                 db_write.output_id,
+                                db_write.intent.profile.reload_speed_percent,
                             ],
                         )?;
                         if let Some(window) = &db_write.effect {
@@ -716,6 +739,35 @@ impl TrackerActor {
                             }
                         }
                         active.dirty = true;
+                    }
+                }
+                // A tool that grants a buff on use (Eir Mk 1) opens it as a
+                // dose with the paid heal; the heal already carries the cost.
+                if let Some(on_use) = write.intent.profile.on_use.clone() {
+                    let start = super::doses::DoseStart {
+                        equipment_id: write.intent.equipment_id,
+                        item_name: write.intent.tool_name.clone(),
+                        profile: crate::consumables::ConsumableProfile {
+                            duration_seconds: on_use.duration_seconds,
+                            effects: on_use.effects,
+                            tt_value_ped: 0.0,
+                            markup_percent: 100.0,
+                            track_cost: false,
+                        },
+                    };
+                    if let Err(error) = self
+                        .start_dose(
+                            start,
+                            crate::consumables::DoseSource::OnUse,
+                            Some(write.activation_id.clone()),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "eo::tracker",
+                            %error,
+                            "a healing tool's on-use buff could not be recorded",
+                        );
                     }
                 }
                 true

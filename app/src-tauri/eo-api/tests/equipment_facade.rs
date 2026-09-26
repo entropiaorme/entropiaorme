@@ -29,7 +29,9 @@ fn write_snapshot(dir: &Path) {
     .unwrap();
     std::fs::write(
         dir.join("stimulants.json"),
-        r#"[{"id": "s1", "name": "Vita Bar", "economy": {}}]"#,
+        r#"[{"id": "s1", "name": "Vita Bar", "economy": {}},
+            {"id": "s2", "name": "Nanobots - Adrenaline Boost", "economy": {"max_tt": 3},
+             "effects": [{"name": "Reload Speed Increased", "strength": 20, "unit": "%", "duration_seconds": 3600}]}]"#,
     )
     .unwrap();
     std::fs::write(
@@ -116,6 +118,7 @@ fn consumable(name: &str) -> EquipmentRequest {
         tick_max: None,
         tick_seconds: None,
         weapon_effect: None,
+        dose: None,
     }
 }
 
@@ -211,7 +214,11 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
         "{\"id\":\"1\",\"name\":\"Nutrio Bar\",\"type\":\"consumable\",\"amplifierName\":null,\
          \"costPerUse\":0.0,\"damageMin\":null,\"damageMax\":null,\"reloadSeconds\":null,\
          \"isLimited\":false,\"enrichmentLevel\":1,\"healingProfile\":null,\
-         \"lifestealPercent\":null,\"effectProfile\":null}"
+         \"lifestealPercent\":null,\"effectProfile\":null,\"consumable\":{\"durationSeconds\":0.0,\
+         \"effects\":[],\"ttValuePed\":0.0,\"markupPercent\":100.0,\"doseCostPed\":0.0,\
+         \"trackCost\":false,\"catalogueEffects\":false,\"catalogueDuration\":false,\
+         \"catalogueValue\":false,\"declaredReloadSpeedPercent\":null,\
+         \"declaredDurationSeconds\":null,\"declaredTtValuePed\":null}}"
     );
 
     // Storage invariance: the stored props bytes are the reference
@@ -572,4 +579,129 @@ async fn a_slotted_or_carried_row_still_deletes() {
     assert!(api.equipment_library().await.unwrap().is_empty());
     // Idempotent over the missing row.
     api.equipment_delete(1).await.unwrap();
+}
+
+fn dosed(catalog_id: Option<&str>, name: Option<&str>) -> EquipmentRequest {
+    let mut request = consumable(name.unwrap_or(""));
+    request.catalog_id = catalog_id.map(str::to_string);
+    request.name = name.map(str::to_string);
+    request.dose = Some(eo_api::equipment::ConsumableDoseRequest {
+        markup_percent: 150.0,
+        track_cost: true,
+        duration_seconds: Some(600.0),
+        reload_speed_percent: Some(12.0),
+        tt_value_ped: Some(2.0),
+    });
+    request
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_catalogue_consumable_takes_its_dose_from_the_catalogue() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    let added = api.equipment_add(&dosed(Some("s2"), None)).await.unwrap();
+    let settings = added
+        .consumable
+        .as_ref()
+        .expect("a consumable carries its dose");
+    // The catalogue's effects, duration, and TT value win over the
+    // declared ones; the markup and tracking are the player's.
+    assert!(settings.catalogue_effects && settings.catalogue_duration && settings.catalogue_value);
+    assert_eq!(settings.duration_seconds, 3600.0);
+    assert_eq!(settings.tt_value_ped, 3.0);
+    assert_eq!(settings.effects.len(), 1);
+    assert_eq!(
+        settings.effects[0].reload_speed_percent.as_ref(),
+        Some(&20.0)
+    );
+    assert!((settings.dose_cost_ped - 4.5).abs() < 1e-12);
+    assert!((added.cost_per_use - 450.0).abs() < 1e-9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_custom_consumable_declares_its_dose_and_rejects_nonsense() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    let added = api
+        .equipment_add(&dosed(None, Some("Home Brew")))
+        .await
+        .unwrap();
+    let settings = added.consumable.as_ref().unwrap();
+    assert!(!settings.catalogue_effects);
+    assert_eq!(settings.duration_seconds, 600.0);
+    assert_eq!(
+        settings.effects[0].reload_speed_percent.as_ref(),
+        Some(&12.0)
+    );
+    assert!((settings.dose_cost_ped - 3.0).abs() < 1e-12);
+
+    let mut bad = dosed(None, Some("Bad Brew"));
+    bad.dose.as_mut().unwrap().markup_percent = 0.0;
+    assert!(matches!(
+        api.equipment_add(&bad).await,
+        Err(ApiError::BadRequest { .. })
+    ));
+    let mut bad = dosed(None, Some("Bad Brew"));
+    bad.dose.as_mut().unwrap().reload_speed_percent = Some(-100.0);
+    assert!(matches!(
+        api.equipment_add(&bad).await,
+        Err(ApiError::BadRequest { .. })
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dose_moves_the_reload_speed_every_surface_prices_under() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    let weapon = api
+        .equipment_add(&{
+            let mut request = consumable("");
+            request.kind = EquipmentKind::Weapon;
+            request.catalog_id = Some("w2".into());
+            request.name = None;
+            request
+        })
+        .await
+        .unwrap();
+    let pill = api.equipment_add(&dosed(Some("s2"), None)).await.unwrap();
+    let pill_id: i64 = pill.id.parse().unwrap();
+    let before = api
+        .equipment_detail(weapon.id.parse().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(before.attack_rate.as_ref().unwrap().factor, 1.0);
+
+    // Outside a session: the dose runs and counts, and books nothing.
+    let doses = api.consumable_dose_start(pill_id).await.unwrap();
+    assert_eq!(doses.doses.len(), 1);
+    let dose = &doses.doses[0];
+    assert_eq!(dose.cost_ped, 0.0);
+    assert!(dose.session_id.as_ref().is_none());
+    assert_eq!(doses.reload_speed.consumed_percent, 20.0);
+    assert_eq!(doses.reload_speed.in_effect_percent, 20.0);
+    assert_eq!(doses.options.len(), 1);
+
+    // 90 attacks a minute at +20% asks for 108; the server holds 100.
+    let during = api
+        .equipment_detail(weapon.id.parse().unwrap())
+        .await
+        .unwrap();
+    assert!((during.attack_rate.as_ref().unwrap().factor - 1.08).abs() < 1e-12);
+
+    // A misclick comes off exactly, and back.
+    let removed = api.consumable_dose_remove(dose.id.clone()).await.unwrap();
+    assert!(removed.doses.is_empty());
+    assert_eq!(removed.reload_speed.in_effect_percent, 0.0);
+    let restored = api.consumable_dose_restore(dose.id.clone()).await.unwrap();
+    assert_eq!(restored.doses.len(), 1);
+    assert_eq!(restored.reload_speed.in_effect_percent, 20.0);
+
+    assert!(matches!(
+        api.consumable_dose_remove("nope".into()).await,
+        Err(ApiError::NotFound { .. })
+    ));
+    assert!(matches!(
+        api.consumable_dose_start(weapon.id.parse().unwrap()).await,
+        Err(ApiError::NotFound { .. })
+    ));
 }

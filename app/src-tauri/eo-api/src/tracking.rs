@@ -223,6 +223,8 @@ pub struct SessionPage {
 pub struct CostBreakdown {
     pub weapon_cost: f64,
     pub heal_cost: f64,
+    /// Consumed doses of cost-tracked items.
+    pub consumable_cost: f64,
     pub enhancer_cost: f64,
     pub armour_cost: f64,
     /// Harvesting (tree cutting) swing decay.

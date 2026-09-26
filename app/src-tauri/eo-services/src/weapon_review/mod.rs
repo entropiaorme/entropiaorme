@@ -17,8 +17,9 @@
 //!
 //! An assignment prices the shot from the chosen weapon as it is configured
 //! now (the correction's pricing snapshot), prepared by the same `pricing`
-//! the live tracker's props pass through, so a review never prices a shot
-//! differently from how play would have. Every correction moves the shot
+//! the live tracker's props pass through, under the reload speed in effect
+//! when the shot was charged (a dose may have changed it since), so a
+//! review never prices a shot differently from how play would have. Every correction moves the shot
 //! between its kill's phases (or in or out of them), and repairs the kill's
 //! cost and shot count (or the session's dangling cost, for a shot after
 //! the last kill), the session summary, its days, and its settled cells in

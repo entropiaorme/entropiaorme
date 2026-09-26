@@ -40,14 +40,15 @@ const PROJECTIONS: [Projection; 9] = [
              dominant_mob, dominant_tag, dominant_weapon, dominant_mob_kills, \
              dominant_tag_kills, activity_skill_tt, primary_mobs_json, \
              primary_weapons_json, globals, hofs, harvest_swings, \
-             harvest_successes, harvest_loot_tt, harvest_cost \
+             harvest_successes, harvest_loot_tt, harvest_cost, consumable_cost \
              FROM session_summaries ORDER BY session_id",
     },
     Projection {
         table: "daily_rollups",
         snapshot_sql: "SELECT day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
              enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, \
-             quest_pes, harvest_loot_tt, harvest_cost FROM daily_rollups ORDER BY day",
+             quest_pes, harvest_loot_tt, harvest_cost, consumable_cost FROM daily_rollups \
+             ORDER BY day",
     },
     Projection {
         table: "daily_ledger_rollups",

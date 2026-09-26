@@ -466,6 +466,8 @@ pub struct QuestAnalyticsRow {
     pub total_duration_sec: f64,
     pub total_weapon_cost: f64,
     pub total_heal_cost: f64,
+    /// Consumed doses of cost-tracked items in the linked sessions.
+    pub total_consumable_cost: f64,
     pub total_enhancer_cost: f64,
     pub total_armour_cost: f64,
     pub total_loot_tt: f64,
@@ -555,6 +557,7 @@ impl QuestAnalyticsRow {
             total_duration_sec: model_float(&row["total_duration"], 1),
             total_weapon_cost: model_float(&row["weapon_cost"], 4),
             total_heal_cost: model_float(&row["heal_cost"], 4),
+            total_consumable_cost: model_float(&row["consumable_cost"], 4),
             total_enhancer_cost: model_float(&row["enhancer_cost"], 4),
             total_armour_cost: model_float(&row["armour_cost"], 4),
             total_loot_tt: model_float(&row["loot_tt"], 4),

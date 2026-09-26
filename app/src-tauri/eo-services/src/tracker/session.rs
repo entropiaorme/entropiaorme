@@ -74,6 +74,14 @@ pub(super) struct ActiveSession {
     /// Heal cost accrued this session (the equipped tool's per-use
     /// cost per counted activation).
     pub(super) heal_cost: Ped,
+    /// Consumed-dose cost booked to this session: every dose of a
+    /// cost-tracked item taken while it ran, less any removed since. The
+    /// session row holds the same figure, moved in the dose's own write.
+    pub(super) consumable_cost: Ped,
+    /// The reload speed in effect that shots and heals are priced under
+    /// now: equipped sources and running doses, under the game's limits.
+    /// Every stored shot and paid heal keeps the value it was charged at.
+    pub(super) reload_speed_percent: f64,
     pub(super) harvest_warning_emitted: bool,
     pub(super) protection_evidence_warning_emitted: bool,
     pub(super) warnings: Vec<String>,
@@ -111,6 +119,8 @@ impl ActiveSession {
             accumulator: Accumulator::default(),
             dirty: false,
             heal_cost: Ped::ZERO,
+            consumable_cost: Ped::ZERO,
+            reload_speed_percent: 0.0,
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
             warnings: Vec::new(),
@@ -245,6 +255,7 @@ impl TrackerActor {
         weapon_cost += active.accumulator.weapon_cost();
         enhancer_cost += active.accumulator.enhancer_cost;
         let heal_cost = active.heal_cost;
+        let consumable_cost = active.consumable_cost;
 
         // Flatten every immutable tool phase at the TT it actually cycled.
         // Equipment changes create distinct phases, while the three hunting
@@ -291,7 +302,7 @@ impl TrackerActor {
         let harvest_cost: Ped = harvests.iter().map(|harvest| harvest.cost_ped).sum();
         let harvest_loot: Ped = harvests.iter().map(|harvest| harvest.loot_total_ped).sum();
 
-        let cost = weapon_cost + heal_cost + enhancer_cost + harvest_cost;
+        let cost = weapon_cost + heal_cost + consumable_cost + enhancer_cost + harvest_cost;
         let returns: Ped = kills.iter().map(|kill| kill.loot_total_ped).sum::<Ped>() + harvest_loot;
 
         let damage_total: f64 = kills.iter().map(|kill| kill.damage_dealt).sum();
@@ -329,11 +340,12 @@ impl TrackerActor {
 
         // Cumulative-net history (per kill and per harvesting swing,
         // merged in timestamp order), distributing the session-level
-        // heal cost pro-rata across kills by their weapon-cost share
-        // so the curve's final point reconciles with the displayed
+        // heal and dose costs pro-rata across kills by their weapon-cost
+        // share so the curve's final point reconciles with the displayed
         // Net stat (returns - cost). Harvest swings carry their own
         // exact per-event net (wood TT minus swing decay), so they
-        // take no heal share.
+        // take no share.
+        let shared_cost = heal_cost + consumable_cost;
         let per_kill_weapon: Vec<Ped> = kills
             .iter()
             .map(|kill| {
@@ -347,7 +359,7 @@ impl TrackerActor {
         let mut net_events: Vec<(f64, Ped)> = Vec::with_capacity(kills.len() + harvests.len());
         for (kill, weapon) in kills.iter().zip(per_kill_weapon.iter()) {
             let heal_share = if total_weapon.is_positive() {
-                heal_cost * (*weapon / total_weapon)
+                shared_cost * (*weapon / total_weapon)
             } else {
                 Ped::ZERO
             };
@@ -836,6 +848,9 @@ impl TrackerActor {
         let mut active = ActiveSession::new(session.clone(), facets);
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
         active.weapons.load_carried(carried);
+        // The carried weapons were prepared under the reload speed the
+        // running doses put in effect; shots and heals are stamped with it.
+        active.reload_speed_percent = self.reload_speed_at(start_ts);
 
         // Seed the declared mob from the configured declaration, when
         // one is set (the same seeding the declare command performs).
@@ -890,6 +905,9 @@ impl TrackerActor {
                 }
             }
         }
+        // A dose taken before this session keeps running in the game: the
+        // play it covers carries its context.
+        self.open_running_dose_intervals().await;
         self.emit_session_event(
             TrackingReason::Started,
             TrackingStatus::Active,

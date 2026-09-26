@@ -17,12 +17,15 @@ use crate::db::DbError;
 pub(super) type Pricing<'a> = Option<&'a WeaponPricing>;
 
 /// A weapon's name and its per-shot cost in PED as it is configured now,
-/// its props prepared by `pricing`, or None when the item is gone or is not
-/// a weapon.
+/// its props prepared by `pricing` under the reload speed the shot was
+/// charged at (`reload_speed_percent`; a shot stored before that was kept
+/// takes the reload speed in effect now), or None when the item is gone or
+/// is not a weapon.
 pub(super) fn weapon_price(
     conn: &rusqlite::Connection,
     equipment_id: i64,
     pricing: Pricing<'_>,
+    reload_speed_percent: Option<f64>,
 ) -> Result<Option<(String, f64)>, WeaponReviewError> {
     let row: Option<(String, String)> = conn
         .query_row(
@@ -39,9 +42,10 @@ pub(super) fn weapon_price(
         context: "weapon properties parse",
         source,
     })?;
-    let props = match pricing {
-        Some(pricing) => pricing.prepare(&props),
-        None => props,
+    let props = match (pricing, reload_speed_percent) {
+        (Some(pricing), Some(speed)) => pricing.prepare_at(&props, speed),
+        (Some(pricing), None) => pricing.prepare(&props),
+        (None, _) => props,
     };
     let cost = cost_per_shot_from_props(&props, None)
         .get("totalCostPerUse")
@@ -192,19 +196,21 @@ pub(super) fn correction_weapons(
     evidence_id: &str,
     pricing: Pricing<'_>,
 ) -> Result<Vec<CorrectionWeapon>, WeaponReviewError> {
-    let candidates: Option<String> = conn
+    let stored: Option<(String, Option<f64>)> = conn
         .query_row(
-            "SELECT candidates_json FROM weapon_shot_evidence WHERE id = ?1",
+            "SELECT candidates_json, reload_speed_percent FROM weapon_shot_evidence WHERE id = ?1",
             [evidence_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let Some(candidates) = candidates else {
+    let Some((candidates, reload_speed_percent)) = stored else {
         return Err(WeaponReviewError::NotFound("Shot not found"));
     };
     let mut weapons = Vec::new();
     for candidate in parse_candidates(&candidates)? {
-        if let Some((name, cost)) = weapon_price(conn, candidate.equipment_id, pricing)? {
+        if let Some((name, cost)) =
+            weapon_price(conn, candidate.equipment_id, pricing, reload_speed_percent)?
+        {
             weapons.push(CorrectionWeapon {
                 equipment_id: candidate.equipment_id,
                 name,

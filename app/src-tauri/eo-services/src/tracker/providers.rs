@@ -7,8 +7,11 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::clock::RealClock;
+use crate::consumables::DoseBoard;
 use crate::expected_hunting::HuntingLooterLevels;
 use crate::harvest_yield::HarvestYieldTier;
+use crate::passive_effects::PassiveEffectSource;
 
 use super::attribution::CarriedWeapon;
 
@@ -114,6 +117,12 @@ pub trait TrackingConfig: Send + Sync {
 
     /// The loot-filter blacklist.
     fn loot_filter_blacklist(&self) -> Vec<String>;
+
+    /// The declared equipped sources of reload speed (rings, clothing): the
+    /// equipped input to the reload speed in effect, beside running doses.
+    fn passive_effect_sources(&self) -> Vec<PassiveEffectSource> {
+        Vec::new()
+    }
 }
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks
@@ -124,6 +133,10 @@ pub struct Providers {
     /// The player's name for global/HoF correlation, fixed at
     /// construction (whitespace-trimmed there).
     pub player_name: String,
+    /// Where the tracker publishes the running doses for every other
+    /// reader of the reload speed in effect (the composition shares it
+    /// with the equipment library and the facade's pricing).
+    pub doses: DoseBoard,
 }
 
 impl Default for Providers {
@@ -132,6 +145,7 @@ impl Default for Providers {
             equipment: Arc::new(InertEquipment),
             config: Arc::new(DefaultTrackingConfig),
             player_name: String::new(),
+            doses: DoseBoard::new(Arc::new(RealClock::new())),
         }
     }
 }

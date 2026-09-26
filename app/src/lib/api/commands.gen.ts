@@ -591,6 +591,124 @@ export interface ComputedCharacterStats {
 }
 
 /**
+ * One dose, as the readouts and review show it. Times are epoch seconds.
+ */
+export interface ConsumableDose {
+	id: string;
+	/** Null once the item was deleted from Equipment. */
+	equipmentId: number | null;
+	itemName: string;
+	source: ConsumableDoseSource;
+	/** The session the dose was taken in; null outside one. */
+	sessionId: string | null;
+	startedAt: number;
+	/** When the effect ends (or ended): the expiry, or earlier when a re-dose of the item replaced it. */
+	endsAt: number;
+	/** Whether a re-dose of the item replaced it before its expiry. */
+	replaced: boolean;
+	/** What it booked to its session, PED. */
+	costPed: number;
+	/** Whether the item's dose cost was tracked when it was taken. */
+	costTracked: boolean;
+	effects: ConsumableEffect[];
+	removedAt: number | null;
+	removedBy: ConsumableDoseRemoval | null;
+}
+
+/**
+ * Who removed a dose.
+ */
+export type ConsumableDoseRemoval = 'player' | 'heal_correction';
+
+/**
+ * A consumable's dose settings as an add or update request declares them,
+ * in the request's casing. The effects, duration, and TT value are used
+ * only where the catalogue has none.
+ */
+export interface ConsumableDoseRequest {
+	/** The acquisition markup, percent of TT. */
+	markup_percent: number;
+	/** Whether taking a dose books its cost to the session. */
+	track_cost: boolean;
+	duration_seconds?: number | null;
+	reload_speed_percent?: number | null;
+	tt_value_ped?: number | null;
+}
+
+/**
+ * How a dose started.
+ */
+export type ConsumableDoseSource = 'hotbar' | 'manual' | 'on_use';
+
+/**
+ * The dose readout: the running doses and those just ended (so they can be
+ * re-dosed), the reload speed in effect, and what a dose can be started
+ * from.
+ */
+export interface ConsumableDoses {
+	/** Now, epoch seconds, as the doses were read: a countdown measures from here. */
+	now: number;
+	doses: ConsumableDose[];
+	reloadSpeed: ReloadSpeedNow;
+	options: ConsumableOption[];
+}
+
+/**
+ * One effect a dose grants, as the item prints it.
+ */
+export interface ConsumableEffect {
+	name: string;
+	strength: number | null;
+	unit: string | null;
+	/** The signed reload speed it adds, percent, when it is a reload-speed effect; the only kind the app evaluates. */
+	reloadSpeedPercent: number | null;
+}
+
+/**
+ * A configured consumable a dose can be started from.
+ */
+export interface ConsumableOption {
+	equipmentId: number;
+	name: string;
+	/** How long one dose lasts, seconds; 0 for an immediate item. */
+	durationSeconds: number;
+	/** What one dose costs at its recorded markup, PED. */
+	doseCostPed: number;
+	/** Whether taking a dose books that cost to the session. */
+	costTracked: boolean;
+	/** The reload speed one dose adds, percent, as printed. */
+	reloadSpeedPercent: number;
+	/** The hotbar slot the item is bound to, when it is; its key starts a dose in game. */
+	hotbarSlot: string | null;
+}
+
+/**
+ * A consumable's dose as Equipment configures it: what the catalogue
+ * supplies and what the player declared, and what one dose costs.
+ */
+export interface ConsumableSettings {
+	/** How long one dose lasts, seconds; 0 for an immediate item. */
+	durationSeconds: number;
+	effects: ConsumableEffect[];
+	/** One dose's TT value, PED. */
+	ttValuePed: number;
+	/** The acquisition markup, percent of TT. */
+	markupPercent: number;
+	/** One dose at that markup, PED. */
+	doseCostPed: number;
+	/** Whether taking a dose books its cost to the session. */
+	trackCost: boolean;
+	/** Which figures the catalogue supplies (the rest are declared). */
+	catalogueEffects: boolean;
+	catalogueDuration: boolean;
+	catalogueValue: boolean;
+	/** What the player declared, for editing: used where the catalogue has nothing. */
+	declaredReloadSpeedPercent: number | null;
+	declaredDurationSeconds: number | null;
+	declaredTtValuePed: number | null;
+}
+
+/**
  * The calibration flow's phase, as the closed wire vocabulary.
  */
 export type CoordCalibrationPhase = 'idle' | 'awaitTopLeft' | 'awaitBottomRight';
@@ -644,6 +762,8 @@ export type CoordScanStatus = 'read' | 'noRegion' | 'captureFailed' | 'engineUna
 export interface CostBreakdown {
 	weaponCost: number;
 	healCost: number;
+	/** Consumed doses of cost-tracked items. */
+	consumableCost: number;
 	enhancerCost: number;
 	armourCost: number;
 	/** Harvesting (tree cutting) swing decay. */
@@ -723,6 +843,8 @@ export interface EquipmentDetail {
 	effectProfile: WeaponEffectProfileDto | null;
 	/** A weapon's attack rate, when its catalogue publishes a base rate. */
 	attackRate: WeaponAttackRate | null;
+	/** A consumable's dose; null for every other kind. */
+	consumable: ConsumableSettings | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -802,6 +924,8 @@ export interface EquipmentRequest {
 	tick_seconds?: number | null;
 	/** A weapon's damage-over-time effect; absent for every other kind. */
 	weapon_effect?: WeaponEffectRequest | null;
+	/** A consumable's dose settings; absent for every other kind, and for a consumable that keeps its dose unbooked with no declared figures. */
+	dose?: ConsumableDoseRequest | null;
 }
 
 /**
@@ -844,6 +968,8 @@ export interface EquipmentSummary {
 	lifestealPercent: number | null;
 	/** A weapon's declared damage-over-time effect, when it has one. */
 	effectProfile: WeaponEffectProfileDto | null;
+	/** A consumable's dose; null for every other kind. */
+	consumable: ConsumableSettings | null;
 }
 
 /**
@@ -2519,6 +2645,8 @@ export interface QuestAnalyticsRow {
 	totalDurationSec: number;
 	totalWeaponCost: number;
 	totalHealCost: number;
+	/** Consumed doses of cost-tracked items in the linked sessions. */
+	totalConsumableCost: number;
 	totalEnhancerCost: number;
 	totalArmourCost: number;
 	totalLootTt: number;
@@ -2751,6 +2879,21 @@ export interface ReloadSpeedInEffect {
 	effectivePercent: number;
 	/** The game's limit on reload speed from equipped items. */
 	itemLimitPercent: number;
+}
+
+/**
+ * The reload speed in effect and where it comes from.
+ */
+export interface ReloadSpeedNow {
+	/** What the enabled equipped sources print, summed. */
+	equippedPercent: number;
+	/** What the running doses print, summed. */
+	consumedPercent: number;
+	/** What reaches weapon attack rates and healing reloads: each group under its own limit, their sum under the total limit, then slowing. */
+	inEffectPercent: number;
+	itemLimitPercent: number;
+	consumedLimitPercent: number;
+	totalLimitPercent: number;
 }
 
 /**
@@ -3690,6 +3833,26 @@ export async function healingCorrect(target: {
 
 export async function healingCorrectionUndo(correctionId: string): Promise<SessionDetail> {
 	return invokeCommand('healing_correction_undo', { correction_id: correctionId });
+}
+
+export async function consumableDoses(): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_doses', {});
+}
+
+export async function consumableDoseStart(equipmentId: number): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_start', { equipment_id: equipmentId });
+}
+
+export async function consumableDoseRemove(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_remove', { dose_id: doseId });
+}
+
+export async function consumableDoseRestore(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_restore', { dose_id: doseId });
+}
+
+export async function consumableSessionDoses(sessionId: string): Promise<ConsumableDose[]> {
+	return invokeCommand('consumable_session_doses', { session_id: sessionId });
 }
 
 export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence' | 'effect_tick', offset: number, limit: number): Promise<WeaponShotPage> {

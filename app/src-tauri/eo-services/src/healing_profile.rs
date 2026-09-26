@@ -51,6 +51,10 @@ pub struct HealingProfile {
     pub reload_speed_percent: Option<f64>,
     #[serde(default)]
     pub effective_reload_seconds: Option<f64>,
+    /// The buff each paid use grants (Eir Mk 1: reload speed for eight
+    /// seconds), opened as a dose; absent for most tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_use: Option<crate::consumables::OnUseEffect>,
 }
 
 impl HealingProfile {
@@ -119,6 +123,7 @@ mod tests {
             base_reload_seconds: None,
             reload_speed_percent: None,
             effective_reload_seconds: None,
+            on_use: None,
         };
         assert!(profile.direct_matches(80.0));
         assert!(!profile.direct_matches(10.0));

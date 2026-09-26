@@ -108,9 +108,12 @@ was undone), `0057_healing_corrections.sql` (post-play healing corrections,
 their supersession and exact-undo provenance, and the effect-window expiry
 read), `0058_weapon_attribution_evidence.sql` (stored weapon evidence, live
 mismatch decisions, post-play assignments of unpriced shots, and each
-session's attribution tallies), and `0059_weapon_effect_windows.sql` (the
+session's attribution tallies), `0059_weapon_effect_windows.sql` (the
 persisted damage-over-time windows paid weapon hits open, each stored shot's
-effect candidates, and the kind of each post-play weapon correction). The
+effect candidates, and the kind of each post-play weapon correction), and
+`0060_consumable_doses.sql` (consumable doses with their absolute expiry, the
+consumed-dose cost bucket on sessions and both projections, and the reload
+speed each stored shot and paid heal was charged under). The
 `Db::open` path opens the write connection, configures its session pragmas,
 adopts or refuses any pre-existing schema, reconciles baseline-column drift,
 runs the embedded chain (`MIGRATIONS` in `eo-services/src/db/migrate.rs`), and
@@ -619,6 +622,7 @@ facets, and an optional session-definition identity.
 | `armour_cost` | REAL | Defaults to 0. |
 | `heal_cost` | REAL | Defaults to 0. |
 | `dangling_cost` | REAL | Defaults to 0. |
+| `consumable_cost` | REAL | Defaults to 0 (migration `0060`). What the session's standing doses of cost-tracked items booked; moved in the same transaction as each dose, removal, or restore. Sessions before the migration booked none. |
 | `mob_tracking_mode` | TEXT | Not null; defaults to `'mob'`. Records the attribution input mode (`'mob'` or `'tag'`); a presentation hint only, since the data semantics are identical. |
 | `session_name` | TEXT | Optional designated session-name stamp (migration `0018`). It remains the recorded name even if an attached definition is later renamed. |
 | `skill_boost_percent` | INTEGER | Optional positive boost declaration (migration `0018`). Null means not captured. |
@@ -780,10 +784,41 @@ as its tick, may name a deleted session's window: in the same transaction
 they lose that pointer (the ticks stay ticks, since the hit that paid for them
 was paid).
 
+#### Consumable doses
+
+Migration `0060` records each dose of a consumable (see ADR-0036).
+`consumable_doses` holds one row per dose: its item's equipment identity and
+name, how it started (`hotbar`, `manual`, or `on_use` for a healing tool's
+buff opened by a paid heal, which also names that heal's activation), the
+session and context it was taken in (null outside a session), the stacking
+`consumable` interval standing for it in the latest session it ran in, its
+absolute start and expiry, what it booked to its session (0 outside a session,
+for an item whose cost is not tracked, and for a heal's buff; a check keeps
+a dose with no session at 0), whether the item's cost was tracked then, and
+its effects as JSON as they stood when it was taken. A re-dose of an item
+ends the running dose where it starts (`superseded_at`) and names the dose it
+ended (`supersedes_dose_id`). A removal marks the dose (`removed_at`,
+`removed_by`: `player` for a misclick, `heal_correction` when its heal was
+corrected) and never deletes it; a restore clears the mark. It is indexed by
+expiry (the start-up read of the running doses), by session and start, and by
+healing activation.
+
+Two evidence tables keep the reload speed in effect when a charge was made,
+null for rows written before the migration:
+
+| Table | Column | Notes |
+| --- | --- | --- |
+| `weapon_shot_evidence` | `reload_speed_percent` | The reload speed the shot was priced under; post-play review prices an assignment at it. |
+| `healing_activations` | `reload_speed_percent` | The reload speed the heal's reload was timed under. |
+
+Session deletion detaches its doses rather than removing them: the doses were
+still taken and a running one keeps its effect, but the session, context,
+interval, and booked cost leave with the session.
+
 #### `session_intervals`
 
 The authoritative duration and cost stretches inside a session (migration
-`0019`). Quests, segments, modifiers, and future kinds share this open-vocabulary
+`0019`). Quests, segments, modifiers, and consumable doses share this open-vocabulary
 primitive. Interval timestamps are wall-clock bounds and are never compared to
 event timestamps for attribution.
 
@@ -1319,6 +1354,7 @@ is healed in by a version bump (the code's `SUMMARY_VERSION` is 4).
 | `harvest_successes` | INTEGER | Defaults to 0 (migration `0006`). |
 | `harvest_loot_tt` | REAL | Defaults to 0 (migration `0006`). Wood loot TT; also included in `loot_tt`. |
 | `harvest_cost` | REAL | Defaults to 0 (migration `0006`). Swing decay; also included in `cycled_ped`. |
+| `consumable_cost` | REAL | Defaults to 0 (migration `0060`). Consumed doses; also included in `cycled_ped`. |
 | `session_name` | TEXT | Optional designated session-name stamp copied from `tracking_sessions` (migration `0018`). |
 | `skill_boost_percent` | INTEGER | Optional positive boost declaration copied from `tracking_sessions` (migration `0018`). |
 
@@ -1357,6 +1393,7 @@ point sets.
 | `computed_at` | REAL | Not null; defaults to `unixepoch('now')`. |
 | `harvest_loot_tt` | REAL | Nullable (migration `0006`); `SUM(harvest_events.loot_total_ped)`. |
 | `harvest_cost` | REAL | Nullable (migration `0006`); `SUM(harvest_events.cost_ped)`. |
+| `consumable_cost` | REAL | Nullable (migration `0060`); `SUM(tracking_sessions.consumable_cost)`. |
 | `quest_item_tt` | REAL | Nullable (migration `0046`); confirmed non-Universal-Ammo quest reward TT. Universal Ammo enters through the ledger instead. |
 
 #### `daily_ledger_rollups`
@@ -1475,7 +1512,7 @@ migrations (`0002_analytical_indexes.sql`,
 `0053_session_protection_policy.sql`, `0054_session_armour_cost_policy.sql`,
 `0055_session_grain_protection_costs.sql`, `0056_protection_recording_undo.sql`,
 `0057_healing_corrections.sql`, `0058_weapon_attribution_evidence.sql`,
-`0059_weapon_effect_windows.sql`); the runner
+`0059_weapon_effect_windows.sql`, `0060_consumable_doses.sql`); the runner
 records applied migrations in the `_sqlx_migrations` ledger (the table name,
 column shapes, and SHA-384 checksum accounting are inherited unchanged from
 the previous runner, so existing databases reconcile byte for byte) and never

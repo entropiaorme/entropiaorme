@@ -49,3 +49,4 @@
   - [ADR-0033: Damage-over-time effect windows](adr/0033-damage-over-time-effect-windows.md)
   - [ADR-0034: The server's attack-rate limit](adr/0034-attack-rate-limit.md)
   - [ADR-0035: User-led promotion](adr/0035-user-led-promotion.md)
+  - [ADR-0036: Consumable dose lifecycle](adr/0036-consumable-dose-lifecycle.md)

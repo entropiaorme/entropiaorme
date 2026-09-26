@@ -593,7 +593,7 @@
     "economy": {
       "decay": 2.4
     },
-    "min_heal": 30,
+    "min_heal": 60,
     "max_heal": 60,
     "uses_per_minute": 41,
     "effects_on_use": [
@@ -1281,7 +1281,7 @@
     "economy": {
       "decay": 6
     },
-    "min_heal": 5,
+    "min_heal": 32,
     "max_heal": 32,
     "uses_per_minute": 27
   },

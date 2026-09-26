@@ -262,9 +262,6 @@
         "name": "Mature"
       },
       {
-        "name": "Old"
-      },
-      {
         "name": "Provider"
       },
       {
@@ -284,6 +281,12 @@
       },
       {
         "name": "Stalker"
+      },
+      {
+        "name": "Hatchling"
+      },
+      {
+        "name": "Old"
       }
     ]
   },
@@ -15408,25 +15411,19 @@
     },
     "maturities": [
       {
-        "name": "Feudal Umbranoid Serf"
-      },
-      {
-        "name": "Feudal Umbranoid Scavenger"
-      },
-      {
         "name": "Feudal Umbranoid Vagabond"
-      },
-      {
-        "name": "Feudal Umbranoid Hunter"
       },
       {
         "name": "Feudal Umbranoid Butcher"
       },
       {
-        "name": "Feudal Umbranoid Invader"
+        "name": "Feudal Umbranoid Serf"
       },
       {
-        "name": "Feudal Umbranoid Nomad"
+        "name": "Feudal Umbranoid Hunter"
+      },
+      {
+        "name": "Feudal Umbranoid Scavenger"
       },
       {
         "name": "Feudal Umbranoid Gatherer"
@@ -15439,6 +15436,12 @@
       },
       {
         "name": "Feudal Umbranoid Quatermaster"
+      },
+      {
+        "name": "Feudal Umbranoid Invader"
+      },
+      {
+        "name": "Feudal Umbranoid Nomad"
       },
       {
         "name": "Feudal Umbranoid Looter"
@@ -15460,6 +15463,12 @@
       },
       {
         "name": "Feudal Umbranoid Assassin"
+      },
+      {
+        "name": "Feudal Umbranoid Guardian"
+      },
+      {
+        "name": "Feudal Umbranoid Fighter"
       }
     ]
   },

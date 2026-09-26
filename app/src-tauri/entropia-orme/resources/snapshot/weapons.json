@@ -1799,7 +1799,7 @@
     "economy": {
       "decay": 0.77,
       "ammo_burn": 710,
-      "efficiency": null,
+      "efficiency": 66.4,
       "max_tt": 200,
       "min_tt": 6
     },
@@ -55563,7 +55563,7 @@
     "id": "51996d64a0d5",
     "name": "Kinetic Attack Nanochip 8",
     "economy": {
-      "decay": 1.611,
+      "decay": 1.289,
       "ammo_burn": 2634,
       "efficiency": 55.5,
       "max_tt": 142,

@@ -47,3 +47,4 @@
   - [ADR-0031: Protection costs recorded at session grain](adr/0031-session-grain-protection-costs.md)
   - [ADR-0032: Unified weapon attribution](adr/0032-unified-weapon-attribution.md)
   - [ADR-0033: Damage-over-time effect windows](adr/0033-damage-over-time-effect-windows.md)
+  - [ADR-0034: The server's attack-rate limit](adr/0034-attack-rate-limit.md)

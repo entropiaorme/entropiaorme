@@ -7,6 +7,7 @@
 {"chat": 1}
 {"chat": 1}
 {"chat": 1}
+{"advance": 1.0}
 {"decide": "confirm"}
 {"advance": 2.0}
 {"chat": 1}
@@ -17,5 +18,6 @@
 {"advance": 2.0}
 {"chat": 1}
 {"chat": 1}
+{"advance": 1.0}
 {"decide": "keep"}
 {"chat": 1}

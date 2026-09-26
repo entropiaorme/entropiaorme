@@ -513,10 +513,10 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     let actual_fingerprint = recorder.serialize(&mut normalizer);
     let actual_snapshot = runtime.block_on(catalogue_snapshot(&db, &mut normalizer));
 
-    // Deliberate re-ratification hook (see TESTING.md "Goldens
-    // regeneration", and the demo-goldens UPDATE hook it mirrors): write
-    // what the pipeline currently produces instead of asserting. Every
-    // write is still gated behind the ratification guard at push time.
+    // Deliberate regeneration hook (see TESTING.md "Goldens regeneration"):
+    // write what the pipeline currently produces instead of asserting. The
+    // moved goldens are reviewed as a behaviour change in the commit that
+    // moves them.
     if std::env::var_os("UPDATE_CORPUS_GOLDENS").is_some() {
         std::fs::create_dir_all(scenario.join("expected")).expect("expected dir");
         std::fs::write(

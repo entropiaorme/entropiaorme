@@ -1,6 +1,6 @@
 # ADR-0029: Two-line development with promotion after soak
 
-- Status: Accepted
+- Status: Accepted (its promotion cadence superseded by [ADR-0035](0035-user-led-promotion.md))
 - Context: a solo-maintained, versioned desktop application with explicit releases ([ADR-0014](0014-release-engineering.md): releases are cut from `main` by tag), where gating every change on the release line had become the bottleneck. This record leaves ADR-0014 in force and changes only how work reaches `main`.
 
 ## Context and problem statement

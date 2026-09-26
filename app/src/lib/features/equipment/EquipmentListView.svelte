@@ -2,6 +2,7 @@
 	import { Button, Card, Divider, Skeleton } from '$lib/components';
 	import { IconConsumables, IconHealing, IconWeapons } from '$lib/icons';
 	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
+	import { formatReload } from './attackRate';
 	import { formatPec } from './display';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import WeaponRow from './WeaponRow.svelte';
@@ -162,7 +163,7 @@
 								Direct {tool.profile.directMin}–{tool.profile.directMax}
 							{/if}
 							{#if tool.reloadSeconds !== null}
-								<span class="ml-2">{tool.reloadSeconds}s reload</span>
+								<span class="ml-2">{formatReload(tool.reloadSeconds, model.reloadSpeed?.effectivePercent ?? 0)}</span>
 							{/if}
 						</div>
 					</div>

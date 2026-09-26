@@ -4,6 +4,8 @@ import {
 	describeAttackRate,
 	describeReloadLimit,
 	formatFactor,
+	formatReload,
+	reloadSecondsUnder,
 	SERVER_ATTACKS_PER_MINUTE_LIMIT,
 } from './attackRate';
 
@@ -103,5 +105,28 @@ describe('formatFactor', () => {
 		expect(formatFactor(1.1700000001)).toBe('×1.17');
 		expect(formatFactor(1.2)).toBe('×1.2');
 		expect(formatFactor(1.035)).toBe('×1.035');
+	});
+});
+
+describe('reloadSecondsUnder', () => {
+	it('divides the reload by the speed multiplier, as the backend does', () => {
+		expect(reloadSecondsUnder(2.5, 15)).toBeCloseTo(2.5 / 1.15, 12);
+		expect(reloadSecondsUnder(2.5, -10)).toBeCloseTo(2.5 / 0.9, 12);
+		expect(reloadSecondsUnder(2.5, 0)).toBe(2.5);
+	});
+
+	it('keeps the base reload when the speed is unusable', () => {
+		expect(reloadSecondsUnder(2.5, -100)).toBe(2.5);
+		expect(reloadSecondsUnder(2.5, Number.NaN)).toBe(2.5);
+	});
+});
+
+describe('formatReload', () => {
+	it('shows the catalogue reload alone when no speed applies', () => {
+		expect(formatReload(2.5, 0)).toBe('2.5s reload');
+	});
+
+	it('shows the effective reload beside the catalogue one', () => {
+		expect(formatReload(2.5, 15)).toBe('2.17s reload (2.5s base)');
 	});
 });

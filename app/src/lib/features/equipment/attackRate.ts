@@ -38,6 +38,35 @@ export function attackRateFactor(
 	return Math.max(1, (basePerMinute * multiplier) / SERVER_ATTACKS_PER_MINUTE_LIMIT);
 }
 
+/**
+ * A reload of `baseSeconds` under `reloadSpeedPercent`: the reload divided
+ * by the speed multiplier, the rule the backend applies to healing tools and
+ * chips (`passive_effects::reload_seconds_under`). Unusable inputs keep the
+ * base reload.
+ */
+export function reloadSecondsUnder(baseSeconds: number, reloadSpeedPercent: number): number {
+	const multiplier = 1 + reloadSpeedPercent / 100;
+	if (
+		!Number.isFinite(baseSeconds) ||
+		baseSeconds < 0 ||
+		!Number.isFinite(multiplier) ||
+		multiplier <= 0
+	) {
+		return baseSeconds;
+	}
+	return baseSeconds / multiplier;
+}
+
+/** A healing tool's reload as Equipment lists it: the effective reload under
+ * the reload speed in effect, with the catalogue reload beside it when the
+ * two differ. */
+export function formatReload(baseSeconds: number, reloadSpeedPercent: number): string {
+	const seconds = (value: number) => `${Number(value.toFixed(2))}s`;
+	const effective = reloadSecondsUnder(baseSeconds, reloadSpeedPercent);
+	if (seconds(effective) === seconds(baseSeconds)) return `${seconds(baseSeconds)} reload`;
+	return `${seconds(effective)} reload (${seconds(baseSeconds)} base)`;
+}
+
 const rate = (value: number) => `${Number(value.toFixed(1))}`;
 
 /** The factor as a multiplier label, `×1.17`: three decimals at most, so a

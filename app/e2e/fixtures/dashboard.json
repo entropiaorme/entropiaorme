@@ -54,6 +54,7 @@
       "costBreakdown": {
         "weaponCost": 900.0,
         "healCost": 50.0,
+        "consumableCost": 0.0,
         "enhancerCost": 30.0,
         "armourCost": 20.0,
         "harvestCost": 0.0
@@ -79,7 +80,23 @@
     "effectiveLoot": 557.5,
     "toolStats": [],
     "skillGains": [],
+    "weaponAttribution": {
+      "correctable": true,
+      "agreed": 0,
+      "evidenced": 0,
+      "evidenceShots": 0,
+      "unresolved": 0,
+      "unpriced": 0,
+      "assigned": 0,
+      "markedTicks": 0,
+      "effectTicks": 0,
+      "pricedTicks": 0,
+      "unclaimedTicks": 0,
+      "effects": [],
+      "reviews": []
+    },
     "healing": {
+      "correctable": true,
       "activations": [],
       "activationCount": 0,
       "outputCount": 0,

@@ -28,11 +28,6 @@ describe('quests visual regression (native Tauri shell)', () => {
 			timeout: 12000,
 			timeoutMsg: 'quests list never settled into the empty state',
 		});
-		// The guide button's unseen indicator renders once the persisted
-		// preference read resolves; gate on it so the shot never races that read.
-		await $('button[aria-label="Open guide for this page"] span.bg-accent').waitForExist({
-			timeout: 12000,
-		});
 		await browser.pause(500);
 		await ensureViewport(browser);
 		const mismatch = await browser.checkElement(area, 'quests-list-empty', VISUAL_OPTS);

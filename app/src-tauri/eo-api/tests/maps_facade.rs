@@ -91,7 +91,6 @@ async fn maps_api(dir: &Path, with_bundle: bool, coord: Option<Arc<CoordCaptureS
         handles.repair_ocr,
         handles.sale_window_ocr,
         handles.quests.clone(),
-        None,
         planet_maps,
         coord,
         None,

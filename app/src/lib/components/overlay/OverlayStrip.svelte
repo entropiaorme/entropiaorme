@@ -175,7 +175,6 @@
 		 is corrected on the session record instead. -->
 	<div
 		class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
-		data-guide-anchor="overlay-session-section"
 	>
 		<div class="w-32 flex flex-col shrink-0">
 			<span class="facet-label">Session</span>
@@ -309,7 +308,6 @@
 		 mob until detection can read the target directly). -->
 	<div
 		class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
-		data-guide-anchor="overlay-mob-section"
 	>
 		<div class="w-32 flex flex-col shrink-0">
 			<span class="facet-label">Mob</span>
@@ -349,7 +347,6 @@
 		 owns the boundary via its left border. -->
 	<div
 		class="flex items-center gap-2 shrink-0"
-		data-guide-anchor="overlay-equipment-section"
 	>
 		<span class="text-white/40 shrink-0">{@html ICON_EQUIPMENT}</span>
 		{#if data.currentToolKind === 'healing'}
@@ -449,7 +446,6 @@
 		 the sessions it covers, so it needs no running session. -->
 	<div
 		class="flex items-center gap-2 shrink-0 border-l border-white/10 pl-3"
-		data-guide-anchor="overlay-armour-section"
 	>
 		<span class="text-white/40 shrink-0">{@html ICON_ARMOUR}</span>
 		<button
@@ -461,7 +457,6 @@
 			aria-expanded={armourCostOpen}
 			onclick={onArmourCostToggle}
 			title="Record an armour repair or a limited set's reading"
-			data-guide-anchor="overlay-armour-cost-btn"
 		>
 			Cost
 		</button>

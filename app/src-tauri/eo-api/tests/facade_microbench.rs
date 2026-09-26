@@ -86,7 +86,6 @@ fn facade_microbench() {
         None,
         None,
         None,
-        None,
     );
 
     let mut rows: Vec<(&str, f64, f64, f64, f64)> = Vec::new();

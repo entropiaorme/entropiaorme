@@ -63,7 +63,6 @@ async fn analytics_api_with_db(dir: &Path, db: Db) -> Api {
         None,
         None,
         None,
-        None,
     )
 }
 

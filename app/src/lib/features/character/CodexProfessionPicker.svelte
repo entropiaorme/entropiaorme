@@ -107,7 +107,6 @@
 	bind:this={root}
 	onkeydown={handleRootKeydown}
 	role="presentation"
-	data-guide-anchor="character-codex-profession-select"
 >
 	<button
 		class="h-9 pl-3 pr-8 text-sm bg-surface/70 text-text rounded-md border border-border cursor-pointer text-left truncate min-w-40 relative

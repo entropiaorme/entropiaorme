@@ -53,7 +53,6 @@ async fn quests_api(dir: &Path) -> Api {
         None,
         None,
         None,
-        None,
     )
 }
 
@@ -244,7 +243,6 @@ async fn populated_analytics_serialise_to_the_wire_bytes() {
         handles.repair_ocr,
         handles.sale_window_ocr,
         handles.quests.clone(),
-        None,
         None,
         None,
         None,

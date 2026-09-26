@@ -63,7 +63,6 @@ async fn definitions_api_with_settings(dir: &Path, settings: Option<&str>) -> (A
         None,
         None,
         None,
-        None,
     );
     (api, db)
 }

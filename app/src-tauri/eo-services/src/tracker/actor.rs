@@ -31,9 +31,8 @@ use crate::consumables::{DoseRecord, DoseRemoval, DoseSource};
 
 use super::doses::{DoseError, DoseRuntime, DoseStart};
 use super::intervals::{ActiveActivity, ActivityKey, ActivityRef};
-use super::mob::DeclaredMob;
 use super::providers::Providers;
-use super::session::{SessionAggregate, SessionFacets};
+use super::session::SessionAggregate;
 use super::weapon_evidence::{MismatchDecision, WeaponDecisionError};
 use super::{HarvestTool, SessionState, TrackerCommandError};
 
@@ -106,12 +105,6 @@ pub(super) enum TrackerMsg {
     /// The wake-up at a dose's expiry: nothing to do beyond the sweep every
     /// message runs first.
     DoseWake,
-    PrimeDemo {
-        session: TrackingSession,
-        declared_mob: Option<DeclaredMob>,
-        facets: SessionFacets,
-        reply: oneshot::Sender<()>,
-    },
     /// Test-only structural inspection: run a closure against the
     /// actor's owned state (the typestate replaced the lockable state
     /// tests used to peek at).
@@ -290,15 +283,6 @@ impl TrackerActor {
                 let _ = reply.send(result);
             }
             TrackerMsg::DoseWake => {}
-            TrackerMsg::PrimeDemo {
-                session,
-                declared_mob,
-                facets,
-                reply,
-            } => {
-                self.prime_demo(session, declared_mob, facets);
-                let _ = reply.send(());
-            }
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),
         }

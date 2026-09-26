@@ -81,7 +81,6 @@
 <!-- Equipment row -->
 <button
 	type="button"
-	data-guide-anchor="library-row-{item.id}"
 	class="w-full text-left px-4 py-3 rounded-md transition-colors duration-[var(--duration-fast)]
 		cursor-pointer
 		{model.expandedId === item.id
@@ -124,7 +123,7 @@
 		</div>
 
 		<!-- Enrichment badge -->
-		<span data-guide-anchor="enrichment-badge-{item.id}" class="shrink-0">
+		<span class="shrink-0">
 			<Badge variant={enrichmentColor(item.enrichmentLevel)} class="shrink-0">
 				{enrichmentLabel(item.enrichmentLevel)}
 			</Badge>
@@ -209,7 +208,6 @@
 				{@const expected = detail.expectedReturn}
 				<div
 					class="grid grid-cols-3 gap-5 border-y border-border/35 py-3 mb-4"
-					data-guide-anchor="expected-return-{item.id}"
 				>
 					<StatDisplay
 						label="Expected Return"

@@ -13,13 +13,6 @@ import {
 	getCharacterStats,
 	showScanOverlay,
 } from '$lib/api';
-import {
-	characterDemoCalibration,
-	characterDemoProfessions,
-	characterDemoProspectOptions,
-	characterDemoSkills,
-	characterDemoStats,
-} from '$lib/guide/fixtures/character';
 import type { ProfessionLevel, SkillLevel, StatProfession } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
@@ -76,17 +69,8 @@ export function createCharacterModel() {
 		initialSort: { key: 'level', dir: 'desc' },
 	});
 
-	async function loadCharacterData(guideMode: boolean) {
+	async function loadCharacterData() {
 		errors.error = null;
-		if (guideMode) {
-			calibration = characterDemoCalibration;
-			stats = characterDemoStats;
-			skills = characterDemoSkills.map((s) => ({ ...s }));
-			professions = characterDemoProfessions.map((p) => ({ ...p }));
-			prospect.options = characterDemoProspectOptions;
-			loading = false;
-			return;
-		}
 		try {
 			const [cal, st, sk, pr, po] = await Promise.all([
 				getCalibrationStatus(),

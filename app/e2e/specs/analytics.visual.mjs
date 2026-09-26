@@ -6,7 +6,7 @@ import { DEV_URL } from '../wdio.conf.mjs';
 // densest deterministic surface in the app: the Overview tab's donut (fixed
 // colour-by-key map, no hover by default) and cumulative-P&L polyline derive
 // purely from the pinned fixture, with no timer / Date.now / random in the
-// render path. Each tab is element-scoped via its guide anchor and gated on the
+// render path. Each tab is element-scoped via its test id and gated on the
 // loaded (non-skeleton) state. Baselines are generated and diffed in the same
 // rendering environment (WebView2 on Windows); regenerate with
 // `npm run test:visual:update`.
@@ -37,7 +37,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 
 	it('matches the overview tab baseline (donut + cumulative P&L)', async () => {
 		// Overview is the default tab; the area renders only once data has loaded.
-		const area = await $('[data-guide-anchor="analytics-overview-area"]');
+		const area = await $('[data-testid="analytics-overview-area"]');
 		await area.waitForExist({ timeout: 15000 });
 		// Gate on the charts actually rendering, not just the container existing:
 		// the donut + cumulative-P&L are SVGs, so wait for one to mount before the
@@ -58,7 +58,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 
 	it('matches the ledger tab baseline', async () => {
 		await selectTab('ledger');
-		const area = await $('[data-guide-anchor="analytics-ledger-area"]');
+		const area = await $('[data-testid="analytics-ledger-area"]');
 		await area.waitForExist({ timeout: 15000 });
 		await browser.waitUntil(async () => (await area.getText()).includes('L weapon purchase'), {
 			timeout: 12000,
@@ -72,7 +72,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 
 	it('matches the hunting tab baseline', async () => {
 		await selectTab('hunting');
-		const area = await $('[data-guide-anchor="analytics-hunting-area"]');
+		const area = await $('[data-testid="analytics-hunting-area"]');
 		await area.waitForExist({ timeout: 15000 });
 		await browser.waitUntil(async () => (await area.getText()).includes('Atrox Young'), {
 			timeout: 12000,
@@ -86,7 +86,7 @@ describe('analytics visual regression (native Tauri shell)', () => {
 
 	it('matches the tree cutting tab baseline', async () => {
 		await selectTab('treecutting');
-		const area = await $('[data-guide-anchor="analytics-treecutting-area"]');
+		const area = await $('[data-testid="analytics-treecutting-area"]');
 		await area.waitForExist({ timeout: 15000 });
 		await browser.waitUntil(async () => (await area.getText()).includes('Terratech PH-1'), {
 			timeout: 12000,

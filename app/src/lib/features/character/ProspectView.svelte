@@ -20,7 +20,7 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center gap-3" data-guide-anchor="character-prospect-knob-first">
+	<div class="flex items-center gap-3">
 		<label for="prospect-prof-select" class="text-sm text-text-secondary whitespace-nowrap">Profession</label>
 		<Select
 			id="prospect-prof-select"
@@ -49,7 +49,7 @@
 		}}
 	/>
 
-	<div class="grid gap-3 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]" data-guide-anchor="character-prospect-knob-last">
+	<div class="grid gap-3 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
 		{#if prospect.sliceType !== 'global'}
 			<Select
 				bind:value={prospect.sliceValue}
@@ -128,7 +128,7 @@
 				</span>
 			</div>
 
-			<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" data-guide-anchor="character-prospect-result-tiles">
+			<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
 				<StatDisplay label="Projected Cycled" value={formatPed(prospectResult.projectedCycledPed)} unit="PED" />
 				<StatDisplay label="Projected Time" value={formatProspectHours(prospectResult.projectedHours)} />
 				<StatDisplay label="Expected Loot TT" value={formatPed(prospectResult.expectedLootTt)} unit="PED" />

@@ -32,18 +32,7 @@
 		targetProfessions,
 		type CodexRankingTarget,
 	} from '$lib/features/character/codexRankingTarget';
-	import { guideState } from '$lib/guide/state.svelte';
 	import { createTableModel } from '$lib/view/tableModel.svelte';
-	import {
-		characterDemoProfessions,
-		characterDemoCodexSpecies,
-		characterDemoCodexRankBreakdown,
-		characterDemoCodexSkillOptions,
-		characterDemoCodexSelectedSpecies,
-		characterDemoCodexSelectedProfession,
-	} from '$lib/guide/fixtures/character';
-
-	let { seedActive = false } = $props<{ seedActive?: boolean }>();
 
 	const PAGE_SIZE = 20;
 
@@ -113,12 +102,6 @@
 	});
 
 	async function loadData() {
-		if (guideState.isActive) {
-			species = characterDemoCodexSpecies;
-			professions = characterDemoProfessions;
-			loading = false;
-			return;
-		}
 		try {
 			const [sp, pr] = await Promise.all([
 				getCodexSpecies(),
@@ -132,25 +115,6 @@
 			loading = false;
 		}
 	}
-
-	// Seed-active reactive effect: when the parent flips the codex-seed flag on,
-	// pre-select the demo species + profession + rank breakdown so the recommendation
-	// panel is fully populated for the guide card.
-	$effect(() => {
-		if (seedActive) {
-			selectedSpecies = characterDemoCodexSelectedSpecies;
-			rankingTarget = { kind: 'profession', name: characterDemoCodexSelectedProfession };
-			rankBreakdown = characterDemoCodexRankBreakdown;
-			skillOptions = characterDemoCodexSkillOptions;
-			panelLoading = false;
-			loading = false;
-		} else if (selectedSpecies === characterDemoCodexSelectedSpecies) {
-			selectedSpecies = null;
-			rankingTarget = { kind: 'none' };
-			rankBreakdown = null;
-			skillOptions = [];
-		}
-	});
 
 	// ── Meta functions ──────────────────────────────────────────────────────────
 
@@ -218,7 +182,6 @@
 	}
 
 	async function loadRecommendations(speciesName: string, rank: number) {
-		if (guideState.isActive) return;
 		skillOptions = await getCodexRecommendation(
 			speciesName,
 			rank,
@@ -227,7 +190,6 @@
 	}
 
 	async function loadMasteryOptions() {
-		if (guideState.isActive) return;
 		masteryOptions = await getCodexMasteryOptions(getRecommendationRequest());
 	}
 
@@ -249,7 +211,6 @@
 	// ── Select species → load detail + auto-select next rank ────────────────────
 
 	async function selectSpecies(name: string) {
-		if (guideState.isActive) return;
 		if (selectedSpecies === name) {
 			selectedSpecies = null;
 			rankBreakdown = null;
@@ -273,10 +234,9 @@
 
 	// ── Claim / unclaim (ranks and mastery) ─────────────────────────────────────
 
-	/** Shared claim-action shell: guide/selection guard, success message,
+	/** Shared claim-action shell: selection guard, success message,
 	 *  species reload, panel refresh, and error feedback. */
 	async function runClaimAction(action: (speciesName: string) => Promise<string>) {
-		if (guideState.isActive) return;
 		if (!selectedSpecies) return;
 		const speciesName = selectedSpecies;
 		try {
@@ -322,7 +282,6 @@
 	// ── Calibrate ───────────────────────────────────────────────────────────────
 
 	async function handleCalibrate(speciesName: string, delta: number) {
-		if (guideState.isActive) return;
 		const sp = species.find(s => s.name === speciesName);
 		if (!sp) return;
 		const newRank = Math.max(0, Math.min(25, sp.currentRank + delta));
@@ -479,7 +438,7 @@
 					{/each}
 				{/if}
 			</div>
-			<div class="h-0 w-full" data-guide-anchor="character-codex-mobs-list-placement"></div>
+			<div class="h-0 w-full"></div>
 
 			<!-- Pagination -->
 			{#if table.totalPages > 1}
@@ -506,7 +465,7 @@
 		</div>
 
 		<!-- Right: Detail panel -->
-		<div class="flex-1 min-w-0 overflow-y-auto border border-border rounded-md" data-guide-anchor="character-codex-recommendation">
+		<div class="flex-1 min-w-0 overflow-y-auto border border-border rounded-md">
 			{#if !selectedSpecies}
 				<div class="h-full flex items-center justify-center">
 					<p class="text-sm text-text-tertiary">Select a species to view codex details</p>

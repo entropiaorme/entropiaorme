@@ -18,7 +18,7 @@
 {:else if model.error && !model.overall}
 	<ErrorNotice message={model.error} />
 {:else if model.overall}
-	<div class="space-y-5" data-guide-anchor="analytics-hunting-area">
+	<div class="space-y-5" data-testid="analytics-hunting-area">
 		<ErrorNotice message={model.error} />
 
 		<div class="flex flex-wrap items-center justify-between gap-3 pb-2">
@@ -45,7 +45,7 @@
 {:else}
 	<p
 		class="py-10 text-center text-sm text-text-tertiary"
-		data-guide-anchor="analytics-hunting-area"
+		data-testid="analytics-hunting-area"
 	>
 		No hunting data yet. Track a hunting session to compare your routines and activities.
 	</p>

@@ -16,7 +16,6 @@
 		hotbar: initialHotbar,
 		carriedWeaponIds,
 		hotbarHooksEnabled,
-		enabled = true,
 		onchange,
 		oncarriedchange
 	}: {
@@ -25,7 +24,6 @@
 		carriedWeaponIds: number[];
 		/** The hotbar key listener setting: presses declare the weapon in hand. */
 		hotbarHooksEnabled: boolean;
-		enabled?: boolean;
 		onchange?: (value: Hotbar) => void;
 		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
@@ -68,7 +66,6 @@
 	}
 
 	async function assignSlot(slot: string, equipId: string | null) {
-		if (!enabled) return;
 		error = null;
 		const previous = { ...hotbar };
 		const nextHotbar = {
@@ -112,7 +109,7 @@
 				Add equipment in the Library tab first, then assign them to hotbar slots here.
 			</p>
 		{:else}
-			<div class="space-y-1" data-guide-anchor="hotbar-slot-list">
+			<div class="space-y-1">
 				{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'] as slot}
 					{@const name = slotName(slot)}
 					{@const cost = slotCost(slot)}
@@ -141,7 +138,6 @@
 							<Select
 								value={hotbar[slot] != null ? String(hotbar[slot]) : ''}
 								onchange={(e) => assignSlot(slot, e.currentTarget.value || null)}
-								disabled={!enabled}
 							>
 								<option value="">— Empty slot —</option>
 								{#if weapons.length > 0}
@@ -209,7 +205,6 @@
 			carried={unslotted}
 			{addable}
 			carriedIds={carriedWeaponIds}
-			{enabled}
 			onchange={oncarriedchange}
 		/>
 		<Divider />

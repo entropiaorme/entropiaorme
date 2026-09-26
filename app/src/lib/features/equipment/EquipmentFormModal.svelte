@@ -199,7 +199,7 @@
 
 				<!-- Damage over time: what one paid cast prints, and for how long its
 				     ticks follow. Ticks are outcomes of the cast, never shots. -->
-				<div class="space-y-3 border-t border-border/50 pt-4" data-guide-anchor="weapon-effect">
+				<div class="space-y-3 border-t border-border/50 pt-4">
 					<div class="flex flex-wrap items-start justify-between gap-3">
 						<div class="min-w-0">
 							<span class="block eyebrow">Damage pattern</span>

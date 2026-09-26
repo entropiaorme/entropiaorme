@@ -13,7 +13,6 @@
 		carried,
 		addable,
 		carriedIds,
-		enabled = true,
 		onchange,
 	}: {
 		/** The weapons carried without a slot, in the stored order. */
@@ -21,7 +20,6 @@
 		/** The weapons that could be added. */
 		addable: Equipment[];
 		carriedIds: number[];
-		enabled?: boolean;
 		onchange?: (ids: number[]) => void;
 	} = $props();
 
@@ -29,7 +27,7 @@
 	let error = $state<string | null>(null);
 
 	async function persist(next: number[]) {
-		if (!enabled || saving) return;
+		if (saving) return;
 		saving = true;
 		error = null;
 		try {
@@ -53,7 +51,7 @@
 	}
 </script>
 
-<section aria-labelledby="carried-weapons-heading" class="space-y-2" data-guide-anchor="carried-weapons">
+<section aria-labelledby="carried-weapons-heading" class="space-y-2">
 	<div>
 		<h3 id="carried-weapons-heading" class="eyebrow">Carried without a hotkey</h3>
 		<p class="mt-1 text-xs text-text-tertiary max-w-xl">
@@ -77,7 +75,7 @@
 					<button
 						type="button"
 						class="linklet shrink-0 text-xs disabled:opacity-40"
-						disabled={!enabled || saving}
+						disabled={saving}
 						aria-label={`Stop carrying ${weapon.name}`}
 						onclick={() => remove(weapon.id)}
 					>
@@ -93,7 +91,7 @@
 			<Select
 				value=""
 				aria-label="Carry a weapon without a hotkey"
-				disabled={!enabled || saving}
+				disabled={saving}
 				onchange={(event) => {
 					const select = event.currentTarget;
 					add(select.value);

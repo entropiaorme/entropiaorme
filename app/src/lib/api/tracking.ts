@@ -1,9 +1,7 @@
 /**
  * The tracking family: session lifecycle, the consolidated snapshot,
  * session reads and post-hoc edits, and mob locking
- * flow. Thin wrappers over the generated typed commands; the session
- * and snapshot reads swap onto the parallel `demo_*` commands while the
- * guide is active (see `./guide`).
+ * flow. Thin wrappers over the generated typed commands.
  */
 
 import type {
@@ -20,7 +18,6 @@ import type {
 	WeaponGuardrailAlert,
 } from './commands.gen';
 import * as commands from './commands.gen';
-import { guideSwapped } from './guide';
 
 /** The snapshot shape the status-flavoured consumers (the stat
  * registry, the overlay pills) render from. */
@@ -123,27 +120,19 @@ export const activateActivity = commands.trackingActivityActivate;
 /** End one standing activity, leaving the others running. Idempotent. */
 export const deactivateActivity = commands.trackingActivityDeactivate;
 
-const readSessionsPage = guideSwapped(commands.trackingSessions, commands.demoTrackingSessions);
-
 /** One keyset page of sessions plus the cursor for the next page (null on
  * the last page). `definitionId` narrows the page to one definition's
  * instances, which is how the review surface reads one; omitted, the
  * page is the whole history. */
 export async function getTrackingSessions(cursor?: string, limit?: number, definitionId?: string) {
-	return readSessionsPage(
+	return commands.trackingSessions(
 		cursor ?? null,
 		limit ?? null,
 		definitionId === undefined ? null : Number(definitionId),
 	);
 }
-export const getSessionDetail = guideSwapped(
-	commands.trackingSessionDetail,
-	commands.demoTrackingSessionDetail,
-);
-export const getTrackingSnapshot = guideSwapped(
-	commands.trackingSnapshot,
-	commands.demoTrackingSnapshot,
-);
+export const getSessionDetail = commands.trackingSessionDetail;
+export const getTrackingSnapshot = commands.trackingSnapshot;
 
 export async function getManualMobSuggestions(query: string) {
 	if (!query.trim()) return [];

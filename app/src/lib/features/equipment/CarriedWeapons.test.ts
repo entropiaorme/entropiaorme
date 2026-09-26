@@ -65,26 +65,8 @@ describe('carried weapons', () => {
 
 	it('offers nothing to add once every weapon is on the hotbar', () => {
 		render(CarriedWeapons, {
-			props: { carried: [], addable: [], carriedIds: [], enabled: true },
+			props: { carried: [], addable: [], carriedIds: [] },
 		});
 		expect(screen.getByText('Every weapon in the library is already on the hotbar.')).toBeTruthy();
-	});
-
-	it('holds its controls while disabled', () => {
-		render(CarriedWeapons, {
-			props: {
-				carried: [weapon('3', 'Marksman')],
-				addable: [weapon('4', 'Opalo')],
-				carriedIds: [3],
-				enabled: false,
-			},
-		});
-		expect(
-			(screen.getByRole('button', { name: 'Stop carrying Marksman' }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
-		expect(
-			(screen.getByLabelText('Carry a weapon without a hotkey') as HTMLSelectElement).disabled,
-		).toBe(true);
 	});
 });

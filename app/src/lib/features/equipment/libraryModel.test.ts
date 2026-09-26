@@ -111,7 +111,7 @@ describe('loadData', () => {
 			summary({ id: '4', name: 'Oil', type: 'consumable' }),
 		]);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 
 		expect(model.allEquipment).toHaveLength(4);
 		expect(model.sortedEquipment.map((e) => e.name)).toEqual(['Zulu']);
@@ -134,28 +134,18 @@ describe('loadData', () => {
 		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.toggleExpand('1');
 		expect(model.detailCache['1']).toBeDefined();
 
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.detailCache['1']).toBeUndefined();
-	});
-
-	it('seeds the guide fixtures without touching the API in guide mode', async () => {
-		const model = createLibraryModel();
-		await model.loadData(true);
-		expect(mocked.getEquipmentLibrary).not.toHaveBeenCalled();
-		expect(mocked.getSettings).not.toHaveBeenCalled();
-		expect(model.sortedEquipment.length).toBeGreaterThan(0);
-		expect(Object.keys(model.detailCache).length).toBeGreaterThan(0);
-		expect(model.hotbarHooksEnabled).toBe(true);
 	});
 
 	it('surfaces a load failure through the error strip', async () => {
 		mocked.getEquipmentLibrary.mockRejectedValue(new Error('backend unreachable'));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.error).toBe('backend unreachable');
 		expect(model.loading).toBe(false);
 	});
@@ -169,14 +159,14 @@ describe('loadData', () => {
 		);
 		const model = createLibraryModel();
 		expect(model.loading).toBe(true);
-		const first = model.loadData(false);
+		const first = model.loadData();
 		expect(model.loading).toBe(true);
 		answer([]);
 		await first;
 		expect(model.loading).toBe(false);
 
 		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
-		const reload = model.loadData(false);
+		const reload = model.loadData();
 		expect(model.loading).toBe(false);
 		await reload;
 	});
@@ -491,7 +481,7 @@ describe('saveEquipment', () => {
 		mocked.getEquipmentDetail.mockResolvedValue(detail({ effectProfile }));
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		expect(model.weaponEffectMode).toBe('over_time');
 		expect(model.effectDurationSeconds).toBe(12);
@@ -520,7 +510,7 @@ describe('saveEquipment', () => {
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1', name: 'New' }));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		await model.saveEquipment();
 
@@ -539,7 +529,7 @@ describe('saveEquipment', () => {
 			.mockRejectedValueOnce(new Error('refresh failed'));
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1', name: 'New' }));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		await model.saveEquipment();
 
@@ -576,7 +566,7 @@ describe('saveEquipment', () => {
 			summary({ id: '5', name: 'New FAP', type: 'healing', healingProfile }),
 		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('5');
 		await model.saveEquipment();
 
@@ -669,7 +659,7 @@ describe('saveEquipment', () => {
 			}),
 		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		expect(model.implantPicker.selected?.catalogId).toBe('i1');
 		expect(model.implantPicker.selected?.absorptionPercent).toBe(20);
@@ -690,7 +680,7 @@ describe('removeEquipment', () => {
 			summary({ id: '3', name: 'Oil', type: 'consumable' }),
 		]);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		return model;
 	}
 

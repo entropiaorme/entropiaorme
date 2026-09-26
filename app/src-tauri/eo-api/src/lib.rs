@@ -51,7 +51,6 @@ pub mod analytics;
 pub mod character;
 pub mod codex;
 pub mod consumables;
-pub mod demo;
 pub mod dev;
 pub mod equipment;
 mod error;
@@ -174,15 +173,6 @@ pub struct Api {
     /// Persisted route navigation and radar guidance, composed only when
     /// the native capture and producer seams are available.
     navigation: Option<Arc<eo_services::navigation::NavigationService>>,
-    /// The bundled guide-mode demo database path (a shipped resource), or
-    /// `None` on a facade built without it (the demo commands then report the
-    /// unavailable error). The demo services are a parallel database + tracker
-    /// built lazily from it on first demo access.
-    demo_db_path: Option<PathBuf>,
-    /// The lazily-built demo services, stood up once on first demo access.
-    /// The inner `None` records a build that could not be served, so a demo
-    /// command degrades gracefully without retrying a hopeless build.
-    demo: tokio::sync::OnceCell<Option<Arc<demo::DemoState>>>,
 }
 
 /// Weapon pricing over the live config and the running doses: the reload
@@ -223,7 +213,6 @@ impl Api {
         repair_ocr: Arc<RepairOcrService>,
         sale_window_ocr: Arc<SaleWindowOcrService>,
         quests: Arc<QuestService>,
-        demo_db_path: Option<PathBuf>,
         planet_maps: Option<Arc<eo_services::planet_maps::PlanetMapStore>>,
         coord_capture: Option<Arc<eo_services::coord_capture::CoordCaptureService>>,
         navigation: Option<Arc<eo_services::navigation::NavigationService>>,
@@ -293,8 +282,6 @@ impl Api {
             planet_maps,
             coord_capture,
             navigation,
-            demo_db_path,
-            demo: tokio::sync::OnceCell::new(),
         }
     }
 

@@ -5,8 +5,7 @@
 //! This is domain logic, extracted from the transport layer that used to
 //! host it inline: the same SQL aggregation and camelCase-ready value
 //! shaping, now behind [`AnalyticsService`] over the shared database and
-//! injected clock, so both the typed IPC facade and the guide-mode demo
-//! surface read through one implementation. Reads scale O(days), not
+//! injected clock, read by the typed IPC facade. Reads scale O(days), not
 //! O(rows): the Overview brings the daily rollups current and aggregates
 //! rollup rows plus bounded raw edges (see [`hybrid_window`]).
 //!

@@ -54,7 +54,6 @@ async fn codex_api(dir: &Path) -> Api {
         None,
         None,
         None,
-        None,
     )
 }
 

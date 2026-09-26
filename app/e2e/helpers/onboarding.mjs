@@ -7,7 +7,7 @@
 // and machines: a fresh profile lands on /welcome and gets driven through; an
 // already-onboarded profile lands on the dashboard and skips straight past.
 
-const DASH = '[data-guide-anchor="dashboard-area"]';
+const DASH = '[data-testid="dashboard-area"]';
 
 function probe(browser) {
 	return browser.execute((dashSel) => {

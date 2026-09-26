@@ -72,7 +72,7 @@ describe('loadData', () => {
 		];
 		mocked.getQuests.mockResolvedValue(rows);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 
 		expect(model.loading).toBe(false);
 		expect(model.quests).toHaveLength(3);
@@ -82,28 +82,19 @@ describe('loadData', () => {
 	it('does not re-collapse categories the user has expanded on a later load', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1', category: 'Iron' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 
 		model.collapsedCategories = new Set();
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.collapsedCategories.size).toBe(0);
 	});
 
 	it('surfaces a load failure through the error strip', async () => {
 		mocked.getQuests.mockRejectedValue(new Error('backend unreachable'));
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.error).toBe('backend unreachable');
 		expect(model.loading).toBe(false);
-	});
-
-	it('seeds the guide fixtures without touching the API in guide mode', async () => {
-		const model = createQuestsModel();
-		await model.loadData(true);
-		expect(mocked.getQuests).not.toHaveBeenCalled();
-		expect(model.quests.length).toBeGreaterThan(0);
-		expect(model.analyticsLoaded).toBe(true);
-		expect(model.rates.liquidReturnRate).toBeGreaterThan(0);
 	});
 });
 
@@ -138,7 +129,7 @@ describe('refresh', () => {
 	it('keeps the last good data and stays silent when the poll tick fails', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 
 		mocked.getQuests.mockRejectedValue(new Error('transient'));
 		await expect(model.refresh()).resolves.toBeUndefined();
@@ -149,7 +140,7 @@ describe('refresh', () => {
 	it('drops a pending cancel choice whose quest vanished from the refreshed list', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' }), quest({ id: '2' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.toggleCancelChoice('2');
 		expect(model.pendingCancelChoiceQuestId).toBe('2');
 
@@ -161,7 +152,7 @@ describe('refresh', () => {
 	it('keeps a pending cancel choice whose quest survives the refresh', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.toggleCancelChoice('1');
 
 		await model.refresh();
@@ -195,7 +186,7 @@ describe('filtering', () => {
 			}),
 		]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		return model;
 	}
 
@@ -249,7 +240,7 @@ describe('quest lifecycle', () => {
 	it('replaces the started quest in place and clears its pending cancel choice', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' }), quest({ id: '2' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.toggleCancelChoice('1');
 		expect(model.pendingCancelChoiceQuestId).toBe('1');
 
@@ -262,7 +253,7 @@ describe('quest lifecycle', () => {
 	it('leaves the pending cancel choice of another quest alone', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' }), quest({ id: '2' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.toggleCancelChoice('2');
 
 		mocked.completeQuest.mockResolvedValue(quest({ id: '1' }));
@@ -296,14 +287,18 @@ describe('quest lifecycle', () => {
 	});
 });
 
-describe('guide mode', () => {
-	it('re-arms the lazy analytics load when leaving guide mode', async () => {
+describe('full load', () => {
+	it('re-arms the lazy analytics load', async () => {
+		mocked.getQuestAnalytics.mockResolvedValue([]);
+		mocked.getAnalyticsOverview.mockResolvedValue({
+			returnsBreakdown: { lootTt: 0, questItemTt: 0, pes: 0, codexPes: 0, questPes: 0, ledger: {} },
+			lossesBreakdown: { trackingCost: 0, cycledBreakdown: {}, ledger: {} },
+		} as never);
 		const model = createQuestsModel();
-		await model.loadData(true);
+		await model.loadAnalytics();
 		expect(model.analyticsLoaded).toBe(true);
 
-		mocked.getQuests.mockResolvedValue([]);
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.analyticsLoaded).toBe(false);
 	});
 });
@@ -360,7 +355,7 @@ describe('quest form', () => {
 	it('saveQuest routes edits through updateQuest and swaps the row in place', async () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1', name: 'Old' })]);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.openEditQuest(model.quests[0]);
 		model.questForm.name = 'New';
 		mocked.updateQuest.mockResolvedValue(quest({ id: '1', name: 'New' }));
@@ -398,7 +393,7 @@ describe('quest deletion', () => {
 		mocked.getQuests.mockResolvedValue([quest({ id: '1' })]);
 		mocked.deleteQuest.mockResolvedValue(undefined);
 		const model = createQuestsModel();
-		await model.loadData(false);
+		await model.loadData();
 		model.deleteConfirmId = '1';
 		await model.handleDeleteQuest('1');
 		expect(model.quests).toEqual([]);

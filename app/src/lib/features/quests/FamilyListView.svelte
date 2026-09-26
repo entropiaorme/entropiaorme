@@ -20,7 +20,7 @@
 	}
 </script>
 
-<div data-guide-anchor="quests-families-view">
+<div>
 {#if questsModel.families.length === 0}
 	<div class="text-center py-8 text-sm text-text-tertiary space-y-1">
 		<p>No families yet.</p>

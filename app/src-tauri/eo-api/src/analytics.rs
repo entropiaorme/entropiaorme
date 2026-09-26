@@ -2,8 +2,8 @@
 //! (keyset-paginated list + create/delete), the ledger presets, and the
 //! inventory ledger (list / create / patch / delete / sell).
 //!
-//! The computation lives in [`eo_services::analytics::AnalyticsService`]
-//! (shared with the guide-mode demo surface); this facade is the typed
+//! The computation lives in [`eo_services::analytics::AnalyticsService`];
+//! this facade is the typed
 //! boundary over it. The service returns typed aggregates and rows, and
 //! the facade maps them field by field onto the declared DTOs, so the
 //! wire shape is single-sourced here and the mapping is compiler-checked.
@@ -13,8 +13,7 @@
 //! `Any`-passthrough integers (the empty-window `cycledBreakdown` zeros
 //! and any all-integer bucket) render as JSON floats (`0` -> `0.0`).
 //! Numerically identical, and the values are floats over any non-empty
-//! window (so the demo surface and every populated read are byte-stable);
-//! only the all-empty case shifts.
+//! window; only the all-empty case shifts.
 //!
 //! The ledger list folds the transport's `X-Next-Cursor` header into the
 //! return DTO ([`LedgerPage`]): a typed command answers one structured

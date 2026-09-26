@@ -30,7 +30,7 @@
 	{@const data = model.data}
 	{@const config = model.config}
 	{@const pieView = model.pieView}
-	<div class="space-y-6" data-guide-anchor="analytics-overview-area">
+	<div class="space-y-6" data-testid="analytics-overview-area">
 
 		<!-- Returns breakdown: donut + legend | gains/losses -->
 		{#if pieView}

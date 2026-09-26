@@ -35,11 +35,6 @@ describe('character visual regression (native Tauri shell)', () => {
 			},
 			{ timeout: 12000, timeoutMsg: 'character stats never settled into the empty state' },
 		);
-		// The guide button's unseen indicator renders once the persisted
-		// preference read resolves; gate on it so the shot never races that read.
-		await $('button[aria-label="Open guide for this page"] span.bg-accent').waitForExist({
-			timeout: 12000,
-		});
 		await browser.pause(500);
 		await ensureViewport(browser);
 		const mismatch = await browser.checkElement(area, 'character-stats', VISUAL_OPTS);
@@ -50,7 +45,7 @@ describe('character visual regression (native Tauri shell)', () => {
 		const skillsTab = await $('button=Skills');
 		await skillsTab.waitForClickable({ timeout: 10000 });
 		await skillsTab.click();
-		const area = await $('[data-guide-anchor="character-skills-table"]');
+		const area = await $('[data-testid="character-skills-table"]');
 		await area.waitForExist({ timeout: 15000 });
 		await browser.waitUntil(
 			async () => (await area.getText()).includes('No skills calibrated yet'),

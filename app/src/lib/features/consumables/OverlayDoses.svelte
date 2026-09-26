@@ -30,7 +30,6 @@
 {#if visible}
 	<div
 		class="flex items-center gap-1.5 shrink-0 border-l border-white/10 pl-3"
-		data-guide-anchor="overlay-doses-section"
 		data-testid="overlay-doses"
 	>
 		<!-- A capsule: what is in force from a consumable. -->

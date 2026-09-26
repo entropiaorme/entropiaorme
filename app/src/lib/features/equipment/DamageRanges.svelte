@@ -73,7 +73,7 @@
 			Weapons on the hotbar or carried without a hotkey show their damage ranges here.
 		</p>
 	{:else}
-		<div class="relative" bind:this={chart} data-guide-anchor="damage-ranges-chart">
+		<div class="relative" bind:this={chart}>
 			<div class="space-y-2" aria-hidden="true">
 				{#each banded as band (band.id)}
 					<div class="grid grid-cols-[9rem_1fr] items-center gap-3">

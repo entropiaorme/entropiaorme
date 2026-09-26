@@ -29,7 +29,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 	});
 
 	it('matches the committed stat-cell baseline', async () => {
-		const grid = await $('[data-guide-anchor="dashboard-stats-grid"]');
+		const grid = await $('[data-testid="dashboard-stats-grid"]');
 		await grid.waitForExist({ timeout: 10000 });
 		// Gate the shot on the loaded state: before the snapshot hydrates, the
 		// stats render an em-dash placeholder (U+2014, written as an escape here so
@@ -58,7 +58,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 	it('matches the recent-events island baseline', async () => {
 		// A pure fixture list (description + value, no timer), so it is the most
 		// stable dashboard surface to broaden onto.
-		const events = await $('[data-guide-anchor="dashboard-recent-events"]');
+		const events = await $('[data-testid="dashboard-recent-events"]');
 		await events.waitForExist({ timeout: 10000 });
 		// Gate on the COMPLETE fixture, not just the first row to mention 'HOF':
 		// require all three painted rows incl. the last ('Atrox Old'), so a
@@ -82,7 +82,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 		// Default widget tab. Its SVG charts mount with JS-driven y-axis rescale
 		// tweens; the e2e build settles them instantly so the shot captures the
 		// settled end-state rather than a mid-rescale frame.
-		const widgets = await $('[data-guide-anchor="dashboard-widgets-area"]');
+		const widgets = await $('[data-testid="dashboard-widgets-area"]');
 		await widgets.waitForExist({ timeout: 10000 });
 		// Gate on the real DATA chart, not just any svg: the empty-state
 		// placeholder is an aria-hidden svg with no aria-label, so `svg` alone
@@ -100,7 +100,7 @@ describe('dashboard visual regression (native Tauri shell)', () => {
 	});
 
 	it('matches the loot-composition widget baseline', async () => {
-		const widgets = await $('[data-guide-anchor="dashboard-widgets-area"]');
+		const widgets = await $('[data-testid="dashboard-widgets-area"]');
 		await widgets.scrollIntoView({ block: 'center' });
 		const lootTab = await widgets.$('[data-tab-id="loot"]');
 		await lootTab.waitForClickable({ timeout: 10000 });

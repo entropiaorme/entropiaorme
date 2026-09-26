@@ -49,15 +49,6 @@ Thumbs.db
 # the directory remains walked and per-path re-inclusions work below.
 data/*
 
-# Bundled curated demo DB: committed so the Tauri bundle (bundle.resources in
-# tauri.conf.json) can ship it for guide-mode playback (the /demo/* router reads
-# it read-only and clones into memory before any tracker priming). Everything
-# else under data/demo/ stays ignored (transient SQLite -wal/-shm, settings).
-!data/demo/
-data/demo/*
-!data/demo/entropia_orme.db
-!data/demo/seed_manifest.json
-
 # Diagnostic/temp artifacts
 tmp/
 /calibration/

@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -15,7 +14,6 @@
 		PAGE_SIZE,
 		tagLabels
 	} from '$lib/features/analytics/ledgerModel.svelte';
-	import { registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 	import type { LedgerEntryType } from '$lib/types/analytics';
 	import { formatLedgerDate, formatPed } from '$lib/utils/format';
 
@@ -25,24 +23,15 @@
 	$effect(() => {
 		void model.loadAll();
 	});
-
-	// Guide-mode demo API lets the analytics surface drive the Add Entry modal.
-	onMount(() => {
-		registerDemoApi('analytics-ledger', {
-			openAddEntryModal: () => (model.showAddModal = true),
-			closeAddEntryModal: () => (model.showAddModal = false)
-		});
-		return () => unregisterDemoApi('analytics-ledger');
-	});
 </script>
 
 {#if model.loading}
 	<p class="text-sm text-text-secondary">Loading ledger...</p>
 {:else}
-	<div class="space-y-6" data-guide-anchor="analytics-ledger-area">
+	<div class="space-y-6" data-testid="analytics-ledger-area">
 		<ErrorNotice message={model.error} />
-		<!-- Strip + table grouped for the guide cutout. -->
-		<div class="space-y-6" data-guide-anchor="analytics-ledger-main-area">
+		<!-- Strip + table grouped. -->
+		<div class="space-y-6">
 		<!-- Net ledger impact -->
 		<Card class="p-4">
 			<div class="flex items-center justify-between gap-4 flex-wrap">
@@ -82,7 +71,7 @@
 						active={model.netRange}
 						onchange={(id) => (model.netRange = id as NetRange)}
 					/>
-					<span data-guide-anchor="ledger-add-entry-btn" class="inline-flex">
+					<span class="inline-flex">
 						<Button size="sm" onclick={() => (model.showAddModal = true)}>Add Entry</Button>
 					</span>
 				</div>
@@ -167,7 +156,6 @@
 					<tbody>
 						{#each table.pageRows as entry}
 							<tr
-								data-guide-anchor="ledger-entry-row"
 								data-entry-id={entry.id}
 								class="border-b border-border/50 hover:bg-surface-hover/50 transition-colors duration-[var(--duration-fast)]"
 							>

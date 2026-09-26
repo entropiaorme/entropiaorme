@@ -39,7 +39,7 @@
 </script>
 
 {#if visible}
-	<section class="flex-shrink-0 px-1" data-testid="doses-panel" data-guide-anchor="dashboard-doses">
+	<section class="flex-shrink-0 px-1" data-testid="doses-panel">
 		<div class="flex items-baseline justify-between gap-4 mb-2">
 			<h3 class="eyebrow">Doses</h3>
 			{#if reloadLine}

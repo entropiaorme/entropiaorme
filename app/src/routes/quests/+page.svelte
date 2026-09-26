@@ -9,10 +9,6 @@
 	import QuestListView from '$lib/features/quests/QuestListView.svelte';
 	import QuestRewardReview from '$lib/features/quests/QuestRewardReview.svelte';
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
-	import { closeGuide, openGuide } from '$lib/guide/engine';
-	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
-	import { questsSurface } from '$lib/guide/surfaces/quests';
-	import { getPreference } from '$lib/preferences';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore.svelte';
 
@@ -47,42 +43,9 @@
 
 	let trackingActive = $derived(trackingSnapshot.current?.status === 'active');
 
-	// Guide
-	let guideSeen = $state(true);
-	function toggleSurfaceGuide(): void {
-		if (guideState.isActive) {
-			closeGuide();
-		} else {
-			guideSeen = true;
-			void openGuide(questsSurface);
-		}
-	}
-
 	onMount(() => {
-		void (async () => {
-			guideSeen = await getPreference<boolean>('guide_seen_quests', false);
-		})();
-		const stopClock = useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
-		registerDemoApi('quests', {
-			setView: (v: string) => {
-				view = v as 'quests' | 'families' | 'review' | 'analytics';
-			},
-			openNewQuestModal: () => {
-				model.openNewQuest();
-			},
-			closeNewQuestModal: () => {
-				model.showQuestModal = false;
-				model.editingQuest = null;
-			},
-			closeFamilyModal: () => {
-				familyModel.showFamilyModal = false;
-				familyModel.editingFamily = null;
-			}
-		});
-		return () => {
-			stopClock();
-			unregisterDemoApi('quests');
-		};
+		void model.loadData();
+		return useVisiblePoll(() => { now = Date.now(); }, { intervalMs: 1000 });
 	});
 
 	// Quest data refreshes every 10s while tracking is active (below) to pick up
@@ -90,7 +53,6 @@
 	// event-driven: hydrate the tracking snapshot once, then keep it current from
 	// pushed session frames rather than polling for session start/stop.
 	$effect(() => {
-		if (guideState.isActive) return;
 		// Subscribe-then-hydrate (the canonical consumer discipline): attach the
 		// tracking listener first so a frame landing during the initial read is
 		// re-announced rather than lost. The hydrate stays independent of the
@@ -113,19 +75,12 @@
 	});
 
 	$effect(() => {
-		if (guideState.isActive) return;
 		if (!trackingActive) return;
 		return useVisiblePoll(() => model.refresh(), { intervalMs: 10000, immediate: false });
 	});
 
-	// Reload data on initial mount and whenever guide-mode toggles.
-	$effect(() => {
-		void model.loadData(guideState.isActive);
-	});
-
 	// Lazy-load analytics on first entry to the analytics tab.
 	$effect(() => {
-		if (guideState.isActive) return;
 		if (view === 'analytics' && !model.analyticsLoaded && !model.analyticsLoading) {
 			model.loadAnalytics();
 		}
@@ -141,24 +96,6 @@
 			<p class="text-sm text-text-secondary mt-0.5">Track missions, manage cooldowns, review rewards</p>
 		</header>
 		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				onclick={toggleSurfaceGuide}
-				title={guideState.isActive ? 'Exit guide' : 'Open guide'}
-				aria-label={guideState.isActive ? 'Exit guide' : 'Open guide for this page'}
-				class="relative h-8 w-8 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-secondary hover:text-text transition-colors flex items-center justify-center text-sm font-semibold {guideState.isActive ? 'z-[9100]' : ''}"
-			>
-				{#if guideState.isActive}
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5" aria-hidden="true">
-						<path d="M5.28 4.22a.75.75 0 00-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 101.06 1.06L8 9.06l2.72 2.72a.75.75 0 101.06-1.06L9.06 8l2.72-2.72a.75.75 0 00-1.06-1.06L8 6.94 5.28 4.22z" />
-					</svg>
-				{:else}
-					?
-				{/if}
-				{#if !guideSeen}
-					<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent"></span>
-				{/if}
-			</button>
 			<Button size="sm" variant="secondary" onclick={() => model.openNewQuest()}>
 				{#snippet children()}+ Quest{/snippet}
 			</Button>

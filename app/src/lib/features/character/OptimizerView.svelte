@@ -14,7 +14,7 @@
 	const pathResult = $derived(optimizer.pathResult);
 </script>
 
-<div class="space-y-4" data-guide-anchor="character-optimizer-area">
+<div class="space-y-4">
 	<!-- Mode toggle: Profession / HP -->
 	<SegmentedControl
 		options={[

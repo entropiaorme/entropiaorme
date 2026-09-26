@@ -4415,50 +4415,6 @@ export async function trackingSessionDelete(sessionId: string): Promise<void> {
 	return invokeCommand('tracking_session_delete', { session_id: sessionId });
 }
 
-export async function demoAnalyticsOverview(period: string): Promise<AnalyticsOverview> {
-	return invokeCommand('demo_analytics_overview', { period });
-}
-
-export async function demoAnalyticsHunting(): Promise<AnalyticsHunting> {
-	return invokeCommand('demo_analytics_hunting', {});
-}
-
-export async function demoAnalyticsHuntingActivity(period: string): Promise<AnalyticsHuntingActivity> {
-	return invokeCommand('demo_analytics_hunting_activity', { period });
-}
-
-export async function demoAnalyticsHarvest(period: string): Promise<AnalyticsHarvest> {
-	return invokeCommand('demo_analytics_harvest', { period });
-}
-
-export async function demoLedgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {
-	return invokeCommand('demo_ledger_list', { cursor, limit });
-}
-
-export async function demoLedgerSummary(period: string): Promise<LedgerSummary> {
-	return invokeCommand('demo_ledger_summary', { period });
-}
-
-export async function demoLedgerPresetsList(): Promise<LedgerPreset[]> {
-	return invokeCommand('demo_ledger_presets_list', {});
-}
-
-export async function demoInventoryList(): Promise<InventoryItem[]> {
-	return invokeCommand('demo_inventory_list', {});
-}
-
-export async function demoTrackingSessions(cursor: string | null, limit: number | null, definitionId: number | null): Promise<SessionPage> {
-	return invokeCommand('demo_tracking_sessions', { cursor, limit, definition_id: definitionId });
-}
-
-export async function demoTrackingSessionDetail(sessionId: string): Promise<SessionDetail> {
-	return invokeCommand('demo_tracking_session_detail', { session_id: sessionId });
-}
-
-export async function demoTrackingSnapshot(): Promise<TrackingSnapshot> {
-	return invokeCommand('demo_tracking_snapshot', {});
-}
-
 export async function devMetrics(): Promise<MetricsSnapshot> {
 	return invokeCommand('dev_metrics', {});
 }

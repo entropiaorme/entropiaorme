@@ -6,8 +6,6 @@
 	import LootPulseWidget from './LootPulseWidget.svelte';
 	import type { ActivityOptionsResult } from '$lib/api';
 	import type { Quest } from '$lib/types/quests';
-	import { onMount } from 'svelte';
-	import { registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 
 	let {
 		trackingPending,
@@ -54,24 +52,11 @@
 
 	let activeTab = $state<string>('pulse');
 
-	onMount(() => {
-		// Sub-API composition. Surface module's dashboard-widgets card cycles
-		// tabs via setTab during its looped play(): the cursor's click ripple
-		// is visual; setTab is the authoritative state mutation (DnD
-		// imperative-shim shape generalised to tab switching).
-		registerDemoApi('dashboard-widgets', {
-			setTab: (id: string) => {
-				activeTab = id;
-			},
-			getTab: () => activeTab
-		});
-		return () => unregisterDemoApi('dashboard-widgets');
-	});
 </script>
 
 <section
 	class="panel p-4 flex-1 min-h-[480px] flex flex-col"
-	data-guide-anchor="dashboard-widgets-area"
+	data-testid="dashboard-widgets-area"
 >
 	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="mb-3" />
 

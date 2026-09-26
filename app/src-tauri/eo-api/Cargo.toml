@@ -26,8 +26,6 @@ thiserror = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-# The guide-mode demo services build a parallel tracker on the async runtime
-# (`Handle`) and stand up lazily behind a `OnceCell`.
 tokio = { workspace = true }
 
 [dev-dependencies]

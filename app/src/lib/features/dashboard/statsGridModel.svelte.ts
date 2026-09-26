@@ -1,55 +1,18 @@
 /**
  * Dashboard stats-grid view model: the enabled-stat projection, the
- * pointer-driven drag-reorder, and the guide-mode stat demo controls.
+ * pointer-driven drag-reorder.
  * The only consumer of the stat-customisation state on the dashboard
  * surface; presentation composes over this state.
  */
 
 import {
-	DEFAULT_OVERLAY_PREFS,
-	DEFAULT_STAT_PREFS,
 	dashboardStats,
 	isOwnSelection,
-	overlayStats,
 	type StatPref,
 	scopedStats,
 	setDashboardStats,
 } from '$lib/statsCustomisation.svelte';
 import { type StatsScope, statsScope } from '$lib/statsScope.svelte';
-
-export interface StatsSnapshot {
-	dashboard: StatPref[];
-	overlay: StatPref[];
-}
-
-// Preselected stat configuration applied to both stores while the guide
-// is open. Cards 1-6 show populated stat content (10 dashboard + 3
-// overlay pills enabled) regardless of the live prefs. Card 7
-// (modular-stats) takes its own snapshot at play() start and switches
-// to a 3-enabled baseline for the demo, then restores this preselected
-// configuration on exit, so back-nav from card 7 to 6 lands cleanly.
-// Guide-close reverses the outer snapshot to restore the live stats.
-const DASHBOARD_GUIDE_PRESELECTED_IDS = new Set<string>([
-	'cycled',
-	'loot_tt',
-	'net',
-	'rate',
-	'pes',
-	'pes_per_100',
-	'avg_cost_per_kill',
-	'multiplier_max',
-	'dpp',
-	'kills_count',
-]);
-const OVERLAY_GUIDE_PRESELECTED_IDS = new Set<string>(['cycled', 'rate', 'kills_count']);
-const DASHBOARD_GUIDE_PRESELECTED: StatPref[] = DEFAULT_STAT_PREFS.map((p) => ({
-	id: p.id,
-	enabled: DASHBOARD_GUIDE_PRESELECTED_IDS.has(p.id),
-}));
-const OVERLAY_GUIDE_PRESELECTED: StatPref[] = DEFAULT_STAT_PREFS.map((p) => ({
-	id: p.id,
-	enabled: OVERLAY_GUIDE_PRESELECTED_IDS.has(p.id),
-}));
 
 const REORDER_COOLDOWN_MS = 100;
 const DRAG_THRESHOLD_PX = 4;
@@ -69,7 +32,7 @@ function fullIndexOfVisible(prefs: StatPref[], visible: StatPref[], filteredInde
  * @param lifetimeAvailable Whether the frame carries a session family to
  * read lifetime figures from. A closure so the model tracks the live
  * value; the default keeps the instance behaviour for callers with no
- * family of their own (the guide demo).
+ * family of their own.
  */
 export function createStatsGridModel(lifetimeAvailable: () => boolean = () => false) {
 	// The one place the scope is resolved, so the grid and the surfaces
@@ -92,10 +55,6 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 	// Cooldown after each reorder so cursor jitter at a cell boundary doesn't
 	// ping-pong the layout while the flip animation is still settling.
 	let lastReorderAt = 0;
-
-	// Snapshot of the live prefs held while the guide's preselected demo
-	// configuration is applied; undefined means "no snapshot held".
-	let guideSnapshot: StatsSnapshot | undefined;
 
 	/** The drawn list for the current scope: the grid's render list. */
 	function visible(): StatPref[] {
@@ -186,82 +145,6 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 		document.body.classList.remove('stat-drag-active');
 	}
 
-	// ── Guide-mode demo controls ──
-
-	function snapshotStats(): StatsSnapshot {
-		return {
-			dashboard: dashboardStats.current,
-			overlay: overlayStats.current,
-		};
-	}
-
-	function restoreStats(snap: StatsSnapshot) {
-		dashboardStats.current = snap.dashboard;
-		overlayStats.current = snap.overlay;
-	}
-
-	function setDemoStatsBaseline(overrides?: Record<string, boolean>) {
-		// Reset both surfaces to default prefs (transient: no setDashboardStats
-		// call, so nothing persists to user preferences). Optional overrides
-		// flip specific stat-ids' enabled flags, letting cards bend the
-		// baseline (e.g. start the modular-stats card with 3 enabled
-		// instead of 4) without forking the constant.
-		const base = overrides
-			? DEFAULT_STAT_PREFS.map((p) => (p.id in overrides ? { ...p, enabled: overrides[p.id] } : p))
-			: DEFAULT_STAT_PREFS;
-		dashboardStats.current = base;
-		overlayStats.current = DEFAULT_OVERLAY_PREFS;
-	}
-
-	function toggleDemoStatPill(surface: 'dashboard' | 'overlay', statId: string) {
-		// Transient toggle on the named pill. Mirrors handlePillClick's
-		// shape (map then flip enabled flag) but bypasses setDashboardStats
-		// so the persisted prefs aren't touched.
-		const target = surface === 'dashboard' ? dashboardStats : overlayStats;
-		const next = target.current.map((p) => (p.id === statId ? { ...p, enabled: !p.enabled } : p));
-		target.current = next;
-	}
-
-	function reorderDemoStat(fromFilteredIdx: number, toFilteredIdx: number) {
-		// Transient reorder using the existing fullIndexOfEnabled logic
-		// so the move respects the disabled-stats-stay-put invariant
-		// the real drag handler enforces.
-		const current = dashboardStats.current;
-		const drawn = scopedStats(current, 'instance');
-		const sourceFull = fullIndexOfVisible(current, drawn, fromFilteredIdx);
-		const targetFull = fullIndexOfVisible(current, drawn, toFilteredIdx);
-		if (sourceFull < 0 || targetFull < 0) return;
-		const next = [...current];
-		const [moved] = next.splice(sourceFull, 1);
-		next.splice(targetFull, 0, moved);
-		dashboardStats.current = next;
-	}
-
-	function setDragVisualIndex(idx: number | null) {
-		// Sets the drag state directly so the real drag visual (opacity-40 +
-		// shadow + ring on the cell at the matching filtered index) renders
-		// for the guide's virtual drag.
-		dragFilteredIndex = idx;
-	}
-
-	function syncGuideStats(active: boolean) {
-		// Snapshot the live config on guide-open + apply the preselected demo
-		// configuration so cards 1-6 render populated stats grids. Card 7
-		// takes its own snapshot at play() start (which captures this
-		// preselected config) and runs its own 3-enabled baseline demo on top,
-		// restoring the preselected on its exit so back-nav from 7 to 6 is
-		// clean. Guide-close reverses this outer snapshot to restore the live
-		// config.
-		if (active && guideSnapshot === undefined) {
-			guideSnapshot = snapshotStats();
-			dashboardStats.current = DASHBOARD_GUIDE_PRESELECTED;
-			overlayStats.current = OVERLAY_GUIDE_PRESELECTED;
-		} else if (!active && guideSnapshot !== undefined) {
-			restoreStats(guideSnapshot);
-			guideSnapshot = undefined;
-		}
-	}
-
 	return {
 		/**
 		 * The grid's render list, in stored order: the enabled prefs
@@ -288,14 +171,6 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 		handlePointerMove,
 		handlePointerUp,
 		handlePointerCancel,
-
-		snapshotStats,
-		restoreStats,
-		setDemoStatsBaseline,
-		toggleDemoStatPill,
-		reorderDemoStat,
-		setDragVisualIndex,
-		syncGuideStats,
 	};
 }
 

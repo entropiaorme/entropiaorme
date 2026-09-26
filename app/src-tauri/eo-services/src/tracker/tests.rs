@@ -4430,53 +4430,21 @@ fn reload_clears_the_declaration_once_the_config_drops_it() {
 }
 
 #[test]
-fn prime_demo_activates_a_demo_session_and_stamps_its_mob() {
-    let rig = rig();
-    let tracker = rig.tracker(Providers::default());
-    assert!(!tracker.is_tracking(), "idle before priming");
-
-    let session = crate::tracking_models::TrackingSession {
-        id: "demo".to_string(),
-        start_time: chrono::DateTime::from_timestamp(1_000, 0).unwrap(),
-        end_time: None,
-        kills: Vec::new(),
-        harvests: Vec::new(),
-        dangling_cost: Ped::ZERO,
-    };
-    rig.wait(tracker.prime_demo(
-        session,
-        Some(super::mob::DeclaredMob::from_parts(
-            "Atrox".to_string(),
-            String::new(),
-        )),
-        SessionFacets::default(),
-    ));
-
-    // The demo session is live without ever running start_session.
-    assert!(tracker.is_tracking(), "prime_demo activates the session");
-    rig.probe(&tracker, |actor| {
-        let active = actor.session.active().expect("a demo session is active");
-        assert_eq!(active.stamped_mob_name(), Some("Atrox"));
-    });
-}
-
-#[test]
 fn a_weapon_press_leaves_the_shots_already_accumulated_alone() {
     let rig = rig();
     let tracker = rig.tracker(Providers::default());
-    // A demo session gives an active session without the bus wiring; the
+    // A primed session gives an active session without the bus wiring; the
     // handler is exercised directly on the actor thread.
     let session = crate::tracking_models::TrackingSession {
-        id: "demo".to_string(),
+        id: "primed".to_string(),
         start_time: chrono::DateTime::from_timestamp(1_000, 0).unwrap(),
         end_time: None,
         kills: Vec::new(),
         harvests: Vec::new(),
         dangling_cost: Ped::ZERO,
     };
-    rig.wait(tracker.prime_demo(session, None, SessionFacets::default()));
-
-    rig.probe(&tracker, |actor| {
+    rig.probe(&tracker, move |actor| {
+        actor.prime_session(session, None, SessionFacets::default());
         let unknown = crate::tracking_models::ToolStats {
             tool_name: "Unknown".to_string(),
             shots_fired: 5,

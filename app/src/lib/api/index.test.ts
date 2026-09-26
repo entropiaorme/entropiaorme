@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The facade's behaviour is its mapping: which typed command, which
-// params/body shape, and (for the analytics-flavoured reads) the per-call
-// guide-mode demo dispatch. The typed-command transport is mocked out
+// params/body shape. The typed-command transport is mocked out
 // wholesale, so these tests pin the facade layer alone; client.ts has its own
 // suite. vi.hoisted: the module under test is imported statically, so the
 // vi.mock factories run before ordinary top-level consts initialise; these
 // seams must be hoisted alongside them.
-const { FakeApiError, guideState, tauriInvoke } = vi.hoisted(() => {
+const { FakeApiError, tauriInvoke } = vi.hoisted(() => {
 	class FakeApiError extends Error {
 		constructor(
 			public kind: string,
@@ -20,16 +19,12 @@ const { FakeApiError, guideState, tauriInvoke } = vi.hoisted(() => {
 	return {
 		tauriInvoke: vi.fn(),
 		FakeApiError,
-		// Mutable guide-state seam: tests flip isActive to drive demo dispatch.
-		guideState: { isActive: false },
 	};
 });
 
 vi.mock('./client', () => ({
 	ApiError: FakeApiError,
 }));
-
-vi.mock('$lib/guide/state.svelte', () => ({ guideState }));
 
 // Startup readiness has its own suite; here the backend is already up, so
 // the transport dispatches straight through.
@@ -46,14 +41,13 @@ import * as api from './index';
 const DATA = { marker: 'payload' } as const;
 
 beforeEach(() => {
-	guideState.isActive = false;
 	tauriInvoke.mockReset();
 	tauriInvoke.mockResolvedValue(DATA);
 });
 
 // The tracking family serves its live surface over typed IPC commands. The
 // session-scoped writes, lifecycle verbs, and mob/loot edits
-// decision are always commands (no demo branch); the camelCase call
+// decision are always commands; the camelCase call
 // arguments map to the snake_case invoke keys the generated bindings send.
 describe('tracking wrappers dispatch typed commands', () => {
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
@@ -147,65 +141,37 @@ describe('session definition lifecycle wrappers dispatch typed commands', () => 
 	});
 });
 
-// The three tracking reads with a guide-mode surface: the live command and the
-// guide-mode demo command share their DTOs. Guide mode dispatches the `demo_*`
-// command with the identical args.
-describe('guide-mode demo dispatch', () => {
-	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>, string][] = [
+// The three tracking reads: each dispatches its typed command with the
+// snake_case args.
+describe('tracking reads dispatch typed commands', () => {
+	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
 		[
 			'getTrackingSessions',
 			() => api.getTrackingSessions(),
 			'tracking_sessions',
 			{ cursor: null, limit: null, definition_id: null },
-			'demo_tracking_sessions',
 		],
 		[
 			'getSessionDetail',
 			() => api.getSessionDetail('s1'),
 			'tracking_session_detail',
 			{ session_id: 's1' },
-			'demo_tracking_session_detail',
 		],
-		[
-			'getTrackingSnapshot',
-			() => api.getTrackingSnapshot(),
-			'tracking_snapshot',
-			{},
-			'demo_tracking_snapshot',
-		],
+		['getTrackingSnapshot', () => api.getTrackingSnapshot(), 'tracking_snapshot', {}],
 	];
 
-	it.each(
-		rows,
-	)('%s invokes the live command, or the demo command in guide mode', async (_name, call, command, args, demoCommand) => {
-		guideState.isActive = false;
+	it.each(rows)('%s invokes its command', async (_name, call, command, args) => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledTimes(1);
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
-		await call();
-		expect(tauriInvoke).toHaveBeenCalledTimes(1);
-		expect(tauriInvoke).toHaveBeenCalledWith(demoCommand, args);
 	});
 });
 
-// The analytics family serves its live surface over typed IPC commands and
-// keeps a per-call demo branch (the guide-mode surface dispatches the parallel
-// `demo_*` command sharing the DTO): the reads dispatch a live command or a
-// demo command by guide state; the writes are always commands (no demo
-// branch).
+// The analytics family serves its surface over typed IPC commands.
 describe('analytics wrappers dispatch typed commands', () => {
-	it('getAnalyticsOverview invokes the live command, or the demo command in guide mode', async () => {
-		guideState.isActive = false;
+	it('getAnalyticsOverview forwards the selected period', async () => {
 		await api.getAnalyticsOverview('30d');
 		expect(tauriInvoke).toHaveBeenCalledWith('analytics_overview', { period: '30d' });
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
-		await api.getAnalyticsOverview('30d');
-		expect(tauriInvoke).toHaveBeenCalledWith('demo_analytics_overview', { period: '30d' });
 	});
 
 	it('getAnalyticsOverview defaults the period to "all"', async () => {
@@ -240,15 +206,9 @@ describe('analytics wrappers dispatch typed commands', () => {
 		expect(page.nextCursor).toBeNull();
 	});
 
-	it('getLedgerSummary invokes the live command, or the demo command in guide mode', async () => {
-		guideState.isActive = false;
-		await api.getLedgerSummary('all');
-		expect(tauriInvoke).toHaveBeenCalledWith('ledger_summary', { period: 'all' });
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
+	it('getLedgerSummary forwards the selected period', async () => {
 		await api.getLedgerSummary('30d');
-		expect(tauriInvoke).toHaveBeenCalledWith('demo_ledger_summary', { period: '30d' });
+		expect(tauriInvoke).toHaveBeenCalledWith('ledger_summary', { period: '30d' });
 	});
 
 	it('getLedgerPresets / getInventoryItems invoke their list commands live', async () => {
@@ -259,8 +219,7 @@ describe('analytics wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).toHaveBeenCalledWith('inventory_list', {});
 	});
 
-	it('the write wrappers invoke their commands (no demo branch, even in guide mode)', async () => {
-		guideState.isActive = true;
+	it('the write wrappers invoke their commands', async () => {
 		const entry = { date: '2026-05-01', type: 'expense', description: 'ammo', amount: 1, tag: 't' };
 		await api.addLedgerEntry(entry as never);
 		expect(tauriInvoke).toHaveBeenCalledWith('ledger_create', { entry });

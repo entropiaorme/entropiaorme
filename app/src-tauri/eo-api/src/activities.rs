@@ -279,10 +279,9 @@ fn active_views(standing: &[ActiveActivity], offers: &[QuestOffer]) -> Vec<Activ
 /// Shared with the tracking snapshot, which publishes the strip-level
 /// subset of it on every frame: one computation, so the chip's cue and
 /// the menu's rows can never disagree about what is available. A free
-/// function rather than a facade method because the guide-mode demo
-/// assembles the same snapshot over its own database and tracker, with
-/// no definition service of its own (`definitions: None`, which reads
-/// as a session outside any definition).
+/// function rather than a facade method so the snapshot assembly can call
+/// it with or without a definition service (`definitions: None` reads as
+/// a session outside any definition).
 ///
 /// Answers while IDLE too, over the definition a start would stamp:
 /// picking a session should show what it will offer, rather than making

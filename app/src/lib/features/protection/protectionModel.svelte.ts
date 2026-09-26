@@ -53,7 +53,6 @@ export function createProtectionModel() {
 	let removalTarget = $state<ProtectionSet | null>(null);
 	let pendingUndo = $state<PendingUndo | null>(null);
 	let expandedWindowId = $state<string | null>(null);
-	let guide = false;
 
 	const armourSets = $derived(overview.sets.filter((set) => set.kind === 'armour'));
 	const plateSets = $derived(overview.sets.filter((set) => set.kind === 'plates'));
@@ -65,12 +64,11 @@ export function createProtectionModel() {
 		!setName.trim() || !Number.isFinite(markupValue) || markupValue < 100 || saving,
 	);
 
-	async function load(guideMode = false): Promise<void> {
-		guide = guideMode;
+	async function load(): Promise<void> {
 		loading = true;
 		error = null;
 		try {
-			overview = guideMode ? { ...EMPTY } : await getProtectionOverview();
+			overview = await getProtectionOverview();
 		} catch (cause) {
 			error = describeError(cause, 'Failed to load armour');
 		} finally {
@@ -80,7 +78,6 @@ export function createProtectionModel() {
 
 	/** Re-read in place after a write elsewhere, keeping what is shown on failure. */
 	async function refresh(): Promise<void> {
-		if (guide) return;
 		try {
 			overview = await getProtectionOverview();
 		} catch {

@@ -73,7 +73,6 @@ async fn scan_api(dir: &Path, providers: ScanProviders) -> (Api, Arc<SkillScanMa
         None,
         None,
         None,
-        None,
     );
     (api, skill_scan)
 }

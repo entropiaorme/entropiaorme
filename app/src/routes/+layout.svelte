@@ -2,7 +2,6 @@
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.png';
 	import { Sidebar, Titlebar, UpdateToast } from '$lib/components';
-	import GuideOverlay from '$lib/guide/GuideOverlay.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
@@ -207,7 +206,6 @@
 			</main>
 		</div>
 	</div>
-	<GuideOverlay />
 	<UpdateToast />
 {/if}
 

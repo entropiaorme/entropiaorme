@@ -585,17 +585,6 @@ pub fn run() {
             commands::tracking_armour_cost,
             commands::tracking_repair_scan,
             commands::tracking_session_delete,
-            commands::demo_analytics_overview,
-            commands::demo_analytics_hunting,
-            commands::demo_analytics_hunting_activity,
-            commands::demo_analytics_harvest,
-            commands::demo_ledger_list,
-            commands::demo_ledger_summary,
-            commands::demo_ledger_presets_list,
-            commands::demo_inventory_list,
-            commands::demo_tracking_sessions,
-            commands::demo_tracking_session_detail,
-            commands::demo_tracking_snapshot,
             commands::dev_metrics,
             commands::dev_crash_reporting,
             commands::dev_set_crash_reporting,
@@ -671,7 +660,7 @@ pub fn run() {
             // the setup path, publishes it to the IPC command when ready,
             // and settles the readiness record every window awaits.
             // Dev and release compose identically; the resource dir (the
-            // bundled snapshot / model / demo assets) resolves only in the
+            // bundled snapshot / model assets) resolves only in the
             // installed build, dev falling back to the repository copies.
             compose_substrate(app.handle().clone(), app.path().resource_dir().ok());
             Ok(())

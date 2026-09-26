@@ -18,7 +18,7 @@
 {:else if model.error && !model.overall}
 	<ErrorNotice message={model.error} />
 {:else if model.overall}
-	<div class="space-y-5" data-guide-anchor="analytics-treecutting-area">
+	<div class="space-y-5" data-testid="analytics-treecutting-area">
 		<ErrorNotice message={model.error} />
 
 		<div class="flex flex-wrap items-center justify-between gap-3 pb-2">
@@ -45,7 +45,7 @@
 {:else}
 	<p
 		class="py-10 text-center text-sm text-text-tertiary"
-		data-guide-anchor="analytics-treecutting-area"
+		data-testid="analytics-treecutting-area"
 	>
 		No tree cutting data yet. Harvest trees during a tracked session to compare board outputs.
 	</p>

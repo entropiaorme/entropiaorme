@@ -64,7 +64,6 @@ async fn make_api_db(dir: &Path, seed: bool, settings: Option<&str>) -> (Api, Db
         None,
         None,
         None,
-        None,
     );
     (api, verify)
 }
@@ -435,7 +434,6 @@ async fn deleting_a_session_cascades_and_guards_active_and_missing() {
         handles.repair_ocr,
         handles.sale_window_ocr,
         handles.quests.clone(),
-        None,
         None,
         None,
         None,
@@ -1136,7 +1134,6 @@ async fn make_api_with_selection(
         handles.repair_ocr,
         handles.sale_window_ocr,
         handles.quests.clone(),
-        None,
         None,
         None,
         None,

@@ -1449,7 +1449,7 @@ impl Api {
     }
 }
 
-// ── Snapshot assembly (shared by the live and demo snapshots) ────────
+// ── Snapshot assembly ───────────────────────────────────────────────
 
 /// The definition's lifetime figures for the instance-versus-family
 /// flip, or `None` when no definition is in force (a legacy or
@@ -1532,10 +1532,7 @@ async fn lifetime_stats(
 }
 
 /// Assemble the projected snapshot value from the tracker readout, the
-/// resolved config, and the hotbar listener's running state. A free
-/// function (rather than an `Api` method) so both the live snapshot and
-/// the guide-mode demo snapshot, which runs over its own parallel tracker
-/// and database, share one assembly.
+/// resolved config, and the hotbar listener's running state.
 pub(crate) async fn build_snapshot_value(
     db: &Db,
     tracker: &HuntTracker,

@@ -359,23 +359,6 @@ impl HuntTracker {
         .await
     }
 
-    /// Prime the tracker with a fully-formed demo session (guide-mode
-    /// demo playback over a throwaway database only).
-    pub async fn prime_demo(
-        &self,
-        session: TrackingSession,
-        declared_mob: Option<DeclaredMob>,
-        facets: SessionFacets,
-    ) {
-        self.call(|reply| TrackerMsg::PrimeDemo {
-            session,
-            declared_mob,
-            facets,
-            reply,
-        })
-        .await
-    }
-
     /// The in-memory aggregate half of the snapshot (see
     /// `session::SessionAggregate`).
     async fn aggregate(

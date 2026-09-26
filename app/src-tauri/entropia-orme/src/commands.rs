@@ -1552,95 +1552,6 @@ pub async fn tracking_session_delete(
     facade(&app)?.tracking_session_delete(session_id).await
 }
 
-// The guide-mode demo reads: the frontend's guide-mode wrappers dispatch
-// these instead of the live commands, sharing the same DTOs. They serve the
-// parallel demo state (built lazily on first access); guide mode is never
-// exercised in the native-shell e2e build, so they carry no `e2e-stub` branch.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_overview(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsOverview, ApiError> {
-    facade(&app)?.demo_analytics_overview(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_hunting(app: tauri::AppHandle) -> Result<AnalyticsHunting, ApiError> {
-    facade(&app)?.demo_analytics_hunting().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_harvest(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsHarvest, ApiError> {
-    facade(&app)?.demo_analytics_harvest(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_hunting_activity(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsHuntingActivity, ApiError> {
-    facade(&app)?.demo_analytics_hunting_activity(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_list(
-    app: tauri::AppHandle,
-    cursor: Option<String>,
-    limit: Option<i64>,
-) -> Result<LedgerPage, ApiError> {
-    facade(&app)?.demo_ledger_list(cursor, limit).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_summary(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<LedgerSummary, ApiError> {
-    facade(&app)?.demo_ledger_summary(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_presets_list(
-    app: tauri::AppHandle,
-) -> Result<Vec<LedgerPreset>, ApiError> {
-    facade(&app)?.demo_ledger_presets_list().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_inventory_list(app: tauri::AppHandle) -> Result<Vec<InventoryItem>, ApiError> {
-    facade(&app)?.demo_inventory_list().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_sessions(
-    app: tauri::AppHandle,
-    cursor: Option<String>,
-    limit: Option<i64>,
-    definition_id: Option<i64>,
-) -> Result<SessionPage, ApiError> {
-    facade(&app)?
-        .demo_tracking_sessions(cursor, limit, definition_id)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_session_detail(
-    app: tauri::AppHandle,
-    session_id: String,
-) -> Result<SessionDetail, ApiError> {
-    facade(&app)?
-        .demo_tracking_session_detail(&session_id)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_snapshot(app: tauri::AppHandle) -> Result<TrackingSnapshot, ApiError> {
-    facade(&app)?.demo_tracking_snapshot().await
-}
-
 // The hidden developer-tools family: native-only, each gated on developer
 // mode (a gate-off command returns the typed not-found, kind "notFound"). The metrics read and the crash-reporting read/write are
 // synchronous facade methods, so their wrappers do not `.await`.
@@ -2145,17 +2056,6 @@ mod tests {
         "tracking_armour_cost",
         "tracking_repair_scan",
         "tracking_session_delete",
-        "demo_analytics_overview",
-        "demo_analytics_hunting",
-        "demo_analytics_hunting_activity",
-        "demo_analytics_harvest",
-        "demo_ledger_list",
-        "demo_ledger_summary",
-        "demo_ledger_presets_list",
-        "demo_inventory_list",
-        "demo_tracking_sessions",
-        "demo_tracking_session_detail",
-        "demo_tracking_snapshot",
         "dev_metrics",
         "dev_crash_reporting",
         "dev_set_crash_reporting",

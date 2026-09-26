@@ -257,7 +257,7 @@
 					{#snippet children()}{starting ? 'Starting...' : 'Start tracking'}{/snippet}
 				</Button>
 			{/if}
-			<span class="inline-flex" data-guide-anchor="dashboard-overlay-btn">
+			<span class="inline-flex">
 				<Button size="sm" variant="primary" onclick={() => toggleOverlay().catch(() => {})}>
 					{#snippet children()}Overlay{/snippet}
 				</Button>
@@ -276,7 +276,7 @@
 	<!-- Session stats -->
 	<div
 		class="dashboard-stat-grid relative grid gap-2"
-		data-guide-anchor="dashboard-stats-grid"
+		data-testid="dashboard-stats-grid"
 	>
 		{#each statsGrid.enabledStats as pref, i (pref.id)}
 			{@const def = getStatDef(pref.id)}

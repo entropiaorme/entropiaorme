@@ -19,13 +19,6 @@ import {
 	startQuest,
 	updateQuest,
 } from '$lib/api';
-import {
-	questsDemoFamilies,
-	questsDemoGlobalLiquidReturnRate,
-	questsDemoGlobalSkillProgressionRate,
-	questsDemoQuestAnalytics,
-	questsDemoQuests,
-} from '$lib/guide/fixtures/quests';
 import type {
 	Quest,
 	QuestAnalyticsRow,
@@ -215,25 +208,12 @@ export function createQuestsModel() {
 		categoriesInitialised = true;
 	}
 
-	async function loadData(guideMode: boolean) {
+	async function loadData() {
 		loading = true;
 		error = null;
 		try {
-			if (guideMode) {
-				quests = questsDemoQuests.map((q) => ({ ...q }));
-				families = questsDemoFamilies.map((f) => ({ ...f }));
-				analyticsData = questsDemoQuestAnalytics.map((a) => ({ ...a }));
-				rates = {
-					liquidReturnRate: questsDemoGlobalLiquidReturnRate,
-					skillProgressionRate: questsDemoGlobalSkillProgressionRate,
-				};
-				analyticsLoaded = true;
-				analyticsError = null;
-				initialiseCollapsedCategories(quests);
-				return;
-			}
-			// Leaving guide mode must drop the seeded demo analytics: re-arm
-			// the lazy analytics load so the next visit reads live data.
+			// A full load re-arms the lazy analytics read so it follows the
+			// freshly loaded quests.
 			analyticsLoaded = false;
 			const [q, f] = await Promise.all([getQuests(), getQuestFamilies()]);
 			quests = q;

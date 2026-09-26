@@ -7,7 +7,7 @@
  * from the Rust command DTOs), which types the arguments and return
  * value against the backend contract at compile time; the generated
  * types are the authoritative contract, and the wrappers add only
- * argument shaping and the guide-mode read swap (`./guide`). The
+ * argument shaping. The
  * shell's bespoke window/byte commands live in `./shell`.
  */
 

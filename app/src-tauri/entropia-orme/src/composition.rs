@@ -169,21 +169,6 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
     }
 }
 
-/// Where the bundled guide-mode demo database lives: the bundled resource
-/// directory in an installed build (`<resource_dir>/demo/entropia_orme.db`),
-/// the repository copy (`data/demo/entropia_orme.db`) in dev. The demo
-/// services copy it to a writable per-process file before opening, so the
-/// bundled file is never mutated.
-pub(crate) fn demo_db_path(resource_dir: Option<&PathBuf>) -> PathBuf {
-    match resource_dir {
-        Some(dir) if !cfg!(debug_assertions) => dir.join("demo").join("entropia_orme.db"),
-        _ => dev_project_root()
-            .join("data")
-            .join("demo")
-            .join("entropia_orme.db"),
-    }
-}
-
 /// The ABSOLUTE path to the platform's bundled ONNX Runtime dylib: the
 /// installed resource dir in a release build, the committed repo copy
 /// (`app/src-tauri/entropia-orme/resources/ort*/...`) in dev. On
@@ -598,7 +583,6 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
         data_dir(),
         snapshot_dir(resource_dir.as_ref()),
         models_dir(resource_dir.as_ref()),
-        Some(demo_db_path(resource_dir.as_ref())),
         maps_dir(resource_dir.as_ref()),
         keystroke_source,
         Some(Arc::new(eu_window::game_focus)),
@@ -615,7 +599,6 @@ async fn compose_with(
     data_dir: PathBuf,
     snapshot: PathBuf,
     models: PathBuf,
-    demo_db_path: Option<PathBuf>,
     maps: PathBuf,
     keystroke_source: Arc<dyn KeystrokeSource>,
     game_focus: Option<GameFocusProbe>,
@@ -917,7 +900,6 @@ async fn compose_with(
             repair_ocr.clone(),
             sale_window_ocr.clone(),
             producers.quests_handle(),
-            demo_db_path,
             planet_maps,
             Some(coord_capture.clone()),
             Some(navigation.0),
@@ -1980,7 +1962,6 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,
@@ -2009,7 +1990,6 @@ mod tests {
             data_dir,
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,
@@ -2056,7 +2036,6 @@ mod tests {
             data_dir,
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,
@@ -2081,7 +2060,6 @@ mod tests {
             dir.path().join("data"),
             dir.path().join("no-such-snapshot"),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,
@@ -2279,7 +2257,6 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,
@@ -2356,7 +2333,6 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
             None,

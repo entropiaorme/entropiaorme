@@ -24,12 +24,6 @@ import {
 	doseRequest,
 	previewDose,
 } from '$lib/features/consumables/doseForm';
-import {
-	equipmentDemoCarriedWeaponIds,
-	equipmentDemoDetails,
-	equipmentDemoHotbar,
-	equipmentDemoLibrary,
-} from '$lib/guide/fixtures/equipment';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
 	AppSettings,
@@ -234,32 +228,18 @@ export function createLibraryModel() {
 			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	async function loadData(guideMode: boolean): Promise<void> {
+	async function loadData(): Promise<void> {
 		try {
-			if (guideMode) {
-				const library = equipmentDemoLibrary.map((e) => ({ ...e }));
-				allEquipment = library;
-				splitByKind(library);
-				hotbar = { ...equipmentDemoHotbar };
-				hotbarHooksEnabled = true;
-				carriedWeaponIds = [...equipmentDemoCarriedWeaponIds];
-				passiveEffectSources = [];
-				reloadSpeed = null;
-				detailCache = Object.fromEntries(
-					Object.entries(equipmentDemoDetails).map(([k, v]) => [k, { ...v }]),
-				);
-			} else {
-				const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
-				allEquipment = library;
-				splitByKind(library);
-				hotbar = hotbarFromSettings(settings);
-				hotbarHooksEnabled = settings.hotbarHooksEnabled;
-				carriedWeaponIds = [...settings.carriedWeaponIds];
-				harvestGuardrail = settings.harvestGuardrail;
-				passiveEffectSources = cloneSources(settings.passiveEffectSources ?? []);
-				reloadSpeed = settings.reloadSpeed;
-				detailCache = {};
-			}
+			const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
+			allEquipment = library;
+			splitByKind(library);
+			hotbar = hotbarFromSettings(settings);
+			hotbarHooksEnabled = settings.hotbarHooksEnabled;
+			carriedWeaponIds = [...settings.carriedWeaponIds];
+			harvestGuardrail = settings.harvestGuardrail;
+			passiveEffectSources = cloneSources(settings.passiveEffectSources ?? []);
+			reloadSpeed = settings.reloadSpeed;
+			detailCache = {};
 		} catch (e) {
 			error = describeError(e, 'Failed to load equipment');
 		} finally {

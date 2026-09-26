@@ -1,4 +1,4 @@
-//! The session lifecycle (start, stop, demo priming, config reload),
+//! The session lifecycle (start, stop, config reload),
 //! the `ActiveSession` typestate payload, the aggregated tracking
 //! readout, and the coalesced tick flush.
 
@@ -485,12 +485,11 @@ impl TrackerActor {
         (current_tool, current_tool_kind, Some(aggregate))
     }
 
-    /// Prime the tracker with a fully-formed demo session, bypassing
-    /// the normal `start_session` lifecycle (no handlers subscribe,
-    /// nothing persists). It exists solely for guide-mode demo playback
-    /// over a throwaway database and must never run on the live
-    /// tracker.
-    pub(super) fn prime_demo(
+    /// Test-only: stand up an active session directly, bypassing the
+    /// normal `start_session` lifecycle (no handlers subscribe, nothing
+    /// persists), so a handler can be exercised on the actor alone.
+    #[cfg(test)]
+    pub(super) fn prime_session(
         &mut self,
         session: TrackingSession,
         declared_mob: Option<DeclaredMob>,

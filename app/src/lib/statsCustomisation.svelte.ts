@@ -31,8 +31,8 @@ export const DEFAULT_OVERLAY_PREFS: StatPref[] = ALL_STAT_IDS.map((id) => ({
 let dashboard = $state<StatPref[]>(DEFAULT_STAT_PREFS);
 let overlay = $state<StatPref[]>(DEFAULT_OVERLAY_PREFS);
 
-// Direct writes are transient (the guide's demo configuration, the overlay
-// window's broadcast sync); a persisted change goes through the setters below.
+// Direct writes are transient (the overlay window's broadcast sync); a
+// persisted change goes through the setters below.
 export const dashboardStats = {
 	get current(): StatPref[] {
 		return dashboard;

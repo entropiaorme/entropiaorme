@@ -14,7 +14,7 @@ describe('dashboard (native Tauri shell)', () => {
 
 	it('renders the dashboard shell: header, session island, stat grid', async () => {
 		await expect($('h1')).toHaveText('Dashboard');
-		await expect($('[data-guide-anchor="dashboard-stats-grid"]')).toBeExisting();
+		await expect($('[data-testid="dashboard-stats-grid"]')).toBeExisting();
 		const cells = await $$('[data-stat-cell]');
 		expect(cells.length).toBeGreaterThan(0);
 	});
@@ -25,13 +25,13 @@ describe('dashboard (native Tauri shell)', () => {
 		// session" to the live state) rather than racing the subscribe-then-
 		// hydrate sequence: the read is otherwise non-deterministic on a slow
 		// shell start.
-		const area = await $('[data-guide-anchor="dashboard-area"]');
+		const area = await $('[data-testid="dashboard-area"]');
 		await browser.waitUntil(async () => (await area.getText()).includes('Tracking active'), {
 			timeout: 12000,
 			timeoutMsg: 'dashboard never hydrated the active-session fixture',
 		});
 		// And the recent-events island shows the fixture's HOF event.
-		const events = await $('[data-guide-anchor="dashboard-recent-events"]');
+		const events = await $('[data-testid="dashboard-recent-events"]');
 		await browser.waitUntil(async () => (await events.getText()).includes('HOF'), {
 			timeout: 12000,
 			timeoutMsg: 'recent-events never showed the fixture HOF event',
@@ -39,14 +39,14 @@ describe('dashboard (native Tauri shell)', () => {
 	});
 
 	it('floats the session catalogue above the widget grid and keeps it in the viewport', async () => {
-		const trigger = await $('[data-guide-anchor="dashboard-session"] button[aria-haspopup="menu"]');
+		const trigger = await $('[data-testid="dashboard-session"] button[aria-haspopup="menu"]');
 		await trigger.waitForClickable({ timeout: 10000 });
 		await trigger.click();
 		await $('[role="menu"]').waitForDisplayed({ timeout: 10000 });
 
 		const geometry = await browser.execute(() => {
 			const panel = document.querySelector('body > [role="menu"]');
-			const grid = document.querySelector('[data-guide-anchor="dashboard-stats-grid"]');
+			const grid = document.querySelector('[data-testid="dashboard-stats-grid"]');
 			const results = panel?.querySelector('[data-testid="definition-results"]');
 			if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) return null;
 
@@ -113,7 +113,7 @@ describe('dashboard (native Tauri shell)', () => {
 	});
 
 	it('drives the overlay button over the real IPC boundary', async () => {
-		const overlayBtn = await $('[data-guide-anchor="dashboard-overlay-btn"] button');
+		const overlayBtn = await $('[data-testid="dashboard-overlay-btn"] button');
 		await expect(overlayBtn).toBeExisting();
 		await overlayBtn.waitForClickable({ timeout: 10000 });
 		await overlayBtn.click(); // wired to the app's invoke('toggle_overlay')

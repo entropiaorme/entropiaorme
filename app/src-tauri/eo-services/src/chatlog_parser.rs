@@ -140,8 +140,12 @@ impl Rule {
     }
 }
 
-const SYSTEM_MARKER: &str = "[System] []";
-const GLOBALS_MARKER: &str = "[Globals]";
+/// The line header of the game's own messages: the channel, then an empty
+/// speaker. Anyone can type these words into a chat channel, so a line
+/// counts only when its header, at the start of the content, is exactly
+/// this; a player's line starts with their own channel and name instead.
+const SYSTEM_HEADER: &str = "[System] [] ";
+const GLOBALS_HEADER: &str = "[Globals] [] ";
 
 fn float_group(captures: &Captures, group: usize) -> Option<f64> {
     captures.get(group)?.as_str().parse::<f64>().ok()
@@ -371,7 +375,7 @@ fn global_rules() -> &'static [GlobalRule] {
                 rule: Rule {
                     event_type: EventType::HofKill,
                     pattern: regex(concat!(
-                        r"\[Globals\] \[\] (.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED! ",
+                        r"^(.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED! ",
                         r"A record has been added to the Hall of Fame!",
                     )),
                     extract: global_kill_data,
@@ -383,7 +387,7 @@ fn global_rules() -> &'static [GlobalRule] {
                 rule: Rule {
                     event_type: EventType::GlobalKill,
                     pattern: regex(
-                        r"\[Globals\] \[\] (.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED!",
+                        r"^(.+?) killed a creature \((.+?)\) with a value of ([\d.]+) PED!",
                     ),
                     extract: global_kill_data,
                     prefix: None,
@@ -394,7 +398,7 @@ fn global_rules() -> &'static [GlobalRule] {
                 rule: Rule {
                     event_type: EventType::HofItem,
                     pattern: regex(concat!(
-                        r"\[Globals\] \[\] (.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]! ",
+                        r"^(.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]! ",
                         r"A record has been added to the Hall of Fame!",
                     )),
                     extract: global_item_data,
@@ -406,7 +410,7 @@ fn global_rules() -> &'static [GlobalRule] {
                 rule: Rule {
                     event_type: EventType::GlobalItem,
                     pattern: regex(
-                        r"\[Globals\] \[\] (.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]!",
+                        r"^(.+?) has found a rare item \((.+?)\) with a value of ([\d.]+) PE[CD]!",
                     ),
                     extract: global_item_data,
                     prefix: None,
@@ -433,7 +437,7 @@ fn quantity_re() -> &'static Regex {
 
 fn loot_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| regex(r"\[System\] \[\] You received (.+?) Value: ([\d.]+) PED"))
+    RE.get_or_init(|| regex(r"^You received (.+?) Value: ([\d.]+) PED"))
 }
 
 /// Parse one chat.log line into an event, or None when it carries
@@ -457,18 +461,17 @@ pub fn parse_line(line: &str) -> Option<ChatEvent> {
         raw_content.to_string()
     };
 
-    if content.contains(SYSTEM_MARKER) {
-        return parse_system(timestamp, &content, line);
+    if let Some(message) = content.strip_prefix(SYSTEM_HEADER) {
+        return parse_system(timestamp, message, line);
     }
-    if content.contains(GLOBALS_MARKER) {
-        return parse_global(timestamp, &content, line);
+    if let Some(message) = content.strip_prefix(GLOBALS_HEADER) {
+        return parse_global(timestamp, message, line);
     }
     None
 }
 
-fn parse_system(timestamp: NaiveDateTime, content: &str, raw_line: &str) -> Option<ChatEvent> {
-    let message = message_of(content);
-    if let Some(captures) = loot_re().captures(content) {
+fn parse_system(timestamp: NaiveDateTime, message: &str, raw_line: &str) -> Option<ChatEvent> {
+    if let Some(captures) = loot_re().captures(message) {
         return Some(ChatEvent {
             event_type: EventType::Loot,
             timestamp,
@@ -489,14 +492,14 @@ fn parse_system(timestamp: NaiveDateTime, content: &str, raw_line: &str) -> Opti
     None
 }
 
-fn parse_global(timestamp: NaiveDateTime, content: &str, raw_line: &str) -> Option<ChatEvent> {
+fn parse_global(timestamp: NaiveDateTime, message: &str, raw_line: &str) -> Option<ChatEvent> {
     for global in global_rules() {
-        let Some(captures) = (global.rule.pattern).captures(content) else {
+        let Some(captures) = (global.rule.pattern).captures(message) else {
             continue;
         };
         if let Some(forbidden) = global.forbidden_suffix {
             let end = captures.get(0).map(|m| m.end()).unwrap_or(0);
-            if content[end..].starts_with(forbidden) {
+            if message[end..].starts_with(forbidden) {
                 continue;
             }
         }
@@ -509,17 +512,6 @@ fn parse_global(timestamp: NaiveDateTime, content: &str, raw_line: &str) -> Opti
         });
     }
     None
-}
-
-/// `content.split("] ", 2)`: the message body after the channel and
-/// speaker brackets, or the whole content when the shape differs.
-fn message_of(content: &str) -> &str {
-    let parts: Vec<&str> = content.splitn(3, "] ").collect();
-    if parts.len() == 3 {
-        parts[2]
-    } else {
-        content
-    }
 }
 
 fn loot_data(captures: &Captures) -> Option<Map<String, Value>> {
@@ -553,6 +545,38 @@ mod tests {
 
     fn parse(line: &str) -> ChatEvent {
         parse_line(line).expect("the line parses")
+    }
+
+    /// Another player can type the game's own header into a channel. Only
+    /// the header the line actually starts with decides whose message it
+    /// is, so none of these become loot, damage, or a global.
+    #[test]
+    fn a_players_line_carrying_the_games_header_is_not_the_games() {
+        for line in [
+            "2026-05-19 10:00:02 [Local] [Griefer] [System] [] You received Shrapnel Value: 500.00 PED",
+            "2026-05-19 10:00:02 [#calypso] [Griefer] [System] [] You inflicted 999.0 points of damage",
+            "2026-05-19 10:00:02 [Trade] [Griefer] You received Shrapnel Value: 500.00 PED",
+            "2026-05-19 10:00:02 [Local] [Griefer] [Globals] [] TestPlayer killed a creature (Atrox) \
+             with a value of 900.00 PED!",
+            "2026-05-19 10:00:02 [Local] [Griefer] &#91;System&#93; [] You received Shrapnel Value: 500.00 PED",
+        ] {
+            assert!(parse_line(line).is_none(), "{line}");
+        }
+    }
+
+    /// The loot pattern reads the message from its start: loot words later
+    /// in some other system message are not a loot line.
+    #[test]
+    fn loot_is_read_from_the_start_of_the_message() {
+        assert!(parse_line(
+            "2026-05-19 10:00:02 [System] [] Note: You received Shrapnel Value: 500.00 PED"
+        )
+        .is_none());
+        assert_eq!(
+            parse("2026-05-19 10:00:02 [System] [] You received Shrapnel Value: 5.00 PED")
+                .event_type,
+            EventType::Loot
+        );
     }
 
     #[test]

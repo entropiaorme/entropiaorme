@@ -11,7 +11,6 @@ import {
 	completeQuest,
 	createQuest,
 	deleteQuest,
-	getAnalyticsOverview,
 	getMarketHuntMarkups,
 	getQuestAnalytics,
 	getQuestFamilies,
@@ -30,7 +29,7 @@ import type {
 } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
 import { getCooldownStatus } from './cooldown';
-import { type GlobalRates, globalRates, type RewardMode } from './economics';
+import type { RewardMode } from './economics';
 
 /** The planet options the quest forms offer. */
 export const PLANETS = [
@@ -141,7 +140,6 @@ export function createQuestsModel() {
 	let analyticsLoading = $state(false);
 	let analyticsError = $state<string | null>(null);
 	let analyticsLoaded = $state(false);
-	let rates = $state<GlobalRates>({ liquidReturnRate: 0, skillProgressionRate: 0 });
 	let rewardMarket = $state<MarketHarvestData | null>(null);
 	let analyticsRewardMode = $state<RewardMode>('tt');
 
@@ -251,13 +249,11 @@ export function createQuestsModel() {
 		analyticsLoading = true;
 		analyticsError = null;
 		try {
-			const [qAnalytics, overview, market] = await Promise.all([
+			const [qAnalytics, market] = await Promise.all([
 				getQuestAnalytics(),
-				getAnalyticsOverview('all'),
 				getMarketHuntMarkups().catch(() => null),
 			]);
 			analyticsData = qAnalytics;
-			rates = globalRates(overview);
 			if (market !== null) rewardMarket = market;
 			analyticsLoaded = true;
 		} catch (e) {
@@ -586,9 +582,6 @@ export function createQuestsModel() {
 		},
 		get analyticsLoaded() {
 			return analyticsLoaded;
-		},
-		get rates() {
-			return rates;
 		},
 		get rewardMarket() {
 			return rewardMarket;

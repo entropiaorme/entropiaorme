@@ -444,9 +444,11 @@ impl QuestFamily {
     }
 }
 
-/// Per-quest analytics in the wire shape (`_format_quest_analytics`).
-/// The reward and cost columns are model-float coerced and rounded; the
-/// session count is an integer; the markup passes through raw.
+/// Per-quest analytics in the wire shape: the recorded completions and
+/// their rewards, model-float coerced and rounded, plus the count of
+/// sessions that recorded the quest. No per-quest cost is reported: a
+/// session's cost cannot be charged to each of its co-active quests
+/// without counting it once per quest.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestAnalyticsRow {
@@ -462,16 +464,8 @@ pub struct QuestAnalyticsRow {
     pub total_recorded_item_tt: f64,
     pub total_realised_reward_markup: f64,
     pub recorded_reward_items: Vec<QuestRewardCandidate>,
+    /// Completed sessions that recorded a stretch of the quest.
     pub linked_sessions: i64,
-    pub total_duration_sec: f64,
-    pub total_weapon_cost: f64,
-    pub total_heal_cost: f64,
-    /// Consumed doses of cost-tracked items in the linked sessions.
-    pub total_consumable_cost: f64,
-    pub total_enhancer_cost: f64,
-    pub total_armour_cost: f64,
-    pub total_loot_tt: f64,
-    pub total_pes: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -554,14 +548,6 @@ impl QuestAnalyticsRow {
                 })
                 .collect(),
             linked_sessions: row["linked_sessions"].as_i64().unwrap_or(0),
-            total_duration_sec: model_float(&row["total_duration"], 1),
-            total_weapon_cost: model_float(&row["weapon_cost"], 4),
-            total_heal_cost: model_float(&row["heal_cost"], 4),
-            total_consumable_cost: model_float(&row["consumable_cost"], 4),
-            total_enhancer_cost: model_float(&row["enhancer_cost"], 4),
-            total_armour_cost: model_float(&row["armour_cost"], 4),
-            total_loot_tt: model_float(&row["loot_tt"], 4),
-            total_pes: model_float(&row["skill_tt"], 4),
         }
     }
 }

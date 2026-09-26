@@ -1,6 +1,6 @@
-//! The per-quest analytics readers over sessions whose recorded quest stretches
-//! (`session_intervals`, kind `quest`) name them, with the engine's
-//! own numeric types preserved on the wire.
+//! The per-quest analytics readers: recorded completions and their rewards,
+//! for every quest whose stretch (`session_intervals`, kind `quest`) a
+//! completed session recorded.
 
 use serde_json::{json, Map, Value};
 
@@ -9,9 +9,9 @@ use super::{QuestError, QuestService};
 impl QuestService {
     // ── Analytics ───────────────────────────────────────────────────
 
-    /// Per-quest sustainability metrics across all sessions with a
-    /// recorded stretch of the quest: raw totals (the frontend derives
-    /// averages), only for quests at least one session recorded.
+    /// Per-quest reward metrics: raw totals over the quest's recorded
+    /// completions (the frontend derives averages), only for quests at
+    /// least one completed session recorded.
     pub async fn get_quest_analytics(&self) -> Result<Vec<Value>, QuestError> {
         let quest_rows = self
             .db
@@ -162,130 +162,27 @@ impl QuestService {
             .await?)
     }
 
-    /// The sessions a quest's metrics aggregate over: every session
-    /// with a recorded stretch of the quest (an interval, whether
-    /// auto-recorded by the lifecycle or hand-placed on history). The
-    /// interval superseded the curated `session_quest_analytics_links`
-    /// row as the membership truth; the wire keeps the historical
-    /// `linked_sessions` field name.
+    /// How many completed sessions recorded a stretch of the quest (an
+    /// interval, whether auto-recorded by the lifecycle or hand-placed on
+    /// history); a quest with none is left out of the analytics. The wire
+    /// keeps the historical `linked_sessions` field name.
+    ///
+    /// Per-quest cost is deliberately not reported: a whole session's cost
+    /// cannot be charged to each quest that ran in it without counting it
+    /// once per co-active quest. It returns when it can be costed from the
+    /// session segments that ran each quest.
     async fn compute_quest_session_stats(&self, quest_id: i64) -> Result<Value, QuestError> {
-        let session_ids = self
-            .db
-            .with_reader(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT DISTINCT session_id FROM session_intervals \
-                     WHERE kind = 'quest' AND ref_id = ? ORDER BY session_id",
-                )?;
-                let mut rows = stmt.query(rusqlite::params![quest_id])?;
-                let mut out = Vec::new();
-                while let Some(row) = rows.next()? {
-                    out.push(row.get::<_, String>(0)?);
-                }
-                Ok(out)
-            })
-            .await?;
-        self.compute_session_set_stats(&session_ids).await
-    }
-
-    /// Aggregate economics for a set of sessions: completed-session
-    /// durations and costs, weapon costs through the per-tool stats,
-    /// and loot and skill totals.
-    async fn compute_session_set_stats(&self, session_ids: &[String]) -> Result<Value, QuestError> {
-        if session_ids.is_empty() {
-            return Ok(json!({
-                "linked_sessions": 0,
-                "total_duration": 0,
-                "weapon_cost": 0,
-                "heal_cost": 0,
-                "consumable_cost": 0,
-                "enhancer_cost": 0,
-                "armour_cost": 0,
-                "loot_tt": 0,
-                "skill_tt": 0,
-            }));
-        }
-
-        let placeholders = vec!["?"; session_ids.len()].join(",");
-        let session_ids: Vec<String> = session_ids.to_vec();
-        // Every leg is a plain read, so the whole aggregate runs as one
-        // synchronous unit on a reader-core connection.
         self.db
             .with_reader(move |conn| {
-                let (linked_sessions, total_duration, heal_cost, armour_cost, consumable_cost) =
-                    conn.query_row(
-                        &format!(
-                            "SELECT COUNT(*), \
-                                COALESCE(SUM(s.ended_at - s.started_at), 0), \
-                                COALESCE(SUM(s.heal_cost), 0), \
-                                COALESCE(SUM(s.armour_cost), 0), \
-                                COALESCE(SUM(s.consumable_cost), 0) \
-                         FROM tracking_sessions s \
-                         WHERE s.id IN ({placeholders}) AND s.is_active = 0"
-                        ),
-                        rusqlite::params_from_iter(session_ids.iter()),
-                        |row| {
-                            Ok((
-                                row_i64(row, 0),
-                                sql_number(row, 1),
-                                sql_number(row, 2),
-                                sql_number(row, 3),
-                                sql_number(row, 4),
-                            ))
-                        },
-                    )?;
-
-                let weapon_cost = conn.query_row(
-                    &format!(
-                        "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
-                         FROM kill_tool_stats ts \
-                         JOIN kills k ON k.id = ts.kill_id \
-                         WHERE k.session_id IN ({placeholders})"
-                    ),
-                    rusqlite::params_from_iter(session_ids.iter()),
-                    |row| Ok(sql_number(row, 0)),
+                let linked_sessions = conn.query_row(
+                    "SELECT COUNT(*) FROM tracking_sessions s \
+                     WHERE s.is_active = 0 AND s.id IN ( \
+                         SELECT session_id FROM session_intervals \
+                         WHERE kind = 'quest' AND ref_id = ?)",
+                    rusqlite::params![quest_id],
+                    |row| Ok(row_i64(row, 0)),
                 )?;
-
-                let enhancer_cost = conn.query_row(
-                    &format!(
-                        "SELECT COALESCE(SUM(k.enhancer_cost), 0) \
-                         FROM kills k \
-                         WHERE k.session_id IN ({placeholders})"
-                    ),
-                    rusqlite::params_from_iter(session_ids.iter()),
-                    |row| Ok(sql_number(row, 0)),
-                )?;
-
-                let loot_tt = conn.query_row(
-                    &format!(
-                        "SELECT COALESCE(SUM(k.loot_total_ped), 0) \
-                         FROM kills k \
-                         WHERE k.session_id IN ({placeholders})"
-                    ),
-                    rusqlite::params_from_iter(session_ids.iter()),
-                    |row| Ok(sql_number(row, 0)),
-                )?;
-
-                let skill_tt = conn.query_row(
-                    &format!(
-                        "SELECT COALESCE(SUM(sg.ped_value), 0) \
-                         FROM skill_gains sg \
-                         WHERE sg.session_id IN ({placeholders})"
-                    ),
-                    rusqlite::params_from_iter(session_ids.iter()),
-                    |row| Ok(sql_number(row, 0)),
-                )?;
-
-                Ok(json!({
-                    "linked_sessions": linked_sessions,
-                    "total_duration": total_duration,
-                    "weapon_cost": weapon_cost,
-                    "heal_cost": heal_cost,
-                    "consumable_cost": consumable_cost,
-                    "enhancer_cost": enhancer_cost,
-                    "armour_cost": armour_cost,
-                    "loot_tt": loot_tt,
-                    "skill_tt": skill_tt,
-                }))
+                Ok(json!({ "linked_sessions": linked_sessions }))
             })
             .await
             .map_err(QuestError::from)
@@ -295,16 +192,4 @@ impl QuestService {
 /// A COUNT column: always an integer.
 fn row_i64(row: &rusqlite::Row, index: usize) -> i64 {
     row.get_unwrap::<_, i64>(index)
-}
-
-/// An aggregate column with the engine's own numeric type: SQLite
-/// returns INTEGER for empty-set COALESCE fallbacks and integer sums,
-/// REAL otherwise, and the original emits whichever arrives. The stored
-/// value's affinity (`ValueRef`) drives the branch, mirroring the original
-/// typed read.
-fn sql_number(row: &rusqlite::Row, index: usize) -> Value {
-    match row.get_ref_unwrap(index) {
-        rusqlite::types::ValueRef::Real(value) => json!(value),
-        value => json!(value.as_i64().expect("sql_number reads a numeric column")),
-    }
 }

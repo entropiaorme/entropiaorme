@@ -2631,9 +2631,11 @@ export interface Quest {
 }
 
 /**
- * Per-quest analytics in the wire shape (`_format_quest_analytics`).
- * The reward and cost columns are model-float coerced and rounded; the
- * session count is an integer; the markup passes through raw.
+ * Per-quest analytics in the wire shape: the recorded completions and
+ * their rewards, model-float coerced and rounded, plus the count of
+ * sessions that recorded the quest. No per-quest cost is reported: a
+ * session's cost cannot be charged to each of its co-active quests
+ * without counting it once per quest.
  */
 export interface QuestAnalyticsRow {
 	questId: string;
@@ -2648,16 +2650,8 @@ export interface QuestAnalyticsRow {
 	totalRecordedItemTt: number;
 	totalRealisedRewardMarkup: number;
 	recordedRewardItems: QuestRewardCandidate[];
+	/** Completed sessions that recorded a stretch of the quest. */
 	linkedSessions: number;
-	totalDurationSec: number;
-	totalWeaponCost: number;
-	totalHealCost: number;
-	/** Consumed doses of cost-tracked items in the linked sessions. */
-	totalConsumableCost: number;
-	totalEnhancerCost: number;
-	totalArmourCost: number;
-	totalLootTt: number;
-	totalPes: number;
 }
 
 export type QuestCompletionTrigger = 'mission_log' | 'signal_item' | 'manual_hand_in';

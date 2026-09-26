@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Card, DataTable, ErrorNotice, SegmentedControl } from '$lib/components';
-	import { formatPed, formatPercent } from '$lib/utils/format';
+	import { formatPed } from '$lib/utils/format';
 	import { createTableModel } from '$lib/view/tableModel.svelte';
 	import {
 		computeQuestAnalytics,
@@ -14,7 +14,6 @@
 	const computedAnalytics = $derived(
 		computeQuestAnalytics(
 			model.analyticsData,
-			model.rates,
 			model.analyticsRewardMode,
 			model.rewardMarket
 		)
@@ -49,8 +48,7 @@
 		const columns: ColumnDef<QuestAnalyticsComputed>[] = [
 			{ key: 'questName', label: 'Quest', sortable: true },
 			{ key: 'recordedCompletions', label: 'Runs', align: 'right', sortable: true },
-			{ key: 'totalRecordedRewardTt', label: 'Reward TT', align: 'right', sortable: true },
-			{ key: 'avgCycled', label: 'Avg Cycled', align: 'right', sortable: true }
+			{ key: 'totalRecordedRewardTt', label: 'Reward TT', align: 'right', sortable: true }
 		];
 		if (model.analyticsRewardMode === 'markup') {
 			columns.splice(3, 0, {
@@ -72,10 +70,12 @@
 			align: 'right',
 			sortable: true
 		});
-		columns.push(
-			{ key: 'avgNet', label: 'Avg Net', align: 'right', sortable: true },
-			{ key: 'returnRate', label: 'Rate', align: 'right', sortable: true }
-		);
+		columns.push({
+			key: 'displayLiquidReward',
+			label: 'Per Run',
+			align: 'right',
+			sortable: true
+		});
 		return columns;
 	});
 
@@ -88,13 +88,18 @@
 {:else if computedAnalytics.length === 0}
 	<Card class="p-6">
 		<p class="text-sm text-text-tertiary text-center">
-			No curated quest analytics yet. Quest tracking continues in the background, but analytics only include sessions you explicitly link after a clean tracked run.
+			No quest runs recorded yet.
 		</p>
 	</Card>
 {:else}
 	<div class="space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
-			<h3 class="text-sm font-medium text-text-secondary">Single Quest Analytics</h3>
+			<div>
+				<h3 class="text-sm font-medium text-text-secondary">Quest Rewards</h3>
+				<p class="mt-0.5 text-xs text-text-tertiary">
+					Cost and net per quest will return once they are costed from the session segments that ran each quest.
+				</p>
+			</div>
 			<SegmentedControl
 				options={[
 					{ id: 'tt', label: 'Reward TT' },
@@ -122,23 +127,17 @@
 				</span>
 			{:else if column.key === 'unresolvedCompletions'}
 				<span class="tabular-nums {Number(value) > 0 ? 'text-warning' : 'text-text-tertiary'}">{value}</span>
-			{:else if column.key === 'avgCycled'}
-				<span class="tabular-nums">{formatPed(Number(value))}</span>
-			{:else if column.key === 'avgNet'}
+			{:else if column.key === 'displayLiquidReward'}
 				<div class="flex flex-col items-end leading-tight">
-					<span class="tabular-nums {Number(value) >= 0 ? 'text-positive' : 'text-negative'}">
-						{Number(value) >= 0 ? '+' : ''}{formatPed(Number(value))}
-					</span>
-					{#if row.avgPesNet > 0}
-						<span class="text-[11px] text-accent">+{formatPed(row.avgPesNet)} PES</span>
+					<span class="tabular-nums">{formatPed(Number(value))}</span>
+					{#if row.avgRewardPes > 0}
+						<span class="text-[11px] text-accent">+{formatPed(row.avgRewardPes)} PES</span>
 					{/if}
 				</div>
 			{:else if column.key === 'rewardMarkupPercent'}
 				<span class="tabular-nums text-text-secondary">
 					{value == null ? '\u2014' : `${Number(value).toFixed(0)}%`}
 				</span>
-			{:else if column.key === 'returnRate'}
-				<span class="tabular-nums">{formatPercent(Number(value))}</span>
 			{:else}
 				{value}
 			{/if}
@@ -153,11 +152,7 @@
 				if (table.sortKey !== undefined && dir !== table.sortDir) table.setSort(table.sortKey);
 			}}
 			cell={analyticsCell}
-			emptyMessage="No curated quest runs"
+			emptyMessage="No quest runs recorded"
 		/>
-
-		<div class="text-[11px] text-text-tertiary tabular-nums pt-2 text-right">
-			Liquid baseline: {formatPercent(model.rates.liquidReturnRate)}
-		</div>
 	</div>
 {/if}

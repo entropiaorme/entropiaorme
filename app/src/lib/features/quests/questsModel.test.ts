@@ -12,7 +12,6 @@ vi.mock('$lib/api', () => ({
 	completeQuest: vi.fn(),
 	cancelQuest: vi.fn(),
 	getQuestAnalytics: vi.fn(),
-	getAnalyticsOverview: vi.fn(),
 	getMarketHuntMarkups: vi.fn(),
 }));
 
@@ -102,10 +101,6 @@ describe('analytics', () => {
 	it('preserves the last market snapshot when its independent refresh fails', async () => {
 		const first = { nanocubeMarkupPct: 123, items: [] } as never;
 		mocked.getQuestAnalytics.mockResolvedValue([]);
-		mocked.getAnalyticsOverview.mockResolvedValue({
-			returnsBreakdown: { lootTt: 0, questItemTt: 0, pes: 0, codexPes: 0, questPes: 0, ledger: {} },
-			lossesBreakdown: { trackingCost: 0, cycledBreakdown: {}, ledger: {} },
-		} as never);
 		mocked.getMarketHuntMarkups.mockResolvedValueOnce(first);
 		const model = createQuestsModel();
 
@@ -290,10 +285,6 @@ describe('quest lifecycle', () => {
 describe('full load', () => {
 	it('re-arms the lazy analytics load', async () => {
 		mocked.getQuestAnalytics.mockResolvedValue([]);
-		mocked.getAnalyticsOverview.mockResolvedValue({
-			returnsBreakdown: { lootTt: 0, questItemTt: 0, pes: 0, codexPes: 0, questPes: 0, ledger: {} },
-			lossesBreakdown: { trackingCost: 0, cycledBreakdown: {}, ledger: {} },
-		} as never);
 		const model = createQuestsModel();
 		await model.loadAnalytics();
 		expect(model.analyticsLoaded).toBe(true);

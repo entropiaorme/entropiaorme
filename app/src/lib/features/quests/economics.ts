@@ -90,7 +90,11 @@ export function computeQuestAnalytics(
 ): QuestAnalyticsComputed[] {
 	return rows.map((row) => {
 		const totalCycled =
-			row.totalWeaponCost + row.totalHealCost + row.totalEnhancerCost + row.totalArmourCost;
+			row.totalWeaponCost +
+			row.totalHealCost +
+			row.totalConsumableCost +
+			row.totalEnhancerCost +
+			row.totalArmourCost;
 		const sessions = row.linkedSessions || 1;
 		const recordedRuns = row.recordedCompletions || 1;
 		const avgCycled = totalCycled / sessions;

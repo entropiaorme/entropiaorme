@@ -4,6 +4,8 @@
 	import { getStatDef } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
 	import { ICON_EQUIPMENT, ICON_ARMOUR } from './icons';
+	import OverlayDoses from '$lib/features/consumables/OverlayDoses.svelte';
+	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { NO_DATA } from '$lib/utils/format';
 
 	const noop = () => {};
@@ -22,6 +24,8 @@
 		decidingWeapon = false,
 		armourCostOpen = false,
 		definitionMenuOpen = false,
+		doses = null,
+		dosesMenuOpen = false,
 		mobQuery = $bindable(''),
 		mobInput = $bindable(null),
 		boostDraft = $bindable(''),
@@ -35,7 +39,8 @@
 		onBoostCommit = noop,
 		onActivitiesTrigger = noop,
 		onWeaponDecision = noop,
-		onArmourCostToggle = noop
+		onArmourCostToggle = noop,
+		onDosesTrigger = noop
 	}: {
 		data: TrackingLive;
 		status?: TrackingStatus | null;
@@ -50,6 +55,9 @@
 		decidingWeapon?: boolean;
 		armourCostOpen?: boolean;
 		definitionMenuOpen?: boolean;
+		/** The live dose readout, when this window shows one. */
+		doses?: DosesModel | null;
+		dosesMenuOpen?: boolean;
 		mobQuery?: string;
 		mobInput?: HTMLInputElement | null;
 		boostDraft?: string;
@@ -64,6 +72,7 @@
 		onActivitiesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		onWeaponDecision?: (decision: WeaponMismatchDecision) => void | Promise<void>;
 		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
+		onDosesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 	} = $props();
 
 	// The Activities menu's anchor: the section, which survives the chip
@@ -457,6 +466,12 @@
 			Cost
 		</button>
 	</div>
+
+	<!-- Doses: what a consumable has in force, each counting down to its
+		 stored end, with the one correction a misclicked key needs. -->
+	{#if doses}
+		<OverlayDoses model={doses} menuOpen={dosesMenuOpen} onStartTrigger={onDosesTrigger} />
+	{/if}
 
 	<!-- Customisable stat pills (driven by the overlay stat prefs): treated as
 		 one unit, so the section separator sits at the unit boundary, not

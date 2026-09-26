@@ -616,6 +616,21 @@ async fn a_catalogue_consumable_takes_its_dose_from_the_catalogue() {
     );
     assert!((settings.dose_cost_ped - 4.5).abs() < 1e-12);
     assert!((added.cost_per_use - 450.0).abs() < 1e-9);
+
+    // The search hit carries the catalogue dose for the form to show before
+    // anything is saved; tracking waits for the player's choice.
+    let hits = api
+        .equipment_search("Adrenaline", SearchKind::Consumable)
+        .await
+        .unwrap();
+    let dose = hits[0]
+        .consumable
+        .as_ref()
+        .expect("a stimulant carries its dose");
+    assert_eq!(dose.duration_seconds, 3600.0);
+    assert_eq!(dose.tt_value_ped, 3.0);
+    assert!(!dose.track_cost);
+    assert!(hits[0].uses_per_minute.as_ref().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

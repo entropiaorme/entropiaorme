@@ -72,6 +72,7 @@ export type {
 	StockRemovalInput,
 	UnresolvedQuestReward,
 } from './commands.gen';
+export * from './consumables';
 export * from './dev';
 export * from './equipment';
 export * from './healing';

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button, Card, Divider, Skeleton } from '$lib/components';
 	import { IconConsumables, IconHealing, IconWeapons } from '$lib/icons';
+	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
 	import { formatPec } from './display';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import WeaponRow from './WeaponRow.svelte';
@@ -83,7 +84,31 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<span class="text-sm font-medium text-text">{item.name}</span>
+						{#if item.consumable}
+							{@const dose = item.consumable}
+							<div class="mt-0.5 text-xs text-text-tertiary">
+								{dose.effects.length > 0 ? describeEffects(dose.effects) : 'No evaluated effect'}
+								<span class="ml-2">{formatDuration(dose.durationSeconds)}</span>
+							</div>
+						{/if}
 					</div>
+					{#if item.consumable}
+						<div class="text-right shrink-0">
+							<span class="text-sm font-medium tabular-nums {item.consumable.trackCost ? 'text-text' : 'text-text-tertiary'}">
+								{item.consumable.doseCostPed.toFixed(2)}
+							</span>
+							<span class="text-xs text-text-tertiary ml-0.5">PED/dose</span>
+							<div class="text-[11px] text-text-tertiary">
+								{item.consumable.trackCost ? 'Booked' : 'Not booked'}
+							</div>
+						</div>
+					{/if}
+					<button
+						type="button" class="linklet shrink-0"
+						onclick={() => model.openEditModal(item.id)}
+					>
+						Edit
+					</button>
 					<button
 						type="button" class="linklet linklet-danger shrink-0"
 						aria-label="Remove {item.name}"

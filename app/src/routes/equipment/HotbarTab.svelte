@@ -181,7 +181,13 @@
 						<!-- Cost display -->
 						<div class="shrink-0 w-20 text-right">
 							{#if type === 'consumable'}
-								<span class="text-xs text-text-tertiary">consumable</span>
+								<!-- The key is the dose: what one press books. -->
+								{#if cost !== null && cost > 0}
+									<span class="text-sm font-medium tabular-nums text-text">{(cost / 100).toFixed(2)}</span>
+									<span class="text-xs text-text-tertiary ml-0.5">PED</span>
+								{:else}
+									<span class="text-xs text-text-tertiary" title="This item's doses book no cost">not booked</span>
+								{/if}
 							{:else if cost !== null}
 								<span class="text-sm font-medium tabular-nums text-text">
 									{cost.toFixed(2)}

@@ -54,7 +54,14 @@ function overview(overrides: Partial<OverviewStats> = {}): OverviewStats {
 		},
 		lossesBreakdown: {
 			trackingCost: 1000,
-			cycledBreakdown: { weapon: 700, healing: 150, enhancer: 100, armour: 50, dangling: 0 },
+			cycledBreakdown: {
+				weapon: 700,
+				healing: 150,
+				enhancer: 100,
+				armour: 50,
+				dangling: 0,
+				consumables: 0,
+			},
 			ledger: { equipment: 40, repair: 20 },
 		},
 		totalGains: 1000,

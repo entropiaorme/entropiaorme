@@ -111,6 +111,23 @@ vi.mock('$lib/api', () => {
 			candidate: null,
 		})),
 		getQuests: vi.fn(async () => []),
+		CONSUMABLES_TOPIC: 'consumables:updated',
+		getConsumableDoses: vi.fn(async () => ({
+			now: 0,
+			doses: [],
+			reloadSpeed: {
+				equippedPercent: 0,
+				consumedPercent: 0,
+				inEffectPercent: 0,
+				itemLimitPercent: 15,
+				consumedLimitPercent: 20,
+				totalLimitPercent: 30,
+			},
+			options: [],
+		})),
+		startConsumableDose: vi.fn(),
+		removeConsumableDose: vi.fn(),
+		restoreConsumableDose: vi.fn(),
 		updateSettings: seams.updateSettings,
 		decideWeaponMismatch: seams.decideWeaponMismatch,
 	};

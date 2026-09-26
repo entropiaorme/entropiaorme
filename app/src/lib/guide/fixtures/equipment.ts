@@ -25,6 +25,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 	},
 	{
 		id: '2',
@@ -40,6 +41,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 	},
 	{
 		id: '3',
@@ -55,6 +57,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 	},
 	{
 		id: '4',
@@ -78,6 +81,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		},
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 	},
 	{
 		id: '5',
@@ -93,6 +97,7 @@ export const equipmentDemoLibrary: Equipment[] = [
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 	},
 ];
 
@@ -147,6 +152,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 		attackRate: {
 			basePerMinute: 46,
 			reloadSpeedPercent: 0,
@@ -226,6 +232,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 		attackRate: {
 			basePerMinute: 57,
 			reloadSpeedPercent: 0,
@@ -272,6 +279,7 @@ export const equipmentDemoDetails: Record<string, EquipmentDetail> = {
 		},
 		lifestealPercent: null,
 		effectProfile: null,
+		consumable: null,
 		attackRate: null,
 	},
 };

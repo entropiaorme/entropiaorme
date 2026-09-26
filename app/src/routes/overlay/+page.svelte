@@ -48,6 +48,7 @@
 		OVERLAY_MENU_WINDOW_LABEL,
 		OVERLAY_MENU_MIN_WIDTH,
 		buildActivitiesMenuState,
+		buildConsumablesMenuState,
 		buildQuestHandInMenuState,
 		buildDefinitionMenuState,
 		computeMenuHeight,
@@ -65,6 +66,7 @@
 		OVERLAY_ARMOUR_COST_WINDOW_LABEL
 	} from '$lib/windows/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
+	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 
 	// The colon-form Tauri topic the shell's event bridge emits each backend
@@ -338,6 +340,33 @@
 		await openActivitiesMenu(anchor);
 	}
 
+	// The doses in force, read on each consumables frame and ticked for
+	// their countdowns while any is on show.
+	const doses = createDosesModel({ includeOnUse: false });
+	$effect(() => doses.connect());
+	$effect(() => {
+		if (!doses.ticking) return;
+		return useVisiblePoll(doses.tick, { intervalMs: 1000 });
+	});
+	$effect(() => {
+		if (doses.error) {
+			notices.push(doses.error);
+			doses.dismissError();
+		}
+	});
+
+	async function toggleDosesMenu(anchor: HTMLElement) {
+		if (overlayMenuKind === 'consumables') {
+			await hideOverlayMenu();
+			return;
+		}
+		const running = doses.rows.flatMap((dose) =>
+			dose.endsAt > doses.now && dose.equipmentId !== null ? [dose.equipmentId] : []
+		);
+		const width = anchor.getBoundingClientRect().width;
+		await showOverlayMenu('consumables', anchor, buildConsumablesMenuState(width, doses.options, running), { focusPopup: true });
+	}
+
 	async function openQuestHandIn(key: string) {
 		const anchor = activitiesAnchor;
 		const option = activities.find(key);
@@ -551,6 +580,12 @@
 					if (!event.payload.selected) {
 						await facets.selectDefinition(event.payload.definitionId);
 					}
+					return;
+				}
+
+				if (event.payload.kind === 'consumables') {
+					overlayMenuKind = null;
+					await doses.start(event.payload.equipmentId);
 					return;
 				}
 
@@ -870,6 +905,9 @@
 		onActivitiesTrigger={toggleActivitiesMenu}
 		onWeaponDecision={handleWeaponDecision}
 		onArmourCostToggle={armourCost.toggle}
+		{doses}
+		dosesMenuOpen={overlayMenuKind === 'consumables'}
+		onDosesTrigger={toggleDosesMenu}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

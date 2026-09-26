@@ -111,6 +111,9 @@ pub struct EquipmentSearchHit {
     /// A weapon's catalogue attack rate, attacks a minute; null for other
     /// items and for weapons the catalogue gives no rate.
     pub uses_per_minute: Nullable<f64>,
+    /// A stimulant's dose as the catalogue prints it (at 100% markup, cost
+    /// tracking off until the player chooses); null for every other item.
+    pub consumable: Nullable<ConsumableSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -271,8 +274,8 @@ impl ConsumableSettings {
     }
 }
 
-fn consumable_settings(props: &Value, game_data: &GameDataStore) -> ConsumableSettings {
-    let resolved = consumable_profile_from_props(props, Some(game_data));
+fn consumable_settings(props: &Value, game_data: Option<&GameDataStore>) -> ConsumableSettings {
+    let resolved = consumable_profile_from_props(props, game_data);
     let declared = |key: &str| {
         props
             .get("dose")
@@ -757,6 +760,9 @@ fn search_hit(row: &Value) -> EquipmentSearchHit {
             .then(|| entity.get("uses_per_minute").and_then(Value::as_f64))
             .flatten()
             .into(),
+        consumable: (row["endpoint"].as_str() == Some("stimulants"))
+            .then(|| consumable_settings(&json!({ "entity": entity }), None))
+            .into(),
     }
 }
 
@@ -843,7 +849,7 @@ fn row_to_summary(
     }
 
     if item_type == "consumable" {
-        let settings = consumable_settings(props, game_data);
+        let settings = consumable_settings(props, Some(game_data));
         return Ok(EquipmentSummary {
             id: id.to_string(),
             name: name.to_string(),
@@ -1028,7 +1034,7 @@ fn row_to_detail(
     }
 
     if item_type == "consumable" {
-        let settings = consumable_settings(props, game_data);
+        let settings = consumable_settings(props, Some(game_data));
         return Ok(EquipmentDetail {
             id: item_id,
             kind: EquipmentKind::Consumable,

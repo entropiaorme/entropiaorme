@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatDuration } from '$lib/features/consumables/doses';
 	import { formatTimeUntil } from '$lib/features/quests/cooldown';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { ActivityOption } from '$lib/api';
@@ -166,6 +167,29 @@
 					{#if definition.selected}
 						<span class="menu-option-badge">Selected</span>
 					{/if}
+				</button>
+			{/each}
+		{/if}
+	{:else if menuState.kind === 'consumables'}
+		{#if menuState.options.length === 0}
+			<div class="menu-empty">No consumables in Equipment</div>
+		{:else}
+			{#each menuState.options as option (option.equipmentId)}
+				{@const running = menuState.runningIds.includes(option.equipmentId)}
+				<button
+					type="button"
+					class="menu-option {running ? 'menu-option-active' : ''}"
+					title={running
+						? `Take another dose of ${option.name}; the running one ends now`
+						: `Take a dose of ${option.name}`}
+					onclick={() => onSelect({ kind: 'consumables', equipmentId: option.equipmentId })}
+				>
+					<span class="menu-option-name">{option.name}</span>
+					<span class="menu-option-badge {running ? '' : 'menu-option-badge-muted'}">
+						{running ? 'Running' : formatDuration(option.durationSeconds)}{option.hotbarSlot
+							? ` · key ${option.hotbarSlot}`
+							: ''}
+					</span>
 				</button>
 			{/each}
 		{/if}

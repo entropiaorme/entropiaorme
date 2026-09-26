@@ -25,6 +25,7 @@
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
+	CONSUMABLES_TOPIC,
 	deleteSession,
 	getSessionDetail,
 	getTrackingSessions,
@@ -119,12 +120,12 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		await refreshMarks();
 	}
 
-	/** Follow armour recordings, healing corrections, and weapon assignments
-	 * from any window, all of which move session costs; returns the detach
-	 * function. */
+	/** Follow armour recordings, healing corrections, weapon assignments,
+	 * and dose changes from any window, all of which move session costs;
+	 * returns the detach function. */
 	async function subscribeCostChanges(): Promise<UnlistenFn> {
 		const stops = await Promise.all(
-			[PROTECTION_TOPIC, HEALING_TOPIC, WEAPONS_TOPIC].map((topic) =>
+			[PROTECTION_TOPIC, HEALING_TOPIC, WEAPONS_TOPIC, CONSUMABLES_TOPIC].map((topic) =>
 				listen(topic, () => void refreshCosts()),
 			),
 		);

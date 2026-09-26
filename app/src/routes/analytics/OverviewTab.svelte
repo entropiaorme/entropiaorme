@@ -409,6 +409,12 @@
 									<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(cb.healing)}</td>
 								</tr>
 							{/if}
+							{#if cb.consumables > 0}
+								<tr class="border-b border-border/20">
+									<td class="py-1 pl-10 text-text-tertiary text-xs">Consumables</td>
+									<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(cb.consumables)}</td>
+								</tr>
+							{/if}
 							{#if cb.enhancer > 0}
 								<tr class="border-b border-border/20">
 									<td class="py-1 pl-10 text-text-tertiary text-xs">Enhancers</td>

@@ -4,6 +4,7 @@
 	import { ApiError } from '$lib/api';
 	import {
 		activateLootItem,
+		CONSUMABLES_TOPIC,
 		deactivateLootItem,
 		getProtectionSessionStatus,
 		getSessionDetail,
@@ -23,6 +24,8 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Divider from '$lib/components/Divider.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import SessionDoses from '$lib/features/consumables/SessionDoses.svelte';
+	import { createSessionDosesModel } from '$lib/features/consumables/sessionDosesModel.svelte';
 	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
 	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
@@ -64,6 +67,13 @@
 		},
 	});
 
+	// The session's doses, read with the session and on each doses frame.
+	const sessionDoses = createSessionDosesModel(() => detail.sessionId);
+	$effect(() => {
+		void detail.sessionId;
+		void sessionDoses.refresh();
+	});
+
 	// Weapon assignments answer with the refreshed detail too.
 	const weaponReview = createWeaponReviewModel({
 		detail: () => detail,
@@ -101,6 +111,7 @@
 			],
 			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
 			[WEAPONS_TOPIC, () => reread(() => void weaponReview.refresh())],
+			[CONSUMABLES_TOPIC, () => reread(() => void sessionDoses.refresh())],
 		];
 		for (const [topic, handler] of subscriptions) {
 			void listen(topic, handler).then((unlisten) => {
@@ -118,6 +129,7 @@
 	const showCostBreakdown = $derived(
 		!!costBreakdown &&
 			(costBreakdown.healCost > 0 ||
+				costBreakdown.consumableCost > 0 ||
 				costBreakdown.enhancerCost > 0 ||
 				costBreakdown.armourCost > 0 ||
 				costBreakdown.harvestCost > 0 ||
@@ -434,6 +446,9 @@
 			{#if detail.summary.costBreakdown.healCost > 0}
 				<span>Healing: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.healCost)}</span></span>
 			{/if}
+			{#if detail.summary.costBreakdown.consumableCost > 0}
+				<span>Consumables: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.consumableCost)}</span></span>
+			{/if}
 			{#if detail.summary.costBreakdown.enhancerCost > 0}
 				<span>Enhancers: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.enhancerCost)}</span></span>
 			{/if}
@@ -457,6 +472,8 @@
 	{#if detail.healing && (detail.healing.outputCount > 0 || detail.healing.activations.length > 0)}
 		<HealingEvidence {detail} model={healingReview} />
 	{/if}
+
+	<SessionDoses model={sessionDoses} />
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->
 	{#if detail.harvest && detail.harvest.swings > 0}

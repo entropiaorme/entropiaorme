@@ -4,6 +4,7 @@
 	import { createGuideDemoModel } from '$lib/features/dashboard/guideDemoModel.svelte';
 	import GuideOverlayDemo from '$lib/features/dashboard/GuideOverlayDemo.svelte';
 	import SessionIsland from '$lib/features/dashboard/SessionIsland.svelte';
+	import DosesPanel from '$lib/features/consumables/DosesPanel.svelte';
 	import { createStatsGridModel } from '$lib/features/dashboard/statsGridModel.svelte';
 	import SessionStage from '$lib/features/sessions/SessionStage.svelte';
 	import { createLiveDefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
@@ -164,6 +165,10 @@
 		{definitions}
 		onReview={(definitionId) => void review.openReview(definitionId)}
 	/>
+
+	{#if !guideState.isActive}
+		<DosesPanel />
+	{/if}
 
 	{#if !(guideState.isActive && guideDemo.demoOverlayVisible)}
 		<!-- ═══ Island: Recent Events ═══ -->

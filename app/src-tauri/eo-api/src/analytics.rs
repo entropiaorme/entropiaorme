@@ -55,6 +55,8 @@ pub struct CycledBreakdown {
     pub enhancer: f64,
     pub armour: f64,
     pub dangling: f64,
+    /// Consumed doses of cost-tracked items.
+    pub consumables: f64,
 }
 
 /// The losses breakdown: tracking cost, its cycled split, and the ledger
@@ -1540,6 +1542,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 enhancer: data.losses_breakdown.cycled_breakdown.enhancer.as_f64(),
                 armour: data.losses_breakdown.cycled_breakdown.armour.as_f64(),
                 dangling: data.losses_breakdown.cycled_breakdown.dangling.as_f64(),
+                consumables: data.losses_breakdown.cycled_breakdown.consumables.as_f64(),
             },
             ledger: data.losses_breakdown.ledger,
         },

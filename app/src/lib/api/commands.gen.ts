@@ -796,6 +796,8 @@ export interface CycledBreakdown {
 	enhancer: number;
 	armour: number;
 	dangling: number;
+	/** Consumed doses of cost-tracked items. */
+	consumables: number;
 }
 
 /**
@@ -947,6 +949,8 @@ export interface EquipmentSearchHit {
 	lifestealPercent: number | null;
 	/** A weapon's catalogue attack rate, attacks a minute; null for other items and for weapons the catalogue gives no rate. */
 	usesPerMinute: number | null;
+	/** A stimulant's dose as the catalogue prints it (at 100% markup, cost tracking off until the player chooses); null for every other item. */
+	consumable: ConsumableSettings | null;
 }
 
 /**

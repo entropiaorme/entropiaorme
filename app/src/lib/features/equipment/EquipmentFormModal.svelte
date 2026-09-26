@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Button, Input, Modal, PickerInput, SegmentedControl } from '$lib/components';
+	import { Button, Input, Modal, PickerInput, SegmentedControl, Toggle } from '$lib/components';
+	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
+	import { doseFieldsError } from '$lib/features/consumables/doseForm';
 	import type { EquipmentSearchResult } from '$lib/api';
 	import { formatFactor } from './attackRate';
 	import { formatPec } from './display';
@@ -15,7 +17,7 @@
 				? !model.healerPicker.selected
 				: model.addType === 'tool'
 					? !model.toolPicker.selected
-					: !model.consumablePicker.selected) ||
+					: !model.consumablePicker.selected || doseFieldsError(model.dose) !== null) ||
 			(model.addType === 'healing' &&
 				((model.healingMode !== 'over_time' &&
 					(model.healMin === null || model.healMax === null)) ||
@@ -385,7 +387,77 @@
 								{/if}
 							{/snippet}
 						</PickerInput>
+						{#if model.consumablePicker.selected}
+							{@const preview = model.dosePreview}
+							<!-- What one dose grants: the catalogue's figures where it
+								 has them, the player's declaration for the rest. -->
+							<dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs" data-testid="dose-preview">
+								<dt class="text-text-tertiary">Effect</dt>
+								<dd class="text-text">
+									{preview.effects.length > 0 ? describeEffects(preview.effects) : 'None the app evaluates'}
+								</dd>
+								<dt class="text-text-tertiary">Lasts</dt>
+								<dd class="text-text">{formatDuration(preview.durationSeconds)}</dd>
+								<dt class="text-text-tertiary">TT value</dt>
+								<dd class="text-text tabular-nums">{preview.ttValuePed.toFixed(2)} PED</dd>
+							</dl>
+							{#if !preview.catalogueEffects || !preview.catalogueDuration || !preview.catalogueValue}
+								<div class="mt-4">
+									<span class="block eyebrow mb-1.5">
+										{model.consumablePicker.selected.catalogId ? 'Missing from the catalogue' : 'Declared'}
+									</span>
+									<div class="grid grid-cols-3 gap-3">
+										{#if !preview.catalogueEffects}
+											<label class="text-xs text-text-tertiary">
+												Reload speed %
+												<Input type="number" bind:value={model.dose.reloadPercent} min={-99} max={100} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+										{#if !preview.catalogueDuration}
+											<label class="text-xs text-text-tertiary">
+												Minutes
+												<Input type="number" bind:value={model.dose.durationMinutes} min={0} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+										{#if !preview.catalogueValue}
+											<label class="text-xs text-text-tertiary">
+												TT value (PED)
+												<Input type="number" bind:value={model.dose.ttValuePed} min={0} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+									</div>
+									<p class="mt-1.5 text-xs text-text-tertiary">
+										Reload speed is the effect the app counts; a dose with no duration is immediate.
+									</p>
+								</div>
+							{/if}
+						{/if}
 					</div>
+					{#if model.consumablePicker.selected}
+						<div class="space-y-4">
+							<div>
+								<label for="equipment-dose-markup" class="block eyebrow mb-1.5">Markup %</label>
+								<Input id="equipment-dose-markup" type="number" bind:value={model.dose.markupPercent} min={1} max={100000} step="any" class="w-28" />
+								<p class="mt-1.5 text-xs text-text-tertiary">What you paid over TT, so each dose costs what it cost you.</p>
+							</div>
+							<div class="flex items-start gap-3">
+								<Toggle
+									checked={model.dose.trackCost}
+									label="Book each dose's cost to the session"
+									onchange={(checked) => (model.dose.trackCost = checked)}
+								/>
+								<div class="text-xs">
+									<div class="text-text">Book each dose's cost to the session</div>
+									<div class="mt-0.5 text-text-tertiary">
+										Off for a bulk buy you account for separately: doses still count their effect.
+									</div>
+								</div>
+							</div>
+							{#if doseFieldsError(model.dose)}
+								<p class="text-xs text-error">{doseFieldsError(model.dose)}</p>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -393,7 +465,13 @@
 		<!-- Summary bar: live cost and actions, always on screen -->
 		<div class="shrink-0 mt-5 pt-4 border-t border-border/50 flex items-center justify-between gap-4">
 			<div class="min-w-0">
-				{#if model.liveCostPreview !== null}
+				{#if model.addType === 'consumable' && model.consumablePicker.selected}
+					<span class="eyebrow">Cost per dose</span>
+					<span class="ml-2 text-lg font-semibold tabular-nums text-accent">{model.dosePreview.doseCostPed.toFixed(2)} PED</span>
+					<span class="ml-2 text-xs text-text-tertiary" data-testid="dose-booking">
+						{model.dose.trackCost ? 'booked to the session' : 'not booked'}
+					</span>
+				{:else if model.liveCostPreview !== null}
 					<span class="eyebrow">Estimated cost per use</span>
 					<span class="ml-2 text-lg font-semibold tabular-nums text-accent">{formatPec(model.liveCostPreview)} PEC</span>
 					{#if model.liveAttackRateFactor > 1}

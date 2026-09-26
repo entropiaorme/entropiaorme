@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { listen } from '@tauri-apps/api/event';
+	import { CONSUMABLES_TOPIC } from '$lib/api';
 	import { Button, ErrorNotice, Tabs } from '$lib/components';
 	import EquipmentFormModal from '$lib/features/equipment/EquipmentFormModal.svelte';
 	import EquipmentListView from '$lib/features/equipment/EquipmentListView.svelte';
@@ -34,6 +36,22 @@
 	$effect(() => {
 		void model.loadData(guideState.isActive);
 		if (inDevelopment.visible) void protection.load(guideState.isActive);
+	});
+
+	// A dose starting or ending moves the reload speed every figure here is
+	// priced under.
+	$effect(() => {
+		if (guideState.isActive) return;
+		let unlisten: (() => void) | undefined;
+		let closed = false;
+		void listen(CONSUMABLES_TOPIC, () => void model.refreshPricing()).then((stop) => {
+			if (closed) stop();
+			else unlisten = stop;
+		});
+		return () => {
+			closed = true;
+			unlisten?.();
+		};
 	});
 
 	onMount(() => {

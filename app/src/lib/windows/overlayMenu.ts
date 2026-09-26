@@ -1,6 +1,7 @@
 import type {
 	ActivityOption,
 	ActivityOptionsResult,
+	ConsumableOption,
 	ManualMobSuggestion,
 	QuestHandInState,
 	SessionDefinition,
@@ -14,13 +15,25 @@ export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
 export const OVERLAY_MENU_CLOSED_EVENT = 'overlay-menu:closed';
 export const OVERLAY_MENU_INTERACT_EVENT = 'overlay-menu:interact';
 
-export type OverlayMenuKind = 'definition' | 'mob' | 'activities' | 'questHandIn';
+export type OverlayMenuKind = 'definition' | 'mob' | 'activities' | 'questHandIn' | 'consumables';
 
 export type OverlayMenuState =
 	| OverlayDefinitionMenuState
 	| OverlayMobMenuState
 	| OverlayActivitiesMenuState
-	| OverlayQuestHandInMenuState;
+	| OverlayQuestHandInMenuState
+	| OverlayConsumablesMenuState;
+
+/** The configured consumables a dose can be started from. A tap starts one
+ * (a running dose of the same item ends where it starts); a bound item
+ * names its hotbar key, which starts one in game. */
+export interface OverlayConsumablesMenuState {
+	kind: 'consumables';
+	width: number;
+	options: ConsumableOption[];
+	/** Items with a dose running now, marked on their rows. */
+	runningIds: number[];
+}
 
 export interface OverlayQuestHandInMenuState {
 	kind: 'questHandIn';
@@ -78,7 +91,8 @@ export type OverlayMenuSelection =
 	| { kind: 'activities'; action: 'coActivate'; key: string }
 	| { kind: 'activities'; action: 'declare'; label: string }
 	| { kind: 'activities'; action: 'handIn'; key: string }
-	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' };
+	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' }
+	| { kind: 'consumables'; equipmentId: number };
 
 /** The widest label's rendered width in the overlay menus' font, for
  * sizing a satellite menu to its content. Falls back to a character
@@ -131,6 +145,7 @@ export function menuRowCount(state: OverlayMenuState): number {
 		const entry = state.adHocSegments ? 1 : 0;
 		return Math.max(1, state.options.length + entry);
 	}
+	if (state.kind === 'consumables') return Math.max(1, state.options.length);
 	if (state.kind === 'questHandIn') {
 		// The waiting view can become a multi-item candidate without a new
 		// parent-window show event. Reserve the satellite's existing maximum
@@ -191,5 +206,21 @@ export function buildActivitiesMenuState(
 		adHocSegments: options.adHocSegments,
 		idle,
 		segmentDraft,
+	};
+}
+
+/** The consumables menu's state over the configured items. The padding
+ * leaves room for a row's duration and hotbar key beside its name. */
+export function buildConsumablesMenuState(
+	anchorWidth: number,
+	options: ConsumableOption[],
+	runningIds: number[],
+): OverlayConsumablesMenuState {
+	const labels = options.map((option) => option.name);
+	return {
+		kind: 'consumables',
+		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No consumables'], 120),
+		options,
+		runningIds,
 	};
 }

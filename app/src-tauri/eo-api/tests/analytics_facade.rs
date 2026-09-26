@@ -139,7 +139,7 @@ async fn the_empty_overview_serialises_to_the_float_typed_zeros() {
         "{\"totalReturnRate\":0.0,\"trend\":\"stable\",\"returnsBreakdown\":{\"lootTt\":0.0,\
          \"questItemTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\"lossesBreakdown\":\
          {\"trackingCost\":0.0,\"cycledBreakdown\":{\"weapon\":0.0,\"healing\":0.0,\
-         \"enhancer\":0.0,\"armour\":0.0,\"dangling\":0.0},\"ledger\":{}},\"totalGains\":0.0,\
+         \"enhancer\":0.0,\"armour\":0.0,\"dangling\":0.0,\"consumables\":0.0},\"ledger\":{}},\"totalGains\":0.0,\
          \"totalLosses\":0.0,\"timeline\":[],\"monthlyBreakdown\":[]}"
     );
 }

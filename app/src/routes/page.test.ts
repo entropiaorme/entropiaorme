@@ -39,6 +39,20 @@ const ACTIVITY_OPTIONS = {
 	active: [],
 };
 
+const NO_DOSES = {
+	now: 0,
+	doses: [],
+	reloadSpeed: {
+		equippedPercent: 0,
+		consumedPercent: 0,
+		inEffectPercent: 0,
+		itemLimitPercent: 15,
+		consumedLimitPercent: 20,
+		totalLimitPercent: 30,
+	},
+	options: [],
+};
+
 /** The backend's answers once it is up: the committed dashboard fixture for
  * the tracking snapshot, empty collections elsewhere. */
 function answer(command: string): unknown {
@@ -49,6 +63,8 @@ function answer(command: string): unknown {
 			return Promise.resolve(dashboardFixture.snapshot);
 		case 'tracking_activity_options':
 			return Promise.resolve(ACTIVITY_OPTIONS);
+		case 'consumable_doses':
+			return Promise.resolve(NO_DOSES);
 		default:
 			return Promise.resolve([]);
 	}

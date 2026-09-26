@@ -6,6 +6,7 @@ vi.mock('$lib/api', () => ({
 	PROTECTION_TOPIC: 'protection:updated',
 	HEALING_TOPIC: 'healing:updated',
 	WEAPONS_TOPIC: 'weapons:updated',
+	CONSUMABLES_TOPIC: 'consumables:updated',
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
 	getUnrecordedArmourSessions: vi.fn(async () => []),

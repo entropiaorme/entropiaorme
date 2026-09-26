@@ -17,6 +17,14 @@ import {
 	updateLibrary,
 } from '$lib/api';
 import {
+	blankDoseFields,
+	type DoseFormFields,
+	doseFieldsError,
+	doseFieldsFrom,
+	doseRequest,
+	previewDose,
+} from '$lib/features/consumables/doseForm';
+import {
 	equipmentDemoCarriedWeaponIds,
 	equipmentDemoDetails,
 	equipmentDemoHotbar,
@@ -103,6 +111,9 @@ export function createLibraryModel() {
 	let weaponEffectMode = $state<WeaponEffectForm>('direct');
 	let hitMin = $state<number | null>(null);
 	let hitMax = $state<number | null>(null);
+	// A consumable's dose: the markup, whether it books, and the figures a
+	// custom item declares (a catalogue item's come from the catalogue).
+	let dose = $state<DoseFormFields>(blankDoseFields());
 
 	// ── Catalogue pickers ──
 	const label = (item: EquipmentSearchResult) => item.name;
@@ -285,6 +296,7 @@ export function createLibraryModel() {
 		weaponEffectMode = 'direct';
 		hitMin = null;
 		hitMax = null;
+		dose = blankDoseFields();
 		showAddModal = true;
 	}
 
@@ -315,9 +327,12 @@ export function createLibraryModel() {
 			reloadSeconds: null,
 			lifestealPercent: detail.lifestealPercent,
 			usesPerMinute: detail.attackRate?.basePerMinute ?? null,
+			consumable: detail.consumable,
 		};
 		if (detail.type === 'healing') healerPicker.select(primary);
+		else if (detail.type === 'consumable') consumablePicker.select(primary);
 		else weaponPicker.select(primary);
+		dose = doseFieldsFrom(detail.type === 'consumable' ? detail.consumable : null);
 		if (detail.amplifier) {
 			selectCompanion(ampPicker, detail.amplifier);
 		} else {
@@ -338,6 +353,7 @@ export function createLibraryModel() {
 				reloadSeconds: null,
 				lifestealPercent: null,
 				usesPerMinute: null,
+				consumable: null,
 			});
 		} else {
 			scopePicker.clear();
@@ -408,6 +424,7 @@ export function createLibraryModel() {
 			reloadSeconds: null,
 			lifestealPercent: null,
 			usesPerMinute: null,
+			consumable: null,
 		});
 	}
 
@@ -458,6 +475,7 @@ export function createLibraryModel() {
 			reloadSeconds: null,
 			lifestealPercent: null,
 			usesPerMinute: null,
+			consumable: null,
 		});
 	}
 
@@ -467,6 +485,13 @@ export function createLibraryModel() {
 	async function effectsSaved(settings: AppSettings) {
 		passiveEffectSources = cloneSources(settings.passiveEffectSources);
 		reloadSpeed = settings.reloadSpeed;
+		await refreshPricing();
+	}
+
+	/** Re-read the library and the open detail: the reload speed in effect
+	 * moved (saved passive effects, or a dose starting or ending), so every
+	 * weapon's attack rate and every healer's reload may have. */
+	async function refreshPricing() {
 		try {
 			const library = await getEquipmentLibrary();
 			allEquipment = library;
@@ -563,12 +588,22 @@ export function createLibraryModel() {
 			} else {
 				const consumable = consumablePicker.selected;
 				if (!consumable) return;
-				const item = await addToLibrary({
+				const invalid = doseFieldsError(dose);
+				if (invalid) {
+					error = invalid;
+					return;
+				}
+				const payload = {
 					type: 'consumable',
 					catalog_id: consumable.catalogId ?? null,
 					name: consumable.catalogId ? null : consumable.name,
-				});
+					dose: doseRequest(dose),
+				} as const;
+				const item = editingEquipmentId
+					? await updateLibrary(editingEquipmentId, payload)
+					: await addToLibrary(payload);
 				replaceEquipment(item);
+				delete detailCache[item.id];
 			}
 			showAddModal = false;
 			editingEquipmentId = null;
@@ -652,6 +687,7 @@ export function createLibraryModel() {
 			return reloadSpeed;
 		},
 		effectsSaved,
+		refreshPricing,
 		get error() {
 			return error;
 		},
@@ -687,6 +723,14 @@ export function createLibraryModel() {
 		},
 		get saving() {
 			return saving;
+		},
+		/** The consumable form's dose fields (bindable in place). */
+		get dose() {
+			return dose;
+		},
+		/** What one dose of the selected consumable will be. */
+		get dosePreview() {
+			return previewDose(consumablePicker.selected?.consumable ?? null, dose);
 		},
 		get markupPercent() {
 			return markupPercent;

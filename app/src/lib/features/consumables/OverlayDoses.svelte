@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ConsumableDose } from '$lib/api';
+	import { IconConsumables } from '$lib/icons';
 	import { doseState, formatCountdown, remainingSeconds, describeEffects } from './doses';
 	import type { DosesModel } from './dosesModel.svelte';
 
@@ -32,21 +33,10 @@
 		class="flex items-center gap-1.5 shrink-0 border-l border-white/10 pl-3"
 		data-testid="overlay-doses"
 	>
-		<!-- A capsule: what is in force from a consumable. -->
-		<svg
-			xmlns="http://www.w3.org/2000/svg"
-			viewBox="0 0 16 16"
-			fill="none"
-			stroke="currentColor"
-			stroke-width="1.3"
-			class="h-4 w-4 shrink-0 text-white/40"
-			aria-hidden="true"
-		>
-			<g transform="rotate(-35 8 8)">
-				<rect x="2" y="5.25" width="12" height="5.5" rx="2.75" />
-				<path d="M8 5.25v5.5" />
-			</g>
-		</svg>
+		<!-- What is in force from a consumable, under the Equipment tab's glyph. -->
+		<span class="text-white/40 shrink-0" data-icon="consumable" aria-hidden="true">
+			<IconConsumables class="h-9 w-9" />
+		</span>
 		{#each model.rows as dose (dose.id)}
 			{@const state = doseState(dose, model.now)}
 			<div

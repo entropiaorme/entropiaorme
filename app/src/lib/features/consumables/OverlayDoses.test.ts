@@ -86,6 +86,12 @@ describe('the overlay doses', () => {
 		expect(screen.queryByTestId('overlay-doses')).toBeNull();
 	});
 
+	it('heads the section with the consumable glyph the Equipment tab uses', async () => {
+		await renderWith(readout([dose()]), () => 1100);
+		const section = screen.getByTestId('overlay-doses');
+		expect(section.querySelector('[data-icon="consumable"] svg')).not.toBeNull();
+	});
+
 	it('counts a running dose down and removes it on the X', async () => {
 		mocked.removeConsumableDose.mockResolvedValue(readout([]));
 		await renderWith(readout([dose()]), () => 1100);

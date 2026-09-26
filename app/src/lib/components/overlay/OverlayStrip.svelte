@@ -3,7 +3,8 @@
 	import { overlayStats, scopedStats } from '$lib/statsCustomisation.svelte';
 	import { getStatDef } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
-	import { ICON_EQUIPMENT, ICON_ARMOUR } from './icons';
+	import { ICON_ARMOUR } from './icons';
+	import { IconHealing, IconWeapons } from '$lib/icons';
 	import OverlayDoses from '$lib/features/consumables/OverlayDoses.svelte';
 	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { NO_DATA } from '$lib/utils/format';
@@ -112,6 +113,7 @@
 				? 'Hunting'
 				: null
 	);
+	const equipmentIcon = $derived(data.currentToolKind === 'healing' ? 'healing' : 'weapon');
 	const enabledPills = $derived(
 		scopedStats(overlayStats.current, overlayScope, { fallback: false }),
 	);
@@ -348,7 +350,15 @@
 	<div
 		class="flex items-center gap-2 shrink-0"
 	>
-		<span class="text-white/40 shrink-0">{@html ICON_EQUIPMENT}</span>
+		<!-- The held tool's own glyph. A harvesting tool shows the weapon's
+			 until it has one of its own; a consumable is never held. -->
+		<span class="text-white/40 shrink-0" data-testid="equipment-icon" data-icon={equipmentIcon} aria-hidden="true">
+			{#if equipmentIcon === 'healing'}
+				<IconHealing class="h-9 w-9" />
+			{:else}
+				<IconWeapons class="h-9 w-12" />
+			{/if}
+		</span>
 		{#if data.currentToolKind === 'healing'}
 			<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
 				{data.currentTool || NO_DATA}

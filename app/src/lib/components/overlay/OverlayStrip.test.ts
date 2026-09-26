@@ -252,6 +252,36 @@ describe('derived activity feedback', () => {
 	});
 });
 
+describe('the equipment slot glyph', () => {
+	const glyph = () => screen.getByTestId('equipment-icon').dataset.icon;
+
+	it('shows the weapon glyph for a held weapon', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ currentTool: 'Opalo', currentToolKind: 'weapon' }) },
+		});
+		expect(glyph()).toBe('weapon');
+	});
+
+	it('shows the weapon glyph before any tool is known', () => {
+		render(OverlayStrip, { props: { data: liveData({ currentTool: null }) } });
+		expect(glyph()).toBe('weapon');
+	});
+
+	it('shows the healing glyph for a held healer', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ currentTool: 'FAP-5', currentToolKind: 'healing' }) },
+		});
+		expect(glyph()).toBe('healing');
+	});
+
+	it('borrows the weapon glyph for a harvesting tool', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ currentTool: 'ChopChop Jr', currentToolKind: 'harvesting' }) },
+		});
+		expect(glyph()).toBe('weapon');
+	});
+});
+
 describe('customisable stat pills', () => {
 	it('renders only the enabled overlay stats, through the real registry render', () => {
 		overlayStats.current = [

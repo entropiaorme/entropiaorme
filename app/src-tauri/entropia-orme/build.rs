@@ -11,7 +11,7 @@ fn main() {
          description = \"Allows the full application command surface to trusted windows.\"\n\
          commands.allow = [\n",
     );
-    for command in APP_COMMANDS {
+    for command in app_commands() {
         permissions.push_str(&format!("  \"{command}\",\n"));
     }
     permissions.push_str(

@@ -60,6 +60,7 @@ function overview(overrides: Partial<OverviewStats> = {}): OverviewStats {
 				enhancer: 100,
 				armour: 50,
 				dangling: 0,
+				harvest: 0,
 				consumables: 0,
 			},
 			ledger: { equipment: 40, repair: 20 },

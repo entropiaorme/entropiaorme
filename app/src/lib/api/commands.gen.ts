@@ -788,7 +788,8 @@ export interface CrashReportingStatus {
 }
 
 /**
- * The per-family cycled-cost split.
+ * The per-family cycled-cost split. Its lines partition `trackingCost`:
+ * every family the Overview sums into Cycled has exactly one line here.
  */
 export interface CycledBreakdown {
 	weapon: number;
@@ -796,6 +797,8 @@ export interface CycledBreakdown {
 	enhancer: number;
 	armour: number;
 	dangling: number;
+	/** Harvesting (tree cutting) swing decay. */
+	harvest: number;
 	/** Consumed doses of cost-tracked items. */
 	consumables: number;
 }

@@ -45,7 +45,8 @@ pub struct ReturnsBreakdown {
     pub ledger: BTreeMap<String, f64>,
 }
 
-/// The per-family cycled-cost split.
+/// The per-family cycled-cost split. Its lines partition `trackingCost`:
+/// every family the Overview sums into Cycled has exactly one line here.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CycledBreakdown {
@@ -54,6 +55,8 @@ pub struct CycledBreakdown {
     pub enhancer: f64,
     pub armour: f64,
     pub dangling: f64,
+    /// Harvesting (tree cutting) swing decay.
+    pub harvest: f64,
     /// Consumed doses of cost-tracked items.
     pub consumables: f64,
 }
@@ -1541,6 +1544,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 enhancer: data.losses_breakdown.cycled_breakdown.enhancer.as_f64(),
                 armour: data.losses_breakdown.cycled_breakdown.armour.as_f64(),
                 dangling: data.losses_breakdown.cycled_breakdown.dangling.as_f64(),
+                harvest: data.losses_breakdown.cycled_breakdown.harvest.as_f64(),
                 consumables: data.losses_breakdown.cycled_breakdown.consumables.as_f64(),
             },
             ledger: data.losses_breakdown.ledger,

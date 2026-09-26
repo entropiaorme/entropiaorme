@@ -427,6 +427,12 @@
 									<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(cb.armour)}</td>
 								</tr>
 							{/if}
+							{#if cb.harvest > 0}
+								<tr class="border-b border-border/20">
+									<td class="py-1 pl-10 text-text-tertiary text-xs">Harvesting</td>
+									<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(cb.harvest)}</td>
+								</tr>
+							{/if}
 							{#if cb.dangling > 0}
 								<tr class="border-b border-border/20">
 									<td class="py-1 pl-10 text-text-tertiary text-xs">Dangling</td>

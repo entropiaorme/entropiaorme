@@ -144,6 +144,62 @@ async fn the_empty_overview_zeros_every_numeric_field() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_cycled_breakdown_lines_sum_to_cycled() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    // One ended session carrying every cycled family: weapon 1.0,
+    // enhancer 0.1, harvest decay 0.5, armour 0.4, healing 0.3,
+    // consumables 0.2, and dangling 0.05.
+    db.with_writer(|connection| {
+        connection.execute_batch(
+            "INSERT INTO tracking_sessions \
+                 (id, started_at, ended_at, is_active, armour_cost, heal_cost, \
+                  consumable_cost, dangling_cost) \
+             VALUES ('mixed', 1000.0, 2000.0, 0, 0.4, 0.3, 0.2, 0.05); \
+             INSERT INTO kills \
+                 (id, session_id, timestamp, mob_name, mob_species, mob_maturity, \
+                  cost_ped, enhancer_cost, loot_total_ped) \
+             VALUES ('kill', 'mixed', 1500.0, 'Atrox Young', 'Atrox', 'Young', \
+                     1.0, 0.1, 2.0); \
+             INSERT INTO kill_tool_stats \
+                 (kill_id, tool_name, shots_fired, cost_per_shot) \
+             VALUES ('kill', 'Test Rifle', 10, 0.1); \
+             INSERT INTO harvest_events \
+                 (id, session_id, timestamp, success, tool_name, yield_tier, cost_ped, \
+                  loot_total_ped) \
+             VALUES ('swing', 'mixed', 1600.0, 1, 'Test Cutter', 'long', 0.5, 0.4);",
+        )?;
+        eo_services::session_rollup::heal(connection)?;
+        eo_services::session_summary::write_session_summary(connection, "mixed")?;
+        Ok(())
+    })
+    .await
+    .expect("mixed-cost fixture");
+
+    let api = analytics_api_with_db(dir.path(), db).await;
+    let losses = api
+        .analytics_overview("all")
+        .await
+        .unwrap()
+        .losses_breakdown;
+    let lines = &losses.cycled_breakdown;
+    assert_eq!(lines.harvest, 0.5);
+    let sum = lines.weapon
+        + lines.enhancer
+        + lines.harvest
+        + lines.armour
+        + lines.healing
+        + lines.consumables
+        + lines.dangling;
+    assert!((losses.tracking_cost - 2.55).abs() < 1e-9);
+    assert!((sum - losses.tracking_cost).abs() < 1e-9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_empty_hunting_has_no_comparisons() {
     let dir = tempfile::tempdir().unwrap();
     let api = analytics_api(dir.path()).await;

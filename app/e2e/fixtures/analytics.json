@@ -18,6 +18,7 @@
         "enhancer": 100.0,
         "armour": 50.0,
         "dangling": 0.0,
+        "harvest": 0.0,
         "consumables": 0.0
       },
       "ledger": { "equipment": 40.0, "repair": 20.0 }

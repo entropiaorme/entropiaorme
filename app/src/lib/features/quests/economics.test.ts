@@ -6,7 +6,7 @@ import { computeQuestAnalytics, type GlobalRates, globalRates } from './economic
 // expected value below is exact by hand.
 const RATES: GlobalRates = { liquidReturnRate: 0.9, skillProgressionRate: 0.05 };
 
-const emptyCycled = { weapon: 0, healing: 0, enhancer: 0, armour: 0, dangling: 0, consumables: 0 };
+const emptyCycled = { weapon: 0, healing: 0, enhancer: 0, armour: 0, dangling: 0, harvest: 0, consumables: 0 };
 
 function questRow(overrides: Partial<QuestAnalyticsRow> = {}): QuestAnalyticsRow {
 	return {

@@ -289,7 +289,9 @@ describe('weapon evidence', () => {
 		mocked.getWeaponShots.mockResolvedValue({ shots: [shot()], total: 2 });
 		mount(detail());
 		await fireEvent.click(screen.getByRole('button', { name: 'Review shots (4)' }));
-		await fireEvent.click(await screen.findByRole('button', { name: 'Overrode the hotbar: 2' }));
+		await fireEvent.click(
+			await screen.findByRole('button', { name: 'Differed from the hotbar: 2' }),
+		);
 		expect(mocked.getWeaponShots).toHaveBeenLastCalledWith('s1', 'evidence', 0, 50);
 	});
 });

@@ -62,7 +62,10 @@ export function attributionTally(summary: WeaponAttributionSummary): string {
 export function reviewGroups(summary: WeaponAttributionSummary): ReviewGroup[] {
 	const groups: ReviewGroup[] = [
 		{ id: 'unresolved', label: 'Unresolved', count: summary.unresolved },
-		{ id: 'evidence', label: 'Overrode the hotbar', count: summary.evidenceShots },
+		// Every shot whose damage pointed at another weapon when it landed,
+		// whether the player then confirmed that weapon or kept the hotbar's;
+		// each row says which, and the tally line counts where they are priced.
+		{ id: 'evidence', label: 'Differed from the hotbar', count: summary.evidenceShots },
 		{ id: 'effect_tick', label: 'Effect ticks', count: summary.effectTicks },
 	];
 	return groups.filter((group) => group.count > 0);

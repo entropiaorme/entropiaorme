@@ -85,6 +85,9 @@ pub fn crate_name() -> &'static str {
 }
 
 #[cfg(test)]
+mod cycled_reconciliation_tests;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn crate_name_is_stable() {

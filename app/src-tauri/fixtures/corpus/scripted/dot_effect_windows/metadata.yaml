@@ -1,0 +1,44 @@
+name: dot_effect_windows
+flavour: scripted
+description: >
+  The effect-window cases one real rotation does not reach. A Shock Chip
+  cast opens a window, the app restarts mid-effect, and the next tick
+  still belongs to that cast at no cost. A second cast while the first
+  still ticks opens a second window, and a tick both explain names
+  neither. With the Rifle in hand, a hit that fits both the Rifle and the
+  open effect's ticks stays unresolved rather than guessed. With the
+  Pistol in hand, a hit only the chip's cast explains raises a mismatch
+  and opens a window; keeping the Pistol reprices that hit, takes the
+  window back, and a later tick-sized hit is no longer explained by it.
+surfaces:
+  - tracking-weapon-effect-window
+  - tracking-weapon-effect-tick
+  - tracking-weapon-effect-overlap
+  - tracking-weapon-effect-concurrency
+  - tracking-weapon-effect-restart
+  - tracking-weapon-effect-withdrawal
+  - tracking-weapon-attribution-keep
+  - tracking-kill-creation
+events: 14
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. carried.json names three weapons: a Pistol (5-10), a
+  Rifle (40-80) whose band overlaps the chip's ticks, and a Shock Chip
+  with a declared effect (a 100-160 cast, then 35-75 ticks for 20
+  seconds). steps.jsonl presses the weapons, restarts after the first
+  tick, and keeps the Pistol over the chip's evidence. The restart is a
+  crash: the first cast and its first tick had not yet settled into a
+  kill, so the recovered session keeps no shots, while the cast's window,
+  written when it opened, survives to explain the next tick.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

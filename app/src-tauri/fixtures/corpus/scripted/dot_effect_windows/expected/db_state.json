@@ -1,0 +1,326 @@
+{
+  "codex_claims": [],
+  "codex_progress": [],
+  "harvest_events": [],
+  "harvest_loot_items": [],
+  "healing_activations": [],
+  "healing_effect_windows": [],
+  "healing_outputs": [],
+  "kill_loot_items": [
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_3>",
+      "quantity": 100,
+      "value_ped": 1.0
+    },
+    {
+      "is_enhancer_shrapnel": 0,
+      "item_name": "Shrapnel",
+      "kill_id": "<UUID_4>",
+      "quantity": 200,
+      "value_ped": 2.0
+    }
+  ],
+  "kill_tool_stats": [
+    {
+      "cost_per_shot": 0.4,
+      "critical_hits": 0,
+      "damage_dealt": 140.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 1,
+      "tool_name": "Shock Chip"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 55.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 1,
+      "tool_name": "Unknown"
+    },
+    {
+      "cost_per_shot": 0.2,
+      "critical_hits": 0,
+      "damage_dealt": 78.0,
+      "kill_id": "<UUID_3>",
+      "shots_fired": 1,
+      "tool_name": "Rifle"
+    },
+    {
+      "cost_per_shot": 0.05,
+      "critical_hits": 0,
+      "damage_dealt": 136.0,
+      "kill_id": "<UUID_4>",
+      "shots_fired": 3,
+      "tool_name": "Pistol"
+    },
+    {
+      "cost_per_shot": 0.0,
+      "critical_hits": 0,
+      "damage_dealt": 36.0,
+      "kill_id": "<UUID_4>",
+      "shots_fired": 1,
+      "tool_name": "Unknown"
+    }
+  ],
+  "kills": [
+    {
+      "cost_ped": 0.6,
+      "critical_hits": 0,
+      "damage_dealt": 369.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_3>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 1.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_2>",
+      "shots_fired": 3,
+      "timestamp": "<TS_42>"
+    },
+    {
+      "cost_ped": 0.15,
+      "critical_hits": 0,
+      "damage_dealt": 210.0,
+      "damage_taken": 0.0,
+      "enhancer_cost": 0.0,
+      "id": "<UUID_4>",
+      "is_global": 0,
+      "is_hof": 0,
+      "loot_total_ped": 2.0,
+      "mob_maturity": "",
+      "mob_name": "Unknown",
+      "mob_species": "",
+      "session_id": "<UUID_2>",
+      "shots_fired": 4,
+      "timestamp": "<TS_43>"
+    }
+  ],
+  "ledger_entries": [],
+  "map_pins": [],
+  "notable_events": [],
+  "quest_claims": [],
+  "quest_mobs": [],
+  "quest_playlist_items": [],
+  "quest_playlists": [],
+  "quests": [],
+  "session_quest_analytics_links": [],
+  "session_quest_completions": [],
+  "skill_calibrations": [],
+  "tracking_sessions": [
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_2>",
+      "heal_cost": 0.0,
+      "id": "<UUID_1>",
+      "is_active": 0,
+      "started_at": "<TS_2>"
+    },
+    {
+      "dangling_cost": 0.0,
+      "ended_at": "<TS_40>",
+      "heal_cost": 0.0,
+      "id": "<UUID_2>",
+      "is_active": 0,
+      "started_at": "<TS_41>"
+    }
+  ],
+  "weapon_attribution_reviews": [
+    {
+      "cost_delta_ped": -0.35,
+      "decided_at": "<TS_44>",
+      "decision": "kept",
+      "evidence_tool": "Shock Chip",
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_5>",
+      "mismatch_since": "<TS_45>",
+      "repriced_shots": 1,
+      "session_id": "<UUID_2>"
+    }
+  ],
+  "weapon_attribution_tallies": [
+    {
+      "session_id": "<UUID_1>",
+      "weapon_shots_agreed": null,
+      "weapon_shots_evidenced": null
+    },
+    {
+      "session_id": "<UUID_2>",
+      "weapon_shots_agreed": 5,
+      "weapon_shots_evidenced": 0
+    }
+  ],
+  "weapon_effect_windows": [
+    {
+      "context_id": 1,
+      "cost_per_shot": 0.4,
+      "critical": 0,
+      "equipment_id": 3,
+      "expires_at": "<TS_51>",
+      "hit_amount": 130.0,
+      "id": "<UUID_6>",
+      "profile_json": "{\"mode\":\"compound\",\"hit_min\":100.0,\"hit_max\":160.0,\"duration_seconds\":20.0,\"tick_min\":35.0,\"tick_max\":75.0,\"tick_seconds\":1.0}",
+      "session_id": "<UUID_1>",
+      "started_at": "<TS_2>",
+      "tick_max": 75.0,
+      "tick_min": 35.0,
+      "tool_name": "Shock Chip",
+      "withdrawn_at": null,
+      "withdrawn_by_review_id": null
+    },
+    {
+      "context_id": 2,
+      "cost_per_shot": 0.4,
+      "critical": 0,
+      "equipment_id": 3,
+      "expires_at": "<TS_52>",
+      "hit_amount": 140.0,
+      "id": "<UUID_14>",
+      "profile_json": "{\"mode\":\"compound\",\"hit_min\":100.0,\"hit_max\":160.0,\"duration_seconds\":20.0,\"tick_min\":35.0,\"tick_max\":75.0,\"tick_seconds\":1.0}",
+      "session_id": "<UUID_2>",
+      "started_at": "<TS_53>",
+      "tick_max": 75.0,
+      "tick_min": 35.0,
+      "tool_name": "Shock Chip",
+      "withdrawn_at": null,
+      "withdrawn_by_review_id": null
+    },
+    {
+      "context_id": 2,
+      "cost_per_shot": 0.4,
+      "critical": 0,
+      "equipment_id": 3,
+      "expires_at": "<TS_54>",
+      "hit_amount": 120.0,
+      "id": "<UUID_11>",
+      "profile_json": "{\"mode\":\"compound\",\"hit_min\":100.0,\"hit_max\":160.0,\"duration_seconds\":20.0,\"tick_min\":35.0,\"tick_max\":75.0,\"tick_seconds\":1.0}",
+      "session_id": "<UUID_2>",
+      "started_at": "<TS_45>",
+      "tick_max": 75.0,
+      "tick_min": 35.0,
+      "tool_name": "Shock Chip",
+      "withdrawn_at": "<TS_44>",
+      "withdrawn_by_review_id": "<UUID_5>"
+    }
+  ],
+  "weapon_shot_evidence": [
+    {
+      "amount": 36.0,
+      "attribution": "effect_tick",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":false}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_candidates": 1,
+      "effect_window_id": "<UUID_6>",
+      "hotbar_tool": null,
+      "id": "<UUID_7>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_46>",
+      "reason": "a tick of an open effect",
+      "review_id": null,
+      "session_id": "<UUID_2>",
+      "tool_name": null
+    },
+    {
+      "amount": 60.0,
+      "attribution": "effect_tick",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":true},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":false}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_candidates": 2,
+      "effect_window_id": null,
+      "hotbar_tool": "Shock Chip",
+      "id": "<UUID_8>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_47>",
+      "reason": "a tick of an open effect; several open effects explain it",
+      "review_id": null,
+      "session_id": "<UUID_2>",
+      "tool_name": null
+    },
+    {
+      "amount": 55.0,
+      "attribution": "unresolved",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":true},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":false}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_candidates": 2,
+      "effect_window_id": null,
+      "hotbar_tool": "Rifle",
+      "id": "<UUID_9>",
+      "kill_id": "<UUID_3>",
+      "observed_at": "<TS_48>",
+      "reason": "fits the hotbar's Rifle and a tick of the open Shock Chip effect",
+      "review_id": null,
+      "session_id": "<UUID_2>",
+      "tool_name": null
+    },
+    {
+      "amount": 120.0,
+      "attribution": "evidence",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":true}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.05,
+      "critical": 0,
+      "effect_candidates": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_10>",
+      "kill_id": "<UUID_4>",
+      "observed_at": "<TS_45>",
+      "reason": "fits only Shock Chip, not the hotbar's Pistol",
+      "review_id": "<UUID_5>",
+      "session_id": "<UUID_2>",
+      "tool_name": "Pistol"
+    },
+    {
+      "amount": 38.0,
+      "attribution": "effect_tick",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":false}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_candidates": 1,
+      "effect_window_id": "<UUID_11>",
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_12>",
+      "kill_id": "<UUID_4>",
+      "observed_at": "<TS_49>",
+      "reason": "a tick of an open effect",
+      "review_id": null,
+      "session_id": "<UUID_2>",
+      "tool_name": null
+    },
+    {
+      "amount": 36.0,
+      "attribution": "unresolved",
+      "candidates_json": "[{\"equipmentId\":1,\"name\":\"Pistol\",\"fits\":false},{\"equipmentId\":2,\"name\":\"Rifle\",\"fits\":false},{\"equipmentId\":3,\"name\":\"Shock Chip\",\"fits\":false}]",
+      "context_id": 2,
+      "correction_id": null,
+      "cost_per_shot": 0.0,
+      "critical": 0,
+      "effect_candidates": 0,
+      "effect_window_id": null,
+      "hotbar_tool": "Pistol",
+      "id": "<UUID_13>",
+      "kill_id": "<UUID_4>",
+      "observed_at": "<TS_50>",
+      "reason": "exceeds every carried weapon's reach",
+      "review_id": null,
+      "session_id": "<UUID_2>",
+      "tool_name": null
+    }
+  ]
+}

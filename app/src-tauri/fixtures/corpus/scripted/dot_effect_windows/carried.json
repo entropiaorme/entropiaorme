@@ -1,0 +1,19 @@
+[
+  {"equipment_id": 1, "name": "Pistol", "damage": 10.0, "decay": 5.0},
+  {"equipment_id": 2, "name": "Rifle", "damage": 80.0, "decay": 20.0},
+  {
+    "equipment_id": 3,
+    "name": "Shock Chip",
+    "damage": 160.0,
+    "decay": 40.0,
+    "effect_profile": {
+      "mode": "compound",
+      "hit_min": 100.0,
+      "hit_max": 160.0,
+      "duration_seconds": 20.0,
+      "tick_min": 35.0,
+      "tick_max": 75.0,
+      "tick_seconds": 1.0
+    }
+  }
+]

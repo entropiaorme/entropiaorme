@@ -641,6 +641,11 @@ fn dot_weapon_rotation_matches_the_goldens() {
 }
 
 #[test]
+fn dot_effect_windows_matches_the_goldens() {
+    replay_against_goldens("scripted", "dot_effect_windows", "");
+}
+
+#[test]
 fn deferred_scenarios_are_named_not_silently_dropped() {
     // The remaining golden-carrying scenario needs the skill-scan
     // capture pipeline, which joins the oracle when that service

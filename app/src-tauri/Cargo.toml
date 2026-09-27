@@ -64,15 +64,18 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24", "directml"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows = "0.61"
-# Linux counterparts of the Windows input plumbing: passive keystroke
-# observation reads the kernel evdev nodes; libc supplies the poll(2)
-# and fcntl(2) calls that keep those reads interruptible.
+# Linux counterparts of the Windows input plumbing: the fallback passive
+# keystroke observer reads the kernel evdev nodes; libc supplies the
+# poll(2) and fcntl(2) calls that keep the reads interruptible.
 evdev = "0.13"
 libc = "0.2"
 # Pure-Rust, safe X11 protocol bindings: the Linux game-window discovery
 # and geometry lookups run over XWayland (where the game and our windows
 # both live), mirroring the Windows EnumWindows/GetClientRect helpers.
-x11rb = "0.13"
+# XInput2 carries the primary Linux keystroke observer: raw key events
+# from the X server, which include keys injected by remappers such as
+# Steam Input that never pass through the kernel input layer.
+x11rb = { version = "0.13", features = ["xinput"] }
 # Wayland screen capture: the ScreenCast desktop portal opens a consented
 # PipeWire stream (ashpd drives the portal D-Bus dance + restore tokens);
 # GStreamer consumes the node as frames. GStreamer is already an app-level

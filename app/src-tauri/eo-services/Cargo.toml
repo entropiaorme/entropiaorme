@@ -47,13 +47,16 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Passive global key observation via the kernel input layer: the Linux
-# implementation behind the keystroke source seam (keystroke_source.rs).
+# fallback behind the keystroke source seam (keystroke_source.rs) when no
+# X server answers.
 # Pure-Rust (no system libraries), so a backend-member build stays free of
 # the Tauri system stack.
 evdev = { workspace = true }
 libc = { workspace = true }
-# Game-window discovery + geometry over X11/XWayland (eu_window.rs).
-# Pure-Rust X11 protocol bindings, likewise system-library-free.
+# Game-window discovery + geometry over X11/XWayland (eu_window.rs), and
+# the primary Linux keystroke observer over XInput2 raw key events
+# (keystroke_source.rs). Pure-Rust X11 protocol bindings, likewise
+# system-library-free.
 x11rb = { workspace = true }
 # ScreenCast-portal + PipeWire screen capture (screen_capture.rs). GStreamer
 # links the system glib/gstreamer libraries, which the backend members must

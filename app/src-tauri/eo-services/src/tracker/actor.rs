@@ -96,6 +96,8 @@ pub(super) enum TrackerMsg {
     ReleaseMob(oneshot::Sender<Option<String>>),
     /// Start a dose of a consumable by hand.
     StartDose(DoseStart, oneshot::Sender<Result<DoseRecord, DoseError>>),
+    /// End an untimed dose's effect now.
+    EndDose(String, oneshot::Sender<Result<DoseRecord, DoseError>>),
     /// Remove a dose, or restore a removed one (`restore`).
     CorrectDose {
         id: String,
@@ -204,6 +206,8 @@ impl TrackerActor {
         let recovered = actor.recover_orphaned_sessions().await;
         let failed = recovered.is_err();
         if !failed {
+            // No session is live after recovery, so no dose runs either.
+            actor.settle_stray_doses().await;
             actor.restore_doses().await;
         }
         let _ = ready.send(recovered);
@@ -273,6 +277,9 @@ impl TrackerActor {
             }
             TrackerMsg::StartDose(start, reply) => {
                 let _ = reply.send(self.start_dose(start, DoseSource::Manual, None).await);
+            }
+            TrackerMsg::EndDose(id, reply) => {
+                let _ = reply.send(self.end_dose(&id).await);
             }
             TrackerMsg::CorrectDose { id, restore, reply } => {
                 let result = if restore {

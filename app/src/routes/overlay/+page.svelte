@@ -67,6 +67,7 @@
 	} from '$lib/windows/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
+	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 
 	// The colon-form Tauri topic the shell's event bridge emits each backend
@@ -341,9 +342,15 @@
 	}
 
 	// The doses in force, read on each consumables frame and ticked for
-	// their countdowns while any is on show.
+	// their countdowns while any is on show. They belong to the running
+	// session, so its start or stop re-reads them.
 	const doses = createDosesModel();
 	$effect(() => doses.connect());
+	const sessionActive = $derived(data.status === 'active');
+	$effect(() => {
+		void sessionActive;
+		void doses.refresh();
+	});
 	$effect(() => {
 		if (!doses.ticking) return;
 		return useVisiblePoll(doses.tick, { intervalMs: 1000 });
@@ -361,7 +368,7 @@
 			return;
 		}
 		const running = doses.rows.flatMap((dose) =>
-			dose.endsAt > doses.now && dose.equipmentId !== null ? [dose.equipmentId] : []
+			doseState(dose, doses.now) === 'running' && dose.equipmentId !== null ? [dose.equipmentId] : []
 		);
 		const width = anchor.getBoundingClientRect().width;
 		await showOverlayMenu('consumables', anchor, buildConsumablesMenuState(width, doses.options, running), { focusPopup: true });
@@ -585,7 +592,7 @@
 
 				if (event.payload.kind === 'consumables') {
 					overlayMenuKind = null;
-					await doses.start(event.payload.equipmentId);
+					await doses.start(event.payload.equipmentId, event.payload.untimed);
 					return;
 				}
 

@@ -472,9 +472,10 @@
 		</button>
 	</div>
 
-	<!-- Doses: what a consumable has in force, each counting down to its
-		 stored end, with the one correction a misclicked key needs. -->
-	{#if doses}
+	<!-- Doses: what a consumable has in force in the running session, each
+		 counting down to its stored end, with the one correction a misclicked
+		 key needs. An effect lives only while tracking, so idle shows none. -->
+	{#if doses && isActive}
 		<OverlayDoses model={doses} menuOpen={dosesMenuOpen} onStartTrigger={onDosesTrigger} />
 	{/if}
 

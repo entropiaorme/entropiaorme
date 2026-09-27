@@ -26,7 +26,9 @@ export type OverlayMenuState =
 
 /** The configured consumables a dose can be started from. A tap starts one
  * (a running dose of the same item ends where it starts); a bound item
- * names its hotbar key, which starts one in game. */
+ * names its hotbar key, which starts one in game. A lasting item not
+ * running also offers "already in effect": a dose taken before the
+ * session, counted with no timer or cost until the player ends it. */
 export interface OverlayConsumablesMenuState {
 	kind: 'consumables';
 	width: number;
@@ -92,7 +94,7 @@ export type OverlayMenuSelection =
 	| { kind: 'activities'; action: 'declare'; label: string }
 	| { kind: 'activities'; action: 'handIn'; key: string }
 	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' }
-	| { kind: 'consumables'; equipmentId: number };
+	| { kind: 'consumables'; equipmentId: number; untimed: boolean };
 
 /** The widest label's rendered width in the overlay menus' font, for
  * sizing a satellite menu to its content. Falls back to a character
@@ -210,16 +212,21 @@ export function buildActivitiesMenuState(
 }
 
 /** The consumables menu's state over the configured items. The padding
- * leaves room for a row's duration and hotbar key beside its name. */
+ * leaves room for a row's duration and hotbar key beside its name, and for
+ * the "already in effect" choice when any row offers it. */
 export function buildConsumablesMenuState(
 	anchorWidth: number,
 	options: ConsumableOption[],
 	runningIds: number[],
 ): OverlayConsumablesMenuState {
 	const labels = options.map((option) => option.name);
+	const offersAlreadyOn = options.some(
+		(option) => option.durationSeconds > 0 && !runningIds.includes(option.equipmentId),
+	);
+	const padding = offersAlreadyOn ? 190 : 120;
 	return {
 		kind: 'consumables',
-		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No consumables'], 120),
+		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No consumables'], padding),
 		options,
 		runningIds,
 	};

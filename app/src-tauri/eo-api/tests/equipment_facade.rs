@@ -57,11 +57,19 @@ fn write_snapshot(dir: &Path) {
 /// The composed facade over a fresh migrated database and the test
 /// snapshot, plus a database handle of its own for storage assertions.
 async fn api_over(dir: &Path) -> (Api, Db) {
+    api_over_settings(dir, None).await
+}
+
+/// [`api_over`] with a settings file in place before the services start.
+async fn api_over_settings(dir: &Path, settings: Option<&str>) -> (Api, Db) {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
     write_snapshot(&snapshot);
     let data_dir: PathBuf = dir.join("data");
     std::fs::create_dir_all(&data_dir).unwrap();
+    if let Some(settings) = settings {
+        std::fs::write(data_dir.join("settings.json"), settings).unwrap();
+    }
     let db = Db::open(&data_dir.join("entropia_orme.db"))
         .await
         .expect("migrated database");
@@ -677,7 +685,12 @@ async fn a_custom_consumable_declares_its_dose_and_rejects_nonsense() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dose_moves_the_reload_speed_every_surface_prices_under() {
     let dir = tempfile::tempdir().unwrap();
-    let (api, _db) = api_over(dir.path()).await;
+    // One slot bound, so a session can start.
+    let (api, _db) = api_over_settings(
+        dir.path(),
+        Some("{\"hotbar_hooks_enabled\": true, \"hotbar\": {\"1\": 1}}"),
+    )
+    .await;
     let weapon = api
         .equipment_add(&{
             let mut request = consumable("");
@@ -696,12 +709,21 @@ async fn a_dose_moves_the_reload_speed_every_surface_prices_under() {
         .unwrap();
     assert_eq!(before.attack_rate.as_ref().unwrap().factor, 1.0);
 
-    // Outside a session: the dose runs and counts, and books nothing.
-    let doses = api.consumable_dose_start(pill_id).await.unwrap();
+    // Outside a session no dose is taken.
+    assert!(matches!(
+        api.consumable_dose_start(pill_id, false).await,
+        Err(ApiError::Conflict { .. })
+    ));
+
+    // In a session: the dose runs, counts, and books its cost.
+    api.tracking_start().await.unwrap();
+    let doses = api.consumable_dose_start(pill_id, false).await.unwrap();
     assert_eq!(doses.doses.len(), 1);
     let dose = &doses.doses[0];
-    assert_eq!(dose.cost_ped, 0.0);
-    assert!(dose.session_id.as_ref().is_none());
+    assert!((dose.cost_ped - 4.5).abs() < 1e-12);
+    assert!(!dose.untimed);
+    assert!(dose.ends_at.as_ref().is_some());
+    assert!(dose.session_id.as_ref().is_some());
     assert_eq!(doses.reload_speed.consumed_percent, 20.0);
     assert_eq!(doses.reload_speed.in_effect_percent, 20.0);
     assert_eq!(doses.options.len(), 1);
@@ -726,7 +748,38 @@ async fn a_dose_moves_the_reload_speed_every_surface_prices_under() {
         Err(ApiError::NotFound { .. })
     ));
     assert!(matches!(
-        api.consumable_dose_start(weapon.id.parse().unwrap()).await,
+        api.consumable_dose_start(weapon.id.parse().unwrap(), false)
+            .await,
         Err(ApiError::NotFound { .. })
     ));
+    // A timed dose ends on its own.
+    assert!(matches!(
+        api.consumable_dose_end(dose.id.clone()).await,
+        Err(ApiError::Conflict { .. })
+    ));
+
+    // An untimed dose, declared from before: in force with no end until the
+    // player ends it.
+    let carried = api.consumable_dose_start(pill_id, true).await.unwrap();
+    let running: Vec<_> = carried
+        .doses
+        .iter()
+        .filter(|dose| dose.ends_at.as_ref().is_none())
+        .collect();
+    assert_eq!(running.len(), 1);
+    assert!(running[0].untimed);
+    assert_eq!(running[0].cost_ped, 0.0);
+    assert_eq!(carried.reload_speed.consumed_percent, 20.0);
+    let ended = api
+        .consumable_dose_end(running[0].id.clone())
+        .await
+        .unwrap();
+    assert_eq!(ended.reload_speed.consumed_percent, 0.0);
+
+    // Stopping the session ends every dose, and the readout empties.
+    api.consumable_dose_start(pill_id, false).await.unwrap();
+    api.tracking_stop().await.unwrap();
+    let stopped = api.consumable_doses().await.unwrap();
+    assert!(stopped.doses.is_empty());
+    assert_eq!(stopped.reload_speed.in_effect_percent, 0.0);
 }

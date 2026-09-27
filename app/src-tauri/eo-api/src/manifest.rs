@@ -306,9 +306,23 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "consumable_dose_start",
+            args: vec![
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "untimed",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_end",
             args: vec![ArgSpec {
-                name: "equipment_id",
-                schema: schema(schema_for!(i64)),
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(ConsumableDoses))),
         },

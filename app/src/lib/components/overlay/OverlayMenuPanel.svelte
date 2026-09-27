@@ -176,21 +176,36 @@
 		{:else}
 			{#each menuState.options as option (option.equipmentId)}
 				{@const running = menuState.runningIds.includes(option.equipmentId)}
-				<button
-					type="button"
-					class="menu-option {running ? 'menu-option-active' : ''}"
-					title={running
-						? `Take another dose of ${option.name}; the running one ends now`
-						: `Take a dose of ${option.name}`}
-					onclick={() => onSelect({ kind: 'consumables', equipmentId: option.equipmentId })}
-				>
-					<span class="menu-option-name">{option.name}</span>
-					<span class="menu-option-badge {running ? '' : 'menu-option-badge-muted'}">
-						{running ? 'Running' : formatDuration(option.durationSeconds)}{option.hotbarSlot
-							? ` · key ${option.hotbarSlot}`
-							: ''}
-					</span>
-				</button>
+				<div class="menu-row">
+					<button
+						type="button"
+						class="menu-option {running ? 'menu-option-active' : ''}"
+						title={running
+							? `Take another dose of ${option.name}; the running one ends now`
+							: `Take a dose of ${option.name}`}
+						onclick={() =>
+							onSelect({ kind: 'consumables', equipmentId: option.equipmentId, untimed: false })}
+					>
+						<span class="menu-option-name">{option.name}</span>
+						<span class="menu-option-badge {running ? '' : 'menu-option-badge-muted'}">
+							{running ? 'Running' : formatDuration(option.durationSeconds)}{option.hotbarSlot
+								? ` · key ${option.hotbarSlot}`
+								: ''}
+						</span>
+					</button>
+					<!-- A dose taken before tracking started: its timer is unknown,
+						 so it counts until the player ends it, and books nothing. -->
+					{#if !running && option.durationSeconds > 0}
+						<button
+							type="button"
+							class="menu-hand-in-btn"
+							aria-label={`${option.name} is already in effect`}
+							title="Already taken before tracking: count its effect, with no timer or cost, until you end it"
+							onclick={() =>
+								onSelect({ kind: 'consumables', equipmentId: option.equipmentId, untimed: true })}
+						>Already on</button>
+					{/if}
+				</div>
 			{/each}
 		{/if}
 	{:else if menuState.loading}

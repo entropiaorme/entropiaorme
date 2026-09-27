@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ErrorNotice } from '$lib/components';
 	import { formatPed } from '$lib/utils/format';
-	import { describeDoseCost, describeEffects, describeSource, formatDuration } from './doses';
+	import { describeDoseCost, describeEffects, describeRun, describeSource } from './doses';
 	import type { SessionDosesModel } from './sessionDosesModel.svelte';
 
 	let { model }: { model: SessionDosesModel } = $props();
@@ -33,9 +33,7 @@
 					<div class="min-w-0 flex-1 {removed ? 'opacity-50' : ''}">
 						<div class="text-sm text-text truncate {removed ? 'line-through' : ''}">{dose.itemName}</div>
 						<div class="text-text-tertiary truncate">
-							{describeEffects(dose.effects) || 'No evaluated effect'} · {formatDuration(dose.endsAt - dose.startedAt)}{dose.replaced
-								? ' (replaced by a re-dose)'
-								: ''} · {describeSource(dose)}
+							{describeEffects(dose.effects) || 'No evaluated effect'} · {describeRun(dose)} · {describeSource(dose)}
 						</div>
 					</div>
 					<span class="tabular-nums shrink-0 {removed ? 'text-text-tertiary' : 'text-text-secondary'}">

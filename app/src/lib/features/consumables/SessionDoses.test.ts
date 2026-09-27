@@ -25,6 +25,7 @@ function dose(overrides: Partial<ConsumableDose> = {}): ConsumableDose {
 		sessionId: 's1',
 		startedAt: 1000,
 		endsAt: 4600,
+		untimed: false,
 		replaced: false,
 		costPed: 4.5,
 		costTracked: true,
@@ -60,6 +61,14 @@ describe("a session's doses", () => {
 		mocked.getSessionDoses.mockResolvedValue([dose({ removedAt: 2000, removedBy: 'player' })]);
 		await fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
 		expect(mocked.removeConsumableDose).toHaveBeenCalledWith('d1');
+	});
+
+	it('says an effect declared from before ran until ended, and booked nothing', async () => {
+		await renderWith([dose({ untimed: true, endsAt: null, costPed: 0 })]);
+		const row = screen.getByTestId('session-dose');
+		expect(row.textContent).toContain('Until ended');
+		expect(row.textContent).toContain('Already in effect');
+		expect(row.textContent).toContain('taken before the session');
 	});
 
 	it('restores a removed dose and leaves a heal buff to its heal', async () => {

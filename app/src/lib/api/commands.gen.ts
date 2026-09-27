@@ -599,11 +599,13 @@ export interface ConsumableDose {
 	equipmentId: number | null;
 	itemName: string;
 	source: ConsumableDoseSource;
-	/** The session the dose was taken in; null outside one. */
+	/** The session the dose was taken in; null for one taken outside a session before effects were bound to one. */
 	sessionId: string | null;
 	startedAt: number;
-	/** When the effect ends (or ended): the expiry, or earlier when a re-dose of the item replaced it. */
-	endsAt: number;
+	/** When the effect ends (or ended): the expiry, or earlier when a re-dose of the item replaced it, it was ended, or its session stopped. Null while an untimed dose runs. */
+	endsAt: number | null;
+	/** Whether the dose was declared in force with no expiry: taken before the session, running until the player ends it. */
+	untimed: boolean;
 	/** Whether a re-dose of the item replaced it before its expiry. */
 	replaced: boolean;
 	/** What it booked to its session, PED. */
@@ -641,13 +643,14 @@ export interface ConsumableDoseRequest {
 export type ConsumableDoseSource = 'hotbar' | 'manual' | 'on_use';
 
 /**
- * The dose readout: the running doses and those just ended (so they can be
- * re-dosed), the reload speed in effect, and what a dose can be started
- * from.
+ * The dose readout: the running session's doses in force and those just
+ * ended (so they can be re-dosed), the reload speed in effect, and what a
+ * dose can be started from.
  */
 export interface ConsumableDoses {
 	/** Now, epoch seconds, as the doses were read: a countdown measures from here. */
 	now: number;
+	/** Empty while no session runs: a dose is taken, and counts, only inside one. */
 	doses: ConsumableDose[];
 	reloadSpeed: ReloadSpeedNow;
 	options: ConsumableOption[];
@@ -3840,8 +3843,12 @@ export async function consumableDoses(): Promise<ConsumableDoses> {
 	return invokeCommand('consumable_doses', {});
 }
 
-export async function consumableDoseStart(equipmentId: number): Promise<ConsumableDoses> {
-	return invokeCommand('consumable_dose_start', { equipment_id: equipmentId });
+export async function consumableDoseStart(equipmentId: number, untimed: boolean): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_start', { equipment_id: equipmentId, untimed });
+}
+
+export async function consumableDoseEnd(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_end', { dose_id: doseId });
 }
 
 export async function consumableDoseRemove(doseId: string): Promise<ConsumableDoses> {

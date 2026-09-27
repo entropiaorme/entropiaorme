@@ -1,7 +1,8 @@
-//! Consumable doses: the running doses and the reload speed they put in
-//! effect, the configured consumables a dose can be started from, a dose
-//! started by hand, a dose removed (a misclick) or restored, and a session's
-//! doses for review.
+//! Consumable doses: the running session's doses and the reload speed they
+//! put in effect, the configured consumables a dose can be started from, a
+//! dose started by hand (timed, or untimed for one taken before the
+//! session), an untimed dose ended, a dose removed (a misclick) or restored,
+//! and a session's doses for review.
 //!
 //! The tracker owns the lifecycle; this facade reads the persisted doses and
 //! maps the tracker's outcomes into the generated contract. Every change the
@@ -103,12 +104,17 @@ pub struct ConsumableDose {
     pub equipment_id: Nullable<i64>,
     pub item_name: String,
     pub source: ConsumableDoseSource,
-    /// The session the dose was taken in; null outside one.
+    /// The session the dose was taken in; null for one taken outside a
+    /// session before effects were bound to one.
     pub session_id: Nullable<String>,
     pub started_at: f64,
     /// When the effect ends (or ended): the expiry, or earlier when a
-    /// re-dose of the item replaced it.
-    pub ends_at: f64,
+    /// re-dose of the item replaced it, it was ended, or its session
+    /// stopped. Null while an untimed dose runs.
+    pub ends_at: Nullable<f64>,
+    /// Whether the dose was declared in force with no expiry: taken before
+    /// the session, running until the player ends it.
+    pub untimed: bool,
     /// Whether a re-dose of the item replaced it before its expiry.
     pub replaced: bool,
     /// What it booked to its session, PED.
@@ -129,8 +135,9 @@ impl From<&DoseRecord> for ConsumableDose {
             source: dose.source.into(),
             session_id: dose.session_id.clone().into(),
             started_at: dose.started_at,
-            ends_at: dose.ends_at(),
-            replaced: dose.superseded_at.is_some_and(|at| at < dose.expires_at),
+            ends_at: dose.ends_at().into(),
+            untimed: dose.is_untimed(),
+            replaced: dose.replaced(),
             cost_ped: dose.cost_ped,
             cost_tracked: dose.cost_tracked,
             effects: dose.effects.iter().map(ConsumableEffect::from).collect(),
@@ -175,15 +182,17 @@ pub struct ReloadSpeedNow {
     pub total_limit_percent: f64,
 }
 
-/// The dose readout: the running doses and those just ended (so they can be
-/// re-dosed), the reload speed in effect, and what a dose can be started
-/// from.
+/// The dose readout: the running session's doses in force and those just
+/// ended (so they can be re-dosed), the reload speed in effect, and what a
+/// dose can be started from.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsumableDoses {
     /// Now, epoch seconds, as the doses were read: a countdown measures from
     /// here.
     pub now: f64,
+    /// Empty while no session runs: a dose is taken, and counts, only
+    /// inside one.
     pub doses: Vec<ConsumableDose>,
     pub reload_speed: ReloadSpeedNow,
     pub options: Vec<ConsumableOption>,
@@ -211,7 +220,21 @@ impl Api {
         let (recent, rows) = self
             .db
             .with_reader(move |conn| {
-                let recent = read_recent_doses(conn, now - RECENTLY_ENDED_SECONDS)?;
+                use rusqlite::OptionalExtension;
+                let session_id: Option<String> = conn
+                    .query_row(
+                        "SELECT id FROM tracking_sessions WHERE is_active = 1 \
+                         ORDER BY started_at DESC, id DESC LIMIT 1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let recent = match &session_id {
+                    Some(session_id) => {
+                        read_recent_doses(conn, session_id, now - RECENTLY_ENDED_SECONDS)?
+                    }
+                    None => Vec::new(),
+                };
                 let mut stmt = conn.prepare(
                     "SELECT id, name, properties_json FROM equipment_library \
                      WHERE item_type = 'consumable' ORDER BY name COLLATE NOCASE, id",
@@ -276,12 +299,15 @@ impl Api {
         })
     }
 
-    /// Start a dose of a configured consumable by hand (one bound to a
-    /// hotbar slot starts from its key in game). A running dose of the same
-    /// item ends where this one starts.
+    /// Start a dose of a configured consumable by hand in the running
+    /// session (one bound to a hotbar slot starts from its key in game). An
+    /// `untimed` dose is one taken before the session, declared still in
+    /// force: no expiry and no cost, until [`Self::consumable_dose_end`]. A
+    /// running dose of the same item ends where this one starts.
     pub async fn consumable_dose_start(
         &self,
         equipment_id: i64,
+        untimed: bool,
     ) -> Result<ConsumableDoses, ApiError> {
         let row = self
             .db
@@ -308,9 +334,16 @@ impl Api {
                 equipment_id,
                 item_name: name,
                 profile,
+                untimed,
             })
             .await
             .map_err(dose_error)?;
+        self.consumable_doses().await
+    }
+
+    /// End an untimed dose's effect now: the player says it ran out.
+    pub async fn consumable_dose_end(&self, dose_id: String) -> Result<ConsumableDoses, ApiError> {
+        self.tracker.end_dose(&dose_id).await.map_err(dose_error)?;
         self.consumable_doses().await
     }
 

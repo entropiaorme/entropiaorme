@@ -10,6 +10,7 @@ vi.mock('$lib/api', () => ({
 	removeConsumableDose: vi.fn(),
 	restoreConsumableDose: vi.fn(),
 	startConsumableDose: vi.fn(),
+	endConsumableDose: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -31,6 +32,7 @@ function dose(overrides: Partial<ConsumableDose> = {}): ConsumableDose {
 		sessionId: 's1',
 		startedAt: 1000,
 		endsAt: 1600,
+		untimed: false,
 		replaced: false,
 		costPed: 4.5,
 		costTracked: true,
@@ -100,12 +102,24 @@ describe('the overlay doses', () => {
 		expect(mocked.removeConsumableDose).toHaveBeenCalledWith('d1');
 	});
 
+	it('shows an untimed dose with no countdown and ends it on the X', async () => {
+		mocked.endConsumableDose.mockResolvedValue(readout([]));
+		await renderWith(readout([dose({ untimed: true, endsAt: null, costPed: 0 })]), () => 99_000);
+		const chip = screen.getByTestId('overlay-dose');
+		expect(chip.textContent).not.toMatch(/\d:\d\d/);
+		expect(chip.getAttribute('title')).toContain('in effect until you end it');
+		expect(screen.queryByRole('button', { name: 'Remove this dose of Adrenaline' })).toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'End the effect of Adrenaline' }));
+		expect(mocked.endConsumableDose).toHaveBeenCalledWith('d1');
+		expect(mocked.removeConsumableDose).not.toHaveBeenCalled();
+	});
+
 	it('offers a re-dose once a dose has ended', async () => {
 		mocked.startConsumableDose.mockResolvedValue(readout([]));
 		await renderWith(readout([dose()]), () => 1620);
 		expect(screen.getByTestId('overlay-dose').textContent).toContain('Ended');
 		await fireEvent.click(screen.getByRole('button', { name: 'Take another dose of Adrenaline' }));
-		expect(mocked.startConsumableDose).toHaveBeenCalledWith(40);
+		expect(mocked.startConsumableDose).toHaveBeenCalledWith(40, false);
 	});
 
 	it('opens the menu of consumables from its start control', async () => {

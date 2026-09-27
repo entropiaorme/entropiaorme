@@ -338,6 +338,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "consumable doses",
         sql: include_str!("../../migrations/0060_consumable_doses.sql"),
     },
+    Migration {
+        version: 61,
+        description: "consumable dose session scope",
+        sql: include_str!("../../migrations/0061_consumable_dose_session_scope.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -406,6 +411,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "F23E22D844FDEF26245B1A76CBA6427B0C6FDC9019F5971F255ED58827C680388F241587C131898CC4EBCCD2FAE2A9D9",
     "1C97E38F06EEAF015ADD596B3CF9F4515527CD463144B877EDC5E4DACD2D2C7E2B05F2053F6BCFB018F6EED44A3CBBD9",
     "CD863AA9ECBA07DB123390C444D1D17F991F3FE6BEE0145D9AB6A3809429E7A8AA9D547FFCC8D5971F3F1BE3F65D2CC2",
+    "67983B1055CD53D142AD2143F1D2DB12CF57B3262CE600987B25952234D0708962CDB55E4C17A3ADD30257CD714004DE",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -1270,5 +1276,95 @@ mod tests {
             ledger_tail,
             MIGRATIONS.last().expect("chain is non-empty").version
         );
+    }
+
+    /// A carried dose row: id, cost, superseded at, supersedes, ended at.
+    type CarriedDose = (String, f64, Option<f64>, Option<String>, Option<f64>);
+
+    #[test]
+    fn dose_session_scope_upgrade_carries_every_dose_and_admits_untimed_ones() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..60] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO consumable_doses \
+                 (id, equipment_id, item_name, source, session_id, started_at, expires_at, \
+                  cost_ped, cost_tracked, effects_json, superseded_at) VALUES \
+                 ('a', 4, 'Pill', 'hotbar', 's', 10, 3610, 4.5, 1, '[]', 600), \
+                 ('b', 4, 'Pill', 'manual', 's', 600, 4200, 4.5, 1, '[]', NULL); \
+                 UPDATE consumable_doses SET supersedes_dose_id = 'a' WHERE id = 'b';",
+            )
+            .expect("v60 doses");
+
+        run(&mut connection).expect("v61 upgrade");
+
+        let carried: Vec<CarriedDose> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, cost_ped, superseded_at, supersedes_dose_id, ended_at \
+                     FROM consumable_doses ORDER BY id",
+                )
+                .expect("dose read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("dose rows")
+            .collect::<Result<_, _>>()
+            .expect("dose rows")
+        };
+        assert_eq!(
+            carried,
+            vec![
+                ("a".to_owned(), 4.5, Some(600.0), None, None),
+                ("b".to_owned(), 4.5, None, Some("a".to_owned()), None),
+            ]
+        );
+        // An untimed dose books nothing and has no expiry.
+        connection
+            .execute(
+                "INSERT INTO consumable_doses \
+                 (id, item_name, source, session_id, started_at, expires_at) \
+                 VALUES ('c', 'Pill', 'manual', 's', 700, NULL)",
+                [],
+            )
+            .expect("an untimed dose");
+        assert!(connection
+            .execute(
+                "INSERT INTO consumable_doses \
+                 (id, item_name, source, session_id, started_at, expires_at, cost_ped) \
+                 VALUES ('d', 'Pill', 'manual', 's', 700, NULL, 1)",
+                [],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "UPDATE consumable_doses SET ended_at = 5 WHERE id = 'c'",
+                [],
+            )
+            .is_err());
     }
 }

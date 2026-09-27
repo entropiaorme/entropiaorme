@@ -6,7 +6,8 @@
 //! (the hotbar resolver, the equipment library, the facade's weapon pricing)
 //! filter by their own reading of the clock, so a dose stops counting the
 //! moment its absolute expiry passes whether or not the tracker has swept it
-//! yet. The board is a projection of persisted state, never its source.
+//! yet. An untimed dose has no expiry: it counts until the tracker publishes
+//! it ended. The board is a projection of persisted state, never its source.
 
 use std::sync::{Arc, RwLock};
 
@@ -56,7 +57,8 @@ pub struct LiveDose {
     pub source: DoseSource,
     pub session_id: Option<String>,
     pub started_at: f64,
-    pub expires_at: f64,
+    /// When the effect ends; `None` while an untimed dose runs.
+    pub expires_at: Option<f64>,
     pub cost_ped: f64,
     pub effects: Vec<DoseEffect>,
 }
@@ -64,7 +66,7 @@ pub struct LiveDose {
 impl LiveDose {
     /// Whether the dose's effect is in force at `now`.
     pub fn in_effect_at(&self, now: f64) -> bool {
-        self.started_at <= now && now < self.expires_at
+        self.started_at <= now && self.expires_at.is_none_or(|end| now < end)
     }
 
     /// The reload speed the dose's effects add, percent, as printed.
@@ -148,7 +150,7 @@ impl DoseBoard {
     pub fn next_expiry_after(&self, now: f64) -> Option<f64> {
         self.doses()
             .iter()
-            .map(|dose| dose.expires_at)
+            .filter_map(|dose| dose.expires_at)
             .filter(|expires_at| *expires_at > now)
             .reduce(f64::min)
     }
@@ -168,7 +170,12 @@ mod tests {
     use crate::clock::MockClock;
     use crate::passive_effects::{PassiveEffect, PassiveEffectKind};
 
-    fn dose(id: &str, started_at: f64, expires_at: f64, reload: f64) -> LiveDose {
+    fn dose(
+        id: &str,
+        started_at: f64,
+        expires_at: impl Into<Option<f64>>,
+        reload: f64,
+    ) -> LiveDose {
         LiveDose {
             id: id.into(),
             equipment_id: Some(1),
@@ -176,7 +183,7 @@ mod tests {
             source: DoseSource::Hotbar,
             session_id: None,
             started_at,
-            expires_at,
+            expires_at: expires_at.into(),
             cost_ped: 0.0,
             effects: vec![DoseEffect::new(
                 "Reload Speed Increased",
@@ -222,5 +229,18 @@ mod tests {
         assert_eq!(board.next_expiry_after(10.0), Some(50.0));
         assert_eq!(board.next_expiry_after(60.0), Some(100.0));
         assert_eq!(board.next_expiry_after(100.0), None);
+    }
+
+    #[test]
+    fn an_untimed_dose_counts_until_it_is_published_ended() {
+        let board = DoseBoard::new(Arc::new(MockClock::new(None, 0.0)));
+        board.publish(vec![
+            dose("a", 100.0, None, 10.0),
+            dose("b", 100.0, 160.0, 5.0),
+        ]);
+        assert_eq!(board.consumed_reload_at(1.0e9), vec![10.0]);
+        // Only the timed dose has an expiry for a wake-up to aim at.
+        assert_eq!(board.next_expiry_after(100.0), Some(160.0));
+        assert_eq!(board.next_expiry_after(160.0), None);
     }
 }

@@ -739,6 +739,9 @@ impl TrackerActor {
         if self.session.active().is_some() {
             self.stop_session().await?;
         }
+        // No dose carries into the session: whatever effect the player
+        // still has from before, they declare on the overlay.
+        self.settle_stray_doses().await;
 
         // Snapshot the session facets from the live config: the name
         // (trimmed; empty is "not declared") and the skill boost (zero
@@ -847,8 +850,8 @@ impl TrackerActor {
         let mut active = ActiveSession::new(session.clone(), facets);
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
         active.weapons.load_carried(carried);
-        // The carried weapons were prepared under the reload speed the
-        // running doses put in effect; shots and heals are stamped with it.
+        // The carried weapons were prepared under the reload speed in
+        // effect; shots and heals are stamped with it.
         active.reload_speed_percent = self.reload_speed_at(start_ts);
 
         // Seed the declared mob from the configured declaration, when
@@ -904,9 +907,6 @@ impl TrackerActor {
                 }
             }
         }
-        // A dose taken before this session keeps running in the game: the
-        // play it covers carries its context.
-        self.open_running_dose_intervals().await;
         self.emit_session_event(
             TrackingReason::Started,
             TrackingStatus::Active,
@@ -1007,6 +1007,8 @@ impl TrackerActor {
                 for row in &dangling_evidence {
                     row.insert(&tx, None)?;
                 }
+                // A dose's effect ends with the session it was taken in.
+                crate::consumables::end_session_doses(&tx, &sid, end_epoch)?;
                 // Enhancer-break Shrapnel is an immediate cost rebate. Ordinary
                 // Shrapnel remains stock until the player explicitly converts it.
                 Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_time)?;
@@ -1054,6 +1056,8 @@ impl TrackerActor {
         // equipped heal tool deliberately does.)
         self.session = SessionState::Idle;
         self.publish_status();
+        self.doses_ended_with_session(&session_id, instant_to_epoch(end_time))
+            .await;
         Ok(Some(session))
     }
 

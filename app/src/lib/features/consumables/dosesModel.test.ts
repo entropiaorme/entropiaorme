@@ -7,6 +7,7 @@ vi.mock('$lib/api', () => ({
 	removeConsumableDose: vi.fn(),
 	restoreConsumableDose: vi.fn(),
 	startConsumableDose: vi.fn(),
+	endConsumableDose: vi.fn(),
 }));
 
 const listeners = new Map<string, () => void>();
@@ -31,6 +32,7 @@ function dose(overrides: Partial<ConsumableDose> = {}): ConsumableDose {
 		sessionId: 's1',
 		startedAt: 1000,
 		endsAt: 1600,
+		untimed: false,
 		replaced: false,
 		costPed: 4.5,
 		costTracked: true,
@@ -128,6 +130,38 @@ describe('the live dose readout', () => {
 		await model.restore(dose());
 		expect(mocked.restoreConsumableDose).toHaveBeenCalledWith('d1');
 		expect(model.undoable).toBeNull();
+	});
+
+	it('adds an effect already in force and ends it when it runs out', async () => {
+		const untimed = dose({ untimed: true, endsAt: null, costPed: 0 });
+		mocked.getConsumableDoses.mockResolvedValue(readout([]));
+		mocked.startConsumableDose.mockResolvedValue(readout([untimed]));
+		mocked.endConsumableDose.mockResolvedValue(readout([]));
+		const model = createDosesModel({ clock: () => 1100 });
+		model.connect();
+		await settle();
+
+		mocked.getConsumableDoses.mockResolvedValue(readout([untimed]));
+		expect(await model.start(40, true)).toBe(true);
+		expect(mocked.startConsumableDose).toHaveBeenCalledWith(40, true);
+		expect(model.rows.map((row) => row.id)).toEqual(['d1']);
+		expect(model.ticking).toBe(true);
+
+		mocked.getConsumableDoses.mockResolvedValue(readout([]));
+		expect(await model.end(untimed)).toBe(true);
+		expect(mocked.endConsumableDose).toHaveBeenCalledWith('d1');
+		expect(model.rows).toEqual([]);
+		expect(model.undoable).toBeNull();
+	});
+
+	it('re-reads when asked, as a session starts or stops', async () => {
+		mocked.getConsumableDoses.mockResolvedValue(readout([dose()]));
+		const model = createDosesModel({ clock: () => 1100 });
+		model.connect();
+		await settle();
+		mocked.getConsumableDoses.mockResolvedValue(readout([]));
+		await model.refresh();
+		expect(model.rows).toEqual([]);
 	});
 
 	it('says why an action failed and keeps the readout', async () => {

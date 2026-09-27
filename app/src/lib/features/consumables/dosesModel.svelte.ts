@@ -1,7 +1,8 @@
 /**
- * Runes-native state for the overlay's live dose readout: the persisted doses
- * read on every `consumables:updated` frame, a local display tick for the
- * countdowns, and the start, remove, and restore actions.
+ * Runes-native state for the overlay's live dose readout: the running
+ * session's doses read on every `consumables:updated` frame (and when a
+ * session starts or stops), a local display tick for the countdowns, and the
+ * start, end, remove, and restore actions.
  *
  * The tick is display only: which dose is running, and how long it has left,
  * is always measured from the dose's stored end. A removal can be taken back
@@ -13,6 +14,7 @@ import {
 	CONSUMABLES_TOPIC,
 	type ConsumableDose,
 	type ConsumableDoses,
+	endConsumableDose,
 	getConsumableDoses,
 	removeConsumableDose,
 	restoreConsumableDose,
@@ -104,16 +106,33 @@ export function createDosesModel(options: DosesModelOptions = {}) {
 				detach?.();
 			};
 		},
+		/** Re-read the readout: a session's start or stop moves which doses
+		 * it holds without a consumables frame of its own. */
+		refresh() {
+			return store.hydrate();
+		},
 		/** Advance the display tick. */
 		tick() {
 			now = clock();
 		},
-		async start(equipmentId: number) {
+		/** Take a dose; `untimed` declares one taken before the session as
+		 * still in force, with no expiry and no cost. */
+		async start(equipmentId: number, untimed = false) {
 			return run(
 				`start:${equipmentId}`,
-				() => startConsumableDose(equipmentId),
-				'Could not start the dose.',
+				() => startConsumableDose(equipmentId, untimed),
+				untimed ? 'Could not add the effect.' : 'Could not start the dose.',
 			);
+		},
+		/** End an untimed dose's effect now: it ran out. */
+		async end(dose: ConsumableDose) {
+			const done = await run(
+				dose.id,
+				() => endConsumableDose(dose.id),
+				'Could not end the effect.',
+			);
+			if (done) now = clock();
+			return done;
 		},
 		async remove(dose: ConsumableDose) {
 			const done = await run(

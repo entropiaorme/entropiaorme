@@ -1,8 +1,11 @@
 //! Consumable doses: what one dose of a stimulant, pill, or similar item
 //! grants and costs, and the persisted lifecycle every surface reads.
 //!
-//! A dose is a persisted record with an absolute expiry. The tracker owns the
-//! lifecycle (start, re-dose, removal and restore, expiry) and publishes the
+//! A dose is a persisted record with an absolute expiry, or none when the
+//! player declares a dose taken before the session as still in force. Its
+//! effect lives inside the tracking session it was taken in: stopping the
+//! session ends it. The tracker owns the lifecycle (start, re-dose, removal
+//! and restore, ending, expiry) and publishes the
 //! doses still running to the [`DoseBoard`]; each dose's reload-speed effect
 //! is the consumed input to
 //! [`reload_speed_in_effect`](crate::passive_effects::reload_speed_in_effect),
@@ -20,10 +23,10 @@ pub use profile::{
     ConsumableProfile, DoseEffect, DoseEffectKind, OnUseEffect, ResolvedConsumable,
 };
 pub use store::{
-    adjust_session_consumable_cost, detach_session, insert_dose, read_dose,
-    read_doses_of_activation, read_recent_doses, read_running_dose_of, read_running_doses,
-    read_session_doses, set_activation_doses_removed, set_interval, set_removed, set_superseded,
-    DoseRecord, DoseRemoval,
+    adjust_session_consumable_cost, detach_session, end_session_doses, end_stray_doses,
+    insert_dose, read_dose, read_doses_of_activation, read_recent_doses, read_running_dose_of,
+    read_running_doses, read_session_doses, set_activation_doses_removed, set_ended, set_interval,
+    set_removed, set_superseded, DoseRecord, DoseRemoval,
 };
 
 /// How long an ended dose stays on the readouts, seconds, so the player can

@@ -1,11 +1,17 @@
 //! The consumable dose lifecycle, owned by the tracker.
 //!
 //! A dose starts from a consumable's hotbar key, a manual start, or a paid
-//! heal of a tool with an on-use buff. It is written as it starts, with an
-//! absolute expiry, so the lifecycle survives any restart: the running doses
-//! are read back when the tracker starts and after a correction elsewhere.
-//! The tracker is the only writer, so starts, re-doses, removals, restores,
-//! and expiries are serialised with the shots and heals they reprice.
+//! heal of a tool with an on-use buff, and only while a session runs: its
+//! effect lives inside the session it was taken in. Stopping the session
+//! ends every dose still running, because the game's clock keeps running
+//! while nothing is tracked, so no later session could know what is left of
+//! it. A dose taken before the session can be declared untimed instead: in
+//! force, with no expiry and no cost, until the player ends it.
+//!
+//! A dose is written as it starts, with its absolute expiry, and re-read
+//! after a correction elsewhere. The tracker is the only writer, so starts,
+//! re-doses, removals, restores, endings, and expiries are serialised with
+//! the shots and heals they reprice.
 //!
 //! Expiry is a comparison with the injected clock, made before every message
 //! the tracker handles; a dose that ended since the last message is closed at
@@ -15,19 +21,19 @@
 //! wake-up, decides.
 //!
 //! A dose of a cost-tracked item books its cost once, in the context it was
-//! taken in, to the session running then; none books outside a session. A
-//! timed dose opens a stacking `Consumable` interval in the running session
-//! (a session starting while a dose runs opens one for it), so later events
-//! carry the context of the doses in force. Whenever the running doses
+//! taken in, to the session running then; an untimed dose books nothing. A
+//! lasting dose opens a stacking `Consumable` interval in the running
+//! session, so later events carry the context of the doses in force.
+//! Whenever the running doses
 //! change, the reload speed in effect is recomputed and, when it moved, the
 //! carried weapons and the held healer are re-priced under it.
 
 use std::time::Duration;
 
 use crate::consumables::{
-    adjust_session_consumable_cost, effects_reload_speed_percent, insert_dose, read_dose,
-    read_running_doses, set_interval, set_removed, set_superseded, ConsumableProfile, DoseRecord,
-    DoseRemoval, DoseSource,
+    adjust_session_consumable_cost, effects_reload_speed_percent, end_stray_doses, insert_dose,
+    read_dose, read_running_doses, set_ended, set_interval, set_removed, set_superseded,
+    ConsumableProfile, DoseRecord, DoseRemoval, DoseSource,
 };
 use crate::db::DbError;
 use crate::passive_effects::{
@@ -52,6 +58,9 @@ pub struct DoseStart {
     pub equipment_id: i64,
     pub item_name: String,
     pub profile: ConsumableProfile,
+    /// A dose taken before the session, declared as still in force: no
+    /// expiry and no cost, running until the player ends it.
+    pub untimed: bool,
 }
 
 /// Why a dose command changed nothing.
@@ -85,7 +94,8 @@ impl Drop for DoseRuntime {
 /// A heal's on-use buff lasts seconds and belongs to the heal's own
 /// provenance, so it opens none.
 fn interval_spec(dose: &DoseRecord) -> Option<IntervalSpec> {
-    if dose.source == DoseSource::OnUse || dose.ends_at() <= dose.started_at {
+    if dose.source == DoseSource::OnUse || dose.ends_at().is_some_and(|end| end <= dose.started_at)
+    {
         return None;
     }
     let reload = effects_reload_speed_percent(&dose.effects);
@@ -118,6 +128,30 @@ impl TrackerActor {
         )
     }
 
+    /// End every dose still running with no session live to hold it: the
+    /// tracker's start (after a crash, a session's doses end where recovery
+    /// closed it) and each session's start. A failed write is logged; the
+    /// doses it missed are tried again at the next.
+    pub(super) async fn settle_stray_doses(&mut self) {
+        if self.session.active().is_some() {
+            return;
+        }
+        let now = self.epoch_now();
+        match self
+            .db
+            .with_writer(move |conn| end_stray_doses(conn, now))
+            .await
+        {
+            Ok(0) => {}
+            Ok(_) => self.restore_doses().await,
+            Err(error) => tracing::warn!(
+                target: "eo::tracker",
+                %error,
+                "doses outside a session could not be ended",
+            ),
+        }
+    }
+
     /// Adopt the persisted running doses: the tracker's start, and the
     /// re-read after a correction elsewhere moved one. A failed read keeps
     /// what memory holds.
@@ -143,24 +177,28 @@ impl TrackerActor {
     /// dose that has already ended.
     pub(super) async fn sweep_doses(&mut self) {
         let now = self.epoch_now();
-        if !self.doses.running.iter().any(|dose| dose.ends_at() <= now) {
+        if !self.doses.running.iter().any(|dose| dose.ended_by(now)) {
             return;
         }
-        let (mut ended, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doses.running)
+        let (ended, running): (Vec<_>, Vec<_>) = std::mem::take(&mut self.doses.running)
             .into_iter()
-            .partition(|dose| dose.ends_at() <= now);
+            .partition(|dose| dose.ended_by(now));
         self.doses.running = running;
-        ended.sort_by(|a, b| a.ends_at().total_cmp(&b.ends_at()));
+        let mut ended: Vec<(f64, DoseRecord)> = ended
+            .into_iter()
+            .filter_map(|dose| dose.ends_at().map(|end| (end, dose)))
+            .collect();
+        ended.sort_by(|a, b| a.0.total_cmp(&b.0));
         let db = self.db.clone();
         if let Some(active) = self.session.active_mut() {
             let session_id = active.session.id.clone();
-            for dose in &ended {
+            for (end, dose) in &ended {
                 if let Some(interval_id) =
                     dose.interval_id.filter(|id| active.intervals.is_open(*id))
                 {
                     let _ = active
                         .intervals
-                        .close_ids(&db, &session_id, dose.ends_at(), &[interval_id])
+                        .close_ids(&db, &session_id, *end, &[interval_id])
                         .await;
                 }
             }
@@ -217,7 +255,7 @@ impl TrackerActor {
             .doses
             .running
             .iter()
-            .map(DoseRecord::ends_at)
+            .filter_map(DoseRecord::ends_at)
             .filter(|ends_at| *ends_at > now)
             .reduce(f64::min)
         else {
@@ -246,16 +284,28 @@ impl TrackerActor {
             ));
     }
 
-    /// Start a dose now. A running dose of the same item ends where this one
-    /// starts (the two never stack); a cost-tracked item books its dose cost
-    /// to the running session. `activation_id` names the paid heal that
-    /// opened an on-use buff.
+    /// Start a dose now, in the running session. A running dose of the same
+    /// item ends where this one starts (the two never stack); a cost-tracked
+    /// item books its dose cost to the session, unless the dose is untimed.
+    /// `activation_id` names the paid heal that opened an on-use buff.
     pub(super) async fn start_dose(
         &mut self,
         start: DoseStart,
         source: DoseSource,
         activation_id: Option<String>,
     ) -> Result<DoseRecord, DoseError> {
+        let Some((session_id, context_id)) = self
+            .session
+            .active()
+            .map(|active| (active.session.id.clone(), active.intervals.context_id()))
+        else {
+            return Err(DoseError::Refused("Start tracking to take a dose"));
+        };
+        if start.untimed && !start.profile.is_timed() {
+            return Err(DoseError::Refused(
+                "This item's effect is immediate; there is nothing to keep in force",
+            ));
+        }
         let now = self.epoch_now();
         let prior = self
             .doses
@@ -263,25 +313,21 @@ impl TrackerActor {
             .iter()
             .find(|dose| dose.equipment_id == Some(start.equipment_id) && dose.in_effect_at(now))
             .cloned();
-        let session = self
-            .session
-            .active()
-            .map(|active| (active.session.id.clone(), active.intervals.context_id()));
-        let cost_ped = if session.is_some() {
-            start.profile.booked_cost_ped()
-        } else {
+        let cost_ped = if start.untimed {
             0.0
+        } else {
+            start.profile.booked_cost_ped()
         };
         let mut dose = DoseRecord {
             id: uuid::Uuid::new_v4().to_string(),
             equipment_id: Some(start.equipment_id),
             item_name: start.item_name,
             source,
-            session_id: session.as_ref().map(|(id, _)| id.clone()),
-            context_id: session.as_ref().and_then(|(_, context)| *context),
+            session_id: Some(session_id),
+            context_id,
             interval_id: None,
             started_at: now,
-            expires_at: now + start.profile.duration_seconds,
+            expires_at: (!start.untimed).then_some(now + start.profile.duration_seconds),
             cost_ped,
             cost_tracked: start.profile.track_cost,
             effects: start.profile.effects,
@@ -290,6 +336,7 @@ impl TrackerActor {
             superseded_at: None,
             removed_at: None,
             removed_by: None,
+            ended_at: None,
         };
         let prior_id = prior.as_ref().map(|prior| prior.id.clone());
         let close: Vec<i64> = prior.iter().filter_map(|prior| prior.interval_id).collect();
@@ -315,11 +362,49 @@ impl TrackerActor {
         if let Some(prior) = prior {
             self.doses.running.retain(|running| running.id != prior.id);
         }
-        if dose.ends_at() > now {
+        if !dose.ended_by(now) {
             self.doses.running.push(dose.clone());
         }
         self.doses_changed(now, true).await;
         Ok(dose)
+    }
+
+    /// End an untimed dose's effect now: the player says it ran out. The
+    /// dose stays on the record as in force until here; a timed dose ends
+    /// on its own. Ending a dose that has already ended changes nothing.
+    pub(super) async fn end_dose(&mut self, id: &str) -> Result<DoseRecord, DoseError> {
+        let now = self.epoch_now();
+        let mut dose = self.read_dose(id).await?;
+        if !dose.in_effect_at(now) {
+            return Ok(dose);
+        }
+        if !dose.is_untimed() {
+            return Err(DoseError::Refused(
+                "A timed dose ends on its own; remove it if it was a misclick",
+            ));
+        }
+        let close: Vec<i64> = dose.interval_id.into_iter().collect();
+        let write_id = dose.id.clone();
+        let writes =
+            move |tx: &rusqlite::Transaction<'_>, _: Option<i64>| set_ended(tx, &write_id, now);
+        self.write_dose_change(now, &close, None, writes).await?;
+        dose.ended_at = Some(now);
+        self.doses.running.retain(|running| running.id != dose.id);
+        self.doses_changed(now, true).await;
+        Ok(dose)
+    }
+
+    /// End every dose running in the session being stopped: in memory,
+    /// after the stop's transaction ended them on the record. A stop with
+    /// none running changes nothing and announces nothing.
+    pub(super) async fn doses_ended_with_session(&mut self, session_id: &str, at: f64) {
+        let before = self.doses.running.len();
+        self.doses
+            .running
+            .retain(|dose| dose.session_id.as_deref() != Some(session_id));
+        if self.doses.running.len() != before {
+            self.doses_changed(at, true).await;
+        }
     }
 
     /// Remove a dose: its effect stops counting, any cost it booked comes
@@ -380,7 +465,7 @@ impl TrackerActor {
         }
         self.adjust_live_cost(&dose, -dose.cost_ped);
         self.doses.running.retain(|running| running.id != dose.id);
-        if let Some(prior) = prior_back.filter(|prior| prior.ends_at() > now) {
+        if let Some(prior) = prior_back.filter(|prior| !prior.ended_by(now)) {
             self.doses.running.push(prior);
         }
         self.doses_changed(now, true).await;
@@ -458,40 +543,6 @@ impl TrackerActor {
         }
         self.doses_changed(now, true).await;
         Ok(dose)
-    }
-
-    /// Open a context interval for every running dose that has none standing
-    /// in the session that just started, so its play carries their context.
-    pub(super) async fn open_running_dose_intervals(&mut self) {
-        let now = self.epoch_now();
-        let db = self.db.clone();
-        let Some(active) = self.session.active_mut() else {
-            return;
-        };
-        let session_id = active.session.id.clone();
-        for dose in &mut self.doses.running {
-            if !dose.in_effect_at(now) {
-                continue;
-            }
-            let Some(spec) = interval_spec(dose) else {
-                continue;
-            };
-            let dose_id = dose.id.clone();
-            let opened = active
-                .intervals
-                .transition_with(
-                    &db,
-                    &session_id,
-                    now,
-                    &[],
-                    Some(spec),
-                    move |tx, interval_id, _| set_interval(tx, &dose_id, interval_id),
-                )
-                .await;
-            if let Ok((interval_id, ())) = opened {
-                dose.interval_id = interval_id;
-            }
-        }
     }
 
     /// Commit one dose change: through the interval engine when a context

@@ -366,6 +366,7 @@ impl TrackerActor {
                         equipment_id: payload.equipment_id,
                         item_name: payload.item_name.clone(),
                         profile,
+                        untimed: false,
                     };
                     if let Err(error) = self
                         .start_dose(start, crate::consumables::DoseSource::Hotbar, None)
@@ -757,6 +758,7 @@ impl TrackerActor {
                             markup_percent: 100.0,
                             track_cost: false,
                         },
+                        untimed: false,
                     };
                     if let Err(error) = self
                         .start_dose(

@@ -47,7 +47,9 @@ pub struct DoseRecord {
     pub context_id: Option<i64>,
     pub interval_id: Option<i64>,
     pub started_at: f64,
-    pub expires_at: f64,
+    /// The absolute expiry; `None` for an untimed dose, which runs until the
+    /// player ends it or its session stops.
+    pub expires_at: Option<f64>,
     pub cost_ped: f64,
     pub cost_tracked: bool,
     pub effects: Vec<DoseEffect>,
@@ -56,19 +58,42 @@ pub struct DoseRecord {
     pub superseded_at: Option<f64>,
     pub removed_at: Option<f64>,
     pub removed_by: Option<DoseRemoval>,
+    /// When the effect was cut short: its session stopped, or the player
+    /// ended an untimed dose.
+    pub ended_at: Option<f64>,
 }
 
 impl DoseRecord {
     /// When the dose's effect ended or will end: its expiry, or earlier when
-    /// a re-dose of the same item replaced it.
-    pub fn ends_at(&self) -> f64 {
-        self.superseded_at
-            .map_or(self.expires_at, |at| at.min(self.expires_at))
+    /// a re-dose of the same item replaced it or it was ended. `None` while
+    /// an untimed dose runs.
+    pub fn ends_at(&self) -> Option<f64> {
+        [self.expires_at, self.superseded_at, self.ended_at]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+    }
+
+    /// Whether the dose's effect has ended by `now`.
+    pub fn ended_by(&self, now: f64) -> bool {
+        self.ends_at().is_some_and(|end| end <= now)
     }
 
     /// Whether the dose's effect is in force at `now`.
     pub fn in_effect_at(&self, now: f64) -> bool {
-        self.removed_at.is_none() && self.started_at <= now && now < self.ends_at()
+        self.removed_at.is_none() && self.started_at <= now && !self.ended_by(now)
+    }
+
+    /// Whether the dose has no expiry of its own.
+    pub fn is_untimed(&self) -> bool {
+        self.expires_at.is_none()
+    }
+
+    /// Whether a re-dose of the item replaced it before it ended otherwise.
+    pub fn replaced(&self) -> bool {
+        self.superseded_at.is_some_and(|at| {
+            self.ends_at() == Some(at) && self.expires_at.is_none_or(|end| at < end)
+        })
     }
 
     pub fn live(&self) -> LiveDose {
@@ -88,7 +113,8 @@ impl DoseRecord {
 
 const DOSE_COLUMNS: &str = "id, equipment_id, item_name, source, session_id, context_id, \
      interval_id, started_at, expires_at, cost_ped, cost_tracked, effects_json, \
-     healing_activation_id, supersedes_dose_id, superseded_at, removed_at, removed_by";
+     healing_activation_id, supersedes_dose_id, superseded_at, removed_at, removed_by, \
+     ended_at";
 
 fn dose_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DoseRecord> {
     let source: String = row.get(3)?;
@@ -115,6 +141,7 @@ fn dose_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DoseRecord> {
         superseded_at: row.get(14)?,
         removed_at: row.get(15)?,
         removed_by: removed_by.as_deref().and_then(DoseRemoval::parse),
+        ended_at: row.get(17)?,
     })
 }
 
@@ -134,18 +161,25 @@ fn query_doses(
 pub fn read_running_doses(conn: &Connection, now: f64) -> Result<Vec<DoseRecord>, DbError> {
     query_doses(
         conn,
-        "WHERE removed_at IS NULL AND superseded_at IS NULL AND expires_at > ?1",
+        "WHERE removed_at IS NULL AND superseded_at IS NULL AND ended_at IS NULL \
+           AND (expires_at IS NULL OR expires_at > ?1)",
         [now],
     )
 }
 
-/// The doses not removed whose effect ended no earlier than `since`: the
-/// live ones plus the recently expired, which the readouts offer to re-dose.
-pub fn read_recent_doses(conn: &Connection, since: f64) -> Result<Vec<DoseRecord>, DbError> {
+/// A session's doses not removed whose effect ended no earlier than
+/// `since`: the live ones plus the recently expired, which the readouts
+/// offer to re-dose.
+pub fn read_recent_doses(
+    conn: &Connection,
+    session_id: &str,
+    since: f64,
+) -> Result<Vec<DoseRecord>, DbError> {
     query_doses(
         conn,
-        "WHERE removed_at IS NULL AND superseded_at IS NULL AND expires_at >= ?1",
-        [since],
+        "WHERE session_id = ?1 AND removed_at IS NULL AND superseded_at IS NULL \
+           AND (expires_at IS NULL OR expires_at >= ?2) AND (ended_at IS NULL OR ended_at >= ?2)",
+        rusqlite::params![session_id, since],
     )
 }
 
@@ -174,7 +208,8 @@ pub fn read_running_dose_of(
     Ok(query_doses(
         conn,
         "WHERE equipment_id = ?1 AND removed_at IS NULL AND superseded_at IS NULL \
-           AND started_at <= ?2 AND expires_at > ?2",
+           AND started_at <= ?2 AND (expires_at IS NULL OR expires_at > ?2) \
+           AND (ended_at IS NULL OR ended_at > ?2)",
         rusqlite::params![equipment_id, at],
     )?
     .pop())
@@ -194,7 +229,7 @@ pub fn insert_dose(conn: &Connection, dose: &DoseRecord) -> Result<(), DbError> 
     conn.execute(
         &format!(
             "INSERT INTO consumable_doses ({DOSE_COLUMNS}) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ),
         rusqlite::params![
             dose.id,
@@ -214,6 +249,7 @@ pub fn insert_dose(conn: &Connection, dose: &DoseRecord) -> Result<(), DbError> 
             dose.superseded_at,
             dose.removed_at,
             dose.removed_by.map(DoseRemoval::as_str),
+            dose.ended_at,
         ],
     )?;
     Ok(())
@@ -244,6 +280,41 @@ pub fn set_removed(
         ],
     )?;
     Ok(())
+}
+
+/// End a running dose's effect at `at`: the player ended an untimed dose.
+pub fn set_ended(conn: &Connection, id: &str, at: f64) -> Result<(), DbError> {
+    conn.execute(
+        "UPDATE consumable_doses SET ended_at = MAX(started_at, ?1) WHERE id = ?2",
+        rusqlite::params![at, id],
+    )?;
+    Ok(())
+}
+
+/// End every dose of a session whose effect runs past `at`, the session's
+/// stop: removed and replaced ones too, so a later restore gives back only
+/// what ran inside the session. Returns how many were ended.
+pub fn end_session_doses(conn: &Connection, session_id: &str, at: f64) -> Result<usize, DbError> {
+    Ok(conn.execute(
+        "UPDATE consumable_doses SET ended_at = MAX(started_at, ?2) \
+         WHERE session_id = ?1 AND ended_at IS NULL \
+           AND (expires_at IS NULL OR expires_at > ?2)",
+        rusqlite::params![session_id, at],
+    )?)
+}
+
+/// End every dose still running at `now` outside a live session: those of a
+/// session that has ended (at its end) and those of none (now). Run when no
+/// session is live, so no effect outlasts the session it was taken in.
+pub fn end_stray_doses(conn: &Connection, now: f64) -> Result<usize, DbError> {
+    Ok(conn.execute(
+        "UPDATE consumable_doses SET ended_at = MAX(started_at, MIN(?1, COALESCE(( \
+             SELECT s.ended_at FROM tracking_sessions s \
+             WHERE s.id = consumable_doses.session_id AND s.is_active = 0 \
+         ), ?1))) \
+         WHERE ended_at IS NULL AND (expires_at IS NULL OR expires_at > ?1)",
+        [now],
+    )?)
 }
 
 /// Point a dose at the context interval now standing for it.
@@ -311,9 +382,8 @@ pub fn set_activation_doses_removed(
     Ok(())
 }
 
-/// Detach a deleted session's doses: the doses were still taken, and a
-/// running one keeps its effect, but what they booked left with the
-/// session.
+/// Detach a deleted session's doses: the doses were still taken, but what
+/// they booked left with the session.
 pub fn detach_session(conn: &Connection, session_id: &str) -> Result<(), DbError> {
     conn.execute(
         "UPDATE consumable_doses SET session_id = NULL, context_id = NULL, \

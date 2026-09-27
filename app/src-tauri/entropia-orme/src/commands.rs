@@ -317,8 +317,19 @@ pub async fn consumable_doses(app: tauri::AppHandle) -> Result<ConsumableDoses, 
 pub async fn consumable_dose_start(
     app: tauri::AppHandle,
     equipment_id: i64,
+    untimed: bool,
 ) -> Result<ConsumableDoses, ApiError> {
-    facade(&app)?.consumable_dose_start(equipment_id).await
+    facade(&app)?
+        .consumable_dose_start(equipment_id, untimed)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_end(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_end(dose_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -324,6 +324,12 @@ impl HuntTracker {
         self.call(|reply| TrackerMsg::StartDose(start, reply)).await
     }
 
+    /// End an untimed dose's effect now (the player says it ran out).
+    pub async fn end_dose(&self, id: &str) -> Result<crate::consumables::DoseRecord, DoseError> {
+        self.call(|reply| TrackerMsg::EndDose(id.to_string(), reply))
+            .await
+    }
+
     /// Remove a dose (a misclick): its effect and any cost it booked are
     /// taken back, exactly restorable with [`Self::restore_dose`].
     pub async fn remove_dose(&self, id: &str) -> Result<crate::consumables::DoseRecord, DoseError> {

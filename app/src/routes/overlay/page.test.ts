@@ -126,6 +126,7 @@ vi.mock('$lib/api', () => {
 			options: [],
 		})),
 		startConsumableDose: vi.fn(),
+		endConsumableDose: vi.fn(),
 		removeConsumableDose: vi.fn(),
 		restoreConsumableDose: vi.fn(),
 		updateSettings: seams.updateSettings,

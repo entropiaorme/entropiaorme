@@ -1,7 +1,9 @@
 //! Consumable doses through the tracker: booking once, re-dosing, expiry at
-//! the absolute expiry, removal and exact restore, restart, the hotbar press
-//! and a heal's on-use buff as starts, and re-pricing the weapons and the
-//! held healer when a dose moves the reload speed in effect.
+//! the absolute expiry, removal and exact restore, the session boundary (no
+//! dose outside a session, every dose ended by the stop or a restart), the
+//! untimed dose ended by hand, the hotbar press and a heal's on-use buff as
+//! starts, and re-pricing the weapons and the held healer when a dose moves
+//! the reload speed in effect.
 
 use std::sync::Arc;
 
@@ -38,6 +40,7 @@ fn adrenaline(track_cost: bool) -> DoseStart {
             markup_percent: 150.0,
             track_cost,
         },
+        untimed: false,
     }
 }
 
@@ -57,6 +60,7 @@ fn rush() -> DoseStart {
             markup_percent: 100.0,
             track_cost: true,
         },
+        untimed: false,
     }
 }
 
@@ -159,7 +163,7 @@ fn a_dose_books_its_cost_once_in_the_running_session_and_stands_as_an_interval()
     assert!((dose.cost_ped - 4.5).abs() < 1e-12);
     assert!((session_cost(&rig, &session.id) - 4.5).abs() < 1e-12);
     assert_eq!(open_consumable_intervals(&rig), 1);
-    assert_eq!(dose.expires_at - dose.started_at, 3600.0);
+    assert_eq!(dose.expires_at.unwrap() - dose.started_at, 3600.0);
     assert_eq!(board.consumed_reload_at(now(&rig)), vec![10.0]);
     assert_eq!(live_reload(&rig, &tracker), 10.0);
 
@@ -170,30 +174,202 @@ fn a_dose_books_its_cost_once_in_the_running_session_and_stands_as_an_interval()
 }
 
 #[test]
-fn an_untracked_item_or_a_dose_outside_a_session_books_nothing_and_still_counts() {
+fn no_dose_is_taken_outside_a_session() {
     let rig = rig();
     let board = board(&rig);
     let tracker = tracker_with(&rig, &board);
 
-    // Idle: the dose is recorded with no session and no cost.
-    let idle = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
-    assert_eq!(idle.session_id, None);
-    assert_eq!(idle.cost_ped, 0.0);
-    assert!(idle.cost_tracked);
-    assert_eq!(board.consumed_reload_at(now(&rig)), vec![10.0]);
+    let refused = rig.wait(tracker.start_dose(adrenaline(true)));
+    assert!(matches!(refused, Err(super::DoseError::Refused(_))));
+    assert_eq!(
+        rig.scalar_i64("SELECT COUNT(*) FROM consumable_doses", &[]),
+        0
+    );
+    assert!(board.doses().is_empty());
+}
 
-    // A session starting while it runs prices under it and carries its
-    // context.
+#[test]
+fn an_untracked_item_books_nothing_and_still_counts() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
     let session = rig.wait(tracker.start_session()).unwrap();
-    assert_eq!(live_reload(&rig, &tracker), 10.0);
-    assert_eq!(open_consumable_intervals(&rig), 1);
-    assert_eq!(session_cost(&rig, &session.id), 0.0);
 
-    // Tracking off: recorded, counted, never booked.
     let untracked = rig.wait(tracker.start_dose(rush_untracked())).unwrap();
     assert_eq!(untracked.cost_ped, 0.0);
     assert_eq!(session_cost(&rig, &session.id), 0.0);
     assert_eq!(live_reload(&rig, &tracker), 20.0);
+}
+
+#[test]
+fn stopping_a_session_ends_its_doses_and_the_next_starts_with_none() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    {
+        let captured = captured.clone();
+        rig.bus.add_tap(move |event| {
+            if event.topic() == Topic::ConsumablesUpdated {
+                *captured.lock().unwrap() += 1;
+            }
+        });
+    }
+    let first = rig.wait(tracker.start_session()).unwrap();
+    let dose = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    rig.clock.advance(1800.0).unwrap();
+    let announced = *captured.lock().unwrap();
+
+    rig.wait(tracker.stop_session()).unwrap();
+    let stopped_at = now(&rig);
+
+    // Half the hour was left; the record says the effect ended with the
+    // session, and keeps the item's own expiry beside it.
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT ended_at FROM consumable_doses WHERE id = ?",
+            &[&dose.id]
+        ),
+        stopped_at
+    );
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT expires_at FROM consumable_doses WHERE id = ?",
+            &[&dose.id]
+        ),
+        dose.expires_at.unwrap()
+    );
+    assert!(board.doses().is_empty());
+    assert!(board.consumed_reload_at(stopped_at).is_empty());
+    assert_eq!(*captured.lock().unwrap(), announced + 1);
+    // The cost stays with the session the dose was taken in.
+    assert!((session_cost(&rig, &first.id) - 4.5).abs() < 1e-12);
+
+    rig.clock.advance(60.0).unwrap();
+    let second = rig.wait(tracker.start_session()).unwrap();
+    assert_eq!(live_reload(&rig, &tracker), 0.0);
+    assert_eq!(open_consumable_intervals(&rig), 0);
+    assert_eq!(session_cost(&rig, &second.id), 0.0);
+}
+
+/// Adrenaline Boost declared as still in force from before the session.
+fn adrenaline_already_taken() -> DoseStart {
+    let mut start = adrenaline(true);
+    start.untimed = true;
+    start
+}
+
+#[test]
+fn an_untimed_dose_counts_free_until_the_player_ends_it() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    let session = rig.wait(tracker.start_session()).unwrap();
+
+    let dose = rig
+        .wait(tracker.start_dose(adrenaline_already_taken()))
+        .unwrap();
+    assert_eq!(dose.expires_at, None);
+    assert_eq!(dose.cost_ped, 0.0);
+    assert_eq!(session_cost(&rig, &session.id), 0.0);
+    assert_eq!(open_consumable_intervals(&rig), 1);
+    assert_eq!(live_reload(&rig, &tracker), 10.0);
+
+    // Far past any expiry the item prints: nothing ends it on its own.
+    rig.clock.advance(3.0 * 3600.0).unwrap();
+    rig.wait(tracker.wake_doses());
+    assert_eq!(live_reload(&rig, &tracker), 10.0);
+    assert_eq!(board.consumed_reload_at(now(&rig)), vec![10.0]);
+
+    let ended = rig.wait(tracker.end_dose(&dose.id)).unwrap();
+    let ended_at = now(&rig);
+    assert_eq!(ended.ended_at, Some(ended_at));
+    assert_eq!(live_reload(&rig, &tracker), 0.0);
+    assert!(board.doses().is_empty());
+    assert_eq!(open_consumable_intervals(&rig), 0);
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT ended_at FROM session_intervals WHERE kind = 'consumable'",
+            &[]
+        ),
+        ended_at
+    );
+
+    // Ending it again changes nothing.
+    rig.clock.advance(5.0).unwrap();
+    let again = rig.wait(tracker.end_dose(&dose.id)).unwrap();
+    assert_eq!(again.ended_at, Some(ended_at));
+}
+
+#[test]
+fn only_an_untimed_dose_is_ended_by_hand_and_only_a_lasting_item_can_be_one() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    rig.wait(tracker.start_session()).unwrap();
+
+    let timed = rig.wait(tracker.start_dose(rush())).unwrap();
+    assert!(matches!(
+        rig.wait(tracker.end_dose(&timed.id)),
+        Err(super::DoseError::Refused(_))
+    ));
+
+    let mut instant = rush();
+    instant.profile.duration_seconds = 0.0;
+    instant.untimed = true;
+    assert!(matches!(
+        rig.wait(tracker.start_dose(instant)),
+        Err(super::DoseError::Refused(_))
+    ));
+}
+
+#[test]
+fn a_timed_dose_replaces_an_untimed_one_of_the_same_item() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    let session = rig.wait(tracker.start_session()).unwrap();
+    let carried = rig
+        .wait(tracker.start_dose(adrenaline_already_taken()))
+        .unwrap();
+    rig.clock.advance(600.0).unwrap();
+
+    let fresh = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    assert_eq!(
+        fresh.supersedes_dose_id.as_deref(),
+        Some(carried.id.as_str())
+    );
+    assert_eq!(board.consumed_reload_at(now(&rig)), vec![10.0]);
+    assert!((session_cost(&rig, &session.id) - 4.5).abs() < 1e-12);
+
+    // A misclicked re-dose comes off, and the untimed dose runs on again.
+    rig.wait(tracker.remove_dose(&fresh.id)).unwrap();
+    let running = board.doses();
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].id, carried.id);
+    assert_eq!(running[0].expires_at, None);
+    assert_eq!(session_cost(&rig, &session.id), 0.0);
+}
+
+#[test]
+fn a_dose_removed_in_a_session_comes_back_ended_after_the_stop() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    let session = rig.wait(tracker.start_session()).unwrap();
+    let dose = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    rig.clock.advance(60.0).unwrap();
+    rig.wait(tracker.remove_dose(&dose.id)).unwrap();
+    rig.clock.advance(60.0).unwrap();
+    rig.wait(tracker.stop_session()).unwrap();
+    let stopped_at = now(&rig);
+    rig.clock.advance(60.0).unwrap();
+
+    let restored = rig.wait(tracker.restore_dose(&dose.id)).unwrap();
+    assert_eq!(restored.removed_at, None);
+    assert_eq!(restored.ends_at(), Some(stopped_at));
+    assert!(board.doses().is_empty());
+    assert!((session_cost(&rig, &session.id) - 4.5).abs() < 1e-12);
 }
 
 fn rush_untracked() -> DoseStart {
@@ -267,7 +443,7 @@ fn expiry_ends_a_dose_at_its_absolute_expiry_and_reprices() {
             "SELECT ended_at FROM session_intervals WHERE kind = 'consumable'",
             &[]
         ),
-        dose.expires_at
+        dose.expires_at.unwrap()
     );
     assert_eq!(live_reload(&rig, &tracker), 0.0);
     assert!(board.consumed_reload_at(now(&rig)).is_empty());
@@ -338,15 +514,17 @@ fn a_restore_is_refused_while_a_later_dose_of_the_item_runs() {
 }
 
 #[test]
-fn a_dose_outlives_a_restart_by_its_persisted_expiry() {
+fn a_restart_ends_the_doses_of_the_session_it_interrupted() {
     let rig = rig();
     let board_one = board(&rig);
     let tracker = tracker_with(&rig, &board_one);
-    rig.wait(tracker.start_session()).unwrap();
+    let session = rig.wait(tracker.start_session()).unwrap();
     let dose = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
     drop(tracker);
 
-    // A fresh process: a new bus and board over the same database.
+    // A fresh process: a new bus and board over the same database. The
+    // interrupted session is closed at its last recorded play (its start,
+    // here), and the dose ends with it.
     rig.clock.advance(1200.0).unwrap();
     let board_two = board(&rig);
     let restarted = rig
@@ -364,12 +542,20 @@ fn a_dose_outlives_a_restart_by_its_persisted_expiry() {
             },
         ))
         .unwrap();
-    let running = board_two.doses();
-    assert_eq!(running.len(), 1);
-    assert_eq!(running[0].id, dose.id);
-    assert_eq!(running[0].expires_at, dose.expires_at);
+    assert!(board_two.doses().is_empty());
+    let session_end = rig.scalar_f64(
+        "SELECT ended_at FROM tracking_sessions WHERE id = ?",
+        &[&session.id],
+    );
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT ended_at FROM consumable_doses WHERE id = ?",
+            &[&dose.id]
+        ),
+        session_end.max(dose.started_at)
+    );
     rig.wait(restarted.start_session()).unwrap();
-    assert_eq!(live_reload(&rig, &restarted), 10.0);
+    assert_eq!(live_reload(&rig, &restarted), 0.0);
 }
 
 /// A hotbar press of a consumable, as the listener resolves it.
@@ -572,7 +758,7 @@ fn a_heal_with_an_on_use_buff_opens_a_dose_the_player_cannot_remove() {
         .unwrap();
     let dose = board.doses()[0].clone();
     assert_eq!(dose.source, DoseSource::OnUse);
-    assert_eq!(dose.expires_at - dose.started_at, 8.0);
+    assert_eq!(dose.expires_at.unwrap() - dose.started_at, 8.0);
     assert_eq!(
         rig.scalar_i64(
             "SELECT COUNT(*) FROM consumable_doses WHERE healing_activation_id = ?",
@@ -596,17 +782,21 @@ mod properties {
 
     #[derive(Debug, Clone)]
     enum Step {
-        Start(bool),
+        /// 0: a timed Adrenaline Boost, 1: a Rush Pill, 2: an untimed
+        /// Adrenaline Boost.
+        Start(u8),
         Remove(usize),
         Restore(usize),
+        End(usize),
         Wait(u16),
     }
 
     fn step() -> impl Strategy<Value = Step> {
         prop_oneof![
-            any::<bool>().prop_map(Step::Start),
+            (0u8..3).prop_map(Step::Start),
             (0usize..8).prop_map(Step::Remove),
             (0usize..8).prop_map(Step::Restore),
+            (0usize..8).prop_map(Step::End),
             (1u16..120).prop_map(Step::Wait),
         ]
     }
@@ -627,9 +817,16 @@ mod properties {
             let mut ids: Vec<String> = Vec::new();
             for step in steps {
                 match step {
-                    Step::Start(first) => {
-                        let start = if first { adrenaline(true) } else { rush() };
+                    Step::Start(kind) => {
+                        let start = match kind {
+                            0 => adrenaline(true),
+                            1 => rush(),
+                            _ => adrenaline_already_taken(),
+                        };
                         ids.push(rig.wait(tracker.start_dose(start)).unwrap().id);
+                    }
+                    Step::End(index) if !ids.is_empty() => {
+                        let _ = rig.wait(tracker.end_dose(&ids[index % ids.len()]));
                     }
                     Step::Remove(index) if !ids.is_empty() => {
                         let _ = rig.wait(tracker.remove_dose(&ids[index % ids.len()]));

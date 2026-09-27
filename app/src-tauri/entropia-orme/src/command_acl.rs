@@ -33,6 +33,7 @@ macro_rules! app_command_surface {
             healing_correction_undo,
             consumable_doses,
             consumable_dose_start,
+            consumable_dose_end,
             consumable_dose_remove,
             consumable_dose_restore,
             consumable_session_doses,

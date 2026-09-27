@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActivityOption, ActivityOptionsResult } from '$lib/api';
 import {
 	buildActivitiesMenuState,
+	buildConsumablesMenuState,
 	buildQuestHandInMenuState,
 	computeMenuHeight,
 	menuRowCount,
@@ -93,5 +94,25 @@ describe('the manual hand-in satellite', () => {
 		});
 
 		expect(computeMenuHeight(menuRowCount(state))).toBe(220);
+	});
+});
+
+describe('the consumables menu', () => {
+	const pill = {
+		equipmentId: 40,
+		name: 'Adrenaline',
+		durationSeconds: 3600,
+		doseCostPed: 4.5,
+		costTracked: true,
+		reloadSpeedPercent: 10,
+		hotbarSlot: null,
+	};
+
+	it('widens for the already-in-effect choice only when a row offers it', () => {
+		const offering = buildConsumablesMenuState(0, [pill], []);
+		const running = buildConsumablesMenuState(0, [pill], [40]);
+		const instant = buildConsumablesMenuState(0, [{ ...pill, durationSeconds: 0 }], []);
+		expect(offering.width).toBeGreaterThan(running.width);
+		expect(instant.width).toBe(running.width);
 	});
 });

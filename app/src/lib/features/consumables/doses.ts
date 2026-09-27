@@ -11,14 +11,16 @@ export const RECENTLY_ENDED_SECONDS = 60;
 
 export type DoseState = 'running' | 'ended' | 'removed';
 
-/** Where a dose stands at `now`. */
+/** Where a dose stands at `now`. An untimed dose runs until it is ended. */
 export function doseState(dose: ConsumableDose, now: number): DoseState {
 	if (dose.removedAt !== null) return 'removed';
-	return now < dose.endsAt ? 'running' : 'ended';
+	return dose.endsAt === null || now < dose.endsAt ? 'running' : 'ended';
 }
 
-/** Whole seconds left in a dose's run at `now`; 0 once it has ended. */
-export function remainingSeconds(dose: ConsumableDose, now: number): number {
+/** Whole seconds left in a dose's run at `now`; 0 once it has ended, and
+ * null for an untimed dose, which has no end to count to. */
+export function remainingSeconds(dose: ConsumableDose, now: number): number | null {
+	if (dose.endsAt === null) return null;
 	return Math.max(0, Math.ceil(dose.endsAt - now));
 }
 
@@ -67,19 +69,21 @@ export function describeEffects(effects: readonly ConsumableEffect[]): string {
 	return ordered.map(describeEffect).join(', ');
 }
 
-/** The rows a live readout shows at `now`: running doses soonest-ending first,
- * then doses that ended within the last minute (offered for a re-dose), most
- * recent first. Removed doses and a healing tool's automatic buffs never
- * show here: the readout is for the doses a player takes. */
+/** The rows a live readout shows at `now`: running doses soonest-ending first
+ * (untimed ones, with no end, last), then doses that ended within the last
+ * minute (offered for a re-dose), most recent first. Removed doses and a
+ * healing tool's automatic buffs never show here: the readout is for the
+ * doses a player takes. */
 export function liveRows(doses: readonly ConsumableDose[], now: number): ConsumableDose[] {
 	const shown = doses.filter((dose) => dose.removedAt === null && dose.source !== 'on_use');
 	const running = shown
 		.filter((dose) => doseState(dose, now) === 'running')
-		.sort((a, b) => a.endsAt - b.endsAt);
+		.sort((a, b) => (a.endsAt ?? Infinity) - (b.endsAt ?? Infinity));
 	const ended = shown
 		.filter(
-			(dose) =>
+			(dose): dose is ConsumableDose & { endsAt: number } =>
 				doseState(dose, now) === 'ended' &&
+				dose.endsAt !== null &&
 				!dose.replaced &&
 				now - dose.endsAt <= RECENTLY_ENDED_SECONDS,
 		)
@@ -90,10 +94,21 @@ export function liveRows(doses: readonly ConsumableDose[], now: number): Consuma
 /** When the next dose on show ends or leaves the readout, for a re-read. */
 export function nextBoundary(doses: readonly ConsumableDose[], now: number): number | null {
 	const boundaries = doses
-		.filter((dose) => dose.removedAt === null)
-		.flatMap((dose) => [dose.endsAt, dose.endsAt + RECENTLY_ENDED_SECONDS])
+		.flatMap((dose) =>
+			dose.removedAt === null && dose.endsAt !== null
+				? [dose.endsAt, dose.endsAt + RECENTLY_ENDED_SECONDS]
+				: [],
+		)
 		.filter((at) => at > now);
 	return boundaries.length > 0 ? Math.min(...boundaries) : null;
+}
+
+/** How long a dose's effect ran, as review says it: its length, or `Until
+ * ended` while an untimed dose is still in force. */
+export function describeRun(dose: ConsumableDose): string {
+	if (dose.endsAt === null) return 'Until ended';
+	const run = formatDuration(dose.endsAt - dose.startedAt);
+	return dose.replaced ? `${run} (replaced by a re-dose)` : run;
 }
 
 /** The consumable a dose was taken of, when it is still configured. */
@@ -104,17 +119,19 @@ export function optionFor(
 	return options.find((option) => option.equipmentId === dose.equipmentId) ?? null;
 }
 
-/** A dose's cost as the readouts say it: the booked figure, `not booked` for
- * a tracked item taken outside a session, or `untracked`. */
+/** A dose's cost as the readouts say it: the booked figure, or why none was
+ * booked. */
 export function describeDoseCost(dose: ConsumableDose): string {
 	if (dose.costPed > 0) return `${dose.costPed.toFixed(2)} PED`;
 	if (dose.source === 'on_use') return 'paid with the heal';
+	if (dose.untimed) return 'taken before the session';
 	if (!dose.costTracked) return 'cost not tracked';
 	return dose.sessionId === null ? 'outside a session' : 'no cost';
 }
 
 /** How a dose started, in words. */
 export function describeSource(dose: ConsumableDose): string {
+	if (dose.untimed) return 'Already in effect';
 	switch (dose.source) {
 		case 'hotbar':
 			return 'Hotbar key';

@@ -24,7 +24,8 @@
 
 	function title(dose: ConsumableDose): string {
 		const effects = describeEffects(dose.effects);
-		return effects ? `${dose.itemName}: ${effects}` : dose.itemName;
+		const named = effects ? `${dose.itemName}: ${effects}` : dose.itemName;
+		return dose.untimed ? `${named}, in effect until you end it` : named;
 	}
 </script>
 
@@ -45,8 +46,23 @@
 				data-testid="overlay-dose"
 			>
 				<span class="truncate max-w-[110px]">{dose.itemName}</span>
-				{#if state === 'running'}
-					<span class="tabular-nums text-white/55">{formatCountdown(remainingSeconds(dose, model.now))}</span>
+				{#if state === 'running' && dose.untimed}
+					<!-- Taken before the session: no timer to show, so the player
+						 ends it when the game says it ran out. -->
+					<button
+						type="button"
+						class="dose-btn"
+						aria-label={`End the effect of ${dose.itemName}`}
+						title="It ran out: end its effect now"
+						disabled={model.busy !== null}
+						onclick={() => void model.end(dose)}
+					>
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="h-2.5 w-2.5" aria-hidden="true">
+							<path d="M5.28 4.22a.75.75 0 0 0-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 1 0 1.06 1.06L8 9.06l2.72 2.72a.75.75 0 1 0 1.06-1.06L9.06 8l2.72-2.72a.75.75 0 0 0-1.06-1.06L8 6.94 5.28 4.22Z" />
+						</svg>
+					</button>
+				{:else if state === 'running'}
+					<span class="tabular-nums text-white/55">{formatCountdown(remainingSeconds(dose, model.now) ?? 0)}</span>
 					<button
 						type="button"
 						class="dose-btn"

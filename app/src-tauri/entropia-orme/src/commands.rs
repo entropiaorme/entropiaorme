@@ -1681,7 +1681,7 @@ pub async fn navigation_start(
     start_lon: f64,
     start_lat: f64,
     selected_pin_ids: Option<Vec<i64>>,
-    hotkey: String,
+    visit_on_key: bool,
 ) -> Result<NavigationRun, ApiError> {
     facade(&app)?
         .navigation_start(
@@ -1690,7 +1690,7 @@ pub async fn navigation_start(
             start_lon,
             start_lat,
             selected_pin_ids,
-            hotkey,
+            visit_on_key,
         )
         .await
 }

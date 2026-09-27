@@ -2,7 +2,7 @@
  * The route-HUD controller: the navigation run's transient state (route setup
  * fields, position/visit feedback, the transient in-strip badges) and the
  * command handlers over the navigation IPC surface. Lifecycle wiring (the
- * event listeners, the automatic-update effect, window drag and sizing) stays
+ * event listeners, the position-poll effect, window drag and sizing) stays
  * in the route shell; this keeps that route a thin shell over the feature
  * module, the same split `mapsController` uses.
  */
@@ -69,11 +69,12 @@ export function createNavigationHudController() {
 	let selectedPinIds = $state<number[] | null>(null);
 	let selectionRequestId = $state<number | null>(null);
 	let nextSelectionRequestId = 0;
-	let hotkey = $state('f8');
-	// Location updates: manual (hotkey / Update button only) or automatic (poll
-	// the observe path every interval). Remembered across routes.
-	let autoUpdate = $state(false);
+	// The position is polled on the observe path every interval while a route
+	// is live. Visiting on F records each tree the moment the game's interact
+	// key is pressed instead of detecting the cut from harvests. Both are
+	// remembered across routes.
 	let updateIntervalSec = $state(1);
+	let visitOnKey = $state(false);
 	// Set when a manual Visited lands outside the arrival tolerance: the visit
 	// is held until the user confirms a forced record.
 	let pendingVisit = $state<{ name: string; distance: number } | null>(null);
@@ -107,10 +108,10 @@ export function createNavigationHudController() {
 		outOfOrderTimer = setTimeout(() => (outOfOrder = false), 3000);
 	}
 
-	// Automatic harvesting advances the route from the tracker. Diffing the
+	// A harvest or an F press advances the route from the backend. Diffing the
 	// previous snapshot against the next surfaces which tree was recorded, and
 	// whether it was reached out of order (so the remaining path was recomputed).
-	function applyHarvestFeedback(prev: NavigationRun, next: NavigationRun) {
+	function applyCutFeedback(prev: NavigationRun, next: NavigationRun) {
 		const before = new Map(prev.stops.map((stop) => [stop.id, stop.status]));
 		const prevActiveId = prev.stops.find((stop) => stop.status === 'active')?.id;
 		for (const stop of next.stops) {
@@ -119,7 +120,7 @@ export function createNavigationHudController() {
 				stop.status === 'visited' &&
 				priorStatus != null &&
 				priorStatus !== 'visited' &&
-				stop.completionSource === 'harvest'
+				(stop.completionSource === 'harvest' || stop.completionSource === 'key')
 			) {
 				if (priorStatus === 'active' || stop.id === prevActiveId) {
 					signalBadge('cut');
@@ -134,7 +135,7 @@ export function createNavigationHudController() {
 	async function hydrate() {
 		try {
 			const next = await getNavigationSnapshot();
-			if (next && run) applyHarvestFeedback(run, next);
+			if (next && run) applyCutFeedback(run, next);
 			run = next;
 			// No run means the setup panel is shown; the overlay only hides on an
 			// explicit close, not whenever a route ends.
@@ -144,8 +145,8 @@ export function createNavigationHudController() {
 	}
 
 	async function loadPrefs() {
-		autoUpdate = await getPreference('navAutoUpdate', false);
 		updateIntervalSec = await getPreference('navUpdateIntervalSec', 1);
+		visitOnKey = await getPreference('navVisitOnKey', false);
 	}
 
 	function applyContext(payload: unknown) {
@@ -154,9 +155,9 @@ export function createNavigationHudController() {
 		mapViewId = context.mapViewId;
 	}
 
-	function setAutoUpdate(value: boolean) {
-		autoUpdate = value;
-		void setPreference('navAutoUpdate', value);
+	function setVisitOnKey(value: boolean) {
+		visitOnKey = value;
+		void setPreference('navVisitOnKey', value);
 	}
 
 	function persistInterval() {
@@ -164,10 +165,10 @@ export function createNavigationHudController() {
 		void setPreference('navUpdateIntervalSec', updateIntervalSec);
 	}
 
-	// Automatic updating polls the observe-only path on a fixed interval while a
-	// route is live, so the radar dot and bearing track the player without a
-	// keypress. It records no visit and stays quiet on a transient read failure.
-	async function autoUpdateTick() {
+	// The position poll runs the observe-only path on a fixed interval while a
+	// route is live, so the radar dot and bearing track the player. It records
+	// no visit and stays quiet on a transient read failure.
+	async function pollPosition() {
 		if (busy) return;
 		try {
 			const result = await updateNavigationPosition();
@@ -256,7 +257,14 @@ export function createNavigationHudController() {
 		busy = true;
 		feedback = null;
 		try {
-			run = await startNavigation(planet, mapViewId, start.lon, start.lat, selectedPinIds, hotkey);
+			run = await startNavigation(
+				planet,
+				mapViewId,
+				start.lon,
+				start.lat,
+				selectedPinIds,
+				visitOnKey,
+			);
 			start = null;
 			selectedPinIds = null;
 			resetRouteAreaSelection();
@@ -287,25 +295,6 @@ export function createNavigationHudController() {
 			run = await action();
 		} catch {
 			feedback = 'The route could not be updated.';
-		} finally {
-			busy = false;
-		}
-	}
-
-	// Update strictly observes: it refreshes the distance and bearing to the
-	// active tree without ever recording a visit.
-	async function updatePosition() {
-		if (busy) return;
-		busy = true;
-		feedback = null;
-		pendingVisit = null;
-		try {
-			const result = await updateNavigationPosition();
-			if (result.run) run = result.run;
-			// The moving radar dot is the confirmation now; only surface a problem.
-			feedback = result.status === 'updated' ? null : statusFeedback(result.status);
-		} catch {
-			feedback = 'The position could not be read.';
 		} finally {
 			busy = false;
 		}
@@ -417,8 +406,8 @@ export function createNavigationHudController() {
 		get outOfOrder() {
 			return outOfOrder;
 		},
-		get autoUpdate() {
-			return autoUpdate;
+		get visitOnKey() {
+			return visitOnKey;
 		},
 		get updateIntervalSec() {
 			return updateIntervalSec;
@@ -429,18 +418,12 @@ export function createNavigationHudController() {
 		get selectedTreeCount() {
 			return selectedPinIds?.length ?? null;
 		},
-		get hotkey() {
-			return hotkey;
-		},
-		set hotkey(value: string) {
-			hotkey = value;
-		},
 		hydrate,
 		loadPrefs,
 		applyContext,
-		setAutoUpdate,
+		setVisitOnKey,
 		persistInterval,
-		autoUpdateTick,
+		pollPosition,
 		captureStart,
 		chooseRouteArea,
 		applyRouteAreaSelection,
@@ -448,7 +431,6 @@ export function createNavigationHudController() {
 		useAllTrees,
 		beginRoute,
 		closeOverlay,
-		updatePosition,
 		markVisited,
 		resolveHarvest,
 		endRoute,

@@ -1900,8 +1900,8 @@ pub fn manifest() -> Vec<CommandSpec> {
                     schema: schema(schema_for!(Option<Vec<i64>>)),
                 },
                 ArgSpec {
-                    name: "hotkey",
-                    schema: schema(schema_for!(String)),
+                    name: "visit_on_key",
+                    schema: schema(schema_for!(bool)),
                 },
             ],
             returns: Some(schema(schema_for!(NavigationRun))),

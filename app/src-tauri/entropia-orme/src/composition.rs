@@ -544,19 +544,19 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     // The single shared OS keyboard hook, built at this production site and
     // injected down the compose chain. The allowlist filters at the hook
     // boundary to the hotbar digit keys, the space key, Enter (the
-    // coordinate-calibration confirm key), and F6-F12 (the field-navigation
-    // update hotkeys), so out-of-scope keystrokes never enter the event stream.
+    // coordinate-calibration confirm key), and F (the game's interact key, on
+    // which a route can record its trees visited), so out-of-scope keystrokes
+    // never enter the event stream.
     //
     // SECURITY (deliberate): admission is static for every allowlisted key,
     // not just the digits and spacebar. While the hook runs for any consumer,
     // an allowlisted edge enters the in-process stream and is dropped by every
     // listener unless a flow armed its consumer (calibration for Enter, a live
-    // route for the F-key; neither logs nor persists the keystroke). The
-    // allowlist has since grown past the original three cases to include the
-    // navigation F-keys: this is a re-affirmed acceptance, not an oversight,
-    // because F6-F12 are no more sensitive than the hotbar digits already
-    // admitted, and they only reach the stream while the hook is already
-    // running for another consumer, then get dropped unless a route is live.
+    // route planned to visit on F; neither logs nor persists the keystroke).
+    // F is the one letter admitted, and a re-affirmed acceptance rather than
+    // an oversight: a single letter's edges carry no recoverable text, just as
+    // the hotbar digits already admitted carry none, and the route listener
+    // additionally drops a press made while another window holds focus.
     // Dynamic admission (membership only while a flow is live) would scope
     // tighter but adds mutable shared state to a hook callback deliberately
     // kept to filter-and-enqueue; it remains the documented upgrade path if a
@@ -570,12 +570,7 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
         .iter()
         .map(|key| key.to_string())
-        .chain(
-            [
-                "space", "return", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-            ]
-            .map(str::to_string),
-        )
+        .chain(["space", "return", "f"].map(str::to_string))
         .collect();
     let keystroke_source: Arc<dyn KeystrokeSource> =
         Arc::new(HookKeystrokeSource::new(Some(allowlist)));
@@ -705,6 +700,7 @@ async fn compose_with(
     // share one connection (one owner, serialised access) rather than
     // opening a second.
     let producer_db = db.clone();
+    let navigation_focus = game_focus.clone();
     let producers = match compose_producers(
         producer_db,
         clock.clone(),
@@ -860,6 +856,7 @@ async fn compose_with(
             bounds,
             changed,
             Some(producers.keystroke_source_handle()),
+            navigation_focus,
         )
         .await;
         let radar_confirm = service.attach_radar_confirm_listener(

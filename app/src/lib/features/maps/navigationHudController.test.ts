@@ -4,6 +4,7 @@ const mocked = vi.hoisted(() => ({
 	beginSelection: vi.fn(),
 	startNavigation: vi.fn(),
 	scanCoordinates: vi.fn(),
+	snapshot: vi.fn(),
 	emit: vi.fn(),
 }));
 
@@ -15,7 +16,7 @@ vi.mock('$lib/preferences', () => ({
 vi.mock('$lib/api', () => ({
 	beginNavigationAreaSelection: mocked.beginSelection,
 	endNavigation: vi.fn(),
-	getNavigationSnapshot: vi.fn().mockResolvedValue(null),
+	getNavigationSnapshot: mocked.snapshot,
 	hideNavigationOverlays: vi.fn(),
 	markNavigationVisited: vi.fn(),
 	resolveNavigationHarvest: vi.fn(),
@@ -42,6 +43,7 @@ beforeEach(() => {
 		altitude: null,
 	});
 	mocked.startNavigation.mockResolvedValue({ status: 'active', stops: [] });
+	mocked.snapshot.mockResolvedValue(null);
 });
 
 describe('navigation HUD route-area scope', () => {
@@ -81,7 +83,7 @@ describe('navigation HUD route-area scope', () => {
 		await controller.captureStart();
 		await controller.beginRoute();
 
-		expect(mocked.startNavigation).toHaveBeenCalledWith('Calypso', 7, 100, 200, [2, 8], 'f8');
+		expect(mocked.startNavigation).toHaveBeenCalledWith('Calypso', 7, 100, 200, [2, 8], false);
 		expect(controller.selectedTreeCount).toBeNull();
 	});
 
@@ -98,5 +100,36 @@ describe('navigation HUD route-area scope', () => {
 		controller.useAllTrees();
 		expect(controller.selectedTreeCount).toBeNull();
 		expect(mocked.emit).toHaveBeenCalledWith('navigation-area-selection-reset');
+	});
+});
+
+describe('navigation HUD visit mode', () => {
+	it('plans a route that visits on F once the toggle is on', async () => {
+		const controller = createNavigationHudController();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		controller.setVisitOnKey(true);
+		await controller.captureStart();
+		await controller.beginRoute();
+
+		expect(mocked.startNavigation).toHaveBeenCalledWith('Calypso', null, 100, 200, null, true);
+	});
+
+	it('acknowledges a tree recorded by an F press as cut', async () => {
+		const stop = (status: string, completionSource: string | null = null) => ({
+			id: 1,
+			status,
+			completionSource,
+		});
+		mocked.startNavigation.mockResolvedValue({ status: 'active', stops: [stop('active')] });
+		const controller = createNavigationHudController();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		await controller.captureStart();
+		await controller.beginRoute();
+
+		mocked.snapshot.mockResolvedValue({ status: 'completed', stops: [stop('visited', 'key')] });
+		await controller.hydrate();
+
+		expect(controller.badge).toBe('cut');
+		controller.dispose();
 	});
 });

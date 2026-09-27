@@ -324,7 +324,8 @@ mod windows_hook {
     }
 
     /// The key vocabulary the listeners speak: number-row digits, the
-    /// spacebar, and Enter (the coordinate-calibration confirm key).
+    /// spacebar, Enter (the coordinate-calibration confirm key), and F (the
+    /// game's interact key, which a route can visit trees on).
     /// Unmapped virtual keys return None, matching the original's
     /// unmappable-key handling.
     fn key_name(vk: u32) -> Option<String> {
@@ -335,7 +336,7 @@ mod windows_hook {
             // VK_RETURN covers both the main Enter and the keypad Enter
             // (the extended-key bit distinguishes them; both confirm).
             0x0D => Some("return".to_string()),
-            0x75..=0x7B => Some(format!("f{}", vk - 0x6F)),
+            0x46 => Some("f".to_string()),
             _ => None,
         }
     }
@@ -507,7 +508,7 @@ mod linux_evdev {
     /// The key vocabulary the listeners speak, mirroring the Windows
     /// mapping exactly: number-row and keypad digits fold to the same
     /// digit strings, the spacebar is "space", Enter (main and keypad)
-    /// is "return", everything else is unmapped.
+    /// is "return", F is "f", everything else is unmapped.
     fn key_name(code: KeyCode) -> Option<&'static str> {
         Some(match code {
             KeyCode::KEY_1 | KeyCode::KEY_KP1 => "1",
@@ -522,13 +523,7 @@ mod linux_evdev {
             KeyCode::KEY_0 | KeyCode::KEY_KP0 => "0",
             KeyCode::KEY_SPACE => "space",
             KeyCode::KEY_ENTER | KeyCode::KEY_KPENTER => "return",
-            KeyCode::KEY_F6 => "f6",
-            KeyCode::KEY_F7 => "f7",
-            KeyCode::KEY_F8 => "f8",
-            KeyCode::KEY_F9 => "f9",
-            KeyCode::KEY_F10 => "f10",
-            KeyCode::KEY_F11 => "f11",
-            KeyCode::KEY_F12 => "f12",
+            KeyCode::KEY_F => "f",
             _ => return None,
         })
     }
@@ -712,10 +707,12 @@ mod linux_evdev {
             assert_eq!(key_name(KeyCode::KEY_SPACE), Some("space"));
             assert_eq!(key_name(KeyCode::KEY_ENTER), Some("return"));
             assert_eq!(key_name(KeyCode::KEY_KPENTER), Some("return"));
+            assert_eq!(key_name(KeyCode::KEY_F), Some("f"));
             for unmapped in [
                 KeyCode::KEY_A,
                 KeyCode::KEY_ESC,
                 KeyCode::KEY_F5,
+                KeyCode::KEY_F8,
                 KeyCode::KEY_LEFTSHIFT,
             ] {
                 assert_eq!(key_name(unmapped), None, "{unmapped:?} must stay unmapped");

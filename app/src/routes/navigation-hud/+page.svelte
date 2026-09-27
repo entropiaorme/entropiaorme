@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
+	import Toggle from '$lib/components/Toggle.svelte';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import { formatGamePoint } from '$lib/features/maps/coords';
 	import { pinGlyph } from '$lib/features/maps/pinIcons';
@@ -12,8 +13,6 @@
 		ROUTE_AREA_SELECTION_RESULT_EVENT,
 	} from '$lib/features/maps/routeAreaSelection';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
-
-	const NAVIGATION_HOTKEYS = ['f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
 
 	let root: HTMLDivElement;
 	const c = createNavigationHudController();
@@ -50,13 +49,13 @@
 		};
 	});
 
-	// Automatic updating polls the observe-only path while a route is live. The
-	// poll routes through the sanctioned visibility-gated helper (the single home
-	// for timer loops), and the effect attaches it to the HUD's lifecycle.
+	// The position poll runs the observe-only path while a route is live. It
+	// routes through the sanctioned visibility-gated helper (the single home for
+	// timer loops), and the effect attaches it to the HUD's lifecycle.
 	$effect(() => {
-		if (!c.autoUpdate || c.run?.status !== 'active') return;
+		if (c.run?.status !== 'active') return;
 		const period = Math.max(1, c.updateIntervalSec) * 1000;
-		return useVisiblePoll(() => c.autoUpdateTick(), { intervalMs: period, immediate: false });
+		return useVisiblePoll(() => c.pollPosition(), { intervalMs: period, immediate: false });
 	});
 
 	function drag(event: PointerEvent) {
@@ -72,7 +71,7 @@
 		<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-2">
 			<div class="min-w-0">
 				<p class="text-[9px] font-bold uppercase tracking-wider text-white/35">{c.run ? 'Route guidance' : 'Plan route'}</p>
-				<p class="mt-1 truncate text-[11px] text-white/65">{c.run ? `${c.run.planet} · ${c.run.mapViewName ?? 'Default'} · ${c.autoUpdate ? `auto ${c.updateIntervalSec}s` : `${c.run.hotkey.toUpperCase()} updates`}` : c.planet ? `${c.planet} · new route` : 'No planet selected'}</p>
+				<p class="mt-1 truncate text-[11px] text-white/65">{c.run ? `${c.run.planet} · ${c.run.mapViewName ?? 'Default'}${c.run.visitOnKey ? ' · F marks visited' : ''}` : c.planet ? `${c.planet} · new route` : 'No planet selected'}</p>
 			</div>
 			<div class="flex items-center gap-2">
 				{#if c.run && c.active}
@@ -126,10 +125,7 @@
 					</div>
 				</div>
 			{/if}
-			<div class="grid {c.autoUpdate ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5">
-				{#if !c.autoUpdate}
-					<button class="hud-btn primary" disabled={c.busy} onclick={c.updatePosition}>Update</button>
-				{/if}
+			<div class="grid grid-cols-3 gap-1.5">
 				<button class="hud-btn" disabled={c.busy} onclick={() => c.markVisited(false)}>Visited</button>
 				<button class="hud-btn" disabled={c.busy} onclick={c.skip}>Skip</button>
 				<button class="hud-btn" disabled={c.busy} onclick={c.undo}>Undo</button>
@@ -165,26 +161,18 @@
 						</div>
 					{/if}
 				</div>
-				<label class="block">
-					<span class="mb-0.5 block text-[9px] uppercase tracking-wider text-white/35">Update hotkey</span>
-					<select class="hud-field w-full" bind:value={c.hotkey} aria-label="Navigation update hotkey">
-						{#each NAVIGATION_HOTKEYS as key}<option value={key}>{key.toUpperCase()}</option>{/each}
-					</select>
-				</label>
-				<div>
-					<span class="mb-0.5 block text-[9px] uppercase tracking-wider text-white/35">Location updates</span>
-					<div class="grid grid-cols-2 gap-1.5">
-						<button class="hud-btn {c.autoUpdate ? '' : 'primary'}" onclick={() => c.setAutoUpdate(false)}>Manual</button>
-						<button class="hud-btn {c.autoUpdate ? 'primary' : ''}" onclick={() => c.setAutoUpdate(true)}>Automatic</button>
+				<div class="flex items-center justify-between gap-2">
+					<div class="min-w-0">
+						<p class="text-[11px] text-white/70">Visit on F press</p>
+						<p class="text-[10px] text-white/40">{c.visitOnKey ? 'Pressing F records the tree you are heading to' : 'Cuts are detected from your harvests'}</p>
 					</div>
-					{#if c.autoUpdate}
-						<label class="mt-1.5 flex items-center gap-2">
-							<span class="text-[10px] text-white/55">Every</span>
-							<input class="hud-field w-16" type="number" min="1" max="60" bind:value={c.updateIntervalSec} onchange={c.persistInterval} aria-label="Automatic update interval in seconds" />
-							<span class="text-[10px] text-white/55">seconds</span>
-						</label>
-					{/if}
+					<Toggle checked={c.visitOnKey} onchange={c.setVisitOnKey} label="Visit on F press" />
 				</div>
+				<label class="flex items-center gap-2">
+					<span class="text-[10px] text-white/55">Update position every</span>
+					<input class="hud-field w-14" type="number" min="1" max="60" bind:value={c.updateIntervalSec} onchange={c.persistInterval} aria-label="Position update interval in seconds" />
+					<span class="text-[10px] text-white/55">s</span>
+				</label>
 				<button class="hud-btn primary w-full" disabled={!c.canStart} onclick={c.beginRoute}>Start route</button>
 			</div>
 		{:else}
@@ -203,14 +191,4 @@
 	.hud-btn:disabled { opacity: .4; cursor: default; }
 	.hud-field { width: 100%; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); border-radius: 5px; padding: 4px 7px; color: rgba(255,255,255,.85); font-size: 11px; }
 	.hud-field:focus { outline: none; border-color: rgba(56,189,248,.5); }
-	select.hud-field {
-		appearance: none;
-		padding-right: 22px;
-		cursor: pointer;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23ffffff88' stroke-width='1.4'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
-		background-repeat: no-repeat;
-		background-position: right 6px center;
-		background-size: 12px;
-	}
-	.hud-field option { color: #0a0e17; background: #e5edf5; }
 </style>

@@ -2007,7 +2007,8 @@ export interface NavigationRun {
 	currentLat: number;
 	lastPositionAt: number | null;
 	hopCount: number;
-	hotkey: string;
+	/** Trees are recorded visited on the game's interact key rather than detected from harvests. */
+	visitOnKey: boolean;
 	updatedAt: number;
 	distanceToActive: number | null;
 	/** Degrees clockwise from north. */
@@ -4547,8 +4548,8 @@ export async function navigationSnapshot(): Promise<NavigationRun | null> {
 	return invokeCommand('navigation_snapshot', {});
 }
 
-export async function navigationStart(planet: string, mapViewId: number | null, startLon: number, startLat: number, selectedPinIds: number[] | null, hotkey: string): Promise<NavigationRun> {
-	return invokeCommand('navigation_start', { planet, map_view_id: mapViewId, start_lon: startLon, start_lat: startLat, selected_pin_ids: selectedPinIds, hotkey });
+export async function navigationStart(planet: string, mapViewId: number | null, startLon: number, startLat: number, selectedPinIds: number[] | null, visitOnKey: boolean): Promise<NavigationRun> {
+	return invokeCommand('navigation_start', { planet, map_view_id: mapViewId, start_lon: startLon, start_lat: startLat, selected_pin_ids: selectedPinIds, visit_on_key: visitOnKey });
 }
 
 export async function navigationUpdatePosition(): Promise<NavigationPositionResult> {

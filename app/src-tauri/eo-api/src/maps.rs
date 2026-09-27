@@ -147,7 +147,9 @@ pub struct NavigationRun {
     pub current_lat: f64,
     pub last_position_at: Nullable<f64>,
     pub hop_count: i64,
-    pub hotkey: String,
+    /// Trees are recorded visited on the game's interact key rather than
+    /// detected from harvests.
+    pub visit_on_key: bool,
     pub updated_at: f64,
     pub distance_to_active: Nullable<f64>,
     /// Degrees clockwise from north.
@@ -214,7 +216,7 @@ impl Api {
         start_lon: f64,
         start_lat: f64,
         selected_pin_ids: Option<Vec<i64>>,
-        hotkey: String,
+        visit_on_key: bool,
     ) -> Result<NavigationRun, ApiError> {
         self.validate_pin_coords(&planet, start_lon, start_lat)?;
         self.validate_map_view(&planet, map_view_id).await?;
@@ -225,7 +227,7 @@ impl Api {
                 start_lon,
                 start_lat,
                 selected_pin_ids,
-                hotkey,
+                visit_on_key,
             )
             .await
             .map(navigation_to_dto)
@@ -351,7 +353,7 @@ fn navigation_to_dto(run: ServiceNavigationRun) -> NavigationRun {
         current_lat: run.current_lat,
         last_position_at: run.last_position_at.into(),
         hop_count: run.hop_count,
-        hotkey: run.hotkey,
+        visit_on_key: run.visit_on_key,
         updated_at: run.updated_at,
         distance_to_active: distance_to_active.into(),
         bearing_degrees: bearing_degrees.into(),
@@ -420,9 +422,9 @@ fn navigation_error(error: NavigationError) -> ApiError {
         NavigationError::NoActiveRun | NavigationError::NoPins => {
             ApiError::invalid_state(error.to_string())
         }
-        NavigationError::EmptyPinSelection
-        | NavigationError::InvalidHotkey
-        | NavigationError::InvalidRadarRadius => ApiError::bad_request(error.to_string()),
+        NavigationError::EmptyPinSelection | NavigationError::InvalidRadarRadius => {
+            ApiError::bad_request(error.to_string())
+        }
         NavigationError::Db(error) => db_error(error),
     }
 }

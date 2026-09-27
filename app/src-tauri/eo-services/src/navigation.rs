@@ -14,6 +14,8 @@ use crate::coord_capture::{
     CoordBounds, CoordCaptureService, CoordConfirmListener, CoordRead, CoordScanOutcome,
 };
 use crate::db::{Db, DbError};
+use crate::eu_window::GameFocus;
+use crate::hotbar_listener::GameFocusProbe;
 use crate::keystroke_source::{KeystrokeKind, KeystrokeSource};
 use crate::time::naive_to_epoch;
 
@@ -30,8 +32,13 @@ pub const DUPLICATE_TOLERANCE_UNITS: f64 = 5.0;
 /// regenerated route excludes trees that were just harvested. Two hours is
 /// the initial default; a configurable per-species respawn is deferred work.
 pub const COOLDOWN_SECONDS: f64 = 2.0 * 60.0 * 60.0;
-pub const DEFAULT_NAVIGATION_HOTKEY: &str = "f8";
-pub const NAVIGATION_HOTKEYS: [&str; 7] = ["f6", "f7", "f8", "f9", "f10", "f11", "f12"];
+/// The game's interact key, which starts cutting a tree. A route planned to
+/// visit on this key records the active tree the moment it is pressed.
+pub const VISIT_KEY: &str = "f";
+/// A second visit signal this soon after the last one, from within the
+/// arrival radius of where that one was observed, is the same tree again
+/// (repeated swings, or the interact key pressed more than once).
+const REPEAT_VISIT_WINDOW_SECONDS: f64 = 30.0;
 
 pub type BoundsProvider = Arc<dyn Fn(&str) -> Option<CoordBounds> + Send + Sync>;
 pub type ChangedSink = Arc<dyn Fn() + Send + Sync>;
@@ -142,7 +149,9 @@ pub struct NavigationRun {
     pub current_lat: f64,
     pub last_position_at: Option<f64>,
     pub hop_count: i64,
-    pub hotkey: String,
+    /// Visits are recorded on the interact key rather than detected from
+    /// harvests.
+    pub visit_on_key: bool,
     pub updated_at: f64,
     pub stops: Vec<NavigationStop>,
     /// Set only on the snapshot read, and only while its stop is still active.
@@ -222,8 +231,6 @@ pub enum NavigationError {
     NoPins,
     #[error("a custom route selection must contain at least one pin")]
     EmptyPinSelection,
-    #[error("navigation hotkey must be F6 through F12")]
-    InvalidHotkey,
     #[error("radar calibration needs a radius of at least 8 pixels")]
     InvalidRadarRadius,
     #[error(transparent)]
@@ -242,7 +249,12 @@ pub struct NavigationService {
     input: Option<Arc<dyn KeystrokeSource>>,
     input_claimed: std::sync::atomic::AtomicBool,
     route_live: std::sync::atomic::AtomicBool,
-    hotkey: Mutex<String>,
+    // Where keyboard focus sits: an interact-key press typed into another
+    // window is not a tree being cut.
+    focus: Option<GameFocusProbe>,
+    // Held between the interact key's press and release, so the autorepeat
+    // presses of a held key record one visit, not a stream of them.
+    visit_key_down: std::sync::atomic::AtomicBool,
     // A harvest swing detected beyond the arrival radius, awaiting the player's
     // confirm/dismiss in the overlay. Ephemeral; the snapshot self-heals it away
     // once the active stop moves on.
@@ -257,6 +269,7 @@ impl NavigationService {
         bounds: BoundsProvider,
         changed: ChangedSink,
         input: Option<Arc<dyn KeystrokeSource>>,
+        focus: Option<GameFocusProbe>,
     ) -> Arc<Self> {
         // An interrupted route is not restored as a unit: recovery is by
         // regenerating a route that excludes cooled-down trees (the per-tree
@@ -276,7 +289,8 @@ impl NavigationService {
             input: input.clone(),
             input_claimed: std::sync::atomic::AtomicBool::new(false),
             route_live: std::sync::atomic::AtomicBool::new(false),
-            hotkey: Mutex::new(DEFAULT_NAVIGATION_HOTKEY.to_string()),
+            focus,
+            visit_key_down: std::sync::atomic::AtomicBool::new(false),
             pending_harvest: Mutex::new(None),
         });
         if let Some(input) = input {
@@ -286,17 +300,38 @@ impl NavigationService {
                 let Some(service) = weak.upgrade() else {
                     return;
                 };
-                if event.kind != KeystrokeKind::Press {
+                use std::sync::atomic::Ordering;
+                if event.key != VISIT_KEY {
                     return;
                 }
-                if event.key == *service.hotkey.lock().expect("navigation hotkey")
-                    && service.route_live.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    let service = service.clone();
-                    runtime.spawn(async move {
-                        let _ = service.update_position().await;
-                    });
+                if event.kind == KeystrokeKind::Release {
+                    service.visit_key_down.store(false, Ordering::SeqCst);
+                    return;
                 }
+                if service.visit_key_down.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                // The keyboard is claimed only while a route that visits on
+                // the key is live; the shared hook may still deliver the key
+                // for another consumer, and those presses are dropped here.
+                if !service.input_claimed.load(Ordering::SeqCst)
+                    || !service.route_live.load(Ordering::SeqCst)
+                {
+                    return;
+                }
+                // Only a definite Unfocused drops the press, matching the
+                // hotbar listener: a platform that cannot tell admits it.
+                if service
+                    .focus
+                    .as_ref()
+                    .is_some_and(|focus| focus() == GameFocus::Unfocused)
+                {
+                    return;
+                }
+                let service = service.clone();
+                runtime.spawn(async move {
+                    service.on_visit_key().await;
+                });
             }));
         }
         service
@@ -313,10 +348,14 @@ impl NavigationService {
     }
 
     fn release_input_if_idle(&self) {
-        use std::sync::atomic::Ordering;
-        if self.route_live.load(Ordering::SeqCst) {
+        if self.route_live.load(std::sync::atomic::Ordering::SeqCst) {
             return;
         }
+        self.release_input();
+    }
+
+    fn release_input(&self) {
+        use std::sync::atomic::Ordering;
         if !self.input_claimed.swap(false, Ordering::SeqCst) {
             return;
         }
@@ -361,15 +400,11 @@ impl NavigationService {
         start_lon: f64,
         start_lat: f64,
         selected_pin_ids: Option<Vec<i64>>,
-        hotkey: String,
+        visit_on_key: bool,
     ) -> Result<NavigationRun, NavigationError> {
         if selected_pin_ids.as_ref().is_some_and(Vec::is_empty) {
             return Err(NavigationError::EmptyPinSelection);
         }
-        if !NAVIGATION_HOTKEYS.contains(&hotkey.as_str()) {
-            return Err(NavigationError::InvalidHotkey);
-        }
-        let selected_hotkey = hotkey.clone();
         let _guard = self.operation.lock().await;
         let now = naive_to_epoch(self.clock.now());
         let mut candidates = load_candidates(&self.db, planet.clone(), map_view_id, now).await?;
@@ -388,8 +423,8 @@ impl NavigationService {
                 [now],
             )?;
             tx.execute(
-                "INSERT INTO navigation_runs (planet, map_view_id, status, start_lon, start_lat, current_lon, current_lat, hop_count, hotkey, created_at, updated_at) VALUES (?1, ?2, 'active', ?3, ?4, ?3, ?4, ?5, ?6, ?7, ?7)",
-                rusqlite::params![planet, map_view_id, start_lon, start_lat, route.len() as i64, hotkey, now],
+                "INSERT INTO navigation_runs (planet, map_view_id, status, start_lon, start_lat, current_lon, current_lat, hop_count, visit_on_key, created_at, updated_at) VALUES (?1, ?2, 'active', ?3, ?4, ?3, ?4, ?5, ?6, ?7, ?7)",
+                rusqlite::params![planet, map_view_id, start_lon, start_lat, route.len() as i64, visit_on_key, now],
             )?;
             let run_id = tx.last_insert_rowid();
             for (index, pin) in route.iter().enumerate() {
@@ -403,8 +438,17 @@ impl NavigationService {
         }).await?;
         self.route_live
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        *self.hotkey.lock().expect("navigation hotkey") = selected_hotkey;
-        self.claim_input();
+        // The keyboard is claimed only for a route that listens to it, and
+        // released when the route ends or completes.
+        if visit_on_key {
+            // A release missed while the keyboard was unclaimed must not leave
+            // the new route's first press swallowed as a held key.
+            self.visit_key_down
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            self.claim_input();
+        } else {
+            self.release_input();
+        }
         let run = load_run(&self.db, run_id)
             .await?
             .ok_or(NavigationError::NoActiveRun)?;
@@ -414,8 +458,8 @@ impl NavigationService {
 
     /// Observe the current position. Strictly captures the coordinate and
     /// refreshes the run's position so distance and bearing to the active
-    /// tree recompute; it never records a visit or advances the route. Both
-    /// the `Update` button and the configured hotkey ride this path.
+    /// tree recompute; it never records a visit or advances the route. The
+    /// overlay's automatic position updates ride this path.
     pub async fn update_position(&self) -> Result<PositionUpdate, NavigationError> {
         let _guard = self.operation.lock().await;
         let Some(run) = load_live_run(&self.db).await? else {
@@ -469,9 +513,93 @@ impl NavigationService {
             (self.changed)();
             return Ok(PositionUpdate::OutOfTolerance(refreshed));
         }
-        let run_id = run.id;
-        let stop_id = active.id;
-        let pin_id = active.pin_id;
+        let refreshed = self
+            .record_active_visit(run.id, active, (lon, lat), "manual", now)
+            .await?;
+        Ok(PositionUpdate::Updated(refreshed))
+    }
+
+    /// The interact key was pressed on a route planned to visit on it: the
+    /// player has started cutting the tree the route points at, so record the
+    /// active tree. No harvest is waited for and no arrival radius applies.
+    /// The observation is a fresh coordinate read, or the last observed
+    /// position when the read fails, so a press is never lost to OCR. A press
+    /// repeated on the tree just recorded is ignored rather than consuming
+    /// the next stop.
+    pub async fn on_visit_key(&self) {
+        let _ = self.key_visit().await;
+    }
+
+    async fn key_visit(&self) -> Result<Option<NavigationRun>, NavigationError> {
+        let _guard = self.operation.lock().await;
+        let Some(run) = load_live_run(&self.db).await? else {
+            return Ok(None);
+        };
+        if !run.visit_on_key {
+            return Ok(None);
+        }
+        let Some(active) = run.active_stop() else {
+            return Ok(None);
+        };
+        let observed = self
+            .scan_position(&run.planet)
+            .map(|read| (read.lon as f64, read.lat as f64))
+            .unwrap_or((run.current_lon, run.current_lat));
+        let now = naive_to_epoch(self.clock.now());
+        if self
+            .repeats_recent_visit(run.id, "key", observed, now)
+            .await?
+        {
+            return Ok(None);
+        }
+        self.record_active_visit(run.id, active, observed, "key", now)
+            .await
+            .map(Some)
+    }
+
+    /// Whether the run's latest visit from `source` was recorded moments ago
+    /// within the arrival radius of `observed`: the same tree signalled again.
+    async fn repeats_recent_visit(
+        &self,
+        run_id: i64,
+        source: &'static str,
+        observed: (f64, f64),
+        now: f64,
+    ) -> Result<bool, NavigationError> {
+        let recent = self
+            .db
+            .with_reader(move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT visited_at, observed_lon, observed_lat FROM map_pin_visits WHERE run_id = ?1 AND source = ?2 ORDER BY visited_at DESC, id DESC LIMIT 1",
+                        rusqlite::params![run_id, source],
+                        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?)),
+                    )
+                    .optional()?)
+            })
+            .await?;
+        Ok(
+            recent.is_some_and(|(visited_at, previous_lon, previous_lat)| {
+                now - visited_at <= REPEAT_VISIT_WINDOW_SECONDS
+                    && distance(observed, (previous_lon, previous_lat)) <= ARRIVAL_TOLERANCE_UNITS
+            }),
+        )
+    }
+
+    /// Complete the active stop from an observation: the stop is marked
+    /// visited, a durable per-pin visit is written (starting its cooldown),
+    /// and the route advances to the next stop or completes.
+    async fn record_active_visit(
+        &self,
+        run_id: i64,
+        stop: &NavigationStop,
+        (lon, lat): (f64, f64),
+        source: &'static str,
+        now: f64,
+    ) -> Result<NavigationRun, NavigationError> {
+        let observed_distance = distance((lon, lat), (stop.lon, stop.lat));
+        let stop_id = stop.id;
+        let pin_id = stop.pin_id;
         self.db.with_writer(move |conn| {
             let tx = conn.transaction()?;
             tx.execute(
@@ -479,12 +607,12 @@ impl NavigationService {
                 rusqlite::params![run_id, lon, lat, now],
             )?;
             tx.execute(
-                "UPDATE navigation_stops SET status = 'visited', completed_at = ?2, completion_source = 'manual', observed_lon = ?3, observed_lat = ?4, observed_distance = ?5 WHERE id = ?1",
-                rusqlite::params![stop_id, now, lon, lat, observed_distance],
+                "UPDATE navigation_stops SET status = 'visited', completed_at = ?2, completion_source = ?3, observed_lon = ?4, observed_lat = ?5, observed_distance = ?6 WHERE id = ?1",
+                rusqlite::params![stop_id, now, source, lon, lat, observed_distance],
             )?;
             tx.execute(
-                "INSERT INTO map_pin_visits (pin_id, run_id, visited_at, source, outcome, observed_lon, observed_lat, observed_distance) VALUES (?1, ?2, ?3, 'manual', 'manual', ?4, ?5, ?6)",
-                rusqlite::params![pin_id, run_id, now, lon, lat, observed_distance],
+                "INSERT INTO map_pin_visits (pin_id, run_id, visited_at, source, outcome, observed_lon, observed_lat, observed_distance) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7)",
+                rusqlite::params![pin_id, run_id, now, source, lon, lat, observed_distance],
             )?;
             activate_next_or_complete(&tx, run_id, now)?;
             tx.commit()?;
@@ -499,7 +627,7 @@ impl NavigationService {
             self.release_input_if_idle();
         }
         (self.changed)();
-        Ok(PositionUpdate::Updated(refreshed))
+        Ok(refreshed)
     }
 
     /// Scan the calibrated coordinate region, mapping every read failure to
@@ -524,30 +652,16 @@ impl NavigationService {
         outcome: &str,
     ) -> Result<PositionUpdate, NavigationError> {
         let now = naive_to_epoch(self.clock.now());
-        if source == "harvest" {
-            let run_id = run.id;
-            let recent = self
-                .db
-                .with_reader(move |conn| {
-                    Ok(conn
-                        .query_row(
-                            "SELECT visited_at, observed_lon, observed_lat FROM map_pin_visits WHERE run_id = ?1 AND source = 'harvest' ORDER BY visited_at DESC, id DESC LIMIT 1",
-                            [run_id],
-                            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?)),
-                        )
-                        .optional()?)
-                })
-                .await?;
-            if recent.is_some_and(|(visited_at, previous_lon, previous_lat)| {
-                now - visited_at <= 30.0
-                    && distance((lon, lat), (previous_lon, previous_lat)) <= ARRIVAL_TOLERANCE_UNITS
-            }) {
-                update_run_position(&self.db, run.id, lon, lat, now).await?;
-                let refreshed = load_run(&self.db, run.id)
-                    .await?
-                    .ok_or(NavigationError::NoActiveRun)?;
-                return Ok(PositionUpdate::Updated(refreshed));
-            }
+        if source == "harvest"
+            && self
+                .repeats_recent_visit(run.id, "harvest", (lon, lat), now)
+                .await?
+        {
+            update_run_position(&self.db, run.id, lon, lat, now).await?;
+            let refreshed = load_run(&self.db, run.id)
+                .await?
+                .ok_or(NavigationError::NoActiveRun)?;
+            return Ok(PositionUpdate::Updated(refreshed));
         }
         let matches: Vec<_> = run
             .stops
@@ -964,6 +1078,11 @@ impl NavigationService {
         let Some(run) = load_live_run(&self.db).await? else {
             return Ok(PositionUpdate::NoActiveRun);
         };
+        // A route that visits on the interact key takes the key as the only
+        // visit signal; harvests leave it untouched.
+        if run.visit_on_key {
+            return Ok(PositionUpdate::Updated(run));
+        }
         let read = match self.scan_position(&run.planet) {
             Ok(read) => read,
             Err(failure) => return Ok(failure.into()),
@@ -1242,9 +1361,9 @@ async fn load_run(db: &Db, id: i64) -> Result<Option<NavigationRun>, DbError> {
 async fn load_run_where(db: &Db, clause: &str) -> Result<Option<NavigationRun>, DbError> {
     let clause = clause.to_string();
     let header = db.with_reader(move |conn| {
-        Ok(conn.query_row(&format!("SELECT id, planet, map_view_id, (SELECT name FROM map_views WHERE id = navigation_runs.map_view_id), status, start_lon, start_lat, current_lon, current_lat, last_position_at, hop_count, hotkey, updated_at FROM navigation_runs {clause}"), [], |row| {
+        Ok(conn.query_row(&format!("SELECT id, planet, map_view_id, (SELECT name FROM map_views WHERE id = navigation_runs.map_view_id), status, start_lon, start_lat, current_lon, current_lat, last_position_at, hop_count, visit_on_key, updated_at FROM navigation_runs {clause}"), [], |row| {
             let status: String = row.get(4)?;
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?, row.get::<_, Option<String>>(3)?, status, row.get::<_, f64>(5)?, row.get::<_, f64>(6)?, row.get::<_, f64>(7)?, row.get::<_, f64>(8)?, row.get::<_, Option<f64>>(9)?, row.get::<_, i64>(10)?, row.get::<_, String>(11)?, row.get::<_, f64>(12)?))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?, row.get::<_, Option<String>>(3)?, status, row.get::<_, f64>(5)?, row.get::<_, f64>(6)?, row.get::<_, f64>(7)?, row.get::<_, f64>(8)?, row.get::<_, Option<f64>>(9)?, row.get::<_, i64>(10)?, row.get::<_, bool>(11)?, row.get::<_, f64>(12)?))
         }).optional()?)
     }).await?;
     let Some((
@@ -1259,7 +1378,7 @@ async fn load_run_where(db: &Db, clause: &str) -> Result<Option<NavigationRun>, 
         current_lat,
         last_position_at,
         hop_count,
-        hotkey,
+        visit_on_key,
         updated_at,
     )) = header
     else {
@@ -1285,7 +1404,7 @@ async fn load_run_where(db: &Db, clause: &str) -> Result<Option<NavigationRun>, 
         current_lat,
         last_position_at,
         hop_count,
-        hotkey,
+        visit_on_key,
         updated_at,
         stops,
         pending_harvest: None,
@@ -1335,13 +1454,19 @@ mod tests {
         assert_eq!(DUPLICATE_TOLERANCE_UNITS, 5.0);
     }
 
-    async fn navigation_fixture() -> (
+    type Fixture = (
         tempfile::TempDir,
         Arc<NavigationService>,
         Arc<Mutex<(i64, i64)>>,
         Arc<AtomicUsize>,
         Arc<MockKeystrokeSource>,
-    ) {
+    );
+
+    async fn navigation_fixture() -> Fixture {
+        navigation_fixture_with_focus(None).await
+    }
+
+    async fn navigation_fixture_with_focus(focus: Option<GameFocusProbe>) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("navigation.db")).await.unwrap();
         let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
@@ -1392,8 +1517,15 @@ mod tests {
         let position = Arc::new(Mutex::new((0_i64, 0_i64)));
         let changes = Arc::new(AtomicUsize::new(0));
         let input = Arc::new(MockKeystrokeSource::new());
-        let service =
-            spawn_navigation(db, clock, position.clone(), changes.clone(), input.clone()).await;
+        let service = spawn_navigation(
+            db,
+            clock,
+            position.clone(),
+            changes.clone(),
+            input.clone(),
+            focus,
+        )
+        .await;
         (dir, service, position, changes, input)
     }
 
@@ -1401,7 +1533,7 @@ mod tests {
     async fn custom_selection_is_an_exact_eligible_pin_allow_list() {
         let (dir, service, _position, _changes, _input) = navigation_fixture().await;
         let all = service
-            .start("Calypso".into(), None, 0.0, 0.0, None, "f8".into())
+            .start("Calypso".into(), None, 0.0, 0.0, None, false)
             .await
             .unwrap();
         let selected = vec![all.stops[1].pin_id, all.stops[3].pin_id];
@@ -1458,7 +1590,7 @@ mod tests {
                     generic_pin.id,
                     i64::MAX,
                 ]),
-                "f8".into(),
+                false,
             )
             .await
             .unwrap();
@@ -1472,14 +1604,7 @@ mod tests {
     async fn custom_selection_must_not_be_empty() {
         let (_dir, service, _position, _changes, _input) = navigation_fixture().await;
         let error = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(Vec::new()),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(Vec::new()), false)
             .await
             .unwrap_err();
         assert!(matches!(error, NavigationError::EmptyPinSelection));
@@ -1494,6 +1619,7 @@ mod tests {
         position: Arc<Mutex<(i64, i64)>>,
         changes: Arc<AtomicUsize>,
         input: Arc<MockKeystrokeSource>,
+        focus: Option<GameFocusProbe>,
     ) -> Arc<NavigationService> {
         let read_position = position.clone();
         let cursor_position = position.clone();
@@ -1537,6 +1663,7 @@ mod tests {
                 change_count.fetch_add(1, AtomicOrdering::SeqCst);
             }),
             Some(input),
+            focus,
         )
         .await
     }
@@ -1600,60 +1727,153 @@ mod tests {
         listener.stop();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn navigation_hotkey_reenters_the_runtime_from_the_dispatch_thread() {
-        let (_dir, service, position, _changes, input) = navigation_fixture().await;
-        let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+    async fn key_visits(service: &NavigationService) -> Vec<(i64, String, f64, f64)> {
+        let run_id = service.snapshot().await.unwrap().unwrap().id;
+        service
+            .db
+            .with_reader(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT pin_id, outcome, observed_lon, observed_lat FROM map_pin_visits WHERE run_id = ?1 AND source = 'key' ORDER BY id",
+                )?;
+                let rows = stmt.query_map([run_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
             .await
-            .unwrap();
-        let first = run.active_stop().unwrap();
-        *position.lock().unwrap() = (first.lon as i64, first.lat as i64);
+            .unwrap()
+    }
 
-        std::thread::spawn(move || {
-            input.inject("f8", chrono::Utc::now(), KeystrokeKind::Press);
-        })
-        .join()
-        .expect("off-runtime hotkey dispatch");
-
-        // The hotkey observes only: it refreshes the position without ever
-        // recording a visit, so no stop transitions to Visited.
+    async fn await_key_visits(service: &NavigationService, count: usize) {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                let snapshot = service.snapshot().await.unwrap().unwrap();
-                if snapshot.last_position_at.is_some() {
-                    assert!(snapshot
-                        .stops
-                        .iter()
-                        .all(|stop| stop.status != StopStatus::Visited));
-                    break;
-                }
+            while key_visits(service).await.len() < count {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("hotkey position update");
+        .expect("interact-key visit");
+    }
+
+    fn press_off_runtime(input: &Arc<MockKeystrokeSource>, kind: KeystrokeKind) {
+        let input = input.clone();
+        std::thread::spawn(move || input.inject(VISIT_KEY, chrono::Utc::now(), kind))
+            .join()
+            .expect("off-runtime key dispatch");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_interact_key_records_the_active_tree_from_the_dispatch_thread() {
+        let (_dir, service, position, _changes, input) = navigation_fixture().await;
+        let run = service
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), true)
+            .await
+            .unwrap();
+        assert!(run.visit_on_key);
+        let first = run.active_stop().unwrap().clone();
+        // Well outside the arrival radius: the key is the whole signal, so no
+        // distance check holds the visit back.
+        *position.lock().unwrap() = (90, 90);
+
+        press_off_runtime(&input, KeystrokeKind::Press);
+        await_key_visits(&service, 1).await;
+
+        let snapshot = service.snapshot().await.unwrap().unwrap();
+        let recorded = snapshot
+            .stops
+            .iter()
+            .find(|stop| stop.id == first.id)
+            .unwrap();
+        assert_eq!(recorded.status, StopStatus::Visited);
+        assert_eq!(recorded.completion_source.as_deref(), Some("key"));
+        assert_ne!(snapshot.active_stop().unwrap().id, first.id);
+        assert_eq!(
+            key_visits(&service).await,
+            vec![(first.pin_id, "key".to_owned(), 90.0, 90.0)]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_held_or_repeated_key_on_the_same_tree_records_one_visit() {
+        let (_dir, service, position, _changes, input) = navigation_fixture().await;
+        service
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2, 3]), true)
+            .await
+            .unwrap();
+        *position.lock().unwrap() = (30, 0);
+
+        // Autorepeat delivers presses with no release between them.
+        press_off_runtime(&input, KeystrokeKind::Press);
+        press_off_runtime(&input, KeystrokeKind::Press);
+        await_key_visits(&service, 1).await;
+        // Released and pressed again on the same spot moments later: the same
+        // tree, not the next one.
+        press_off_runtime(&input, KeystrokeKind::Release);
+        service.on_visit_key().await;
+        assert_eq!(key_visits(&service).await.len(), 1);
+
+        // Moved on to another tree: the next press records it.
+        *position.lock().unwrap() = (60, 9);
+        service.on_visit_key().await;
+        assert_eq!(key_visits(&service).await.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_key_press_while_another_window_holds_focus_is_dropped() {
+        let focus = Arc::new(Mutex::new(GameFocus::Unfocused));
+        let probe_focus = focus.clone();
+        let probe: GameFocusProbe = Arc::new(move || *probe_focus.lock().unwrap());
+        let (_dir, service, position, _changes, input) =
+            navigation_fixture_with_focus(Some(probe)).await;
+        service
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), true)
+            .await
+            .unwrap();
+        *position.lock().unwrap() = (30, 0);
+
+        press_off_runtime(&input, KeystrokeKind::Press);
+        press_off_runtime(&input, KeystrokeKind::Release);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(key_visits(&service).await.is_empty());
+
+        *focus.lock().unwrap() = GameFocus::Focused;
+        press_off_runtime(&input, KeystrokeKind::Press);
+        await_key_visits(&service, 1).await;
+    }
+
+    #[tokio::test]
+    async fn a_key_route_ignores_harvests_and_a_detecting_route_ignores_the_key() {
+        let (_dir, service, position, _changes, input) = navigation_fixture().await;
+        let run = service
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), true)
+            .await
+            .unwrap();
+        let first = run.active_stop().unwrap().clone();
+        *position.lock().unwrap() = (first.lon as i64, first.lat as i64);
+        service.on_harvest(true).await;
+        let snapshot = service.snapshot().await.unwrap().unwrap();
+        assert_eq!(snapshot.active_stop().unwrap().id, first.id);
+        assert!(snapshot.pending_harvest.is_none());
+
+        // A route that detects cuts from harvests leaves the keyboard alone.
+        let run = service
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
+            .await
+            .unwrap();
+        assert!(!run.visit_on_key);
+        let first = run.active_stop().unwrap().clone();
+        *position.lock().unwrap() = (first.lon as i64, first.lat as i64);
+        service.on_visit_key().await;
+        input.inject(VISIT_KEY, chrono::Utc::now(), KeystrokeKind::Press);
+        let snapshot = service.snapshot().await.unwrap().unwrap();
+        assert_eq!(snapshot.active_stop().unwrap().id, first.id);
+        assert!(key_visits(&service).await.is_empty());
     }
 
     #[tokio::test]
     async fn route_progress_persists_supports_undo_and_stays_visible_at_completion() {
         let (_dir, service, position, changes, _input) = navigation_fixture().await;
         let mut run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         assert_eq!(run.stops.len(), 2);
@@ -1694,14 +1914,7 @@ mod tests {
     async fn arriving_at_a_pending_stop_marks_it_and_replans_from_the_observed_position() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2, 3]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2, 3]), false)
             .await
             .unwrap();
         // Pick a pending stop beyond the arrival radius of the active one, so a
@@ -1749,14 +1962,7 @@ mod tests {
     async fn repeated_harvest_swings_near_the_same_tree_do_not_advance_the_next_stop() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let first = run.active_stop().unwrap().clone();
@@ -1787,14 +1993,7 @@ mod tests {
     async fn a_harvest_prefers_the_active_tree_when_several_are_within_range() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         // A(30,0) is active and D(39,0) is pending; (34,0) is within fifteen of
@@ -1821,14 +2020,7 @@ mod tests {
     async fn a_far_harvest_awaits_confirmation_then_records_on_confirm() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let active = run.active_stop().unwrap().clone();
@@ -1887,14 +2079,7 @@ mod tests {
     async fn a_far_harvest_dismissal_leaves_the_route_untouched() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let active = run.active_stop().unwrap().clone();
@@ -1931,14 +2116,7 @@ mod tests {
     async fn a_harvest_amid_only_non_active_trees_stays_ambiguous() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2, 3]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2, 3]), false)
             .await
             .unwrap();
         // (50,4) is within fifteen of pending D(39,0) and B(60,9) but not of the
@@ -1959,14 +2137,7 @@ mod tests {
     async fn update_position_observes_without_recording_a_visit() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let first = run.active_stop().unwrap().clone();
@@ -1993,14 +2164,7 @@ mod tests {
     async fn mark_visited_outside_tolerance_needs_force_then_completes_the_active_tree() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let first = run.active_stop().unwrap().clone();
@@ -2036,7 +2200,7 @@ mod tests {
     async fn a_regenerated_route_excludes_recently_visited_trees() {
         let (_dir, service, position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start("Calypso".into(), None, 0.0, 0.0, None, "f8".into())
+            .start("Calypso".into(), None, 0.0, 0.0, None, false)
             .await
             .unwrap();
         let first = run.active_stop().unwrap().clone();
@@ -2045,7 +2209,7 @@ mod tests {
         service.end().await.unwrap();
 
         let regenerated = service
-            .start("Calypso".into(), None, 0.0, 0.0, None, "f8".into())
+            .start("Calypso".into(), None, 0.0, 0.0, None, false)
             .await
             .unwrap();
         // The just-visited tree is on cooldown, so it never enters the new route.
@@ -2059,14 +2223,7 @@ mod tests {
     async fn a_lingering_run_is_ended_at_startup_not_resumed() {
         let (dir, service, position, _changes, _input) = navigation_fixture().await;
         service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         assert!(service.snapshot().await.unwrap().is_some());
@@ -2082,6 +2239,7 @@ mod tests {
             position.clone(),
             Arc::new(AtomicUsize::new(0)),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(restarted.snapshot().await.unwrap().is_none());
@@ -2091,14 +2249,7 @@ mod tests {
     async fn cooling_the_active_tree_skips_it_and_replans() {
         let (_dir, service, _position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let active = run.active_stop().unwrap().clone();
@@ -2124,14 +2275,14 @@ mod tests {
     async fn cooling_a_tree_excludes_it_from_the_next_route() {
         let (_dir, service, _position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start("Calypso".into(), None, 0.0, 0.0, None, "f8".into())
+            .start("Calypso".into(), None, 0.0, 0.0, None, false)
             .await
             .unwrap();
         let cooled = run.active_stop().unwrap().pin_id;
         service.end().await.unwrap();
         service.cooldown_pin(cooled).await.unwrap();
         let replanned = service
-            .start("Calypso".into(), None, 0.0, 0.0, None, "f8".into())
+            .start("Calypso".into(), None, 0.0, 0.0, None, false)
             .await
             .unwrap();
         assert!(replanned.stops.iter().all(|stop| stop.pin_id != cooled));
@@ -2141,14 +2292,7 @@ mod tests {
     async fn deleting_a_route_pin_drops_its_stop_and_replans() {
         let (_dir, service, _position, _changes, _input) = navigation_fixture().await;
         let run = service
-            .start(
-                "Calypso".into(),
-                None,
-                0.0,
-                0.0,
-                Some(vec![1, 2]),
-                "f8".into(),
-            )
+            .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2]), false)
             .await
             .unwrap();
         let removed = run.active_stop().unwrap().pin_id;

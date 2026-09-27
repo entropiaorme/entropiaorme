@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
 [![Branch coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/coverage.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
-[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/nightly.yml)
+[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/mutation.yml)
 
 An analytical desktop tool for Entropia Universe. Overview and installer downloads: **[entropiaorme.com](https://entropiaorme.com)**.
 
@@ -39,7 +39,7 @@ Give each checkout its own `.env.local` with a distinct `ENTROPIAORME_FRONTEND_P
 ## Documentation
 
 - [Architecture handbook](docs/) and [ADRs](docs/src/adr/): published to GitHub Pages from `main` alongside the generated `cargo doc` API reference; `mdbook build docs` locally.
-- [TESTING.md](TESTING.md): the test suite, the preserved equivalence evidence, and the CI gates.
+- [TESTING.md](TESTING.md): the test suite, the replay corpus, and the CI gates.
 - [SECURITY.md](SECURITY.md): the security policy, supply-chain review gates, and the release attestations (SBOM, checksums, build provenance).
 
 ## License

@@ -51,3 +51,4 @@
   - [ADR-0035: User-led promotion](adr/0035-user-led-promotion.md)
   - [ADR-0036: Consumable dose lifecycle](adr/0036-consumable-dose-lifecycle.md)
   - [ADR-0037: Retire the golden-ratification guard](adr/0037-retire-golden-ratification-guard.md)
+  - [ADR-0038: Promotion carries the public surface's polish](adr/0038-promotion-carries-public-polish.md)

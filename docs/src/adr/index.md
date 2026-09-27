@@ -45,3 +45,4 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0035](0035-user-led-promotion.md) | Promotion is user-led: no cadence; `next` is promoted up to the point the maintainer has used, as a prefix, never a selection |
 | [ADR-0036](0036-consumable-dose-lifecycle.md) | Consumable doses as one persisted lifecycle: an absolute expiry the tracker owns, the consumed input to the one reload evaluator, booked once by the player's per-item choice, never stacked, corrected by supersession |
 | [ADR-0037](0037-retire-golden-ratification-guard.md) | Retire the golden-ratification guard: goldens still assert, and a deliberate change is reviewed in the commit that moves them |
+| [ADR-0038](0038-promotion-carries-public-polish.md) | Promotion carries the public surface's polish: in-development marking and documentation are settled once per promotion, not per landing on `next` |

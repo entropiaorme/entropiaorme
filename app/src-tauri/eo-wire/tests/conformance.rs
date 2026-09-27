@@ -1,10 +1,10 @@
-//! Frozen Normalizer conformance table.
+//! Normaliser conformance table.
 //!
 //! Reads the committed fixture
-//! `eo-wire/tests/fixtures/normalizer_conformance.json` and checks the native
-//! normaliser reproduces every `expected` byte-for-byte. This is the frozen
-//! equivalence evidence for the Normalizer: a fixed input/output table banked
-//! when the byte-identical port was proven, asserted on every Rust CI job.
+//! `eo-wire/tests/fixtures/normalizer_conformance.json` and checks the
+//! normaliser reproduces every `expected` byte-for-byte. The normaliser renders
+//! the replay goldens, so a change to its output would move every golden at
+//! once; this table catches it at the source.
 
 use std::path::PathBuf;
 

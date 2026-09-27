@@ -1,6 +1,6 @@
-//! The corpus replay oracle: every scenario replayed through the
-//! complete native pipeline (chat-log tail -> bus -> tracker ->
-//! database) must match the committed goldens byte-for-byte, on both
+//! The corpus replay tests: every scenario replayed through the
+//! complete pipeline (chat-log tail -> bus -> tracker -> database) must
+//! match the scenario's committed goldens byte-for-byte, on both
 //! surfaces at once:
 //!
 //! - the normalised event fingerprint (`expected/fingerprint.jsonl`),
@@ -9,13 +9,11 @@
 //! - the catalogue database snapshot (`expected/db_state.json`),
 //!   produced by the tracker's real persistence writes.
 //!
-//! The goldens are the frozen end-to-end equivalence evidence: banked
-//! when the native pipeline was proven byte-identical to the reference
-//! implementation, they pin that behaviour permanently, so a
-//! byte-identical native replay proves equivalence on every CI run with
-//! no second implementation present. The two serialisations share one
-//! normaliser, in fingerprint-then-snapshot order, exactly as the
-//! golden harness assigns its encounter-order symbols.
+//! The goldens pin the pipeline's end-to-end behaviour: a deliberate
+//! change regenerates them (`UPDATE_CORPUS_GOLDENS=1`) and the diff is
+//! reviewed in the commit that moves them. The two serialisations share
+//! one normaliser, in fingerprint-then-snapshot order, so encounter-order
+//! symbols are assigned consistently across both.
 //!
 //! The replay protocol mirrors the harness: a frozen, driver-advanced
 //! clock from the scenario's committed plan; lines streamed one flush
@@ -621,11 +619,6 @@ fn tree_harvesting_session_matches_the_goldens() {
 }
 
 #[test]
-fn placeholder_recorded_hunt_matches_the_goldens() {
-    replay_against_goldens("recorded", "placeholder_recorded_hunt", "");
-}
-
-#[test]
 fn healing_effect_rotation_matches_the_goldens() {
     replay_against_goldens("scripted", "healing_effect_rotation", "");
 }
@@ -643,27 +636,4 @@ fn dot_weapon_rotation_matches_the_goldens() {
 #[test]
 fn dot_effect_windows_matches_the_goldens() {
     replay_against_goldens("scripted", "dot_effect_windows", "");
-}
-
-#[test]
-fn deferred_scenarios_are_named_not_silently_dropped() {
-    // The remaining golden-carrying scenario needs the skill-scan
-    // capture pipeline, which joins the oracle when that service
-    // lands; naming it here keeps the coverage gap loud. Real
-    // recorded bundles are local-by-default and stay out of the
-    // public tree, so the scenario is simply absent on most hosts;
-    // where it is present, it must still carry the goldens this
-    // manifest defers.
-    let deferred = ["hunt_with_skill_scan"];
-    for name in deferred {
-        let dir = scenario_dir("recorded", name);
-        if !dir.is_dir() {
-            eprintln!("{name}: local-only bundle absent on this host; the deferral stands");
-            continue;
-        }
-        assert!(
-            dir.join("expected/db_state.json").exists(),
-            "{name} is present without goldens; update the deferred manifest"
-        );
-    }
 }

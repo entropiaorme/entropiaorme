@@ -21,11 +21,10 @@ reviews:
     - "!app/src-tauri/entropia-orme/resources/models/*.onnx"
     - "!app/src-tauri/entropia-orme/resources/snapshot/*.json"
     - "!app/src-tauri/eo-services/src/data/*.csv"
-    # The frozen equivalence goldens and ratified contract snapshots: large,
-    # mechanically-generated, and guarded by the golden-ratification gate, so
-    # they are kept out of the line-by-line review surface.
+    # The replay goldens and wire-test fixtures: large and mechanically
+    # generated, and reviewed as a diff in the commit that moves them, so they
+    # are kept out of the line-by-line review surface.
     - "!app/src-tauri/fixtures/**"
-    - "!app/src-tauri/contracts/*.snapshot.json"
     - "!app/src-tauri/eo-wire/tests/fixtures/**"
     - "!assets/**"
     - "!app/static/**"

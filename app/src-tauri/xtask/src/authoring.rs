@@ -127,7 +127,6 @@ fn exempt_patterns() -> &'static [Regex] {
             r"(^|/)Cargo\.lock$",
             r"(?i)\.db$",
             r"(^|/)app/src-tauri/entropia-orme/resources/models/",
-            r"(^|/)app/src-tauri/contracts/[^/]+\.snapshot\.json$",
             r"(^|/)app/src/lib/api/schema\.d\.ts$",
         ]
         .iter()

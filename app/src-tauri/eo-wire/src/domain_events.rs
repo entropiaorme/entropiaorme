@@ -5,10 +5,7 @@
 //! models' forbidden extras), payload keys are camelCase, `occurred_at`
 //! is a required ISO-8601 UTC string, and serialisation emits fields in
 //! the envelope's declaration order (`type`, `event_version`,
-//! `occurred_at`, `payload`) so the JSON bytes match the Python
-//! `model_dump_json()` output for the same envelope. The committed
-//! `event_schemas.snapshot.json` is asserted against these types by the
-//! schema-conformance test; the value-level wire vectors are pinned in
+//! `occurred_at`, `payload`). The value-level wire vectors are pinned in
 //! this module's tests.
 
 use serde::de::Error as _;

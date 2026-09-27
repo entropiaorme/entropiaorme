@@ -35,9 +35,10 @@ pub const COOLDOWN_SECONDS: f64 = 2.0 * 60.0 * 60.0;
 /// The game's interact key, which starts cutting a tree. A route planned to
 /// visit on this key records the active tree the moment it is pressed.
 pub const VISIT_KEY: &str = "f";
-/// A second visit signal this soon after the last one, from within the
-/// arrival radius of where that one was observed, is the same tree again
-/// (repeated swings, or the interact key pressed more than once).
+/// A second harvest this soon after the last one, from within the arrival
+/// radius of where that one was observed, is the same tree swung at again.
+/// The interact key is exempt: each press is the player declaring a cut, which
+/// is what lets a dense stand be walked tree by tree.
 const REPEAT_VISIT_WINDOW_SECONDS: f64 = 30.0;
 
 pub type BoundsProvider = Arc<dyn Fn(&str) -> Option<CoordBounds> + Send + Sync>;
@@ -523,9 +524,10 @@ impl NavigationService {
     /// player has started cutting the tree the route points at, so record the
     /// active tree. No harvest is waited for and no arrival radius applies.
     /// The observation is a fresh coordinate read, or the last observed
-    /// position when the read fails, so a press is never lost to OCR. A press
-    /// repeated on the tree just recorded is ignored rather than consuming
-    /// the next stop.
+    /// position when the read fails, so a press is never lost to OCR. Every
+    /// distinct press counts, however close in time and space to the last:
+    /// in a dense stand the next tree can be a step away. Only a held key's
+    /// autorepeat is folded into one press, at the dispatch.
     pub async fn on_visit_key(&self) {
         let _ = self.key_visit().await;
     }
@@ -546,12 +548,6 @@ impl NavigationService {
             .map(|read| (read.lon as f64, read.lat as f64))
             .unwrap_or((run.current_lon, run.current_lat));
         let now = naive_to_epoch(self.clock.now());
-        if self
-            .repeats_recent_visit(run.id, "key", observed, now)
-            .await?
-        {
-            return Ok(None);
-        }
         self.record_active_visit(run.id, active, observed, "key", now)
             .await
             .map(Some)
@@ -1793,7 +1789,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_held_or_repeated_key_on_the_same_tree_records_one_visit() {
+    async fn a_held_key_records_one_visit_and_each_new_press_records_the_next_tree() {
         let (_dir, service, position, _changes, input) = navigation_fixture().await;
         service
             .start("Calypso".into(), None, 0.0, 0.0, Some(vec![1, 2, 3]), true)
@@ -1805,16 +1801,18 @@ mod tests {
         press_off_runtime(&input, KeystrokeKind::Press);
         press_off_runtime(&input, KeystrokeKind::Press);
         await_key_visits(&service, 1).await;
-        // Released and pressed again on the same spot moments later: the same
-        // tree, not the next one.
+        // Released and pressed again from the same spot moments later: a
+        // neighbouring tree in a dense stand, so it records the next stop.
         press_off_runtime(&input, KeystrokeKind::Release);
-        service.on_visit_key().await;
-        assert_eq!(key_visits(&service).await.len(), 1);
-
-        // Moved on to another tree: the next press records it.
-        *position.lock().unwrap() = (60, 9);
-        service.on_visit_key().await;
-        assert_eq!(key_visits(&service).await.len(), 2);
+        press_off_runtime(&input, KeystrokeKind::Press);
+        await_key_visits(&service, 2).await;
+        let pins: Vec<i64> = key_visits(&service)
+            .await
+            .into_iter()
+            .map(|(pin_id, ..)| pin_id)
+            .collect();
+        assert_eq!(pins.len(), 2);
+        assert_ne!(pins[0], pins[1]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

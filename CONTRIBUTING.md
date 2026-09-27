@@ -1,6 +1,6 @@
 # Contributing
 
-EntropiaOrme is a personal project: built for my own use, with public source under MIT. It's released openly so anyone who finds it useful is free to use, fork, or adapt it. Right now I'm not accepting external contributions.
+EntropiaOrme's source is public under MIT: anyone who finds it useful is free to use, fork, or adapt it. Right now I'm not accepting external contributions.
 
 ## Bug reports
 
@@ -14,7 +14,7 @@ For security-related issues see [SECURITY.md](SECURITY.md); please do not file p
 
 ## Contributions
 
-Pull requests for new features, refactors, or non-bug-fix changes are on hold for now. This keeps the maintenance surface small enough that the project stays sustainable as a one-person effort.
+Pull requests for new features, refactors, or non-bug-fix changes are on hold for now.
 
 If you're interested in contributing, please reach out first at MikelWL@protonmail.com with what you have in mind. I'll reconsider the posture if enough interest is expressed.
 

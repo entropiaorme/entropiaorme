@@ -80,7 +80,6 @@ describe('dashboard while the backend starts', () => {
 
 		// Each data region stands in with a placeholder, never an answer.
 		expect(screen.getByTestId('session-strip-pending')).toBeTruthy();
-		expect(screen.getByTestId('recent-events-pending')).toBeTruthy();
 		expect(screen.getByTestId('dashboard-widget-pending')).toBeTruthy();
 		for (const claim of [
 			'No recent events.',
@@ -98,7 +97,6 @@ describe('dashboard while the backend starts', () => {
 		await waitFor(() => expect(screen.getByText('Tracking active')).toBeTruthy());
 		expect(screen.getByText('Looted Animal Oil Residue')).toBeTruthy();
 		expect(screen.queryByTestId('session-strip-pending')).toBeNull();
-		expect(screen.queryByTestId('recent-events-pending')).toBeNull();
 		expect(screen.queryByTestId('dashboard-widget-pending')).toBeNull();
 		expect(screen.queryByRole('alert')).toBeNull();
 

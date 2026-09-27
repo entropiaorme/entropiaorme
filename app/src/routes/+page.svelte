@@ -9,16 +9,14 @@
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
 	import { getCooldownRemaining } from '$lib/features/quests/cooldown';
 	import { getActivityOptions, type ActivityOptionsResult } from '$lib/api';
-	import { Skeleton } from '$lib/components';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore.svelte';
 
 	// The consolidated tracking readout, sourced from the store: the dashboard's
 	// single source of live-session render shape. Every tracking read on this
-	// route flows through this one derived (the island, widgets, and events list
-	// take it as input), so the store has a single consumption point here.
+	// route flows through this one derived (the island and widgets take it as
+	// input), so the store has a single consumption point here.
 	let status = $derived(trackingSnapshot.current);
-	let recentEvents = $derived(trackingSnapshot.current?.recentEvents ?? []);
 
 	// Quest data + lifecycle handlers come from the shared quests feature model;
 	// the dashboard reads the selected or running session's integrated roster. The stats
@@ -102,50 +100,9 @@
 		onReview={(definitionId) => void review.openReview(definitionId)}
 	/>
 
-	<!-- ═══ Island: Recent Events ═══ -->
-	<section
-		class="panel p-4 flex-shrink-0"
-		data-testid="dashboard-recent-events"
-		aria-busy={status === null}
-	>
-		<h3 class="eyebrow mb-3">Recent events</h3>
-
-		{#if status === null}
-			<!-- Not read yet: an empty list here would claim there are none. -->
-			<ul class="space-y-2" data-testid="recent-events-pending">
-				{#each ['w-3/5', 'w-2/5', 'w-1/2'] as width}
-					<li class="flex items-center h-5"><Skeleton class="h-3 {width}" /></li>
-				{/each}
-			</ul>
-		{:else if recentEvents.length > 0}
-			<ul class="relative space-y-2">
-				{#each recentEvents.slice(0, 3) as event}
-					<li class="flex items-center gap-2.5 text-sm">
-						<span class="w-1.5 h-1.5 rounded-full shrink-0
-							{event.type === 'hof'
-								? 'bg-warning [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-warning)_60%,transparent)]'
-								: event.type === 'quest'
-									? 'bg-positive [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-positive)_60%,transparent)]'
-									: event.type === 'warning'
-										? 'bg-negative [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-negative)_60%,transparent)]'
-										: 'bg-accent [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-accent)_60%,transparent)]'}"></span>
-						<span class="text-text-secondary truncate">{event.description}</span>
-						{#if event.value}
-							<span class="ml-auto text-xs text-text-tertiary font-medium tabular-nums tracking-wider">{event.value}</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{:else}
-			<div class="relative py-4 text-center">
-				<p class="text-text-tertiary text-sm">No recent events.</p>
-			</div>
-		{/if}
-	</section>
-
-
 	<DashboardWidgets
 		trackingPending={status === null}
+		recentEvents={status === null ? null : (status.recentEvents ?? [])}
 		sessionId={status?.session_id ?? null}
 		multiplierHistory={status?.multiplierHistory ?? null}
 		cumulativeNetHistory={status?.cumulativeNetHistory ?? null}

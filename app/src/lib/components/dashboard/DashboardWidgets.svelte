@@ -1,14 +1,22 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Skeleton, Tabs } from '$lib/components';
 	import QuestingWidget from './QuestingWidget.svelte';
 	import CustomiseStatsWidget from './CustomiseStatsWidget.svelte';
 	import LootCompositionWidget from './LootCompositionWidget.svelte';
 	import LootPulseWidget from './LootPulseWidget.svelte';
-	import type { ActivityOptionsResult } from '$lib/api';
+	import RecentEventsWidget from './RecentEventsWidget.svelte';
+	import {
+		acknowledgeHead,
+		feedHead,
+		hasUnseenEvents,
+	} from '$lib/features/dashboard/recentEvents';
+	import type { ActivityOptionsResult, RecentEvent } from '$lib/api';
 	import type { Quest } from '$lib/types/quests';
 
 	let {
 		trackingPending,
+		recentEvents,
 		sessionId,
 		multiplierHistory,
 		cumulativeNetHistory,
@@ -27,6 +35,9 @@
 		/** No tracking snapshot has been read yet, so whether a session is
 		 * running is still unknown. */
 		trackingPending: boolean;
+		/** The live session's notable-event feed, newest first; `null` until
+		 * the tracking snapshot has been read. */
+		recentEvents: RecentEvent[] | null;
 		sessionId: string | null;
 		multiplierHistory: number[] | null;
 		cumulativeNetHistory: number[] | null;
@@ -43,14 +54,28 @@
 		getCooldownRemaining: (quest: import('$lib/types/quests').Quest) => string | null;
 	} = $props();
 
-	const tabs = [
+	let activeTab = $state<string>('events');
+
+	// An event arriving while another tab is open marks the events tab until
+	// the reader opens it.
+	const eventsHead = $derived(recentEvents === null ? undefined : feedHead(recentEvents));
+	let seenEventsHead = $state<string | null | undefined>(undefined);
+	$effect.pre(() => {
+		const head = eventsHead;
+		const watching = activeTab === 'events';
+		seenEventsHead = acknowledgeHead(untrack(() => seenEventsHead), head, watching);
+	});
+	const eventsUnseen = $derived(
+		hasUnseenEvents(seenEventsHead, eventsHead, activeTab === 'events'),
+	);
+
+	const tabs = $derived([
+		{ id: 'events', label: 'Recent Events', attention: eventsUnseen },
 		{ id: 'pulse', label: 'Loot Pulse' },
 		{ id: 'loot', label: 'Loot Composition' },
 		{ id: 'quests', label: 'Quests' },
 		{ id: 'customise', label: 'Customise Stats' },
-	];
-
-	let activeTab = $state<string>('pulse');
+	]);
 
 </script>
 
@@ -66,6 +91,8 @@
 		<div class="flex-1 flex flex-col" aria-busy="true" data-testid="dashboard-widget-pending">
 			<Skeleton class="flex-1 w-full rounded-md" />
 		</div>
+	{:else if activeTab === 'events'}
+		<RecentEventsWidget events={recentEvents ?? []} />
 	{:else if activeTab === 'pulse'}
 		<LootPulseWidget history={multiplierHistory} netHistory={cumulativeNetHistory} />
 	{:else if activeTab === 'loot'}

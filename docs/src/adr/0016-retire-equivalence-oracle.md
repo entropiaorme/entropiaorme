@@ -1,6 +1,6 @@
 # ADR-0016: Retire the cross-language equivalence oracle
 
-- Status: Accepted; the golden-ratification guard it re-homed is retired by [ADR-0037](0037-retire-golden-ratification-guard.md)
+- Status: Accepted; the golden-ratification guard it re-homed is retired by [ADR-0037](0037-retire-golden-ratification-guard.md), and the frozen port evidence it preserved is retired by [ADR-0039](0039-retire-port-equivalence-evidence.md)
 - Context: the Python-to-Rust port is complete and shipped ([ADR-0013](0013-in-process-collapse.md): a single in-process Rust binary), and the cross-language equivalence oracle of [ADR-0005](0005-cross-language-equivalence-oracle.md), retained after the port as a test-only reference implementation, has served its purpose and is now removed. This record supersedes ADR-0005.
 
 ## Context and problem statement

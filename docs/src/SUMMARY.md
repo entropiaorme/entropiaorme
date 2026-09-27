@@ -8,7 +8,7 @@
 - [Service and crate map](architecture/service-map.md)
 - [Event taxonomy](architecture/event-taxonomy.md)
 - [OCR pipeline](architecture/ocr-pipeline.md)
-- [Database schema reference](architecture/database-schema.md)
+- [Database schema](architecture/database-schema.md)
 - [Market data pipeline](architecture/market-data.md)
 
 # Decision records
@@ -52,3 +52,4 @@
   - [ADR-0036: Consumable dose lifecycle](adr/0036-consumable-dose-lifecycle.md)
   - [ADR-0037: Retire the golden-ratification guard](adr/0037-retire-golden-ratification-guard.md)
   - [ADR-0038: Promotion carries the public surface's polish](adr/0038-promotion-carries-public-polish.md)
+  - [ADR-0039: Retire the port-equivalence evidence](adr/0039-retire-port-equivalence-evidence.md)

@@ -1,37 +1,25 @@
 # Testing
 
-EntropiaOrme ships as a single pure-Rust binary: a Tauri desktop shell hosting the application backend in-process, with a Svelte frontend. Testing follows that shape in three tracks:
+EntropiaOrme ships as a single pure-Rust binary: a Tauri desktop shell hosting the application backend in-process, with a Svelte frontend. Testing follows that shape in two tracks:
 
 - **The cargo workspace** (`app/src-tauri/`): the native backend members and the Tauri shell, run under `cargo nextest`. This is the primary gate on the shipped binary.
 - **The frontend track** (`app/`): the pure-TypeScript logic layer and the high-logic Svelte components under Vitest and Testing-Library, with Biome owning lint and format.
-- **The native-shell end-to-end suite** (`app/e2e/`): the real Tauri WebView2 window driven through `tauri-driver`, exercising the desktop IPC boundary and pinning per-surface visual baselines.
 
 This document is the command-level reference; specific counts, coverage percentages, and mutation scores live in the badges and a live run, not in this prose, because they move with every change.
 
-## The equivalence evidence (the rigour story)
+## What the suite rests on
 
-The application was originally a Python (FastAPI) backend. It was ported to Rust, and the port was proven by a behavioural-equivalence oracle: for a given scenario's declared inputs, the Python implementation produced a fixed, normalised set of observable outputs (domain events, database state, HTTP responses), pinned as golden files, and the Rust implementation was graded byte-for-byte against them. With the port complete, the Python tree has been retired entirely; the shipped app is the single Rust binary.
+- **Unit and property tests beside the code** carry most of the weight: each backend module's `#[cfg(test)]` suite, `proptest` properties for the invariants that matter most (cost conservation across re-dose chains, for example), and the `eo-api` facade tests that drive the typed commands through the facade.
+- **The replay corpus is the end-to-end net.** It feeds canned versions of the real input surface (the chat.log tail, plus scripted hotbar presses, clock steps, and restarts) through the production pipeline and pins what comes out: the domain-event stream and the resulting database state. That makes "did behaviour change?" a mechanical question for the application's core loop.
+- **Mutation testing measures whether the net would notice.** It deliberately breaks the code in many small ways and asks whether any test fails. The score is published as a badge; it is a measurement, not a gate.
 
-The proof survives the retirement. The frozen goldens the port was graded against are committed Rust-side, and a family of hermetic tests re-asserts them on every run **with no second implementation present**: a byte-identical native result is the equivalence evidence, banked permanently. The goldens fall into three groups, all under `app/src-tauri/`:
+A test that runs code but asserts nothing about the result undermines all three: it shows as covered, leaves every behaviour-changing mutant alive, and pins nothing. Coverage proves a line ran; it cannot prove a test would notice if that line were wrong.
 
-- **The replay corpus** (`fixtures/corpus/`): per-scenario event-stream fingerprints (`expected/fingerprint.jsonl`), database-state snapshots (`expected/db_state.json`), and per-endpoint HTTP-response goldens (`expected/http_responses/`).
-- **The contract snapshot** (`contracts/`): the frontend-facing domain-event schema snapshot (`event_schemas.snapshot.json`).
-- **The wire fixtures** (`eo-wire/tests/fixtures/`): the normaliser conformance table and the listener / quest-automation projection mirrors.
-
-These goldens are frozen evidence: the tests below only read and assert them. Changing one is a deliberate, reviewed change (see "Goldens regeneration" below).
-
-### The safety net and the proof it holds
-
-Two ideas sit behind the suite and answer different questions.
-
-- **The replay corpus is the safety net.** It feeds canned versions of the real input surfaces (the chat.log tail) through the production pipeline and pins the externally observable output. That makes "did behaviour change?" a mechanical question. It is cheap; it runs constantly.
-- **Mutation testing is the proof the net has no holes.** It deliberately sabotages the code in many small ways and asks whether any test notices. A high mutation score is the evidence that the net is tight enough to catch a silent divergence (an off-by-one, a dropped reset, a sign flip) rather than wave it through. "All my replay tests pass" is a weaker statement without it.
-
-A test that runs code but asserts nothing about the result undermines both: it shows as covered, leaves every behaviour-changing mutant alive, and pins nothing. Coverage proves a line ran; it cannot prove a test would notice if that line were wrong.
+The application began as a Python backend and was ported to Rust, graded byte-for-byte against the Python implementation's recorded output. With the port long finished, that equivalence evidence has been retired ([ADR-0039](docs/src/adr/0039-retire-port-equivalence-evidence.md)); the replay corpus that remains pins this codebase's own behaviour.
 
 ## Running the Rust suite
 
-The workspace lives at `app/src-tauri/`: the Tauri shell (`entropia-orme`, window orchestration and hosting the backend in-process) plus the native-backend members (`eo-wire`, `eo-services`, `eo-api`) that implement the application logic. The backend members carry the equivalence tests and the bulk of the unit coverage; they build and test without the Tauri system toolchain.
+The workspace lives at `app/src-tauri/`: the Tauri shell (`entropia-orme`, window orchestration and hosting the backend in-process) plus the native-backend members (`eo-wire`, `eo-services`, `eo-api`) that implement the application logic. The backend members carry the replay corpus and the bulk of the unit coverage; they build and test without the Tauri system toolchain.
 
 Run the backend members alone (no Tauri toolchain required):
 
@@ -58,15 +46,9 @@ cargo test --workspace --doc      # nextest does not run doctests; this leg keep
 
 A `.cargo/config.toml` under the workspace redirects test temporary directories into `target/`, so an interrupted run does not accumulate scratch directories in the OS temp area; reclaim any leftovers with `cargo clean`.
 
-### The equivalence tests
+### The replay corpus
 
-These are the hermetic tests that re-assert the frozen goldens. Each runs with no second implementation; a byte-identical native result is the proof.
-
-- **`eo-services/tests/corpus_replay_oracle.rs`**: replays every scripted scenario through the complete native pipeline (chat-log tail to event bus to tracker to database), then asserts both the event-stream fingerprint and the database-state snapshot byte-for-byte. The two serialisations share one normaliser in fingerprint-then-snapshot order, exactly as the golden harness assigned its encounter-order symbols.
-- **`eo-wire/tests/emitters_proof.rs`**: feeds the committed raw captures (pre-normalisation bus events, database rows, and HTTP responses) through the Rust emitters and asserts byte-equality against the goldens. The raw captures and goldens are committed together, so a stale fixture cannot pass.
-- **`eo-wire/tests/conformance.rs`**: replays the normaliser conformance table and checks the native normaliser reproduces every expected output byte-for-byte (and refuses a vacuous pass on an empty table).
-- **`eo-wire/tests/event_schema_conformance.rs`**: asserts the native domain-event union against its counterpart in the committed event-schema snapshot (property sets, required lists, field shapes, nullability, closed-world posture), and round-trips the snapshot's enum values through the real serde implementations.
-- **`eo-wire/tests/yml_family.rs`**: asserts the native normaliser and serialiser reproduce the listener and quest-automation projection mirrors byte-for-byte.
+`eo-services/tests/corpus_replay_oracle.rs` replays every scenario under `app/src-tauri/fixtures/corpus/scripted/` through the complete pipeline (chat-log tail to event bus to tracker to database), then asserts the scenario's two goldens byte-for-byte: the normalised event-stream fingerprint (`expected/fingerprint.jsonl`) and the database-state snapshot (`expected/db_state.json`). The two serialisations share one normaliser (`eo-wire`) in fingerprint-then-snapshot order, so the symbols standing in for ids and timestamps are assigned consistently across both. `eo-wire/tests/conformance.rs` pins that normaliser's own behaviour against a fixed input and output table.
 
 ### Deterministic scenario clocks
 
@@ -99,32 +81,28 @@ This is the durable discipline behind every golden: the system under test must b
 
 ## Mutation testing
 
-Coverage proves a line ran; it cannot prove a test would notice if that line were wrong. Mutation testing closes that gap: [cargo-mutants](https://mutants.rs) makes small changes to the code (a `<` becomes `<=`, a `+` a `-`, a constant shifts) and re-runs the tests against each one. A mutant the tests catch is *killed*; one that slips through *survives* and marks a weak spot. The **mutation score** (the share of mutants killed) is the suite's effectiveness metric and the headline quality signal for the native logic core.
+Coverage proves a line ran; it cannot prove a test would notice if that line were wrong. Mutation testing closes that gap: [cargo-mutants](https://mutants.rs) makes small changes to the code (a `<` becomes `<=`, a `+` a `-`, a constant shifts) and re-runs the tests against each one. A mutant the tests catch is *killed*; one that slips through *survives* and marks a weak spot. The **mutation score** (the share of mutants killed) is the suite's effectiveness metric for the native logic core.
 
-The campaign targets the backend members; the Tauri shell stays out (its logic is OS-window plumbing behind `cfg(windows)`, and building it needs the Tauri system toolchain). Because a campaign re-runs the tests once per mutant, it is heavy and runs nightly rather than per-change (`.github/workflows/nightly.yml`), on a Linux runner. Run one locally on a POSIX environment with:
+The campaign targets `eo-wire` and `eo-services`; the Tauri shell stays out (its logic is OS-window plumbing behind `cfg(windows)`, and building it needs the Tauri system toolchain). Because a campaign re-runs the tests once per mutant, it is heavy: it runs when `main` moves and the campaigned members changed, and on demand (`.github/workflows/mutation.yml`), sharded across Linux runners. Run one locally on a POSIX environment with:
 
 ```sh
 cd app/src-tauri
 cargo mutants --package eo-wire --package eo-services --in-place
+cargo run -p xtask -- mutation-score --outcomes mutants.out/outcomes.json
 ```
 
-The campaign runs `--in-place` because the member tests read committed fixtures from the repository outside the cargo workspace (the relocated corpus under `fixtures/`), which cargo-mutants' default copied build tree would not contain.
-
-The acceptance bar is a **per-file floor map** enforced by the in-tree guard:
-
-```sh
-cargo run -p xtask -- mutation-floors --outcomes mutants.out/outcomes.json
-```
-
-(The `--outcomes` flag repeats to merge the outcome files of a sharded campaign; per-file counts are summed before scoring.) The floor map is the explicit register of files under mutation coverage. A file with an adopted floor must hold its score, and floors only ever ratchet up. A file without a floor is unadopted: it is still measured and counted in the aggregate badge, and reported as awaiting coverage, but it is non-blocking, so surviving mutants on a newly added file do not fail the gate. Bringing a file into coverage (killing its survivors, recording its floor, excluding any provable equivalents) is done in periodic, deliberate coverage passes rather than in every feature change, so day-to-day work stays off the slow campaign while the aggregate score stays honest. A mutant counts as caught when a test failed on it or the mutated build timed out; unviable mutants (the mutation does not compile) leave the denominator. The aggregate score is published as the README's mutation badge. Triaging a survivor is a two-way choice: strengthen a test until it is killed, or, if the mutation is provably equivalent, leave it with a recorded reason. Never lower a floor to make a regressed run pass.
+The campaign runs `--in-place` because the member tests read committed fixtures from the repository outside the cargo workspace (the corpus under `fixtures/`), which cargo-mutants' default copied build tree would not contain. `mutation-score` prints each file's caught and missed mutants and the aggregate score, and with `--badge-out` writes the README's badge (the `--outcomes` flag repeats to merge a sharded campaign's outcome files). It reports; it never fails on a score. A mutant counts as caught when a test failed on it or the mutated build timed out; unviable mutants (the mutation does not compile) leave the denominator. Raising the score is a deliberate pass over the files with survivors: strengthen a test until a survivor is killed, or, if the mutation is provably equivalent, exclude it in `.cargo/mutants.toml` with a recorded reason.
 
 ## Goldens regeneration
 
-The equivalence goldens (the corpus fingerprints, DB-state snapshots, and HTTP-response goldens under `fixtures/corpus/`; the contract snapshots under `contracts/`; the wire fixtures under `eo-wire/tests/fixtures/`) assert by default. What they pin is this codebase's own contract, not fidelity to the retired reference implementation: a golden whose bytes encoded an artefact of that reference (a representation detail, a transport-envelope shape, an error-message text) may be changed as a deliberate behaviour decision. See [ADR-0017](docs/src/adr/0017-behavioural-contract-ownership.md).
+The replay goldens assert by default. A deliberate behaviour change regenerates the affected scenarios:
 
-A deliberate behaviour change regenerates the affected goldens, and the diff is reviewed in the commit that moves them; the commit message names the sets that moved and why. Regenerating re-pins whatever the pipeline currently produces, so an unscrutinised regeneration can lock in a regression: the expected output moves to match the regressed code and every assertion passes again. Treat a golden diff as a behaviour-change review, never a mechanical step. The first generation of a new golden deserves the closest look, because no prior golden fails to force the review.
+```sh
+cd app/src-tauri
+UPDATE_CORPUS_GOLDENS=1 cargo nextest run -p eo-services --test corpus_replay_oracle
+```
 
-There is no CI guard over golden moves ([ADR-0037](docs/src/adr/0037-retire-golden-ratification-guard.md)). The reports under `app/src-tauri/ratifications/` record the reviews carried out while one was in force.
+The diff is reviewed in the commit that moves it, and the commit message names the scenarios that moved and why ([ADR-0037](docs/src/adr/0037-retire-golden-ratification-guard.md)). Regenerating re-pins whatever the pipeline currently produces, so an unscrutinised regeneration can lock in a regression: the expected output moves to match the regressed code and every assertion passes again. Treat a golden diff as a behaviour-change review, never a mechanical step. The first generation of a new scenario deserves the closest look, because no prior golden forces the review.
 
 ## Frontend tests
 
@@ -137,14 +115,14 @@ npm run test:watch      # re-run on change during development
 npm run test:coverage   # run with a v8 coverage report
 ```
 
-Scope is two layers, with end-to-end flows owned by the native-shell suite (below):
+Scope is two layers:
 
 - **Module**: the extracted logic layers under `src/lib/`. Each route's behaviour lives in a per-surface feature module (`lib/features/<surface>/`: view models and pure domain logic, e.g. `questsModel.svelte.ts`, `cooldown.ts`), backed by the shared view-model helpers (`lib/view/`: table, form-modal, typeahead, error-state), the window and overlay helpers (`lib/windows/`), the realtime plumbing (`lib/realtime/`), the typed API seam (`lib/api/`), and the runes state modules (`lib/*.svelte.ts`, `lib/stores/`). Suites are colocated as `<module>.test.ts` next to their source; `.svelte.ts` modules compile through the Svelte plugin, so `$state` / `$derived` behave in the tests exactly as in the app.
 - **Component**: the high-logic Svelte surfaces, rendered under Testing Library with `happy-dom` and the Tauri/backend seams mocked.
 
 Routes can be mounted too: `vitest.config.ts` aliases SvelteKit's `$app/navigation` and `$app/state` to inert stubs under `app/test-stubs/`. The startup suites (`src/routes/startup.test.ts`, `src/routes/page.test.ts`) use this to mount every main page while the backend is still starting, with only Tauri's `invoke` mocked. They assert that no read reaches the backend before it is ready, that no page shows an error, and that no region shows an empty state as though it were the answer. To walk that path by hand on a machine that starts quickly, set `ENTROPIAORME_STARTUP_DELAY_MS` (debug builds only) to hold startup back, e.g. `ENTROPIAORME_STARTUP_DELAY_MS=5000 just dev`.
 
-Coverage instrumentation (`coverage.include` in `app/vitest.config.ts`) is directory-based over those tested layers plus the standalone pure-logic modules, so a new module landing in a tested layer is instrumented from the moment it exists rather than once someone remembers to list it. `.svelte` components, generated files, test files, and fixtures are excluded: components are exercised through the component suites and the native-shell e2e, not unit-instrumented.
+Coverage instrumentation (`coverage.include` in `app/vitest.config.ts`) is directory-based over those tested layers plus the standalone pure-logic modules, so a new module landing in a tested layer is instrumented from the moment it exists rather than once someone remembers to list it. `.svelte` components, generated files, test files, and fixtures are excluded: components are exercised through the component suites, not unit-instrumented.
 
 Tests assert the code's actual behaviour; where a module diverges from what a reader might expect, the divergence is asserted and flagged in-file as a candidate defect rather than papered over.
 
@@ -170,23 +148,6 @@ The Svelte frontend is runes-native: `svelte.config.js` forces runes mode for ev
 
 Shared state is runes-native too: cross-surface state is authored as `.svelte.ts` modules, the legacy `svelte/store` writables have all been migrated away, and the `no-new-writable` authoring lint (`cargo run -p xtask -- no-new-writable`, run in CI) forbids any `svelte/store` import from returning. Its frozen-legacy allowlist is empty and can only ever shrink, so the guarantee is whole-tree: no importer anywhere.
 
-### Frontend end-to-end tests (native shell)
-
-The end-to-end layer drives the **real desktop shell** (the Tauri WebView2 window), not a browser tab, through [WebdriverIO](https://webdriver.io) and [`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/). Driving the real shell is the point: only there does the desktop IPC bridge exist, so the suite can assert the panels render and the IPC surface is live across the boundary a browser-served harness is structurally blind to. The suite lives under `app/e2e/`.
-
-```sh
-cd app
-npm run test:e2e          # functional panel flows against the native shell
-npm run test:visual       # diff every visual spec against its committed baseline
-npm run test:visual:update # regenerate the baselines after an intended UI change
-```
-
-The e2e build embeds the frontend and serves it at the application's own `tauri://` origin (native IPC), built with an in-process request-fixture stub (the `e2e-stub` feature) so responses are deterministic, and with chart tweens frozen (`E2E_FREEZE_TWEENS`) so the visual baselines are stable. A `tauri.e2e.conf.json` overlay (capture window size plus a broadened CSP for the stub) is e2e-only and never ships. The suite is hermetic on a developer machine as well as in CI: the harness recreates a fresh backend data directory per run (`e2e/.data/`, injected through the spawn environment) so a run can never open a developer's own database, and the e2e build scopes its preference store to a separate file (`E2E_ISOLATED_PREFS`) so it never shares onboarding or consent state with a real installation. The visual layer commits per-surface screenshot baselines under `e2e/baselines/` and diffs against them with a small fuzzy tolerance. Baselines are captured in one rendering environment (WebView2 on Windows), so a different renderer will diff: regenerate after an intended change rather than editing the image.
-
-The functional suite covers the panel flows and the live IPC surface, plus a keyboard-only smoke (`e2e/specs/keyboard.e2e.mjs`) that drives the shared modal and menu primitives with real key events: the modal's focus trap, Escape dismissal, and focus return, and the menu's roving menuitem focus, arrow keys, and Escape-to-trigger. The visual suite pins the dashboard and analytics surfaces against their populated fixtures, and the quests and character surfaces in their default (empty-database) states; populated-state visual coverage for those two surfaces needs fixture-served data and is a deliberate follow-up. A missing baseline fails the run rather than silently adopting the first capture (`autoSaveBaseline: false`), so new baselines land deliberately: `npm run test:visual:update` locally, or committing the actuals a CI run uploads.
-
-This layer runs on Windows in CI (the `Frontend e2e + visual (native shell, Windows)` job), the application's platform; it provisions `tauri-driver` and the matching Microsoft Edge WebDriver per run. The CI job is temporarily disabled: the runner image's WebView2 150 update broke WebDriver session creation for every run (the DevTools remote-debugging endpoint does not come up under the runner's elevated execution context; MicrosoftEdge/WebView2Feedback#5640), while the identical suite passes on a real Windows machine, so the suite runs locally until the upstream regression is fixed (the job comment in `ci.yml` carries the re-enable path).
-
 ## Continuous integration
 
 Every pull request and every push to the two development branches executes the workflow in `.github/workflows/ci.yml`. `next` is the integration branch work lands on directly; `main` is the stable branch releases are cut from, reached by a promotion pull request from `next` (merged as a merge commit, so both lines keep the same commits) or by a squash hotfix pull request. On a documentation-only change (every changed file is Markdown) the compiling jobs are skipped, as described under "Documentation-only changes" below.
@@ -194,17 +155,17 @@ Every pull request and every push to the two development branches executes the w
 - **Change scope and CI gate**: a quick detection job classifies whether the change touches code or only documentation, and the compiling jobs run only for a code change. A small always-running `CI gate` sentinel is the single required check in their place: it passes when the change is documentation-only (those jobs were legitimately skipped) or when every gated job succeeded, and fails closed otherwise, so a skip can never let an untested change merge. Branch protection requires only this one context, so the required-check list never drifts as individual jobs are added or renamed.
 - **Authoring lint** (every pull request and push): the `authoring-lint` guard flags em dashes and US spellings on the lines a change adds, and references to absent files, iteration tokens, and tool-attribution lines in the added prose and the commit messages; a `version-stamps` step asserts the three application version stamps stay in lock-step (see "Authoring lint" below).
 - **Frontend**: the generated-client freshness check, the production build, the type-check, the Biome lint, and the Vitest suites.
-- **Frontend e2e + visual** (Windows): the native-shell IPC and visual-regression suites (see above).
 - **Rust workspace policy** (`fmt` + `audit` + `deny`): formatting, RustSec advisory audit, and supply-chain policy (licence allowlist, bans, registry sources). Source- and lockfile-level only, so it runs unconditionally on a cheap Linux runner (see "Rust workspace checks" below).
 - **Rust workspace** (`clippy` + `build` + `test` + doctests, Windows): lints, compiles, and tests every workspace member on the application's real target (most of the shell sits behind `cfg(windows)`).
 - **Rust backend members** (`nextest`, Linux): builds and tests the backend members on a runner without the Tauri toolchain, structurally proving they stay free of GUI dependencies, and compile-checks the criterion benches.
-- **Rust backend members** (branch coverage): measures per-member branch coverage over the same members with `cargo llvm-cov` on the nightly toolchain (branch instrumentation is nightly-only). The figure is review evidence (whether a member's tests exercise the paths its behaviour rests on) and is published as the README's coverage badge from `main`.
+- **Rust backend members** (branch coverage): measures per-member branch coverage over the same members with `cargo llvm-cov` on the nightly toolchain (branch instrumentation is nightly-only), published as the README's coverage badge from `main`. It re-runs the member suite under instrumentation, so it runs only on pull requests and pushes to `main`; a push to `next` skips it.
+- **Linux build + bundle**: builds the full Tauri shell on Linux and bundles the `.deb`.
 
 On a push these same jobs run against the state that landed, so a promotion to `main` is verified on the exact merged result as well as on its pull request.
 
 ### The two branches
 
-A change lands on `next` by direct push and is run from there before it is promoted. `main` accepts only pull requests, requires the `CI gate` check with the branch up to date, and merges by auto-merge once the check is green; there is no merge queue, because the workflow already runs on every push to both branches and the nightly campaign covers what is too slow for it. A promotion pull request from `next` merges as a merge commit; the integration branch is never squashed, so the two branches keep the same commits and a promotion that falls behind `main` is refreshed by merging `main` into `next`.
+A change lands on `next` by direct push and is run from there before it is promoted. `main` accepts only pull requests, requires the `CI gate` check with the branch up to date, and merges by auto-merge once the check is green; there is no merge queue, because the workflow already runs on every push to both branches. A promotion pull request from `next` merges as a merge commit; the integration branch is never squashed, so the two branches keep the same commits and a promotion that falls behind `main` is refreshed by merging `main` into `next`.
 
 ### Documentation-only changes
 
@@ -212,9 +173,9 @@ A change that touches only documentation needs none of the compiling jobs: there
 
 Skipping a required check is the hazard: branch protection treats a never-reported required check as pending (deadlocking the merge) and a skipped one as passing (fail-open). The `CI gate` avoids this with an always-running, fail-closed sentinel that stands in for the gated contexts: a documentation-only change goes green in seconds on the sentinel's verdict alone, while a code change still runs and must pass everything. The classification is deliberately conservative: anything other than Markdown counts as code, so the safe direction (run the suite) is the default whenever there is any doubt.
 
-### Nightly
+### Mutation campaign
 
-A separate scheduled workflow (`.github/workflows/nightly.yml`) runs the slower checks once a day: the `cargo-mutants` campaign over the backend members (sharded across parallel runners; a single runner cannot finish the full campaign inside the hosted six-hour job ceiling), a verdict job that merges the shard outcomes for the per-file mutation-floor enforcement, and the mutation-score badge publish from `main` (see "Mutation testing" above).
+A separate workflow (`.github/workflows/mutation.yml`) runs the `cargo-mutants` campaign over the backend members when `main` moves and they changed, and on demand: sharded across parallel runners (a single runner cannot finish the full campaign inside the hosted six-hour job ceiling), then a score job that merges the shard outcomes into the per-file report and the mutation-score badge published from `main` (see "Mutation testing" above).
 
 ## Local checks (pre-commit)
 
@@ -243,7 +204,7 @@ The xtask guards compile the in-tree `xtask` crate once (cached thereafter) and 
 
 ## In-development surfaces
 
-Development lands on the main line continuously, so a control or a panel can reach the tree before the capability behind it. Such a surface must not read as finished, and the rule is enforced mechanically rather than remembered.
+Development lands on `next` continuously, so a control or a panel can reach the tree before the capability behind it. On `next` it may land unmarked; a promotion to `main` marks every such surface (or finishes it) before the merge, so nothing on `main` reads as finished when it is not ([ADR-0038](docs/src/adr/0038-promotion-carries-public-polish.md)). The marking is enforced mechanically rather than remembered.
 
 Three parts, in `app/src/lib/inDevelopment/`:
 
@@ -291,7 +252,7 @@ cargo nextest run -p eo-wire -p eo-services -p eo-api   # backend members alone,
 cargo test --workspace --doc                            # doctests (nextest does not run them)
 cargo llvm-cov nextest --branch -p eo-wire -p eo-services  # branch coverage (eo-api is nextest-only here, not measured)
 cargo mutants -p eo-wire -p eo-services --in-place         # mutation testing (eo-wire + eo-services only, matching CI)
-cargo run -p xtask -- mutation-floors --outcomes mutants.out/outcomes.json  # the floor gate over the campaign
+cargo run -p xtask -- mutation-score --outcomes mutants.out/outcomes.json  # the per-file and aggregate score report
 cargo bench -p eo-services                              # criterion micro-benchmarks (hot-path figures)
 cargo audit -D warnings                                 # RustSec advisories against Cargo.lock
 cargo deny check                                        # licences, bans, sources, advisories
@@ -302,8 +263,8 @@ The CI jobs split by what they need to compile:
 - The **policy job** (`fmt` + `audit` + `deny`) is source- and lockfile-level, so it runs unconditionally on a Linux runner.
 - The **workspace job** (`clippy` + `build` + `test` + doctests, whole workspace) runs on Windows: most of the shell sits behind `cfg(windows)`, and linting only the Linux configuration would gate the wrong code. The build step is a debug-profile compile check; the release bundle (`tauri build`) stays a release-time step.
 - The **members job** runs `cargo nextest` on the backend members (plus a compile check of the criterion benches) on a plain Linux runner with no Tauri system stack installed. That environment is load-bearing: the backend members must stay buildable and testable without the Tauri toolchain, so a GUI dependency creeping into backend code fails this job structurally rather than landing silently.
-- The **Linux bundle job** builds the full Tauri shell on Linux and bundles the `.deb`, the platform counterpart of the Windows workspace/e2e build: a Linux-only regression (a platform seam that stops compiling, a bundler or resource misconfiguration) fails here rather than surfacing only at release.
-- The **coverage job** runs `cargo llvm-cov nextest --branch` over the same members (branch coverage needs the nightly toolchain) and publishes the figure as the README's coverage badge from `main`.
+- The **Linux bundle job** builds the full Tauri shell on Linux and bundles the `.deb`, the platform counterpart of the Windows workspace job: a Linux-only regression (a platform seam that stops compiling, a bundler or resource misconfiguration) fails here rather than surfacing only at release.
+- The **coverage job** runs `cargo llvm-cov nextest --branch` over the same members (branch coverage needs the nightly toolchain) on pull requests and pushes to `main`, and publishes the figure as the README's coverage badge from `main`.
 
 Benchmarks run on demand rather than in CI: shared runners produce noisy timings, so CI only compile-checks the benches and real figures are taken locally when a hot path matters.
 
@@ -312,4 +273,4 @@ Two policy files make the audit and licence gates deliberate rather than advisor
 - `.cargo/audit.toml`: the RustSec ignore list, every entry a transitive crate inside the Tauri toolchain with a per-advisory rationale comment. `-D warnings` makes the list load-bearing: an advisory not explicitly ignored there fails CI.
 - `deny.toml`: the supply-chain policy: an explicit licence allowlist (a new dependency carrying any other licence fails until the list is deliberately edited), crates-io-only sources, wildcard-version denial, and the advisory ignores.
 
-Review both files together on every Tauri bump; the Tauri version itself is pinned to a named minor in the workspace manifest. The shell tests live in `entropia-orme/src/lib.rs` under `#[cfg(test)]` and cover its pure logic; each backend member carries its own `#[cfg(test)]` suite alongside the equivalence tests above.
+Review both files together on every Tauri bump; the Tauri version itself is pinned to a named minor in the workspace manifest. The shell tests live in `entropia-orme/src/lib.rs` under `#[cfg(test)]` and cover its pure logic; each backend member carries its own `#[cfg(test)]` suite alongside the replay corpus above.

@@ -12,7 +12,7 @@ A companion API reference, generated from the Rust source by `cargo doc`, is pub
 - [Service and crate map](architecture/service-map.md): the Rust workspace crates, the services they own, and the operations the typed-command facade exposes.
 - [Event taxonomy](architecture/event-taxonomy.md): the two-layer event system, the domain-event envelopes, and the in-process event delivery path.
 - [OCR pipeline](architecture/ocr-pipeline.md): how a captured skill panel becomes structured skill levels.
-- [Database schema reference](architecture/database-schema.md): every table, its columns, and the migration mechanism.
+- [Database schema](architecture/database-schema.md): storage, the data model by domain, and the migration mechanism.
 
 ## Conventions
 

@@ -2,7 +2,7 @@
 
 EntropiaOrme is an analytical desktop application whose Rust core observes a stream of game-state changes (parsed chat-log lines, manual skill scans) and pushes the resulting changes to the frontend windows without polling. Internally this is built as **two distinct event systems**, layered so that each solves a different problem. This page documents both layers end to end: from the low-level, synchronous, in-process topics that core services use to coordinate, up to the coarse typed envelopes that cross to the webview over the in-process Tauri event bridge.
 
-The two-layer shape is implemented in Rust under `app/src-tauri/`: the low-level bus lives in the `eo-services` crate (`app/src-tauri/eo-services/src/event_bus.rs`, with its typed payloads in `app/src-tauri/eo-services/src/bus_events.rs`), and the domain envelopes and the typed broadcast channel live in the `eo-wire` crate (`app/src-tauri/eo-wire/src/domain_events.rs` and `app/src-tauri/eo-wire/src/bus.rs`). This began life as a Python FastAPI sidecar that was kept on only as a cross-language equivalence test oracle; that oracle has since been retired and its tree removed, so the Rust implementation is now the only one. The wire contract the two implementations shared is preserved as the committed schema snapshot the Rust types are asserted against.
+The two-layer shape is implemented in Rust under `app/src-tauri/`: the low-level bus lives in the `eo-services` crate (`app/src-tauri/eo-services/src/event_bus.rs`, with its typed payloads in `app/src-tauri/eo-services/src/bus_events.rs`), and the domain envelopes and the typed broadcast channel live in the `eo-wire` crate (`app/src-tauri/eo-wire/src/domain_events.rs` and `app/src-tauri/eo-wire/src/bus.rs`). This began life as a Python FastAPI sidecar; the Rust implementation is now the only one.
 
 For the wider context of where this fits, see the [architecture overview](overview.md) and the [service map](service-map.md). The two design decisions that shape this layer are recorded as [ADR 0002: the event spine](../adr/0002-event-spine.md) and [ADR 0009: push-to-pull invalidation](../adr/0009-push-to-pull-invalidation.md).
 
@@ -58,54 +58,9 @@ The variants of the `Topic` enum in `app/src-tauri/eo-services/src/event_bus.rs`
 
 The same enum also carries the eight frontend-facing domain topics (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, `ProtectionUpdated`, `HealingUpdated`, `WeaponsUpdated`, and `ConsumablesUpdated`), whose `as_str()` returns the dotted constants from `app/src-tauri/eo-wire/src/domain_events.rs`, because the typed envelopes ride this same bus before the bridge republishes them onto the broadcast channel.
 
-### Healing intent and chat evidence
+### Intent and evidence
 
-Healing attribution consumes two independent observations. `HotbarIntent`
-carries the user's resolved equipment intent and the time at which the input
-hook observed the key. A later compatible activation output confirms one paid
-activation: a direct output for a direct or compound profile, or the first
-matching tick for a pure over-time profile. Subsequent effect outputs, passive
-outputs, and unattributed outputs remain zero-cost evidence. The game chat
-timestamp is retained as provenance, but it has only
-whole-second precision, so local monotonic observation and input occurrence
-times decide ordering and bounded reconciliation.
-
-The hotbar resolver runs off the hook callback on its worker thread. A rapid
-healer activation followed by a weapon switch therefore keeps a short closed
-intent tail, allowing the heal output to confirm the healer that was actually
-used. The inverse delivery order is also safe: an unexplained output is first
-persisted at zero cost and can be reconciled only when a subsequently delivered
-intent proves it occurred first and matches the healing profile.
-
-The tracker derives its active weapon, healing tool, or harvesting tool from
-that same session-scoped `HotbarIntent`, so a session transition cannot split
-intent attribution from the corresponding equipment change.
-`ActiveToolChanged`, `ActiveHealToolChanged`, and
-`ActiveHarvestToolChanged` remain supported compatibility topics for direct
-producers. Healing cost no longer depends on chat-only tool inference: a
-self-heal without compatible hotbar intent is passive or unattributed evidence
-and cannot add PED cost.
-
-### Weapon intent and damage evidence
-
-A weapon press in `HotbarIntent` declares the weapon in hand from its
-occurrence time and starts a new attribution regime (a harvesting-tool press
-starts one too). Each offensive `Combat` line is then checked against the
-carried weapons' damage bands: a hit the declared weapon explains agrees with
-it, a hit only one other carried weapon explains is recorded to that weapon
-and raises the mismatch the snapshot's `weaponGuardrail` carries, and a hit
-several weapons explain, or none, is recorded without a price. The previous
-weapon's shots may still land for a delivery tail after a switch, and count as
-its own. Without hotbar intent the bands alone attribute each hit. A decision
-on the mismatch is a command, not an event: it reprices the regime's shots and
-announces itself through `tracking.session.updated`. See ADR-0032.
-
-A priced hit of a weapon with a declared damage-over-time effect opens an
-effect window in the tracker, persisted as it lands; no event announces it.
-While it is open, an offensive `Combat` line its tick range holds is a tick of
-that paid hit (no shot, no cost), and it never raises the mismatch. A line
-both the declared weapon and another weapon's open effect could have printed
-stays unpriced. See ADR-0033.
+Healing and weapon attribution each combine two independent observations: `HotbarIntent`, the equipment the player pressed and when the input hook saw the key, and the chat-log output that later confirms (or contradicts) it. The chat timestamp has only whole-second precision, so the input occurrence time and local monotonic observation decide ordering. How the tracker reconciles the two, and what it does when they disagree, is recorded in [ADR-0027](../adr/0027-intent-led-healing-attribution.md) (healing), [ADR-0032](../adr/0032-unified-weapon-attribution.md) (weapons), and [ADR-0033](../adr/0033-damage-over-time-effect-windows.md) (damage-over-time effect windows).
 
 ### The tick_flushed settling boundary
 
@@ -115,7 +70,7 @@ This is purely intra-core, like the other low-level topics. Its purpose is to gi
 
 ## Domain event envelopes
 
-The frontend-facing domain events are defined in `app/src-tauri/eo-wire/src/domain_events.rs`. Four concrete envelope types exist today.
+The frontend-facing domain events are defined in `app/src-tauri/eo-wire/src/domain_events.rs`, which is the reference for each envelope's exact fields.
 
 ### The shared envelope shape
 
@@ -130,100 +85,28 @@ Every envelope carries the same three top-level fields, then a typed `payload`:
 
 #### occurred_at is required and never null
 
-`occurred_at` is a **required** envelope field and is never `null` and never the bus's raw float. In `app/src-tauri/eo-wire/src/domain_events.rs` it is typed as a plain `String` on every envelope, with no `Option`. The schema snapshot in `app/src-tauri/contracts/event_schemas.snapshot.json` confirms this: `occurred_at` is `"type": "string"` and appears in every envelope's `required` array, with no null branch.
+`occurred_at` is a **required** envelope field and is never `null` and never the bus's raw float. In `app/src-tauri/eo-wire/src/domain_events.rs` it is typed as a plain `String` on every envelope, with no `Option`.
 
 An emitter whose domain carries no instant for the change (for example a settled tick that has no timestamp) synthesises one from its injected clock rather than threading a null to the wire. The helper `to_iso_utc(ts)` (in `app/src-tauri/eo-services/src/tracker.rs`) renders a Unix timestamp (a SQLite REAL or a bus float) as ISO-8601 UTC, so the required `occurred_at` always names a real instant.
 
 #### The closed-schema rule
 
-Every envelope struct and every payload struct carries `#[serde(deny_unknown_fields)]`, so the wire contract is closed in both directions: an undeclared key is rejected on the way in, and the core is the *emitter* that constructs these explicitly, so an undeclared key is a bug the schema-drift snapshot must catch. Payload field names are spelled camelCase via serde renames (no alias generators), so snake_case keys and float timestamps cannot leak onto the wire. The schema snapshot records this as `"additionalProperties": false` on every `$def`. The module's tests assert that an extra payload key, an extra envelope key, a missing `type` tag, and a foreign `type` tag are all rejected.
+Every envelope struct and every payload struct carries `#[serde(deny_unknown_fields)]`, so the wire contract is closed in both directions: an undeclared key is rejected on the way in, and the core is the *emitter* that constructs these explicitly, so an undeclared key is a bug. Payload field names are spelled camelCase via serde renames (no alias generators), so snake_case keys and float timestamps cannot leak onto the wire. The module's tests assert that an extra payload key, an extra envelope key, a missing `type` tag, and a foreign `type` tag are all rejected.
 
-### `tracking.session.updated`
+### The eight events
 
-`TrackingSessionUpdated` fires when the session aggregates changed: the session started, advanced a tick, or stopped. Its payload (`TrackingSessionUpdatedPayload`):
-
-| Payload field | Type | Notes |
+| Topic | Fires when | Payload |
 | --- | --- | --- |
-| `sessionId` | `Option<String>` (default `None`) | Which session changed. Serialised as `null` when absent, never omitted. |
-| `status` | `TrackingStatus` (`active` / `idle`) | The coarse session state, so a subscriber can route on it without parsing the body. |
-| `reason` | `TrackingReason` (`started` / `updated` / `stopped`) | Why the event fired. |
+| `tracking.session.updated` | the live session started, advanced a tick that changed its readout, or stopped; also after a decision on a weapon mismatch | `sessionId` (nullable, never omitted), `status` (`active` / `idle`), `reason` (`started` / `updated` / `stopped`) |
+| `scan.status.changed` | the manual skill scan changed phase or advanced a capture or OCR step | `phase` (`idle` / `capturing` / `processing` / `awaiting_review`) |
+| `harvest.recorded` | a harvesting attempt, successful or failed, has been written durably | `harvestId`, `success` |
+| `navigation.updated` | persisted navigation state changed | none |
+| `protection.updated` | a protection write committed (a repair or reading, an undo, a limited set changed) | none |
+| `healing.updated` | a healing correction or its undo committed, or a session was deleted | none |
+| `weapons.updated` | a stored shot of an ended session was corrected, or the correction undone | none |
+| `consumables.updated` | the running doses changed: started, expired, removed, or restored ([ADR-0036](../adr/0036-consumable-dose-lifecycle.md)) | none |
 
-`session_id: Option<String>` carries `#[serde(rename = "sessionId", default)]`, and a dedicated test asserts a `None` value serialises as `"sessionId":null` rather than being dropped. In the schema snapshot, `sessionId` has an `anyOf` of string and null with a `null` default, and is absent from the payload's `required` list (only `status` and `reason` are required).
-
-### `scan.status.changed`
-
-`ScanStatusChanged` fires when the manual skill-scan status changed: a phase transition, or a capture / OCR progress step. Its payload (`ScanStatusChangedPayload`):
-
-| Payload field | Type | Notes |
-| --- | --- | --- |
-| `phase` | `ScanPhase` (`idle` / `capturing` / `processing` / `awaiting_review`) | The coarse scan phase. The only payload field. |
-
-`phase` is the sole field and is required (confirmed by the `required: ["phase"]` entry and the four-value enum in the schema snapshot). The `ScanPhase` enum uses `#[serde(rename_all = "snake_case")]`, so `awaiting_review` round-trips byte-for-byte.
-
-### `harvest.recorded`
-
-`HarvestRecorded` fires only after a successful or failed harvesting attempt has
-been written durably. Its payload carries the stable `harvestId` and a required
-`success` boolean. Navigation consumes this semantic boundary rather than
-guessing from raw loot lines, then captures the current coordinates and applies
-the same arrival policy as a manual refresh.
-
-### `navigation.updated`
-
-`NavigationUpdated` is a content-free push-to-pull invalidation for persisted
-navigation state. The Maps page and navigation overlay re-read the complete run
-from the typed snapshot command on every event. Radar calibration uses its
-separate status read and does not emit this route-state signal.
-
-### `protection.updated`
-
-`ProtectionUpdated` is a content-free push-to-pull invalidation that fires after
-any protection write commits: a repair or reading recorded from the overlay's
-Cost popup, an undo, or a limited set created, edited, removed, or restored.
-Recording moves session armour costs in a different window from the ones that
-show them, so the Equipment armour tab, the session review list, and an open
-session detail each re-read what they show on every event. A refused write
-publishes nothing.
-
-### `healing.updated`
-
-`HealingUpdated` is a content-free push-to-pull invalidation that fires after
-a healing correction or its undo commits, and after a session deletion (which
-takes its healing evidence with it). A correction moves an ended
-session's heal cost, and may take back (or give back) an effect window a
-running session is still matching ticks against. The session review list and
-an open session detail re-read what they show, and the tracker re-reads its
-live effect windows from their persisted expiry, so a taken-back effect stops
-explaining ticks at once. Like the navigation service's use of
-`harvest.recorded`, this makes the tracker a consumer of a domain topic as
-well as a producer. A refused correction publishes nothing.
-
-### `weapons.updated`
-
-`WeaponsUpdated` is a content-free push-to-pull invalidation that fires after
-a stored shot of an ended session is corrected (an unpriced shot or an effect
-tick assigned to a weapon, or an unresolved hit marked as an effect's tick),
-or the correction is undone. The correction moves that session's weapon cost
-or shot count (the kill's, or the dangling cost for a shot after the last
-kill), so the session review list re-reads its rows and their marks, and an
-open session detail re-reads its cost and its weapon attribution evidence.
-Corrections touch only ended sessions and never an effect window, so the
-tracker does not consume it. A refused correction publishes nothing. (A decision on a live mismatch is part of the running
-session and announces itself as `tracking.session.updated` instead.)
-
-### `consumables.updated`
-
-`ConsumablesUpdated` is a content-free push-to-pull invalidation the tracker
-publishes whenever the running doses change: a dose started (from a hotbar
-key, a manual start, or a heal's on-use buff), ended at its expiry, or was
-removed or restored (see ADR-0036). Any of these may move the reload speed in
-effect and a session's consumed-dose cost, so the overlay's dose readout,
-Equipment's prices, the session review list, and an open session detail
-re-read what they show. The expiry announcement comes
-from the tracker's sweep at the dose's expiry, however it was woken; a
-refused start, removal, or restore publishes nothing. A healing correction
-that takes a heal's buff away announces `healing.updated`, which the tracker
-consumes by re-reading its running doses.
+Most payloads are empty on purpose (see [push-to-pull](#why-the-payloads-are-minimal-push-to-pull)): each consumer re-reads what it shows. Two domain topics are also consumed inside the core: navigation advances a run on `harvest.recorded`, and the tracker re-reads its live effect windows and running doses on `healing.updated`. A refused write publishes nothing.
 
 ### The discriminated union
 
@@ -243,7 +126,7 @@ pub enum DomainEvent {
 }
 ```
 
-The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel, the schema snapshot) routes through this union unchanged. The schema snapshot records the union as a `oneOf` over the eight `$def`s with a `discriminator` mapping keyed on `type`. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
+The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel) routes through this union unchanged. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
 
 ## The typed broadcast channel
 
@@ -283,38 +166,9 @@ The manual skill-scan service (`app/src-tauri/eo-services/src/skill_scan_manual.
 
 The payload carries only the coarse `phase`. Per-page capture / OCR progress liveness rides the snapshot re-hydration the frame triggers, rather than widening the wire: the emitter fires on every discrete progress change, but the payload stays a minimal invalidation signal.
 
-### Harvesting and navigation
+### The other producers
 
-The tracker publishes `harvest.recorded` after its harvest transaction commits,
-for both resource-yielding and failed attempts. The navigation service subscribes
-to that topic only while a run is live. After serialising its route mutations it
-publishes `navigation.updated`; navigation consumers then hydrate the persisted
-snapshot. Repeated harvesting events at the same captured location are debounced
-for 30 seconds so tool swings cannot advance several closely spaced stops.
-
-### Protection
-
-The protection service takes a change sink at composition, the same shape as
-navigation's, and calls it after each committed write. The sink publishes
-`protection.updated` stamped from the injected clock.
-
-### Healing corrections
-
-The healing review service takes the same kind of change sink and calls it
-after each committed correction or undo. The sink publishes `healing.updated`
-stamped from the injected clock.
-
-### Weapon assignments
-
-The weapon review service takes the same kind of change sink and calls it
-after each committed assignment or undo. The sink publishes `weapons.updated`
-stamped from the injected clock.
-
-### Dose changes
-
-The tracker publishes `consumables.updated` itself, from its own actor, after
-each committed dose change and after an expiry sweep that ended a dose,
-stamped from the injected clock.
+The remaining producers publish after a committed write, outside their own lock, stamped from the injected clock. The tracker publishes `harvest.recorded` after its harvest transaction commits and `consumables.updated` after each dose change or expiry sweep. The navigation, protection, healing-review, and weapon-review services each take a change sink at composition and call it after every committed write or undo; the sink publishes the service's topic. Navigation debounces repeated harvesting events at one captured location for 30 seconds, so tool swings cannot advance several closely spaced stops.
 
 ### Why the payloads are minimal: push-to-pull
 

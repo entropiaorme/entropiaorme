@@ -9,7 +9,7 @@
 //! ```text
 //! xtask authoring-lint      --range <BASE>..<HEAD>
 //! xtask version-stamps
-//! xtask mutation-floors     --outcomes <PATH> [--outcomes <PATH> ...]
+//! xtask mutation-score      --outcomes <PATH> [--outcomes <PATH> ...] [--badge-out <PATH>]
 //! xtask no-bare-setinterval [--warn-only]
 //! xtask no-new-writable     [--warn-only]
 //! xtask in-development      [--warn-only]
@@ -25,7 +25,7 @@ mod git;
 mod id_order;
 mod in_development;
 mod market_isolation;
-mod mutation_floors;
+mod mutation_score;
 mod no_bare_setinterval;
 mod no_new_writable;
 mod route_ceilings;
@@ -43,7 +43,7 @@ USAGE:
 SUBCOMMANDS:
     authoring-lint  --range <BASE>..<HEAD>   flag em dashes, US spellings, and stray references in what a change adds
     version-stamps                            assert the app version stamps agree across the tree
-    mutation-floors --outcomes <PATH>...      enforce per-file cargo-mutants score floors (flag repeats to merge campaign shards)
+    mutation-score --outcomes <PATH>...       report per-file and aggregate cargo-mutants scores (flag repeats to merge campaign shards)
     no-bare-setinterval [--warn-only]         forbid bare setInterval and the retired tracking event in the frontend
     no-new-writable [--warn-only]             forbid svelte/store imports outside the frozen legacy surface
     market-isolation [--warn-only]            forbid market-layer references on the accounting surface
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
     let result: Result<i32, String> = match subcommand.as_str() {
         "authoring-lint" => authoring::run(rest),
         "version-stamps" => version_stamps::run(rest),
-        "mutation-floors" => mutation_floors::run(rest),
+        "mutation-score" => mutation_score::run(rest),
         "no-bare-setinterval" => no_bare_setinterval::run(rest),
         "no-new-writable" => no_new_writable::run(rest),
         "market-isolation" => market_isolation::run(rest),

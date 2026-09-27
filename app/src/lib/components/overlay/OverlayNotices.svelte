@@ -15,7 +15,7 @@
 		onRelease?: () => void;
 	} = $props();
 
-	// A reduced-motion preference (and the frozen e2e build) drops the fade.
+	// A reduced-motion preference drops the fade.
 	const fadeMs = shouldSettleInstantly() ? 0 : 150;
 </script>
 

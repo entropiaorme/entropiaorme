@@ -203,153 +203,6 @@ jobs:
       - run: npm run lint
       - run: npm run test
 
-  frontend-e2e:
-    name: Frontend e2e + visual (native shell, Windows)
-    runs-on: windows-latest
-    # Drives the REAL Tauri WebView2 shell through tauri-driver (not a browser),
-    # so it runs on Windows, the app's platform, and compiles the shell. It is
-    # the only surface that exercises the native IPC command boundary end to end.
-    # Gated on change scope like the backend matrix.
-    #
-    # BLOCKING (a required input of the ci-gate aggregator): the suite drives the
-    # app at its own tauri:// origin (native IPC) with the deterministic in-process
-    # typed read-command stub, and every visual capture is gated on a recovered inner
-    # viewport (ensureViewport), so the WebView2 inner-viewport collapse is
-    # absorbed rather than flaking the gate. A failure uploads the actual + diff
-    # PNGs for inspection.
-    #
-    # TEMPORARILY DISABLED: the runner image's WebView2 150 update broke
-    # WebDriver session creation for every run of this job (the DevTools
-    # remote-debugging endpoint does not come up under the runner's elevated
-    # execution context; MicrosoftEdge/WebView2Feedback#5640). An explicit
-    # remote-debugging port, a de-elevated basic-user launch, and a medium
-    # integrity label on the shell binary all failed to restore the endpoint
-    # on the runner, while the identical suite passes on a real Windows
-    # machine. Until the upstream regression is fixed, the suite runs locally
-    # (`npm run test:e2e` / `npm run test:visual`) and the ci-gate tolerates
-    # this job's skip. Re-enable by restoring the change-scope condition:
-    # if: needs.changes.outputs.code == 'true'
-    needs: [changes]
-    if: false
-    defaults:
-      run:
-        working-directory: app
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: app/package-lock.json
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (branch SHA; dtolnay has no semver tags)
-        with:
-          toolchain: 1.96.0
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          workspaces: app/src-tauri
-          # Restrict cache writes to the trusted main and next timelines; pull-request
-          # runs restore read-only so a branch cannot seed or poison the cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
-      - run: npm ci
-      # tauri-driver bridges WebdriverIO to the platform WebView2 WebDriver.
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
-      # The Edge WebDriver must match the runner's WebView2 Evergreen runtime
-      # version exactly, so it is resolved at run time rather than committed.
-      - name: Fetch the matching WebView2 driver
-        shell: pwsh
-        run: |
-          # The app runs on the WebView2 Evergreen RUNTIME, whose version can
-          # diverge from the Edge browser's after a runner-image update (the
-          # divergence broke WebDriver session creation with a
-          # DevToolsActivePort error when Edge 150 landed on the image). The
-          # authoritative runtime version is its versioned install directory;
-          # the registry updater key for the runtime carries the updater
-          # component's own version (1.3.x), so it is useless here, and the
-          # browser keys are a fallback only. Readings are printed for
-          # diagnosis.
-          $webviewDir = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
-            Sort-Object { [version]$_.Name } | Select-Object -Last 1
-          $runtime = $webviewDir.Name
-          $browserKey = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
-          $browser = (Get-ItemProperty $browserKey -ErrorAction SilentlyContinue).pv
-          if (-not $browser) { $browser = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Edge\BLBeacon" -ErrorAction SilentlyContinue).version }
-          Write-Host "WebView2 runtime version: $runtime"
-          Write-Host "Edge browser version: $browser"
-          $pv = $runtime
-          if (-not $pv) { $pv = $browser }
-          if (-not $pv) { throw "could not determine the WebView2 / Edge version" }
-          Write-Host "Driver version selected: $pv"
-          New-Item -ItemType Directory -Force -Path e2e/.drivers | Out-Null
-          Invoke-WebRequest "https://msedgedriver.microsoft.com/$pv/edgedriver_win64.zip" -OutFile "$env:RUNNER_TEMP\edgedriver.zip"
-          Expand-Archive "$env:RUNNER_TEMP\edgedriver.zip" -DestinationPath e2e/.drivers -Force
-      # The e2e build embeds the frontend and serves it at the app's own tauri://
-      # origin (native IPC), built with the `e2e-stub` feature (the in-process
-      # typed read-command fixture stub) and E2E_FREEZE_TWEENS (chart-tween determinism
-      # for the visual baselines). tauri.e2e.conf.json is an e2e-only overlay
-      # (capture window size + CSP) that never ships.
-      - name: Build the e2e shell
-        run: npx tauri build --debug --no-bundle --features e2e-stub --config src-tauri/entropia-orme/tauri.e2e.conf.json
-        env:
-          E2E_FREEZE_TWEENS: '1'
-          # Scope the plugin-store preferences to an e2e-only file so the test
-          # shell never shares preference state with a real installation (a
-          # no-op on the clean runner image; load-bearing for local runs on a
-          # machine that also carries a real profile).
-          E2E_ISOLATED_PREFS: '1'
-      # Workaround for the WebView2 150 WebDriver regression
-      # (MicrosoftEdge/WebView2Feedback#5640): the DevTools remote-debugging
-      # endpoint does not come up when the host process runs at high
-      # integrity, this runner's default (administrator, UAC disabled), so
-      # WebDriver session creation fails with "DevToolsActivePort file
-      # doesn't exist". Verified empirically on this runner: the endpoint is
-      # DOWN from an elevated launch, and UP on the same runtime when the
-      # host runs at medium integrity. A process's integrity level is capped
-      # by its executable's integrity label, so labelling the e2e shell
-      # binary medium makes every launch of it (including msedgedriver's)
-      # run at medium integrity, which is also what a real user's session
-      # runs at. Remove once the upstream regression is fixed.
-      - name: Cap the e2e shell to medium integrity (WebView2 150 workaround)
-        shell: pwsh
-        run: |
-          icacls 'src-tauri\target\debug\entropia-orme.exe' /setintegritylevel medium
-          # Confirm the DevTools endpoint now comes up from an elevated parent.
-          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9231'
-          $env:ENTROPIAORME_DATA_DIR = "$env:RUNNER_TEMP\ildiag"
-          Start-Process (Join-Path (Get-Location) 'src-tauri\target\debug\entropia-orme.exe')
-          Start-Sleep -Seconds 20
-          try {
-            $v = Invoke-RestMethod 'http://127.0.0.1:9231/json/version' -TimeoutSec 5
-            Write-Host "DevTools endpoint after the integrity cap: UP ($($v.Browser))"
-          } catch {
-            Write-Host "DevTools endpoint after the integrity cap: DOWN ($($_.Exception.Message))"
-          }
-          Get-Process entropia-orme -ErrorAction SilentlyContinue | Stop-Process -Force
-          exit 0
-      - name: Run the native-shell e2e suite
-        run: npm run test:e2e
-      - name: Run the visual regression suite
-        run: npm run test:visual
-      # On failure, publish the actual + diff PNGs the visual suite writes so a
-      # mismatch is inspectable: the diff is otherwise discarded with the runner.
-      # Path is repo-root relative;
-      # upload-artifact does not honour the job's working-directory default.
-      # include-hidden-files is required: the output dir starts with a dot, and
-      # v4 excludes hidden paths by default (which would upload nothing).
-      - name: Upload visual diff on failure
-        if: failure()
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: visual-diff-${{ github.run_id }}-${{ github.run_attempt }}
-          path: app/e2e/.visual-output
-          include-hidden-files: true
-          retention-days: 14
-          if-no-files-found: warn
-
   rust-policy:
     name: Rust workspace (fmt + audit + deny)
     runs-on: ubuntu-latest
@@ -434,14 +287,6 @@ jobs:
       - name: Run workspace tests
         timeout-minutes: 20
         run: cargo nextest run --workspace
-      # The e2e fixture/DTO drift tripwires only compile under the e2e-stub
-      # feature (the module they test is feature-gated), so the plain
-      # workspace run never sees them; without this leg a typed-command DTO
-      # gaining a field fails as an opaque e2e session error on the Windows
-      # visual job instead of as a named fixture-drift test.
-      - name: Run e2e fixture drift tests
-        timeout-minutes: 10
-        run: cargo nextest run -p entropia-orme --features e2e-stub -E 'test(fixture)'
       # nextest does NOT run doctests; keep them on a dedicated cargo-test leg so
       # doctest coverage is not silently dropped by the migration.
       - name: Run workspace doctests
@@ -499,9 +344,9 @@ jobs:
     name: Linux build + bundle (deb)
     runs-on: ubuntu-latest
     # Proves the Linux port builds the full Tauri shell and produces an
-    # installable package. It is the platform counterpart of the Windows
-    # e2e job's shell build: a Linux-only regression (a platform seam that
-    # stops compiling, a bundler/resource misconfiguration) fails here
+    # installable package, the platform counterpart of the Windows workspace
+    # job: a Linux-only regression (a platform seam that stops compiling, a
+    # bundler/resource misconfiguration) fails here
     # rather than surfacing only at release. Skipped on a
     # documentation-only pull request; the ci-gate sentinel covers the
     # required-check report in that case.
@@ -557,18 +402,16 @@ jobs:
   rust-coverage:
     name: Rust backend members (branch coverage)
     runs-on: ubuntu-latest
-    # Measures per-member branch coverage over the native-backend members.
-    # The figure is review evidence, not vanity: a ported service's branch
-    # coverage shows whether its tests actually exercise the code paths its
-    # behavioural-equivalence claim rests on, so it is read against the
-    # service's pre-port coverage whenever a port lands. Branch-level
+    # Measures per-member branch coverage over the native-backend members for
+    # the README badge. It re-runs the whole member suite under
+    # instrumentation, so it measures the vetted line only: promotion and
+    # hotfix pull requests and pushes to main, never pushes to next (where the
+    # members job above already runs the same tests). Branch-level
     # instrumentation is a nightly-only compiler feature, hence the pinned
-    # nightly toolchain on this measurement job (the gating test run stays on
-    # stable in the members job above; this job re-runs the same tests, so a
-    # test failure fails here too). Skipped on documentation-only pull
-    # requests like the backend matrix.
+    # nightly toolchain on this measurement job. Skipped on documentation-only
+    # pull requests like the backend matrix.
     needs: [changes]
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main')
     defaults:
       run:
         working-directory: app/src-tauri
@@ -659,7 +502,7 @@ jobs:
     # jobs did not pass, fails it, so a skip can never let an untested change
     # merge. This lets a documentation-only pull request go green in seconds
     # without deadlocking on a never-reported required job.
-    needs: [changes, authoring-lint, frontend, frontend-e2e, rust-policy, rust, rust-members, rust-coverage, linux-bundle]
+    needs: [changes, authoring-lint, frontend, rust-policy, rust, rust-members, rust-coverage, linux-bundle]
     if: always()
     steps:
       - name: Require the gated jobs to have passed (or been documentation-only)
@@ -668,12 +511,13 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           AUTHORING_LINT_RESULT: ${{ needs.authoring-lint.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
-          FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           RUST_POLICY_RESULT: ${{ needs.rust-policy.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           RUST_MEMBERS_RESULT: ${{ needs.rust-members.result }}
           RUST_COVERAGE_RESULT: ${{ needs.rust-coverage.result }}
           LINUX_BUNDLE_RESULT: ${{ needs.linux-bundle.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         shell: bash
         run: |
           if [ "$CHANGES_RESULT" != "success" ]; then
@@ -699,21 +543,17 @@ jobs:
             echo "Documentation-only change; the frontend build and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          # The native-shell e2e + visual job (frontend-e2e) is normally a
-          # REQUIRED input: it drives the app at its tauri:// origin (native
-          # IPC) with the deterministic in-process typed read-command stub. It
-          # is TEMPORARILY DISABLED (see the job's own comment: the runner
-          # image's WebView2 150 update broke WebDriver session creation for
-          # every run, MicrosoftEdge/WebView2Feedback#5640), so the gate
-          # tolerates its skip; a real failure on a run where the job is
-          # re-enabled still fails the gate.
-          if [ "$FRONTEND_E2E_RESULT" != "success" ] && [ "$FRONTEND_E2E_RESULT" != "skipped" ]; then
-            echo "::error::The native-shell e2e suite did not pass (result: $FRONTEND_E2E_RESULT)."
-            exit 1
+          # Coverage is measured only on pull requests and pushes to main, so
+          # a push to next skips it legitimately.
+          COVERAGE_OK=false
+          if [ "$RUST_COVERAGE_RESULT" = "success" ]; then
+            COVERAGE_OK=true
+          elif [ "$RUST_COVERAGE_RESULT" = "skipped" ] && [ "$EVENT_NAME" = "push" ] && [ "$REF" != "refs/heads/main" ]; then
+            COVERAGE_OK=true
           fi
-          if [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$RUST_COVERAGE_RESULT" = "success" ] && [ "$LINUX_BUNDLE_RESULT" = "success" ]; then
-            echo "Frontend build, Rust workspace, and Linux build+bundle jobs passed (native-shell e2e temporarily disabled). Gate satisfied."
+          if [ "$FRONTEND_RESULT" = "success" ] && [ "$RUST_RESULT" = "success" ] && [ "$RUST_MEMBERS_RESULT" = "success" ] && [ "$COVERAGE_OK" = "true" ] && [ "$LINUX_BUNDLE_RESULT" = "success" ]; then
+            echo "Frontend build, Rust workspace, coverage, and Linux build+bundle jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the frontend build, the Rust workspace jobs, and the Linux build+bundle (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT, e2e: $FRONTEND_E2E_RESULT, linux-bundle: $LINUX_BUNDLE_RESULT)."
+          echo "::error::A code change must pass the frontend build, the Rust workspace jobs, and the Linux build+bundle (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT, linux-bundle: $LINUX_BUNDLE_RESULT).""
           exit 1

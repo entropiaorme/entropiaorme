@@ -11,9 +11,6 @@ mod substrate;
 mod telemetry;
 mod updater;
 
-#[cfg(feature = "e2e-stub")]
-mod e2e_stub;
-
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};

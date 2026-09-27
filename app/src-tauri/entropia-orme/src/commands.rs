@@ -94,27 +94,6 @@ pub(crate) fn facade(app: &tauri::AppHandle) -> Result<Arc<eo_api::Api>, ApiErro
         .ok_or(ApiError::Unavailable)
 }
 
-/// The analytics fixture-backed read for the native-shell e2e build: the
-/// live analytics surface is served by typed commands, so the e2e build
-/// serves the same committed analytics fixture through these commands
-/// (deserialised into their DTO), keeping the visual baselines stable.
-#[cfg(feature = "e2e-stub")]
-fn e2e_analytics<T: serde::de::DeserializeOwned>(key: &str) -> Result<T, ApiError> {
-    serde_json::from_value(crate::e2e_stub::analytics_fixture(key))
-        .map_err(ApiError::internal("e2e analytics fixture"))
-}
-
-/// The dashboard fixture value under `key`, deserialised into the typed
-/// tracking read command's DTO: the live tracking snapshot and
-/// session-detail reads migrated to typed commands, so the e2e build
-/// serves the same committed dashboard fixture through them (the sessions
-/// list rides the analytics fixture; see [`e2e_analytics`]).
-#[cfg(feature = "e2e-stub")]
-fn e2e_dashboard<T: serde::de::DeserializeOwned>(key: &str) -> Result<T, ApiError> {
-    serde_json::from_value(crate::e2e_stub::dashboard_fixture(key))
-        .map_err(ApiError::internal("e2e dashboard fixture"))
-}
-
 #[tauri::command(rename_all = "snake_case")]
 pub async fn equipment_search(
     app: tauri::AppHandle,
@@ -791,28 +770,12 @@ pub async fn analytics_overview(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsOverview, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("overview")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_overview(&period).await
-    }
+    facade(&app)?.analytics_overview(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn analytics_hunting(app: tauri::AppHandle) -> Result<AnalyticsHunting, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("hunting")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_hunting().await
-    }
+    facade(&app)?.analytics_hunting().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -820,15 +783,7 @@ pub async fn analytics_harvest(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsHarvest, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("harvest")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_harvest(&period).await
-    }
+    facade(&app)?.analytics_harvest(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -836,15 +791,7 @@ pub async fn analytics_hunting_activity(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsHuntingActivity, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("huntingActivity")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_hunting_activity(&period).await
-    }
+    facade(&app)?.analytics_hunting_activity(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -984,20 +931,7 @@ pub async fn ledger_list(
     cursor: Option<String>,
     limit: Option<i64>,
 ) -> Result<LedgerPage, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &cursor, &limit);
-        let entries: Vec<LedgerItem> = e2e_analytics("ledger")?;
-        Ok(LedgerPage {
-            total: entries.len() as i64,
-            entries,
-            next_cursor: None.into(),
-        })
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_list(cursor, limit).await
-    }
+    facade(&app)?.ledger_list(cursor, limit).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1005,30 +939,7 @@ pub async fn ledger_summary(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<LedgerSummary, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        // Derive the per-tag summary from the same committed ledger fixture
-        // the entry list serves, keeping the net-impact card's baseline
-        // consistent with the visible entries.
-        let entries: Vec<LedgerItem> = e2e_analytics("ledger")?;
-        let mut summary = LedgerSummary {
-            gains: Default::default(),
-            losses: Default::default(),
-        };
-        for entry in entries {
-            let side = match serde_json::to_value(entry.kind) {
-                Ok(value) if value == "markup" => &mut summary.gains,
-                _ => &mut summary.losses,
-            };
-            *side.entry(entry.tag).or_insert(0.0) += entry.amount;
-        }
-        Ok(summary)
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_summary(&period).await
-    }
+    facade(&app)?.ledger_summary(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1046,15 +957,7 @@ pub async fn ledger_delete(app: tauri::AppHandle, entry_id: String) -> Result<()
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn ledger_presets_list(app: tauri::AppHandle) -> Result<Vec<LedgerPreset>, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("presets")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_presets_list().await
-    }
+    facade(&app)?.ledger_presets_list().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1075,15 +978,7 @@ pub async fn ledger_preset_delete(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn inventory_list(app: tauri::AppHandle) -> Result<Vec<InventoryItem>, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("inventory")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.inventory_list().await
-    }
+    facade(&app)?.inventory_list().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1321,24 +1216,9 @@ pub async fn tracking_sessions(
     limit: Option<i64>,
     definition_id: Option<i64>,
 ) -> Result<SessionPage, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &cursor, &limit);
-        let sessions: Vec<eo_api::tracking::TrackingSession> =
-            serde_json::from_value(crate::e2e_stub::analytics_sessions_fixture(definition_id))
-                .map_err(ApiError::internal("e2e analytics fixture"))?;
-        Ok(SessionPage {
-            total: sessions.len() as i64,
-            sessions,
-            next_cursor: None.into(),
-        })
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?
-            .tracking_sessions(cursor, limit, definition_id)
-            .await
-    }
+    facade(&app)?
+        .tracking_sessions(cursor, limit, definition_id)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1346,15 +1226,7 @@ pub async fn tracking_session_detail(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<SessionDetail, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &session_id);
-        e2e_dashboard("sessionDetail")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.tracking_session_detail(session_id).await
-    }
+    facade(&app)?.tracking_session_detail(session_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1378,15 +1250,7 @@ pub async fn tracking_manual_mob_suggestions(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_snapshot(app: tauri::AppHandle) -> Result<TrackingSnapshot, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_dashboard("snapshot")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.tracking_snapshot().await
-    }
+    facade(&app)?.tracking_snapshot().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

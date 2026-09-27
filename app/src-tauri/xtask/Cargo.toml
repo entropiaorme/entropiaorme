@@ -1,8 +1,8 @@
 # Repository maintenance task runner.
 #
-# Hosts the CI guards that were previously Python scripts:
-# the golden-ratification gate, the authoring-discipline lint, the version-stamp
-# parity check, and the per-file mutation-score floors. Each is a subcommand of a
+# Hosts the repository's CI guards and maintenance tools (the authoring-discipline
+# lint, the version-stamp parity check, the architecture guards, the TypeScript
+# binding generator, and the mutation-score report). Each is a subcommand of a
 # single `xtask` binary, dispatched from main.rs.
 #
 # Dependencies are kept minimal: standard library, git invoked via

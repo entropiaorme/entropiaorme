@@ -9,7 +9,7 @@
 # says so and a reader cannot mistake it for the usually-higher line coverage.
 #
 # The shape and colour bands mirror the mutation badge (emitted by the
-# `mutation-floors` cargo xtask guard) so the two product badges read
+# `mutation-score` cargo xtask) so the two product badges read
 # consistently.
 #
 # Usage: coverage-badge.sh <llvm-cov-json-export> <out-json>

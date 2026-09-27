@@ -2,7 +2,7 @@
 
 import { render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import dashboardFixture from '../../e2e/fixtures/dashboard.json';
+import dashboardFixture from './dashboard.fixture.json';
 
 // The dashboard's first paint while the backend is still starting. Only
 // Tauri's `invoke` is mocked: the real facade, typed transport, and startup

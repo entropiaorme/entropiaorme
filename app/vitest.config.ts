@@ -32,11 +32,8 @@ export default defineConfig({
 		},
 		// `src/**` covers the app suites; the `src-tauri` entry pulls in the
 		// dev-tooling build-script tests (e.g. build-dev-config), which live
-		// beside the script they exercise rather than under `src/`; the `e2e`
-		// entry covers the native-shell harness helpers' own unit tests (e.g.
-		// ensureViewport's inner-viewport recovery logic), which live beside the
-		// helper they exercise.
-		include: ['src/**/*.test.ts', 'src-tauri/entropia-orme/*.test.ts', 'e2e/helpers/*.test.mjs'],
+		// beside the script they exercise rather than under `src/`.
+		include: ['src/**/*.test.ts', 'src-tauri/entropia-orme/*.test.ts'],
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'html'],
@@ -46,7 +43,7 @@ export default defineConfig({
 			// modules, so a new module in a tested layer is instrumented from the
 			// moment it lands rather than only once someone remembers to list it.
 			// `.svelte` components stay excluded (they are exercised through the
-			// module suites and the native-shell e2e, not unit-instrumented), as
+			// module suites, not unit-instrumented), as
 			// do generated files and test files.
 			include: [
 				'src/lib/features/**',

@@ -2,13 +2,7 @@ import { dataDir, join } from '@tauri-apps/api/path';
 import { load, type Store } from '@tauri-apps/plugin-store';
 
 const APP_DATA_FOLDER = 'EntropiaOrme';
-// The e2e shell writes its preferences to a separate file so a test run can
-// never read or mutate a real installation's preferences (onboarding state,
-// consent choices) on the same machine. The flag is baked in at build time by
-// the e2e's own Vite build only (see app/vite.config.ts), so shipped builds
-// fold this to the plain 'settings.json'.
-const STORE_FILE =
-	import.meta.env.E2E_ISOLATED_PREFS === '1' ? 'settings.e2e.json' : 'settings.json';
+const STORE_FILE = 'settings.json';
 
 const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

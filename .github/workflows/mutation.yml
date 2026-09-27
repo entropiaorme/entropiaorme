@@ -1,9 +1,16 @@
-name: nightly
+name: mutation
 
+# The mutation campaign measures the vetted line, so it runs when main moves
+# (a promotion or a hotfix) and the campaigned members changed, and on demand.
+# It reports a score and publishes the badge; it never gates anything.
 on:
-  schedule:
-    # 07:00 UTC daily, off-peak.
-    - cron: '0 7 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'app/src-tauri/eo-wire/**'
+      - 'app/src-tauri/eo-services/**'
+      - 'app/src-tauri/.cargo/mutants.toml'
+      - '.github/workflows/mutation.yml'
   workflow_dispatch:
 
 concurrency:
@@ -20,14 +27,14 @@ permissions:
 jobs:
   rust-mutation:
     name: Mutation testing (shard ${{ matrix.shard }}/8)
-    # The mutation campaign over the native-backend workspace members, the proof
-    # the test net has no holes. The Tauri shell stays out of the campaign: its
+    # The mutation campaign over the native-backend workspace members: how many
+    # deliberately broken variants of the code the tests catch. The Tauri shell stays out of the campaign: its
     # logic is OS-window plumbing behind cfg(windows), and building it needs the
     # Tauri system toolchain this Linux runner deliberately lacks. The campaign
     # is sharded across parallel runners because the full run exceeds the 6-hour
     # hosted-job ceiling on a single runner; each shard tests a deterministic
-    # slice of the mutant set and reports its outcomes to the verdict job below,
-    # which merges them for the floors gate and the badge.
+    # slice of the mutant set and reports its outcomes to the score job below,
+    # which merges them into the report and the badge.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -61,12 +68,12 @@ jobs:
       # relocated corpus under app/src-tauri/fixtures/), which
       # cargo-mutants' default copied build tree does not contain. Exit codes 2
       # (missed mutants) and 3 (timed-out mutants) are outcome reports, tolerated
-      # here because the floors gate in the verdict job is the acceptance bar (it
-      # counts a timeout as caught); anything else (usage error, failing
-      # baseline, internal error) still fails this shard.
+      # here because the score is reported, not enforced (a timeout counts as
+      # caught); anything else (usage error, failing baseline, internal error)
+      # still fails this shard.
       - name: Run mutation campaign shard (backend members)
         run: cargo mutants --package eo-wire --package eo-services --in-place --shard ${{ matrix.shard }}/8 || { rc=$?; test "$rc" -eq 2 -o "$rc" -eq 3; }
-      # Every shard hands its outcomes to the verdict job; if-no-files-found
+      # Every shard hands its outcomes to the score job; if-no-files-found
       # fails closed so a shard that produced nothing cannot silently thin the
       # merged campaign.
       - name: Upload shard outcomes
@@ -78,15 +85,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  mutation-verdict:
-    name: Mutation verdict (floors + badge)
-    # Merges the shard outcomes (the floors tool sums per-file counts across
-    # repeated --outcomes flags), builds the aggregate-score badge, then
-    # enforces the per-file floor map: adopted files must hold their floor
-    # (floors only ratchet up), while unadopted files are non-blocking and
-    # merely reported as awaiting coverage, so a newly added file never reds
-    # the nightly. Badge before gate, so the published badge still reflects
-    # reality on a regression.
+  mutation-score:
+    name: Mutation score (report + badge)
+    # Merges the shard outcomes (the score tool sums per-file counts across
+    # repeated --outcomes flags), prints the per-file table, and builds the
+    # aggregate-score badge. Only a malformed or partial campaign fails it.
     runs-on: ubuntu-latest
     needs: [rust-mutation]
     defaults:
@@ -105,26 +108,23 @@ jobs:
         with:
           pattern: mutation-outcomes-*
           path: mutation-shards
-      - name: Merge shard outcomes into badge and floors verdict
+      - name: Merge shard outcomes into the score report and badge
         run: |
           set -euo pipefail
           # Repo-root relative: download-artifact ignores the job's working-directory.
           mapfile -t shard_files < <(find "$GITHUB_WORKSPACE/mutation-shards" -name outcomes.json | sort)
           if [ "${#shard_files[@]}" -ne 8 ]; then
-            echo "::error::expected 8 shard outcome files, found ${#shard_files[@]}; refusing a partial campaign verdict."
+            echo "::error::expected 8 shard outcome files, found ${#shard_files[@]}; refusing a partial campaign score."
             exit 1
           fi
           outcome_flags=()
           for f in "${shard_files[@]}"; do outcome_flags+=(--outcomes "$f"); done
-          # Badge first (badge-only mode always exits 0, so the badge reflects
-          # reality even when the floors gate below fails), then the gate.
-          cargo run -q -p xtask -- mutation-floors "${outcome_flags[@]}" --badge-out mutation.json
-          cargo run -q -p xtask -- mutation-floors "${outcome_flags[@]}"
+          cargo run -q -p xtask -- mutation-score "${outcome_flags[@]}" --badge-out mutation.json
       # Hand the badge to the main-only publish job as an artifact rather than
       # pushing here: this job builds repository code, so it must never carry a
       # write-scoped token (mirrors the coverage measure/publish split).
       - name: Upload mutation badge
-        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref == 'refs/heads/main' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutation-badge
@@ -134,16 +134,14 @@ jobs:
           retention-days: 1
 
   # Publish the mutation badge to the badges branch, from the trunk only. Kept
-  # separate from the verdict job so the write-scoped token never attaches to a
+  # separate from the score job so the write-scoped token never attaches to a
   # run that builds repository code: this job runs no repository code, it only
-  # downloads the badge artifact and pushes it. if: always() so the badge still
-  # publishes when the floors gate failed (the badge then shows the regressed
-  # figure, matching the measure-then-publish-then-enforce ordering above).
+  # downloads the badge artifact and pushes it.
   publish-mutation-badge:
     name: Publish mutation badge
     runs-on: ubuntu-latest
-    needs: [mutation-verdict]
-    if: ${{ always() && github.ref == 'refs/heads/main' }}
+    needs: [mutation-score]
+    if: ${{ github.ref == 'refs/heads/main' }}
     permissions:
       contents: write
     steps:

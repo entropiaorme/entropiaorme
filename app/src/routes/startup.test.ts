@@ -33,7 +33,6 @@ const PAGES = {
 	quests: () => import('./quests/+page.svelte'),
 	equipment: () => import('./equipment/+page.svelte'),
 	market: () => import('./market/+page.svelte'),
-	maps: () => import('./maps/+page.svelte'),
 	settings: () => import('./settings/+page.svelte'),
 };
 

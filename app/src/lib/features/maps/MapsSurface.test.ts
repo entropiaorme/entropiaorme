@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import { createRawSnippet } from 'svelte';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanetMap } from '$lib/api';
 
@@ -45,10 +44,6 @@ const calypso: PlanetMap = {
 	calibration: null,
 };
 
-const heading = createRawSnippet(() => ({
-	render: () => '<h1>Maps</h1>',
-}));
-
 // happy-dom has no Web Animations API; the dialogs' transitions need one
 // that settles instantly.
 beforeAll(() => {
@@ -73,22 +68,13 @@ beforeEach(() => {
 });
 
 describe('maps surface', () => {
-	it('embeds as a compact bar with no heading of its own', async () => {
+	it('offers the map actions in one compact bar', async () => {
 		render(MapsSurface);
 
 		expect(await screen.findByRole('button', { name: 'Pin overlay' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Route' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Select pins' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Setup' })).toBeTruthy();
-		expect(screen.queryByRole('heading')).toBeNull();
-	});
-
-	it('sets the action bar beside the host heading', async () => {
-		render(MapsSurface, { props: { heading } });
-
-		expect(screen.getByRole('heading', { name: 'Maps' })).toBeTruthy();
-		const overlay = await screen.findByRole('button', { name: 'Pin overlay' });
-		expect(overlay.closest('header')).toBeTruthy();
 	});
 
 	it('toggles the pin overlay and opens route planning in the overlay', async () => {

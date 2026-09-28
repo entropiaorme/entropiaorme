@@ -4,9 +4,10 @@ import type { MapsModel } from './mapsModel.svelte';
 
 /**
  * Refreshes the Maps view model's pins when the cartography overlay window
- * drops one, for one mounted route lifetime. Selection is owned by the main
- * surface and published to the overlay from the route (see the context
- * broadcast there); this only handles the overlay-to-map pin feedback.
+ * drops one, for one mounted maps-surface lifetime. Selection is owned by the
+ * main surface and published to the overlay from it (see the context
+ * broadcast in `MapsSurface.svelte`); this only handles the overlay-to-map pin
+ * feedback.
  */
 export function startMapsCartographySync(model: MapsModel): () => void {
 	let mounted = true;

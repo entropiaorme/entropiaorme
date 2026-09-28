@@ -1,13 +1,11 @@
 <script lang="ts">
 	/**
-	 * The whole Maps surface: the pan/zoom viewer, its action bar, the pin
-	 * lifecycle and the setup dialogs, wired to the feature model and
-	 * controllers. One implementation hosted in two places: the Maps route
-	 * passes its page heading, which the action bar sits beside; the
-	 * dashboard's map widget passes none and gets a single compact bar with
-	 * the feedback line folded into it.
+	 * The whole Maps surface, hosted as the dashboard's map widget: the
+	 * pan/zoom viewer, a compact action bar carrying the feedback line, the
+	 * pin lifecycle and the setup dialogs, wired to the feature model and
+	 * controllers.
 	 */
-	import { onMount, type Snippet } from 'svelte';
+	import { onMount } from 'svelte';
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import CalibrationModal from './CalibrationModal.svelte';
 	import CartographyOverlayModal from './CartographyOverlayModal.svelte';
@@ -35,16 +33,7 @@
 	} from './cartographyOverlay.svelte';
 	import { getPreference, setPreference } from '$lib/preferences';
 
-	let {
-		heading,
-		class: className = '',
-	}: {
-		/** The host page's title block. When present the action bar sits
-		 * beside it with the feedback line beneath; when absent (an embedded
-		 * host) the bar is one compact row carrying the feedback itself. */
-		heading?: Snippet;
-		class?: string;
-	} = $props();
+	let { class: className = '' }: { class?: string } = $props();
 
 	const LAST_PLANET_KEY = 'mapsLastPlanet';
 	const LAST_MAP_VIEW_KEY = 'mapsLastMapViewId';
@@ -219,41 +208,25 @@
 	const flash = controller.flash;
 </script>
 
-{#snippet controls()}
-	{#if model.planets.length > 0}
-		<MapControls
-			pins={model.pins}
-			disabled={areaSelection.active}
-			ontoggleoverlay={() => void toggleOverlay()}
-			onconfigure={() => (overlayConfigOpen = true)}
-			oncalibrate={() => (calibrationOpen = true)}
-			onselectpin={(pin) => focusMap({ lon: pin.lon, lat: pin.lat })}
-			onroute={() => void openRouteSetup()}
-			onselectpins={areaSelection.beginPinSelection}
-			onradarcalibrate={() => (radarCalibrationOpen = true)}
-		/>
-	{/if}
-{/snippet}
-
-<!-- The live region stays mounted so each flash is announced, not just the
-	 first one that happens to create it. -->
-{#snippet feedbackLine()}
-	<p class="truncate text-xs text-text-secondary" role="status">{controller.feedback ?? ''}</p>
-{/snippet}
-
-<div class="flex min-h-0 flex-col {heading ? 'gap-3' : 'gap-2'} {className}" data-testid="maps-surface">
-	{#if heading}
-		<header class="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-end">
-			{@render heading()}
-			{@render controls()}
-		</header>
-		<div class="h-4 shrink-0">{@render feedbackLine()}</div>
-	{:else}
-		<div class="flex min-h-8 shrink-0 items-center justify-between gap-3">
-			<div class="min-w-0 flex-1">{@render feedbackLine()}</div>
-			{@render controls()}
-		</div>
-	{/if}
+<div class="flex min-h-0 flex-col gap-2 {className}" data-testid="maps-surface">
+	<div class="flex min-h-8 shrink-0 items-center justify-between gap-3">
+		<!-- The live region stays mounted so each flash is announced, not just
+			 the first one that happens to create it. -->
+		<p class="min-w-0 flex-1 truncate text-xs text-text-secondary" role="status">{controller.feedback ?? ''}</p>
+		{#if model.planets.length > 0}
+			<MapControls
+				pins={model.pins}
+				disabled={areaSelection.active}
+				ontoggleoverlay={() => void toggleOverlay()}
+				onconfigure={() => (overlayConfigOpen = true)}
+				oncalibrate={() => (calibrationOpen = true)}
+				onselectpin={(pin) => focusMap({ lon: pin.lon, lat: pin.lat })}
+				onroute={() => void openRouteSetup()}
+				onselectpins={areaSelection.beginPinSelection}
+				onradarcalibrate={() => (radarCalibrationOpen = true)}
+			/>
+		{/if}
+	</div>
 
 	{#if model.error}
 		<ErrorNotice message={model.error} />

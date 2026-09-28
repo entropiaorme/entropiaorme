@@ -7,7 +7,6 @@ export { default as NavCharacter } from './NavCharacter.svelte';
 export { default as NavDashboard } from './NavDashboard.svelte';
 export { default as NavEquipment } from './NavEquipment.svelte';
 export { default as NavInventory } from './NavInventory.svelte';
-export { default as NavMaps } from './NavMaps.svelte';
 export { default as NavMarket } from './NavMarket.svelte';
 export { default as NavNews } from './NavNews.svelte';
 export { default as NavQuests } from './NavQuests.svelte';

@@ -57,9 +57,23 @@ const tab = (name: RegExp) => screen.getByRole('tab', { name });
 const attention = () => screen.queryByTestId('tab-attention');
 
 describe('dashboard widgets', () => {
-	it('opens on the recent events feed', () => {
+	it('orders its widgets with the stats customiser last', () => {
 		render(DashboardWidgets, props([event()]));
-		expect(tab(/Recent Events/).getAttribute('aria-selected')).toBe('true');
+		expect(screen.getAllByRole('tab').map((candidate) => candidate.textContent?.trim())).toEqual([
+			'Loot Pulse',
+			'Recent Events',
+			'Loot Composition',
+			'Quests',
+			'Map',
+			'Customise Stats',
+		]);
+	});
+
+	it('opens on the loot pulse, with the events feed one tab over', async () => {
+		render(DashboardWidgets, props([event()]));
+		expect(tab(/Loot Pulse/).getAttribute('aria-selected')).toBe('true');
+
+		await fireEvent.click(tab(/Recent Events/));
 		expect(screen.getByText('Global! Combibo Young')).toBeTruthy();
 		expect(screen.getByText('52.40 PED')).toBeTruthy();
 		expect(screen.getByText('2:05 PM')).toBeTruthy();
@@ -91,6 +105,7 @@ describe('dashboard widgets', () => {
 
 	it('does not mark events that arrive while the feed is open', async () => {
 		const view = render(DashboardWidgets, props([event()]));
+		await fireEvent.click(tab(/Recent Events/));
 		await view.rerender(
 			props([event({ timestamp: '2026-01-01T14:09:00.000Z' }), event({ id: 'ne-1' })]),
 		);

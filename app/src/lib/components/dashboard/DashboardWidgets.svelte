@@ -55,7 +55,7 @@
 		getCooldownRemaining: (quest: import('$lib/types/quests').Quest) => string | null;
 	} = $props();
 
-	let activeTab = $state<string>('events');
+	let activeTab = $state<string>('pulse');
 
 	// An event arriving while another tab is open marks the events tab until
 	// the reader opens it.
@@ -71,8 +71,8 @@
 	);
 
 	const tabs = $derived([
-		{ id: 'events', label: 'Recent Events', attention: eventsUnseen },
 		{ id: 'pulse', label: 'Loot Pulse' },
+		{ id: 'events', label: 'Recent Events', attention: eventsUnseen },
 		{ id: 'loot', label: 'Loot Composition' },
 		{ id: 'quests', label: 'Quests' },
 		{ id: 'map', label: 'Map' },

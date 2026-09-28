@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import dashboardFixture from './dashboard.fixture.json';
 
@@ -95,9 +95,10 @@ describe('dashboard while the backend starts', () => {
 		// The backend comes up: the held reads dispatch and the page fills in.
 		seams.settleSubstrate({ state: 'ready' });
 		await waitFor(() => expect(screen.getByText('Tracking active')).toBeTruthy());
-		expect(screen.getByText('Looted Animal Oil Residue')).toBeTruthy();
 		expect(screen.queryByTestId('session-strip-pending')).toBeNull();
 		expect(screen.queryByTestId('dashboard-widget-pending')).toBeNull();
+		await fireEvent.click(screen.getByRole('tab', { name: 'Recent Events' }));
+		expect(screen.getByText('Looted Animal Oil Residue')).toBeTruthy();
 		expect(screen.queryByRole('alert')).toBeNull();
 
 		// One initial snapshot read, sent once, after readiness.

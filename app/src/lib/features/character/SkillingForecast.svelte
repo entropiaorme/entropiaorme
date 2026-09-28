@@ -18,7 +18,7 @@
 	} from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
 
-	// The Prospect: the play it takes to reach the goal in one of your named
+	// The Session Forecast: the play it takes to reach the goal in one of your named
 	// sessions, at the pace, loot return, and skill mix it recorded, with its
 	// own realised markup.
 	let { hub }: { hub: SkillingModel } = $props();
@@ -40,7 +40,7 @@
 	const topShare = $derived(Math.max(0, ...onTarget.map((skill) => skill.pesShare ?? 0)));
 </script>
 
-<SkillingSection id="skilling-forecast" title="Prospect" busy={hub.forecastLoading}>
+<SkillingSection id="skilling-forecast" title="Session Forecast" busy={hub.forecastLoading}>
 	{#snippet info()}
 		<p class="text-xs font-semibold leading-relaxed text-text">From your own play</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">

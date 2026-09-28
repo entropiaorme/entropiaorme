@@ -340,7 +340,10 @@ describe('restore', () => {
 		expect(model.target).toEqual({ kind: 'profession', name: 'Animal Looter' });
 		expect(model.goalInput).toBe('31');
 		await model.restore();
-		expect(prefs.getPreference).toHaveBeenCalledTimes(1);
+		const targetReads = prefs.getPreference.mock.calls.filter(
+			([key]) => key === 'skilling_hub_target',
+		);
+		expect(targetReads).toHaveLength(1);
 	});
 
 	it('ignores a malformed or unknown saved target', async () => {

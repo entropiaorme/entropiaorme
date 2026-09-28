@@ -28,7 +28,7 @@
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			Every activity ranked by the skilling PES it takes to add one {isHp ? 'HP' : 'level'}, from the
 			profession weights and your current skill levels. How much PES an hour of each activity yields
-			is not modelled: the Prospect measures that from your own sessions.
+			is not modelled: the Session Forecast measures that from your own sessions.
 		</p>
 		{#if activities.result?.direct}
 			<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
@@ -56,26 +56,37 @@
 			<ol class="max-h-80 overflow-y-auto overscroll-contain pr-1" aria-label="Activities, quickest first">
 				{#each activities.candidates as candidate, i (candidate.activity)}
 					{@const active = selected?.activity === candidate.activity}
-					<li>
+					{@const hidden = activities.isHidden(candidate.activity)}
+					<li
+						class="group relative flex items-center rounded-md transition-colors duration-[var(--duration-fast)]
+							{active ? 'bg-accent/[0.07]' : 'hover:bg-surface-hover/60'}
+							{hidden && i === activities.visibleCount && i > 0 ? 'mt-2 border-t border-border/40 pt-2' : ''}"
+					>
+						{#if active}
+							<span class="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" aria-hidden="true"></span>
+						{/if}
 						<button
 							type="button"
-							class="relative flex w-full cursor-pointer items-baseline gap-3 rounded-md py-2 pl-3 pr-2 text-left text-sm
-								transition-colors duration-[var(--duration-fast)]
-								{active ? 'bg-accent/[0.07] text-text' : 'text-text-secondary hover:bg-surface-hover/60 hover:text-text'}"
+							class="flex min-w-0 flex-1 cursor-pointer items-baseline gap-3 py-2 pl-3 pr-2 text-left text-sm
+								{hidden ? 'text-text-tertiary' : active ? 'text-text' : 'text-text-secondary group-hover:text-text'}"
 							aria-pressed={active}
 							onclick={() => activities.select(candidate.activity)}
 						>
-							{#if active}
-								<span class="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" aria-hidden="true"></span>
-							{/if}
 							<span
 								class="w-5 shrink-0 text-right text-xs tabular-nums
-									{i === 0 ? 'text-success' : i < 3 ? 'text-accent' : 'text-text-tertiary'}"
+									{hidden ? 'text-transparent' : i === 0 ? 'text-success' : i < 3 ? 'text-accent' : 'text-text-tertiary'}"
+								aria-hidden={hidden}
 							>
-								{i + 1}
+								{hidden ? '' : i + 1}
 							</span>
-							<span class="min-w-0 flex-1 truncate">{candidate.activity}</span>
-							<span class="shrink-0 whitespace-nowrap text-xs tabular-nums {active ? 'text-accent' : 'text-text-tertiary'}">
+							<span class="min-w-0 flex-1 truncate">
+								{candidate.activity}
+							</span>
+							<span
+								class="shrink-0 whitespace-nowrap text-xs tabular-nums
+									{active && !hidden ? 'text-accent' : 'text-text-tertiary'}
+									{hidden ? 'opacity-60' : 'group-hover:hidden group-focus-within:hidden'}"
+							>
 								{#if candidate.pesToPlusOne !== null}
 									{formatPes(candidate.pesToPlusOne)} PES
 								{:else}
@@ -83,6 +94,26 @@
 								{/if}
 							</span>
 						</button>
+						{#if hidden}
+							<button
+								type="button"
+								class="linklet shrink-0 px-2"
+								aria-label="Restore {candidate.activity} to the ranking"
+								onclick={() => activities.restore(candidate.activity)}
+							>
+								Restore
+							</button>
+						{:else}
+							<button
+								type="button"
+								class="linklet hidden shrink-0 px-2 group-hover:block group-focus-within:block"
+								aria-label="Hide {candidate.activity} from every ranking"
+								title="Hide it from every ranking"
+								onclick={() => activities.hide(candidate.activity)}
+							>
+								Hide
+							</button>
+						{/if}
 					</li>
 				{/each}
 			</ol>

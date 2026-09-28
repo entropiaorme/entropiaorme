@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityRecommenderResult, RecommenderActivity } from '$lib/api/commands.gen';
 import type { PageErrorSlot } from './errorSlot.svelte';
-import { createRecommenderModel } from './recommenderModel.svelte';
+import { createRecommenderModel, orderByVisibility } from './recommenderModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	getActivityRecommender: vi.fn(),
 }));
 
+vi.mock('$lib/preferences', () => ({
+	getPreference: vi.fn(),
+	setPreference: vi.fn(),
+}));
+
 import * as api from '$lib/api';
+import * as preferences from '$lib/preferences';
 
 const mocked = vi.mocked(api);
+const prefs = vi.mocked(preferences);
 
 function activity(overrides: Partial<RecommenderActivity> = {}): RecommenderActivity {
 	return {
@@ -45,6 +52,8 @@ function makeModel(): { model: ReturnType<typeof createRecommenderModel>; errors
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	prefs.getPreference.mockResolvedValue([]);
+	prefs.setPreference.mockResolvedValue(undefined);
 });
 
 describe('load', () => {
@@ -195,5 +204,67 @@ describe('select', () => {
 
 		model.select('Not A Candidate');
 		expect(model.selected?.activity).toBe('Resource Gatherer');
+	});
+});
+
+describe('hidden activities', () => {
+	const names = (list: RecommenderActivity[]) => list.map((candidate) => candidate.activity);
+
+	it('orders hidden activities last, each part in ranked order', () => {
+		const ranked = [
+			activity({ activity: 'A' }),
+			activity({ activity: 'B' }),
+			activity({ activity: 'C' }),
+		];
+		expect(names(orderByVisibility(ranked, ['A']))).toEqual(['B', 'C', 'A']);
+		expect(names(orderByVisibility(ranked, []))).toEqual(['A', 'B', 'C']);
+	});
+
+	it('restores the saved list and never selects a hidden activity by default', async () => {
+		prefs.getPreference.mockResolvedValue(['Resource Gatherer']);
+		mocked.getActivityRecommender.mockResolvedValue(recommenderResult());
+		const { model } = makeModel();
+		await model.load({ kind: 'profession', name: 'Animal Looter' });
+		expect(prefs.getPreference).toHaveBeenCalledWith('recommender_hidden_activities', []);
+		expect(names(model.candidates)).toEqual(['Gardener', 'Resource Gatherer']);
+		expect(model.selected?.activity).toBe('Gardener');
+		expect(model.visibleCount).toBe(1);
+		expect(model.isHidden('Resource Gatherer')).toBe(true);
+	});
+
+	it('hides and restores persistently, moving the chart off a hidden activity', async () => {
+		mocked.getActivityRecommender.mockResolvedValue(recommenderResult());
+		const { model } = makeModel();
+		await model.load({ kind: 'profession', name: 'Animal Looter' });
+		expect(model.selected?.activity).toBe('Resource Gatherer');
+
+		model.hide('Resource Gatherer');
+		expect(names(model.candidates)).toEqual(['Gardener', 'Resource Gatherer']);
+		expect(model.selected?.activity).toBe('Gardener');
+		expect(prefs.setPreference).toHaveBeenLastCalledWith('recommender_hidden_activities', [
+			'Resource Gatherer',
+		]);
+
+		model.restore('Resource Gatherer');
+		expect(names(model.candidates)).toEqual(['Resource Gatherer', 'Gardener']);
+		expect(prefs.setPreference).toHaveBeenLastCalledWith('recommender_hidden_activities', []);
+	});
+
+	it('keeps the hidden list across targets and reads it once', async () => {
+		mocked.getActivityRecommender.mockResolvedValue(recommenderResult());
+		const { model } = makeModel();
+		await model.load({ kind: 'profession', name: 'Animal Looter' });
+		model.hide('Gardener');
+		await model.load({ kind: 'hp' });
+		expect(names(model.candidates)).toEqual(['Resource Gatherer', 'Gardener']);
+		expect(prefs.getPreference).toHaveBeenCalledTimes(1);
+	});
+
+	it('ignores a malformed saved list', async () => {
+		prefs.getPreference.mockResolvedValue('nope');
+		mocked.getActivityRecommender.mockResolvedValue(recommenderResult());
+		const { model } = makeModel();
+		await model.load({ kind: 'profession', name: 'Animal Looter' });
+		expect(model.hidden).toEqual([]);
 	});
 });

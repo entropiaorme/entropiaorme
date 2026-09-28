@@ -6,8 +6,9 @@
 	import SkillingTargetHeader from './SkillingTargetHeader.svelte';
 
 	// The skilling hub: "I want to skill up X; what do I need to know?"
-	// answered in one place. The target and goal lead; the recommender,
-	// the prospect, and the optimiser each answer against them.
+	// answered in one place. The target and goal lead; the session
+	// forecast, the activity recommender, and the optimiser each answer
+	// against them.
 	let { model }: { model: CharacterModel } = $props();
 	const hub = $derived(model.skilling);
 
@@ -43,8 +44,8 @@
 			</button>
 		</div>
 	{:else}
-		<SkillingActivities {hub} />
 		<SkillingForecast {hub} />
+		<SkillingActivities {hub} />
 		<SkillingPath {hub} />
 	{/if}
 </div>

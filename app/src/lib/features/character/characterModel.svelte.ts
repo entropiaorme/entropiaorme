@@ -1,8 +1,10 @@
 /**
  * Character-surface view model: calibration, stats, the skill and profession
- * tables, the shared data load, and the optimiser and prospect sub-models
- * composed over one page-level error slot. Presentation lives in the feature
- * components; they compose over this state.
+ * tables, the shared data load, and the optimiser, prospect, recommender,
+ * and skilling-hub sub-models. The stats and legacy tabs share one
+ * page-level error slot; the skilling hub reports into per-facet slots of
+ * its own. Presentation lives in the feature components; they compose over
+ * this state.
  */
 
 import {
@@ -16,23 +18,13 @@ import {
 import type { ProfessionLevel, SkillLevel, StatProfession } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
-import { createOptimizerModel, type PageErrorSlot } from './optimizerModel.svelte';
+import { createErrorSlot } from './errorSlot.svelte';
+import { createOptimizerModel } from './optimizerModel.svelte';
 import { createProspectModel } from './prospectModel.svelte';
 import { createRecommenderModel } from './recommenderModel.svelte';
+import { createSkillingModel } from './skillingModel.svelte';
 
 export const PAGE_SIZE = 12;
-
-function createErrorSlot(): PageErrorSlot {
-	let error = $state<string | null>(null);
-	return {
-		get error() {
-			return error;
-		},
-		set error(value: string | null) {
-			error = value;
-		},
-	};
-}
 
 export function createCharacterModel() {
 	const errors = createErrorSlot();
@@ -49,6 +41,11 @@ export function createCharacterModel() {
 	let skills = $state([] as SkillLevel[]);
 	let professions = $state([] as ProfessionLevel[]);
 	let loading = $state(true);
+
+	const skilling = createSkillingModel({
+		professions: () => professions,
+		hp: () => stats.hp,
+	});
 
 	// ── Split attributes from regular skills ──
 	const attributes = $derived(skills.filter((s) => s.isAttribute));
@@ -102,6 +99,7 @@ export function createCharacterModel() {
 		optimizer,
 		prospect,
 		recommender,
+		skilling,
 		skillsTable,
 		professionsTable,
 

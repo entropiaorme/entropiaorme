@@ -66,6 +66,13 @@ describe('filterRows', () => {
 		expect(filterRows(NAMES, [], 'hp gain').map(labelOf)).toEqual(['HP gain']);
 		expect(filterRows(NAMES, [], 'no profession').map(labelOf)).toEqual(['No profession']);
 	});
+
+	it('drops the none row where no target is not a choice', () => {
+		const rows = filterRows(NAMES, [], '', { includeNone: false });
+		expect(rows.some((row) => row.kind === 'none')).toBe(false);
+		expect(rows[0].kind).toBe('hp');
+		expect(filterRows(NAMES, [], 'no profession', { includeNone: false })).toEqual([]);
+	});
 });
 
 describe('rowToTarget', () => {

@@ -444,8 +444,10 @@ fn status_rank(status: ForecastStatus) -> u8 {
 }
 
 /// Forecast `goal` on `target` from every definition's recorded sessions.
-/// Definitions that answer come first, quickest to the goal (least
-/// cycling) leading; the rest follow by how much play they recorded.
+/// Definitions that answer come first, cheapest to the goal (least TT
+/// burned, then least cycling) leading: cycling alone would favour a
+/// low-burn activity that takes far longer and costs more. The rest follow
+/// by how much play they recorded.
 /// `realised_markup` maps a definition id to its net realised markup.
 pub fn skilling_forecast(
     skill_levels: &Map<String, Value>,
@@ -467,6 +469,7 @@ pub fn skilling_forecast(
     sources.sort_by(|a, b| {
         status_rank(a.status)
             .cmp(&status_rank(b.status))
+            .then_with(|| a.tt_cost.total_cmp(&b.tt_cost))
             .then_with(|| a.cycled_ped.total_cmp(&b.cycled_ped))
             .then_with(|| b.evidence.cycled_ped.total_cmp(&a.evidence.cycled_ped))
             .then_with(|| a.evidence.name.cmp(&b.evidence.name))
@@ -615,7 +618,11 @@ mod tests {
             &target,
             &project(&skill_levels, &rates, source.cycled_ped + 0.01),
         );
-        assert!(reached >= 0.5 - 1e-9, "reached {reached} at {}", source.cycled_ped);
+        assert!(
+            reached >= 0.5 - 1e-9,
+            "reached {reached} at {}",
+            source.cycled_ped
+        );
         let short = target_gain(
             &target,
             &project(&skill_levels, &rates, source.cycled_ped * 0.99),
@@ -679,6 +686,22 @@ mod tests {
             ]
         );
         assert!(sources[0].cycled_ped < sources[1].cycled_ped);
+    }
+
+    #[test]
+    fn the_cheapest_to_reach_leads_even_when_it_cycles_more() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        // Burner earns Rifle PES twice as fast per PED but returns half its
+        // loot; Grinder cycles twice as much for the same gain at 99% back.
+        let mut burner = session(1, "Burner", 100.0, &[("Rifle", 4.0)]);
+        burner.loot_tt = 50.0;
+        let mut grinder = session(2, "Grinder", 100.0, &[("Rifle", 2.0)]);
+        grinder.loot_tt = 99.0;
+        let sources = skilling_forecast(&skill_levels, &target, 5.2, &[burner, grinder], &[]);
+        assert_eq!(sources[0].evidence.name, "Grinder");
+        assert!(sources[0].cycled_ped > sources[1].cycled_ped);
+        assert!(sources[0].tt_cost < sources[1].tt_cost);
     }
 
     #[test]

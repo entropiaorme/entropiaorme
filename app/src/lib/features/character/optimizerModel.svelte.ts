@@ -13,11 +13,9 @@ import type {
 	PathOptimizerResult,
 } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
+import type { PageErrorSlot } from './errorSlot.svelte';
 
-/** Shared page-level error slot; every load clears it on entry. */
-export interface PageErrorSlot {
-	error: string | null;
-}
+export type { PageErrorSlot };
 
 export type OptimizerMode = 'profession' | 'hp';
 

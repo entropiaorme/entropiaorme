@@ -3235,8 +3235,8 @@ export interface SkillingForecastQuery {
 }
 
 /**
- * The forecast from every named session, ready ones first (least
- * cycling to the goal leading). `error` is present only on the soft
+ * The forecast from every named session, ready ones first (least TT
+ * cost to the goal leading). `error` is present only on the soft
  * unknown-profession path.
  */
 export interface SkillingForecastResult {

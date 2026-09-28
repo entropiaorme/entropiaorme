@@ -11,7 +11,7 @@ import { getActivityRecommender } from '$lib/api';
 import type { ActivityRecommenderResult, RecommenderActivity } from '$lib/api/commands.gen';
 import { describeError } from '$lib/view/errorState';
 import { type CodexRankingTarget, targetProfessions } from './codexRankingTarget';
-import type { PageErrorSlot } from './optimizerModel.svelte';
+import type { PageErrorSlot } from './errorSlot.svelte';
 
 export function createRecommenderModel(errors: PageErrorSlot) {
 	let target = $state<CodexRankingTarget>({ kind: 'none' });

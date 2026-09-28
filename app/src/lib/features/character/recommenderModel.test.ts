@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityRecommenderResult, RecommenderActivity } from '$lib/api/commands.gen';
-import type { PageErrorSlot } from './optimizerModel.svelte';
+import type { PageErrorSlot } from './errorSlot.svelte';
 import { createRecommenderModel } from './recommenderModel.svelte';
 
 vi.mock('$lib/api', () => ({

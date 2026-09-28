@@ -8,9 +8,9 @@
 	import { formatPes } from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
 
-	// Where to train it: every activity ranked by the skilling PES it takes
-	// to add one to the target (the activity recommender), with the chosen
-	// activity's projection and what drives it.
+	// The Activity Recommender: every activity ranked by the skilling PES it
+	// takes to add one to the target, with the chosen activity's projection
+	// and what drives it.
 	let { hub }: { hub: SkillingModel } = $props();
 	const activities = $derived(hub.activities);
 	const isHp = $derived(hub.target.kind === 'hp');
@@ -22,14 +22,22 @@
 	const SHOWN_CONTRIBUTORS = 5;
 </script>
 
-<SkillingSection
-	id="skilling-activities"
-	title="Where to train it"
-	description="Every activity ranked by the skilling PES it takes to add one {isHp
-		? 'HP'
-		: 'level'}, from the profession weights and your current skill levels."
-	busy={activities.loading}
->
+<SkillingSection id="skilling-activities" title="Activity Recommender" busy={activities.loading}>
+	{#snippet info()}
+		<p class="text-xs font-semibold leading-relaxed text-text">A model, per PES of skilling</p>
+		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+			Every activity ranked by the skilling PES it takes to add one {isHp ? 'HP' : 'level'}, from the
+			profession weights and your current skill levels. How much PES an hour of each activity yields
+			is not modelled: the Prospect measures that from your own sessions.
+		</p>
+		{#if activities.result?.direct}
+			<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
+				The faded line is {activities.result.direct.activity} itself, for reference; some professions
+				have no direct grind path.
+			</p>
+		{/if}
+	{/snippet}
+
 	{#if hub.activitiesError}
 		<ErrorNotice message={hub.activitiesError} />
 	{:else if activities.loading}
@@ -42,10 +50,7 @@
 			<Skeleton class="h-60 w-full" />
 		</div>
 	{:else if activities.result && activities.candidates.length === 0}
-		<p class="py-6 text-sm text-text-tertiary">
-			No activity trains the skills behind {targetLabel(hub.target)} from your current calibration.
-			Scan your skills if you have not yet.
-		</p>
+		<p class="py-4 text-sm text-text-tertiary">No activity trains {targetLabel(hub.target)} yet.</p>
 	{:else if activities.result}
 		<div class="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(15rem,1fr)_2fr]">
 			<ol class="max-h-80 overflow-y-auto overscroll-contain pr-1" aria-label="Activities, quickest first">
@@ -93,7 +98,7 @@
 					/>
 					{#if selected.contributors.length > 0}
 						<div>
-							<p class="eyebrow mb-2.5">What {selected.activity} moves, at 1,000 PES</p>
+							<p class="eyebrow mb-2.5">At 1,000 PES</p>
 							<ul class="max-w-xl space-y-2">
 								{#each selected.contributors.slice(0, SHOWN_CONTRIBUTORS) as contributor (contributor.name)}
 									<li class="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-3 text-xs">
@@ -109,7 +114,7 @@
 							{#if selected.contributors.length > SHOWN_CONTRIBUTORS}
 								{@const more = selected.contributors.length - SHOWN_CONTRIBUTORS}
 								<p class="mt-2 text-xs text-text-tertiary">
-									and {more} smaller {more === 1 ? 'contributor' : 'contributors'}
+									+{more} more
 								</p>
 							{/if}
 						</div>
@@ -117,14 +122,5 @@
 				{/if}
 			</div>
 		</div>
-
-		<p class="mt-5 max-w-3xl text-xs leading-relaxed text-text-tertiary">
-			A model, per PES of skilling: how much PES an hour of each activity yields is not part of it,
-			which is what your own sessions below measure.
-			{#if activities.result.direct}
-				The faded line is {activities.result.direct.activity} itself, for reference; some
-				professions have no direct grind path.
-			{/if}
-		</p>
 	{/if}
 </SkillingSection>

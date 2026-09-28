@@ -73,10 +73,10 @@ describe('statuses and caveats', () => {
 	it('says why a session cannot answer', () => {
 		expect(statusMessage('ready', 'A', 'B')).toBe('');
 		expect(statusMessage('does_not_train', 'Tree Cutting', 'Evader')).toBe(
-			'Nothing Tree Cutting has trained in your recorded sessions moves Evader.',
+			'Tree Cutting does not train Evader.',
 		);
-		expect(statusMessage('out_of_range', 'Tree Cutting', 'Evader')).toContain(
-			"Tree Cutting's skill mix",
+		expect(statusMessage('out_of_range', 'Tree Cutting', 'Evader')).toBe(
+			"Out of Tree Cutting's reach.",
 		);
 		expect(statusLabel('no_evidence')).toBe('No recorded cycling');
 		expect(statusLabel('ready')).toBe('');

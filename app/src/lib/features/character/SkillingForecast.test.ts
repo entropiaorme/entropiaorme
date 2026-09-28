@@ -132,12 +132,13 @@ describe('SkillingForecast', () => {
 		expect(screen.getByText('41.38')).toBeTruthy();
 		// No confirmed sales: the after-markup slot is empty, never a copy of TT.
 		expect(screen.getByText(NO_DATA)).toBeTruthy();
-		expect(screen.getByText('no sales from it yet')).toBeTruthy();
+		expect(screen.getByText('No sales yet')).toBeTruthy();
 		// The skill that moves the target is a row; the negligible one and the
-		// off-target one are summarised beneath.
+		// off-target one sit behind a tip.
 		expect(screen.getByText('Analysis')).toBeTruthy();
-		expect(screen.getByText(/Barely moves it/).parentElement?.textContent).toContain('Skinning');
-		expect(screen.getByText(/Also trains/).parentElement?.textContent).toContain('Botany +160.95');
+		expect(screen.queryByText('Skinning')).toBeNull();
+		expect(screen.getByText('+2 other skills trained')).toBeTruthy();
+		expect(screen.getByText(/Skinning \+0\.03, Botany \+160\.95/)).toBeTruthy();
 	});
 
 	it('applies the session realised markup when it has one', async () => {
@@ -154,11 +155,7 @@ describe('SkillingForecast', () => {
 
 	it('says why a session cannot answer', async () => {
 		await renderWith([source({ status: 'does_not_train', skills: [] })]);
-		expect(
-			screen.getByText(
-				/Nothing Tree Cutting has trained in your recorded sessions moves Animal Looter/,
-			),
-		).toBeTruthy();
+		expect(screen.getByText('Tree Cutting does not train Animal Looter.')).toBeTruthy();
 	});
 
 	it('points at tracking when no named session exists', async () => {
@@ -170,6 +167,7 @@ describe('SkillingForecast', () => {
 		await renderWith([
 			source({ warnings: ['thin_sessions'], sample: { ...source().sample, sessions: 2 } }),
 		]);
-		expect(screen.getByText(/Treat it as rough: only 2 sessions recorded/)).toBeTruthy();
+		expect(screen.getByText('Thin sample')).toBeTruthy();
+		expect(screen.getByText('only 2 sessions recorded.')).toBeTruthy();
 	});
 });

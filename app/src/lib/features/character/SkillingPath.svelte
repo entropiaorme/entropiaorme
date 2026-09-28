@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
-	import StatDisplay from '$lib/components/StatDisplay.svelte';
 	import { formatPed } from '$lib/utils/format';
 	import { targetLabel } from './codexRankingTarget';
 	import SkillingBar from './SkillingBar.svelte';
@@ -9,9 +9,9 @@
 	import { formatGoal, formatLevel, groupByReason } from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
 
-	// The cheapest skill path: where skill PES (codex rewards, chips) moves
-	// the target furthest. A profession gets the least-PES allocation to the
-	// goal; HP gets every contributing skill ranked by PES per HP.
+	// The Optimiser: where skill PES (codex rewards, chips) moves the target
+	// furthest. A profession gets the least-PES allocation to the goal; HP
+	// gets every contributing skill ranked by PES per HP.
 	let { hub }: { hub: SkillingModel } = $props();
 
 	const isHp = $derived(hub.target.kind === 'hp');
@@ -19,7 +19,12 @@
 	const name = $derived(targetLabel(hub.target));
 	const path = $derived(hub.path);
 	const allocated = $derived(path?.allocations.filter((alloc) => alloc.levelsToGain > 0) ?? []);
-	const unallocated = $derived(path?.allocations.filter((alloc) => alloc.levelsToGain === 0) ?? []);
+	const leftOut = $derived([
+		...(path?.allocations
+			.filter((alloc) => alloc.levelsToGain === 0)
+			.map((alloc) => ({ name: alloc.name, reason: 'not needed for this goal' })) ?? []),
+		...(path?.excluded.map((skill) => ({ name: skill.name, reason: skill.reason })) ?? []),
+	]);
 	const topCost = $derived(Math.max(0, ...allocated.map((alloc) => alloc.pedCost)));
 	const hpSkills = $derived(hub.hpPath?.skills ?? []);
 	const cheapestHp = $derived(hpSkills[0]?.pedPerHp ?? 0);
@@ -29,39 +34,45 @@
 	const rankTone = (i: number) => (i === 0 ? 'text-success' : i < 3 ? 'text-accent' : 'text-text');
 </script>
 
-{#snippet attributeList(items: { name: string; figure: string }[], note: string)}
-	<p class="mt-4 text-xs leading-relaxed text-text-tertiary">
-		<span class="text-text-secondary">If an attribute is offered as a reward:</span>
-		{#each items as item, i (item.name)}
-			{i > 0 ? ', ' : ' '}{item.name} <span class="tabular-nums text-text-secondary">{item.figure}</span>
-		{/each}. {note}
-	</p>
+{#snippet attributeTip(items: { name: string; figure: string }[], better: string)}
+	<InfoTip label="Attribute rewards" width="w-72" align="left">
+		{#snippet trigger()}
+			<span class="linklet">Attribute rewards</span>
+		{/snippet}
+		<p class="text-xs font-semibold leading-relaxed text-text">If an attribute is offered</p>
+		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+			{items.map((item) => `${item.name} ${item.figure}`).join(', ')}. {better}
+		</p>
+	</InfoTip>
 {/snippet}
 
-<SkillingSection
-	id="skilling-path"
-	title={isHp ? 'Cheapest skills for HP' : 'Cheapest skill path'}
-	description={isHp
-		? 'Every skill that adds HP, ranked by the PES it takes to add one HP from your current level: where codex rewards and chips go furthest.'
-		: `The least skill PES that reaches the goal, spread across ${isFamily ? 'the profession' : name}'s skills where each moves it most: where codex rewards and chips go furthest.`}
-	busy={hub.pathLoading}
->
-	{#if isFamily}
-		<p class="py-4 text-sm text-text-tertiary">
-			A skill path follows one profession at a time. Pick one of the family's professions above.
+<SkillingSection id="skilling-path" title="Optimiser" busy={hub.pathLoading}>
+	{#snippet info()}
+		<p class="text-xs font-semibold leading-relaxed text-text">Where skill PES goes furthest</p>
+		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+			{#if isHp}
+				Every skill that adds HP, ranked by the PES it takes to add one HP from your current level.
+			{:else}
+				The least skill PES that reaches the goal, spread across {isFamily ? 'the profession' : name}'s
+				skills where each moves it most.
+			{/if}
+			For codex rewards and chips.
 		</p>
+	{/snippet}
+
+	{#if isFamily}
+		<p class="text-sm text-text-tertiary">Pick one profession.</p>
 	{:else if hub.pathError}
 		<ErrorNotice message={hub.pathError} />
 	{:else if hub.pathLoading}
 		<div class="space-y-3">
-			<Skeleton class="h-6 w-48" />
 			{#each { length: 5 } as _}
 				<Skeleton class="h-5 w-full" />
 			{/each}
 		</div>
 	{:else if isHp}
 		{#if hpSkills.length === 0}
-			<p class="py-4 text-sm text-text-tertiary">No skill data yet. Scan your skills to rank them.</p>
+			<p class="text-sm text-text-tertiary">Scan your skills first.</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
@@ -79,7 +90,9 @@
 						{#each showAllHp ? hpSkills : hpSkills.slice(0, SHOWN_HP_SKILLS) as skill, i (skill.name)}
 							<tr class="border-b border-border/30 transition-colors hover:bg-surface-hover/40">
 								<td class="py-2.5 pr-2 text-xs tabular-nums text-text-tertiary">{i + 1}</td>
-								<td class="py-2.5 pr-3 {skill.currentLevel > 0 ? 'text-text' : 'text-text-tertiary'}">{skill.name}</td>
+								<td class="py-2.5 pr-3 {skill.currentLevel > 0 ? 'text-text' : 'text-text-tertiary'}">
+									{skill.name}
+								</td>
 								<td class="px-3 py-2.5 text-right tabular-nums text-text-secondary">
 									{#if skill.currentLevel > 0}
 										{formatLevel(skill.currentLevel)}
@@ -104,33 +117,25 @@
 					</tbody>
 				</table>
 			</div>
-			{#if hpSkills.length > SHOWN_HP_SKILLS}
-				<button type="button" class="linklet mt-3" onclick={() => (showAllHp = !showAllHp)}>
-					{showAllHp ? 'Show the cheapest only' : `Show all ${hpSkills.length} skills`}
-				</button>
-			{/if}
-			{#if hub.hpPath && hub.hpPath.attributes.length > 0}
-				{@render attributeList(
-					hub.hpPath.attributes.map((attr) => ({ name: attr.name, figure: `${attr.levelsPerHp} lvl/HP` })),
-					'Fewer levels per HP is better.',
-				)}
-			{/if}
+			<div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1">
+				{#if hpSkills.length > SHOWN_HP_SKILLS}
+					<button type="button" class="linklet" onclick={() => (showAllHp = !showAllHp)}>
+						{showAllHp ? 'Show fewer' : `Show all ${hpSkills.length}`}
+					</button>
+				{/if}
+				{#if hub.hpPath && hub.hpPath.attributes.length > 0}
+					{@render attributeTip(
+						hub.hpPath.attributes.map((attr) => ({ name: attr.name, figure: `${attr.levelsPerHp} lvl/HP` })),
+						'Fewer levels per HP is better.',
+					)}
+				{/if}
+			</div>
 		{/if}
 	{:else if !hub.goalActive}
-		<p class="py-4 text-sm text-text-tertiary">Set a goal above your current level to plan a path.</p>
+		<p class="text-sm text-text-tertiary">Set a goal above your current level.</p>
 	{:else if path}
-		<div class="grid grid-cols-2 gap-x-8 gap-y-6 lg:grid-cols-4">
-			<StatDisplay label="Skill PES" value={formatPed(path.totalPed)} unit="PES" comparison="to {formatGoal(hub.target, hub.goal ?? 0)}" />
-			<StatDisplay
-				label="Levels gained"
-				value={`+${path.professionLevelsGained.toFixed(2)}`}
-				comparison="{path.currentLevel.toFixed(2)} to {path.endLevel.toFixed(2)}"
-			/>
-			<StatDisplay label="Skills involved" value={allocated.length} comparison="ranked by PES below" />
-		</div>
-
 		{#if allocated.length > 0}
-			<div class="mt-7 overflow-x-auto">
+			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
 					<thead>
 						<tr class="border-b border-border/60">
@@ -138,7 +143,7 @@
 							<th class="py-2 pr-3 text-left eyebrow">Skill</th>
 							<th class="px-3 py-2 text-right eyebrow">Weight</th>
 							<th class="px-3 py-2 text-right eyebrow">Level</th>
-							<th class="w-40 px-3 py-2 text-left eyebrow">Share of the PES</th>
+							<th class="w-40 px-3 py-2 text-left eyebrow">Share of PES</th>
 							<th class="py-2 pl-3 text-right eyebrow">PES</th>
 						</tr>
 					</thead>
@@ -161,29 +166,46 @@
 										</span>
 									</div>
 								</td>
-								<td class="py-2.5 pl-3 text-right font-medium tabular-nums {rankTone(i)}">{formatPed(alloc.pedCost)}</td>
+								<td class="py-2.5 pl-3 text-right font-medium tabular-nums {rankTone(i)}">
+									{formatPed(alloc.pedCost)}
+								</td>
 							</tr>
 						{/each}
 					</tbody>
+					<tfoot>
+						<tr>
+							<td></td>
+							<td class="pt-3 pr-3 text-xs text-text-secondary" colspan="4">
+								Total to {formatGoal(hub.target, hub.goal ?? 0)}
+							</td>
+							<td class="pt-3 pl-3 text-right font-semibold tabular-nums text-text">
+								{formatPed(path.totalPed)}
+							</td>
+						</tr>
+					</tfoot>
 				</table>
 			</div>
+		{:else}
+			<p class="text-sm text-text-tertiary">Already there.</p>
 		{/if}
 
-		{#if unallocated.length > 0 || path.excluded.length > 0}
-			<p class="mt-4 text-xs leading-relaxed text-text-tertiary">
-				<span class="text-text-secondary">Left out,</span>
-				{groupByReason([
-					...unallocated.map((alloc) => ({ name: alloc.name, reason: 'not needed for this goal' })),
-					...path.excluded.map((skill) => ({ name: skill.name, reason: skill.reason })),
-				])}.
-			</p>
-		{/if}
-
-		{#if path.attributes.length > 0}
-			{@render attributeList(
-				path.attributes.map((attr) => ({ name: attr.name, figure: `×${attr.contributionFactor}` })),
-				'Higher contribution is better.',
-			)}
+		{#if leftOut.length > 0 || path.attributes.length > 0}
+			<div class="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1">
+				{#if leftOut.length > 0}
+					<InfoTip label="Skills left out" width="w-80" align="left">
+						{#snippet trigger()}
+							<span class="linklet">{leftOut.length} left out</span>
+						{/snippet}
+						<p class="text-xs leading-relaxed text-text-secondary">{groupByReason(leftOut)}.</p>
+					</InfoTip>
+				{/if}
+				{#if path.attributes.length > 0}
+					{@render attributeTip(
+						path.attributes.map((attr) => ({ name: attr.name, figure: `×${attr.contributionFactor}` })),
+						'Higher contribution is better.',
+					)}
+				{/if}
+			</div>
 		{/if}
 	{/if}
 </SkillingSection>

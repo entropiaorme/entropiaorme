@@ -73,13 +73,13 @@ export function statusMessage(
 		case 'ready':
 			return '';
 		case 'reached':
-			return 'You are already at the goal.';
+			return 'Goal reached.';
 		case 'does_not_train':
-			return `Nothing ${sessionName} has trained in your recorded sessions moves ${targetName}.`;
+			return `${sessionName} does not train ${targetName}.`;
 		case 'no_evidence':
-			return `${sessionName} has no recorded cycling to project from yet.`;
+			return `${sessionName} has no recorded cycling.`;
 		case 'out_of_range':
-			return `The goal is beyond what ${sessionName}'s skill mix can reach.`;
+			return `Out of ${sessionName}'s reach.`;
 	}
 }
 

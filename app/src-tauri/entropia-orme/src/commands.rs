@@ -23,9 +23,8 @@ use eo_api::analytics::{
     StockConversionInput, StockPosition, StockRemovalInput,
 };
 use eo_api::character::{
-    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus,
-    CharacterProspectOptions, ComputedCharacterStats, HpOptimizerResult, PathOptimizerResult,
-    ProfessionLevel, ProfessionOptimizerResult, ProspectQuery, ProspectResult, SkillLevel,
+    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
+    HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
 };
 use eo_api::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
@@ -396,31 +395,6 @@ pub async fn character_professions(
     app: tauri::AppHandle,
 ) -> Result<Vec<ProfessionLevel>, ApiError> {
     facade(&app)?.character_professions().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn character_prospect_options(
-    app: tauri::AppHandle,
-) -> Result<CharacterProspectOptions, ApiError> {
-    facade(&app)?.character_prospect_options().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn character_prospect(
-    app: tauri::AppHandle,
-    query: ProspectQuery,
-) -> Result<ProspectResult, ApiError> {
-    facade(&app)?.character_prospect(&query).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn character_profession_optimizer(
-    app: tauri::AppHandle,
-    profession: String,
-) -> Result<ProfessionOptimizerResult, ApiError> {
-    facade(&app)?
-        .character_profession_optimizer(&profession)
-        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

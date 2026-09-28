@@ -158,10 +158,6 @@ fn facade_microbench() {
         bench!("character_stats", api.character_stats());
         bench!("character_skills", api.character_skills());
         bench!("character_professions", api.character_professions());
-        bench!(
-            "character_prospect_options",
-            api.character_prospect_options()
-        );
         bench!("character_hp_optimizer", api.character_hp_optimizer());
 
         // The settings reads, the after-leg of the HTTP dispatch

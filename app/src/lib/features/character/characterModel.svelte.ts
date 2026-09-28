@@ -1,16 +1,14 @@
 /**
  * Character-surface view model: calibration, stats, the skill and profession
- * tables, the shared data load, and the optimiser, prospect, recommender,
- * and skilling-hub sub-models. The stats and legacy tabs share one
- * page-level error slot; the skilling hub reports into per-facet slots of
- * its own. Presentation lives in the feature components; they compose over
- * this state.
+ * tables, the shared data load, and the skilling-hub sub-model. The stats
+ * surface reports into one page-level error slot; the skilling hub reports
+ * into per-facet slots of its own. Presentation lives in the feature
+ * components; they compose over this state.
  */
 
 import {
 	getCalibrationStatus,
 	getCharacterProfessions,
-	getCharacterProspectOptions,
 	getCharacterSkills,
 	getCharacterStats,
 	showScanOverlay,
@@ -19,18 +17,12 @@ import type { ProfessionLevel, SkillLevel, StatProfession } from '$lib/types/ana
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { createErrorSlot } from './errorSlot.svelte';
-import { createOptimizerModel } from './optimizerModel.svelte';
-import { createProspectModel } from './prospectModel.svelte';
-import { createRecommenderModel } from './recommenderModel.svelte';
 import { createSkillingModel } from './skillingModel.svelte';
 
 export const PAGE_SIZE = 12;
 
 export function createCharacterModel() {
 	const errors = createErrorSlot();
-	const optimizer = createOptimizerModel(errors);
-	const prospect = createProspectModel(optimizer, errors);
-	const recommender = createRecommenderModel(errors);
 
 	let calibration = $state({
 		calibrated: false,
@@ -69,18 +61,16 @@ export function createCharacterModel() {
 	async function loadCharacterData() {
 		errors.error = null;
 		try {
-			const [cal, st, sk, pr, po] = await Promise.all([
+			const [cal, st, sk, pr] = await Promise.all([
 				getCalibrationStatus(),
 				getCharacterStats(),
 				getCharacterSkills(),
 				getCharacterProfessions(),
-				getCharacterProspectOptions(),
 			]);
 			calibration = cal;
 			stats = st;
 			skills = sk;
 			professions = pr;
-			prospect.options = po;
 		} catch (e) {
 			errors.error = describeError(e, 'Failed to load character data');
 		} finally {
@@ -96,9 +86,6 @@ export function createCharacterModel() {
 	}
 
 	return {
-		optimizer,
-		prospect,
-		recommender,
 		skilling,
 		skillsTable,
 		professionsTable,

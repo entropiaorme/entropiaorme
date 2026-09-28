@@ -8,12 +8,9 @@ vi.mock('$lib/api', () => ({
 	getCharacterStats: vi.fn(),
 	getCharacterSkills: vi.fn(),
 	getCharacterProfessions: vi.fn(),
-	getCharacterProspectOptions: vi.fn(),
 	showScanOverlay: vi.fn(),
-	getProfessionOptimizer: vi.fn(),
 	getHpOptimizer: vi.fn(),
 	getProfessionPathOptimizer: vi.fn(),
-	getCharacterProspect: vi.fn(),
 }));
 
 import * as api from '$lib/api';
@@ -58,7 +55,6 @@ function seedLiveMocks() {
 	mocked.getCharacterStats.mockResolvedValue(stats());
 	mocked.getCharacterSkills.mockResolvedValue([skill()]);
 	mocked.getCharacterProfessions.mockResolvedValue([profession()]);
-	mocked.getCharacterProspectOptions.mockResolvedValue({ tags: [], mobs: [], weapons: [] });
 }
 
 beforeEach(() => {
@@ -66,7 +62,7 @@ beforeEach(() => {
 });
 
 describe('loadCharacterData', () => {
-	it('loads calibration, stats, skills, professions and prospect options', async () => {
+	it('loads calibration, stats, skills and professions', async () => {
 		seedLiveMocks();
 		const model = createCharacterModel();
 		await model.loadCharacterData();
@@ -75,7 +71,6 @@ describe('loadCharacterData', () => {
 		expect(model.stats.hp).toBe(92);
 		expect(model.skills.map((s) => s.name)).toEqual(['Rifle']);
 		expect(model.professions.map((p) => p.name)).toEqual(['Laser Sniper (Hit)']);
-		expect(model.prospect.options).toEqual({ tags: [], mobs: [], weapons: [] });
 		expect(model.loading).toBe(false);
 		expect(model.error).toBeNull();
 	});
@@ -184,19 +179,6 @@ describe('openScanOverlay', () => {
 		const model = createCharacterModel();
 		model.error = 'stale failure';
 		model.openScanOverlay();
-		expect(model.error).toBeNull();
-	});
-});
-
-describe('shared error slot', () => {
-	it('exposes a sub-model failure at page level and clears it on the next load', async () => {
-		seedLiveMocks();
-		mocked.getHpOptimizer.mockRejectedValue(new Error('no data'));
-		const model = createCharacterModel();
-		await model.optimizer.loadHpOptimizer();
-		expect(model.error).toBe('no data');
-
-		await model.loadCharacterData();
 		expect(model.error).toBeNull();
 	});
 });

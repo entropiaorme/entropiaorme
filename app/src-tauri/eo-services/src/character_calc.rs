@@ -10,20 +10,6 @@ use crate::codex_categories::{get_codex_category, reward_divisor};
 use crate::tt_value_curve::{levels_for_tt_value, max_tt_curve_level, tt_value_at};
 use eo_wire::normalizer::round_half_even;
 
-/// One regular-skill row of the profession optimizer: PED cost to reach
-/// the next integer profession level via that skill alone.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OptimizerSkillRow {
-    pub name: String,
-    pub weight: f64,
-    pub current_level: f64,
-    pub levels_needed: f64,
-    pub ped_to_next_level: f64,
-    pub codex_category: Option<&'static str>,
-    pub codex_divisor: Option<i64>,
-}
-
 /// One attribute row of the profession / path optimizer.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,18 +18,6 @@ pub struct OptimizerAttributeRow {
     pub weight: f64,
     pub current_level: f64,
     pub contribution_factor: f64,
-}
-
-/// The profession optimizer's breakdown (the facade adds the
-/// profession's name).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProfessionOptimizerBreakdown {
-    pub skills: Vec<OptimizerSkillRow>,
-    pub attributes: Vec<OptimizerAttributeRow>,
-    pub current_level: f64,
-    pub next_level: i64,
-    pub gap: f64,
 }
 
 /// One allocation of the path optimizer.
@@ -345,62 +319,6 @@ fn sort_stable_by_f64<T>(rows: &mut [T], key: impl Fn(&T) -> f64, descending: bo
             ordering
         }
     });
-}
-
-/// Analyse skills for levelling a profession: regular skills ranked by
-/// PED cost to reach the next integer level via that skill alone, and
-/// attribute skills ranked by raw contribution factor.
-pub fn profession_skill_optimizer(
-    skill_levels: &Map<String, Value>,
-    profession: &Value,
-) -> ProfessionOptimizerBreakdown {
-    let current_prof = raw_profession_total(skill_levels, profession) / 10000.0;
-    let next_level = current_prof.trunc() as i64 + 1;
-    let gap = next_level as f64 - current_prof;
-
-    let mut skills: Vec<OptimizerSkillRow> = Vec::new();
-    let mut attributes: Vec<OptimizerAttributeRow> = Vec::new();
-
-    for (name, weight) in iter_profession_skills(profession) {
-        if weight <= 0.0 {
-            continue;
-        }
-        let current_level = level_of(skill_levels, &name);
-
-        if is_attribute(&name) {
-            attributes.push(OptimizerAttributeRow {
-                name,
-                weight,
-                current_level,
-                contribution_factor: weight * 20.0,
-            });
-        } else {
-            let levels_needed = gap * 10000.0 / weight;
-            let target_level = current_level + levels_needed;
-            let ped_cost = tt_value_at(target_level) - tt_value_at(current_level);
-            let (codex_category, codex_divisor) = codex_fields(&name);
-            skills.push(OptimizerSkillRow {
-                name,
-                weight,
-                current_level,
-                levels_needed: round_half_even(levels_needed, 1),
-                ped_to_next_level: round_half_even(ped_cost, 2),
-                codex_category,
-                codex_divisor,
-            });
-        }
-    }
-
-    sort_stable_by_f64(&mut skills, |row| row.ped_to_next_level, false);
-    sort_stable_by_f64(&mut attributes, |row| row.contribution_factor, true);
-
-    ProfessionOptimizerBreakdown {
-        skills,
-        attributes,
-        current_level: round_half_even(current_prof, 2),
-        next_level,
-        gap: round_half_even(gap, 4),
-    }
 }
 
 struct PathSkill {
@@ -829,26 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn skill_optimizer_shapes_rank_and_round() {
-        let levels = levels(&[
-            ("Rifle", 100.0),
-            ("Agility", 50.0),
-            ("Marksmanship", 2000.0),
-        ]);
-        // (100*5 + 50*20*2 + 2000*3)/10000 = 0.85.
-        let result = to_json(profession_skill_optimizer(&levels, &profession()));
-        assert_eq!(result["currentLevel"], 0.85);
-        assert_eq!(result["nextLevel"], 1);
-        let skills = result["skills"].as_array().unwrap();
-        assert_eq!(skills.len(), 2, "attributes and zero weights excluded");
-        // Marksmanship (higher level, steeper curve) costs more than
-        // Rifle to push the same gap; cheapest first.
-        assert_eq!(skills[0]["name"], "Rifle");
-        let attrs = result["attributes"].as_array().unwrap();
-        assert_eq!(attrs[0]["contributionFactor"], 40.0);
-    }
-
-    #[test]
     fn path_optimizer_validates_inputs_and_partitions_results() {
         let level_map = levels(&[("Rifle", 100.0), ("Agility", 50.0)]);
         assert!(profession_path_optimizer(&level_map, &profession(), None, None).is_err());
@@ -968,11 +866,6 @@ mod tests {
             assert_eq!(to_python_json(value, None), expected, "{context}");
         };
 
-        pin(
-            &to_json(profession_skill_optimizer(&level_map, &profession)),
-            r#"{"attributes": [{"contributionFactor": 50.0, "currentLevel": 80.0, "name": "Agility", "weight": 2.5}, {"contributionFactor": 20.0, "currentLevel": 12.0, "name": "Strength", "weight": 1.0}], "currentLevel": 1.27, "gap": 0.7275, "nextLevel": 2, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "levelsNeeded": 1455.0, "name": "Rifle", "pedToNextLevel": 21.39, "weight": 5.0}, {"codexCategory": null, "codexDivisor": null, "currentLevel": 320.5, "levelsNeeded": 2424.9, "name": "Marksmanship", "pedToNextLevel": 23.08, "weight": 3.0}, {"codexCategory": null, "codexDivisor": null, "currentLevel": 0.0, "levelsNeeded": 3637.4, "name": "Locked Skill", "pedToNextLevel": 52.08, "weight": 2.0}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 45.0, "levelsNeeded": 14549.5, "name": "Anatomy", "pedToNextLevel": 7762.67, "weight": 0.5}]}"#,
-            "skill_optimizer",
-        );
         pin(
             &to_json(profession_path_optimizer(&level_map, &profession, Some(2.0), None).unwrap()),
             r#"{"allocations": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "levelsToGain": 754.05, "name": "Rifle", "newLevel": 2254.3, "pedCost": 8.17, "weight": 5.0}, {"codexCategory": null, "codexDivisor": null, "currentLevel": 320.5, "levelsToGain": 1167.0, "name": "Marksmanship", "newLevel": 1487.5, "pedCost": 6.08, "weight": 3.0}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 45.0, "levelsToGain": 7.0, "name": "Anatomy", "newLevel": 52.0, "pedCost": 0.0, "weight": 0.5}], "attributes": [{"contributionFactor": 50.0, "currentLevel": 80.0, "name": "Agility", "weight": 2.5}, {"contributionFactor": 20.0, "currentLevel": 12.0, "name": "Strength", "weight": 1.0}], "currentLevel": 1.27, "endLevel": 2.0, "excluded": [{"name": "Locked Skill", "reason": "not unlocked", "weight": 2.0}], "inputPedBudget": null, "inputTargetLevel": 2.0, "mode": "target", "professionLevelsGained": 0.73, "totalPed": 14.25}"#,

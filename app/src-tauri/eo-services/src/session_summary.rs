@@ -3,13 +3,13 @@
 //! eagerly when a session ends and clear when a session stops
 //! qualifying; a stale or missing summary rebuilds lazily on read.
 //! (The summary table sits outside the snapshot catalogue, so parity
-//! here surfaces through the prospect reads rather than the goldens.)
+//! here surfaces through its readers' tests rather than the goldens.)
 
 use rusqlite::OptionalExtension as _;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::character_calc::ATTRIBUTE_SKILLS;
-use crate::db::{Db, DbError};
+use crate::db::DbError;
 use eo_wire::normalizer::{round_half_even, to_python_json};
 
 /// Whether a rusqlite error is SQLite's "no such table" report: the
@@ -455,53 +455,11 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
 }
 
 /// Remove a session's summary row; idempotent.
-/// One stored summary row to its camelCase prospect shape (the
-/// original's column order and coercions: or-zero floats, an integer
-/// kill count, JSON columns parsed when non-empty, and the dominant
-/// fields passed through raw).
-fn row_to_prospect_dict(row: &rusqlite::Row) -> Value {
-    let float_or_zero = |index: usize| -> f64 {
-        row.get::<_, Option<f64>>(index)
-            .ok()
-            .flatten()
-            .unwrap_or(0.0)
-    };
-    let json_or_empty = |index: usize| -> Value {
-        row.get::<_, Option<String>>(index)
-            .ok()
-            .flatten()
-            .filter(|text| !text.is_empty())
-            .map(|text| serde_json::from_str(&text).expect("stored summary JSON parses"))
-            .unwrap_or_else(|| json!({}))
-    };
-    json!({
-        "id": row.get_unwrap::<_, String>(0),
-        "startedAt": float_or_zero(1),
-        "endedAt": float_or_zero(2),
-        "durationHours": float_or_zero(3),
-        "kills": row.get::<_, Option<i64>>(4).ok().flatten().unwrap_or(0),
-        "lootTt": float_or_zero(5),
-        "weaponCost": float_or_zero(6),
-        "enhancerCost": float_or_zero(7),
-        "armourCost": float_or_zero(8),
-        "healCost": float_or_zero(9),
-        "danglingCost": float_or_zero(10),
-        "cycledPed": float_or_zero(11),
-        "regularSkillPed": json_or_empty(12),
-        "attributeLevels": json_or_empty(13),
-        "regularSkillTt": float_or_zero(14),
-        "attributeLevelsTotal": float_or_zero(15),
-        "dominantMob": row.get_unwrap::<_, Option<String>>(16),
-        "dominantTag": row.get_unwrap::<_, Option<String>>(17),
-        "dominantWeapon": row.get_unwrap::<_, Option<String>>(18),
-    })
-}
-
 /// Rebuild every missing or stale-version summary row, so a read taken after a
 /// `SUMMARY_VERSION` bump (or on a fresh install) sees current rows without a
-/// data migration. Shared by every summary reader (the prospect surface and the
-/// Activity / session-list reads); once the rows converge it finds nothing and
-/// is cheap.
+/// data migration. Shared by every summary reader (the skilling forecast and
+/// the Activity / session-list reads); once the rows converge it finds nothing
+/// and is cheap.
 pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
     let missing: Vec<String> = {
         let mut stmt = conn.prepare(
@@ -534,32 +492,6 @@ pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
     Ok(())
 }
 
-/// All qualifying completed-session summaries, lazily rebuilding any
-/// missing or stale-version rows first so new installs converge on
-/// first read without a migration. A summarised session may carry no
-/// skill gains at all, so consumers reading the skill maps must
-/// tolerate them being empty.
-pub async fn load_prospect_sessions(db: &Db) -> Result<Vec<Value>, DbError> {
-    // Heal (a write) on the writer core; read the prospect rows in one
-    // synchronous pass on a reader-core connection.
-    db.with_writer(|conn| heal_summaries(conn)).await?;
-    db.with_reader(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT session_id, started_at, ended_at, duration_hours, kills, loot_tt, \
-             weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost, \
-             cycled_ped, regular_skill_ped_json, attribute_levels_json, \
-             regular_skill_tt, attribute_levels_total, dominant_mob, dominant_tag, \
-             dominant_weapon \
-             FROM session_summaries",
-        )?;
-        let rows = stmt
-            .query_map([], |row| Ok(row_to_prospect_dict(row)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })
-    .await
-}
-
 pub fn delete_session_summary(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -585,6 +517,8 @@ pub fn rebuild_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
+    use serde_json::json;
 
     async fn env() -> (tempfile::TempDir, Db) {
         let dir = tempfile::tempdir().unwrap();
@@ -1080,16 +1014,13 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    /// The prospect reader over a seeded summary table, mirroring the
-    /// original's run: a missing summary rebuilds lazily, a
-    /// stale-version row for a session that no longer qualifies (zero
-    /// cycled PED) clears instead of rebuilding, sessions without
-    /// gains or still active never enter, and a minimal current
-    /// version row passes through with the falsy-JSON and null
-    /// dominant legs intact. Every expected object is the original
-    /// implementation's output over byte-identical seeds.
+    /// Healing over a seeded summary table: a missing summary rebuilds
+    /// lazily, a stale-version row for a session that no longer qualifies
+    /// (zero cycled PED) clears instead of rebuilding, sessions without
+    /// gains or still active never enter, and a current-version row
+    /// passes through untouched.
     #[tokio::test]
-    async fn the_prospect_reader_matches_the_original() {
+    async fn healing_rebuilds_missing_rows_and_clears_disqualified_ones() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::Db::open(&dir.path().join("entropia_orme.db"))
             .await
@@ -1191,34 +1122,7 @@ mod tests {
         .await
         .unwrap();
 
-        let prospects = load_prospect_sessions(&db).await.unwrap();
-        assert_eq!(
-            prospects,
-            vec![
-                json!({
-                    "id": "sess-manual", "startedAt": 0.0, "endedAt": 0.0,
-                    "durationHours": 0.0, "kills": 0, "lootTt": 0.0, "weaponCost": 0.0,
-                    "enhancerCost": 0.0, "armourCost": 0.0, "healCost": 0.0,
-                    "danglingCost": 0.0, "cycledPed": 0.0, "regularSkillPed": {},
-                    "attributeLevels": {}, "regularSkillTt": 0.0,
-                    "attributeLevelsTotal": 0.0, "dominantMob": null,
-                    "dominantTag": null, "dominantWeapon": null,
-                }),
-                json!({
-                    "id": "sess-full", "startedAt": 1000.0, "endedAt": 4600.0,
-                    "durationHours": 1.0, "kills": 1, "lootTt": 12.75, "weaponCost": 2.0,
-                    "enhancerCost": 0.5, "armourCost": 0.0, "healCost": 1.5,
-                    "danglingCost": 0.25, "cycledPed": 4.25,
-                    "regularSkillPed": {"Rifle": 0.8},
-                    "attributeLevels": {"Agility": 1.0}, "regularSkillTt": 0.8,
-                    "attributeLevelsTotal": 1.0, "dominantMob": null,
-                    // The seeded kill carries no species, so it reaches
-                    // neither axis here; its designated identity lives on
-                    // the session row as the name facet.
-                    "dominantTag": null, "dominantWeapon": "LR-32",
-                }),
-            ]
-        );
+        db.with_writer(|conn| heal_summaries(conn)).await.unwrap();
 
         // The disqualified stale row cleared rather than rebuilding.
         let rows: Vec<String> = db

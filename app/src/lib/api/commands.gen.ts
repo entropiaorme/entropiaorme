@@ -422,15 +422,6 @@ export interface CaptureResult {
 }
 
 /**
- * GET prospect-options: the grouped slice options, one list per axis.
- */
-export interface CharacterProspectOptions {
-	tags: ProspectOption[];
-	mobs: ProspectOption[];
-	weapons: ProspectOption[];
-}
-
-/**
  * The record a manual rank calibration returns.
  */
 export interface CodexCalibrateResult {
@@ -2071,19 +2062,6 @@ export interface OptimizerAttribute {
 }
 
 /**
- * One skill row of the profession optimizer.
- */
-export interface OptimizerSkill {
-	name: string;
-	weight: number;
-	currentLevel: number;
-	levelsNeeded: number;
-	pedToNextLevel: number;
-	codexCategory: string | null;
-	codexDivisor: number | null;
-}
-
-/**
  * GET overlay-position: the persisted overlay window coordinates (null
  * until first placed).
  */
@@ -2276,113 +2254,6 @@ export interface ProfessionLevel {
 	gainSinceAnchor: number | null;
 	category: string;
 }
-
-/**
- * GET profession-optimizer: the cheapest-skill breakdown to the next
- * profession level. On a missing profession the declared tail fields
- * stay unset and only `error` accompanies the empty lists.
- */
-export interface ProfessionOptimizerResult {
-	skills: OptimizerSkill[];
-	attributes: OptimizerAttribute[];
-	profession?: string | null;
-	currentLevel?: number | null;
-	nextLevel?: number | null;
-	gap?: number | null;
-	error?: string | null;
-}
-
-/**
- * One grouped Prospect slice option.
- */
-export interface ProspectOption {
-	value: string;
-	label: string;
-	sessions: number;
-	kills: number;
-	hours: number;
-	cycledPed: number;
-}
-
-/**
- * The Prospect forecast query. `sliceValue` is required for every slice
- * but `global`; `markupUplift` defaults to zero.
- */
-export interface ProspectQuery {
-	profession: string;
-	targetLevel: number;
-	sliceType: ProspectSliceType;
-	sliceValue?: string | null;
-	markupUplift?: number;
-}
-
-/**
- * GET prospect: the forecast. `error` is present only on the soft-error
- * paths (the frontend renders it inline rather than throwing); every
- * other field is always present, so the declared order below is the
- * wire order.
- */
-export interface ProspectResult {
-	error?: string | null;
-	rows: ProspectRow[];
-	warnings: string[];
-	profession: string;
-	sliceType: string;
-	sliceValue: string | null;
-	markupUplift: number;
-	currentLevel: number;
-	targetLevel: number;
-	projectedCycledPed: number;
-	projectedHours: number;
-	expectedLootTt: number;
-	expectedNetTtBurn: number;
-	speculativeLootTt: number | null;
-	speculativeNetTtBurn: number | null;
-	sample: ProspectSample;
-}
-
-/**
- * One skill/attribute row of a Prospect forecast.
- */
-export interface ProspectRow {
-	name: string;
-	isAttribute: boolean;
-	weight: number;
-	currentLevel: number;
-	observedShare: number;
-	observedRate: number;
-	projectedGain: number;
-	projectedEndLevel: number;
-	professionContribution: number;
-	relevant: boolean;
-}
-
-/**
- * The observed sample a Prospect forecast projects from. The internal
- * `skillShares` / `attributeRates` maps are computed but not surfaced
- * (no consumer reads them; dropped with the migration).
- */
-export interface ProspectSample {
-	sessions: number;
-	kills: number;
-	hours: number;
-	cycledPed: number;
-	lootTt: number;
-	pes: number;
-	attributeLevels: number;
-	cycledPerHour: number;
-	lootPerHour: number;
-	returnRate: number;
-	pesPerPed: number;
-	lootTtPerPed: number;
-}
-
-/**
- * The slice a Prospect forecast aggregates over. A closed vocabulary:
- * the bindings expose only these four, so the old out-of-vocabulary 422
- * is unrepresentable rather than validated.
- */
-export type ProspectSliceType = 'global' | 'tag' | 'mob' | 'weapon';
 
 /**
  * How far one stream's recordings lag the play since them.
@@ -3997,18 +3868,6 @@ export async function characterSkills(): Promise<SkillLevel[]> {
 
 export async function characterProfessions(): Promise<ProfessionLevel[]> {
 	return invokeCommand('character_professions', {});
-}
-
-export async function characterProspectOptions(): Promise<CharacterProspectOptions> {
-	return invokeCommand('character_prospect_options', {});
-}
-
-export async function characterProspect(query: ProspectQuery): Promise<ProspectResult> {
-	return invokeCommand('character_prospect', { query });
-}
-
-export async function characterProfessionOptimizer(profession: string): Promise<ProfessionOptimizerResult> {
-	return invokeCommand('character_profession_optimizer', { profession });
 }
 
 export async function characterPathOptimizer(professions: string[], targetLevel: number | null, pedBudget: number | null): Promise<PathOptimizerResult> {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { CharacterModel } from './characterModel.svelte';
-	import { formatGain, gainColorClass } from './prospectModel.svelte';
+	import { formatGain, gainColorClass } from './characterFormat';
 
 	let { model }: { model: CharacterModel } = $props();
 </script>

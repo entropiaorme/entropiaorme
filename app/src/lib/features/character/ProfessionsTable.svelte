@@ -2,7 +2,7 @@
 	import Pagination from '$lib/components/Pagination.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { type CharacterModel, PAGE_SIZE } from './characterModel.svelte';
-	import { formatGain, formatProfLevel, gainColorClass } from './prospectModel.svelte';
+	import { formatGain, formatProfLevel, gainColorClass } from './characterFormat';
 
 	let { model }: { model: CharacterModel } = $props();
 	const table = $derived(model.professionsTable);

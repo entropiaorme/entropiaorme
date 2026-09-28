@@ -7,10 +7,7 @@
 	import Tabs from '$lib/components/Tabs.svelte';
 	import AttributesTable from '$lib/features/character/AttributesTable.svelte';
 	import { createCharacterModel } from '$lib/features/character/characterModel.svelte';
-	import OptimizerView from '$lib/features/character/OptimizerView.svelte';
 	import ProfessionsTable from '$lib/features/character/ProfessionsTable.svelte';
-	import ProspectView from '$lib/features/character/ProspectView.svelte';
-	import RecommenderView from '$lib/features/character/RecommenderView.svelte';
 	import SkillingHub from '$lib/features/character/SkillingHub.svelte';
 	import SkillsTable from '$lib/features/character/SkillsTable.svelte';
 	import {
@@ -23,11 +20,10 @@
 	import ScanInFlightView from './ScanInFlightView.svelte';
 
 	const model = createCharacterModel();
-	const prospect = model.prospect;
 
 	// ── Tab state ───────────────────────────────────────────────────────────
 
-	let mainTab = $state<'stats' | 'skilling' | 'prospect' | 'optimizer' | 'recommender' | 'codex'>('stats');
+	let mainTab = $state<'stats' | 'skilling' | 'codex'>('stats');
 	let statsSubTab = $state<'attributes' | 'skills' | 'professions'>('attributes');
 
 	// ── Manual scan status (drives in-flight view) ──────────────────────────────
@@ -67,17 +63,6 @@
 		void model.loadCharacterData();
 	}
 
-	// Keep the prospect slice selection valid as its options or type change.
-	$effect(() => {
-		if (prospect.sliceType === 'global') {
-			prospect.sliceValue = '';
-			return;
-		}
-		if (!prospect.currentOptions.some((option) => option.value === prospect.sliceValue)) {
-			prospect.sliceValue = prospect.currentOptions[0]?.value ?? '';
-		}
-	});
-
 	// ── Load on mount ───────────────────────────────────────────────────────────
 
 	onMount(() => {
@@ -95,13 +80,10 @@
 		tabs={[
 			{ id: 'stats', label: 'Stats' },
 			{ id: 'skilling', label: 'Skilling' },
-			{ id: 'prospect', label: 'Prospect' },
-			{ id: 'optimizer', label: 'Optimiser' },
-			{ id: 'recommender', label: 'Activity Recommender' },
 			{ id: 'codex', label: 'Codex' }
 		]}
 		active={mainTab}
-		onchange={(id) => (mainTab = id as 'stats' | 'skilling' | 'prospect' | 'optimizer' | 'recommender' | 'codex')}
+		onchange={(id) => (mainTab = id as 'stats' | 'skilling' | 'codex')}
 	/>
 
 	<ErrorNotice message={model.error} />
@@ -169,18 +151,6 @@
 
 	{#if mainTab === 'skilling'}
 		<SkillingHub {model} />
-	{/if}
-
-	{#if mainTab === 'prospect'}
-		<ProspectView {model} />
-	{/if}
-
-	{#if mainTab === 'optimizer'}
-		<OptimizerView {model} />
-	{/if}
-
-	{#if mainTab === 'recommender'}
-		<RecommenderView {model} />
 	{/if}
 
 	{#if mainTab === 'codex'}

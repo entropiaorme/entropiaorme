@@ -25,9 +25,8 @@ use crate::analytics::{
     StockConversionInput, StockPosition, StockRemovalInput,
 };
 use crate::character::{
-    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus,
-    CharacterProspectOptions, ComputedCharacterStats, HpOptimizerResult, PathOptimizerResult,
-    ProfessionLevel, ProfessionOptimizerResult, ProspectQuery, ProspectResult, SkillLevel,
+    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
+    HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
 };
 use crate::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
@@ -444,27 +443,6 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "character_professions",
             args: Vec::new(),
             returns: Some(schema(schema_for!(Vec<ProfessionLevel>))),
-        },
-        CommandSpec {
-            name: "character_prospect_options",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(CharacterProspectOptions))),
-        },
-        CommandSpec {
-            name: "character_prospect",
-            args: vec![ArgSpec {
-                name: "query",
-                schema: schema(schema_for!(ProspectQuery)),
-            }],
-            returns: Some(schema(schema_for!(ProspectResult))),
-        },
-        CommandSpec {
-            name: "character_profession_optimizer",
-            args: vec![ArgSpec {
-                name: "profession",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(ProfessionOptimizerResult))),
         },
         CommandSpec {
             name: "character_path_optimizer",

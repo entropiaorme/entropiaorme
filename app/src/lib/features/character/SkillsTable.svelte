@@ -4,7 +4,7 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { formatPed } from '$lib/utils/format';
 	import { type CharacterModel, PAGE_SIZE } from './characterModel.svelte';
-	import { formatGain, gainColorClass } from './prospectModel.svelte';
+	import { formatGain, gainColorClass } from './characterFormat';
 
 	let { model }: { model: CharacterModel } = $props();
 	const table = $derived(model.skillsTable);

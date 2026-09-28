@@ -6,7 +6,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use eo_api::character::ProspectQuery;
 use eo_api::Api;
 use eo_services::clock::MockClock;
 use eo_services::db::Db;
@@ -174,23 +173,6 @@ async fn the_facade_shapes_the_seeded_state() {
         Some(eo_wire::normalizer::round_half_even(level - anchor, 4))
     );
 
-    // Prospect options: no recorded sessions in the seed, so every axis
-    // is empty.
-    let options = api.character_prospect_options().await.unwrap();
-    assert!(options.tags.is_empty());
-    assert!(options.mobs.is_empty());
-    assert!(options.weapons.is_empty());
-
-    // The profession optimizer composes the calc service with the
-    // projections.
-    let optimizer = api
-        .character_profession_optimizer("Marksman")
-        .await
-        .unwrap();
-    assert_eq!(optimizer.profession.as_deref(), Some("Marksman"));
-    assert!(optimizer.next_level.is_some());
-    assert!(optimizer.error.is_none());
-
     // Both path-optimizer modes carry their mode inputs (the other input
     // echoes null, present).
     let target = api
@@ -239,34 +221,12 @@ async fn the_facade_shapes_the_seeded_state() {
 }
 
 /// The computed reads over the family's richest responses carry the
-/// expected figures: the profession optimizer's skill breakdown and
-/// aggregate gap, the skill list's levels and ranks, and the HP
+/// expected figures: the skill list's levels and ranks, and the HP
 /// optimizer's current reading.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_computed_reads_carry_the_expected_figures() {
     let dir = tempfile::tempdir().unwrap();
     let api = seeded_api(dir.path()).await;
-
-    let optimizer = api
-        .character_profession_optimizer("Marksman")
-        .await
-        .unwrap();
-    assert_eq!(optimizer.profession.as_deref(), Some("Marksman"));
-    assert_eq!(optimizer.current_level, Some(5.8));
-    assert_eq!(optimizer.next_level, Some(6.0));
-    assert_eq!(optimizer.gap, Some(0.2));
-    assert!(serde_json::to_value(&optimizer).unwrap()["nextLevel"].is_f64());
-
-    assert_eq!(optimizer.skills.len(), 2);
-    let rifle = &optimizer.skills[0];
-    assert_eq!(rifle.name, "Rifle");
-    assert_eq!(rifle.levels_needed, 50.0);
-    assert_eq!(rifle.ped_to_next_level, 0.24);
-    let anatomy = &optimizer.skills[1];
-    assert_eq!(anatomy.name, "Anatomy");
-    assert_eq!(anatomy.levels_needed, 200.0);
-    assert_eq!(anatomy.ped_to_next_level, 1.07);
-    assert!(optimizer.attributes.is_empty());
 
     let skills = api.character_skills().await.unwrap();
     assert_eq!(skills.len(), 3);
@@ -298,16 +258,6 @@ async fn the_optimizers_report_a_missing_profession() {
     let dir = tempfile::tempdir().unwrap();
     let api = seeded_api(dir.path()).await;
 
-    // The profession optimizer keeps its minimal not-found shape: empty
-    // lists and the error, nothing else.
-    let missing = api.character_profession_optimizer("Nope").await.unwrap();
-    assert_eq!(
-        missing.error.as_deref(),
-        Some("Profession 'Nope' not found")
-    );
-    assert!(missing.skills.is_empty());
-    assert!(missing.attributes.is_empty());
-
     // The path optimizer's not-found converges on the full error shape
     // (ratified): the mode inputs echo, the aggregates zero, the error
     // marks the miss.
@@ -323,38 +273,6 @@ async fn the_optimizers_report_a_missing_profession() {
     assert_eq!(missing.input_target_level, Some(7.0));
     assert_eq!(missing.current_level, 0.0);
     assert!(missing.allocations.is_empty());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prospect_validates_and_converges_on_a_missing_profession() {
-    let dir = tempfile::tempdir().unwrap();
-    let api = seeded_api(dir.path()).await;
-
-    // Value validations survive as bad-request rejections.
-    let mut query = ProspectQuery {
-        profession: "Marksman".into(),
-        target_level: 0.0,
-        slice_type: eo_api::character::ProspectSliceType::Global,
-        slice_value: None,
-        markup_uplift: 0.0,
-    };
-    assert!(api.character_prospect(&query).await.is_err());
-    query.target_level = 10.0;
-    query.slice_type = eo_api::character::ProspectSliceType::Mob;
-    // A non-global slice with no value is refused.
-    assert!(api.character_prospect(&query).await.is_err());
-
-    // A missing profession converges on the full error shape (ratified):
-    // the error is present, the echoes and empty sample accompany it.
-    query.slice_type = eo_api::character::ProspectSliceType::Global;
-    query.profession = "Nope".into();
-    let result = api.character_prospect(&query).await.unwrap();
-    assert_eq!(result.error.as_deref(), Some("Profession 'Nope' not found"));
-    assert_eq!(result.profession, "Nope");
-    assert_eq!(result.slice_type, "global");
-    assert_eq!(result.speculative_loot_tt, None);
-    assert!(result.rows.is_empty());
-    assert_eq!(result.sample.sessions, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

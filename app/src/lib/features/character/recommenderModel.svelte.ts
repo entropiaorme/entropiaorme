@@ -6,8 +6,8 @@
  * is never the default selection, and stays hidden for every target
  * and across app restarts (a UI preference). Presentation lives in the
  * feature components; they compose over this state. Failures land in
- * the page-level error slot the character model shares across the
- * surface.
+ * the error slot the caller hands it (the skilling hub gives it one of
+ * its own).
  */
 
 import { getActivityRecommender } from '$lib/api';

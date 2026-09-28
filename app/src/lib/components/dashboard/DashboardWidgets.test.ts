@@ -5,6 +5,20 @@ import { describe, expect, it, vi } from 'vitest';
 import type { RecentEvent } from '$lib/api';
 import DashboardWidgets from './DashboardWidgets.svelte';
 
+// The map tab mounts the full maps surface, whose reads go through the real
+// facade: hold the backend's readiness answer so every read waits, as it
+// does while the app starts.
+vi.mock('@tauri-apps/api/core', () => ({
+	invoke: vi.fn((command: string) =>
+		command === 'substrate_ready' ? new Promise(() => {}) : Promise.resolve([]),
+	),
+	convertFileSrc: (path: string) => path,
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+	listen: vi.fn(async () => () => {}),
+	emit: vi.fn(async () => {}),
+}));
+
 function event(overrides: Partial<RecentEvent> = {}): RecentEvent {
 	return {
 		id: 'ne-0',
@@ -89,5 +103,20 @@ describe('dashboard widgets', () => {
 		await fireEvent.click(tab(/Quests/));
 		await view.rerender(props([event()]));
 		expect(attention()).toBeNull();
+	});
+
+	it('hosts the maps surface in the map tab without waiting on tracking', async () => {
+		render(DashboardWidgets, props(null));
+		expect(screen.getByTestId('dashboard-widget-pending')).toBeTruthy();
+
+		await fireEvent.click(tab(/^Map$/));
+		expect(tab(/^Map$/).getAttribute('aria-selected')).toBe('true');
+		expect(screen.queryByTestId('dashboard-widget-pending')).toBeNull();
+		expect(screen.getByTestId('maps-surface')).toBeTruthy();
+		expect(screen.getByText('Loading map…')).toBeTruthy();
+
+		// Leaving the tab takes the surface (and its listeners) down with it.
+		await fireEvent.click(tab(/Recent Events/));
+		expect(screen.queryByTestId('maps-surface')).toBeNull();
 	});
 });

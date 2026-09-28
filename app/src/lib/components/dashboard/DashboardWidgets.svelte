@@ -6,6 +6,7 @@
 	import LootCompositionWidget from './LootCompositionWidget.svelte';
 	import LootPulseWidget from './LootPulseWidget.svelte';
 	import RecentEventsWidget from './RecentEventsWidget.svelte';
+	import MapsSurface from '$lib/features/maps/MapsSurface.svelte';
 	import {
 		acknowledgeHead,
 		feedHead,
@@ -74,8 +75,26 @@
 		{ id: 'pulse', label: 'Loot Pulse' },
 		{ id: 'loot', label: 'Loot Composition' },
 		{ id: 'quests', label: 'Quests' },
+		{ id: 'map', label: 'Map' },
 		{ id: 'customise', label: 'Customise Stats' },
 	]);
+
+	// Whether the open tab's data is still unread, so its empty state ("No
+	// active session", "Choose a session type") would be a claim, not a fact.
+	// The map and the stats customiser load their own data and show their own
+	// loading states.
+	const tabPending = $derived.by(() => {
+		switch (activeTab) {
+			case 'events':
+			case 'pulse':
+			case 'loot':
+				return trackingPending;
+			case 'quests':
+				return activityOptions === null;
+			default:
+				return false;
+		}
+	});
 
 </script>
 
@@ -85,9 +104,7 @@
 >
 	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="mb-3" />
 
-	{#if activeTab !== 'customise' && (activeTab === 'quests' ? activityOptions === null : trackingPending)}
-		<!-- The tab's data has not been read yet: its empty states ("No active
-			 session", "Choose a session type") would be claims, not facts. -->
+	{#if tabPending}
 		<div class="flex-1 flex flex-col" aria-busy="true" data-testid="dashboard-widget-pending">
 			<Skeleton class="flex-1 w-full rounded-md" />
 		</div>
@@ -111,6 +128,8 @@
 			{onEditSession}
 			{getCooldownRemaining}
 		/>
+	{:else if activeTab === 'map'}
+		<MapsSurface class="flex-1" />
 	{:else if activeTab === 'customise'}
 		<CustomiseStatsWidget />
 	{/if}

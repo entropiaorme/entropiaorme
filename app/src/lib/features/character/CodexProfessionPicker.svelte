@@ -33,7 +33,9 @@
 		 *  side of the page so the panel never leaves the window. */
 		align?: 'left' | 'right';
 		/** `field` is a form control; `headline` makes the chosen target the
-		 *  surface's title, the way a session view names its session. */
+		 *  surface's title, the way a session view names its session. A
+		 *  headline pads its hover surface, so the caller offsets it (e.g.
+		 *  `-ml-1.5`) to align the text with the page edge. */
 		variant?: 'field' | 'headline';
 		/** Offer the "No profession" row (a surface where no target is not a
 		 *  choice leaves it out). */
@@ -124,7 +126,7 @@
 >
 	{#if variant === 'headline'}
 		<button
-			class="group -ml-1.5 inline-flex max-w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left
+			class="group inline-flex max-w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left
 				transition-colors duration-[var(--duration-fast)] hover:bg-surface-hover
 				focus:outline-none focus:bg-surface-hover focus:[box-shadow:var(--shadow-glow)] cursor-pointer"
 			aria-haspopup="listbox"

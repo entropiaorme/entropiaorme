@@ -588,18 +588,18 @@ describe('character wrappers dispatch typed commands', () => {
 
 describe('getProfessionPathOptimizer dispatches the typed command', () => {
 	it('maps a targetLevel goal onto the target_level argument, ped_budget null', async () => {
-		await api.getProfessionPathOptimizer('Sniper (Hit)', { targetLevel: 40 });
+		await api.getProfessionPathOptimizer(['Sniper (Hit)'], { targetLevel: 40 });
 		expect(tauriInvoke).toHaveBeenCalledWith('character_path_optimizer', {
-			profession: 'Sniper (Hit)',
+			professions: ['Sniper (Hit)'],
 			target_level: 40,
 			ped_budget: null,
 		});
 	});
 
 	it('maps a pedBudget goal onto the ped_budget argument, target_level null', async () => {
-		await api.getProfessionPathOptimizer('Sniper (Hit)', { pedBudget: 250 });
+		await api.getProfessionPathOptimizer(['Sniper (Hit)', 'Sniper (Dmg)'], { pedBudget: 250 });
 		expect(tauriInvoke).toHaveBeenCalledWith('character_path_optimizer', {
-			profession: 'Sniper (Hit)',
+			professions: ['Sniper (Hit)', 'Sniper (Dmg)'],
 			target_level: null,
 			ped_budget: 250,
 		});

@@ -57,7 +57,7 @@
 	{/snippet}
 
 	{#snippet actions()}
-		{#if hub.goalActive && !isFamily && hub.sources.length > 0}
+		{#if hub.goalActive && hub.sources.length > 0}
 			<SkillingSourcePicker sources={hub.sources} selected={source} onselect={hub.selectSource} />
 		{/if}
 		{#if source?.status === 'ready' && source.warnings.length > 0}
@@ -72,10 +72,8 @@
 		{/if}
 	{/snippet}
 
-	{#if isFamily}
-		<p class="text-sm text-text-tertiary">Pick one profession.</p>
-	{:else if !hub.goalActive}
-		<p class="text-sm text-text-tertiary">Set a goal above your current {isHp ? 'HP' : 'level'}.</p>
+	{#if !hub.goalActive}
+		<p class="text-sm text-text-tertiary">Set a goal above where you stand.</p>
 	{:else if hub.forecastError}
 		<ErrorNotice message={hub.forecastError} />
 	{:else if hub.forecastLoading}
@@ -144,7 +142,7 @@
 							<th class="py-2 pr-3 text-left eyebrow">Skill</th>
 							<th class="w-48 px-3 py-2 text-left eyebrow">Share of PES</th>
 							<th class="px-3 py-2 text-right eyebrow">Level</th>
-							<th class="py-2 pl-3 text-right eyebrow">{isHp ? 'HP' : 'Profession'}</th>
+							<th class="py-2 pl-3 text-right eyebrow">{isHp ? 'HP' : isFamily ? 'Combined' : 'Profession'}</th>
 						</tr>
 					</thead>
 					<tbody>

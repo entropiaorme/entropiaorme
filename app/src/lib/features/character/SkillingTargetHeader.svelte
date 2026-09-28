@@ -13,10 +13,13 @@
 
 	const levels = $derived(Object.fromEntries(model.professions.map((prof) => [prof.name, prof.level])));
 	const isHp = $derived(hub.target.kind === 'hp');
+	const isFamily = $derived(hub.target.kind === 'family');
 	const current = $derived(hub.current);
 	// Progress through the current whole level (profession levels carry a
 	// fraction; HP reads as whole points and shows none).
-	const fraction = $derived(current !== null && !isHp ? current - Math.floor(current) : null);
+	const fraction = $derived(
+		current !== null && hub.target.kind === 'profession' ? current - Math.floor(current) : null,
+	);
 	const goalBelow = $derived(current !== null && hub.goal !== null && hub.goal <= current);
 </script>
 
@@ -31,7 +34,7 @@
 			hp={model.stats.hp}
 			target={hub.target}
 			onchange={hub.setTarget}
-			class="min-w-0"
+			class="-ml-1.5 max-w-full shrink-0"
 		/>
 
 		{#if current !== null}
@@ -44,7 +47,7 @@
 					min="1"
 					step={isHp ? '1' : '0.01'}
 					inputmode="decimal"
-					aria-label={isHp ? 'Goal HP' : 'Goal level'}
+					aria-label={isHp ? 'Goal HP' : isFamily ? 'Goal combined level' : 'Goal level'}
 					aria-invalid={goalBelow}
 					value={hub.goalInput}
 					oninput={(event) => hub.setGoal(event.currentTarget.value)}
@@ -61,32 +64,30 @@
 	</div>
 
 	{#if current !== null}
-		<div class="mt-2 flex max-w-md items-center gap-3 text-xs tabular-nums">
+		<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums">
 			<span class="whitespace-nowrap text-sm text-text-secondary">
 				{#if isHp}
 					<span class="font-medium text-text">{formatTargetValue(hub.target, current)}</span> HP
 				{:else}
-					Level <span class="font-medium text-text">{formatTargetValue(hub.target, current)}</span>
+					{isFamily ? 'Combined' : 'Level'}
+					<span class="font-medium text-text">{formatTargetValue(hub.target, current)}</span>
 				{/if}
 			</span>
 			{#if fraction !== null}
-				<SkillingBar {fraction} class="flex-1" />
+				<SkillingBar {fraction} class="w-80 max-w-full" />
 				<span class="whitespace-nowrap text-text-tertiary">{Math.floor(fraction * 100)}%</span>
 			{/if}
-		</div>
-	{:else if hub.members.length > 0}
-		<p class="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-text-secondary">
 			{#each hub.members as member (member.name)}
 				<button
 					type="button"
-					class="cursor-pointer rounded transition-colors hover:text-text focus:outline-none focus-visible:text-text"
+					class="cursor-pointer rounded text-sm text-text-secondary transition-colors hover:text-text focus:outline-none focus-visible:text-text"
 					title="Skill up {member.name} on its own"
 					onclick={() => hub.setTarget({ kind: 'profession', name: member.name })}
 				>
 					{member.name}
-					<span class="ml-1 tabular-nums text-text-tertiary">{member.level.toFixed(2)}</span>
+					<span class="ml-1 text-text-tertiary">{member.level.toFixed(2)}</span>
 				</button>
 			{/each}
-		</p>
+		</div>
 	{/if}
 </section>

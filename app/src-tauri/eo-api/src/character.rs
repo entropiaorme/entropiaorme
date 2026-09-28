@@ -23,8 +23,8 @@ use eo_services::activity_recommender::{
     RECOMMENDER_SAMPLE_STEP,
 };
 use eo_services::character_calc::{
-    all_profession_levels, effective_points, hp_skill_optimizer, is_attribute, profession_level,
-    profession_path_optimizer, profession_skill_optimizer, skill_rank,
+    all_profession_levels, combined_profession, effective_points, hp_skill_optimizer, is_attribute,
+    profession_level, profession_path_optimizer, profession_skill_optimizer, skill_rank,
 };
 use eo_services::db::DbError;
 use eo_services::time::{naive_to_epoch, to_iso_utc};
@@ -693,11 +693,41 @@ impl Api {
         })
     }
 
+    /// One target entity for a list of profession names: the profession
+    /// itself for one name, the members' [`combined_profession`] for several
+    /// (a family, levelled as the sum of its members). An empty list is a
+    /// bad request; an unknown name is `Ok(Err(soft error))`, which each
+    /// command renders in its family's inline error shape.
+    pub(crate) fn target_profession(
+        &self,
+        professions: &[String],
+    ) -> Result<Result<Value, String>, ApiError> {
+        if professions.is_empty() {
+            return Err(ApiError::bad_request("at least one profession is required"));
+        }
+        let catalogue = self.game_data.get_entities("professions");
+        let mut members: Vec<&Value> = Vec::with_capacity(professions.len());
+        for name in professions {
+            match catalogue
+                .iter()
+                .find(|p| p.get("name").and_then(Value::as_str) == Some(name.as_str()))
+            {
+                Some(entity) => members.push(entity),
+                None => return Ok(Err(format!("Profession '{name}' not found"))),
+            }
+        }
+        Ok(Ok(match members.as_slice() {
+            [single] => (*single).clone(),
+            _ => combined_profession(&professions.join(", "), &members),
+        }))
+    }
+
     /// The path optimizer: greedy allocation for a target level or a PED
-    /// budget (exactly one supplied).
+    /// budget (exactly one supplied). Several professions are optimised as
+    /// one combined target whose level is the sum of theirs.
     pub async fn character_path_optimizer(
         &self,
-        profession: &str,
+        professions: &[String],
         target_level: Option<f64>,
         ped_budget: Option<f64>,
     ) -> Result<PathOptimizerResult, ApiError> {
@@ -707,34 +737,32 @@ impl Api {
                 "Exactly one of target_level or ped_budget must be provided",
             ));
         }
-        let prof_entity = self
-            .game_data
-            .get_entities("professions")
-            .iter()
-            .find(|p| p.get("name").and_then(Value::as_str) == Some(profession))
-            .cloned();
-        let Some(prof_entity) = prof_entity else {
-            // A missing profession converges on the full error shape
-            // (was a minimal {allocations, attributes, error}); ratified.
-            let mode = if target_level.is_some() {
-                "target"
-            } else {
-                "budget"
-            };
-            return Ok(PathOptimizerResult {
-                allocations: Vec::new(),
-                attributes: Vec::new(),
-                profession: profession.to_string(),
-                mode: mode.to_string(),
-                input_target_level: target_level.into(),
-                input_ped_budget: ped_budget.into(),
-                current_level: 0.0,
-                end_level: 0.0,
-                profession_levels_gained: 0.0,
-                total_ped: 0.0,
-                excluded: Vec::new(),
-                error: Some(format!("Profession '{profession}' not found")),
-            });
+        let profession = professions.join(", ");
+        let prof_entity = match self.target_profession(professions)? {
+            Ok(entity) => entity,
+            Err(error) => {
+                // A missing profession converges on the full error shape
+                // (was a minimal {allocations, attributes, error}); ratified.
+                let mode = if target_level.is_some() {
+                    "target"
+                } else {
+                    "budget"
+                };
+                return Ok(PathOptimizerResult {
+                    allocations: Vec::new(),
+                    attributes: Vec::new(),
+                    profession,
+                    mode: mode.to_string(),
+                    input_target_level: target_level.into(),
+                    input_ped_budget: ped_budget.into(),
+                    current_level: 0.0,
+                    end_level: 0.0,
+                    profession_levels_gained: 0.0,
+                    total_ped: 0.0,
+                    excluded: Vec::new(),
+                    error: Some(error),
+                });
+            }
         };
         let skill_levels = self
             .skill_calibrations(None)
@@ -756,7 +784,7 @@ impl Api {
                 .into_iter()
                 .map(optimizer_attribute_dto)
                 .collect(),
-            profession: profession.to_string(),
+            profession,
             mode: result.mode.to_string(),
             input_target_level: result.input_target_level.into(),
             input_ped_budget: result.input_ped_budget.into(),

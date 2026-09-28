@@ -10,7 +10,6 @@ use eo_services::skilling_forecast::{
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::analytics::analytics_error;
 use crate::Nullable;
@@ -25,15 +24,16 @@ pub enum SkillingTargetKind {
     Hp,
 }
 
-/// The forecast query. `profession` names the target for a `profession`
-/// target and is ignored for `hp`; `goal` is the profession level or HP
-/// to reach.
+/// The forecast query. `professions` names a `profession` target (one
+/// name, or several for a family forecast as their summed level) and is
+/// ignored for `hp`; `goal` is the level (summed, for several) or HP to
+/// reach.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillingForecastQuery {
     pub target: SkillingTargetKind,
     #[serde(default)]
-    pub profession: Option<String>,
+    pub professions: Vec<String>,
     pub goal: f64,
 }
 
@@ -209,28 +209,18 @@ impl Api {
             SkillingTargetKind::Hp => {
                 ForecastTarget::hp(self.game_data.get_entities("skills"), &skill_levels)
             }
-            SkillingTargetKind::Profession => {
-                let Some(name) = query.profession.as_deref().filter(|name| !name.is_empty()) else {
-                    return Err(ApiError::bad_request(
-                        "profession is required for a profession target",
-                    ));
-                };
-                let Some(entity) = self
-                    .game_data
-                    .get_entities("professions")
-                    .iter()
-                    .find(|p| p.get("name").and_then(Value::as_str) == Some(name))
-                else {
+            SkillingTargetKind::Profession => match self.target_profession(&query.professions)? {
+                Ok(entity) => ForecastTarget::profession(&entity, &skill_levels),
+                Err(error) => {
                     // The family's soft-error shape, rendered inline.
                     return Ok(SkillingForecastResult {
-                        error: Some(format!("Profession '{name}' not found")),
+                        error: Some(error),
                         current: 0.0,
                         goal: query.goal,
                         sources: Vec::new(),
                     });
-                };
-                ForecastTarget::profession(entity, &skill_levels)
-            }
+                }
+            },
         };
         let (sessions, markups) = tokio::try_join!(
             async {

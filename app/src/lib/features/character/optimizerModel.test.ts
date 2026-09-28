@@ -154,7 +154,7 @@ describe('loadPathOptimizer', () => {
 		model.selectedProfession = 'Laser Sniper (Hit)';
 		model.pathTargetInput = '50';
 		await model.loadPathOptimizer();
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith('Laser Sniper (Hit)', {
+		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(['Laser Sniper (Hit)'], {
 			targetLevel: 50,
 		});
 		expect(model.pathResult?.endLevel).toBe(50);

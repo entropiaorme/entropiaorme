@@ -426,12 +426,12 @@ pub async fn character_profession_optimizer(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn character_path_optimizer(
     app: tauri::AppHandle,
-    profession: String,
+    professions: Vec<String>,
     target_level: Option<f64>,
     ped_budget: Option<f64>,
 ) -> Result<PathOptimizerResult, ApiError> {
     facade(&app)?
-        .character_path_optimizer(&profession, target_level, ped_budget)
+        .character_path_optimizer(&professions, target_level, ped_budget)
         .await
 }
 

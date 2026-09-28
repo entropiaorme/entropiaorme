@@ -53,16 +53,19 @@
 			{#if isHp}
 				Every skill that adds HP, ranked by the PES it takes to add one HP from your current level.
 			{:else}
-				The least skill PES that reaches the goal, spread across {isFamily ? 'the profession' : name}'s
-				skills where each moves it most.
+				{#if isFamily}
+					The least skill PES that reaches the goal on the family's combined level, spread across
+					its professions' skills where each moves the total most.
+				{:else}
+					The least skill PES that reaches the goal, spread across {name}'s skills where each moves
+					it most.
+				{/if}
 			{/if}
 			For codex rewards and chips.
 		</p>
 	{/snippet}
 
-	{#if isFamily}
-		<p class="text-sm text-text-tertiary">Pick one profession.</p>
-	{:else if hub.pathError}
+	{#if hub.pathError}
 		<ErrorNotice message={hub.pathError} />
 	{:else if hub.pathLoading}
 		<div class="space-y-3">
@@ -132,7 +135,7 @@
 			</div>
 		{/if}
 	{:else if !hub.goalActive}
-		<p class="text-sm text-text-tertiary">Set a goal above your current level.</p>
+		<p class="text-sm text-text-tertiary">Set a goal above where you stand.</p>
 	{:else if path}
 		{#if allocated.length > 0}
 			<div class="overflow-x-auto">

@@ -170,12 +170,12 @@ describe('setTarget', () => {
 			target: 'profession',
 			professions: ['Laser Sniper (Hit)'],
 		});
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith('Laser Sniper (Hit)', {
+		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(['Laser Sniper (Hit)'], {
 			targetLevel: 43,
 		});
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
 			target: 'profession',
-			profession: 'Laser Sniper (Hit)',
+			professions: ['Laser Sniper (Hit)'],
 			goal: 43,
 		});
 		expect(model.path?.totalPed).toBe(120);
@@ -199,20 +199,29 @@ describe('setTarget', () => {
 		expect(model.hpPath?.currentHp).toBe(142);
 	});
 
-	it('keeps a family to the recommender and lists its members', async () => {
+	it('answers a family on its combined level across every facet', async () => {
 		const model = makeModel();
 		model.setTarget({ kind: 'family', key: 'looter' });
-		await settle();
-		expect(model.current).toBeNull();
-		expect(model.goalInput).toBe('');
+		// 30.5 + 20.25 + 0 (Robot Looter, uncalibrated) = 50.75.
+		expect(model.current).toBe(50.75);
+		expect(model.goalInput).toBe('51');
 		expect(model.members.map((member) => [member.name, member.level])).toEqual([
 			['Animal Looter', 30.5],
 			['Mutant Looter', 20.25],
 			['Robot Looter', 0],
 		]);
-		expect(mocked.getActivityRecommender).toHaveBeenCalledTimes(1);
-		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
-		expect(mocked.getSkillingForecast).not.toHaveBeenCalled();
+		await settle();
+		const looters = ['Animal Looter', 'Mutant Looter', 'Robot Looter'];
+		expect(mocked.getActivityRecommender).toHaveBeenCalledWith({
+			target: 'profession',
+			professions: looters,
+		});
+		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(looters, { targetLevel: 51 });
+		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
+			target: 'profession',
+			professions: looters,
+			goal: 51,
+		});
 	});
 
 	it('discards a response that a newer target superseded', async () => {
@@ -249,7 +258,7 @@ describe('the goal', () => {
 
 		expect(mocked.getSkillingForecast).toHaveBeenCalledTimes(1);
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith(expect.objectContaining({ goal: 45 }));
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith('Laser Sniper (Hit)', {
+		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(['Laser Sniper (Hit)'], {
 			targetLevel: 45,
 		});
 		expect(mocked.getActivityRecommender).not.toHaveBeenCalled();

@@ -16,10 +16,12 @@ export function formatTargetValue(target: CodexRankingTarget, value: number): st
 	return target.kind === 'hp' ? String(Math.trunc(value)) : value.toFixed(2);
 }
 
-/** A goal as it reads inline: "Lv 43" or "150 HP". */
+/** A goal as it reads inline: "Lv 43", "150 HP", or "98 combined". */
 export function formatGoal(target: CodexRankingTarget, goal: number): string {
 	const value = Number.isInteger(goal) ? String(goal) : goal.toFixed(2);
-	return target.kind === 'hp' ? `${value} HP` : `Lv ${value}`;
+	if (target.kind === 'hp') return `${value} HP`;
+	if (target.kind === 'family') return `${value} combined`;
+	return `Lv ${value}`;
 }
 
 /** Play time: minutes under an hour, one place under ten hours. */

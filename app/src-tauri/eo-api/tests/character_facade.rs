@@ -194,7 +194,7 @@ async fn the_facade_shapes_the_seeded_state() {
     // Both path-optimizer modes carry their mode inputs (the other input
     // echoes null, present).
     let target = api
-        .character_path_optimizer("Marksman", Some(7.0), None)
+        .character_path_optimizer(&["Marksman".to_string()], Some(7.0), None)
         .await
         .unwrap();
     assert_eq!(target.mode, "target");
@@ -207,11 +207,30 @@ async fn the_facade_shapes_the_seeded_state() {
         "the unused mode echoes null"
     );
     let budget = api
-        .character_path_optimizer("Marksman", None, Some(25.0))
+        .character_path_optimizer(&["Marksman".to_string()], None, Some(25.0))
         .await
         .unwrap();
     assert_eq!(budget.mode, "budget");
     assert_eq!(budget.input_ped_budget, Some(25.0));
+
+    // Several professions optimise as one combined target, levelled as the
+    // sum of theirs and named by its members.
+    let family = api
+        .character_path_optimizer(
+            &["Marksman".to_string(), "Healer".to_string()],
+            Some(11.0),
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(family.error.is_none());
+    assert_eq!(family.profession, "Marksman, Healer");
+    assert_eq!(family.current_level, 9.8);
+    assert!(family.end_level >= 11.0);
+    assert!(api
+        .character_path_optimizer(&[], Some(11.0), None)
+        .await
+        .is_err());
 
     // The HP optimizer reconciles current HP to the truncated Health
     // skill (the Stats-panel reading).
@@ -293,7 +312,7 @@ async fn the_optimizers_report_a_missing_profession() {
     // (ratified): the mode inputs echo, the aggregates zero, the error
     // marks the miss.
     let missing = api
-        .character_path_optimizer("Nope", Some(7.0), None)
+        .character_path_optimizer(&["Nope".to_string()], Some(7.0), None)
         .await
         .unwrap();
     assert_eq!(
@@ -444,7 +463,7 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
 
     let query = SkillingForecastQuery {
         target: SkillingTargetKind::Profession,
-        profession: Some("Marksman".into()),
+        professions: vec!["Marksman".into()],
         goal: 6.0,
     };
     let result = api.character_skilling_forecast(&query).await.unwrap();
@@ -486,7 +505,7 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
     let hp = api
         .character_skilling_forecast(&SkillingForecastQuery {
             target: SkillingTargetKind::Hp,
-            profession: None,
+            professions: Vec::new(),
             goal: 150.0,
         })
         .await
@@ -510,6 +529,28 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
         .iter()
         .all(|source| source.status == SkillingForecastStatus::Reached));
 
+    // A family forecasts as its summed level: Marksman (5.8) plus Healer
+    // (Anatomy 800 at weight 50: 4.0) is 9.8, so +0.2 asks for Rifle or
+    // Anatomy gains through the combined weights.
+    let family = api
+        .character_skilling_forecast(&SkillingForecastQuery {
+            professions: vec!["Marksman".into(), "Healer".into()],
+            goal: 10.0,
+            ..query.clone()
+        })
+        .await
+        .unwrap();
+    assert_eq!(family.current, 9.8);
+    assert_eq!(family.sources[0].name, "Rifle Skilling");
+    assert_eq!(family.sources[0].status, SkillingForecastStatus::Ready);
+    // Anatomy counts toward both members, so it outranks its single-member weight.
+    let anatomy = family.sources[0]
+        .skills
+        .iter()
+        .find(|skill| skill.name == "Anatomy")
+        .unwrap();
+    assert!(anatomy.moves_target);
+
     // Validation and the soft unknown-profession shape.
     let bad_goal = SkillingForecastQuery {
         goal: 0.0,
@@ -517,13 +558,13 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
     };
     assert!(api.character_skilling_forecast(&bad_goal).await.is_err());
     let unnamed = SkillingForecastQuery {
-        profession: None,
+        professions: Vec::new(),
         ..query.clone()
     };
     assert!(api.character_skilling_forecast(&unnamed).await.is_err());
     let missing = api
         .character_skilling_forecast(&SkillingForecastQuery {
-            profession: Some("Nope".into()),
+            professions: vec!["Nope".into()],
             ..query
         })
         .await

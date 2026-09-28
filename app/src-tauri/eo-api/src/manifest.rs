@@ -470,8 +470,8 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "character_path_optimizer",
             args: vec![
                 ArgSpec {
-                    name: "profession",
-                    schema: schema(schema_for!(String)),
+                    name: "professions",
+                    schema: schema(schema_for!(Vec<String>)),
                 },
                 ArgSpec {
                     name: "target_level",

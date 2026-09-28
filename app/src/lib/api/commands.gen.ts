@@ -3224,13 +3224,14 @@ export interface SkillScanPending {
 }
 
 /**
- * The forecast query. `profession` names the target for a `profession`
- * target and is ignored for `hp`; `goal` is the profession level or HP
- * to reach.
+ * The forecast query. `professions` names a `profession` target (one
+ * name, or several for a family forecast as their summed level) and is
+ * ignored for `hp`; `goal` is the level (summed, for several) or HP to
+ * reach.
  */
 export interface SkillingForecastQuery {
 	target: SkillingTargetKind;
-	profession?: string | null;
+	professions?: string[];
 	goal: number;
 }
 
@@ -4010,8 +4011,8 @@ export async function characterProfessionOptimizer(profession: string): Promise<
 	return invokeCommand('character_profession_optimizer', { profession });
 }
 
-export async function characterPathOptimizer(profession: string, targetLevel: number | null, pedBudget: number | null): Promise<PathOptimizerResult> {
-	return invokeCommand('character_path_optimizer', { profession, target_level: targetLevel, ped_budget: pedBudget });
+export async function characterPathOptimizer(professions: string[], targetLevel: number | null, pedBudget: number | null): Promise<PathOptimizerResult> {
+	return invokeCommand('character_path_optimizer', { professions, target_level: targetLevel, ped_budget: pedBudget });
 }
 
 export async function characterHpOptimizer(): Promise<HpOptimizerResult> {

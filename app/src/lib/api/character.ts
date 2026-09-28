@@ -17,13 +17,15 @@ export const getCharacterProspectOptions = commands.characterProspectOptions;
 export const getActivityRecommender = commands.characterActivityRecommender;
 export const getSkillingForecast = commands.characterSkillingForecast;
 
+/** The cheapest skill path for one profession, or for several optimised as
+ * one combined target (a family, levelled as the sum of its members). */
 export async function getProfessionPathOptimizer(
-	profession: string,
+	professions: string[],
 	params: { targetLevel: number } | { pedBudget: number },
 ) {
 	const targetLevel = 'targetLevel' in params ? params.targetLevel : null;
 	const pedBudget = 'pedBudget' in params ? params.pedBudget : null;
-	return commands.characterPathOptimizer(profession, targetLevel, pedBudget);
+	return commands.characterPathOptimizer(professions, targetLevel, pedBudget);
 }
 
 export async function getCharacterProspect(params: {

@@ -77,7 +77,7 @@ export function createOptimizerModel(errors: PageErrorSlot) {
 		pathLoading = true;
 		pathResult = null;
 		try {
-			pathResult = await getProfessionPathOptimizer(selectedProfession, { targetLevel: target });
+			pathResult = await getProfessionPathOptimizer([selectedProfession], { targetLevel: target });
 		} catch (e) {
 			pathResult = null;
 			errors.error = describeError(e, 'Failed to compute the skilling path');

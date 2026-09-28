@@ -3,10 +3,11 @@
  * three ways at once. Where to train it (the activity recommender's
  * modelled ranking), what your own named sessions say it takes (the
  * skilling forecast, from recorded play and its realised markup), and the
- * cheapest skill path (the path optimiser for a profession, the HP
- * optimiser for HP). Each facet loads into its own error slot so one
- * failure never blanks the others; each load claims a generation so an
- * out-of-order response can never repopulate a newer target or goal.
+ * cheapest skill path (the path optimiser for a profession or a family's
+ * combined level, the HP optimiser for HP). Each facet loads into its own
+ * error slot so one failure never blanks the others; each load claims a
+ * generation so an out-of-order response can never repopulate a newer
+ * target or goal.
  */
 
 import { getHpOptimizer, getProfessionPathOptimizer, getSkillingForecast } from '$lib/api';
@@ -19,7 +20,7 @@ import type {
 import { getPreference, setPreference } from '$lib/preferences';
 import type { ProfessionLevel } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
-import { type CodexRankingTarget, familyByKey } from './codexRankingTarget';
+import { type CodexRankingTarget, familyByKey, targetProfessions } from './codexRankingTarget';
 import { createErrorSlot } from './errorSlot.svelte';
 import { createRecommenderModel } from './recommenderModel.svelte';
 
@@ -92,18 +93,6 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	let forecastGeneration = 0;
 	let goalTimer: ReturnType<typeof setTimeout> | undefined;
 
-	/** The target's current value; null for a family (no single level). */
-	const current = $derived.by<number | null>(() => {
-		if (target.kind === 'profession') {
-			const name = target.name;
-			return inputs.professions().find((prof) => prof.name === name)?.level ?? 0;
-		}
-		if (target.kind === 'hp') return inputs.hp();
-		return null;
-	});
-	const goal = $derived(parseGoal(goalInput));
-	/** A goal the goal-bound facets can answer: set, and above current. */
-	const goalActive = $derived(current !== null && goal !== null && goal > current);
 	/** The family's member professions with their levels. */
 	const members = $derived.by(() => {
 		if (target.kind !== 'family') return [];
@@ -113,6 +102,21 @@ export function createSkillingModel(inputs: SkillingInputs) {
 			level: levels.find((prof) => prof.name === name)?.level ?? 0,
 		}));
 	});
+	/** The target's current value: a profession's level, HP, or a family's
+	 * summed level (the recommender's family target, so all three facets
+	 * answer the same question). Null only with no target. */
+	const current = $derived.by<number | null>(() => {
+		if (target.kind === 'profession') {
+			const name = target.name;
+			return inputs.professions().find((prof) => prof.name === name)?.level ?? 0;
+		}
+		if (target.kind === 'hp') return inputs.hp();
+		if (target.kind === 'family') return members.reduce((sum, member) => sum + member.level, 0);
+		return null;
+	});
+	const goal = $derived(parseGoal(goalInput));
+	/** A goal the goal-bound facets can answer: set, and above current. */
+	const goalActive = $derived(current !== null && goal !== null && goal > current);
 	const sources = $derived(forecast?.sources ?? []);
 	const selectedSource = $derived<SkillingForecastSource | null>(
 		sources.find((source) => source.definitionId === selectedSourceId) ?? defaultSource(forecast),
@@ -141,13 +145,14 @@ export function createSkillingModel(inputs: SkillingInputs) {
 			return;
 		}
 		path = null;
-		if (current.kind !== 'profession' || !goalActive || goal === null) {
+		const professions = targetProfessions(current);
+		if (professions.length === 0 || !goalActive || goal === null) {
 			pathLoading = false;
 			return;
 		}
 		pathLoading = true;
 		try {
-			const loaded = await getProfessionPathOptimizer(current.name, { targetLevel: goal });
+			const loaded = await getProfessionPathOptimizer(professions, { targetLevel: goal });
 			if (claimed !== pathGeneration) return;
 			if (loaded.error) {
 				pathError = loaded.error;
@@ -168,7 +173,7 @@ export function createSkillingModel(inputs: SkillingInputs) {
 		forecastError = null;
 		forecast = null;
 		const current = target;
-		if ((current.kind !== 'profession' && current.kind !== 'hp') || !goalActive || goal === null) {
+		if (current.kind === 'none' || !goalActive || goal === null) {
 			forecastLoading = false;
 			return;
 		}
@@ -177,7 +182,7 @@ export function createSkillingModel(inputs: SkillingInputs) {
 			const loaded = await getSkillingForecast(
 				current.kind === 'hp'
 					? { target: 'hp', goal }
-					: { target: 'profession', profession: current.name, goal },
+					: { target: 'profession', professions: targetProfessions(current), goal },
 			);
 			if (claimed !== forecastGeneration) return;
 			if (loaded.error) {

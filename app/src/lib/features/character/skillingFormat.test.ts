@@ -27,6 +27,7 @@ describe('target values', () => {
 		expect(formatGoal(PROFESSION, 43)).toBe('Lv 43');
 		expect(formatGoal(PROFESSION, 43.5)).toBe('Lv 43.50');
 		expect(formatGoal(HP, 150)).toBe('150 HP');
+		expect(formatGoal({ kind: 'family', key: 'looter' }, 98)).toBe('98 combined');
 	});
 
 	it('signs target gains at the precision each unit needs', () => {

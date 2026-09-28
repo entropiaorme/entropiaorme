@@ -248,6 +248,28 @@ fn raw_profession_total(skill_levels: &Map<String, Value>, profession: &Value) -
     total
 }
 
+/// Several professions as one: each skill weighted by the sum of its
+/// weights across the members, so the combined level is exactly the sum of
+/// the member levels (profession level is linear in its weights). This is
+/// how a profession family is optimised and forecast as a single target,
+/// matching the activity recommender's summed-level family target.
+pub fn combined_profession(name: &str, members: &[&Value]) -> Value {
+    let mut weights: Vec<(String, f64)> = Vec::new();
+    for member in members {
+        for (skill, weight) in iter_profession_skills(member) {
+            match weights.iter_mut().find(|(entry, _)| *entry == skill) {
+                Some((_, total)) => *total += weight,
+                None => weights.push((skill, weight)),
+            }
+        }
+    }
+    let skills: Vec<Value> = weights
+        .into_iter()
+        .map(|(skill, weight)| serde_json::json!({"skill": {"name": skill}, "weight": weight}))
+        .collect();
+    serde_json::json!({"name": name, "skills": skills})
+}
+
 /// `round(sum(effective_points * weight) / 10000, 2)`.
 pub fn profession_level(skill_levels: &Map<String, Value>, profession: &Value) -> f64 {
     round_half_even(raw_profession_total(skill_levels, profession) / 10000.0, 2)
@@ -734,6 +756,32 @@ mod tests {
             .iter()
             .map(|(name, level)| (name.to_string(), json!(level)))
             .collect()
+    }
+
+    #[test]
+    fn a_combined_profession_levels_as_the_sum_of_its_members() {
+        let hit = json!({"name": "Hit", "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 40},
+            {"skill": {"name": "Agility"}, "weight": 5},
+        ]});
+        let dmg = json!({"name": "Dmg", "skills": [
+            {"skill": {"name": "Rifle"}, "weight": 10},
+            {"skill": {"name": "Anatomy"}, "weight": 30},
+        ]});
+        let combined = combined_profession("Both", &[&hit, &dmg]);
+        assert_eq!(combined["name"], "Both");
+        assert_eq!(
+            iter_profession_skills(&combined),
+            vec![
+                ("Rifle".to_string(), 50.0),
+                ("Agility".to_string(), 5.0),
+                ("Anatomy".to_string(), 30.0),
+            ]
+        );
+        let skill_levels = levels(&[("Rifle", 1234.5), ("Agility", 40.0), ("Anatomy", 777.0)]);
+        let sum =
+            raw_profession_total(&skill_levels, &hit) + raw_profession_total(&skill_levels, &dmg);
+        assert!((raw_profession_total(&skill_levels, &combined) - sum).abs() < 1e-9);
     }
 
     fn profession() -> Value {

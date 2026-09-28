@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { portal } from '$lib/utils/portal';
 
 	// A hover/focus text popover (no click). By default the trigger is a
 	// small circled "i"; pass a `trigger` snippet to hang the same popover
@@ -37,18 +38,6 @@
 
 	const VIEWPORT_MARGIN = 8;
 	const TRIGGER_GAP = 8;
-
-	/** The popover belongs to the document layer, not the trigger's
-	 * stacking context; moving it to body is what makes `fixed` genuinely
-	 * viewport-relative and puts it beyond any scroll container's clip. */
-	function portal(node: HTMLElement) {
-		document.body.appendChild(node);
-		return {
-			destroy() {
-				node.remove();
-			},
-		};
-	}
 
 	function position() {
 		if (!triggerEl || !tipEl) return;

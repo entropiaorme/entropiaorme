@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { portal } from '$lib/utils/portal';
 
 	interface MenuItem {
 		label: string;
@@ -76,19 +77,6 @@
 	 * viewport on both axes. */
 	const VIEWPORT_MARGIN = 8;
 	const TRIGGER_GAP = 4;
-
-	/** Overlay panels belong to the document layer, not the trigger's
-	 * stacking context. Moving the node to body is what makes `fixed`
-	 * genuinely viewport-relative even inside transformed dashboard
-	 * ancestors. */
-	function portal(node: HTMLElement, enabled: boolean) {
-		if (enabled) document.body.appendChild(node);
-		return {
-			destroy() {
-				if (enabled) node.remove();
-			}
-		};
-	}
 
 	function positionPanel() {
 		if (!overlay || !rootEl || !panelEl) return;

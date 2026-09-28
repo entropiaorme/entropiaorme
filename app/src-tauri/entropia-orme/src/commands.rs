@@ -68,6 +68,7 @@ use eo_api::scan::{
 };
 use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use eo_api::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
     ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
     ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
@@ -445,6 +446,14 @@ pub async fn character_activity_recommender(
     query: ActivityRecommenderQuery,
 ) -> Result<ActivityRecommenderResult, ApiError> {
     facade(&app)?.character_activity_recommender(&query).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn character_skilling_forecast(
+    app: tauri::AppHandle,
+    query: SkillingForecastQuery,
+) -> Result<SkillingForecastResult, ApiError> {
+    facade(&app)?.character_skilling_forecast(&query).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

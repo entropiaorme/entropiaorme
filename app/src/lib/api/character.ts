@@ -1,6 +1,6 @@
 /**
  * The character family: calibration, stats, skills, professions, the
- * optimisers, and the prospect forecast. Thin wrappers over the
+ * optimisers, the prospect forecast, and the skilling forecast. Thin wrappers over the
  * generated typed commands; argument shaping only.
  */
 
@@ -15,6 +15,7 @@ export const getProfessionOptimizer = commands.characterProfessionOptimizer;
 export const getHpOptimizer = commands.characterHpOptimizer;
 export const getCharacterProspectOptions = commands.characterProspectOptions;
 export const getActivityRecommender = commands.characterActivityRecommender;
+export const getSkillingForecast = commands.characterSkillingForecast;
 
 export async function getProfessionPathOptimizer(
 	profession: string,

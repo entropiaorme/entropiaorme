@@ -70,6 +70,7 @@ use crate::scan::{
 };
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
     ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
     ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
@@ -495,6 +496,14 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(ActivityRecommenderQuery)),
             }],
             returns: Some(schema(schema_for!(ActivityRecommenderResult))),
+        },
+        CommandSpec {
+            name: "character_skilling_forecast",
+            args: vec![ArgSpec {
+                name: "query",
+                schema: schema(schema_for!(SkillingForecastQuery)),
+            }],
+            returns: Some(schema(schema_for!(SkillingForecastResult))),
         },
         CommandSpec {
             name: "settings_get",

@@ -69,6 +69,7 @@ pub mod session_summary;
 pub mod skill_panel;
 pub mod skill_scan_manual;
 pub mod skill_tracker;
+pub mod skilling_forecast;
 pub mod spacebar_capture_listener;
 pub mod stock_allocation;
 pub mod time;

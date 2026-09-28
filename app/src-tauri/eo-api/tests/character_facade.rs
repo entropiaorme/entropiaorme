@@ -23,6 +23,12 @@ fn write_fixture(dir: &Path, name: &str, value: &Value) {
 /// calibrations and a small catalogue, and a clock frozen days past the
 /// latest scan (inside the 30-day window).
 async fn seeded_api(dir: &Path) -> Api {
+    seeded_api_with_db(dir).await.0
+}
+
+/// [`seeded_api`] plus the facade's database handle, for tests that seed
+/// recorded play beyond the calibrations.
+async fn seeded_api_with_db(dir: &Path) -> (Api, Db) {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
     write_fixture(
@@ -91,8 +97,8 @@ async fn seeded_api(dir: &Path) -> Api {
         0.0,
     ));
     let handles = common::producer_handles(&db, &data_dir, tokio::runtime::Handle::current()).await;
-    Api::new(
-        db,
+    let api = Api::new(
+        db.clone(),
         Arc::new(GameDataStore::new(&snapshot).unwrap()),
         clock,
         data_dir,
@@ -109,7 +115,8 @@ async fn seeded_api(dir: &Path) -> Api {
         None,
         None,
         None,
-    )
+    );
+    (api, db)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -391,4 +398,139 @@ async fn the_activity_recommender_ranks_arbitrage_and_validates() {
     assert!(hp.error.is_none());
     assert!(hp.candidates.is_empty());
     assert!(hp.direct.is_none());
+}
+
+/// The skilling forecast reads each named session's recorded play: the
+/// seeded definition trains Rifle, so it answers a Marksman goal, while a
+/// definition that only trained Mining says it does not train the target.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_skilling_forecast_answers_from_named_sessions() {
+    use eo_api::skilling::{
+        SkillingForecastQuery, SkillingForecastStatus, SkillingSampleWarning, SkillingTargetKind,
+    };
+    use eo_services::session_summary::SUMMARY_VERSION;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = seeded_api_with_db(dir.path()).await;
+    db.with_writer(|conn| {
+            conn.execute_batch(
+                "INSERT INTO session_definitions (id, name) VALUES (50, 'Rifle Skilling'); \
+                 INSERT INTO session_definitions (id, name, is_active) VALUES (51, 'Old Mining', 0);",
+            )?;
+            let sessions = [
+                ("s1", 50, 3.0, 300.0, 270.0, r#"{"Rifle": 6.0, "Anatomy": 2.0}"#),
+                ("s2", 50, 2.0, 200.0, 190.0, r#"{"Rifle": 4.0}"#),
+                ("s3", 51, 1.0, 80.0, 60.0, r#"{"Mining": 3.0}"#),
+            ];
+            for (id, definition, hours, cycled, loot, skills) in sessions {
+                conn.execute(
+                    "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, definition_id) \
+                     VALUES (?1, 1700000000, 1700003600, 0, ?2)",
+                    rusqlite::params![id, definition],
+                )?;
+                conn.execute(
+                    "INSERT INTO session_summaries (session_id, summary_version, started_at, ended_at, \
+                       duration_hours, kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, \
+                       heal_cost, dangling_cost, cycled_ped, regular_skill_ped_json, \
+                       attribute_levels_json, regular_skill_tt, attribute_levels_total) \
+                     VALUES (?1, ?2, 1700000000, 1700003600, ?3, 0, ?4, ?5, 0, 0, 0, 0, ?5, ?6, '{}', 0, 0)",
+                    rusqlite::params![id, SUMMARY_VERSION, hours, loot, cycled, skills],
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let query = SkillingForecastQuery {
+        target: SkillingTargetKind::Profession,
+        profession: Some("Marksman".into()),
+        goal: 6.0,
+    };
+    let result = api.character_skilling_forecast(&query).await.unwrap();
+    assert!(result.error.is_none());
+    assert_eq!(result.goal, 6.0);
+    assert_eq!(result.current, 5.8);
+    assert_eq!(result.sources.len(), 2);
+
+    let rifle = &result.sources[0];
+    assert_eq!(rifle.name, "Rifle Skilling");
+    assert_eq!(rifle.status, SkillingForecastStatus::Ready);
+    assert_eq!(rifle.sample.sessions, 2);
+    assert_eq!(rifle.sample.cycled_ped, 500.0);
+    assert_eq!(rifle.sample.pes, 12.0);
+    // Nothing sold: markup is absent, never a zero lift.
+    assert_eq!(rifle.sample.realised_markup, None);
+    assert_eq!(rifle.markup, None);
+    assert_eq!(rifle.net_cost, None);
+    assert!(rifle.cycled_ped > 0.0);
+    assert!(rifle.tt_cost > 0.0);
+    assert_eq!(rifle.skills[0].name, "Rifle");
+    assert!(rifle.skills[0].moves_target);
+    assert_eq!(rifle.warnings, vec![SkillingSampleWarning::ThinSessions]);
+
+    let mining = &result.sources[1];
+    assert_eq!(mining.name, "Old Mining");
+    assert!(mining.archived);
+    assert_eq!(mining.status, SkillingForecastStatus::DoesNotTrain);
+    assert_eq!(mining.cycled_ped, 0.0);
+
+    // The wire spells the statuses and warnings in snake case.
+    let wire = serde_json::to_value(&result).unwrap();
+    assert_eq!(wire["sources"][1]["status"], "does_not_train");
+    assert_eq!(wire["sources"][0]["warnings"][0], "thin_sessions");
+    assert_eq!(wire["sources"][0]["markup"], Value::Null);
+
+    // HP reads the Health attribute as its current value; the seeded
+    // skills carry no HP contribution, so no definition trains it.
+    let hp = api
+        .character_skilling_forecast(&SkillingForecastQuery {
+            target: SkillingTargetKind::Hp,
+            profession: None,
+            goal: 150.0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(hp.current, 142.7);
+    assert!(hp
+        .sources
+        .iter()
+        .all(|source| source.status == SkillingForecastStatus::DoesNotTrain));
+
+    // A goal already met asks for no cycling from any definition.
+    let reached = api
+        .character_skilling_forecast(&SkillingForecastQuery {
+            goal: 1.0,
+            ..query.clone()
+        })
+        .await
+        .unwrap();
+    assert!(reached
+        .sources
+        .iter()
+        .all(|source| source.status == SkillingForecastStatus::Reached));
+
+    // Validation and the soft unknown-profession shape.
+    let bad_goal = SkillingForecastQuery {
+        goal: 0.0,
+        ..query.clone()
+    };
+    assert!(api.character_skilling_forecast(&bad_goal).await.is_err());
+    let unnamed = SkillingForecastQuery {
+        profession: None,
+        ..query.clone()
+    };
+    assert!(api.character_skilling_forecast(&unnamed).await.is_err());
+    let missing = api
+        .character_skilling_forecast(&SkillingForecastQuery {
+            profession: Some("Nope".into()),
+            ..query
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        missing.error.as_deref(),
+        Some("Profession 'Nope' not found")
+    );
+    assert!(missing.sources.is_empty());
 }

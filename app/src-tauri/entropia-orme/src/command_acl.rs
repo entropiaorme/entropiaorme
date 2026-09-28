@@ -53,6 +53,7 @@ macro_rules! app_command_surface {
             character_path_optimizer,
             character_hp_optimizer,
             character_activity_recommender,
+            character_skilling_forecast,
             settings_get,
             settings_overlay_position,
             settings_set_overlay_position,

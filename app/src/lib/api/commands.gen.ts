@@ -3224,6 +3224,100 @@ export interface SkillScanPending {
 }
 
 /**
+ * The forecast query. `profession` names the target for a `profession`
+ * target and is ignored for `hp`; `goal` is the profession level or HP
+ * to reach.
+ */
+export interface SkillingForecastQuery {
+	target: SkillingTargetKind;
+	profession?: string | null;
+	goal: number;
+}
+
+/**
+ * The forecast from every named session, ready ones first (least
+ * cycling to the goal leading). `error` is present only on the soft
+ * unknown-profession path.
+ */
+export interface SkillingForecastResult {
+	error?: string | null;
+	/** The target's current value (profession level or HP). */
+	current: number;
+	goal: number;
+	sources: SkillingForecastSource[];
+}
+
+/**
+ * The recorded play a definition's forecast projects from.
+ */
+export interface SkillingForecastSample {
+	sessions: number;
+	hours: number;
+	cycledPed: number;
+	lootTt: number;
+	pes: number;
+	/** Net markup realised from confirmed sales of the definition's stock; null when none has sold. */
+	realisedMarkup: number | null;
+	/** That markup as a fraction of the definition's loot TT. */
+	markupLift: number | null;
+}
+
+/**
+ * One skill the definition trains, projected to the goal.
+ */
+export interface SkillingForecastSkill {
+	name: string;
+	isAttribute: boolean;
+	currentLevel: number;
+	/** Share of the definition's skill PES; null for attributes. */
+	pesShare: number | null;
+	levelGain: number;
+	endLevel: number;
+	/** Profession levels or HP this skill's gain contributes. */
+	targetGain: number;
+	movesTarget: boolean;
+}
+
+/**
+ * One definition's forecast. The projected figures are zero unless the
+ * status is `ready`.
+ */
+export interface SkillingForecastSource {
+	definitionId: number;
+	name: string;
+	archived: boolean;
+	sample: SkillingForecastSample;
+	status: SkillingForecastStatus;
+	cycledPed: number;
+	hours: number;
+	lootTt: number;
+	/** Realised markup lift applied to the forecast loot; null when the definition has no confirmed sales. */
+	markup: number | null;
+	/** Cycled minus loot TT. */
+	ttCost: number;
+	/** TT cost less realised markup; null with the markup. */
+	netCost: number | null;
+	skills: SkillingForecastSkill[];
+	warnings: SkillingSampleWarning[];
+}
+
+/**
+ * Whether a definition answers, and if not, why.
+ */
+export type SkillingForecastStatus = 'ready' | 'reached' | 'does_not_train' | 'no_evidence' | 'out_of_range';
+
+/**
+ * A sample-quality caveat on a forecast.
+ */
+export type SkillingSampleWarning = 'thin_sessions' | 'thin_hours' | 'thin_cycling' | 'long_extrapolation';
+
+/**
+ * What the forecast measures progress on. A closed vocabulary: the
+ * bindings expose only these two.
+ */
+export type SkillingTargetKind = 'profession' | 'hp';
+
+/**
  * The spacebar-capture toggle acknowledgement: the resulting enabled
  * state after the flip.
  */
@@ -3926,6 +4020,10 @@ export async function characterHpOptimizer(): Promise<HpOptimizerResult> {
 
 export async function characterActivityRecommender(query: ActivityRecommenderQuery): Promise<ActivityRecommenderResult> {
 	return invokeCommand('character_activity_recommender', { query });
+}
+
+export async function characterSkillingForecast(query: SkillingForecastQuery): Promise<SkillingForecastResult> {
+	return invokeCommand('character_skilling_forecast', { query });
 }
 
 export async function settingsGet(): Promise<AppSettings> {

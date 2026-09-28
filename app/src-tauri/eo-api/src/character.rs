@@ -874,7 +874,7 @@ impl Api {
     /// `MAX(scanned_at)` / `MAX(id)` tiebreaker read behind
     /// [`Db::latest_skill_calibrations`]), as the insertion-ordered map
     /// the calculation services consume.
-    async fn skill_calibrations(
+    pub(crate) async fn skill_calibrations(
         &self,
         source: Option<&str>,
     ) -> Result<Map<String, Value>, DbError> {

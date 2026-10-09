@@ -74,68 +74,87 @@
 				: `Every species on ${model.planet} has reached rank 25.`}
 		</p>
 	{:else}
-		<ol aria-label="Species by the cost of their next meta reward, cheapest first">
-			{#each model.rows as target, i (target.speciesName)}
-				{@const hidden = model.isHidden(target.speciesName)}
-				<li
-					class="group flex items-center rounded-md transition-colors duration-[var(--duration-fast)] hover:bg-surface-hover/60
-						{hidden && i === model.visibleCount && i > 0 ? 'mt-2 border-t border-border/40 pt-2' : ''}"
-				>
-					<button
-						type="button"
-						class="flex min-w-0 flex-1 cursor-pointer items-baseline gap-3 py-2 pl-3 pr-2 text-left text-sm
-							{hidden ? 'text-text-tertiary' : 'text-text-secondary group-hover:text-text'}"
-						title="Open {target.speciesName}"
-						onclick={() => onOpenSpecies(target.speciesName)}
+		<div>
+			<!-- Column labels sit outside the scroll region so they stay in view; the
+			     reserved scrollbar gutter on both keeps them aligned with the rows. -->
+			<div
+				class="flex items-baseline overflow-hidden border-b border-border/40 pb-1.5 [scrollbar-gutter:stable]"
+				aria-hidden="true"
+			>
+				<div class="flex min-w-0 flex-1 items-baseline gap-3 pl-3">
+					<span class="w-7 shrink-0"></span>
+					<span class="eyebrow min-w-0 flex-1">Species</span>
+					<span class="eyebrow w-24 shrink-0 text-right">Next meta</span>
+					<span class="eyebrow w-32 shrink-0 text-right">Est. PED cycled</span>
+				</div>
+				<span class="w-16 shrink-0"></span>
+			</div>
+			<ol
+				class="max-h-[min(36rem,calc(100vh-16rem))] overflow-y-auto overscroll-contain pt-1 [scrollbar-gutter:stable]"
+				aria-label="Species by the estimated PED cycled to reach their next meta reward, cheapest first"
+			>
+				{#each model.rows as target, i (target.speciesName)}
+					{@const hidden = model.isHidden(target.speciesName)}
+					<li
+						class="group flex items-center rounded-md transition-colors duration-[var(--duration-fast)] hover:bg-surface-hover/60
+							{hidden && i === model.visibleCount && i > 0 ? 'mt-2 border-t border-border/40 pt-2' : ''}"
 					>
-						<span
-							class="w-7 shrink-0 text-right text-xs tabular-nums
-								{hidden ? 'text-transparent' : i === 0 ? 'text-success' : i < 3 ? 'text-accent' : 'text-text-tertiary'}"
-							aria-hidden={hidden}
+						<button
+							type="button"
+							class="flex min-w-0 flex-1 cursor-pointer items-baseline gap-3 py-2 pl-3 text-left text-sm
+								{hidden ? 'text-text-tertiary' : 'text-text-secondary group-hover:text-text'}"
+							title="Open {target.speciesName}"
+							onclick={() => onOpenSpecies(target.speciesName)}
 						>
-							{hidden ? '' : i + 1}
-						</span>
-						<span class="min-w-0 flex-1 truncate">
-							<span class={hidden ? '' : 'text-text'}>{target.speciesName}</span>
-							{#if model.planet === ALL_PLANETS && target.planets.length > 0}
-								<span class="ml-2 text-xs text-text-tertiary">{target.planets.join(', ')}</span>
+							<span
+								class="w-7 shrink-0 text-right text-xs tabular-nums
+									{hidden ? 'text-transparent' : i === 0 ? 'text-success' : i < 3 ? 'text-accent' : 'text-text-tertiary'}"
+								aria-hidden={hidden}
+							>
+								{hidden ? '' : i + 1}
+							</span>
+							<span class="min-w-0 flex-1 truncate">
+								<span class={hidden ? '' : 'text-text'}>{target.speciesName}</span>
+								{#if model.planet === ALL_PLANETS && target.planets.length > 0}
+									<span class="ml-2 text-xs text-text-tertiary">{target.planets.join(', ')}</span>
+								{/if}
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-tertiary">
+								Rank {target.currentRank} &rarr; {target.targetRank}
+							</span>
+							<span
+								class="w-32 shrink-0 text-right tabular-nums {hidden ? 'opacity-60' : 'text-text'}"
+								title="{codexPoints.format(target.cost)} codex points"
+							>
+								&asymp; {wholePed.format(target.estimatedPed)}
+								<span class="sr-only">PED cycled</span>
+							</span>
+						</button>
+						<span class="w-16 shrink-0 pr-2 text-right">
+							{#if hidden}
+								<button
+									type="button"
+									class="linklet px-2"
+									aria-label="Restore {target.speciesName} to the ranking"
+									onclick={() => model.restore(target.speciesName)}
+								>
+									Restore
+								</button>
+							{:else}
+								<button
+									type="button"
+									class="linklet invisible px-2 group-hover:visible group-focus-within:visible"
+									aria-label="Hide {target.speciesName} from the ranking"
+									title="Hide a species you cannot hunt"
+									onclick={() => model.hide(target.speciesName)}
+								>
+									Hide
+								</button>
 							{/if}
 						</span>
-						<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-tertiary">
-							Rank {target.currentRank} &rarr; {target.targetRank}
-						</span>
-						<span
-							class="w-28 shrink-0 text-right tabular-nums {hidden ? 'opacity-60' : 'text-text'}"
-							title="{codexPoints.format(target.cost)} codex points"
-						>
-							&asymp; {wholePed.format(target.estimatedPed)}
-							<span class="text-xs text-text-tertiary">PED</span>
-						</span>
-					</button>
-					<span class="w-16 shrink-0 text-right">
-						{#if hidden}
-							<button
-								type="button"
-								class="linklet px-2"
-								aria-label="Restore {target.speciesName} to the ranking"
-								onclick={() => model.restore(target.speciesName)}
-							>
-								Restore
-							</button>
-						{:else}
-							<button
-								type="button"
-								class="linklet invisible px-2 group-hover:visible group-focus-within:visible"
-								aria-label="Hide {target.speciesName} from the ranking"
-								title="Hide a species you cannot hunt"
-								onclick={() => model.hide(target.speciesName)}
-							>
-								Hide
-							</button>
-						{/if}
-					</span>
-				</li>
-			{/each}
-		</ol>
+					</li>
+				{/each}
+			</ol>
+		</div>
 	{/if}
 </div>

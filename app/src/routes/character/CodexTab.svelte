@@ -28,6 +28,7 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import CodexProfessionPicker from '$lib/features/character/CodexProfessionPicker.svelte';
 	import CodexSkillOptionList from '$lib/features/character/CodexSkillOptionList.svelte';
+	import CodexMetaTargets from '$lib/features/character/CodexMetaTargets.svelte';
 	import {
 		targetProfessions,
 		type CodexRankingTarget,
@@ -38,7 +39,7 @@
 
 	// ── Top-level mode ──────────────────────────────────────────────────────────
 
-	let codexMode = $state<'mobs' | 'meta'>('mobs');
+	let codexMode = $state<'mobs' | 'meta' | 'recommended'>('mobs');
 
 	// ── Data state ──────────────────────────────────────────────────────────────
 
@@ -232,6 +233,12 @@
 		}
 	}
 
+	/** Open a species from the meta-target ranking in the species view. */
+	function openSpecies(name: string) {
+		codexMode = 'mobs';
+		if (selectedSpecies !== name) void selectSpecies(name);
+	}
+
 	// ── Claim / unclaim (ranks and mastery) ─────────────────────────────────────
 
 	/** Shared claim-action shell: selection guard, success message,
@@ -327,6 +334,11 @@
 					{codexMode === 'meta' ? 'bg-surface-hover text-text' : 'text-text-secondary hover:text-text'}"
 				onclick={() => codexMode = 'meta'}
 			>Meta</button>
+			<button
+				class="px-3 py-1.5 text-xs font-medium rounded transition-colors cursor-pointer
+					{codexMode === 'recommended' ? 'bg-surface-hover text-text' : 'text-text-secondary hover:text-text'}"
+				onclick={() => codexMode = 'recommended'}
+			>Recommended</button>
 		</div>
 
 		{#if codexMode === 'mobs'}
@@ -349,7 +361,9 @@
 		{/if}
 	</div>
 
-	{#if codexMode === 'meta'}
+	{#if codexMode === 'recommended'}
+		<CodexMetaTargets onOpenSpecies={openSpecies} />
+	{:else if codexMode === 'meta'}
 		<!-- ═══ Meta codex view ═══ -->
 		<Card class="p-4 space-y-4">
 			<div>

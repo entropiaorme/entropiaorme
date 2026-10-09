@@ -5,6 +5,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Mature"
@@ -29,6 +30,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -39,6 +41,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -51,6 +54,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -63,6 +67,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Rakta"
@@ -90,6 +95,7 @@
       "codex_base_cost": 37.125,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "6"
@@ -102,6 +108,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Scout"
@@ -123,6 +130,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -159,6 +167,7 @@
       "codex_base_cost": 172.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Alpha"
@@ -196,6 +205,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L24"
@@ -218,6 +228,7 @@
     "species": {
       "name": null
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "THR-01"
@@ -254,6 +265,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Young"
@@ -296,6 +308,7 @@
       "codex_base_cost": 35,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -338,6 +351,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Generation IX"
@@ -380,6 +394,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Weak"
@@ -422,6 +437,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Weak"
@@ -450,6 +466,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -462,6 +479,7 @@
       "codex_base_cost": 76.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 01"
@@ -498,6 +516,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Outcast"
@@ -537,6 +556,7 @@
       "codex_base_cost": 562.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Infernal Regent"
@@ -556,12 +576,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L10"
@@ -581,6 +603,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -593,6 +616,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -632,6 +656,7 @@
       "codex_base_cost": 562.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Giga"
@@ -647,6 +672,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 01"
@@ -687,6 +713,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -702,6 +729,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -741,6 +769,7 @@
       "codex_base_cost": 975,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -778,6 +807,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -786,18 +816,21 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -808,12 +841,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -824,6 +859,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -834,6 +870,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -844,6 +881,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L13"
@@ -863,6 +901,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -873,6 +912,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Bonzo"
@@ -885,6 +925,7 @@
       "codex_base_cost": 61.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Outcast"
@@ -925,36 +966,42 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -963,6 +1010,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Disector"
@@ -990,6 +1038,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Hatchling"
@@ -1014,6 +1063,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Hatchling"
@@ -1041,6 +1091,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Hatchling"
@@ -1068,6 +1119,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Hatchling"
@@ -1093,6 +1145,7 @@
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Quartermaster"
@@ -1135,6 +1188,7 @@
       "codex_base_cost": 7.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -1145,6 +1199,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -1157,6 +1212,7 @@
       "codex_base_cost": 71.25,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Mk4"
@@ -1196,6 +1252,7 @@
       "codex_base_cost": 1.875,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Young"
@@ -1235,6 +1292,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Outcast"
@@ -1301,6 +1359,7 @@
       "codex_base_cost": 30,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -1338,12 +1397,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Adult"
@@ -1381,6 +1442,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -1391,6 +1453,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Exterminator"
@@ -1428,6 +1491,7 @@
     "species": {
       "name": null
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "CB-Prototype"
@@ -1465,6 +1529,7 @@
     "species": {
       "name": null
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Gen 02"
@@ -1480,6 +1545,7 @@
       "codex_base_cost": 218.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -1492,6 +1558,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Meekling"
@@ -1508,6 +1575,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -1520,6 +1588,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Reinforced"
@@ -1532,6 +1601,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 05"
@@ -1571,6 +1641,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -1583,6 +1654,7 @@
       "codex_base_cost": 195,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 09"
@@ -1625,6 +1697,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Gen 01"
@@ -1661,6 +1734,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Supreme"
@@ -1689,6 +1763,7 @@
     "species": {
       "name": null
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "P.A.R.A. Light"
@@ -1704,6 +1779,7 @@
       "codex_base_cost": 7.5,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "DHR-Prototype"
@@ -1741,6 +1817,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -1749,12 +1826,14 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -1763,6 +1842,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Guardian"
@@ -1793,6 +1873,7 @@
       "codex_base_cost": 276.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old"
@@ -1832,6 +1913,7 @@
       "codex_base_cost": 237.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old"
@@ -1871,6 +1953,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Thug"
@@ -1913,6 +1996,7 @@
       "codex_base_cost": 172.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Young"
@@ -1976,6 +2060,7 @@
       "codex_base_cost": 627.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mammoth"
@@ -2027,6 +2112,7 @@
       "codex_base_cost": 35,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -2066,6 +2152,7 @@
       "codex_base_cost": 87.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -2103,6 +2190,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Recently Hatched"
@@ -2118,6 +2206,7 @@
       "codex_base_cost": 200,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -2126,6 +2215,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -2168,6 +2258,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -2207,6 +2298,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Old"
@@ -2225,6 +2317,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -2237,6 +2330,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -2276,6 +2370,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Champion Elite"
@@ -2336,6 +2431,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Hunter"
@@ -2357,6 +2453,7 @@
       "codex_base_cost": 175,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Bartoohn"
@@ -2411,6 +2508,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -2448,6 +2546,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Bootylicious"
@@ -2484,6 +2583,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -2521,6 +2621,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -2529,6 +2630,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -2556,6 +2658,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -2580,6 +2683,7 @@
       "codex_base_cost": 218.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Crystal Ice Golem"
@@ -2598,6 +2702,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -2608,6 +2713,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Guardian"
@@ -2627,6 +2733,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -2635,6 +2742,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Hunter"
@@ -2674,6 +2782,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -2711,6 +2820,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L4 Green/Yellow Hair"
@@ -2729,6 +2839,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Scout"
@@ -2766,6 +2877,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -2774,6 +2886,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Gatherer"
@@ -2795,6 +2908,7 @@
       "codex_base_cost": 30,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -2807,6 +2921,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -2819,6 +2934,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Prowler"
@@ -2858,6 +2974,7 @@
       "codex_base_cost": 56.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -2897,6 +3014,7 @@
       "codex_base_cost": 128.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Adept"
@@ -2934,6 +3052,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -2946,6 +3065,7 @@
       "codex_base_cost": 1.875,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "*"
@@ -2958,18 +3078,21 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -2980,6 +3103,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old"
@@ -3017,6 +3141,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -3029,6 +3154,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -3037,6 +3163,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -3045,6 +3172,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -3057,6 +3185,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Guardian"
@@ -3069,6 +3198,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Dominant"
@@ -3108,6 +3238,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Frisky"
@@ -3150,6 +3281,7 @@
       "codex_base_cost": 278.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -3187,6 +3319,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia Moon",
     "maturities": [
       {
         "name": "Gen08"
@@ -3226,6 +3359,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -3238,6 +3372,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3277,6 +3412,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3311,6 +3447,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3335,6 +3472,7 @@
       "codex_base_cost": 172.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3374,6 +3512,7 @@
       "codex_base_cost": 35,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3416,6 +3555,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -3428,6 +3568,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Old"
@@ -3479,6 +3620,7 @@
       "codex_base_cost": 23.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -3489,6 +3631,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -3499,6 +3642,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Scout"
@@ -3526,6 +3670,7 @@
       "codex_base_cost": 56.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -3563,6 +3708,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Brawler"
@@ -3584,6 +3730,7 @@
       "codex_base_cost": 33.75,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 02"
@@ -3600,6 +3747,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L3 Blue t-shirt, blue bandana, two pistols"
@@ -3654,6 +3802,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -3666,6 +3815,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -3678,6 +3828,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Dominant"
@@ -3718,6 +3869,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -3728,6 +3880,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Alpha"
@@ -3764,6 +3917,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Old"
@@ -3782,6 +3936,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -3797,6 +3952,7 @@
       "codex_base_cost": 15,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -3809,6 +3965,7 @@
       "codex_base_cost": 15,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -3830,6 +3987,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -3867,6 +4025,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -3877,6 +4036,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -3889,6 +4049,7 @@
       "codex_base_cost": 4875,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -3901,6 +4062,7 @@
       "codex_base_cost": 4875,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -3911,6 +4073,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L5"
@@ -3926,6 +4089,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "MK7"
@@ -3965,6 +4129,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -4002,6 +4167,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Soldier"
@@ -4015,6 +4181,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Soldier"
@@ -4028,6 +4195,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Dominant"
@@ -4067,6 +4235,7 @@
       "codex_base_cost": 27.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Young"
@@ -4100,6 +4269,7 @@
       "codex_base_cost": 13.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -4142,6 +4312,7 @@
       "codex_base_cost": 13.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -4160,6 +4331,7 @@
       "codex_base_cost": 22.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Marauder"
@@ -4208,6 +4380,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old"
@@ -4247,6 +4420,7 @@
       "codex_base_cost": 195,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Guardian"
@@ -4284,6 +4458,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4294,6 +4469,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4304,6 +4480,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4316,6 +4493,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Stalker"
@@ -4355,6 +4533,7 @@
       "codex_base_cost": 146.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -4392,6 +4571,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4404,6 +4584,7 @@
       "codex_base_cost": 101.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "F2-TF"
@@ -4450,6 +4631,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -4487,6 +4669,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Warlord"
@@ -4524,6 +4707,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4534,6 +4718,7 @@
     "species": {
       "name": null
     },
+    "planet": "Monria",
     "maturities": [
       {
         "name": "Green"
@@ -4558,6 +4743,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -4597,6 +4783,7 @@
       "codex_base_cost": 25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -4605,6 +4792,7 @@
       "codex_base_cost": 331.25,
       "codex_type": "Mob"
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -4620,6 +4808,7 @@
       "codex_base_cost": 118.75,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Mature"
@@ -4648,6 +4837,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Matriarch"
@@ -4705,6 +4895,7 @@
       "codex_base_cost": 38.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Dominant"
@@ -4742,6 +4933,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -4754,6 +4946,7 @@
       "codex_base_cost": 52.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -4793,6 +4986,7 @@
       "codex_base_cost": 81.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Hunter"
@@ -4850,6 +5044,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "1"
@@ -4871,6 +5066,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -4910,6 +5106,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -4949,6 +5146,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "1"
@@ -4970,6 +5168,7 @@
       "codex_base_cost": 321.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old"
@@ -5009,6 +5208,7 @@
       "codex_base_cost": 321.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -5048,6 +5248,7 @@
       "codex_base_cost": 38.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -5096,6 +5297,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 03"
@@ -5120,6 +5322,7 @@
       "codex_base_cost": 106.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Juvenile"
@@ -5160,6 +5363,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Boss"
@@ -5172,6 +5376,7 @@
       "codex_base_cost": 175,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "1"
@@ -5206,6 +5411,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -5245,6 +5451,7 @@
       "codex_base_cost": 331.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -5284,6 +5491,7 @@
       "codex_base_cost": 250,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -5326,6 +5534,7 @@
       "codex_base_cost": 27.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -5350,6 +5559,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Lone"
@@ -5365,6 +5575,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Young"
@@ -5404,6 +5615,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Target Dummy"
@@ -5425,6 +5637,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Breezy"
@@ -5450,6 +5663,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Officer"
@@ -5462,6 +5676,7 @@
       "codex_base_cost": 1.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Default"
@@ -5474,6 +5689,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia Underground",
     "maturities": [
       {
         "name": "MK1"
@@ -5492,6 +5708,7 @@
       "codex_base_cost": 200,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -5531,6 +5748,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -5543,6 +5761,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Alpha"
@@ -5583,6 +5802,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Boss"
@@ -5595,6 +5815,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Broodling"
@@ -5643,6 +5864,7 @@
       "codex_base_cost": 207.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "(FFA 5)"
@@ -5667,6 +5889,7 @@
       "codex_base_cost": 13.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "(FFA 5)"
@@ -5691,6 +5914,7 @@
       "codex_base_cost": 63.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "2"
@@ -5730,6 +5954,7 @@
       "codex_base_cost": 63.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -5767,12 +5992,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -5781,6 +6008,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -5793,6 +6021,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Procurer"
@@ -5853,6 +6082,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -5861,6 +6091,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mod Merp"
@@ -5903,6 +6134,7 @@
       "codex_base_cost": 63.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -5942,6 +6174,7 @@
       "codex_base_cost": 63.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "2"
@@ -5981,6 +6214,7 @@
       "codex_base_cost": 71.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Scout"
@@ -6023,6 +6257,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Adult"
@@ -6062,6 +6297,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Strong"
@@ -6092,6 +6328,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Brave"
@@ -6120,6 +6357,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -6128,6 +6366,7 @@
       "codex_base_cost": 225,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Puny"
@@ -6155,6 +6394,7 @@
       "codex_base_cost": 10,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -6182,6 +6422,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Gen 0"
@@ -6248,6 +6489,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
@@ -6256,6 +6498,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -6268,6 +6511,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "01"
@@ -6307,6 +6551,7 @@
       "codex_base_cost": 33.75,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 03"
@@ -6325,6 +6570,7 @@
       "codex_base_cost": 1.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Default"
@@ -6337,6 +6583,7 @@
       "codex_base_cost": 75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Umbranoid Guardian"
@@ -6379,12 +6626,14 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -6395,6 +6644,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -6403,6 +6653,7 @@
       "codex_base_cost": 40,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Dominant"
@@ -6448,6 +6699,7 @@
       "codex_base_cost": 40,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -6466,6 +6718,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
@@ -6474,6 +6727,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Mature"
@@ -6490,6 +6744,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -6498,6 +6753,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -6531,6 +6787,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "5"
@@ -6570,6 +6827,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "7"
@@ -6609,6 +6867,7 @@
       "codex_base_cost": 250,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "7"
@@ -6648,6 +6907,7 @@
       "codex_base_cost": 40,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -6660,6 +6920,7 @@
       "codex_base_cost": 80,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -6697,60 +6958,70 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -6759,6 +7030,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Alpha"
@@ -6801,6 +7073,7 @@
       "codex_base_cost": 20,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Leader"
@@ -6838,6 +7111,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -6886,6 +7160,7 @@
       "codex_base_cost": 23.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -6923,6 +7198,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "God L43"
@@ -6972,6 +7248,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -6982,6 +7259,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Berserker"
@@ -7021,6 +7299,7 @@
       "codex_base_cost": 63.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Ascended Overlord"
@@ -7087,6 +7366,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -7099,6 +7379,7 @@
       "codex_base_cost": 51.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7107,6 +7388,7 @@
       "codex_base_cost": 287.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -7140,6 +7422,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -7148,6 +7431,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -7160,6 +7444,7 @@
       "codex_base_cost": 52.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -7199,6 +7484,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -7238,6 +7524,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -7275,6 +7562,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -7283,6 +7571,7 @@
       "codex_base_cost": 115,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -7322,6 +7611,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -7330,6 +7620,7 @@
       "codex_base_cost": 120,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Stalker"
@@ -7366,6 +7657,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -7378,6 +7670,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Rakta"
@@ -7411,6 +7704,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Rakta"
@@ -7441,6 +7735,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Primordial"
@@ -7474,6 +7769,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -7482,6 +7778,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "IFN Officer Cadet"
@@ -7500,6 +7797,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -7508,6 +7806,7 @@
       "codex_base_cost": 86.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Inceptus"
@@ -7544,6 +7843,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -7556,6 +7856,7 @@
       "codex_base_cost": 375,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -7568,6 +7869,7 @@
       "codex_base_cost": 11.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Stalker"
@@ -7595,6 +7897,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Weak"
@@ -7634,6 +7937,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -7646,6 +7950,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -7685,6 +7990,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -7697,6 +8003,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -7705,6 +8012,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Broodling"
@@ -7781,6 +8089,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Stalker"
@@ -7823,6 +8132,7 @@
       "codex_base_cost": 56.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -7862,6 +8172,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -7870,6 +8181,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Weak"
@@ -7892,12 +8204,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L13"
@@ -7925,6 +8239,7 @@
       "codex_base_cost": 700,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7933,6 +8248,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7941,6 +8257,7 @@
       "codex_base_cost": 60,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7949,6 +8266,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7957,6 +8275,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7965,6 +8284,7 @@
       "codex_base_cost": 115,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7973,6 +8293,7 @@
       "codex_base_cost": 56.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7981,6 +8302,7 @@
       "codex_base_cost": 101.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7989,6 +8311,7 @@
       "codex_base_cost": 226.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -7997,6 +8320,7 @@
       "codex_base_cost": 51.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -8005,6 +8329,7 @@
       "codex_base_cost": 51.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -8013,6 +8338,7 @@
       "codex_base_cost": 500,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -8021,6 +8347,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -8029,6 +8356,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Puny"
@@ -8071,6 +8399,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Prowler"
@@ -8110,6 +8439,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -8129,6 +8459,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old"
@@ -8168,6 +8499,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia Moon",
     "maturities": [
       {
         "name": "Young"
@@ -8207,6 +8539,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Vandal"
@@ -8246,6 +8579,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Jumbo"
@@ -8285,6 +8619,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Rogue"
@@ -8369,6 +8704,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -8377,6 +8713,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -8385,6 +8722,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -8424,6 +8762,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Villain"
@@ -8463,6 +8802,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Stalker"
@@ -8505,6 +8845,7 @@
       "codex_base_cost": 431.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -8544,6 +8885,7 @@
       "codex_base_cost": 431.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -8583,6 +8925,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -8622,6 +8965,7 @@
       "codex_base_cost": 115,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -8661,6 +9005,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old"
@@ -8700,6 +9045,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -8712,6 +9058,7 @@
       "codex_base_cost": 1.875,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Ancient"
@@ -8724,6 +9071,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "King"
@@ -8751,6 +9099,7 @@
       "codex_base_cost": 200,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -8794,6 +9143,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -8804,6 +9154,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Puny"
@@ -8814,6 +9165,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -8826,6 +9178,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -8865,6 +9218,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Guardian"
@@ -8904,6 +9258,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Provider"
@@ -8943,6 +9298,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Mature"
@@ -8980,6 +9336,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -8988,6 +9345,7 @@
       "codex_base_cost": 233.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old"
@@ -9004,12 +9362,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Boatswain"
@@ -9071,6 +9431,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L3"
@@ -9083,6 +9444,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Prowler"
@@ -9122,6 +9484,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -9153,6 +9516,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "King"
@@ -9201,6 +9565,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Puny"
@@ -9213,6 +9578,7 @@
       "codex_base_cost": 233.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Pup"
@@ -9240,6 +9606,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Meekling"
@@ -9258,6 +9625,7 @@
       "codex_base_cost": 120,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -9297,6 +9665,7 @@
       "codex_base_cost": 50,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Weak"
@@ -9351,6 +9720,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Hunter"
@@ -9384,6 +9754,7 @@
       "codex_base_cost": 61.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Outcast"
@@ -9421,30 +9792,35 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "FreezeMaster"
@@ -9487,6 +9863,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Crystal Palace",
     "maturities": [
       {
         "name": "Dread The Allbrood"
@@ -9514,6 +9891,7 @@
       "codex_base_cost": 152.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Adept"
@@ -9553,6 +9931,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Outcast"
@@ -9616,6 +9995,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -9628,12 +10008,14 @@
       "codex_base_cost": 225,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Medic"
@@ -9653,6 +10035,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Soldier"
@@ -9672,6 +10055,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -9711,6 +10095,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -9719,12 +10104,14 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -9735,6 +10122,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L37"
@@ -9747,6 +10135,7 @@
       "codex_base_cost": 363.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -9786,6 +10175,7 @@
       "codex_base_cost": 363.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Divine"
@@ -9798,6 +10188,7 @@
       "codex_base_cost": 115,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -9806,6 +10197,7 @@
       "codex_base_cost": 56.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -9814,6 +10206,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -9841,6 +10234,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -9878,6 +10272,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -9890,6 +10285,7 @@
       "codex_base_cost": 61.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -9898,6 +10294,7 @@
       "codex_base_cost": 263.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -9916,6 +10313,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Juvenile Young"
@@ -9959,6 +10357,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Qaffaz Guardian"
@@ -9984,6 +10383,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -9996,6 +10396,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Default"
@@ -10008,6 +10409,7 @@
       "codex_base_cost": 11.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -10045,6 +10447,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -10057,6 +10460,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -10091,6 +10495,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Stalker"
@@ -10128,6 +10533,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Yarrijak Young"
@@ -10150,6 +10556,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Yarrijak Provider"
@@ -10169,6 +10576,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Ubo Provider"
@@ -10191,6 +10599,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Ubo Dominant"
@@ -10213,6 +10622,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Ubo Old Alpha"
@@ -10232,36 +10642,42 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -10270,6 +10686,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -10280,6 +10697,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -10292,6 +10710,7 @@
       "codex_base_cost": 73.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -10329,6 +10748,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -10368,6 +10788,7 @@
       "codex_base_cost": 207.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -10405,6 +10826,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -10417,6 +10839,7 @@
       "codex_base_cost": 276.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Prime"
@@ -10468,6 +10891,7 @@
       "codex_base_cost": 225,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -10480,6 +10904,7 @@
       "codex_base_cost": 226.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 04"
@@ -10528,6 +10953,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10543,6 +10969,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10558,6 +10985,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10568,6 +10996,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Jeef Qaher Median"
@@ -10592,6 +11021,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -10634,6 +11064,7 @@
       "codex_base_cost": 136.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Hardened"
@@ -10670,6 +11101,7 @@
       "codex_base_cost": 8.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Puny"
@@ -10718,6 +11150,7 @@
       "codex_base_cost": 8.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -10757,6 +11190,7 @@
       "codex_base_cost": 8.75,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10772,6 +11206,7 @@
       "codex_base_cost": 87.5,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10787,6 +11222,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -10802,6 +11238,7 @@
       "codex_base_cost": 60,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 03"
@@ -10826,6 +11263,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "SLE"
@@ -10869,6 +11307,7 @@
     "species": {
       "name": null
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "I"
@@ -10908,6 +11347,7 @@
       "codex_base_cost": 700,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -10962,6 +11402,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "100"
@@ -10995,6 +11436,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Hatchling"
@@ -11061,6 +11503,7 @@
       "codex_base_cost": 197.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Soldier"
@@ -11107,6 +11550,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -11117,6 +11561,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Diva"
@@ -11157,6 +11602,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -11169,6 +11615,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Swamp Creeper"
@@ -11191,6 +11638,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L23"
@@ -11215,6 +11663,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Default"
@@ -11227,6 +11676,7 @@
       "codex_base_cost": 97.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Young"
@@ -11260,6 +11710,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Gen 01"
@@ -11302,6 +11753,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -11341,6 +11793,7 @@
       "codex_base_cost": 437.5,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Point Defender"
@@ -11372,6 +11825,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -11380,6 +11834,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Young"
@@ -11402,6 +11857,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Freaky"
@@ -11442,6 +11898,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Mature"
@@ -11481,6 +11938,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Monria",
     "maturities": [
       {
         "name": "Inchoate the Shapeless"
@@ -11541,6 +11999,7 @@
       "codex_base_cost": 90,
       "codex_type": "Mob"
     },
+    "planet": "Monria",
     "maturities": [
       {
         "name": "Ashogglui The Incarnate"
@@ -11601,6 +12060,7 @@
       "codex_base_cost": 78.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia Moon",
     "maturities": [
       {
         "name": "Soldier"
@@ -11644,12 +12104,14 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -11658,6 +12120,7 @@
       "codex_base_cost": 181.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -11697,6 +12160,7 @@
       "codex_base_cost": 218.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Default"
@@ -11709,6 +12173,7 @@
       "codex_base_cost": 51.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -11763,6 +12228,7 @@
       "codex_base_cost": 181.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -11781,6 +12247,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -11793,6 +12260,7 @@
       "codex_base_cost": 230,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Perky Oxlet"
@@ -11832,6 +12300,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Sprouted"
@@ -11866,6 +12335,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Zeladoth (Small)"
@@ -11887,6 +12357,7 @@
       "codex_base_cost": 662.5,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -11918,6 +12389,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -11926,12 +12398,14 @@
       "codex_base_cost": 287.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -11940,6 +12414,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -11948,6 +12423,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -11956,6 +12432,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Young"
@@ -11996,6 +12473,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -12009,6 +12487,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -12028,6 +12507,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "4"
@@ -12055,6 +12535,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -12067,6 +12548,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Stalker"
@@ -12107,24 +12589,28 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Ancient Greece",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -12133,6 +12619,7 @@
       "codex_base_cost": 60,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -12141,6 +12628,7 @@
       "codex_base_cost": 115,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -12149,12 +12637,14 @@
       "codex_base_cost": 101.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -12163,6 +12653,7 @@
       "codex_base_cost": 500,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -12171,30 +12662,35 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L2"
@@ -12208,6 +12704,7 @@
     "species": {
       "name": null
     },
+    "planet": "Hunt The THING",
     "maturities": [
       {
         "name": "L7"
@@ -12286,6 +12783,7 @@
       "codex_base_cost": 46.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Master"
@@ -12337,6 +12835,7 @@
       "codex_base_cost": 46.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Adept"
@@ -12376,6 +12875,7 @@
       "codex_base_cost": 46.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Weakling"
@@ -12415,6 +12915,7 @@
       "codex_base_cost": 91.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Queen"
@@ -12452,6 +12953,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -12464,6 +12966,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -12503,6 +13006,7 @@
       "codex_base_cost": 625,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Default"
@@ -12513,6 +13017,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Scout"
@@ -12564,6 +13069,7 @@
       "codex_base_cost": 202.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Hardened"
@@ -12594,6 +13100,7 @@
       "codex_base_cost": null,
       "codex_type": "Asteroid"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "I"
@@ -12633,6 +13140,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -12645,6 +13153,7 @@
       "codex_base_cost": 46.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Thorifoid Inept Berserker"
@@ -12693,6 +13202,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": []
   },
   {
@@ -12701,6 +13211,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -12749,6 +13260,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Stalker"
@@ -12788,6 +13300,7 @@
       "codex_base_cost": 5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old"
@@ -12827,6 +13340,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Straggler"
@@ -12845,6 +13359,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Elite"
@@ -12890,6 +13405,7 @@
       "codex_base_cost": 115,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mulciber"
@@ -12935,6 +13451,7 @@
       "codex_base_cost": 25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 02"
@@ -12989,6 +13506,7 @@
       "codex_base_cost": 333.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -13028,6 +13546,7 @@
       "codex_base_cost": 7.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -13065,6 +13584,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -13077,6 +13597,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -13089,6 +13610,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 04"
@@ -13144,6 +13666,7 @@
     "species": {
       "name": null
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -13152,6 +13675,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Young"
@@ -13180,6 +13704,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -13190,6 +13715,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "New Born"
@@ -13232,6 +13758,7 @@
       "codex_base_cost": 100,
       "codex_type": "MobLooter"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Young"
@@ -13272,6 +13799,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -13284,6 +13812,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -13292,6 +13821,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -13300,42 +13830,49 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Arkadia Moon",
     "maturities": [
       {
         "name": "Young"
@@ -13370,18 +13907,21 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Default"
@@ -13392,6 +13932,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "God"
@@ -13438,6 +13979,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Stalker"
@@ -13475,6 +14017,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -13485,6 +14028,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -13495,6 +14039,7 @@
     "species": {
       "name": null
     },
+    "planet": "Hunt The THING",
     "maturities": [
       {
         "name": "L4"
@@ -13531,6 +14076,7 @@
       "codex_base_cost": 55,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -13568,6 +14114,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Boss"
@@ -13581,6 +14128,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -13593,6 +14141,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -13623,6 +14172,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Monria",
     "maturities": [
       {
         "name": "Vacuity of Perforation"
@@ -13695,6 +14245,7 @@
       "codex_base_cost": 375,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Provider"
@@ -13732,6 +14283,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "(FFA 1)"
@@ -13754,6 +14306,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -13762,6 +14315,7 @@
       "codex_base_cost": 75,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"
@@ -13774,6 +14328,7 @@
       "codex_base_cost": 131.25,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "The Tormented"
@@ -13835,6 +14390,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Intelligent"
@@ -13872,6 +14428,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Crazy"
@@ -13909,6 +14466,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Adult"
@@ -13946,6 +14504,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Crazy"
@@ -13983,6 +14542,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "5"
@@ -14022,12 +14582,14 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Zombie Kong 494"
@@ -14041,6 +14603,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Warrior"
@@ -14078,6 +14641,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "L3"
@@ -14093,6 +14657,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Adept"
@@ -14127,6 +14692,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -14135,6 +14701,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Astral"
@@ -14156,6 +14723,7 @@
       "codex_base_cost": 500,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "I3-TF Sentinel"
@@ -14246,6 +14814,7 @@
       "codex_base_cost": 387.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Elite Guard"
@@ -14261,6 +14830,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -14273,6 +14843,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Reinforced"
@@ -14286,6 +14857,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -14296,6 +14868,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -14335,6 +14908,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Mu"
@@ -14395,6 +14969,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Forager Watcher"
@@ -14432,6 +15007,7 @@
     "species": {
       "name": null
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 05"
@@ -14456,6 +15032,7 @@
       "codex_base_cost": 60,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -14507,6 +15084,7 @@
       "codex_base_cost": 81.25,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Mangler"
@@ -14546,6 +15124,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gatherer"
@@ -14621,6 +15200,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -14633,6 +15213,7 @@
       "codex_base_cost": 75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -14672,6 +15253,7 @@
       "codex_base_cost": 8.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -14720,6 +15302,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -14732,6 +15315,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -14771,6 +15355,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Default"
@@ -14783,6 +15368,7 @@
       "codex_base_cost": 37.125,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -14822,6 +15408,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -14837,6 +15424,7 @@
       "codex_base_cost": 126.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -14876,6 +15464,7 @@
       "codex_base_cost": 207.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Guardian"
@@ -14918,6 +15507,7 @@
       "codex_base_cost": 11.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -14955,6 +15545,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -14965,6 +15556,7 @@
     "species": {
       "name": null
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Young"
@@ -14993,6 +15585,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Single Maturity Mob"
@@ -15005,6 +15598,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Sickly"
@@ -15023,6 +15617,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -15038,6 +15633,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Feudal Umbranoid Bailiff"
@@ -15068,6 +15664,7 @@
       "codex_base_cost": 500,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -15110,6 +15707,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Gen 01"
@@ -15131,6 +15729,7 @@
       "codex_base_cost": 262.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Dominant"
@@ -15171,6 +15770,7 @@
     "species": {
       "name": null
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Gen 01"
@@ -15181,6 +15781,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Sub-Zero"
@@ -15409,6 +16010,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Feudal Umbranoid Vagabond"
@@ -15478,6 +16080,7 @@
       "codex_base_cost": 275,
       "codex_type": "MobLooter"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Decaybringer"
@@ -15514,6 +16117,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -15522,6 +16126,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -15530,6 +16135,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -15538,6 +16144,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": []
   },
   {
@@ -15546,6 +16153,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Guardian"
@@ -15583,6 +16191,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -15595,6 +16204,7 @@
       "codex_base_cost": 126.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -15634,6 +16244,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Strung Out"
@@ -15673,6 +16284,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Advisor"
@@ -15712,6 +16324,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -15749,6 +16362,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -15757,6 +16371,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Default"
@@ -15769,6 +16384,7 @@
       "codex_base_cost": 28.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -15808,6 +16424,7 @@
       "codex_base_cost": 28.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -15845,6 +16462,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -15855,6 +16473,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -15867,6 +16486,7 @@
       "codex_base_cost": 25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Gatherer"
@@ -15906,6 +16526,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Gen 02"
@@ -15921,6 +16542,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Defender"
@@ -15942,6 +16564,7 @@
       "codex_base_cost": 33.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -15996,6 +16619,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Elite"
@@ -16050,6 +16674,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Alpha"
@@ -16089,6 +16714,7 @@
       "codex_base_cost": 112.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Mature"
@@ -16104,6 +16730,7 @@
       "codex_base_cost": 25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 02"
@@ -16155,6 +16782,7 @@
       "codex_base_cost": 5000,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Yirut Khan"
@@ -16173,6 +16801,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Lord Ashker"
@@ -16188,6 +16817,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -16196,6 +16826,7 @@
       "codex_base_cost": 150,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "MK8"
@@ -16235,6 +16866,7 @@
       "codex_base_cost": 28.75,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -16250,6 +16882,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Old"
@@ -16283,6 +16916,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -16325,6 +16959,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16364,6 +16999,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Puny"
@@ -16392,6 +17028,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -16405,6 +17042,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16432,6 +17070,7 @@
       "codex_base_cost": 43.75,
       "codex_type": "Mob"
     },
+    "planet": "Monria",
     "maturities": [
       {
         "name": "Cohort"
@@ -16489,6 +17128,7 @@
       "codex_base_cost": 28.75,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Alpha"
@@ -16528,6 +17168,7 @@
       "codex_base_cost": 167.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -16567,6 +17208,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Puny"
@@ -16579,6 +17221,7 @@
       "codex_base_cost": 436.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Aspirant"
@@ -16618,6 +17261,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16655,6 +17299,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -16667,6 +17312,7 @@
       "codex_base_cost": 68.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Adult"
@@ -16692,6 +17338,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16716,6 +17363,7 @@
       "codex_base_cost": 1.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Alpha"
@@ -16758,6 +17406,7 @@
       "codex_base_cost": 263.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gakklorr"
@@ -16798,6 +17447,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Old"
@@ -16837,6 +17487,7 @@
       "codex_base_cost": 10,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16877,6 +17528,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -16889,6 +17541,7 @@
       "codex_base_cost": 116.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old"
@@ -16928,6 +17581,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -16970,6 +17624,7 @@
       "codex_base_cost": 81.25,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Old"
@@ -17007,6 +17662,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -17017,6 +17673,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -17027,60 +17684,70 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -17089,6 +17756,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Tooth Assassin"
@@ -17105,6 +17773,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Qaffaz Cuhof Dominant"
@@ -17124,6 +17793,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Mokhat Cuhof Dominant"
@@ -17143,6 +17813,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Khaffash Cuhof Master"
@@ -17159,6 +17830,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Qaffaz Cuhof Dominant"
@@ -17169,12 +17841,14 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "TabTab Cuhof Provider"
@@ -17188,6 +17862,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Freaky"
@@ -17230,6 +17905,7 @@
       "codex_base_cost": 300,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Devotee"
@@ -17278,6 +17954,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Frisky"
@@ -17320,6 +17997,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Fighter"
@@ -17359,6 +18037,7 @@
       "codex_base_cost": 7.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Alpha"
@@ -17401,6 +18080,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Juvenile"
@@ -17449,6 +18129,7 @@
       "codex_base_cost": 23.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -17488,6 +18169,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -17525,12 +18207,14 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -17541,6 +18225,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -17551,6 +18236,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -17561,6 +18247,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Clan Warlord Elite"
@@ -17607,6 +18294,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L1 Blue t-shirt, blue bandana, two pistols"
@@ -17676,6 +18364,7 @@
       "codex_base_cost": 121.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Raider Elite"
@@ -17722,6 +18411,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -17730,6 +18420,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Old Alpha"
@@ -17769,6 +18460,7 @@
       "codex_base_cost": 191.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Mature"
@@ -17808,6 +18500,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Prowler"
@@ -17847,6 +18540,7 @@
       "codex_base_cost": 23.75,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Mature"
@@ -17881,6 +18575,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -17889,6 +18584,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -17928,6 +18624,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Alpha"
@@ -17967,6 +18664,7 @@
       "codex_base_cost": 120,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -18004,6 +18702,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L31"
@@ -18044,6 +18743,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L3"
@@ -18060,6 +18760,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L54"
@@ -18073,6 +18774,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Young"
@@ -18112,6 +18814,7 @@
       "codex_base_cost": 202.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 04"
@@ -18154,6 +18857,7 @@
       "codex_base_cost": 250,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Red"
@@ -18169,6 +18873,7 @@
       "codex_base_cost": 30,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Old"
@@ -18208,6 +18913,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Basic"
@@ -18226,6 +18932,7 @@
       "codex_base_cost": 187.5,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Plains"
@@ -18244,6 +18951,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Ancient"
@@ -18272,6 +18980,7 @@
     "species": {
       "name": null
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "E1706"
@@ -18288,6 +18997,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L6"
@@ -18301,6 +19011,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Shock Trooper"
@@ -18323,6 +19034,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L9"
@@ -18344,6 +19056,7 @@
       "codex_base_cost": 100,
       "codex_type": "Mob"
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Provider"
@@ -18365,6 +19078,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Colonel"
@@ -18419,6 +19133,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "MK5"
@@ -18443,6 +19158,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "MK2"
@@ -18455,6 +19171,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "I"
@@ -18509,6 +19226,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -18548,6 +19266,7 @@
       "codex_base_cost": 2.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -18587,6 +19306,7 @@
       "codex_base_cost": 40,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -18626,6 +19346,7 @@
       "codex_base_cost": 82.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -18663,6 +19384,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L2 Red t-shirt, red bandana, 2 pistols,100 HP"
@@ -18724,6 +19446,7 @@
     "species": {
       "name": null
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Boatswain"
@@ -18763,6 +19486,7 @@
       "codex_base_cost": 25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 03"
@@ -18802,6 +19526,7 @@
       "codex_base_cost": 250,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -18817,6 +19542,7 @@
       "codex_base_cost": 48.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Noble"
@@ -18859,6 +19585,7 @@
       "codex_base_cost": 250,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Prowler"
@@ -18899,6 +19626,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -18909,6 +19637,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -18919,6 +19648,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
@@ -18927,6 +19657,7 @@
       "codex_base_cost": 10,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Gatherer"
@@ -18948,6 +19679,7 @@
       "codex_base_cost": 15,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -18988,6 +19720,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Default"
@@ -19000,6 +19733,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -19039,6 +19773,7 @@
       "codex_base_cost": 123.75,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Young"
@@ -19060,6 +19795,7 @@
       "codex_base_cost": 5,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Gen 01"
@@ -19075,6 +19811,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Gen 01"
@@ -19085,6 +19822,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Provider"
@@ -19133,6 +19871,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Toxic"
@@ -19193,6 +19932,7 @@
       "codex_base_cost": 3.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Provider"
@@ -19232,6 +19972,7 @@
       "codex_base_cost": 306.25,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Alpha"
@@ -19244,6 +19985,7 @@
       "codex_base_cost": 27.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Median"
@@ -19286,6 +20028,7 @@
       "codex_base_cost": 26.25,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Slug"
@@ -19325,6 +20068,7 @@
       "codex_base_cost": 137.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Young"
@@ -19362,6 +20106,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "A01"
@@ -19410,6 +20155,7 @@
       "codex_base_cost": 287.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Guardian"
@@ -19452,24 +20198,28 @@
       "codex_base_cost": 22.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": []
   },
   {
@@ -19478,6 +20228,7 @@
       "codex_base_cost": 162.5,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Hatchling"
@@ -19490,6 +20241,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -19574,6 +20326,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -19658,6 +20411,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -19740,6 +20494,7 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
@@ -19748,6 +20503,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "HELL",
     "maturities": [
       {
         "name": "Default"
@@ -19758,6 +20514,7 @@
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Mokhat Dominant"
@@ -19779,6 +20536,7 @@
       "codex_base_cost": 437.5,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Puny"
@@ -19803,12 +20561,14 @@
       "codex_base_cost": 500,
       "codex_type": "MobLooter"
     },
+    "planet": "Calypso",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
@@ -19817,6 +20577,7 @@
       "codex_base_cost": 262.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Mature"
@@ -19859,6 +20620,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Young"
@@ -19899,6 +20661,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L8"
@@ -19918,6 +20681,7 @@
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Default"
@@ -19930,6 +20694,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Divine"
@@ -19942,6 +20707,7 @@
       "codex_base_cost": 12.5,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Yatrithril"
@@ -20005,6 +20771,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Young"
@@ -20047,6 +20814,7 @@
       "codex_base_cost": 262.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Necrosis"
@@ -20089,6 +20857,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Provider"
@@ -20128,6 +20897,7 @@
       "codex_base_cost": 125,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Young"
@@ -20152,6 +20922,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Guardian"
@@ -20179,6 +20950,7 @@
       "codex_base_cost": 262.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Dominant"
@@ -20221,6 +20993,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "8"
@@ -20303,6 +21076,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L8"
@@ -20337,6 +21111,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Single Maturity Mob"
@@ -20349,6 +21124,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Provider"
@@ -20373,6 +21149,7 @@
       "codex_base_cost": 3.75,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Salvador"
@@ -20403,6 +21180,7 @@
       "codex_base_cost": 197.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia Moon",
     "maturities": [
       {
         "name": "Monstrosity Boss"
@@ -20472,6 +21250,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -20502,6 +21281,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Scout"
@@ -20539,6 +21319,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L2 White vest, baseball cap, two pistols"
@@ -20605,6 +21386,7 @@
       "codex_base_cost": 41.25,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Seer"
@@ -20642,6 +21424,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "4 Chains"
@@ -20730,36 +21513,42 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -20770,6 +21559,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "1"
@@ -20794,6 +21584,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia Underground",
     "maturities": [
       {
         "name": "MK1"
@@ -20812,6 +21603,7 @@
       "codex_base_cost": 62.5,
       "codex_type": "Mob"
     },
+    "planet": "Toulan",
     "maturities": [
       {
         "name": "Young"
@@ -20866,6 +21658,7 @@
       "codex_base_cost": 147.5,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Outcast"
@@ -20899,6 +21692,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Apprentice"
@@ -20917,6 +21711,7 @@
       "codex_base_cost": 170,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 04"
@@ -20959,6 +21754,7 @@
       "codex_base_cost": 80.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "01"
@@ -20998,6 +21794,7 @@
       "codex_base_cost": 73.75,
       "codex_type": "Mob"
     },
+    "planet": "ARIS",
     "maturities": [
       {
         "name": "Gen 01"
@@ -21040,6 +21837,7 @@
       "codex_base_cost": 36.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Mature"
@@ -21088,6 +21886,7 @@
       "codex_base_cost": 15,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Stalker"
@@ -21127,6 +21926,7 @@
       "codex_base_cost": 37.5,
       "codex_type": "Mob"
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -21139,6 +21939,7 @@
       "codex_base_cost": 172.5,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -21154,6 +21955,7 @@
       "codex_base_cost": 250,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Young"
@@ -21169,6 +21971,7 @@
       "codex_base_cost": null,
       "codex_type": "Mob"
     },
+    "planet": "Setesh",
     "maturities": [
       {
         "name": "Hatchling"
@@ -21182,6 +21985,7 @@
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Default"
@@ -21194,6 +21998,7 @@
       "codex_base_cost": 70,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Old"
@@ -21233,6 +22038,7 @@
       "codex_base_cost": 6.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -21272,6 +22078,7 @@
       "codex_base_cost": 275,
       "codex_type": "Mob"
     },
+    "planet": "DSEC9",
     "maturities": [
       {
         "name": "Hatchling"
@@ -21335,6 +22142,7 @@
       "codex_base_cost": 237.5,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Alpha"
@@ -21384,6 +22192,7 @@
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Default"
@@ -21394,6 +22203,7 @@
     "species": {
       "name": null
     },
+    "planet": "Secret Island",
     "maturities": [
       {
         "name": "Default"
@@ -21404,6 +22214,7 @@
     "species": {
       "name": null
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "L15"
@@ -21426,6 +22237,7 @@
     "species": {
       "name": null
     },
+    "planet": "Next Island",
     "maturities": [
       {
         "name": "Default"
@@ -21436,24 +22248,28 @@
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "HELL",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Toulan",
     "maturities": []
   },
   {
     "species": {
       "name": null
     },
+    "planet": "Crystal Palace",
     "maturities": []
   },
   {
@@ -21462,6 +22278,7 @@
       "codex_base_cost": 18.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Puny"
@@ -21507,6 +22324,7 @@
       "codex_base_cost": 22.5,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Provider"
@@ -21549,6 +22367,7 @@
       "codex_base_cost": 23.75,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Young"
@@ -21588,6 +22407,7 @@
       "codex_base_cost": 31.25,
       "codex_type": "MobLooter"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Gigantic Scuttler"
@@ -21624,6 +22444,7 @@
       "codex_base_cost": 50,
       "codex_type": "Mob"
     },
+    "planet": "Cyrene",
     "maturities": [
       {
         "name": "Guardian"
@@ -21684,6 +22505,7 @@
       "codex_base_cost": 46.25,
       "codex_type": "Mob"
     },
+    "planet": "Calypso",
     "maturities": [
       {
         "name": "Herder"
@@ -21721,6 +22543,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "L3"
@@ -21739,6 +22562,7 @@
       "codex_base_cost": 16.25,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Provider"
@@ -21776,6 +22600,7 @@
     "species": {
       "name": null
     },
+    "planet": "Space",
     "maturities": [
       {
         "name": "Default"
@@ -21788,6 +22613,7 @@
       "codex_base_cost": 175,
       "codex_type": "Mob"
     },
+    "planet": "Arkadia",
     "maturities": [
       {
         "name": "Old"
@@ -21825,6 +22651,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Freaky"
@@ -21862,6 +22689,7 @@
     "species": {
       "name": null
     },
+    "planet": "ROCKtropia",
     "maturities": [
       {
         "name": "Hell Key I"
@@ -21878,6 +22706,7 @@
     "species": {
       "name": null
     },
+    "planet": "Ancient Greece",
     "maturities": [
       {
         "name": "Default"

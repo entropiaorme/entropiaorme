@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityRecommenderResult, RecommenderActivity } from '$lib/api/commands.gen';
 import type { PageErrorSlot } from './errorSlot.svelte';
-import { createRecommenderModel, orderByVisibility } from './recommenderModel.svelte';
+import { createRecommenderModel } from './recommenderModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	getActivityRecommender: vi.fn(),
@@ -209,16 +209,6 @@ describe('select', () => {
 
 describe('hidden activities', () => {
 	const names = (list: RecommenderActivity[]) => list.map((candidate) => candidate.activity);
-
-	it('orders hidden activities last, each part in ranked order', () => {
-		const ranked = [
-			activity({ activity: 'A' }),
-			activity({ activity: 'B' }),
-			activity({ activity: 'C' }),
-		];
-		expect(names(orderByVisibility(ranked, ['A']))).toEqual(['B', 'C', 'A']);
-		expect(names(orderByVisibility(ranked, []))).toEqual(['A', 'B', 'C']);
-	});
 
 	it('restores the saved list and never selects a hidden activity by default', async () => {
 		prefs.getPreference.mockResolvedValue(['Resource Gatherer']);

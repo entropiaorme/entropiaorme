@@ -478,6 +478,33 @@ export interface CodexMetaClaimResult {
 }
 
 /**
+ * One species' next meta reward: the breakpoint it reaches next, the
+ * codex cost of the ranks left before it, and that cost as estimated PED
+ * cycled (a planning estimate, never an accounting figure). `planets` is
+ * sorted and empty when the catalogue names none.
+ */
+export interface CodexMetaTarget {
+	speciesName: string;
+	planets: string[];
+	currentRank: number;
+	targetRank: number;
+	cost: number;
+	estimatedPed: number;
+}
+
+/**
+ * The meta-target ranking: every species short of rank 25, cheapest next
+ * meta first, with the metas the recorded ranks have earned against the
+ * cap and the rate the PED estimates use.
+ */
+export interface CodexMetaTargets {
+	metasEarned: number;
+	metaCap: number;
+	pedPerCost: number;
+	targets: CodexMetaTarget[];
+}
+
+/**
  * One requested profession's share of a skill option's contribution
  * (professions with no weight on the skill are omitted).
  */
@@ -3916,6 +3943,10 @@ export async function codexRecommend(speciesName: string, rank: number, professi
 
 export async function codexMetaAttributes(): Promise<CodexMetaAttribute[]> {
 	return invokeCommand('codex_meta_attributes', {});
+}
+
+export async function codexMetaTargets(): Promise<CodexMetaTargets> {
+	return invokeCommand('codex_meta_targets', {});
 }
 
 export async function codexCalibrate(speciesName: string, rank: number): Promise<CodexCalibrateResult> {

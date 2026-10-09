@@ -33,8 +33,9 @@ use serde_json::Value;
 
 use crate::clock::Clock;
 use crate::codex_categories::{
-    build_rank_breakdown, get_category_for_rank, get_rank_cost, get_reward_ped, is_cat4_rank,
-    mastery_reward_ped, skills_for_category, RankBreakdown, CAT4_SKILLS, MASTERY_CATEGORIES,
+    build_rank_breakdown, cost_between_ranks, get_category_for_rank, get_rank_cost, get_reward_ped,
+    is_cat4_rank, mastery_reward_ped, metas_earned, next_meta_rank, skills_for_category,
+    RankBreakdown, CAT4_SKILLS, ESTIMATED_PED_PER_CODEX_COST, MASTERY_CATEGORIES, META_CAP,
 };
 use crate::db::Db;
 use crate::game_data_store::GameDataStore;
@@ -162,6 +163,35 @@ pub struct MasteryClaimEntry {
 pub struct MetaAttribute {
     pub name: &'static str,
     pub current_level: Option<f64>,
+}
+
+/// One species' next meta reward: the breakpoint it reaches next, the
+/// codex cost of the ranks left before it, and that cost as estimated
+/// PED cycled. `planets` lists every planet the species is catalogued
+/// on (sorted; empty when the catalogue names none).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaTarget {
+    pub species_name: String,
+    pub planets: Vec<String>,
+    pub current_rank: i64,
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+}
+
+/// The meta-target ranking: every species short of rank 25 ordered by
+/// the cost of its next meta reward (cheapest first, then by name), plus
+/// the metas the recorded ranks have earned against the cap. Earned
+/// metas derive from ranks, not from logged meta claims, because a meta
+/// is earned at its breakpoint whether or not its claim was recorded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaTargets {
+    pub metas_earned: i64,
+    pub meta_cap: i64,
+    pub ped_per_cost: f64,
+    pub targets: Vec<MetaTarget>,
 }
 
 /// The record a rank claim (or its reversal) reports.
@@ -349,6 +379,81 @@ impl CodexService {
                 .then_with(|| a.name.cmp(&b.name))
         });
         Ok(result)
+    }
+
+    /// Every species short of rank 25, ranked by the codex cost of its
+    /// next meta reward. A species' base cost comes from its first
+    /// catalogue entry carrying one (the listing's rule); its planets
+    /// gather across all of its entries, since one species can live on
+    /// several planets.
+    pub async fn get_meta_targets(&self) -> Result<MetaTargets, CodexError> {
+        let mut base_costs: Vec<(String, f64)> = Vec::new();
+        let mut planets: HashMap<String, Vec<String>> = HashMap::new();
+        for mob in self.game_data.get_entities("mobs") {
+            let Some(species) = species_object(mob) else {
+                continue;
+            };
+            let name = species.get("name").and_then(Value::as_str).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let species_planets = planets.entry(name.to_string()).or_default();
+            if let Some(planet) = mob.get("planet").and_then(Value::as_str) {
+                if !species_planets.iter().any(|known| known == planet) {
+                    species_planets.push(planet.to_string());
+                }
+            }
+            if let Some(base_cost) = base_cost_of(species) {
+                if !base_costs.iter().any(|(known, _)| known == name) {
+                    base_costs.push((name.to_string(), base_cost));
+                }
+            }
+        }
+
+        let ranks: HashMap<String, i64> = self
+            .db
+            .with_reader(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT species_name, current_rank FROM codex_progress")?;
+                let mut rows = stmt.query([])?;
+                let mut ranks = HashMap::new();
+                while let Some(row) = rows.next()? {
+                    ranks.insert(row.get::<_, String>(0)?, row.get::<_, i64>(1)?);
+                }
+                Ok(ranks)
+            })
+            .await?;
+
+        let metas_earned = ranks.values().map(|&rank| metas_earned(rank)).sum();
+        let mut targets: Vec<MetaTarget> = base_costs
+            .into_iter()
+            .filter_map(|(name, base_cost)| {
+                let current_rank = ranks.get(&name).copied().unwrap_or(0).clamp(0, 25);
+                let target_rank = next_meta_rank(current_rank)?;
+                let cost = cost_between_ranks(current_rank, target_rank, base_cost);
+                let mut species_planets = planets.remove(&name).unwrap_or_default();
+                species_planets.sort();
+                Some(MetaTarget {
+                    species_name: name,
+                    planets: species_planets,
+                    current_rank,
+                    target_rank,
+                    cost: round_half_even(cost, 2),
+                    estimated_ped: round_half_even(cost * ESTIMATED_PED_PER_CODEX_COST, 2),
+                })
+            })
+            .collect();
+        targets.sort_by(|a, b| {
+            a.cost
+                .total_cmp(&b.cost)
+                .then_with(|| a.species_name.cmp(&b.species_name))
+        });
+        Ok(MetaTargets {
+            metas_earned,
+            meta_cap: META_CAP,
+            ped_per_cost: ESTIMATED_PED_PER_CODEX_COST,
+            targets,
+        })
     }
 
     /// The 25-rank breakdown for a species, cross-referenced with
@@ -1289,14 +1394,15 @@ mod tests {
         std::fs::write(
             dir.join("mobs.json"),
             serde_json::to_string(&json!([
-                {"name": "Mob A", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
-                {"name": "Mob A Variant", "species": {"name": "Boar", "codex_base_cost": 99.0, "codex_type": "Mob"}},
-                {"name": "Looter", "species": {"name": "Looter Bird", "codex_base_cost": 10.0, "codex_type": "MobLooter"}},
+                {"name": "Mob A", "planet": "Calypso", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
+                {"name": "Mob A Variant", "planet": "Arkadia", "species": {"name": "Boar", "codex_base_cost": 99.0, "codex_type": "Mob"}},
+                {"name": "Mob A Twin", "planet": "Calypso", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
+                {"name": "Looter", "planet": "Calypso", "species": {"name": "Looter Bird", "codex_base_cost": 10.0, "codex_type": "MobLooter"}},
                 {"name": "Nameless", "species": {"name": "", "codex_base_cost": 5.0}},
                 {"name": "NoSpecies"},
                 {"name": "EmptySpecies", "species": {}},
                 {"name": "Costless First", "species": {"name": "Ghost", "codex_base_cost": null}},
-                {"name": "Costless Second", "species": {"name": "Ghost", "codex_base_cost": 7.0}},
+                {"name": "Costless Second", "planet": "Cyrene", "species": {"name": "Ghost", "codex_base_cost": 7.0}},
             ]))
             .unwrap(),
         )
@@ -1374,6 +1480,68 @@ mod tests {
             CodexError::Invalid(message) => message,
             other => panic!("expected a validation error, got: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn meta_targets_rank_unranked_species_by_first_band_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _db) = service(dir.path()).await;
+
+        // Every species is unranked, so each next meta is rank 5 at
+        // 16 x base: Ghost 112, Looter Bird 160, Boar 600 (its first
+        // costed entry). Planets gather across a species' entries.
+        let targets = to_json(svc.get_meta_targets().await.unwrap());
+        assert_eq!(
+            targets,
+            json!({
+                "metasEarned": 0,
+                "metaCap": 750,
+                "pedPerCost": 1.5,
+                "targets": [
+                    {"speciesName": "Ghost", "planets": ["Cyrene"], "currentRank": 0,
+                     "targetRank": 5, "cost": 112.0, "estimatedPed": 168.0},
+                    {"speciesName": "Looter Bird", "planets": ["Calypso"], "currentRank": 0,
+                     "targetRank": 5, "cost": 160.0, "estimatedPed": 240.0},
+                    {"speciesName": "Boar", "planets": ["Arkadia", "Calypso"], "currentRank": 0,
+                     "targetRank": 5, "cost": 600.0, "estimatedPed": 900.0},
+                ],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn meta_targets_follow_recorded_ranks_and_count_earned_metas() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _db) = service(dir.path()).await;
+        svc.calibrate("Boar", 25).await.unwrap();
+        svc.calibrate("Looter Bird", 5).await.unwrap();
+        svc.calibrate("Ghost", 12).await.unwrap();
+        // A ranked species the catalogue does not carry still earned
+        // its metas.
+        svc.calibrate("Retired Species", 10).await.unwrap();
+
+        let result = svc.get_meta_targets().await.unwrap();
+        // 5 (Boar) + 1 (Looter Bird) + 2 (Ghost) + 2 (Retired Species).
+        assert_eq!(result.metas_earned, 10);
+        let ranked: Vec<(&str, i64, i64, f64)> = result
+            .targets
+            .iter()
+            .map(|t| {
+                (
+                    t.species_name.as_str(),
+                    t.current_rank,
+                    t.target_rank,
+                    t.cost,
+                )
+            })
+            .collect();
+        // Boar is complete and drops out. Ghost needs ranks 13-15
+        // (24 + 28 + 32 = 84 x 7 = 588); Looter Bird, on a breakpoint,
+        // needs ranks 6-10 (60 x 10 = 600).
+        assert_eq!(
+            ranked,
+            vec![("Ghost", 12, 15, 588.0), ("Looter Bird", 5, 10, 600.0)]
+        );
     }
 
     #[tokio::test]

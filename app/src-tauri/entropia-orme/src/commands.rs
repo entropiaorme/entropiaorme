@@ -28,7 +28,8 @@ use eo_api::character::{
 };
 use eo_api::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
-    CodexMetaClaimResult, CodexRecommendTarget, CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
+    CodexMetaClaimResult, CodexMetaTargets, CodexRecommendTarget, CodexSkillOption, CodexSpecies,
+    CodexSpeciesRanks,
 };
 use eo_api::consumables::{ConsumableDose, ConsumableDoses};
 use eo_api::dev::{
@@ -488,6 +489,11 @@ pub async fn codex_meta_attributes(
     app: tauri::AppHandle,
 ) -> Result<Vec<CodexMetaAttribute>, ApiError> {
     facade(&app)?.codex_meta_attributes().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn codex_meta_targets(app: tauri::AppHandle) -> Result<CodexMetaTargets, ApiError> {
+    facade(&app)?.codex_meta_targets().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

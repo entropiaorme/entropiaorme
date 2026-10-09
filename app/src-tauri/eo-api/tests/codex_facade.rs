@@ -1,6 +1,7 @@
 //! Behavioural pins for the codex family over the typed facade: the
 //! reads over an empty catalogue (the species listing, the fixed
-//! meta-attribute set, a missing-species recommendation), the
+//! meta-attribute set, a missing-species recommendation, the meta-target
+//! ranking and its earned tally), the
 //! path-parameter not-found, the recommend rank bound, and the write
 //! ladder (calibrate's success and out-of-domain refusal, the claim /
 //! unclaim / meta-claim error mapping, a meta-claim success).
@@ -208,4 +209,24 @@ async fn the_mastery_options_are_catalogue_independent() {
     assert_eq!(reward("Aim"), 25.0);
     assert_eq!(reward("Melee Combat"), 15.625);
     assert_eq!(reward("Evade"), 7.8125);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn meta_targets_count_earned_metas_from_recorded_ranks() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = codex_api(dir.path()).await;
+
+    let empty = api.codex_meta_targets().await.unwrap();
+    assert_eq!(empty.metas_earned, 0);
+    assert_eq!(empty.meta_cap, 750);
+    assert!(empty.targets.is_empty());
+
+    // Ranks earn their metas even for a species the (empty) catalogue
+    // cannot rank: 14 passes two breakpoints, 25 passes all five.
+    api.codex_calibrate("Atrox", 14).await.unwrap();
+    api.codex_calibrate("Daikiba", 25).await.unwrap();
+    let ranked = api.codex_meta_targets().await.unwrap();
+    assert_eq!(ranked.metas_earned, 7);
+    assert!(ranked.targets.is_empty());
+    assert!(ranked.ped_per_cost > 0.0);
 }

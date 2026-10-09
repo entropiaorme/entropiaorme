@@ -424,6 +424,7 @@ describe('codex wrappers dispatch typed commands', () => {
 			{ professions: [], target: 'profession' },
 		],
 		['getCodexMetaAttributes', () => api.getCodexMetaAttributes(), 'codex_meta_attributes', {}],
+		['getCodexMetaTargets', () => api.getCodexMetaTargets(), 'codex_meta_targets', {}],
 		[
 			'claimCodexMeta',
 			() => api.claimCodexMeta('Strength'),

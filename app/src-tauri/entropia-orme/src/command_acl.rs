@@ -59,6 +59,7 @@ macro_rules! app_command_surface {
             codex_species_ranks,
             codex_recommend,
             codex_meta_attributes,
+            codex_meta_targets,
             codex_calibrate,
             codex_claim,
             codex_unclaim,

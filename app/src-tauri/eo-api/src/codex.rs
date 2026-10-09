@@ -1,5 +1,6 @@
 //! The codex family: the species listing and per-species rank breakdown,
-//! the skill-recommendation read, the six meta attributes, and the
+//! the skill-recommendation read, the six meta attributes, the
+//! meta-target ranking, and the
 //! claim / unclaim / calibrate / meta-claim writes.
 //!
 //! The computation stays in `eo_services::codex::CodexService`, which
@@ -148,6 +149,33 @@ pub struct CodexMetaAttribute {
     pub current_level: Nullable<f64>,
 }
 
+/// One species' next meta reward: the breakpoint it reaches next, the
+/// codex cost of the ranks left before it, and that cost as estimated PED
+/// cycled (a planning estimate, never an accounting figure). `planets` is
+/// sorted and empty when the catalogue names none.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaTarget {
+    pub species_name: String,
+    pub planets: Vec<String>,
+    pub current_rank: i64,
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+}
+
+/// The meta-target ranking: every species short of rank 25, cheapest next
+/// meta first, with the metas the recorded ranks have earned against the
+/// cap and the rate the PED estimates use.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaTargets {
+    pub metas_earned: i64,
+    pub meta_cap: i64,
+    pub ped_per_cost: f64,
+    pub targets: Vec<CodexMetaTarget>,
+}
+
 /// The record a rank claim (or its reversal) returns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -258,6 +286,33 @@ impl Api {
                 current_level: attribute.current_level.into(),
             })
             .collect())
+    }
+
+    /// Every species short of rank 25, ranked by the codex cost of its
+    /// next meta reward, with the earned-meta tally.
+    pub async fn codex_meta_targets(&self) -> Result<CodexMetaTargets, ApiError> {
+        let result = self
+            .codex
+            .get_meta_targets()
+            .await
+            .map_err(ApiError::internal("codex meta targets read"))?;
+        Ok(CodexMetaTargets {
+            metas_earned: result.metas_earned,
+            meta_cap: result.meta_cap,
+            ped_per_cost: result.ped_per_cost,
+            targets: result
+                .targets
+                .into_iter()
+                .map(|target| CodexMetaTarget {
+                    species_name: target.species_name,
+                    planets: target.planets,
+                    current_rank: target.current_rank,
+                    target_rank: target.target_rank,
+                    cost: target.cost,
+                    estimated_ped: target.estimated_ped,
+                })
+                .collect(),
+        })
     }
 
     /// Set a species' codex rank directly (manual calibration, no side

@@ -3,6 +3,7 @@
 	import { listen } from '@tauri-apps/api/event';
 	import { CONSUMABLES_TOPIC } from '$lib/api';
 	import { Button, ErrorNotice, Tabs } from '$lib/components';
+	import CompareTab from '$lib/features/equipment/compare/CompareTab.svelte';
 	import EquipmentFormModal from '$lib/features/equipment/EquipmentFormModal.svelte';
 	import EquipmentListView from '$lib/features/equipment/EquipmentListView.svelte';
 	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
@@ -19,6 +20,7 @@
 
 	const tabs = $derived([
 		{ id: 'library', label: 'Library' },
+		{ id: 'compare', label: 'Compare' },
 		...(inDevelopment.visible ? [{ id: 'protection', label: 'Armour' }] : []),
 		{ id: 'effects', label: 'Effects' },
 		{ id: 'hotbar', label: 'Hotbar' },
@@ -117,6 +119,8 @@
 			reloadSpeed={model.reloadSpeed}
 			onchange={(settings) => model.effectsSaved(settings)}
 		/>
+	{:else if activeTab === 'compare'}
+		<CompareTab />
 	{:else if activeTab === 'protection' && inDevelopment.visible}
 		<ProtectionTab model={protection} />
 	{:else}

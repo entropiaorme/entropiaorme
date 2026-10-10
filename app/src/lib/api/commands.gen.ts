@@ -601,6 +601,47 @@ export interface CompactResult {
 }
 
 /**
+ * One compared setup.
+ */
+export interface ComparedSetup {
+	/** Its position in the request. */
+	index: number;
+	/** The weapon's name. */
+	name: string;
+	components: SetupComponentView[];
+	economics: SetupEconomicsView | null;
+	unmodelled: UnmodelledReason | null;
+	/** Kill figures at each sampled HP; empty when the setup cannot be priced. */
+	curve: KillFiguresView[];
+}
+
+/**
+ * The modelling assumptions every figure is estimated under, for the
+ * disclosure beside them.
+ */
+export interface ComparisonAssumptionsView {
+	modelVersion: string;
+	looterSource: ExpectedLooterSource;
+	looterLevel: number;
+	/** The share of uses that land. */
+	hitRate: number;
+	/** The lowest roll as a share of max damage. */
+	damageFloor: number;
+	criticalChance: number;
+	/** A critical multiplies the rolled damage by this. */
+	criticalMultiplier: number;
+}
+
+/**
+ * One catalogue item in a setup.
+ */
+export interface ComponentPick {
+	catalogId: string;
+	/** The markup a limited item is bought at, percent (100 is TT; absent reads as 100). Ignored for an unlimited item, which runs at TT. */
+	markupPercent?: number | null;
+}
+
+/**
  * GET stats: current HP and the top five professions.
  */
 export interface ComputedCharacterStats {
@@ -1467,6 +1508,17 @@ export interface InventorySellResult {
 }
 
 /**
+ * What a setup costs to kill a mob at one HP.
+ */
+export interface KillFiguresView {
+	hp: number;
+	uses: number;
+	lossPec: number;
+	cycledPec: number;
+	seconds: number | null;
+}
+
+/**
  * A ledger-entry create payload.
  */
 export interface LedgerEntryInput {
@@ -1570,6 +1622,18 @@ export interface LifetimeStats {
 	durationSeconds: number;
 	/** Shots across these instances recorded without a price: the cycled figure (and everything derived from it) leaves them out. */
 	unpricedShots: number;
+}
+
+/**
+ * The comparison.
+ */
+export interface LoadoutComparison {
+	assumptions: ComparisonAssumptionsView;
+	/** The highest mob HP the curves reach. */
+	hpMax: number;
+	setups: ComparedSetup[];
+	/** The cheapest priced setup across the curve, lowest HP first; empty unless at least two setups can be priced. */
+	winners: WinnerSegmentView[];
 }
 
 /**
@@ -3083,6 +3147,56 @@ export interface SettingsPatch {
 }
 
 /**
+ * The parts a setup is built from.
+ */
+export type SetupComponentRole = 'weapon' | 'amplifier' | 'absorber' | 'implant';
+
+/**
+ * One part of a setup as priced.
+ */
+export interface SetupComponentView {
+	role: SetupComponentRole;
+	catalogId: string;
+	name: string;
+	isLimited: boolean;
+	/** The markup it runs at: the given one for a limited item, 100 for an unlimited one. */
+	markupPercent: number;
+}
+
+/**
+ * Per-use economics, PEC per use unless stated.
+ */
+export interface SetupEconomicsView {
+	costPerUsePec: number;
+	lossPerUsePec: number;
+	/** Limited-item markup the weapon and amplifier consume per use. */
+	consumedPremiumPec: number;
+	/** Absorber and implant decay: cost with no modelled return. */
+	outsideModelPec: number;
+	effectiveEfficiency: EquipmentEffectiveEfficiency | null;
+	weightedEfficiencyPct: number | null;
+	maxDamage: number;
+	/** Amplifier damage above half the weapon's: paid for, never dealt. */
+	ampDamageWasted: number;
+	damagePerPec: number;
+	/** Expected loss per HP removed: the per-HP ranking metric. */
+	lossPerHpPec: number;
+	usesPerMinute: number | null;
+	damagePerSecond: number | null;
+}
+
+/**
+ * A setup: a catalogue weapon with an optional amplifier, absorber, and
+ * implant.
+ */
+export interface SetupPick {
+	weapon: ComponentPick;
+	amplifier?: ComponentPick | null;
+	absorber?: ComponentPick | null;
+	implant?: ComponentPick | null;
+}
+
+/**
  * Deliberate Shrapnel conversion at the game's fixed 100:101 ratio.
  */
 export interface ShrapnelConversionInput {
@@ -3462,6 +3576,11 @@ export interface UndoResult {
 }
 
 /**
+ * Why a setup has no figures.
+ */
+export type UnmodelledReason = 'no_damage' | 'no_cost' | 'missing_efficiency';
+
+/**
  * Recorded hits no protection cost covers yet.
  */
 export interface UnrecordedProtection {
@@ -3727,6 +3846,17 @@ export interface WeaponShotPage {
 	total: number;
 }
 
+/**
+ * A stretch of HP where one setup is the cheapest per kill; consecutive
+ * segments meet where the cheapest setup changes.
+ */
+export interface WinnerSegmentView {
+	/** The setup's position in the request. */
+	index: number;
+	fromHp: number;
+	toHp: number;
+}
+
 export async function equipmentSearch(q: string, kind: SearchKind): Promise<EquipmentSearchHit[]> {
 	return invokeCommand('equipment_search', { q, kind });
 }
@@ -3749,6 +3879,10 @@ export async function equipmentDelete(itemId: number): Promise<void> {
 
 export async function equipmentDetail(itemId: number): Promise<EquipmentDetail> {
 	return invokeCommand('equipment_detail', { item_id: itemId });
+}
+
+export async function loadoutCompare(setups: SetupPick[]): Promise<LoadoutComparison> {
+	return invokeCommand('loadout_compare', { setups });
 }
 
 export async function protectionOverview(): Promise<ProtectionOverview> {

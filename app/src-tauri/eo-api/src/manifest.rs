@@ -44,6 +44,7 @@ use crate::equipment::{
 use crate::healing::{
     HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
 };
+use crate::loadout_comparison::{LoadoutComparison, SetupPick};
 use crate::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
@@ -157,6 +158,14 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(i64)),
             }],
             returns: Some(schema(schema_for!(EquipmentDetail))),
+        },
+        CommandSpec {
+            name: "loadout_compare",
+            args: vec![ArgSpec {
+                name: "setups",
+                schema: schema(schema_for!(Vec<SetupPick>)),
+            }],
+            returns: Some(schema(schema_for!(LoadoutComparison))),
         },
         CommandSpec {
             name: "protection_overview",

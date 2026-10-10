@@ -42,6 +42,7 @@ use eo_api::equipment::{
 use eo_api::healing::{
     HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
 };
+use eo_api::loadout_comparison::{LoadoutComparison, SetupPick};
 use eo_api::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
@@ -137,6 +138,14 @@ pub async fn equipment_detail(
     item_id: i64,
 ) -> Result<EquipmentDetail, ApiError> {
     facade(&app)?.equipment_detail(item_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn loadout_compare(
+    app: tauri::AppHandle,
+    setups: Vec<SetupPick>,
+) -> Result<LoadoutComparison, ApiError> {
+    facade(&app)?.loadout_compare(setups).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

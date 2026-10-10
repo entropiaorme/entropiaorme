@@ -15,6 +15,7 @@ macro_rules! app_command_surface {
             equipment_update,
             equipment_delete,
             equipment_detail,
+            loadout_compare,
             protection_overview,
             protection_set_create,
             protection_set_update,

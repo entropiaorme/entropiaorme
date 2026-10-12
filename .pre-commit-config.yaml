@@ -55,6 +55,14 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # One search implementation: every frontend search box, picker, and
+      # filter matches through the shared search module.
+      - id: single-search
+        name: single search implementation (frontend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- single-search'
+        language: system
+        pass_filenames: false
+        always_run: true
       # Runes-native state ruling: new shared state may not import
       # svelte/store; the legacy surface is frozen and only shrinks.
       - id: no-new-writable

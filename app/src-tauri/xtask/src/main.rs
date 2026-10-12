@@ -15,6 +15,7 @@
 //! xtask in-development      [--warn-only]
 //! xtask id-order            [--warn-only]
 //! xtask route-ceilings      [--warn-only]
+//! xtask single-search       [--warn-only]
 //! xtask bump-version        <NEW_VERSION>
 //! ```
 
@@ -29,6 +30,7 @@ mod mutation_score;
 mod no_bare_setinterval;
 mod no_new_writable;
 mod route_ceilings;
+mod single_search;
 mod version_stamps;
 mod vocabulary;
 
@@ -50,6 +52,7 @@ SUBCOMMANDS:
     in-development [--warn-only]              keep the in-development register and its consumers in step
     id-order [--warn-only]                    require every id-ordered database read to name its allowed case
     route-ceilings [--warn-only]              hold tracked route files at or under their line ceilings
+    single-search [--warn-only]               keep every frontend search on the shared search module
     bump-version <NEW_VERSION>                rewrite the app version stamps in lock-step
     gen-ts [--check]                          emit the TypeScript bindings for the typed IPC commands
 ";
@@ -72,6 +75,7 @@ fn main() -> ExitCode {
         "in-development" => in_development::run(rest),
         "id-order" => id_order::run(rest),
         "route-ceilings" => route_ceilings::run(rest),
+        "single-search" => single_search::run(rest),
         "bump-version" => bump_version::run(rest),
         "gen-ts" => gen_ts::run(rest),
         "-h" | "--help" | "help" => {

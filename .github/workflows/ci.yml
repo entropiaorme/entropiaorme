@@ -166,8 +166,10 @@ jobs:
         # is declared once and marked where it renders; graduating it deletes
         # both), and the latest-in-time read convention (a database read that
         # means "the newest" orders by its timestamp column; an id-ordered read
-        # names its allowed case at the site). All bind on every pull request
-        # and push through this required job.
+        # names its allowed case at the site), and the single search (every
+        # search box, picker, and filter matches through the shared search
+        # module). All bind on every pull request and push through this
+        # required job.
         run: |
           cargo run -q -p xtask -- no-bare-setinterval
           cargo run -q -p xtask -- no-new-writable
@@ -175,6 +177,7 @@ jobs:
           cargo run -q -p xtask -- market-isolation
           cargo run -q -p xtask -- in-development
           cargo run -q -p xtask -- id-order
+          cargo run -q -p xtask -- single-search
 
   frontend:
     name: Frontend (build + check + test)

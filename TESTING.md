@@ -195,6 +195,7 @@ The configured hooks are:
 
 - **Biome** (lint + format) over the frontend, mirroring the CI `npm run lint` step through the lockfile-pinned binary (run `npm ci` in `app/` once so the hook can resolve it).
 - **`no-bare-setinterval`**: the frontend polling-discipline guard (a `cargo xtask` subcommand), forbidding a bare `setInterval` outside the visibility-gated helper and any reference to the retired tracking event.
+- **`single-search`**: the shared-search guard (a `cargo xtask` subcommand), forbidding a hand-rolled case-insensitive substring match in the frontend and any import of the fuzzy matcher outside `app/src/lib/view/search.ts`, the one module every search box, picker, and filter matches through.
 - **`in-development`**: the in-development surface guard (a `cargo xtask` subcommand); see "In-development surfaces" below.
 - **`id-order`**: the latest-in-time read guard (a `cargo xtask` subcommand); see "Latest-in-time reads" below.
 - **authoring lint** (em dash, UK spelling, and the reference and vocabulary rules), diff-scoped against the staged change, and **version-stamp parity**, both `cargo xtask` subcommands (see "Authoring lint" below).

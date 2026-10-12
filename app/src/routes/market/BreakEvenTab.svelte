@@ -2,6 +2,7 @@
 	import DataTable from '$lib/components/DataTable.svelte';
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import ExpectedReturnInfoTip from '$lib/components/ExpectedReturnInfoTip.svelte';
+	import LooterBasisSelect from '$lib/components/LooterBasisSelect.svelte';
 	import { createBreakEvenModel } from '$lib/features/market/breakEvenModel.svelte';
 	import { NO_DATA } from '$lib/utils/format';
 
@@ -44,10 +45,9 @@
 				are weighted by their own TT streams; limited-item premium raises cost without raising loot.
 			</p>
 			{#if model.looters.length > 0}
-				<p class="mt-2 text-xs text-text-tertiary">
-					Using the three-looter mean:
-					{model.looters.map((looter) => `${looter.name.replace(' Looter', '')} ${looter.level.toFixed(1)}`).join(' · ')}
-				</p>
+				<div class="mt-2 text-xs text-text-tertiary">
+					Read at <LooterBasisSelect levels={model.looterLevels} />
+				</div>
 			{/if}
 		</div>
 		<DataTable

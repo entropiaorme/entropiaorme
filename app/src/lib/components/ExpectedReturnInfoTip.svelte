@@ -1,13 +1,18 @@
 <script lang="ts">
 	import { formatPercent } from '$lib/utils/format';
+	import { looterBasisCaption, type LooterBasis } from '$lib/looterBasis.svelte';
 	import InfoTip from './InfoTip.svelte';
 
 	let {
 		looterLevel = null,
+		looterBasis = 'three_looter_mean',
 		coverage = null,
 		incomplete = false,
 	}: {
 		looterLevel?: number | null;
+		/** The basis `looterLevel` was read at (analytics replays the mean);
+		 * null for a level chosen between the bases. */
+		looterBasis?: LooterBasis | null;
 		coverage?: number | null;
 		incomplete?: boolean;
 	} = $props();
@@ -24,7 +29,7 @@
 		<p class="mt-2 text-[11px] leading-relaxed text-text-tertiary">
 			Community model v1
 			{#if looterLevel !== null}
-				· three-looter mean {looterLevel.toFixed(1)}
+				· {looterBasisCaption(looterBasis, looterLevel)}
 			{/if}
 			{#if coverage !== null}
 				· {formatPercent(coverage)} offensive basis coverage

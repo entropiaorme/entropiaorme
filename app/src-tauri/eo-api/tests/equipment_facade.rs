@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use eo_api::equipment::{EquipmentKind, EquipmentRequest, EquipmentSearchHit, SearchKind};
+use eo_api::equipment::{
+    EquipmentKind, EquipmentRequest, EquipmentSearchHit, ExpectedLooterSource, SearchKind,
+};
 use eo_api::{Api, ApiError};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
@@ -17,7 +19,8 @@ mod common;
 /// A minimal catalogue snapshot: two weapons (a limited one, so the
 /// `(L)` flag pins, and a fast one with a catalogue attack rate), one
 /// stimulant, one Mindforce implant, one
-/// absorber/extender.
+/// absorber/extender, and the three hunting looters, each a hundredth of
+/// its own skill.
 fn write_snapshot(dir: &Path) {
     std::fs::write(
         dir.join("weapons.json"),
@@ -51,6 +54,39 @@ fn write_snapshot(dir: &Path) {
         dir.join("absorbers.json"),
         r#"[{"id": "x1", "name": "ArMatrix Extender P20 (L)", "economy": {"decay": null, "absorption": 0.2}}]"#,
     )
+    .unwrap();
+    std::fs::write(
+        dir.join("professions.json"),
+        r#"[{"name": "Animal Looter", "skills": [{"weight": 100, "skill": {"name": "Animal Lore"}}]},
+            {"name": "Mutant Looter", "skills": [{"weight": 100, "skill": {"name": "Mutant Lore"}}]},
+            {"name": "Robot Looter", "skills": [{"weight": 100, "skill": {"name": "Robot Lore"}}]}]"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("skills.json"),
+        r#"[{"name": "Animal Lore"}, {"name": "Mutant Lore"}, {"name": "Robot Lore"}]"#,
+    )
+    .unwrap();
+}
+
+/// Scanned skills putting the Animal, Mutant, and Robot Looter professions
+/// at the given levels.
+async fn seed_looters(db: &Db, animal: f64, mutant: f64, robot: f64) {
+    db.with_writer(move |conn| {
+        for (skill, level) in [
+            ("Animal Lore", animal),
+            ("Mutant Lore", mutant),
+            ("Robot Lore", robot),
+        ] {
+            conn.execute(
+                "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+                 VALUES (?1, ?2, 'scan', 1700000000.0)",
+                rusqlite::params![skill, level * 100.0],
+            )?;
+        }
+        Ok(())
+    })
+    .await
     .unwrap();
 }
 
@@ -488,7 +524,7 @@ async fn an_existing_weapon_setup_gains_descriptive_lifesteal_without_a_rewrite(
             .and_then(|amplifier| amplifier.efficiency_pct.0),
         Some(75.0)
     );
-    let expected = detail.expected_return.as_ref().unwrap();
+    let expected = &detail.expected_returns.as_ref().unwrap().three_looter_mean;
     assert_eq!(expected.looter_level, 0.0);
     assert_eq!(expected.coverage, 1.0);
     assert!(!expected.incomplete);
@@ -537,7 +573,7 @@ async fn a_weapon_detail_combines_efficiency_and_damage_into_loss_per_100_hp() {
     // At looter 0 a use costs 2 PEC and returns 86% + 7% x 80% of it, so it
     // loses 0.168 PEC; an expected use deals 40 x 0.9 x 0.75 x 1.02 damage.
     let detail = api.equipment_detail(1).await.unwrap();
-    let expected = detail.expected_return.as_ref().unwrap();
+    let expected = &detail.expected_returns.as_ref().unwrap().three_looter_mean;
     let loss = expected
         .loss_per_100_hp_pec
         .0
@@ -548,12 +584,108 @@ async fn a_weapon_detail_combines_efficiency_and_damage_into_loss_per_100_hp() {
     // A weapon the catalogue gives no damage cannot be placed per HP.
     let undamaged = api.equipment_detail(2).await.unwrap();
     assert!(undamaged
-        .expected_return
+        .expected_returns
         .as_ref()
         .unwrap()
+        .three_looter_mean
         .loss_per_100_hp_pec
         .0
         .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_weapon_reads_its_expected_return_at_every_looter_basis() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    db.with_writer(|conn| {
+        conn.execute(
+            "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
+             VALUES ('Test Rifle', 'weapon', 'w9', ?)",
+            [r#"{"weapon_entity":{"id":"w9","name":"Test Rifle","economy":{"decay":1.0,"ammo_burn":100,"efficiency":80},"damage":{"impact":40}},"weapon_catalog_id":"w9"}"#],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    seed_looters(&db, 20.0, 50.0, 80.0).await;
+
+    // Community Model v1 returns 86% + 7% x 80% Efficiency + 7% x looter / 100
+    // of a 2 PEC use; the rest is lost over 40 x 0.9 x 0.75 x 1.02 damage.
+    let returns = api
+        .equipment_detail(1)
+        .await
+        .unwrap()
+        .expected_returns
+        .0
+        .expect("a modelled weapon");
+    let damage = 40.0 * 0.9 * 0.75 * 1.02;
+    for (expected, source, level) in [
+        (
+            &returns.three_looter_mean,
+            ExpectedLooterSource::ThreeLooterMean,
+            50.0,
+        ),
+        (&returns.animal, ExpectedLooterSource::Animal, 20.0),
+        (&returns.mutant, ExpectedLooterSource::Mutant, 50.0),
+        (&returns.robot, ExpectedLooterSource::Robot, 80.0),
+    ] {
+        let rate = 0.86 + 0.07 * 0.8 + 0.07 * level / 100.0;
+        assert_eq!(expected.looter_source, source);
+        assert_eq!(expected.looter_level, level);
+        let tt_rate = expected.expected_tt_rate.0.unwrap();
+        assert!(
+            (tt_rate - rate).abs() < 1e-9,
+            "{source:?}: {tt_rate} against {rate}"
+        );
+        let loss = expected.loss_per_100_hp_pec.0.unwrap();
+        let want = 100.0 * 2.0 * (1.0 - rate) / damage;
+        assert!(
+            (loss - want).abs() < 1e-9,
+            "{source:?}: {loss} against {want}"
+        );
+    }
+    // A higher looter level lowers the break-even markup.
+    let markup = |expected: &eo_api::equipment::EquipmentExpectedReturn| {
+        expected.break_even_loot_markup.0.unwrap()
+    };
+    assert!(markup(&returns.robot) < markup(&returns.mutant));
+    assert!(markup(&returns.mutant) < markup(&returns.animal));
+
+    // Market's break-even reads the same per-basis figures, in percent.
+    let break_even = api.market_break_even().await.unwrap();
+    let levels: Vec<(&str, f64)> = break_even
+        .looters
+        .iter()
+        .map(|looter| (looter.name.as_str(), looter.level))
+        .collect();
+    assert_eq!(
+        levels,
+        [
+            ("Animal Looter", 20.0),
+            ("Mutant Looter", 50.0),
+            ("Robot Looter", 80.0)
+        ]
+    );
+    let row = break_even.weapons[0]
+        .by_looter
+        .as_ref()
+        .expect("a modelled row");
+    for (market, expected) in [
+        (&row.three_looter_mean, &returns.three_looter_mean),
+        (&row.animal, &returns.animal),
+        (&row.mutant, &returns.mutant),
+        (&row.robot, &returns.robot),
+    ] {
+        assert_eq!(market.looter_level, expected.looter_level);
+        assert_eq!(
+            market.break_even_loot_markup_pct.0,
+            expected.break_even_loot_markup.0.map(|value| value * 100.0)
+        );
+        assert_eq!(
+            market.expected_tt_return_pct.0,
+            expected.expected_tt_rate.0.map(|value| value * 100.0)
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

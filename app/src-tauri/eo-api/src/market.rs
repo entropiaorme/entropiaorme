@@ -7,7 +7,7 @@
 //! DTOs stay in this module so the accounting surfaces cannot consume
 //! them by accident.
 
-use crate::equipment::EquipmentKind;
+use crate::equipment::{EquipmentExpectedReturn, EquipmentExpectedReturns, EquipmentKind};
 use eo_services::expected_hunting::HuntingLooterLevels;
 use eo_services::market_paste::{self, MarketPasteRow};
 use eo_services::market_service::{self, MarketError};
@@ -294,12 +294,63 @@ pub struct MarketWeaponBreakEven {
     pub amplifier_name: Nullable<String>,
     pub weighted_efficiency_pct: Nullable<f64>,
     pub offensive_tt_recovery_pct: Nullable<f64>,
-    pub expected_tt_return_pct: Nullable<f64>,
-    pub break_even_loot_markup_pct: Nullable<f64>,
-    pub looter_level: Nullable<f64>,
+    /// The looter-dependent figures at each basis the player can choose;
+    /// null when the loadout has no modelled offensive stream.
+    pub by_looter: Nullable<MarketBreakEvenByLooter>,
     pub coverage: Nullable<f64>,
     pub incomplete: bool,
     pub model_version: Nullable<String>,
+}
+
+/// A loadout's expected return and break-even loot markup at one looter
+/// basis.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketLooterBreakEven {
+    pub looter_level: f64,
+    pub expected_tt_return_pct: Nullable<f64>,
+    pub break_even_loot_markup_pct: Nullable<f64>,
+}
+
+/// One loadout's break-even figures at every looter basis: the
+/// three-looter mean, or the one hunting looter a known target class
+/// applies.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketBreakEvenByLooter {
+    pub three_looter_mean: MarketLooterBreakEven,
+    pub animal: MarketLooterBreakEven,
+    pub mutant: MarketLooterBreakEven,
+    pub robot: MarketLooterBreakEven,
+}
+
+impl From<&EquipmentExpectedReturn> for MarketLooterBreakEven {
+    fn from(expected: &EquipmentExpectedReturn) -> Self {
+        Self {
+            looter_level: expected.looter_level,
+            expected_tt_return_pct: expected
+                .expected_tt_rate
+                .0
+                .map(|value| value * 100.0)
+                .into(),
+            break_even_loot_markup_pct: expected
+                .break_even_loot_markup
+                .0
+                .map(|value| value * 100.0)
+                .into(),
+        }
+    }
+}
+
+impl From<&EquipmentExpectedReturns> for MarketBreakEvenByLooter {
+    fn from(returns: &EquipmentExpectedReturns) -> Self {
+        Self {
+            three_looter_mean: (&returns.three_looter_mean).into(),
+            animal: (&returns.animal).into(),
+            mutant: (&returns.mutant).into(),
+            robot: (&returns.robot).into(),
+        }
+    }
 }
 
 /// The break-even readout: the player's exact three hunting-looter
@@ -483,9 +534,9 @@ impl Api {
     }
 
     /// Configured loadout economics under the shared component-weighted
-    /// expected-hunting core. The three exact hunting looters are returned as
-    /// provenance; each row uses their visible arithmetic mean until target
-    /// classification is grounded.
+    /// expected-hunting core. The three exact hunting looters are returned
+    /// beside each row's figures at every basis, so the reader chooses the
+    /// mean or the one looter their target's class applies.
     pub async fn market_break_even(&self) -> Result<MarketBreakEven, ApiError> {
         let professions = self.character_professions().await?;
         let profession_level = |name: &str| {
@@ -522,33 +573,23 @@ impl Api {
             let detail = self
                 .equipment_detail_with_looters(item_id, Some(looter_basis))
                 .await?;
-            let expected = detail.expected_return.0;
+            let returns = detail.expected_returns.0;
+            // The basis-independent figures read the same at every basis.
+            let expected = returns.as_ref().map(|returns| &returns.three_looter_mean);
             weapons.push(MarketWeaponBreakEven {
                 name: item.name,
                 amplifier_name: item.amplifier_name,
                 weighted_efficiency_pct: expected
-                    .as_ref()
                     .and_then(|value| value.weighted_efficiency_pct.0)
                     .into(),
                 offensive_tt_recovery_pct: expected
-                    .as_ref()
                     .and_then(|value| value.offensive_tt_recovery.0)
                     .map(|value| value * 100.0)
                     .into(),
-                expected_tt_return_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.expected_tt_rate.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                break_even_loot_markup_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.break_even_loot_markup.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                looter_level: expected.as_ref().map(|value| value.looter_level).into(),
-                coverage: expected.as_ref().map(|value| value.coverage).into(),
-                incomplete: expected.as_ref().is_none_or(|value| value.incomplete),
-                model_version: expected.map(|value| value.model_version).into(),
+                by_looter: returns.as_ref().map(Into::into).into(),
+                coverage: expected.map(|value| value.coverage).into(),
+                incomplete: expected.is_none_or(|value| value.incomplete),
+                model_version: expected.map(|value| value.model_version.clone()).into(),
             });
         }
 

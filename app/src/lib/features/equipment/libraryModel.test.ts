@@ -58,7 +58,7 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 		implant: null,
 		costBreakdown: [],
 		totalCostPerUse: 2.05,
-		expectedReturn: null,
+		expectedReturns: null,
 		healingProfile: null,
 		lifestealPercent: null,
 		effectProfile: null,

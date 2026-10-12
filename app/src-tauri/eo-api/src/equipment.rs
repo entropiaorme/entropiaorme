@@ -488,6 +488,18 @@ pub struct EquipmentExpectedReturn {
     pub loss_per_100_hp_pec: Nullable<f64>,
 }
 
+/// One setup's expected return read at each looter basis the player can
+/// choose: the three-looter mean for an unknown target, or the one hunting
+/// looter that applies when the target's class is known.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EquipmentExpectedReturns {
+    pub three_looter_mean: EquipmentExpectedReturn,
+    pub animal: EquipmentExpectedReturn,
+    pub mutant: EquipmentExpectedReturn,
+    pub robot: EquipmentExpectedReturn,
+}
+
 /// The absorber component of a stored weapon setup.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -560,7 +572,7 @@ pub struct EquipmentDetail {
     pub implant: Nullable<AbsorberComponent>,
     pub cost_breakdown: Vec<CostBreakdownLine>,
     pub total_cost_per_use: f64,
-    pub expected_return: Nullable<EquipmentExpectedReturn>,
+    pub expected_returns: Nullable<EquipmentExpectedReturns>,
     pub healing_profile: Nullable<HealingProfileDto>,
     pub lifesteal_percent: Nullable<f64>,
     /// A weapon's declared damage-over-time effect, when it has one.
@@ -1026,7 +1038,7 @@ fn row_to_detail(
             .into(),
             cost_breakdown: breakdown_lines(&cost_result)?,
             total_cost_per_use: cost_result["totalCostPerUse"].as_f64().unwrap_or(0.0),
-            expected_return: equipment_expected_return(props, enhancers, looters)?.into(),
+            expected_returns: equipment_expected_returns(props, enhancers, looters)?.into(),
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
             effect_profile: weapon_effect_dto(props).into(),
@@ -1059,7 +1071,7 @@ fn row_to_detail(
             implant: None.into(),
             cost_breakdown: Vec::new(),
             total_cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
-            expected_return: None.into(),
+            expected_returns: None.into(),
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
             effect_profile: None.into(),
@@ -1148,7 +1160,7 @@ fn row_to_detail(
         .into(),
         cost_breakdown: breakdown,
         total_cost_per_use: cost,
-        expected_return: None.into(),
+        expected_returns: None.into(),
         healing_profile: (item_type == "healing")
             .then(|| healing_profile_dto(props))
             .into(),
@@ -1159,11 +1171,11 @@ fn row_to_detail(
     })
 }
 
-fn equipment_expected_return(
+fn equipment_expected_returns(
     props: &Value,
     enhancers: i64,
     looters: HuntingLooterLevels,
-) -> Result<Option<EquipmentExpectedReturn>, ApiError> {
+) -> Result<Option<EquipmentExpectedReturns>, ApiError> {
     let evidence: OffensiveLoadoutEvidence =
         expected_hunting::evidence_from_equipment_props(props, Some(enhancers), looters);
     if evidence.components.is_empty() {
@@ -1175,32 +1187,51 @@ fn equipment_expected_return(
         .filter(|component| component.efficiency_pct.is_some())
         .map(|component| component.consumed_premium_per_use)
         .sum();
-    let result = expected_hunting::evaluate(&evidence)
-        .map_err(ApiError::internal("equipment expected return"))?;
-    Ok(Some(EquipmentExpectedReturn {
-        model_version: result.model_version,
-        looter_source: result.looter_source.into(),
-        looter_level: result.looter_level,
-        weighted_efficiency_pct: result.weighted_efficiency_pct.into(),
-        offensive_tt_recovery: result.offensive_tt_recovery.into(),
-        expected_tt_rate: result.expected_tt_rate.into(),
-        effective_efficiency: result.effective_efficiency.map(Into::into).into(),
-        break_even_loot_markup: result.break_even_loot_markup.into(),
-        modelled_raw_tt_per_use: result.modelled_raw_tt * 100.0,
-        eligible_offensive_cost_per_use: result.eligible_offensive_cost * 100.0,
-        consumed_premium_per_use: premium * 100.0,
-        coverage: result.coverage,
-        incomplete: result.incomplete,
-        loss_per_100_hp_pec: eo_services::loadout_comparison::setup_economics(
-            props,
-            looters,
-            None,
-            &eo_services::loadout_comparison::ComparisonAssumptions::STANDARD,
-        )
-        .ok()
-        .map(|economics| economics.loss_per_hp_pec * 100.0)
-        .filter(|value| value.is_finite())
-        .into(),
+    let at = |looter_source: LooterSource| -> Result<EquipmentExpectedReturn, ApiError> {
+        let evidence = OffensiveLoadoutEvidence {
+            looter_source,
+            ..evidence.clone()
+        };
+        let level = evidence.selected_looter_level();
+        let result = expected_hunting::evaluate(&evidence)
+            .map_err(ApiError::internal("equipment expected return"))?;
+        Ok(EquipmentExpectedReturn {
+            model_version: result.model_version,
+            looter_source: result.looter_source.into(),
+            looter_level: result.looter_level,
+            weighted_efficiency_pct: result.weighted_efficiency_pct.into(),
+            offensive_tt_recovery: result.offensive_tt_recovery.into(),
+            expected_tt_rate: result.expected_tt_rate.into(),
+            effective_efficiency: result.effective_efficiency.map(Into::into).into(),
+            break_even_loot_markup: result.break_even_loot_markup.into(),
+            modelled_raw_tt_per_use: result.modelled_raw_tt * 100.0,
+            eligible_offensive_cost_per_use: result.eligible_offensive_cost * 100.0,
+            consumed_premium_per_use: premium * 100.0,
+            coverage: result.coverage,
+            incomplete: result.incomplete,
+            // The loss engine reads the mean of the levels it is given, so
+            // the basis's one level stands in for all three.
+            loss_per_100_hp_pec: eo_services::loadout_comparison::setup_economics(
+                props,
+                HuntingLooterLevels {
+                    animal: level,
+                    mutant: level,
+                    robot: level,
+                },
+                None,
+                &eo_services::loadout_comparison::ComparisonAssumptions::STANDARD,
+            )
+            .ok()
+            .map(|economics| economics.loss_per_hp_pec * 100.0)
+            .filter(|value| value.is_finite())
+            .into(),
+        })
+    };
+    Ok(Some(EquipmentExpectedReturns {
+        three_looter_mean: at(LooterSource::ThreeLooterMean)?,
+        animal: at(LooterSource::Animal)?,
+        mutant: at(LooterSource::Mutant)?,
+        robot: at(LooterSource::Robot)?,
     }))
 }
 

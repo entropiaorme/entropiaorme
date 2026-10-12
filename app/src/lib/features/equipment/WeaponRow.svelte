@@ -9,10 +9,26 @@
 	import type { LibraryModel } from './libraryModel.svelte';
 	import { describeAttackRate } from './attackRate';
 	import { describeEffectProfile } from './weaponEffect';
+	import LooterBasisSelect from '$lib/components/LooterBasisSelect.svelte';
+	import { atLooterBasis, looterBasis, looterBasisCaption } from '$lib/looterBasis.svelte';
 
 	let { model, item }: { model: LibraryModel; item: Equipment } = $props();
 
 	const detail = $derived(model.detailCache[item.id] ?? null);
+	// The expected figures at the app-wide looter basis, and the three
+	// looters' levels the basis picker lists.
+	const expectedReturn = $derived(
+		detail?.expectedReturns ? atLooterBasis(detail.expectedReturns, looterBasis.current) : null,
+	);
+	const looterLevels = $derived(
+		detail?.expectedReturns
+			? {
+					animal: detail.expectedReturns.animal.looterLevel,
+					mutant: detail.expectedReturns.mutant.looterLevel,
+					robot: detail.expectedReturns.robot.looterLevel,
+				}
+			: null,
+	);
 
 	// Absorption annotation for a breakdown line, mirroring the markup
 	// multiplier tag: the split devices show the share of weapon decay they
@@ -47,7 +63,7 @@
 		})),
 	);
 	const effectiveEfficiencyValue = $derived.by(() => {
-		const effective = detail?.expectedReturn?.effectiveEfficiency;
+		const effective = expectedReturn?.effectiveEfficiency;
 		if (!effective) return NO_DATA;
 		switch (effective.status) {
 			case 'within_model_range':
@@ -64,26 +80,29 @@
 
 {#snippet expectedReturnTip()}
 	<ExpectedReturnInfoTip
-		looterLevel={detail?.expectedReturn?.looterLevel}
-		coverage={detail?.expectedReturn?.coverage}
-		incomplete={detail?.expectedReturn?.incomplete}
+		looterLevel={expectedReturn?.looterLevel}
+		looterBasis={looterBasis.current}
+		coverage={expectedReturn?.coverage}
+		incomplete={expectedReturn?.incomplete}
 	/>
 {/snippet}
 
 {#snippet effectiveEfficiencyTip()}
 		<EffectiveEfficiencyInfoTip
-			effectiveEfficiency={detail?.expectedReturn?.effectiveEfficiency ?? null}
-			weightedEfficiencyPct={detail?.expectedReturn?.weightedEfficiencyPct ?? null}
-			consumedPremiumLabel={formatPec((detail?.expectedReturn?.consumedPremiumPerUse ?? 0) * 100)}
-			looterLevel={detail?.expectedReturn?.looterLevel ?? 0}
+			effectiveEfficiency={expectedReturn?.effectiveEfficiency ?? null}
+			weightedEfficiencyPct={expectedReturn?.weightedEfficiencyPct ?? null}
+			consumedPremiumLabel={formatPec((expectedReturn?.consumedPremiumPerUse ?? 0) * 100)}
+			looterLevel={expectedReturn?.looterLevel ?? 0}
+			looterBasis={looterBasis.current}
 		/>
 {/snippet}
 
 {#snippet lossPerHpTip()}
 	<InfoTip label="What Loss / 100 HP means" width="w-80">
 		<p class="text-xs leading-relaxed text-text-secondary">
-			The PEC this setup loses for every 100 HP it removes, at looter level
-			{(detail?.expectedReturn?.looterLevel ?? 0).toFixed(1)} and assuming the weapon is maxed. It
+			The PEC this setup loses for every 100 HP it removes, at
+			{looterBasisCaption(looterBasis.current, expectedReturn?.looterLevel ?? 0)} and assuming the
+			weapon is maxed. It
 			combines Effective Efficiency with damage per PEC, so it ranks weapons where neither does alone.
 		</p>
 		<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
@@ -220,8 +239,8 @@
 				{/if}
 			</div>
 
-			{#if detail.expectedReturn}
-				{@const expected = detail.expectedReturn}
+			{#if expectedReturn && looterLevels}
+				{@const expected = expectedReturn}
 				<div
 					class="grid grid-cols-4 gap-5 border-y border-border/35 py-3 mb-4"
 				>
@@ -255,12 +274,13 @@
 						labelSuffix={lossPerHpTip}
 					/>
 				</div>
-				<p class="-mt-2 mb-4 text-[11px] leading-relaxed text-text-tertiary">
-					Community model v1 · three-looter mean {expected.looterLevel.toFixed(1)}
+				<!-- The caption names the figures' model and looter basis; the basis is the control. -->
+				<div class="-mt-2 mb-4 text-[11px] leading-relaxed text-text-tertiary">
+					Community model v1 · <LooterBasisSelect levels={looterLevels} />
 					{#if expected.incomplete}
 						· partial Efficiency coverage ({formatPercent(expected.coverage)})
 					{/if}
-				</p>
+				</div>
 			{/if}
 
 			<!-- Component list -->

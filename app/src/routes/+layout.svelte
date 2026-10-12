@@ -15,6 +15,7 @@
 	import { initUpdater, maybeCheckOnLaunch, updateAvailable } from '$lib/updater.svelte';
 	import { maybeRefreshOnMount } from '$lib/newsFetch';
 	import { initMarketData, MARKET_DATA_PREFERENCE_KEYS } from '$lib/marketData.svelte';
+	import { initLooterBasis } from '$lib/looterBasis.svelte';
 	import { maybeRefreshMarketSnapshotOnMount } from '$lib/marketDataFetch';
 	import { getPreference } from '$lib/preferences';
 	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
@@ -81,6 +82,7 @@
 			initNews(),
 			initUpdater(),
 			initMarketData(),
+			initLooterBasis(),
 		]);
 		void maybeRefreshOnMount();
 		void maybeRefreshMarketSnapshotOnMount();

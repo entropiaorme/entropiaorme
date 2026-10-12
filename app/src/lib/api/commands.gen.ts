@@ -905,7 +905,7 @@ export interface EquipmentDetail {
 	implant: AbsorberComponent | null;
 	costBreakdown: CostBreakdownLine[];
 	totalCostPerUse: number;
-	expectedReturn: EquipmentExpectedReturn | null;
+	expectedReturns: EquipmentExpectedReturns | null;
 	healingProfile: HealingProfileDto | null;
 	lifestealPercent: number | null;
 	/** A weapon's declared damage-over-time effect, when it has one. */
@@ -946,6 +946,18 @@ export interface EquipmentExpectedReturn {
 	incomplete: boolean;
 	/** PEC lost per 100 HP removed at the looter level above, a maxed weapon assumed: Effective Efficiency and damage per PEC combined. It ranks weapons for mobs several hits deep; on small mobs the smaller shot can win regardless. */
 	lossPer100HpPec: number | null;
+}
+
+/**
+ * One setup's expected return read at each looter basis the player can
+ * choose: the three-looter mean for an unknown target, or the one hunting
+ * looter that applies when the target's class is known.
+ */
+export interface EquipmentExpectedReturns {
+	threeLooterMean: EquipmentExpectedReturn;
+	animal: EquipmentExpectedReturn;
+	mutant: EquipmentExpectedReturn;
+	robot: EquipmentExpectedReturn;
 }
 
 /**
@@ -1792,6 +1804,18 @@ export interface MarketBreakEven {
 }
 
 /**
+ * One loadout's break-even figures at every looter basis: the
+ * three-looter mean, or the one hunting looter a known target class
+ * applies.
+ */
+export interface MarketBreakEvenByLooter {
+	threeLooterMean: MarketLooterBreakEven;
+	animal: MarketLooterBreakEven;
+	mutant: MarketLooterBreakEven;
+	robot: MarketLooterBreakEven;
+}
+
+/**
  * A committed paste: the submission it created.
  */
 export interface MarketCommitResult {
@@ -1886,6 +1910,16 @@ export interface MarketHistoryPoint {
  * One of the export's five aggregation horizons.
  */
 export type MarketHorizon = 'day' | 'week' | 'month' | 'year' | 'decade';
+
+/**
+ * A loadout's expected return and break-even loot markup at one looter
+ * basis.
+ */
+export interface MarketLooterBreakEven {
+	looterLevel: number;
+	expectedTtReturnPct: number | null;
+	breakEvenLootMarkupPct: number | null;
+}
 
 /**
  * One looter profession and its believed-current level.
@@ -1984,9 +2018,8 @@ export interface MarketWeaponBreakEven {
 	amplifierName: string | null;
 	weightedEfficiencyPct: number | null;
 	offensiveTtRecoveryPct: number | null;
-	expectedTtReturnPct: number | null;
-	breakEvenLootMarkupPct: number | null;
-	looterLevel: number | null;
+	/** The looter-dependent figures at each basis the player can choose; null when the loadout has no modelled offensive stream. */
+	byLooter: MarketBreakEvenByLooter | null;
 	coverage: number | null;
 	incomplete: boolean;
 	modelVersion: string | null;

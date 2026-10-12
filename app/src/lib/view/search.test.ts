@@ -137,9 +137,11 @@ describe('filterByQuery', () => {
 		expect(filterByQuery(quests, 'hunt arkadia', text)).toEqual([quests[1]]);
 	});
 
-	it('never runs a word across a field boundary', () => {
+	it('never runs a word or a phrase across a field boundary', () => {
 		const rows = [{ a: 'Foo', b: 'Bar' }];
 		expect(filterByQuery(rows, 'foobar', (r) => [r.a, r.b])).toEqual([]);
+		expect(filterByQuery(rows, '"foo bar"', (r) => [r.a, r.b])).toEqual([]);
+		expect(filterByQuery(rows, 'foo bar', (r) => [r.a, r.b])).toEqual(rows);
 	});
 
 	it('skips absent fields', () => {

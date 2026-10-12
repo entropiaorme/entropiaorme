@@ -105,7 +105,7 @@ const universalMatcher = new uFuzzy({
 });
 
 function matcherFor(needle: string): uFuzzy {
-	return /[^\x00-\x7f]/.test(needle) ? universalMatcher : latinMatcher;
+	return /[^ -~]/.test(needle) ? universalMatcher : latinMatcher;
 }
 
 /**
@@ -129,9 +129,15 @@ function words(text: string): string[] {
 		.filter((word) => word !== '');
 }
 
-/** Folded, lower-cased text with every punctuation run collapsed to one space. */
-function phraseForm(text: string): string {
-	return ` ${words(text).join(' ')} `;
+/**
+ * Each field as its folded, lower-cased words between single spaces,
+ * fields kept apart so a phrase cannot run from one into the next.
+ */
+function phraseForm(haystack: string): string {
+	return haystack
+		.split(FIELD_SEPARATOR)
+		.map((field) => ` ${words(field).join(' ')} `)
+		.join('|');
 }
 
 /** Split letter-digit seams so `ep10` reads as `ep 10` and finds "EP-10". */
@@ -237,16 +243,15 @@ function matchIndices(haystack: string[], parsed: ParsedQuery, ranked: boolean):
 
 /** A reusable search over a fixed item list; folds each item's text once. */
 export interface SearchIndex<T> {
-	/** Matching items in their original order (the whole list for an empty query). */
+	/** Matching items in their original order; the list itself, unchanged,
+	 * for a query with nothing to search. */
 	filter(query: string): T[];
-	/** Matching items best first, optionally capped (the list's head for an empty query). */
+	/** Matching items best first, optionally capped; the list (or its head)
+	 * for a query with nothing to search. */
 	rank(query: string, limit?: number): T[];
 }
 
-export function createSearchIndex<T>(
-	items: readonly T[],
-	text: (item: T) => SearchText,
-): SearchIndex<T> {
+export function createSearchIndex<T>(items: T[], text: (item: T) => SearchText): SearchIndex<T> {
 	let haystack: string[] | null = null;
 	const prepared = () => {
 		haystack ??= items.map((item) => haystackOf(text(item)));
@@ -255,28 +260,24 @@ export function createSearchIndex<T>(
 	return {
 		filter(query) {
 			const indices = matchIndices(prepared(), parseQuery(query), false);
-			return indices === null ? [...items] : indices.map((i) => items[i]);
+			return indices === null ? items : indices.map((i) => items[i]);
 		},
 		rank(query, limit = Number.POSITIVE_INFINITY) {
 			const indices = matchIndices(prepared(), parseQuery(query), true);
-			const ranked = indices === null ? items : indices.map((i) => items[i]);
-			return ranked.slice(0, limit);
+			if (indices === null) return limit >= items.length ? items : items.slice(0, limit);
+			return indices.slice(0, limit).map((i) => items[i]);
 		},
 	};
 }
 
-/** Matching items in their original order; the whole list for an empty query. */
-export function filterByQuery<T>(
-	items: readonly T[],
-	query: string,
-	text: (item: T) => SearchText,
-): T[] {
+/** Matching items in their original order; the list itself for an empty query. */
+export function filterByQuery<T>(items: T[], query: string, text: (item: T) => SearchText): T[] {
 	return createSearchIndex(items, text).filter(query);
 }
 
 /** Matching items best first, optionally capped; the list's head for an empty query. */
 export function rankByQuery<T>(
-	items: readonly T[],
+	items: T[],
 	query: string,
 	text: (item: T) => SearchText,
 	limit?: number,

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { SkillingForecastSource } from '$lib/api/commands.gen';
+	import { filterByQuery } from '$lib/view/search';
 	import Menu from '$lib/components/Menu.svelte';
 	import DefinitionCataloguePanel from '$lib/features/sessions/DefinitionCataloguePanel.svelte';
 	import { formatPed } from '$lib/utils/format';
@@ -25,10 +26,7 @@
 	// re-sort. Sessions that cannot answer always trail.
 	let sortKey = $state<SortKey>('ttCost');
 	const matches = $derived(
-		sources
-			.filter((source) =>
-				source.name.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()),
-			)
+		filterByQuery(sources, filter, (source) => source.name)
 			.map((source, index) => ({ source, index }))
 			.sort((a, b) => {
 				const aReady = a.source.status === 'ready';

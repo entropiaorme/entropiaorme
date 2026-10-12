@@ -19,6 +19,7 @@ import {
 	type SnapshotReading,
 } from '$lib/marketData.svelte';
 import { contributeMarketBatch, fetchMarketSnapshot } from '$lib/marketDataFetch';
+import { filterByQuery } from '$lib/view/search';
 
 /** One table row: the selected horizon's reading flattened beside the
  * item identity and the staleness signal (epoch seconds). */
@@ -53,19 +54,16 @@ export function createSharedModel() {
 	const tableRows = $derived.by<SharedTableRow[]>(() => {
 		const snapshot = cache;
 		if (!snapshot) return [];
-		const query = search.trim().toLowerCase();
-		return snapshot.items
-			.filter((item) => !query || item.itemName.toLowerCase().includes(query))
-			.map((item) => {
-				const reading = readingFor(item, horizon);
-				return {
-					itemName: item.itemName,
-					tier: item.tier,
-					markupPct: reading.markupPct,
-					salesPed: reading.salesPed,
-					observedAt: isoToEpoch(item.observedAt),
-				};
-			});
+		return filterByQuery(snapshot.items, search, (item) => item.itemName).map((item) => {
+			const reading = readingFor(item, horizon);
+			return {
+				itemName: item.itemName,
+				tier: item.tier,
+				markupPct: reading.markupPct,
+				salesPed: reading.salesPed,
+				observedAt: isoToEpoch(item.observedAt),
+			};
+		});
 	});
 
 	async function refresh(): Promise<void> {

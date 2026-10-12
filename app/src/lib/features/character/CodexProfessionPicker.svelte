@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
 	import { onMount, tick } from 'svelte';
 	import Badge from '$lib/components/Badge.svelte';
 	import PickerInput from '$lib/components/PickerInput.svelte';
@@ -207,13 +208,13 @@
 				dropdownClass={variant === 'headline' ? 'max-h-80' : ''}
 				{model}
 			>
-				{#snippet result({ item }: { item: PickerRow })}
+				{#snippet result({ item, query }: { item: PickerRow; query: string })}
 					<span class="flex items-center gap-2 min-w-0">
 						{#if item.kind === 'profession' && item.favourite}
 							<span class="text-warning shrink-0"><IconStar /></span>
 						{/if}
 						<span class="truncate">
-							{item.kind === 'profession' ? item.name : item.label}
+							<SearchHighlight text={item.kind === 'profession' ? item.name : item.label} {query} />
 						</span>
 					</span>
 					{#if item.kind === 'family'}

@@ -31,7 +31,9 @@
 	 * commit nothing, so typing remains a complete path rather than a
 	 * fallback, and a capture is reviewed here before anything is written.
 	 */
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
 	import { onDestroy } from 'svelte';
+	import { rankByQuery } from '$lib/view/search';
 	import Button from '$lib/components/Button.svelte';
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -111,10 +113,7 @@
 	let unread = $state<string[]>([]);
 
 	const picker = createTypeahead<HoldingOption>({
-		search: async (query) => {
-			const needle = query.trim().toLowerCase();
-			return holdings.filter((row) => row.name.toLowerCase().includes(needle)).slice(0, 12);
-		},
+		search: async (query) => rankByQuery(holdings, query, (row) => row.name, 12),
 		debounceMs: 0,
 		minLength: 1,
 		labelOf: (row) => row.name,
@@ -413,8 +412,8 @@
 					class="relative"
 					dropdownClass="absolute left-0 right-0 z-30 shadow-lg"
 				>
-					{#snippet result({ item })}
-						<span class="truncate">{item.name}</span>
+					{#snippet result({ item, query })}
+						<span class="truncate"><SearchHighlight text={item.name} {query} /></span>
 						{#if item.kind === 'equipment'}
 							<span class="ml-3 shrink-0 text-xs text-text-tertiary">Asset</span>
 						{/if}

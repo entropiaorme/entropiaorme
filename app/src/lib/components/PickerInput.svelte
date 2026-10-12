@@ -13,6 +13,8 @@
 		selected: T | null;
 		loading: boolean;
 		error: string | null;
+		/** The trimmed query the current results answer, once a search settles. */
+		settledQuery?: string | null;
 		select(item: T): void;
 		clear(): void;
 	}
@@ -30,8 +32,9 @@
 		id: string;
 		placeholder?: string;
 		model: PickerModel;
-		/** Renders one dropdown row for a search hit. */
-		result: Snippet<[{ item: T }]>;
+		/** Renders one dropdown row for a search hit; `query` is the text it
+		 * answers, for `SearchHighlight`. */
+		result: Snippet<[{ item: T; query: string }]>;
 		/** Renders the confirmed selection inside the search box. */
 		selection: Snippet<[{ item: T }]>;
 		/** Optional trailing dropdown row (e.g. an "Add custom" affordance). */
@@ -48,11 +51,33 @@
 	// the model's result list, which it does not own.
 	let dismissedForQuery = $state<string | null>(null);
 
+	// A settled search that found nothing says so rather than leaving the
+	// box looking unresponsive.
+	const noMatches = $derived(
+		!model.loading &&
+			!model.error &&
+			model.results.length === 0 &&
+			model.settledQuery != null &&
+			model.settledQuery !== '' &&
+			model.settledQuery === model.query.trim(),
+	);
+
 	const showDropdown = $derived(
 		!model.selected &&
 			dismissedForQuery !== model.query &&
-			(model.results.length > 0 || (!!extraRow && model.query.trim().length > 0)),
+			(model.results.length > 0 ||
+				noMatches ||
+				(!!extraRow && model.query.trim().length > 0)),
 	);
+
+	let listbox = $state<HTMLDivElement>();
+
+	// Keep the keyboard-highlighted row in view inside the scrolling list.
+	$effect(() => {
+		if (activeIndex < 0 || !listbox) return;
+		const option = listbox.querySelector<HTMLElement>(`#${CSS.escape(`${id}-option-${activeIndex}`)}`);
+		option?.scrollIntoView?.({ block: 'nearest' });
+	});
 
 	// A fresh result set restarts the highlight.
 	$effect(() => {
@@ -79,7 +104,10 @@
 				}
 				break;
 			case 'Escape':
+				// The innermost layer: a dialog listening on the window would
+				// otherwise close on the same press.
 				e.preventDefault();
+				e.stopPropagation();
 				dismissedForQuery = model.query;
 				activeIndex = -1;
 				break;
@@ -137,6 +165,7 @@
 
 	{#if showDropdown}
 		<div
+			bind:this={listbox}
 			id={listboxId}
 			role="listbox"
 			aria-label="Suggestions"
@@ -153,9 +182,14 @@
 						flex items-center justify-between {i === activeIndex ? 'bg-surface-hover' : ''}"
 					onclick={() => model.select(item)}
 				>
-					{@render result({ item })}
+					{@render result({ item, query: model.query })}
 				</button>
 			{/each}
+			{#if noMatches}
+				<p class="px-3 py-2 text-sm text-text-tertiary">
+					No matches for “{model.query.trim()}”
+				</p>
+			{/if}
 			{#if extraRow}
 				{@render extraRow()}
 			{/if}

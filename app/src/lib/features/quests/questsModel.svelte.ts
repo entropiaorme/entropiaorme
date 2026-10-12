@@ -28,6 +28,7 @@ import type {
 	QuestRewardPolicy,
 } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
+import { filterByQuery } from '$lib/view/search';
 import { getCooldownStatus } from './cooldown';
 import type { RewardMode } from './economics';
 
@@ -160,14 +161,12 @@ export function createQuestsModel() {
 			result = result.filter((q) => q.targetMobs.includes(mob));
 		}
 		if (searchQuery) {
-			const s = searchQuery.toLowerCase();
-			result = result.filter(
-				(q) =>
-					q.name.toLowerCase().includes(s) ||
-					q.targetMobs.some((m) => m.toLowerCase().includes(s)) ||
-					q.planet.toLowerCase().includes(s) ||
-					(q.category?.toLowerCase().includes(s) ?? false),
-			);
+			result = filterByQuery(result, searchQuery, (q) => [
+				q.name,
+				...q.targetMobs,
+				q.planet,
+				q.category,
+			]);
 		}
 		return result;
 	});

@@ -6,6 +6,7 @@
 		placeholder = 'Search…',
 		loading = false,
 		class: className = '',
+		onkeydown,
 		...rest
 	}: {
 		value?: string;
@@ -14,7 +15,22 @@
 		class?: string;
 	} & Omit<HTMLInputAttributes, 'value' | 'class' | 'placeholder' | 'type'> = $props();
 
+	let input = $state<HTMLInputElement>();
+
 	function clear() {
+		value = '';
+		input?.focus();
+	}
+
+	// Escape empties a filled box before it reaches anything listening
+	// further out (a dialog closes on Escape); an owner that handles the
+	// key itself (a picker dismissing its suggestions) prevents the default
+	// and keeps its own behaviour.
+	function handleKeydown(e: KeyboardEvent & { currentTarget: EventTarget & HTMLInputElement }) {
+		onkeydown?.(e);
+		if (e.defaultPrevented || e.key !== 'Escape' || value === '') return;
+		e.preventDefault();
+		e.stopPropagation();
 		value = '';
 	}
 </script>
@@ -34,9 +50,13 @@
 	</svg>
 
 	<input
+		bind:this={input}
 		type="text"
 		bind:value
 		{placeholder}
+		autocomplete="off"
+		spellcheck="false"
+		onkeydown={handleKeydown}
 		class="w-full h-9 pl-9 pr-8 text-sm bg-surface/70 text-text rounded-md
 			border border-border
 			placeholder:text-text-tertiary
@@ -62,6 +82,7 @@
 		</svg>
 	{:else if value}
 		<button
+			type="button"
 			class="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center
 				rounded-full text-text-tertiary cursor-pointer
 				transition-colors duration-[var(--duration-fast)]

@@ -1,3 +1,5 @@
+import { createSearchIndex, type SearchText } from './search';
+
 export type SortDir = 'asc' | 'desc';
 export type SortKey<T> = Extract<keyof T, string>;
 
@@ -6,10 +8,11 @@ export interface TableModelOptions<T> {
 	rows: () => T[];
 	pageSize: number;
 	/**
-	 * Fields matched case-insensitively (substring) against the search query.
-	 * Omit to make `search` a no-op.
+	 * The text a row is searched by (one string or several fields), matched
+	 * through the shared search (`$lib/view/search`). Omit to make `search`
+	 * a no-op.
 	 */
-	searchText?: (row: T) => string[];
+	searchText?: (row: T) => SearchText;
 	/**
 	 * Category value per row; rows yielding null carry no category. Omit to make
 	 * `category` a no-op and `categories` empty.
@@ -76,17 +79,15 @@ export function createTableModel<T>(options: TableModelOptions<T>): TableModel<T
 		return [...unique].sort();
 	});
 
+	// Rebuilt only when the rows change, so each keystroke reuses the
+	// folded row text.
+	const searchIndex = $derived(searchText ? createSearchIndex(rows(), searchText) : null);
+
 	const filtered = $derived.by(() => {
-		let result = rows();
+		let result = searchIndex ? searchIndex.filter(search) : rows();
 		if (categoryOf && category !== null) {
 			const wanted = category;
 			result = result.filter((row) => categoryOf(row) === wanted);
-		}
-		const query = search.toLowerCase();
-		if (searchText && query) {
-			result = result.filter((row) =>
-				searchText(row).some((field) => field.toLowerCase().includes(query)),
-			);
 		}
 		if (sortKey !== undefined) {
 			const key = sortKey;

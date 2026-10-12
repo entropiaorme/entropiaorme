@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { filterByQuery } from '$lib/view/search';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
@@ -53,11 +54,7 @@
 	let showEmptied = $state(false);
 	const longList = $derived(stock.length > SEARCH_THRESHOLD);
 	const searchable = $derived(alwaysSearch || longList);
-	const matches = $derived(
-		query.trim() === ''
-			? stock
-			: stock.filter((item) => item.itemName.toLowerCase().includes(query.trim().toLowerCase())),
-	);
+	const matches = $derived(filterByQuery(stock, query, (item) => item.itemName));
 	// A live query overrides the emptied fold: a deliberate search is a
 	// deliberate request for that item, sold out or not. The fold's count
 	// reads against the whole list so the two can never disagree.

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import InfoTip from '$lib/components/InfoTip.svelte';
+	import { filterByQuery } from '$lib/view/search';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 	import { confidenceTip, confidenceTitle, markupLabel } from './marketConfidence';
@@ -21,11 +22,7 @@
 	let query = $state('');
 	let expanded = $state(false);
 	const searchable = $derived(!disclosure && (items.length > SEARCH_THRESHOLD || query !== ''));
-	const visible = $derived(
-		disclosure || query.trim() === ''
-			? items
-			: items.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase())),
-	);
+	const visible = $derived(disclosure ? items : filterByQuery(items, query, (item) => item.name));
 	const disclosureId = $derived(disclosure ? `${disclosure}-loot-composition` : undefined);
 	$effect(() => {
 		void items;

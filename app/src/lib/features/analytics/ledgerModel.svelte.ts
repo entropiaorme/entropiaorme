@@ -20,6 +20,7 @@ import {
 } from '$lib/api';
 import type { LedgerEntry, LedgerEntryType, LedgerPreset } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
+import { filterByQuery, isSearchQuery } from '$lib/view/search';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { ANALYTICS_RANGES, type AnalyticsRange, analyticsPeriod } from './analyticsRange';
 
@@ -89,20 +90,19 @@ export function createLedgerModel() {
 	let showLedgerSources = $state(false);
 
 	function buildTagSuggestions(query: string, type: LedgerEntryType): string[] {
-		const normalisedQuery = query.trim().toLowerCase();
-		if (!normalisedQuery) return [];
+		if (!isSearchQuery(query)) return [];
+		// The tag already typed in full is not a suggestion.
+		const typed = query.trim().toLowerCase();
 
 		const tagCounts = new Map<string, number>();
 		for (const entry of entries) {
 			if (entry.type !== type) continue;
 			const tag = entry.tag.trim();
-			if (!tag) continue;
-			const normalised = tag.toLowerCase();
-			if (!normalised.includes(normalisedQuery) || normalised === normalisedQuery) continue;
+			if (!tag || tag.toLowerCase() === typed) continue;
 			tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
 		}
 
-		return Array.from(tagCounts.entries())
+		return filterByQuery(Array.from(tagCounts.entries()), query, ([tag]) => tag)
 			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 			.slice(0, 6)
 			.map(([tag]) => tag);

@@ -35,8 +35,10 @@ describe('MapPinPicker', () => {
 		render(MapPinPicker, { props: { pins, onselect } });
 
 		await fireEvent.input(screen.getByRole('combobox'), { target: { value: 'north' } });
-		const label = await waitFor(() => screen.getByText('North claim'));
-		await fireEvent.click(label.closest('[role="option"]') as HTMLElement);
+		const option = await waitFor(() => screen.getByRole('option', { name: /North claim/ }));
+		// The matched word is brought forward in the suggestion.
+		expect(option.querySelector('mark')?.textContent).toBe('North');
+		await fireEvent.click(option);
 
 		expect(onselect).toHaveBeenCalledWith(pins[1]);
 		expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('');

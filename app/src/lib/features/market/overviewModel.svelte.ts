@@ -7,6 +7,7 @@
 import type { MarketHorizon, MarketOverviewRow, MarketReading } from '$lib/api';
 import { getMarketOverview } from '$lib/api';
 import { describeError } from '$lib/view/errorState';
+import { filterByQuery } from '$lib/view/search';
 
 export const HORIZONS: { id: MarketHorizon; label: string }[] = [
 	{ id: 'day', label: 'Day' },
@@ -108,10 +109,7 @@ export function createOverviewModel() {
 	// Search-filtered, sorted view of the flattened rows. Null markups
 	// (no sales in the horizon) sort last in both directions.
 	const sortedRows = $derived.by<OverviewTableRow[]>(() => {
-		const query = search.trim().toLowerCase();
-		const filtered = query
-			? tableRows.filter((row) => row.itemName.toLowerCase().includes(query))
-			: tableRows;
+		const filtered = filterByQuery(tableRows, search, (row) => row.itemName);
 		const dir = sortDir === 'asc' ? 1 : -1;
 		const key = sortKey;
 		return [...filtered].sort((a, b) => {

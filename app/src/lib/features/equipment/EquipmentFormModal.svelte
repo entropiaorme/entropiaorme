@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
 	import { Button, Input, Modal, PickerInput, SegmentedControl, Toggle } from '$lib/components';
 	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
 	import { doseFieldsError } from '$lib/features/consumables/doseForm';
@@ -49,8 +50,8 @@
 	}
 </script>
 
-{#snippet resultLine({ item }: { item: EquipmentSearchResult })}
-	<span class="text-text truncate">{item.name}</span>
+{#snippet resultLine({ item, query }: { item: EquipmentSearchResult; query: string })}
+	<span class="text-text truncate"><SearchHighlight text={item.name} {query} /></span>
 	<span class="text-xs text-text-tertiary tabular-nums shrink-0">{economyLine(item)}</span>
 {/snippet}
 
@@ -103,7 +104,7 @@
 								Weapon
 							</label>
 							<PickerInput id="equipment-weapon-search" model={model.weaponPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.weaponPicker.selected?.isLimited}
@@ -119,7 +120,7 @@
 								Amplifier
 							</label>
 							<PickerInput id="equipment-amp-search" model={model.ampPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.ampPicker.selected?.isLimited}
@@ -152,7 +153,7 @@
 								Scope
 							</label>
 							<PickerInput id="equipment-scope-search" model={model.scopePicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.scopePicker.selected?.isLimited}
@@ -168,7 +169,7 @@
 								Extender / Absorber
 							</label>
 							<PickerInput id="equipment-absorber-search" model={model.absorberPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.absorberPicker.selected?.isLimited}
@@ -184,7 +185,7 @@
 								Mindforce implant
 							</label>
 							<PickerInput id="equipment-implant-search" model={model.implantPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.implantPicker.selected?.isLimited}
@@ -258,7 +259,7 @@
 								Healing Tool
 							</label>
 							<PickerInput id="equipment-healer-search" model={model.healerPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.healerPicker.selected?.isLimited}
@@ -309,7 +310,7 @@
 								Mindforce implant
 							</label>
 							<PickerInput id="equipment-heal-implant-search" model={model.implantPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.implantPicker.selected?.isLimited}
@@ -353,7 +354,7 @@
 								Harvesting Tool
 							</label>
 							<PickerInput id="equipment-tool-search" model={model.toolPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.toolPicker.selected?.isLimited}
@@ -377,8 +378,8 @@
 							placeholder="Search or type a custom name…"
 							extraRow={showConsumableCustomRow ? consumableCustomRow : undefined}
 						>
-							{#snippet result({ item })}
-								<span class="text-text truncate">{item.name}</span>
+							{#snippet result({ item, query })}
+								<span class="text-text truncate"><SearchHighlight text={item.name} {query} /></span>
 							{/snippet}
 							{#snippet selection({ item })}
 								<span class="text-text font-medium truncate flex-1">{item.name}</span>

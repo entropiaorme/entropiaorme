@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
 	import { tick } from 'svelte';
 	import type { EquipmentSearchResult, SetupComponentRole } from '$lib/api';
 	import { Input, PickerInput } from '$lib/components';
@@ -28,8 +29,8 @@
 	}
 </script>
 
-{#snippet resultLine({ item }: { item: EquipmentSearchResult })}
-	<span class="text-text truncate">{item.name}</span>
+{#snippet resultLine({ item, query }: { item: EquipmentSearchResult; query: string })}
+	<span class="text-text truncate"><SearchHighlight text={item.name} {query} /></span>
 	<span class="text-xs text-text-tertiary tabular-nums shrink-0">{economyLine(item)}</span>
 {/snippet}
 
@@ -62,7 +63,7 @@
 				placeholder={blank ? 'Add a weapon…' : `Search ${ROLE_LABEL[role].toLowerCase()}s`}
 				class="min-w-0 flex-1 max-w-md"
 			>
-				{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+				{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 				{#snippet selection({ item })}{@render selectionLine({ item })}{/snippet}
 			</PickerInput>
 		{/if}

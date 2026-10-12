@@ -1,4 +1,5 @@
 import type { MapPin } from '$lib/api';
+import { rankByQuery } from '$lib/view/search';
 import type { GamePoint } from './coords';
 
 export interface MapFocusRequest {
@@ -6,8 +7,7 @@ export interface MapFocusRequest {
 	nonce: number;
 }
 
+/** Pins by name and notes, best match first. */
 export function filterMapPins(pins: MapPin[], query: string): MapPin[] {
-	const needle = query.trim().toLowerCase();
-	if (!needle) return pins;
-	return pins.filter((pin) => `${pin.name}\n${pin.notes ?? ''}`.toLowerCase().includes(needle));
+	return rankByQuery(pins, query, (pin) => [pin.name, pin.notes]);
 }

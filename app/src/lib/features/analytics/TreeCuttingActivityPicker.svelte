@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Menu from '$lib/components/Menu.svelte';
+	import { matchesQuery } from '$lib/view/search';
 	import DefinitionCataloguePanel from '$lib/features/sessions/DefinitionCataloguePanel.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 	import type { TableModel } from '$lib/view/tableModel.svelte';
@@ -35,9 +36,7 @@
 	const COL_REALISED = 'min-w-0 flex-[0_1_7.5rem]';
 	const rateTone = (value: number) => (value >= 1 ? 'text-positive' : 'text-negative');
 	const selectedName = $derived(selected ? treeCuttingActivityName(selected) : 'Overall');
-	const showOverall = $derived(
-		table.search.trim() === '' || 'overall'.includes(table.search.trim().toLocaleLowerCase()),
-	);
+	const showOverall = $derived(matchesQuery('Overall', table.search));
 	const sortArrow = (key: TreeCuttingActivitySortKey) =>
 		table.sortKey === key ? (table.sortDir === 'asc' ? '↑' : '↓') : '';
 	const sortDescription = (key: TreeCuttingActivitySortKey, label: string) => {

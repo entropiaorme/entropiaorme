@@ -31,6 +31,7 @@ import {
 import { hydrate } from '$lib/stores/trackingStore.svelte';
 import type { Quest, QuestFamily } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
+import { matchesQuery } from '$lib/view/search';
 import { sortDefinitions } from './definitionCatalogue';
 
 /** One roster row as the editor drafts it (ids stringified for the UI;
@@ -145,7 +146,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 	);
 
 	function matchesFilter(value: string): boolean {
-		return value.toLowerCase().includes(catalogFilter.trim().toLowerCase());
+		return matchesQuery(value, catalogFilter);
 	}
 
 	const catalogFamilies = $derived(

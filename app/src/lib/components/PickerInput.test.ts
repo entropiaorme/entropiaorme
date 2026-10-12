@@ -15,6 +15,7 @@ type FakeModel = {
 	selected: Item | null;
 	loading: boolean;
 	error: string | null;
+	settledQuery?: string | null;
 	select: ReturnType<typeof vi.fn<(item: Item) => void>>;
 	clear: ReturnType<typeof vi.fn<() => void>>;
 };
@@ -34,8 +35,8 @@ function fakeModel(overrides: Partial<FakeModel> = {}): FakeModel {
 
 // The test render callsite cannot infer the component's generic from props,
 // so the snippets are typed against `unknown` and narrow to Item inside.
-const resultSnippet = createRawSnippet((args: () => { item: unknown }) => ({
-	render: () => `<span>${(args().item as Item).name}</span>`,
+const resultSnippet = createRawSnippet((args: () => { item: unknown; query: string }) => ({
+	render: () => `<span data-query="${args().query}">${(args().item as Item).name}</span>`,
 }));
 
 const selectionSnippet = createRawSnippet((args: () => { item: unknown }) => ({
@@ -141,6 +142,18 @@ describe('keyboard interaction', () => {
 		expect(screen.queryByRole('listbox')).toBeNull();
 		expect(input.getAttribute('aria-expanded')).toBe('false');
 	});
+
+	it('keeps the Escape that dismisses the dropdown from reaching the window', async () => {
+		renderPicker(fakeModel({ results: twoResults }));
+		const onWindowKeydown = vi.fn();
+		window.addEventListener('keydown', onWindowKeydown);
+		try {
+			await fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+		} finally {
+			window.removeEventListener('keydown', onWindowKeydown);
+		}
+		expect(onWindowKeydown).not.toHaveBeenCalled();
+	});
 });
 
 describe('selection and rows', () => {
@@ -156,6 +169,27 @@ describe('selection and rows', () => {
 		renderPicker(fakeModel({ results: twoResults, selected: twoResults[0] }));
 
 		expect(screen.getByText('Selected: Atrox Young')).toBeTruthy();
+		expect(screen.queryByRole('listbox')).toBeNull();
+	});
+
+	it('hands each row the query it answers, for highlighting', () => {
+		renderPicker(fakeModel({ query: 'atr', results: twoResults }));
+
+		const rows = screen.getAllByRole('option');
+		expect(rows[0].querySelector('[data-query]')?.getAttribute('data-query')).toBe('atr');
+	});
+
+	it('says so when a settled search found nothing', () => {
+		renderPicker(fakeModel({ query: 'zeta ', results: [], settledQuery: 'zeta' }));
+
+		expect(screen.getByRole('listbox').textContent).toContain('No matches for “zeta”');
+	});
+
+	it('stays quiet while a search for the current query is still pending', () => {
+		renderPicker(fakeModel({ query: 'zetas', results: [], settledQuery: 'zeta' }));
+		expect(screen.queryByRole('listbox')).toBeNull();
+
+		renderPicker(fakeModel({ query: 'zeta', results: [], settledQuery: 'zeta', loading: true }));
 		expect(screen.queryByRole('listbox')).toBeNull();
 	});
 

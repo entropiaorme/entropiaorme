@@ -129,6 +129,29 @@ describe('loading and results', () => {
 		expect(ta.error).toBeNull();
 	});
 
+	it('records the query a settled search answered, and forgets it on clear', async () => {
+		const search = vi.fn().mockResolvedValue([]);
+		const ta = createTypeahead<Item>({ search });
+		expect(ta.settledQuery).toBeNull();
+		ta.query = ' zeta ';
+		vi.advanceTimersByTime(200);
+		expect(ta.settledQuery).toBeNull();
+		await flush();
+		expect(ta.settledQuery).toBe('zeta');
+
+		ta.clear();
+		expect(ta.settledQuery).toBeNull();
+	});
+
+	it('records the query a failed search answered', async () => {
+		const search = vi.fn().mockRejectedValue(new Error('down'));
+		const ta = createTypeahead<Item>({ search });
+		ta.query = 'zeta';
+		vi.advanceTimersByTime(200);
+		await flush();
+		expect(ta.settledQuery).toBe('zeta');
+	});
+
 	it('keeps the previous results visible while a follow-up search debounces', async () => {
 		const search = vi.fn().mockResolvedValue([alpha]);
 		const ta = createTypeahead<Item>({ search });

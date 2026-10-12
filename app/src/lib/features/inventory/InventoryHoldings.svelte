@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
+	import { filterByQuery, isSearchQuery } from '$lib/view/search';
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
@@ -55,10 +56,7 @@
 	} = $props();
 
 	let query = $state('');
-	const normalisedQuery = $derived(query.trim().toLowerCase());
-	const visibleEquipment = $derived(
-		equipment.filter((item) => !normalisedQuery || item.name.toLowerCase().includes(normalisedQuery)),
-	);
+	const visibleEquipment = $derived(filterByQuery(equipment, query, (item) => item.name));
 	const kindOptions = [
 		{ id: 'loot', label: 'Loot' },
 		{ id: 'equipment', label: 'Assets' },
@@ -192,7 +190,7 @@
 					</div>
 				</li>
 			{/each}
-			{#if visibleEquipment.length === 0 && normalisedQuery}
+			{#if visibleEquipment.length === 0 && isSearchQuery(query)}
 				<li class="px-2.5 py-3 text-center text-xs text-text-tertiary" role="row">
 					<span role="cell">No asset matches that search.</span>
 				</li>

@@ -44,6 +44,7 @@
 		"vitest": "^3.2.6"
 	},
 	"dependencies": {
+		"@leeoniya/ufuzzy": "^1.0.19",
 		"@tauri-apps/api": "^2.10.1",
 		"@tauri-apps/plugin-shell": "^2.3.5",
 		"@tauri-apps/plugin-store": "^2.4.3",

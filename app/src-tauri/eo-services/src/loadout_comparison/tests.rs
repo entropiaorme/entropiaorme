@@ -505,6 +505,179 @@ fn the_streams_add_up_to_the_cost_of_one_use() {
 }
 
 #[test]
+fn the_loss_splits_into_premium_shortfall_outside_and_house_edge() {
+    let mut bc30_a106 = bc30(1800.0);
+    bc30_a106["amp_entity"] = amp("Omegaton A106", 18.0, 100.0, 2.902, 83.6);
+    let setups = [
+        ("BC-30 at 1800% with a P20", economics(&bc30(1800.0), 50.0)),
+        ("Scimitar, unlimited", economics(&scimitar(), 50.0)),
+        ("BC-30 with an unlimited amp", economics(&bc30_a106, 50.0)),
+        (
+            "Gauss + 37B with a P20",
+            economics(
+                &props(
+                    gauss_weapon(),
+                    1500.0,
+                    Some((
+                        amp("ArMatrix L-Amplifier 37B (L)", 37.0, 777.0, 0.592, 85.0),
+                        125.0,
+                    )),
+                    Some(p20()),
+                    None,
+                ),
+                41.5,
+            ),
+        ),
+        (
+            "chip with an implant",
+            economics(
+                &mayhem_chip((
+                    amp("Mayhem MF-Amplifier Delta (L)", 57.0, 898.0, 0.019, 75.0),
+                    370.0,
+                )),
+                50.0,
+            ),
+        ),
+    ];
+    for (label, setup) in &setups {
+        assert_close(
+            label,
+            setup.consumed_premium_pec
+                + setup.efficiency_shortfall_pec
+                + setup.outside_model_pec
+                + setup.house_edge_pec,
+            setup.loss_per_use_pec,
+            1e-9,
+        );
+        assert!(setup.efficiency_shortfall_pec > 0.0, "{label}");
+        assert!(setup.house_edge_pec > 0.0, "{label}");
+    }
+    // An unlimited setup with nothing outside the model loses only to its
+    // Efficiency and the house edge.
+    let scimitar = &setups[1].1;
+    assert_eq!(scimitar.consumed_premium_pec, 0.0);
+    assert_eq!(scimitar.outside_model_pec, 0.0);
+    // A limited weapon at markup pays its premium; its absorber sits
+    // outside the model.
+    let limited = &setups[0].1;
+    assert!(limited.consumed_premium_pec > 0.0);
+    assert!(limited.outside_model_pec > 0.0);
+}
+
+#[test]
+fn the_efficiency_shortfall_ignores_the_looter_level_and_the_house_edge_ends_at_100() {
+    let at = |level: f64| economics(&bc30(1800.0), level);
+    let base = at(0.0);
+    let mut previous_edge = f64::INFINITY;
+    for level in [0.0, 25.0, 50.0, 75.0, 100.0] {
+        let setup = at(level);
+        // Within the model's rounding of expected loot to 1e-8 PED.
+        assert_close(
+            &format!("shortfall at {level}"),
+            setup.efficiency_shortfall_pec,
+            base.efficiency_shortfall_pec,
+            1e-5,
+        );
+        // Community Model v1 returns 86% + 7% x Efficiency + 7% x looter:
+        // a 100% Efficiency item still keeps 7% x (1 - looter / 100) back.
+        assert_close(
+            &format!("house edge at {level}"),
+            setup.house_edge_pec,
+            setup.loot_bearing_pec * 0.07 * (1.0 - level / 100.0),
+            1e-9,
+        );
+        assert!(setup.house_edge_pec < previous_edge, "falls with the level");
+        previous_edge = setup.house_edge_pec;
+    }
+    assert_close("house edge at 100", at(100.0).house_edge_pec, 0.0, 1e-12);
+    // The model stops counting looter skill at 100.
+    assert_close("house edge past 100", at(150.0).house_edge_pec, 0.0, 1e-12);
+}
+
+#[test]
+fn part_decay_splits_decay_by_part_before_markup() {
+    // The implant takes 20% of the chip's 0.011 PEC decay, the absorber 20%
+    // of the rest, and the weapon what is left; the amp decays on its own.
+    let chip = mayhem_chip((
+        amp("Mayhem MF-Amplifier Delta (L)", 57.0, 898.0, 0.019, 75.0),
+        370.0,
+    ));
+    let [weapon, amp_decay, absorber, implant] = part_decay_pec(&chip);
+    assert_close("implant", implant, 0.0022, 1e-4);
+    assert_close("absorber", absorber, 0.0088 * 0.2, 1e-4);
+    assert_close("weapon", weapon, 0.0088 * 0.8, 1e-4);
+    assert_close("amp", amp_decay, 0.019, 1e-4);
+    assert_close("all of it", weapon + absorber + implant, 0.011, 1e-4);
+
+    // Without an amp or implant those parts take nothing; the 1800% markup
+    // does not enter the TT decay.
+    assert_eq!(part_decay_pec(&bc30(1800.0)), [0.0016, 0.0, 0.0004, 0.0]);
+    assert_eq!(part_decay_pec(&scimitar()), [2.336, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn compare_to_reaches_its_hp_max() {
+    let setups = vec![
+        economics(&bc30(1800.0), 50.0),
+        economics(
+            &props(gauss_weapon(), 1500.0, None, Some(p20()), None),
+            50.0,
+        ),
+    ];
+    let outcome = compare_to(&setups, &STANDARD, 5000.0).unwrap();
+    for curve in &outcome.curves {
+        assert_eq!(curve.first().unwrap().hp, 1.0);
+        assert_eq!(curve.last().unwrap().hp, 5000.0);
+    }
+    assert_eq!(outcome.winners.first().unwrap().from_hp, 1.0);
+    assert_eq!(outcome.winners.last().unwrap().to_hp, 5000.0);
+    // The same setups over the default reach agree where the curves overlap.
+    let short = compare(&setups, &STANDARD).unwrap();
+    let at_1000 = |curve: &[KillFigures]| *curve.iter().find(|point| point.hp == 1000.0).unwrap();
+    assert_close(
+        "loss at 1,000 HP",
+        at_1000(&outcome.curves[0]).loss_pec,
+        at_1000(&short.curves[0]).loss_pec,
+        1e-9,
+    );
+    // A reach of 1 HP or less, or none at all, has no curve.
+    assert!(compare_to(&setups, &STANDARD, 1.0).is_none());
+    assert!(compare_to(&setups, &STANDARD, f64::NAN).is_none());
+    assert!(compare_to(&setups, &STANDARD, f64::INFINITY).is_none());
+}
+
+#[test]
+fn a_longer_curve_widens_its_step_past_3000_points() {
+    let up_to_3000 = curve_points_to(3000.0);
+    assert_eq!(up_to_3000.len(), 3000);
+    assert_eq!(up_to_3000[1] - up_to_3000[0], 1.0);
+    assert_eq!(up_to_3000.last(), Some(&3000.0));
+
+    let points = curve_points_to(5000.0);
+    assert_eq!(&points[..3], &[1.0, 2.0, 4.0]);
+    assert_eq!(points.len(), 2501);
+    assert_eq!(points.last(), Some(&5000.0));
+
+    let points = curve_points_to(30_000.0);
+    assert_eq!(&points[..3], &[1.0, 10.0, 20.0]);
+    assert_eq!(points.last(), Some(&30_000.0));
+
+    for hp_max in [3001.0, 4500.0, 12_345.0, 100_000.0] {
+        let points = curve_points_to(hp_max);
+        assert_eq!(points[0], 1.0, "{hp_max}");
+        assert!(points.len() <= 3001, "{hp_max}: {} points", points.len());
+        assert!(
+            points.windows(2).all(|pair| pair[1] > pair[0]),
+            "{hp_max}: rising"
+        );
+        // The curve reaches the slider's end even off a whole step, so a
+        // pin there still reads figures.
+        assert_eq!(points.last(), Some(&hp_max), "{hp_max}: ends on the reach");
+    }
+    assert_eq!(curve_points_to(50_000.0).last(), Some(&50_000.0));
+}
+
+#[test]
 fn amplifier_damage_above_half_the_weapon_is_flagged_as_wasted() {
     let mut capped = bc30(1800.0);
     capped["amp_entity"] = amp("ArMatrix L-Amplifier 37B (L)", 37.0, 777.0, 0.592, 85.0);

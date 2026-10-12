@@ -126,6 +126,13 @@ pub struct SetupEconomics {
     /// their markups, and any scope.
     pub outside_model_pec: f64,
     pub expected_loot_pec: f64,
+    /// What the weapon and amplifier TT returns below a 100% Efficiency
+    /// item cycling the same TT. The looter level cancels out of it.
+    pub efficiency_shortfall_pec: f64,
+    /// What even a 100% Efficiency item loses on the weapon and amplifier
+    /// TT at the player's looter level. With the premium, the shortfall,
+    /// and the cost outside the model, it makes up the loss per use.
+    pub house_edge_pec: f64,
     /// Cost minus expected loot.
     pub loss_per_use_pec: f64,
     /// The weapon and amplifier streams under Community Model v1:
@@ -196,6 +203,10 @@ pub fn setup_economics(
     let expected_loot_pec = expected_return.expected_loot_tt * 100.0;
     let outside_model_pec = (cost_per_use_pec - loot_bearing_pec - consumed_premium_pec).max(0.0);
     let loss_per_use_pec = cost_per_use_pec - expected_loot_pec;
+    let ideal_return = expected_hunting::community_model_v1(100.0, expected_return.looter_level)
+        .map_err(|_| Unmodelled::MissingEfficiency)?;
+    let efficiency_shortfall_pec = (loot_bearing_pec * ideal_return - expected_loot_pec).max(0.0);
+    let house_edge_pec = loot_bearing_pec * (1.0 - ideal_return);
 
     let expected_damage_per_use = max_damage * assumptions.damage_per_use_factor();
     let uses_per_minute = uses_per_minute.filter(|rate| rate.is_finite() && *rate > 0.0);
@@ -205,6 +216,8 @@ pub fn setup_economics(
         consumed_premium_pec,
         outside_model_pec,
         expected_loot_pec,
+        efficiency_shortfall_pec,
+        house_edge_pec,
         loss_per_use_pec,
         expected_return,
         max_damage,
@@ -215,6 +228,25 @@ pub fn setup_economics(
         uses_per_minute,
         damage_per_second: uses_per_minute.map(|rate| expected_damage_per_use * rate / 60.0),
     })
+}
+
+/// The TT decay one use takes from each part, PEC: the weapon, amplifier,
+/// absorber, and implant in that order. What a limited part's TT is spent
+/// on, so how many of it a volume of hunting uses up.
+pub fn part_decay_pec(props: &Value) -> [f64; 4] {
+    let cost = cost_per_shot_from_props(props, None);
+    let mut decay = [0.0; 4];
+    for line in cost["costBreakdown"].as_array().into_iter().flatten() {
+        let slot = match line["component"].as_str() {
+            Some("Weapon decay") => 0,
+            Some("Amp decay") => 1,
+            Some("Absorber decay") => 2,
+            Some("Implant decay") => 3,
+            _ => continue,
+        };
+        decay[slot] += line["costPec"].as_f64().unwrap_or(0.0);
+    }
+    decay
 }
 
 /// The highest mob HP the comparison curve reaches.
@@ -266,14 +298,25 @@ pub struct ComparisonOutcome {
     pub crossovers: Vec<Crossover>,
 }
 
+/// The most points a curve is sampled at; a longer curve widens its step.
+const CURVE_POINTS_MAX: f64 = 3_000.0;
+
 /// The HP points the curve is sampled at: 1 HP, then every
 /// [`CURVE_HP_STEP`] up to [`CURVE_HP_MAX`].
 pub fn curve_points() -> Vec<f64> {
-    let steps = (CURVE_HP_MAX / CURVE_HP_STEP).round() as usize;
+    curve_points_to(CURVE_HP_MAX)
+}
+
+/// The HP points a curve up to `hp_max` is sampled at: 1 HP, then every
+/// [`CURVE_HP_STEP`], or wider when that would pass [`CURVE_POINTS_MAX`],
+/// always ending on `hp_max` itself.
+pub fn curve_points_to(hp_max: f64) -> Vec<f64> {
+    let step = (hp_max / CURVE_POINTS_MAX).ceil().max(CURVE_HP_STEP);
+    let steps = (hp_max / step).ceil() as usize;
     std::iter::once(1.0)
         .chain(
             (1..=steps)
-                .map(|index| index as f64 * CURVE_HP_STEP)
+                .map(|index| (index as f64 * step).min(hp_max))
                 .filter(|hp| *hp > 1.0),
         )
         .collect()
@@ -308,14 +351,23 @@ pub fn compare(
     setups: &[SetupEconomics],
     assumptions: &ComparisonAssumptions,
 ) -> Option<ComparisonOutcome> {
-    if setups.is_empty() {
+    compare_to(setups, assumptions, CURVE_HP_MAX)
+}
+
+/// [`compare`] from 1 HP to `hp_max`.
+pub fn compare_to(
+    setups: &[SetupEconomics],
+    assumptions: &ComparisonAssumptions,
+    hp_max: f64,
+) -> Option<ComparisonOutcome> {
+    if setups.is_empty() || !hp_max.is_finite() || hp_max <= 1.0 {
         return None;
     }
     let solved: Vec<KillCurve> = setups
         .iter()
-        .map(|setup| KillCurve::solve(setup.max_damage, CURVE_HP_MAX, assumptions))
+        .map(|setup| KillCurve::solve(setup.max_damage, hp_max, assumptions))
         .collect::<Option<_>>()?;
-    let points = curve_points();
+    let points = curve_points_to(hp_max);
     let curves = setups
         .iter()
         .zip(&solved)
@@ -330,7 +382,7 @@ pub fn compare(
     // The scan: every setup's loss per kill at evenly spaced HP, for the
     // crossovers and the cheapest setup at each HP.
     let scan: Vec<f64> = (0..=SCAN_POINTS)
-        .map(|index| 1.0 + (CURVE_HP_MAX - 1.0) * index as f64 / SCAN_POINTS as f64)
+        .map(|index| 1.0 + (hp_max - 1.0) * index as f64 / SCAN_POINTS as f64)
         .collect();
     let losses: Vec<Vec<f64>> = setups
         .iter()

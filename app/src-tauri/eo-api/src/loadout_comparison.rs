@@ -70,6 +70,8 @@ pub struct ComparisonAssumptionsView {
     pub model_version: String,
     pub looter_source: ExpectedLooterSource,
     pub looter_level: f64,
+    /// The player's own three-looter mean, whatever level was compared at.
+    pub own_looter_level: f64,
     /// The share of uses that land.
     pub hit_rate: f64,
     /// The lowest roll as a share of max damage.
@@ -90,6 +92,10 @@ pub struct SetupComponentView {
     /// The markup it runs at: the given one for a limited item, 100 for an
     /// unlimited one.
     pub markup_percent: f64,
+    /// TT decay one use takes from it, PEC.
+    pub decay_pec_per_use: f64,
+    /// Its full TT, PED, when the catalogue gives one.
+    pub max_tt_ped: Nullable<f64>,
 }
 
 /// Per-use economics, PEC per use unless stated.
@@ -102,16 +108,19 @@ pub struct SetupEconomicsView {
     pub consumed_premium_pec: f64,
     /// Absorber and implant decay: cost with no modelled return.
     pub outside_model_pec: f64,
+    /// Return lost per use against a 100% Efficiency item cycling the same
+    /// TT; independent of the looter level.
+    pub efficiency_shortfall_pec: f64,
+    /// What a 100% Efficiency item would still lose per use on the same TT
+    /// at the player's looter level.
+    pub house_edge_pec: f64,
     pub effective_efficiency: Nullable<EquipmentEffectiveEfficiency>,
     pub weighted_efficiency_pct: Nullable<f64>,
     pub max_damage: f64,
     /// Amplifier damage above half the weapon's: paid for, never dealt.
     pub amp_damage_wasted: f64,
     pub damage_per_pec: f64,
-    /// Expected loss per HP removed: the per-HP ranking metric.
-    pub loss_per_hp_pec: f64,
     pub uses_per_minute: Nullable<f64>,
-    pub damage_per_second: Nullable<f64>,
 }
 
 /// What a setup costs to kill a mob at one HP.
@@ -181,6 +190,10 @@ const ASSUMPTIONS: ComparisonAssumptions = ComparisonAssumptions::STANDARD;
 /// The most setups one comparison takes: a readable chart's worth.
 pub const MAX_COMPARED_SETUPS: usize = 8;
 
+/// The range of mob HP a comparison's curve may reach.
+pub const MIN_CURVE_HP: f64 = 10.0;
+pub const MAX_CURVE_HP: f64 = 100_000.0;
+
 fn setup_label(index: usize) -> String {
     format!("Setup {}", index + 1)
 }
@@ -209,6 +222,8 @@ fn economics_view(economics: &SetupEconomics) -> SetupEconomicsView {
         loss_per_use_pec: economics.loss_per_use_pec,
         consumed_premium_pec: economics.consumed_premium_pec,
         outside_model_pec: economics.outside_model_pec,
+        efficiency_shortfall_pec: economics.efficiency_shortfall_pec,
+        house_edge_pec: economics.house_edge_pec,
         effective_efficiency: economics
             .expected_return
             .effective_efficiency
@@ -218,9 +233,7 @@ fn economics_view(economics: &SetupEconomics) -> SetupEconomicsView {
         max_damage: economics.max_damage,
         amp_damage_wasted: economics.amp_damage_wasted,
         damage_per_pec: economics.damage_per_pec,
-        loss_per_hp_pec: economics.loss_per_hp_pec,
         uses_per_minute: economics.uses_per_minute.into(),
-        damage_per_second: economics.damage_per_second.into(),
     }
 }
 
@@ -233,11 +246,25 @@ struct ResolvedSetup {
 }
 
 impl Api {
-    /// Compare setups per kill from 1 to 1,000 HP.
+    /// Compare setups per kill from 1 HP to `hp_max`.
     pub async fn loadout_compare(
         &self,
         setups: Vec<SetupPick>,
+        hp_max: f64,
+        looter_level: Option<f64>,
     ) -> Result<LoadoutComparison, ApiError> {
+        if looter_level.is_some_and(|level| !(level.is_finite() && (0.0..=200.0).contains(&level)))
+        {
+            return Err(ApiError::bad_request(
+                "a looter level is between 0 and 200".to_string(),
+            ));
+        }
+        if !hp_max.is_finite() || !(MIN_CURVE_HP..=MAX_CURVE_HP).contains(&hp_max) {
+            return Err(ApiError::bad_request(format!(
+                "a comparison reaches between {MIN_CURVE_HP} and {MAX_CURVE_HP} HP"
+            )));
+        }
+        let hp_max = hp_max.round();
         if setups.is_empty() || setups.len() > MAX_COMPARED_SETUPS {
             return Err(ApiError::bad_request(format!(
                 "a comparison takes between 1 and {MAX_COMPARED_SETUPS} setups"
@@ -256,10 +283,19 @@ impl Api {
             .map(|profession| (profession.name.clone(), profession.level))
             .collect();
         let level = |name: &str| levels.get(name).copied().unwrap_or(0.0);
-        let looters = HuntingLooterLevels {
+        let own = HuntingLooterLevels {
             animal: level("Animal Looter"),
             mutant: level("Mutant Looter"),
             robot: level("Robot Looter"),
+        };
+        // A looter level given for the comparison stands in for all three.
+        let looters = match looter_level {
+            Some(level) => HuntingLooterLevels {
+                animal: level,
+                mutant: level,
+                robot: level,
+            },
+            None => own,
         };
 
         let economics: Vec<Result<SetupEconomics, UnmodelledReason>> = resolved
@@ -277,7 +313,7 @@ impl Api {
             .iter()
             .filter_map(|result| result.as_ref().ok().cloned())
             .collect();
-        let outcome = engine::compare(&priced, &ASSUMPTIONS);
+        let outcome = engine::compare_to(&priced, &ASSUMPTIONS, hp_max);
         // The outcome indexes the priced setups; map back to request order.
         let priced_indices: Vec<usize> = economics
             .iter()
@@ -339,12 +375,13 @@ impl Api {
                 model_version: engine::RETURN_MODEL.to_string(),
                 looter_source: ExpectedLooterSource::ThreeLooterMean,
                 looter_level: eo_wire::normalizer::round_half_even(looters.three_looter_mean(), 2),
+                own_looter_level: eo_wire::normalizer::round_half_even(own.three_looter_mean(), 2),
                 hit_rate: ASSUMPTIONS.hit_rate,
                 damage_floor: ASSUMPTIONS.damage_floor,
                 critical_chance: ASSUMPTIONS.critical_chance,
                 critical_multiplier: ASSUMPTIONS.critical_multiplier,
             },
-            hp_max: engine::CURVE_HP_MAX,
+            hp_max,
             setups,
             winners,
         })
@@ -434,16 +471,32 @@ impl Api {
                     .to_string(),
                 is_limited: limited,
                 markup_percent: markup,
+                decay_pec_per_use: 0.0,
+                max_tt_ped: entity
+                    .pointer("/economy/max_tt")
+                    .and_then(Value::as_f64)
+                    .filter(|tt| *tt > 0.0)
+                    .into(),
             });
         }
         props.insert("scope_entity".into(), Value::Null);
         props.insert("scope_catalog_id".into(), Value::Null);
         props.insert("scope_markup".into(), json!(100));
         props.insert("damage_enhancers".into(), json!(0));
+        let props = self.weapon_pricing.prepare(&Value::Object(props));
+        let decay = engine::part_decay_pec(&props);
+        for component in &mut components {
+            component.decay_pec_per_use = decay[match component.role {
+                SetupComponentRole::Weapon => 0,
+                SetupComponentRole::Amplifier => 1,
+                SetupComponentRole::Absorber => 2,
+                SetupComponentRole::Implant => 3,
+            }];
+        }
         Ok(ResolvedSetup {
             name: components[0].name.clone(),
             components,
-            props: self.weapon_pricing.prepare(&Value::Object(props)),
+            props,
         })
     }
 }

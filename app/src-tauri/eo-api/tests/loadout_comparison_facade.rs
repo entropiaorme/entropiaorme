@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eo_api::loadout_comparison::{
-    ComponentPick, SetupComponentRole, SetupPick, UnmodelledReason, MAX_COMPARED_SETUPS,
+    ComponentPick, LoadoutComparison, SetupComponentRole, SetupPick, UnmodelledReason,
+    MAX_COMPARED_SETUPS,
 };
 use eo_api::{Api, ApiError};
 use eo_services::db::Db;
@@ -155,6 +156,11 @@ fn with_p20(catalog_id: &str, markup: f64) -> SetupPick {
     }
 }
 
+/// Compare over the default 1,000 HP reach at the player's own looter levels.
+async fn compare(api: &Api, setups: Vec<SetupPick>) -> Result<LoadoutComparison, ApiError> {
+    api.loadout_compare(setups, 1000.0, None).await
+}
+
 fn bad_request(result: Result<impl std::fmt::Debug, ApiError>) -> String {
     match result {
         Err(ApiError::BadRequest { message }) => message,
@@ -174,10 +180,12 @@ async fn setups_compare_per_kill_across_the_whole_curve() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db) = api_over(dir.path()).await;
     seed_skills(&db, 50.0).await;
-    let comparison = api
-        .loadout_compare(vec![with_p20("bc30", 1800.0), with_p20("gauss", 1500.0)])
-        .await
-        .unwrap();
+    let comparison = compare(
+        &api,
+        vec![with_p20("bc30", 1800.0), with_p20("gauss", 1500.0)],
+    )
+    .await
+    .unwrap();
 
     assert_eq!(comparison.hp_max, 1000.0);
     assert_eq!(comparison.assumptions.model_version, "community_v1");
@@ -231,14 +239,16 @@ async fn more_than_two_setups_rank_together_in_request_order() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db) = api_over(dir.path()).await;
     seed_skills(&db, 41.5).await;
-    let comparison = api
-        .loadout_compare(vec![
+    let comparison = compare(
+        &api,
+        vec![
             with_p20("flicker", 1200.0),
             weapon_only("scimitar", None),
             with_p20("bc30", 1800.0),
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await
+    .unwrap();
     let indices: Vec<u32> = comparison.setups.iter().map(|setup| setup.index).collect();
     assert_eq!(indices, [0, 1, 2]);
     assert!(comparison
@@ -257,8 +267,9 @@ async fn a_markup_applies_to_limited_items_and_unlimited_ones_run_at_tt() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db) = api_over(dir.path()).await;
     seed_skills(&db, 41.5).await;
-    let comparison = api
-        .loadout_compare(vec![
+    let comparison = compare(
+        &api,
+        vec![
             weapon_only("scimitar", Some(11_000.0)),
             SetupPick {
                 weapon: pick("flicker", None),
@@ -266,9 +277,10 @@ async fn a_markup_applies_to_limited_items_and_unlimited_ones_run_at_tt() {
                 absorber: Some(pick("p20", Some(106.0))),
                 implant: Some(pick("neo", Some(110.0))),
             },
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await
+    .unwrap();
     let scimitar = &comparison.setups[0];
     assert_eq!(scimitar.components[0].markup_percent, 100.0);
     assert!(!scimitar.components[0].is_limited);
@@ -303,13 +315,15 @@ async fn a_markup_applies_to_limited_items_and_unlimited_ones_run_at_tt() {
 async fn an_unpriceable_setup_says_why_and_leaves_no_ranking() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
-    let comparison = api
-        .loadout_compare(vec![
+    let comparison = compare(
+        &api,
+        vec![
             weapon_only("mystery", None),
             weapon_only("bc30", Some(1800.0)),
-        ])
-        .await
-        .unwrap();
+        ],
+    )
+    .await
+    .unwrap();
     let mystery = &comparison.setups[0];
     assert_eq!(
         *mystery.unmodelled,
@@ -327,10 +341,10 @@ async fn the_comparison_refuses_what_it_cannot_build() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
     let low = bad_request(
-        api.loadout_compare(vec![
-            weapon_only("bc30", None),
-            weapon_only("gauss", Some(50.0)),
-        ])
+        compare(
+            &api,
+            vec![weapon_only("bc30", None), weapon_only("gauss", Some(50.0))],
+        )
         .await,
     );
     assert_eq!(
@@ -338,29 +352,161 @@ async fn the_comparison_refuses_what_it_cannot_build() {
         "Setup 2's weapon markup must be a percentage of at least 100"
     );
     let missing = not_found(
-        api.loadout_compare(vec![
-            SetupPick {
-                absorber: Some(pick("nope", Some(100.0))),
-                ..weapon_only("bc30", None)
-            },
-            weapon_only("gauss", None),
-        ])
+        compare(
+            &api,
+            vec![
+                SetupPick {
+                    absorber: Some(pick("nope", Some(100.0))),
+                    ..weapon_only("bc30", None)
+                },
+                weapon_only("gauss", None),
+            ],
+        )
         .await,
     );
     assert_eq!(missing, "Setup 1's absorber 'nope' is not in the catalogue");
     // A weapon id from another vocabulary is not a weapon.
     not_found(
-        api.loadout_compare(vec![weapon_only("p20", None), weapon_only("gauss", None)])
-            .await,
+        compare(
+            &api,
+            vec![weapon_only("p20", None), weapon_only("gauss", None)],
+        )
+        .await,
     );
     not_found(
-        api.loadout_compare(vec![weapon_only("", None), weapon_only("gauss", None)])
-            .await,
+        compare(
+            &api,
+            vec![weapon_only("", None), weapon_only("gauss", None)],
+        )
+        .await,
     );
     // A comparison takes one to eight setups.
-    bad_request(api.loadout_compare(Vec::new()).await);
+    bad_request(compare(&api, Vec::new()).await);
     bad_request(
-        api.loadout_compare(vec![weapon_only("bc30", None); MAX_COMPARED_SETUPS + 1])
-            .await,
+        compare(
+            &api,
+            vec![weapon_only("bc30", None); MAX_COMPARED_SETUPS + 1],
+        )
+        .await,
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reach_and_looter_level_are_refused_outside_their_ranges() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    let setups = || vec![with_p20("bc30", 1800.0)];
+    for hp_max in [9.0, 100_001.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            bad_request(api.loadout_compare(setups(), hp_max, None).await),
+            "a comparison reaches between 10 and 100000 HP",
+            "{hp_max}"
+        );
+    }
+    for level in [-1.0, 200.5, f64::NAN] {
+        assert_eq!(
+            bad_request(api.loadout_compare(setups(), 1000.0, Some(level)).await),
+            "a looter level is between 0 and 200",
+            "{level}"
+        );
+    }
+    // The ends of both ranges are taken, and the reach is a whole HP.
+    let shortest = api
+        .loadout_compare(setups(), 10.0, Some(0.0))
+        .await
+        .unwrap();
+    assert_eq!(shortest.hp_max, 10.0);
+    assert_eq!(shortest.setups[0].curve.last().unwrap().hp, 10.0);
+    assert_eq!(shortest.assumptions.looter_level, 0.0);
+    let longer = api
+        .loadout_compare(setups(), 4999.6, Some(200.0))
+        .await
+        .unwrap();
+    assert_eq!(longer.hp_max, 5000.0);
+    assert_eq!(longer.setups[0].curve.last().unwrap().hp, 5000.0);
+    assert_eq!(longer.assumptions.looter_level, 200.0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_looter_level_given_stands_in_for_the_players_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, 41.5).await;
+    let at =
+        |level: Option<f64>| api.loadout_compare(vec![with_p20("bc30", 1800.0)], 1000.0, level);
+
+    let own = at(None).await.unwrap();
+    assert_eq!(own.assumptions.looter_level, 41.5);
+    assert_eq!(own.assumptions.own_looter_level, 41.5);
+    let higher = at(Some(80.0)).await.unwrap();
+    assert_eq!(higher.assumptions.looter_level, 80.0);
+    assert_eq!(higher.assumptions.own_looter_level, 41.5);
+
+    let own_economics = own.setups[0].economics.as_ref().unwrap();
+    let higher_economics = higher.setups[0].economics.as_ref().unwrap();
+    // A higher looter level narrows the house edge alone; the shortfall
+    // moves only by the model's rounding of expected loot to 1e-8 PED.
+    assert!(higher_economics.house_edge_pec < own_economics.house_edge_pec);
+    assert!(
+        (higher_economics.efficiency_shortfall_pec - own_economics.efficiency_shortfall_pec).abs()
+            < 1e-5
+    );
+    assert!(higher_economics.loss_per_use_pec < own_economics.loss_per_use_pec);
+    assert!(
+        higher.setups[0].curve[500].loss_pec < own.setups[0].curve[500].loss_pec,
+        "the curve follows the looter level"
+    );
+    // At 100 a 100% Efficiency item would lose nothing.
+    let top = at(Some(100.0)).await.unwrap();
+    assert!(
+        top.setups[0]
+            .economics
+            .as_ref()
+            .unwrap()
+            .house_edge_pec
+            .abs()
+            < 1e-9
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn components_carry_their_decay_per_use_and_full_tt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, 50.0).await;
+    let comparison = compare(
+        &api,
+        vec![SetupPick {
+            weapon: pick("flicker", Some(1200.0)),
+            amplifier: Some(pick("a106", None)),
+            absorber: Some(pick("p20", Some(106.0))),
+            implant: Some(pick("neo", Some(110.0))),
+        }],
+    )
+    .await
+    .unwrap();
+    let components = &comparison.setups[0].components;
+    let decay: Vec<f64> = components
+        .iter()
+        .map(|component| component.decay_pec_per_use)
+        .collect();
+    // The implant takes 20% of the weapon's 0.02 PEC, the absorber 20% of
+    // the rest; the amp decays on its own. Markups do not enter TT decay.
+    for (actual, expected) in decay.iter().zip([0.0128, 2.902, 0.0032, 0.004]) {
+        assert!((actual - expected).abs() < 1e-4, "{decay:?}");
+    }
+    let max_tt: Vec<Option<f64>> = components
+        .iter()
+        .map(|component| *component.max_tt_ped)
+        .collect();
+    assert_eq!(max_tt, [Some(250.0), Some(300.0), None, Some(188.0)]);
+
+    // The loss per use is the premium, the shortfall, the cost outside the
+    // model, and the house edge.
+    let economics = comparison.setups[0].economics.as_ref().unwrap();
+    let parts = economics.consumed_premium_pec
+        + economics.efficiency_shortfall_pec
+        + economics.outside_model_pec
+        + economics.house_edge_pec;
+    assert!((parts - economics.loss_per_use_pec).abs() < 1e-9);
 }

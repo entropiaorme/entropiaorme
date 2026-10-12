@@ -144,8 +144,12 @@ pub async fn equipment_detail(
 pub async fn loadout_compare(
     app: tauri::AppHandle,
     setups: Vec<SetupPick>,
+    hp_max: f64,
+    looter_level: Option<f64>,
 ) -> Result<LoadoutComparison, ApiError> {
-    facade(&app)?.loadout_compare(setups).await
+    facade(&app)?
+        .loadout_compare(setups, hp_max, looter_level)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

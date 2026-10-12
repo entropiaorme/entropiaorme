@@ -623,6 +623,8 @@ export interface ComparisonAssumptionsView {
 	modelVersion: string;
 	looterSource: ExpectedLooterSource;
 	looterLevel: number;
+	/** The player's own three-looter mean, whatever level was compared at. */
+	ownLooterLevel: number;
 	/** The share of uses that land. */
 	hitRate: number;
 	/** The lowest roll as a share of max damage. */
@@ -3161,6 +3163,10 @@ export interface SetupComponentView {
 	isLimited: boolean;
 	/** The markup it runs at: the given one for a limited item, 100 for an unlimited one. */
 	markupPercent: number;
+	/** TT decay one use takes from it, PEC. */
+	decayPecPerUse: number;
+	/** Its full TT, PED, when the catalogue gives one. */
+	maxTtPed: number | null;
 }
 
 /**
@@ -3173,16 +3179,17 @@ export interface SetupEconomicsView {
 	consumedPremiumPec: number;
 	/** Absorber and implant decay: cost with no modelled return. */
 	outsideModelPec: number;
+	/** Return lost per use against a 100% Efficiency item cycling the same TT; independent of the looter level. */
+	efficiencyShortfallPec: number;
+	/** What a 100% Efficiency item would still lose per use on the same TT at the player's looter level. */
+	houseEdgePec: number;
 	effectiveEfficiency: EquipmentEffectiveEfficiency | null;
 	weightedEfficiencyPct: number | null;
 	maxDamage: number;
 	/** Amplifier damage above half the weapon's: paid for, never dealt. */
 	ampDamageWasted: number;
 	damagePerPec: number;
-	/** Expected loss per HP removed: the per-HP ranking metric. */
-	lossPerHpPec: number;
 	usesPerMinute: number | null;
-	damagePerSecond: number | null;
 }
 
 /**
@@ -3881,8 +3888,8 @@ export async function equipmentDetail(itemId: number): Promise<EquipmentDetail> 
 	return invokeCommand('equipment_detail', { item_id: itemId });
 }
 
-export async function loadoutCompare(setups: SetupPick[]): Promise<LoadoutComparison> {
-	return invokeCommand('loadout_compare', { setups });
+export async function loadoutCompare(setups: SetupPick[], hpMax: number, looterLevel: number | null): Promise<LoadoutComparison> {
+	return invokeCommand('loadout_compare', { setups, hp_max: hpMax, looter_level: looterLevel });
 }
 
 export async function protectionOverview(): Promise<ProtectionOverview> {

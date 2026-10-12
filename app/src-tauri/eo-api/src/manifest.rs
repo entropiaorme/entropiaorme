@@ -161,10 +161,20 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "loadout_compare",
-            args: vec![ArgSpec {
-                name: "setups",
-                schema: schema(schema_for!(Vec<SetupPick>)),
-            }],
+            args: vec![
+                ArgSpec {
+                    name: "setups",
+                    schema: schema(schema_for!(Vec<SetupPick>)),
+                },
+                ArgSpec {
+                    name: "hp_max",
+                    schema: schema(schema_for!(f64)),
+                },
+                ArgSpec {
+                    name: "looter_level",
+                    schema: schema(schema_for!(Option<f64>)),
+                },
+            ],
             returns: Some(schema(schema_for!(LoadoutComparison))),
         },
         CommandSpec {

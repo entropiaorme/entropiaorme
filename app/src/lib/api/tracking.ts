@@ -4,6 +4,7 @@
  * flow. Thin wrappers over the generated typed commands.
  */
 
+import { createCatalogueSearch } from '$lib/view/catalogueSearch';
 import type {
 	ActivitySummary,
 	HarvestGuardrailAlert,
@@ -134,10 +135,15 @@ export async function getTrackingSessions(cursor?: string, limit?: number, defin
 export const getSessionDetail = commands.trackingSessionDetail;
 export const getTrackingSnapshot = commands.trackingSnapshot;
 
-export async function getManualMobSuggestions(query: string) {
-	if (!query.trim()) return [];
-	return commands.trackingManualMobSuggestions(query.trim(), null);
-}
+/** Most mob names the declared-mob picker offers at once. */
+const MOB_SUGGESTION_LIMIT = 10;
+
+/** Catalogue mob names matching `query`, best first; empty for a blank query. */
+export const getManualMobSuggestions = createCatalogueSearch(
+	commands.trackingMobCatalogue,
+	(mob) => mob.display,
+	MOB_SUGGESTION_LIMIT,
+);
 
 export async function lockManualMob(species: string, maturity = '') {
 	return commands.trackingManualMobLock(species, maturity);

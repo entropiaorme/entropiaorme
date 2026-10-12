@@ -97,12 +97,11 @@ pub(crate) fn facade(app: &tauri::AppHandle) -> Result<Arc<eo_api::Api>, ApiErro
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn equipment_search(
+pub async fn equipment_catalogue(
     app: tauri::AppHandle,
-    q: String,
     kind: SearchKind,
 ) -> Result<Vec<EquipmentSearchHit>, ApiError> {
-    facade(&app)?.equipment_search(&q, kind).await
+    facade(&app)?.equipment_catalogue(kind).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1251,14 +1250,10 @@ pub async fn tracking_session_intervals(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn tracking_manual_mob_suggestions(
+pub async fn tracking_mob_catalogue(
     app: tauri::AppHandle,
-    q: String,
-    limit: Option<i64>,
 ) -> Result<Vec<ManualMobSuggestion>, ApiError> {
-    facade(&app)?
-        .tracking_manual_mob_suggestions(q, limit)
-        .await
+    facade(&app)?.tracking_mob_catalogue().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

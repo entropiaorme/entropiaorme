@@ -109,21 +109,21 @@ fn facade_microbench() {
         ));
 
         for _ in 0..WARMUPS {
-            api.equipment_search("herb", SearchKind::Weapon)
+            api.equipment_catalogue(SearchKind::Weapon)
                 .await
-                .expect("search warm-up");
+                .expect("catalogue warm-up");
         }
         let mut timings = Vec::with_capacity(SAMPLES);
         for _ in 0..SAMPLES {
             let started = Instant::now();
-            api.equipment_search("herb", SearchKind::Weapon)
+            api.equipment_catalogue(SearchKind::Weapon)
                 .await
-                .expect("search");
+                .expect("catalogue");
             timings.push(started.elapsed().as_secs_f64() * 1000.0);
         }
         timings.sort_by(|a, b| a.partial_cmp(b).expect("finite timings"));
         rows.push((
-            "equipment_search",
+            "equipment_catalogue",
             median(&timings),
             p95(&timings),
             timings[0],

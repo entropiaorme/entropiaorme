@@ -103,17 +103,11 @@ pub struct CommandSpec {
 pub fn manifest() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
-            name: "equipment_search",
-            args: vec![
-                ArgSpec {
-                    name: "q",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "kind",
-                    schema: schema(schema_for!(SearchKind)),
-                },
-            ],
+            name: "equipment_catalogue",
+            args: vec![ArgSpec {
+                name: "kind",
+                schema: schema(schema_for!(SearchKind)),
+            }],
             returns: Some(schema(schema_for!(Vec<EquipmentSearchHit>))),
         },
         CommandSpec {
@@ -1378,17 +1372,8 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(SessionIntervals))),
         },
         CommandSpec {
-            name: "tracking_manual_mob_suggestions",
-            args: vec![
-                ArgSpec {
-                    name: "q",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "limit",
-                    schema: schema(schema_for!(Option<i64>)),
-                },
-            ],
+            name: "tracking_mob_catalogue",
+            args: vec![],
             returns: Some(schema(schema_for!(Vec<ManualMobSuggestion>))),
         },
         CommandSpec {

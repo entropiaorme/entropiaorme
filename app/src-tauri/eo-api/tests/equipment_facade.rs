@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use eo_api::equipment::{EquipmentKind, EquipmentRequest, SearchKind};
+use eo_api::equipment::{EquipmentKind, EquipmentRequest, EquipmentSearchHit, SearchKind};
 use eo_api::{Api, ApiError};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
@@ -127,41 +127,38 @@ fn consumable(name: &str) -> EquipmentRequest {
     }
 }
 
+/// The named entry of one vocabulary's catalogue.
+async fn catalogue_entry(api: &Api, kind: SearchKind, name: &str) -> EquipmentSearchHit {
+    api.equipment_catalogue(kind)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.name == name)
+        .unwrap_or_else(|| panic!("{name} is in the catalogue"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn search_gates_and_hits_match_the_route_behaviour() {
+async fn the_catalogue_lists_one_vocabulary_with_its_economy() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
 
-    // Short queries answer empty before any lookup.
-    let hits = api.equipment_search("o", SearchKind::Weapon).await.unwrap();
-    assert!(hits.is_empty());
+    // Every entry of the vocabulary, in catalogue order.
+    let weapons = api.equipment_catalogue(SearchKind::Weapon).await.unwrap();
+    let names: Vec<&str> = weapons.iter().map(|entry| entry.name.as_str()).collect();
+    assert_eq!(names, ["Opalo Rifle (L)", "Rapid Carbine"]);
 
-    // A hit carries the catalogue economy in the response shape.
-    let hits = api
-        .equipment_search("opalo", SearchKind::Weapon)
-        .await
-        .unwrap();
-    assert_eq!(hits.len(), 1);
-    let hit = &hits[0];
-    assert_eq!(hit.catalog_id.as_deref(), Some("w1"));
-    assert_eq!(hit.name, "Opalo Rifle (L)");
-    assert_eq!(hit.decay, 0.5);
-    assert_eq!(hit.ammo_burn, 3.0);
-    assert!(hit.is_limited);
+    // An entry carries the catalogue economy in the response shape.
+    let entry = &weapons[0];
+    assert_eq!(entry.catalog_id.as_deref(), Some("w1"));
+    assert_eq!(entry.decay, 0.5);
+    assert_eq!(entry.ammo_burn, 3.0);
+    assert!(entry.is_limited);
 
-    // A miss in another vocabulary answers empty, not an error.
-    let hits = api
-        .equipment_search("opalo", SearchKind::Healer)
-        .await
-        .unwrap();
-    assert!(hits.is_empty());
-
-    let hits = api
-        .equipment_search("restoration", SearchKind::Healer)
-        .await
-        .unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].reload_seconds, Some(3.75));
+    // Each vocabulary reads its own endpoint.
+    let healers = api.equipment_catalogue(SearchKind::Healer).await.unwrap();
+    assert_eq!(healers.len(), 1);
+    assert_eq!(healers[0].name, "Restoration Chip");
+    assert_eq!(healers[0].reload_seconds, Some(3.75));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -340,12 +337,9 @@ async fn reload_speed_past_the_attack_rate_limit_reprices_every_weapon_surface()
     assert_eq!(rate.factor, 1.0);
     assert_eq!(detail.total_cost_per_use, 2.0);
     assert_eq!(added.damage_max.as_ref().copied(), Some(40.0));
-    // The search hit carries the rate for the form's preview.
-    let hits = api
-        .equipment_search("Rapid", SearchKind::Weapon)
-        .await
-        .unwrap();
-    assert_eq!(hits[0].uses_per_minute.as_ref().copied(), Some(90.0));
+    // The catalogue entry carries the rate for the form's preview.
+    let entry = catalogue_entry(&api, SearchKind::Weapon, "Rapid Carbine").await;
+    assert_eq!(entry.uses_per_minute.as_ref().copied(), Some(90.0));
 
     // Two rings declaring 30% between them; equipped items add at most 15%.
     let ring = |id: &str, percent: f64| PassiveEffectSourceInput {
@@ -567,15 +561,16 @@ async fn a_catalogue_implant_and_extender_reprice_the_weapon() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
 
-    // The implant is searchable through its own vocabulary, carrying its
+    // The implant is listed in its own vocabulary, carrying its
     // absorption share for the form preview.
-    let hits = api
-        .equipment_search("neopsion", SearchKind::Implant)
-        .await
-        .unwrap();
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].absorption_percent.as_ref(), Some(&20.0));
-    assert!(hits[0].is_limited);
+    let entry = catalogue_entry(
+        &api,
+        SearchKind::Implant,
+        "NeoPsion 85-B Mindforce Implant (L)",
+    )
+    .await;
+    assert_eq!(entry.absorption_percent.as_ref(), Some(&20.0));
+    assert!(entry.is_limited);
 
     let mut req = consumable("");
     req.kind = EquipmentKind::Weapon;
@@ -677,20 +672,17 @@ async fn a_catalogue_consumable_takes_its_dose_from_the_catalogue() {
     assert!((settings.dose_cost_ped - 4.5).abs() < 1e-12);
     assert!((added.cost_per_use - 450.0).abs() < 1e-9);
 
-    // The search hit carries the catalogue dose for the form to show before
+    // The catalogue entry carries the catalogue dose for the form to show before
     // anything is saved; tracking waits for the player's choice.
-    let hits = api
-        .equipment_search("Adrenaline", SearchKind::Consumable)
-        .await
-        .unwrap();
-    let dose = hits[0]
+    let entry = catalogue_entry(&api, SearchKind::Consumable, "Nanobots - Adrenaline Boost").await;
+    let dose = entry
         .consumable
         .as_ref()
         .expect("a stimulant carries its dose");
     assert_eq!(dose.duration_seconds, 3600.0);
     assert_eq!(dose.tt_value_ped, 3.0);
     assert!(!dose.track_cost);
-    assert!(hits[0].uses_per_minute.as_ref().is_none());
+    assert!(entry.uses_per_minute.as_ref().is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

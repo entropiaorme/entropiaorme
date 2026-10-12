@@ -1000,7 +1000,7 @@ export interface EquipmentRequest {
 }
 
 /**
- * A catalogue search hit.
+ * One catalogue entry, as the equipment pickers search and select it.
  */
 export interface EquipmentSearchHit {
 	catalogId: string | null;
@@ -1680,7 +1680,7 @@ export interface ManualMobLockResult {
 }
 
 /**
- * One manual-mob autocomplete suggestion.
+ * One catalogue mob name, as the declared-mob picker offers it.
  */
 export interface ManualMobSuggestion {
 	display: string;
@@ -2947,7 +2947,7 @@ export interface ScanStatus {
 }
 
 /**
- * A catalogue vocabulary the search accepts; each maps to one snapshot
+ * A catalogue vocabulary the equipment pickers search; each maps to one snapshot
  * endpoint. An out-of-vocabulary value cannot be constructed (the
  * bindings expose the closed union), so the old unknown-type reply
  * class is unrepresentable rather than handled.
@@ -3866,8 +3866,8 @@ export interface WinnerSegmentView {
 	toHp: number;
 }
 
-export async function equipmentSearch(q: string, kind: SearchKind): Promise<EquipmentSearchHit[]> {
-	return invokeCommand('equipment_search', { q, kind });
+export async function equipmentCatalogue(kind: SearchKind): Promise<EquipmentSearchHit[]> {
+	return invokeCommand('equipment_catalogue', { kind });
 }
 
 export async function equipmentLibrary(): Promise<EquipmentSummary[]> {
@@ -4476,8 +4476,8 @@ export async function trackingSessionIntervals(sessionId: string): Promise<Sessi
 	return invokeCommand('tracking_session_intervals', { session_id: sessionId });
 }
 
-export async function trackingManualMobSuggestions(q: string, limit: number | null): Promise<ManualMobSuggestion[]> {
-	return invokeCommand('tracking_manual_mob_suggestions', { q, limit });
+export async function trackingMobCatalogue(): Promise<ManualMobSuggestion[]> {
+	return invokeCommand('tracking_mob_catalogue', {});
 }
 
 export async function trackingSnapshot(): Promise<TrackingSnapshot> {

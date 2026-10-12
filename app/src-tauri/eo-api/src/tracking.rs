@@ -35,7 +35,7 @@ use std::collections::HashMap;
 
 use eo_services::config_service::{load_config_readonly, AppConfig};
 use eo_services::db::Db;
-use eo_services::mob_lookup_service::{python_whitespace, MobLookupService};
+use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::session_definitions::SessionDefinitionService;
 use eo_services::time::{local_isoformat, naive_to_epoch};
 use eo_services::tracker::{HuntTracker, TrackerCommandError};
@@ -455,7 +455,7 @@ pub struct SessionDetail {
     pub healing: HealingSessionSummary,
 }
 
-/// One manual-mob autocomplete suggestion.
+/// One catalogue mob name, as the declared-mob picker offers it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ManualMobSuggestion {
     pub display: String,
@@ -933,20 +933,12 @@ impl Api {
         }
     }
 
-    /// Catalogue mob-name autocomplete for the declared-mob typeahead.
-    pub async fn tracking_manual_mob_suggestions(
-        &self,
-        q: String,
-        limit: Option<i64>,
-    ) -> Result<Vec<ManualMobSuggestion>, ApiError> {
-        let query = q.trim_matches(python_whitespace);
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        let bounded = limit.unwrap_or(10).clamp(1, 20) as usize;
+    /// Every catalogue mob name, for the declared-mob picker's shared
+    /// search to match against.
+    pub async fn tracking_mob_catalogue(&self) -> Result<Vec<ManualMobSuggestion>, ApiError> {
         let lookup = MobLookupService::new(&self.game_data);
         lookup
-            .search_mob_names(query, bounded)
+            .mob_names()
             .into_iter()
             .map(|value| {
                 serde_json::from_value(value)

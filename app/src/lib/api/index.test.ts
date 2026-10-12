@@ -263,10 +263,27 @@ describe('equipment wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).not.toHaveBeenCalled();
 	});
 
-	it('searchEquipmentItems invokes with q and kind from two characters', async () => {
-		tauriInvoke.mockResolvedValue([]);
-		await api.searchEquipmentItems('op', 'amp');
-		expect(tauriInvoke).toHaveBeenCalledWith('equipment_search', { q: 'op', kind: 'amp' });
+	it('searchEquipmentItems loads a vocabulary once and ranks its matches locally', async () => {
+		tauriInvoke.mockResolvedValue([
+			{ name: 'Omegaton A104 Scope' },
+			{ name: 'Omegaton A101 Scope' },
+			{ name: 'Sollomate Opalo' },
+		]);
+		await expect(api.searchEquipmentItems('a101 omegaton', 'scope')).resolves.toEqual([
+			{ name: 'Omegaton A101 Scope' },
+		]);
+		await expect(api.searchEquipmentItems('omegaton', 'scope')).resolves.toHaveLength(2);
+		expect(tauriInvoke).toHaveBeenCalledTimes(1);
+		expect(tauriInvoke).toHaveBeenCalledWith('equipment_catalogue', { kind: 'scope' });
+	});
+
+	it('searchEquipmentItems retries a catalogue whose load failed', async () => {
+		tauriInvoke.mockRejectedValueOnce(new Error('offline'));
+		await expect(api.searchEquipmentItems('drill', 'tool')).rejects.toThrow('offline');
+		tauriInvoke.mockResolvedValueOnce([{ name: 'Ziplex Drill' }]);
+		await expect(api.searchEquipmentItems('drill', 'tool')).resolves.toEqual([
+			{ name: 'Ziplex Drill' },
+		]);
 	});
 
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
@@ -494,15 +511,17 @@ describe('quests wrappers dispatch typed commands', () => {
 });
 
 describe('suggestion lookups', () => {
-	it('getManualMobSuggestions short-circuits on blank input and trims the query', async () => {
-		await expect(api.getManualMobSuggestions('')).resolves.toEqual([]);
+	it('getManualMobSuggestions answers a blank query without loading the catalogue', async () => {
+		await expect(api.getManualMobSuggestions('  ')).resolves.toEqual([]);
 		expect(tauriInvoke).not.toHaveBeenCalled();
+	});
 
-		await api.getManualMobSuggestions(' atrox ');
-		expect(tauriInvoke).toHaveBeenCalledWith('tracking_manual_mob_suggestions', {
-			q: 'atrox',
-			limit: null,
-		});
+	it('getManualMobSuggestions matches the mob catalogue in any word order', async () => {
+		const young = { display: 'Young Atrox', species: 'Atrox', maturity: 'Young' };
+		const old = { display: 'Old Atrox', species: 'Atrox', maturity: 'Old' };
+		tauriInvoke.mockResolvedValue([old, young]);
+		await expect(api.getManualMobSuggestions(' atrox young ')).resolves.toEqual([young]);
+		expect(tauriInvoke).toHaveBeenCalledWith('tracking_mob_catalogue', {});
 	});
 });
 

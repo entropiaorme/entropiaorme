@@ -65,38 +65,26 @@ impl GameDataStore {
             .unwrap_or(&[])
     }
 
-    /// Substring match by display name, case-insensitively, returning
-    /// rows shaped `{endpoint, item_id, item_name, data}` in walk order.
-    pub fn search_entities(&self, query: &str, endpoint: Option<&str>, limit: usize) -> Vec<Value> {
-        let q = query.to_lowercase();
-        let endpoints: Vec<&str> = match endpoint {
-            Some(one) => vec![one],
-            None => self.by_endpoint.keys().map(String::as_str).collect(),
-        };
-        let mut out = Vec::new();
-        for ep in endpoints {
-            for entity in self.get_entities(ep) {
-                let Some(name) = display_name(entity, ep) else {
-                    continue;
-                };
-                if name.is_empty() || !name.to_lowercase().contains(&q) {
-                    continue;
-                }
+    /// Every named entity of one endpoint, as rows shaped `{endpoint,
+    /// item_id, item_name, data}` in walk order: the catalogue a picker
+    /// searches. Matching a query is the frontend's shared search, so no
+    /// text matching happens here.
+    pub fn catalogue(&self, endpoint: &str) -> Vec<Value> {
+        self.get_entities(endpoint)
+            .iter()
+            .filter_map(|entity| {
+                let name = display_name(entity, endpoint).filter(|name| !name.is_empty())?;
                 let mut row = Map::new();
-                row.insert("endpoint".into(), Value::from(ep));
+                row.insert("endpoint".into(), Value::from(endpoint));
                 row.insert(
                     "item_id".into(),
                     entity.get("id").cloned().unwrap_or(Value::Null),
                 );
                 row.insert("item_name".into(), Value::from(name));
                 row.insert("data".into(), entity.clone());
-                out.push(Value::Object(row));
-                if out.len() >= limit {
-                    return out;
-                }
-            }
-        }
-        out
+                Some(Value::Object(row))
+            })
+            .collect()
     }
 
     /// The entity whose stringified `id` matches, or None.
@@ -128,7 +116,7 @@ impl GameDataStore {
     }
 }
 
-/// The display name the search matches on: `species.name` for mobs,
+/// The display name a catalogue row carries: `species.name` for mobs,
 /// `name` everywhere else.
 fn display_name(entity: &Value, endpoint: &str) -> Option<String> {
     let value = if endpoint == "mobs" {
@@ -202,26 +190,40 @@ mod tests {
     }
 
     #[test]
-    fn search_matches_display_names_case_insensitively_in_walk_order() {
+    fn catalogue_lists_one_endpoint_by_display_name_in_walk_order() {
         let dir = snapshot_dir();
         let store = GameDataStore::new(dir.path()).unwrap();
-        let rows = store.search_entities("o", None, 50);
-        // Walk order: mobs (Atrox) then weapons (Opalo, Korss H400).
+        let rows = store.catalogue("weapons");
         let names: Vec<&str> = rows
             .iter()
             .map(|row| row["item_name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["Atrox", "Opalo", "Korss H400"]);
-        let row = &rows[0];
-        let keys: Vec<&String> = row.as_object().unwrap().keys().collect();
+        assert_eq!(names, ["Opalo", "Korss H400"]);
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
         assert_eq!(keys, ["endpoint", "item_id", "item_name", "data"]);
-        assert_eq!(row["endpoint"], "mobs");
-        assert_eq!(row["item_id"], 7);
-        assert_eq!(row["data"]["species"]["name"], "Atrox");
+        assert_eq!(rows[0]["endpoint"], "weapons");
+        assert_eq!(rows[0]["item_id"], 1);
 
-        assert_eq!(store.search_entities("o", None, 2).len(), 2, "limit");
-        assert_eq!(store.search_entities("OPALO", Some("weapons"), 50).len(), 1);
-        assert!(store.search_entities("opalo", Some("mobs"), 50).is_empty());
+        // Mobs are named by species.
+        let rows = store.catalogue("mobs");
+        assert_eq!(rows[0]["item_name"], "Atrox");
+        assert_eq!(rows[0]["data"]["species"]["name"], "Atrox");
+
+        assert!(store.catalogue("unknown").is_empty());
+    }
+
+    #[test]
+    fn catalogue_skips_unnamed_entities() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("weapons.json"),
+            r#"[{"id": 1, "name": ""}, {"id": 2}, {"id": 3, "name": "Opalo"}]"#,
+        )
+        .unwrap();
+        let store = GameDataStore::new(dir.path()).unwrap();
+        let rows = store.catalogue("weapons");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["item_name"], "Opalo");
     }
 
     #[test]

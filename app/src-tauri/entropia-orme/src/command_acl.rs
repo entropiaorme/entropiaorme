@@ -9,7 +9,7 @@ macro_rules! app_command_surface {
     ($shape:ident) => {
         $shape! {
             typed: [
-            equipment_search,
+            equipment_catalogue,
             equipment_library,
             equipment_add,
             equipment_update,
@@ -157,7 +157,7 @@ macro_rules! app_command_surface {
             tracking_sessions,
             tracking_session_detail,
             tracking_session_intervals,
-            tracking_manual_mob_suggestions,
+            tracking_mob_catalogue,
             tracking_snapshot,
             tracking_start,
             tracking_stop,

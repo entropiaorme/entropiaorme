@@ -35,7 +35,7 @@ use serde_json::{json, Map, Value};
 use crate::Nullable;
 use crate::{Api, ApiError};
 
-/// A catalogue vocabulary the search accepts; each maps to one snapshot
+/// A catalogue vocabulary the equipment pickers search; each maps to one snapshot
 /// endpoint. An out-of-vocabulary value cannot be constructed (the
 /// bindings expose the closed union), so the old unknown-type reply
 /// class is unrepresentable rather than handled.
@@ -90,7 +90,7 @@ impl EquipmentKind {
     }
 }
 
-/// A catalogue search hit.
+/// One catalogue entry, as the equipment pickers search and select it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EquipmentSearchHit {
@@ -1212,18 +1212,13 @@ struct BuiltProps {
 }
 
 impl Api {
-    /// Catalogue search: substring match by display name over one
-    /// vocabulary. Queries under two characters answer empty before any
-    /// lookup.
-    pub async fn equipment_search(
+    /// One vocabulary's whole catalogue, in catalogue order, for the
+    /// frontend's shared search to match against.
+    pub async fn equipment_catalogue(
         &self,
-        q: &str,
         kind: SearchKind,
     ) -> Result<Vec<EquipmentSearchHit>, ApiError> {
-        if q.chars().count() < 2 {
-            return Ok(Vec::new());
-        }
-        let rows = self.game_data.search_entities(q, Some(kind.endpoint()), 50);
+        let rows = self.game_data.catalogue(kind.endpoint());
         Ok(rows.iter().map(search_hit).collect())
     }
 

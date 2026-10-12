@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EquipmentSearchResult } from '$lib/api';
+import { setLooterBasis } from '$lib/looterBasis.svelte';
 import { comparison, component, economics, setup } from './__fixtures__/comparison';
 import {
 	createComparator,
@@ -47,10 +48,11 @@ function hit(overrides: Partial<EquipmentSearchResult> = {}): EquipmentSearchRes
 
 const unlimited = (catalogId: string, name: string) => hit({ catalogId, name, isLimited: false });
 
-beforeEach(() => {
+beforeEach(async () => {
 	vi.clearAllMocks();
 	mocked.compareLoadouts.mockResolvedValue(comparison());
 	professions.mockResolvedValue([]);
+	await setLooterBasis('three_looter_mean');
 });
 
 describe('markupProblem', () => {
@@ -379,6 +381,68 @@ describe('createComparator', () => {
 		professions.mockRejectedValueOnce(new Error('not ready'));
 		const failed = createComparator();
 		await vi.waitFor(() => expect(failed.ownLooterLevel).toBe(0));
+	});
+
+	it('marks the mean and each looter on the slider, capped at 100', async () => {
+		professions.mockResolvedValue([
+			profession('Animal Looter', 30),
+			profession('Mutant Looter', 60),
+			profession('Robot Looter', 120),
+		]);
+		const comparator = createComparator();
+		expect(comparator.looterTicks).toEqual([]);
+		expect(comparator.sliderLooterLevel).toBeNull();
+		await vi.waitFor(() => expect(comparator.looterTicks).toHaveLength(4));
+		expect(comparator.looterTicks).toEqual([
+			{ basis: 'three_looter_mean', value: 70 },
+			{ basis: 'animal', value: 30 },
+			{ basis: 'mutant', value: 60 },
+			{ basis: 'robot', value: 100 },
+		]);
+		expect(comparator.sliderLooterLevel).toBe(70);
+		expect(comparator.looterBasisAt).toBe('three_looter_mean');
+
+		// A tick names the level slid to; a level between them has no basis.
+		comparator.looterLevel = 30;
+		expect(comparator.looterBasisAt).toBe('animal');
+		comparator.looterLevel = 45;
+		expect(comparator.looterBasisAt).toBeNull();
+		expect(comparator.basisOfLevel(60.02)).toBe('mutant');
+	});
+
+	it('starts at the app-wide looter basis and sends its level', async () => {
+		professions.mockResolvedValue([
+			profession('Animal Looter', 30),
+			profession('Mutant Looter', 60),
+			profession('Robot Looter', 90),
+		]);
+		await setLooterBasis('robot');
+		const comparator = ready();
+		await vi.waitFor(() => expect(comparator.sliderLooterLevel).toBe(90));
+		expect(comparator.looterLevel).toBeNull();
+		expect(comparator.basisLooterLevel).toBe(90);
+		expect(comparator.looterBasisAt).toBe('robot');
+		await comparator.compare();
+		expect(mocked.compareLoadouts).toHaveBeenLastCalledWith(expect.any(Array), 3000, 90);
+
+		// The mean is the backend's own default, so it sends none.
+		await setLooterBasis('three_looter_mean');
+		expect(comparator.current).toBe(false);
+		await comparator.compare();
+		expect(mocked.compareLoadouts).toHaveBeenLastCalledWith(expect.any(Array), 3000, null);
+	});
+
+	it('names the app-wide basis where looter levels coincide', async () => {
+		professions.mockResolvedValue([
+			profession('Animal Looter', 50),
+			profession('Mutant Looter', 50),
+			profession('Robot Looter', 50),
+		]);
+		const comparator = createComparator();
+		await vi.waitFor(() => expect(comparator.looterTicks).toHaveLength(4));
+		expect(comparator.looterBasisAt).toBe('three_looter_mean');
+		await setLooterBasis('mutant');
+		expect(comparator.looterBasisAt).toBe('mutant');
 	});
 
 	it('keeps one comparator for the app session', () => {

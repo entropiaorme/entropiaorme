@@ -20,6 +20,14 @@ import {
 } from '$lib/api';
 import { getCharacterProfessions } from '$lib/api/character';
 import type { SearchKind } from '$lib/api/commands.gen';
+import {
+	LOOTER_BASES,
+	type LooterBasis,
+	type LooterLevels,
+	looterBasis,
+	looterBasisLevel,
+	looterLevelsFrom,
+} from '$lib/looterBasis.svelte';
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead, type Typeahead } from '$lib/view/typeahead.svelte';
 import { isLimitedSetup, lossPerKill, parseAmount } from './comparisonView';
@@ -203,21 +211,50 @@ export function createComparator() {
 	/** The limited setup an unlimited one is weighed against; null follows
 	 * the best limited setup listed. */
 	let referenceId = $state<number | null>(null);
-	/** A looter level to compare at instead of the player's own. */
+	/** A looter level to compare at instead of the app-wide basis's. */
 	let looterLevel = $state<number | null>(null);
-	/** The player's own three-looter mean, read up front so the looter
-	 * slider stands before any setup is listed. */
-	let ownLooterLevel = $state<number | null>(null);
+	/** The player's three hunting looters, read up front so the looter
+	 * slider and its ticks stand before any setup is listed. */
+	let ownLooterLevels = $state<LooterLevels | null>(null);
 	void getCharacterProfessions()
 		.then((professions) => {
-			const level = (name: string) =>
-				professions.find((profession) => profession.name === name)?.level ?? 0;
-			ownLooterLevel =
-				(level('Animal Looter') + level('Mutant Looter') + level('Robot Looter')) / 3;
+			ownLooterLevels = looterLevelsFrom(professions);
 		})
 		.catch(() => {
-			ownLooterLevel = 0;
+			ownLooterLevels = { animal: 0, mutant: 0, robot: 0 };
 		});
+
+	/** The community model counts looter skill up to 100, so the slider and
+	 * its ticks stop there. */
+	const LOOTER_CEILING = 100;
+	/** Where each basis sits on the looter slider, in menu order. */
+	function looterTicks(): { basis: LooterBasis; value: number }[] {
+		const levels = ownLooterLevels;
+		if (!levels) return [];
+		return LOOTER_BASES.map((basis) => ({
+			basis,
+			value: Math.min(LOOTER_CEILING, looterBasisLevel(levels, basis)),
+		}));
+	}
+	/** The level the app-wide basis stands for, which the slider starts at;
+	 * null until the player's levels are read. */
+	function basisLevel(): number | null {
+		return looterTicks().find((tick) => tick.basis === looterBasis.current)?.value ?? null;
+	}
+	/** The basis a looter level stands for, or null for a level between
+	 * them. Where levels coincide, the app-wide basis names it. */
+	function basisOfLevel(level: number): LooterBasis | null {
+		const matches = looterTicks().filter((tick) => Math.abs(tick.value - level) < 0.05);
+		return (
+			matches.find((tick) => tick.basis === looterBasis.current)?.basis ?? matches[0]?.basis ?? null
+		);
+	}
+	/** The level sent with a request. Null asks for the player's own mean,
+	 * so a basis other than the mean sends its level. */
+	function requestedLooterLevel(): number | null {
+		if (looterLevel !== null) return looterLevel;
+		return looterBasis.current === 'three_looter_mean' ? null : basisLevel();
+	}
 	let sequence = 0;
 	let nextId = 1;
 
@@ -235,12 +272,13 @@ export function createComparator() {
 		if (complete.length === 0) return null;
 		const setups = complete.map((entry) => entry.pick);
 		const ids = complete.map((entry) => entry.id);
+		const level = requestedLooterLevel();
 		return {
 			setups,
 			ids,
 			hpMax,
-			looterLevel,
-			key: JSON.stringify([ids, setups, hpMax, looterLevel]),
+			looterLevel: level,
+			key: JSON.stringify([ids, setups, hpMax, level]),
 		};
 	}
 
@@ -350,14 +388,41 @@ export function createComparator() {
 		get looterLevel() {
 			return looterLevel;
 		},
-		/** The player's own level: the shown comparison's when there is one. */
+		/** The player's own three-looter mean: the shown comparison's when
+		 * there is one. */
 		get ownLooterLevel(): number | null {
-			return comparison?.assumptions.ownLooterLevel ?? ownLooterLevel;
+			const levels = ownLooterLevels;
+			return (
+				comparison?.assumptions.ownLooterLevel ??
+				(levels ? looterBasisLevel(levels, 'three_looter_mean') : null)
+			);
 		},
-		/** Compare at this looter level; null returns to the player's own. */
+		/** The level the looter slider shows: the one slid to, or else the
+		 * app-wide basis's; null until the player's levels are read. */
+		get sliderLooterLevel(): number | null {
+			return looterLevel ?? basisLevel();
+		},
+		/** The level the app-wide basis stands for, where the slider rests. */
+		get basisLooterLevel(): number | null {
+			return basisLevel();
+		},
+		/** The mean and each looter, marked on the slider for a quick set. */
+		get looterTicks() {
+			return looterTicks();
+		},
+		/** The basis the slider's level stands for, or null for a level
+		 * between them. */
+		get looterBasisAt(): LooterBasis | null {
+			const shown = looterLevel ?? basisLevel();
+			return shown === null ? null : basisOfLevel(shown);
+		},
+		basisOfLevel,
+		/** Compare at this looter level; null returns to the app-wide basis. */
 		set looterLevel(value: number | null) {
 			looterLevel =
-				value === null || !Number.isFinite(value) ? null : Math.min(100, Math.max(0, value));
+				value === null || !Number.isFinite(value)
+					? null
+					: Math.min(LOOTER_CEILING, Math.max(0, value));
 		},
 		set referenceId(value: number | null) {
 			referenceId = value;

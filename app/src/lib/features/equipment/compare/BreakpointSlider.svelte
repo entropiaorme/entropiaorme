@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { type Snippet, tick } from 'svelte';
 	import { parseAmount } from './comparisonView';
+	import { groupTicks, overlapsAny, type SliderTick, spreadLabels } from './sliderTicks';
 
 	/**
 	 * A slider from 0 to an editable upper end, finer below a breakpoint:
@@ -18,7 +19,8 @@
 		step,
 		decimals = 0,
 		fixedMax = false,
-		marker,
+		ticks = [],
+		valueNote,
 		info,
 		note,
 		onValue,
@@ -40,8 +42,10 @@
 		decimals?: number;
 		/** The upper end is a hard limit, not an editable label. */
 		fixedMax?: boolean;
-		/** A reference point marked on the track; clicking its label slides to it. */
-		marker?: { value: number; label: string };
+		/** Reference points marked on the track; clicking a label slides to it. */
+		ticks?: SliderTick[];
+		/** What the value stands for, read after it, e.g. the tick it sits on. */
+		valueNote?: string;
 		/** An info tip beside the label. */
 		info?: Snippet;
 		/** A quiet line under the track. */
@@ -77,6 +81,26 @@
 		const unit = Math.max(1, 10 ** (Math.floor(Math.log10(raw)) - (significant - 1)));
 		return Math.min(max, Math.round(raw / unit) * unit);
 	}
+
+	// Tick labels centre under their ticks once the row is measured, pushed
+	// apart where they would collide; an end label they cover gives way.
+	const groups = $derived(groupTicks(ticks, decimals));
+	let rowWidth = $state(0);
+	let labelWidths = $state<number[]>([]);
+	let zeroWidth = $state(0);
+	let maxWidth = $state(0);
+	const boxes = $derived(
+		groups.map((group, index) => ({
+			centre: (toPosition(group.value) / RESOLUTION) * rowWidth,
+			width: labelWidths[index] ?? 0,
+		})),
+	);
+	const lefts = $derived(rowWidth > 0 ? spreadLabels(boxes, rowWidth) : null);
+	const zeroCovered = $derived(lefts !== null && overlapsAny(0, zeroWidth, lefts, boxes));
+	const maxCovered = $derived(
+		lefts !== null && overlapsAny(rowWidth - maxWidth, rowWidth, lefts, boxes),
+	);
+	const onTick = (group: SliderTick) => Math.abs(group.value - value) < 10 ** -decimals / 2;
 
 	const compact = new Intl.NumberFormat('en-GB', { notation: 'compact', maximumFractionDigits: 1 });
 	const full = $derived(
@@ -158,7 +182,9 @@
 				title="Type an exact figure"
 				onclick={editValue}
 			>
-				{full.format(value)}{unit ? ` ${unit}` : ''}
+				{full.format(value)}{unit ? ` ${unit}` : ''}{#if valueNote}<span
+						class="text-xs font-normal text-text-tertiary"> · {valueNote}</span
+					>{/if}
 			</button>
 		{/if}
 	</div>
@@ -171,19 +197,22 @@
 		step={1}
 		value={toPosition(value)}
 		aria-label={label}
-		aria-valuetext="{full.format(value)} {unit}"
+		aria-valuetext="{full.format(value)}{unit ? ` ${unit}` : ''}{valueNote ? `, ${valueNote}` : ''}"
 		oninput={(event) => onValue(rounded(toValue(Number(event.currentTarget.value))))}
 	/>
-	<div class="relative mt-0.5 h-5 text-[10px] tabular-nums text-text-tertiary">
-		<span class="absolute left-0 top-0.5">0</span>
+	<div
+		class="relative mt-0.5 h-5 text-[10px] tabular-nums text-text-tertiary"
+		bind:clientWidth={rowWidth}
+	>
+		<span class="absolute left-0 top-0.5" class:invisible={zeroCovered} bind:offsetWidth={zeroWidth}>0</span>
 		{#if split}
 			<span class="absolute top-0.5 -translate-x-1/2" style="left: {SPLIT * 100}%">
 				{compact.format(bp)}
 			</span>
 		{/if}
-		{#if marker}
-			{@const at = (toPosition(marker.value) / RESOLUTION) * 100}
-			<!-- The marker's tick sits on the track; its label slides back to it. -->
+		{#each groups as group, index (group.label)}
+			{@const at = (toPosition(group.value) / RESOLUTION) * 100}
+			<!-- Each tick sits on the track; its label slides the value to it. -->
 			<span
 				class="pointer-events-none absolute -top-[13px] h-2 w-px -translate-x-1/2 bg-text-secondary"
 				style="left: {at}%"
@@ -191,15 +220,19 @@
 			></span>
 			<button
 				type="button"
-				class="absolute top-0.5 -translate-x-1/2 cursor-pointer whitespace-nowrap hover:text-text"
-				style="left: {at}%"
-				title="Slide back to {marker.label}"
-				onclick={() => onValue(marker.value)}
+				class="absolute top-0.5 cursor-pointer whitespace-nowrap rounded-sm hover:text-text
+					focus:outline-none focus-visible:[box-shadow:var(--shadow-glow)]
+					{lefts === null ? '-translate-x-1/2' : ''} {onTick(group) ? 'font-medium text-text' : ''}"
+				style="left: {lefts === null ? `${at}%` : `${lefts[index]}px`}"
+				title="Slide to {group.title}"
+				aria-label="Slide to {group.title}"
+				bind:offsetWidth={labelWidths[index]}
+				onclick={() => onValue(group.value)}
 			>
-				{marker.label}
+				{group.label}
 			</button>
-		{/if}
-		<span class="absolute right-0 top-0">
+		{/each}
+		<span class="absolute right-0 top-0" class:invisible={maxCovered} bind:offsetWidth={maxWidth}>
 			{#if fixedMax}
 				<span class="leading-tight">{compact.format(max)}</span>
 			{:else if editing}

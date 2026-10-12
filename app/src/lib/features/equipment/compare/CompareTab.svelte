@@ -7,6 +7,7 @@
 	import LossChart from './LossChart.svelte';
 	import { type Comparator, sessionComparator } from './compareModel.svelte';
 	import { buildChart, type ChartModel, formatCompact, planFigures, setupLabels } from './comparisonView';
+	import { looterBasisCaption, looterBasisInitial, looterBasisName } from '$lib/looterBasis.svelte';
 
 	/** The comparator to drive; the app session's own unless a test supplies one. */
 	let { comparator = sessionComparator() }: { comparator?: Comparator } = $props();
@@ -62,7 +63,10 @@
 		<div class="mb-3 flex h-5 items-center gap-2">
 			<h3 id="compare-chart-heading" class="eyebrow">Loss per kill by mob HP</h3>
 			{#if comparison}
-				<ComparisonAssumptionsTip assumptions={comparison.assumptions} />
+				<ComparisonAssumptionsTip
+					assumptions={comparison.assumptions}
+					looterBasis={comparator.basisOfLevel(comparison.assumptions.looterLevel)}
+				/>
 			{/if}
 		</div>
 		<LossChart
@@ -99,27 +103,37 @@
 				onValue={(value) => (comparator.pinnedHp = value)}
 				onMax={(max) => (comparator.hpMax = max)}
 			/>
-			{#if comparator.ownLooterLevel !== null}
-				{@const own = comparator.ownLooterLevel}
+			{#if comparator.sliderLooterLevel !== null}
+				{@const rest = comparator.basisLooterLevel}
+				{@const at = comparator.looterBasisAt}
 				<BreakpointSlider
 					label="Looter level"
 					unit=""
-					value={comparator.looterLevel ?? Math.min(100, own)}
+					value={comparator.sliderLooterLevel}
 					max={100}
 					step={0.1}
 					decimals={1}
 					fixedMax
-					marker={{ value: Math.min(100, own), label: 'yours' }}
+					ticks={comparator.looterTicks.map((tick) => ({
+						value: tick.value,
+						label: looterBasisInitial(tick.basis),
+						title: looterBasisCaption(tick.basis, tick.value),
+					}))}
+					valueNote={at === null ? undefined : looterBasisName(at)}
 					onValue={(value) =>
 						(comparator.looterLevel =
-							Math.abs(value - Math.min(100, own)) < 0.05 ? null : value)}
+							rest !== null && Math.abs(value - rest) < 0.05 ? null : value)}
 				>
 					{#snippet info()}
 						<InfoTip label="About the looter level" width="w-80">
 							<p class="text-xs leading-relaxed text-text-secondary">
-								The three-looter mean the return model runs at; it starts at yours, marked on the
-								track. Levels go past 100 in game, but the community model assumes looter skill
-								stops counting at 100, so the slider stops there too.
+								The looter level the return model runs at. The ticks mark your Animal (A), Mutant
+								(M) and Robot (R) Looter levels and their mean; click one to slide to it. It starts
+								at the looter basis chosen for expected returns elsewhere in the app.
+							</p>
+							<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
+								Levels go past 100 in game, but the community model assumes looter skill stops
+								counting at 100, so the slider stops there too.
 							</p>
 							<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
 								It changes what each extra PED cycled costs, so it matters most between setups that

@@ -1,8 +1,16 @@
 <script lang="ts">
 	import type { ComparisonAssumptionsView } from '$lib/api/comparison';
 	import InfoTip from '$lib/components/InfoTip.svelte';
+	import { looterBasisCaption, type LooterBasis } from '$lib/looterBasis.svelte';
 
-	let { assumptions }: { assumptions: ComparisonAssumptionsView } = $props();
+	let {
+		assumptions,
+		looterBasis = null,
+	}: {
+		assumptions: ComparisonAssumptionsView;
+		/** The basis the compared level stands for; null between them. */
+		looterBasis?: LooterBasis | null;
+	} = $props();
 
 	const pct = (ratio: number) => `${Number((ratio * 100).toFixed(1))}%`;
 </script>
@@ -12,8 +20,8 @@
 <InfoTip label="How these figures are estimated" width="w-96">
 	<p class="text-xs font-semibold leading-relaxed text-text">Planning estimate, not tracked results</p>
 	<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-		Expected loot follows Community model v1 over the weapon and amplifier at a three-looter mean of
-		{assumptions.looterLevel.toFixed(1)}. Absorber and implant decay counts as cost with no
+		Expected loot follows Community model v1 over the weapon and amplifier at
+		{looterBasisCaption(looterBasis, assumptions.looterLevel)}. Absorber and implant decay counts as cost with no
 		modelled return. Kills are solved exactly from these assumptions, not simulated:
 	</p>
 	<ul class="mt-1.5 space-y-0.5 text-xs leading-relaxed text-text-secondary">

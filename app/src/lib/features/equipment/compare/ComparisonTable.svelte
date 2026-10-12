@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ComparedSetup } from '$lib/api/comparison';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
+	import { looterBasisCaption } from '$lib/looterBasis.svelte';
 	import { NO_DATA } from '$lib/utils/format';
 	import { formatPec } from '../display';
 	import SetupCell from './SetupCell.svelte';
@@ -157,8 +158,9 @@
 
 	function lostTitle(answer: PlanFigures): string {
 		const looter = comparator.comparison?.assumptions.looterLevel;
+		const basis = looter === undefined ? '' : ` at ${looterBasisCaption(comparator.basisOfLevel(looter), looter)}`;
 		return [
-			`House edge${looter === undefined ? '' : ` at looter level ${looter.toFixed(1)}`} ${formatPed(answer.houseEdgePed)} PED`,
+			`House edge${basis} ${formatPed(answer.houseEdgePed)} PED`,
 			answer.cycledPed > 0
 				? `Gear leak ${formatPed((answer.leakPed / answer.cycledPed) * 100)} PED per 100 PED cycled`
 				: null,
@@ -322,6 +324,7 @@
 								weightedEfficiencyPct={economics.weightedEfficiencyPct}
 								consumedPremiumLabel={formatPec(economics.consumedPremiumPec)}
 								looterLevel={comparator.comparison.assumptions.looterLevel}
+								looterBasis={comparator.basisOfLevel(comparator.comparison.assumptions.looterLevel)}
 							/>
 						{/if}
 					</span>

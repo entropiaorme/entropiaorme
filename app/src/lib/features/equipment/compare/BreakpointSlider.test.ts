@@ -134,19 +134,43 @@ describe('BreakpointSlider', () => {
 		expect(onMax).toHaveBeenCalledWith(5_000_000);
 	});
 
-	it('slides back to its marker when the marker is clicked', async () => {
+	it('slides to a tick when its label is clicked, naming the tick it sits on', async () => {
 		const { onValue } = slider({
 			label: 'Looter level',
 			unit: '',
-			value: 70,
+			value: 42.3,
 			max: 100,
 			breakpoint: undefined,
 			step: 0.1,
 			decimals: 1,
 			fixedMax: true,
-			marker: { value: 42.3, label: 'yours' },
+			ticks: [
+				{ value: 42.3, label: 'mean', title: 'three-looter mean 42.3' },
+				{ value: 61.04, label: 'A', title: 'Animal Looter 61.0' },
+				{ value: 32.96, label: 'M', title: 'Mutant Looter 33.0' },
+				{ value: 33, label: 'R', title: 'Robot Looter 33.0' },
+			],
+			valueNote: 'Looter mean',
 		});
-		await fireEvent.click(screen.getByRole('button', { name: 'yours' }));
-		expect(onValue).toHaveBeenCalledWith(42.3);
+		expect(screen.getByRole('button', { name: '42.3 · Looter mean' })).toBeTruthy();
+		expect(
+			screen.getByRole('slider', { name: 'Looter level' }).getAttribute('aria-valuetext'),
+		).toBe('42.3, Looter mean');
+		// The tick the value sits on reads as the current one.
+		expect(
+			screen.getByRole('button', { name: 'Slide to three-looter mean 42.3' }).className,
+		).toContain('font-medium');
+		expect(
+			screen.getByRole('button', { name: 'Slide to Animal Looter 61.0' }).className,
+		).not.toContain('font-medium');
+		await fireEvent.click(screen.getByRole('button', { name: 'Slide to Animal Looter 61.0' }));
+		expect(onValue).toHaveBeenCalledWith(61.04);
+		// Levels that read the same share one label.
+		const shared = screen.getByRole('button', {
+			name: 'Slide to Mutant Looter 33.0, Robot Looter 33.0',
+		});
+		expect(shared.textContent?.trim()).toBe('M · R');
+		await fireEvent.click(shared);
+		expect(onValue).toHaveBeenLastCalledWith(32.96);
 	});
 });

@@ -22,9 +22,9 @@ vi.mock('$lib/api', () => ({
 }));
 vi.mock('$lib/api/character', () => ({
 	getCharacterProfessions: vi.fn(async () => [
-		{ name: 'Animal Looter', level: 40, anchorLevel: null, gainSinceAnchor: null, category: '' },
-		{ name: 'Mutant Looter', level: 40, anchorLevel: null, gainSinceAnchor: null, category: '' },
-		{ name: 'Robot Looter', level: 40, anchorLevel: null, gainSinceAnchor: null, category: '' },
+		{ name: 'Animal Looter', level: 30, anchorLevel: null, gainSinceAnchor: null, category: '' },
+		{ name: 'Mutant Looter', level: 60, anchorLevel: null, gainSinceAnchor: null, category: '' },
+		{ name: 'Robot Looter', level: 30, anchorLevel: null, gainSinceAnchor: null, category: '' },
 	]),
 }));
 
@@ -101,13 +101,21 @@ describe('CompareTab', () => {
 
 		expect(screen.getByRole('slider', { name: 'Mobs killed' })).toBeTruthy();
 		expect(screen.getByRole('slider', { name: 'Mob HP' })).toBeTruthy();
-		// The looter slider starts at the player's own level, marked on the track.
+		// The looter slider starts at the looter mean; its ticks mark the mean
+		// and each looter, and looters at one level share a tick.
 		expect(await screen.findByRole('slider', { name: 'Looter level' })).toBeTruthy();
-		expect(screen.getByRole('button', { name: '50.0' })).toBeTruthy();
+		expect(screen.getByRole('button', { name: '40.0 · Looter mean' })).toBeTruthy();
+		expect(
+			screen.getByRole('button', { name: 'Slide to Animal Looter 30.0, Robot Looter 30.0' })
+				.textContent,
+		).toContain('A · R');
+		await fireEvent.click(screen.getByRole('button', { name: 'Slide to Mutant Looter 60.0' }));
+		expect(comparator.looterLevel).toBe(60);
+		expect(screen.getByRole('button', { name: '60.0 · Mutant Looter' })).toBeTruthy();
 		comparator.looterLevel = 70;
 		await tick();
 		expect(screen.getByRole('button', { name: '70.0' })).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'yours' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Slide to three-looter mean 40.0' }));
 		expect(comparator.looterLevel).toBeNull();
 		// What the year's kills cycle with the reference setup.
 		expect(screen.getByText((text) => text.includes(`PED cycled with ${BC30}`))).toBeTruthy();

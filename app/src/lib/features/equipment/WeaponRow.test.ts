@@ -69,6 +69,7 @@ const jesterDetail: EquipmentDetail = {
 		consumedPremiumPerUse: 0,
 		coverage: 1,
 		incomplete: false,
+		lossPer100HpPec: 1.2345,
 	},
 	healingProfile: null,
 	lifestealPercent: null,
@@ -126,5 +127,25 @@ describe('the weapon detail attack rate', () => {
 			props: { model: expandedWith({ ...jesterDetail, attackRate: null }), item },
 		});
 		expect(screen.queryByTestId('weapon-attack-rate')).toBeNull();
+	});
+});
+
+describe('the weapon detail economics', () => {
+	it('shows loss per 100 HP beside Effective Efficiency', () => {
+		render(WeaponRow, { props: { model: expandedWith(jesterDetail), item } });
+		expect(screen.getByText('Loss / 100 HP')).toBeTruthy();
+		expect(screen.getByText('1.23 PEC')).toBeTruthy();
+	});
+
+	it('shows no figure for a weapon it cannot place per HP', () => {
+		const expectedReturn = jesterDetail.expectedReturn;
+		if (!expectedReturn) throw new Error('the fixture carries an expected return');
+		const detail: EquipmentDetail = {
+			...jesterDetail,
+			expectedReturn: { ...expectedReturn, lossPer100HpPec: null },
+		};
+		render(WeaponRow, { props: { model: expandedWith(detail), item } });
+		expect(screen.getByText('Loss / 100 HP')).toBeTruthy();
+		expect(screen.queryByText('1.23 PEC')).toBeNull();
 	});
 });

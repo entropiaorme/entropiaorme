@@ -481,6 +481,11 @@ pub struct EquipmentExpectedReturn {
     pub consumed_premium_per_use: f64,
     pub coverage: f64,
     pub incomplete: bool,
+    /// PEC lost per 100 HP removed at the looter level above, a maxed weapon
+    /// assumed: Effective Efficiency and damage per PEC combined. It ranks
+    /// weapons for mobs several hits deep; on small mobs the smaller shot
+    /// can win regardless.
+    pub loss_per_100_hp_pec: Nullable<f64>,
 }
 
 /// The absorber component of a stored weapon setup.
@@ -1186,6 +1191,16 @@ fn equipment_expected_return(
         consumed_premium_per_use: premium * 100.0,
         coverage: result.coverage,
         incomplete: result.incomplete,
+        loss_per_100_hp_pec: eo_services::loadout_comparison::setup_economics(
+            props,
+            looters,
+            None,
+            &eo_services::loadout_comparison::ComparisonAssumptions::STANDARD,
+        )
+        .ok()
+        .map(|economics| economics.loss_per_hp_pec * 100.0)
+        .filter(|value| value.is_finite())
+        .into(),
     }))
 }
 

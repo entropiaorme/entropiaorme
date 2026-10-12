@@ -944,6 +944,8 @@ export interface EquipmentExpectedReturn {
 	consumedPremiumPerUse: number;
 	coverage: number;
 	incomplete: boolean;
+	/** PEC lost per 100 HP removed at the looter level above, a maxed weapon assumed: Effective Efficiency and damage per PEC combined. It ranks weapons for mobs several hits deep; on small mobs the smaller shot can win regardless. */
+	lossPer100HpPec: number | null;
 }
 
 /**

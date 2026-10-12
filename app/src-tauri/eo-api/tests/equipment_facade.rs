@@ -521,6 +521,48 @@ async fn an_existing_weapon_setup_gains_descriptive_lifesteal_without_a_rewrite(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_weapon_detail_combines_efficiency_and_damage_into_loss_per_100_hp() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    db.with_writer(|conn| {
+        conn.execute(
+            "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
+             VALUES ('Test Rifle', 'weapon', 'w9', ?)",
+            [r#"{"weapon_entity":{"id":"w9","name":"Test Rifle","economy":{"decay":1.0,"ammo_burn":100,"efficiency":80},"damage":{"impact":40}},"weapon_catalog_id":"w9"}"#],
+        )?;
+        conn.execute(
+            "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
+             VALUES ('No Damage', 'weapon', 'w1', ?)",
+            [r#"{"weapon_entity":{"id":"w1","name":"Opalo Rifle (L)","economy":{"decay":0.5,"ammo_burn":300}},"weapon_catalog_id":"w1"}"#],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    // At looter 0 a use costs 2 PEC and returns 86% + 7% x 80% of it, so it
+    // loses 0.168 PEC; an expected use deals 40 x 0.9 x 0.75 x 1.02 damage.
+    let detail = api.equipment_detail(1).await.unwrap();
+    let expected = detail.expected_return.as_ref().unwrap();
+    let loss = expected
+        .loss_per_100_hp_pec
+        .0
+        .expect("a damaging weapon has a figure");
+    let want = 100.0 * 0.168 / (40.0 * 0.9 * 0.75 * 1.02);
+    assert!((loss - want).abs() < 1e-9, "{loss} against {want}");
+
+    // A weapon the catalogue gives no damage cannot be placed per HP.
+    let undamaged = api.equipment_detail(2).await.unwrap();
+    assert!(undamaged
+        .expected_return
+        .as_ref()
+        .unwrap()
+        .loss_per_100_hp_pec
+        .0
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_catalogue_implant_and_extender_reprice_the_weapon() {
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;

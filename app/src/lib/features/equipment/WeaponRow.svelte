@@ -5,6 +5,7 @@
 	import { NO_DATA, formatPercent } from '$lib/utils/format';
 	import { enrichmentColor, enrichmentLabel, formatPec } from './display';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import { describeAttackRate } from './attackRate';
 	import { describeEffectProfile } from './weaponEffect';
@@ -76,6 +77,21 @@
 			consumedPremiumLabel={formatPec((detail?.expectedReturn?.consumedPremiumPerUse ?? 0) * 100)}
 			looterLevel={detail?.expectedReturn?.looterLevel ?? 0}
 		/>
+{/snippet}
+
+{#snippet lossPerHpTip()}
+	<InfoTip label="What Loss / 100 HP means" width="w-80">
+		<p class="text-xs leading-relaxed text-text-secondary">
+			The PEC this setup loses for every 100 HP it removes, at looter level
+			{(detail?.expectedReturn?.looterLevel ?? 0).toFixed(1)} and assuming the weapon is maxed. It
+			combines Effective Efficiency with damage per PEC, so it ranks weapons where neither does alone.
+		</p>
+		<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
+			Lower is better on mobs that take several hits. On small mobs the cost per use matters more: a
+			big shot wastes most of itself on the last hit. Compare them in Equipment's Compare tab to be
+			sure.
+		</p>
+	</InfoTip>
 {/snippet}
 
 <!-- Equipment row -->
@@ -207,7 +223,7 @@
 			{#if detail.expectedReturn}
 				{@const expected = detail.expectedReturn}
 				<div
-					class="grid grid-cols-3 gap-5 border-y border-border/35 py-3 mb-4"
+					class="grid grid-cols-4 gap-5 border-y border-border/35 py-3 mb-4"
 				>
 					<StatDisplay
 						label="Expected Return"
@@ -228,6 +244,15 @@
 						valueClass={expected.effectiveEfficiency !== null ? 'text-text' : 'text-text-tertiary'}
 						emphasis="secondary"
 						labelSuffix={effectiveEfficiencyTip}
+					/>
+					<StatDisplay
+						label="Loss / 100 HP"
+						value={expected.lossPer100HpPec !== null
+							? `${expected.lossPer100HpPec.toFixed(2)} PEC`
+							: NO_DATA}
+						valueClass={expected.lossPer100HpPec !== null ? 'text-text' : 'text-text-tertiary'}
+						emphasis="secondary"
+						labelSuffix={lossPerHpTip}
 					/>
 				</div>
 				<p class="-mt-2 mb-4 text-[11px] leading-relaxed text-text-tertiary">

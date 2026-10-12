@@ -8,7 +8,19 @@
 		niceTicks,
 	} from './comparisonView';
 
-	let { chart, emptyMessage }: { chart: ChartModel; emptyMessage?: string } = $props();
+	let {
+		chart,
+		emptyMessage,
+		pinnedHp = null,
+		onPin,
+	}: {
+		chart: ChartModel;
+		emptyMessage?: string;
+		/** The mob HP the table answers for, marked on the plot. */
+		pinnedHp?: number | null;
+		/** A click on the plot pins its HP. */
+		onPin?: (hp: number) => void;
+	} = $props();
 
 	const HEIGHT = 260;
 	const PAD_L = 48;
@@ -101,7 +113,11 @@
 		if (!drag) return;
 		const { from, to } = drag;
 		drag = null;
-		if (Math.abs(to.x - from.x) < MIN_DRAG) return;
+		if (Math.abs(to.x - from.x) < MIN_DRAG) {
+			const index = nearestIndex(to.x);
+			if (index !== null) onPin?.(hps[index]);
+			return;
+		}
 		const [left, right] = [Math.min(from.x, to.x), Math.max(from.x, to.x)];
 		const tall = Math.abs(to.y - from.y) >= MIN_DRAG;
 		const [top, bottom] = [Math.min(from.y, to.y), Math.max(from.y, to.y)];
@@ -170,7 +186,7 @@
 			viewBox="0 0 {width} {HEIGHT}"
 			role="img"
 			tabindex="0"
-			aria-label="Expected loss per kill, PEC, against mob HP from {formatHp(domain.x0)} to {formatHp(domain.x1)}. Drag a box to zoom; use the arrow keys to read each HP; Escape resets the zoom."
+			aria-label="Expected loss per kill, PEC, against mob HP from {formatHp(domain.x0)} to {formatHp(domain.x1)}. Click to pin a mob HP; drag a box to zoom; use the arrow keys to read each HP; Escape resets the zoom."
 			onpointerdown={onPointerDown}
 			onpointermove={onPointerMove}
 			onpointerup={onPointerUp}
@@ -219,6 +235,19 @@
 						stroke-linecap="round"
 					/>
 				{/each}
+
+				<!-- The HP the table answers for -->
+				{#if pinnedHp !== null && visible(pinnedHp)}
+					<line
+						x1={xAt(pinnedHp)}
+						x2={xAt(pinnedHp)}
+						y1={PAD_T}
+						y2={PAD_T + PLOT_H}
+						stroke="var(--color-accent)"
+						stroke-width="1"
+						stroke-dasharray="3 3"
+					/>
+				{/if}
 
 				<!-- Where the cheaper setup changes -->
 				{#each chart.markers.filter((marker) => visible(marker.hp)) as marker}
@@ -270,6 +299,15 @@
 					{/each}
 				{/if}
 			</g>
+
+			{#if pinnedHp !== null && visible(pinnedHp)}
+				<text
+					x={xAt(pinnedHp)}
+					y={PAD_T - 5}
+					text-anchor="middle"
+					class="fill-accent text-[10px] font-medium tabular-nums">{formatHp(pinnedHp)}</text
+				>
+			{/if}
 
 			{#if dragBox}
 				<rect

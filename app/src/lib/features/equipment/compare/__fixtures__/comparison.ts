@@ -16,21 +16,40 @@ export function curve(base: number, lambda: number, secondsPerHp = 0.04): KillFi
 	}));
 }
 
-/** Per-use figures in the wire shape; a BC-30-like default. */
-export function economics(overrides: Partial<NonNullable<ComparedSetup['economics']>> = {}) {
+/** Per-use figures in the wire shape; a BC-30-like default whose loss
+ * splits into its premium, Efficiency shortfall, and house edge. */
+export function economics(
+	overrides: Partial<NonNullable<ComparedSetup['economics']>> = {},
+): NonNullable<ComparedSetup['economics']> {
 	return {
 		costPerUsePec: 8,
 		lossPerUsePec: 0.4,
 		consumedPremiumPec: 0.03,
 		outsideModelPec: 0,
+		efficiencyShortfallPec: 0.09,
+		houseEdgePec: 0.28,
 		effectiveEfficiency: { status: 'within_model_range' as const, efficiencyPct: 75.9 },
 		weightedEfficiencyPct: 80.5,
 		maxDamage: 38,
 		ampDamageWasted: 0,
 		damagePerPec: 3.3,
-		lossPerHpPec: 0.016,
 		usesPerMinute: 67,
-		damagePerSecond: 29.2,
+		...overrides,
+	};
+}
+
+/** One part of a setup in the wire shape: a limited weapon by default. */
+export function component(
+	overrides: Partial<ComparedSetup['components'][number]> = {},
+): ComparedSetup['components'][number] {
+	return {
+		role: 'weapon',
+		catalogId: 'weapon',
+		name: 'Weapon',
+		isLimited: true,
+		markupPercent: 100,
+		decayPecPerUse: 0.002,
+		maxTtPed: 45,
 		...overrides,
 	};
 }
@@ -43,9 +62,7 @@ export function setup(
 	return {
 		index,
 		name,
-		components: [
-			{ role: 'weapon', catalogId: `weapon-${index}`, name, isLimited: true, markupPercent: 100 },
-		],
+		components: [component({ catalogId: `weapon-${index}`, name })],
 		economics: economics(),
 		unmodelled: null,
 		curve: curve(0.2, 0.016),
@@ -59,6 +76,7 @@ export function comparison(overrides: Partial<LoadoutComparison> = {}): LoadoutC
 			modelVersion: 'community_v1',
 			looterSource: 'three_looter_mean',
 			looterLevel: 50,
+			ownLooterLevel: 50,
 			hitRate: 0.9,
 			damageFloor: 0.5,
 			criticalChance: 0.02,
@@ -82,8 +100,6 @@ export function bc30AgainstGauss(): LoadoutComparison {
 				economics: economics({
 					maxDamage: 80.8,
 					damagePerPec: 3.7,
-					lossPerHpPec: 0.0112,
-					damagePerSecond: 34.6,
 				}),
 			}),
 		],

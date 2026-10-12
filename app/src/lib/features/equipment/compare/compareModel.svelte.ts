@@ -18,9 +18,11 @@ import {
 	type SetupPick,
 	searchEquipmentItems,
 } from '$lib/api';
+import { getCharacterProfessions } from '$lib/api/character';
 import type { SearchKind } from '$lib/api/commands.gen';
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead, type Typeahead } from '$lib/view/typeahead.svelte';
+import { isLimitedSetup, lossPerKill, parseAmount } from './comparisonView';
 
 export const SETUP_ROLES: SetupComponentRole[] = ['weapon', 'amplifier', 'absorber', 'implant'];
 export const OPTIONAL_ROLES: SetupComponentRole[] = ['amplifier', 'absorber', 'implant'];
@@ -51,6 +53,10 @@ export function markupProblem(label: string, markup: number | null): string | nu
 	return null;
 }
 
+/** The HP range the backend accepts for the curve's reach. */
+export const MIN_CURVE_HP = 10;
+export const MAX_CURVE_HP = 100_000;
+
 /** The most setups compared at once: one per chart colour. */
 export const MAX_SETUPS = 8;
 
@@ -77,6 +83,19 @@ export function createSetupDraft(id: number, slot: number) {
 			implant: { id: null, percent: DEFAULT_MARKUP_PERCENT },
 		},
 	);
+	// What an unlimited part's markup cost, as typed: capital held while
+	// the item is owned. Like a markup, it belongs to the item it was typed for.
+	const capitals = $state<Record<SetupComponentRole, { id: string | null; text: string }>>({
+		weapon: { id: null, text: '' },
+		amplifier: { id: null, text: '' },
+		absorber: { id: null, text: '' },
+		implant: { id: null, text: '' },
+	});
+	function capitalTextFor(role: SetupComponentRole): string {
+		const id = pickers[role].selected?.catalogId ?? null;
+		return capitals[role].id === id ? capitals[role].text : '';
+	}
+
 	// Optional parts the player has opened, so an empty picker stays put.
 	const shown = $state<Record<SetupComponentRole, boolean>>({
 		weapon: true,
@@ -117,6 +136,18 @@ export function createSetupDraft(id: number, slot: number) {
 		markupFor,
 		setMarkup(role: SetupComponentRole, percent: number | null) {
 			markups[role] = { id: pickers[role].selected?.catalogId ?? null, percent };
+		},
+		capitalTextFor,
+		setCapitalText(role: SetupComponentRole, text: string) {
+			capitals[role] = { id: pickers[role].selected?.catalogId ?? null, text };
+		},
+		/** The markup paid for the setup's unlimited parts, in PED. */
+		get capitalPed(): number {
+			return SETUP_ROLES.reduce((total, role) => {
+				const selected = pickers[role].selected;
+				if (!selected || selected.isLimited) return total;
+				return total + (parseAmount(capitalTextFor(role)) ?? 0);
+			}, 0);
 		},
 		isShown(role: SetupComponentRole) {
 			return shown[role] || pickers[role].selected !== null;
@@ -160,10 +191,43 @@ export function createComparator() {
 	let computedKey = $state<string | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+	/** The mob HP the per-kill figures answer for; the chart pins it too. */
+	let pinnedHp = $state(100);
+	/** The HP slider's upper end, which is also how far the curve reaches. */
+	let hpMax = $state(3000);
+	/** The kills a year the table answers for, and its slider's upper end. */
+	let killCount = $state(10_000);
+	let killMax = $state(1_000_000);
+	/** The yearly rate capital held in unlimited gear is charged at. */
+	let capitalRate = $state(0.1);
+	/** The limited setup an unlimited one is weighed against; null follows
+	 * the best limited setup listed. */
+	let referenceId = $state<number | null>(null);
+	/** A looter level to compare at instead of the player's own. */
+	let looterLevel = $state<number | null>(null);
+	/** The player's own three-looter mean, read up front so the looter
+	 * slider stands before any setup is listed. */
+	let ownLooterLevel = $state<number | null>(null);
+	void getCharacterProfessions()
+		.then((professions) => {
+			const level = (name: string) =>
+				professions.find((profession) => profession.name === name)?.level ?? 0;
+			ownLooterLevel =
+				(level('Animal Looter') + level('Mutant Looter') + level('Robot Looter')) / 3;
+		})
+		.catch(() => {
+			ownLooterLevel = 0;
+		});
 	let sequence = 0;
 	let nextId = 1;
 
-	function request(): { setups: SetupPick[]; ids: number[]; key: string } | null {
+	function request(): {
+		setups: SetupPick[];
+		ids: number[];
+		hpMax: number;
+		looterLevel: number | null;
+		key: string;
+	} | null {
 		const complete = drafts.flatMap((draft) => {
 			const pick = draft.pick();
 			return pick ? [{ id: draft.id, pick }] : [];
@@ -171,9 +235,34 @@ export function createComparator() {
 		if (complete.length === 0) return null;
 		const setups = complete.map((entry) => entry.pick);
 		const ids = complete.map((entry) => entry.id);
-		return { setups, ids, key: JSON.stringify([ids, setups]) };
+		return {
+			setups,
+			ids,
+			hpMax,
+			looterLevel,
+			key: JSON.stringify([ids, setups, hpMax, looterLevel]),
+		};
 	}
 
+	function figures(id: number): ComparedSetup | null {
+		const index = computedIds.indexOf(id);
+		return index === -1 ? null : (comparison?.setups[index] ?? null);
+	}
+	function referenceDraftId(): number | null {
+		const limited = drafts.filter((draft) => {
+			const setup = figures(draft.id);
+			return setup !== null && isLimitedSetup(setup);
+		});
+		if (referenceId !== null && limited.some((draft) => draft.id === referenceId))
+			return referenceId;
+		let best: number | null = null;
+		let bestCost = Infinity;
+		for (const draft of limited) {
+			const cost = lossPerKill(figures(draft.id) as ComparedSetup, pinnedHp);
+			if (cost !== null && cost < bestCost) [best, bestCost] = [draft.id, cost];
+		}
+		return best;
+	}
 	/** Keep one empty row at the end of the list while there is room. */
 	function ensureBlank() {
 		if (blank !== null || drafts.length >= MAX_SETUPS) return;
@@ -228,6 +317,65 @@ export function createComparator() {
 		set error(value: string | null) {
 			error = value;
 		},
+		get killCount() {
+			return killCount;
+		},
+		set killCount(value: number) {
+			if (Number.isFinite(value)) killCount = Math.min(killMax, Math.max(0, Math.round(value)));
+		},
+		get killMax() {
+			return killMax;
+		},
+		set killMax(value: number) {
+			if (!Number.isFinite(value) || value < 1) return;
+			killMax = Math.round(value);
+			killCount = Math.min(killCount, killMax);
+		},
+		get capitalRate() {
+			return capitalRate;
+		},
+		set capitalRate(value: number) {
+			if (Number.isFinite(value) && value > 0) capitalRate = value;
+		},
+		get referenceId() {
+			return referenceId !== null && drafts.some((draft) => draft.id === referenceId)
+				? referenceId
+				: null;
+		},
+		/** The limited setup unlimited ones are weighed against: the one
+		 * picked, or else the limited setup that loses least per kill. */
+		get referenceDraftId(): number | null {
+			return referenceDraftId();
+		},
+		get looterLevel() {
+			return looterLevel;
+		},
+		/** The player's own level: the shown comparison's when there is one. */
+		get ownLooterLevel(): number | null {
+			return comparison?.assumptions.ownLooterLevel ?? ownLooterLevel;
+		},
+		/** Compare at this looter level; null returns to the player's own. */
+		set looterLevel(value: number | null) {
+			looterLevel =
+				value === null || !Number.isFinite(value) ? null : Math.min(100, Math.max(0, value));
+		},
+		set referenceId(value: number | null) {
+			referenceId = value;
+		},
+		get hpMax() {
+			return hpMax;
+		},
+		set hpMax(value: number) {
+			if (!Number.isFinite(value)) return;
+			hpMax = Math.min(MAX_CURVE_HP, Math.max(MIN_CURVE_HP, Math.round(value)));
+			pinnedHp = Math.min(pinnedHp, hpMax);
+		},
+		get pinnedHp() {
+			return pinnedHp;
+		},
+		set pinnedHp(value: number) {
+			if (Number.isFinite(value)) pinnedHp = Math.min(hpMax, Math.max(1, Math.round(value)));
+		},
 		/** The current request's identity, or null while no setup is complete. */
 		get requestKey(): string | null {
 			return request()?.key ?? null;
@@ -245,7 +393,7 @@ export function createComparator() {
 			const mine = ++sequence;
 			loading = true;
 			try {
-				const result = await compareLoadouts(next.setups);
+				const result = await compareLoadouts(next.setups, next.hpMax, next.looterLevel);
 				if (mine !== sequence) return;
 				comparison = result;
 				computedIds = next.ids;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EquipmentSearchResult } from '$lib/api';
-import { comparison } from './__fixtures__/comparison';
+import { comparison, component, economics, setup } from './__fixtures__/comparison';
 import {
 	createComparator,
 	createSetupDraft,
@@ -13,10 +13,19 @@ vi.mock('$lib/api', () => ({
 	compareLoadouts: vi.fn(),
 	searchEquipmentItems: vi.fn(async () => []),
 }));
+vi.mock('$lib/api/character', () => ({
+	getCharacterProfessions: vi.fn(),
+}));
 
 import * as api from '$lib/api';
+import * as character from '$lib/api/character';
 
 const mocked = vi.mocked(api);
+const professions = vi.mocked(character.getCharacterProfessions);
+
+function profession(name: string, level: number) {
+	return { name, level, anchorLevel: null, gainSinceAnchor: null, category: 'Looting' };
+}
 
 function hit(overrides: Partial<EquipmentSearchResult> = {}): EquipmentSearchResult {
 	return {
@@ -41,6 +50,7 @@ const unlimited = (catalogId: string, name: string) => hit({ catalogId, name, is
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocked.compareLoadouts.mockResolvedValue(comparison());
+	professions.mockResolvedValue([]);
 });
 
 describe('markupProblem', () => {
@@ -88,6 +98,35 @@ describe('createSetupDraft', () => {
 		draft.setMarkup('absorber', 50);
 		expect(draft.problem).toBe('Absorber markup is a percentage of at least 100.');
 		expect(draft.pick()).toBeNull();
+	});
+
+	it('holds capital typed for an unlimited part against the item it was typed for', () => {
+		const draft = createSetupDraft(1, 1);
+		const scimitar = unlimited('scimitar', 'Scimitar of the Mages, TWEN Edition');
+		draft.pickers.weapon.select(scimitar);
+		draft.setCapitalText('weapon', '150k');
+		draft.pickers.amplifier.select(unlimited('a106', 'Omegaton A106'));
+		draft.setCapitalText('amplifier', '+2,500');
+		expect(draft.capitalTextFor('weapon')).toBe('150k');
+		expect(draft.capitalPed).toBe(152_500);
+
+		// Another weapon starts with none; the first one's comes back with it.
+		draft.pickers.weapon.select(unlimited('saif', 'CUHOF Saif'));
+		expect(draft.capitalTextFor('weapon')).toBe('');
+		expect(draft.capitalPed).toBe(2500);
+		draft.pickers.weapon.select(scimitar);
+		expect(draft.capitalPed).toBe(152_500);
+
+		// Text that is not an amount counts for nothing.
+		draft.setCapitalText('amplifier', 'lots');
+		expect(draft.capitalPed).toBe(150_000);
+	});
+
+	it('counts no capital for a limited part, whose markup is paid per use', () => {
+		const draft = createSetupDraft(1, 1);
+		draft.pickers.weapon.select(hit());
+		draft.setCapitalText('weapon', '5000');
+		expect(draft.capitalPed).toBe(0);
 	});
 
 	it('opens and removes optional parts', () => {
@@ -152,20 +191,24 @@ describe('createComparator', () => {
 		list(comparator, hit());
 		list(comparator, unlimited('scimitar', 'Scimitar'));
 		await comparator.compare();
-		expect(mocked.compareLoadouts).toHaveBeenCalledWith([
-			{
-				weapon: { catalogId: 'bc30', markupPercent: 100 },
-				amplifier: null,
-				absorber: null,
-				implant: null,
-			},
-			{
-				weapon: { catalogId: 'scimitar', markupPercent: null },
-				amplifier: null,
-				absorber: null,
-				implant: null,
-			},
-		]);
+		expect(mocked.compareLoadouts).toHaveBeenCalledWith(
+			[
+				{
+					weapon: { catalogId: 'bc30', markupPercent: 100 },
+					amplifier: null,
+					absorber: null,
+					implant: null,
+				},
+				{
+					weapon: { catalogId: 'scimitar', markupPercent: null },
+					amplifier: null,
+					absorber: null,
+					implant: null,
+				},
+			],
+			3000,
+			null,
+		);
 		expect(comparator.current).toBe(true);
 		await comparator.compare();
 		expect(mocked.compareLoadouts).toHaveBeenCalledTimes(1);
@@ -212,6 +255,130 @@ describe('createComparator', () => {
 		await comparator.compare();
 		expect(comparator.error).toBe("Setup 1's weapon 'bc30' is not in the catalogue");
 		expect(comparator.comparison).not.toBeNull();
+	});
+
+	it('carries the curve reach and looter level into the request', async () => {
+		const comparator = ready();
+		await comparator.compare();
+		comparator.hpMax = 20_000;
+		expect(comparator.current).toBe(false);
+		await comparator.compare();
+		expect(mocked.compareLoadouts).toHaveBeenLastCalledWith(expect.any(Array), 20_000, null);
+		comparator.looterLevel = 42.5;
+		expect(comparator.current).toBe(false);
+		await comparator.compare();
+		expect(mocked.compareLoadouts).toHaveBeenLastCalledWith(expect.any(Array), 20_000, 42.5);
+		comparator.looterLevel = null;
+		expect(comparator.requestKey).toContain('null');
+		expect(comparator.current).toBe(false);
+	});
+
+	it('keeps the sliders inside their ranges', () => {
+		const comparator = createComparator();
+		comparator.hpMax = 5;
+		expect(comparator.hpMax).toBe(10);
+		comparator.hpMax = 250_000;
+		expect(comparator.hpMax).toBe(100_000);
+		comparator.hpMax = Number.NaN;
+		expect(comparator.hpMax).toBe(100_000);
+
+		// The pinned HP stays on the curve, and a shorter curve pulls it in.
+		comparator.pinnedHp = 0;
+		expect(comparator.pinnedHp).toBe(1);
+		comparator.pinnedHp = 4321.4;
+		expect(comparator.pinnedHp).toBe(4321);
+		comparator.hpMax = 500;
+		expect(comparator.pinnedHp).toBe(500);
+		comparator.pinnedHp = 900;
+		expect(comparator.pinnedHp).toBe(500);
+
+		comparator.killCount = 12.6;
+		expect(comparator.killCount).toBe(13);
+		comparator.killCount = -5;
+		expect(comparator.killCount).toBe(0);
+		comparator.killCount = 5_000_000;
+		expect(comparator.killCount).toBe(1_000_000);
+		comparator.killMax = 0;
+		expect(comparator.killMax).toBe(1_000_000);
+		comparator.killMax = 4000.4;
+		expect(comparator.killMax).toBe(4000);
+		expect(comparator.killCount).toBe(4000);
+
+		comparator.looterLevel = 150;
+		expect(comparator.looterLevel).toBe(100);
+		comparator.looterLevel = -3;
+		expect(comparator.looterLevel).toBe(0);
+		comparator.looterLevel = Number.NaN;
+		expect(comparator.looterLevel).toBeNull();
+
+		comparator.capitalRate = 0;
+		expect(comparator.capitalRate).toBe(0.1);
+		comparator.capitalRate = 0.05;
+		expect(comparator.capitalRate).toBe(0.05);
+	});
+
+	it('weighs capital against the picked limited setup, else the cheapest per kill', async () => {
+		// Two limited setups, the second cheaper per kill, and an unlimited one.
+		mocked.compareLoadouts.mockResolvedValue(
+			comparison({
+				setups: [
+					setup(0, 'BC-30'),
+					setup(1, 'Gauss', {
+						economics: economics({ lossPerUsePec: 0.3, houseEdgePec: 0.18 }),
+					}),
+					setup(2, 'Scimitar', {
+						components: [component({ name: 'Scimitar', isLimited: false })],
+					}),
+				],
+			}),
+		);
+		const comparator = createComparator();
+		list(comparator, hit());
+		list(comparator, hit({ catalogId: 'gauss', name: 'Gauss' }));
+		list(comparator, unlimited('scimitar', 'Scimitar'));
+		const [bc30, gauss, scimitar] = comparator.drafts;
+		expect(comparator.referenceDraftId).toBeNull();
+		await comparator.compare();
+		expect(comparator.referenceDraftId).toBe(gauss.id);
+
+		comparator.referenceId = bc30.id;
+		expect(comparator.referenceId).toBe(bc30.id);
+		expect(comparator.referenceDraftId).toBe(bc30.id);
+		// An unlimited setup is never the reference.
+		comparator.referenceId = scimitar.id;
+		expect(comparator.referenceDraftId).toBe(gauss.id);
+
+		// Removing the picked setup falls back to the cheapest.
+		comparator.referenceId = bc30.id;
+		comparator.remove(bc30.id);
+		expect(comparator.referenceId).toBeNull();
+		expect(comparator.referenceDraftId).toBe(gauss.id);
+	});
+
+	it("reads the player's own looter level up front, and the comparison's once shown", async () => {
+		professions.mockResolvedValue([
+			profession('Animal Looter', 30),
+			profession('Mutant Looter', 60),
+			profession('Robot Looter', 90),
+			profession('Rifle', 99),
+		]);
+		const comparator = ready();
+		expect(comparator.ownLooterLevel).toBeNull();
+		await vi.waitFor(() => expect(comparator.ownLooterLevel).toBe(60));
+		mocked.compareLoadouts.mockResolvedValue(
+			comparison({ assumptions: { ...comparison().assumptions, ownLooterLevel: 61.25 } }),
+		);
+		await comparator.compare();
+		expect(comparator.ownLooterLevel).toBe(61.25);
+	});
+
+	it('counts a missing looter as level 0, and every looter as 0 when the read fails', async () => {
+		professions.mockResolvedValueOnce([profession('Animal Looter', 45)]);
+		const partial = createComparator();
+		await vi.waitFor(() => expect(partial.ownLooterLevel).toBe(15));
+		professions.mockRejectedValueOnce(new Error('not ready'));
+		const failed = createComparator();
+		await vi.waitFor(() => expect(failed.ownLooterLevel).toBe(0));
 	});
 
 	it('keeps one comparator for the app session', () => {

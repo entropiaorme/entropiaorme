@@ -163,3 +163,162 @@ export function niceRangeTicks(min: number, max: number, target = 4): number[] {
 	}
 	return ticks;
 }
+
+/** One setup's answers for a number of kills of one mob HP. */
+export interface PlanFigures {
+	/** TT cycled; markup paid on top is part of the leak. */
+	cycledPed: number;
+	/** PED lost beyond a perfect setup (unlimited, 100% Efficiency), and
+	 * its parts. */
+	leakPed: number;
+	markupPed: number;
+	efficiencyPed: number;
+	unmodelledPed: number;
+	/** What even a perfect setup would lose on the same TT. */
+	houseEdgePed: number;
+	/** Expected loss: the house edge plus the leak. */
+	lossPed: number;
+	/** Firing time, when the attack rate is known. */
+	seconds: number | null;
+	/** Uses fired. */
+	uses: number;
+	/** The share of damage dealt that lands past the kill at this HP. */
+	overkillShare: number;
+}
+
+/** A setup's figures for killing `kills` mobs of `hp`. */
+export function planFigures(setup: ComparedSetup, kills: number, hp: number): PlanFigures | null {
+	const economics = setup.economics;
+	if (!economics) return null;
+	const ttPerUse = economics.costPerUsePec - economics.consumedPremiumPec;
+	const usesPerKill = usesAt(setup, hp);
+	if (!(ttPerUse > 0) || usesPerKill === null || !(usesPerKill > 0)) return null;
+	const uses = kills * usesPerKill;
+	const ped = (perUse: number) => (uses * perUse) / 100;
+	const markupPed = ped(economics.consumedPremiumPec);
+	const efficiencyPed = ped(economics.efficiencyShortfallPec);
+	const unmodelledPed = ped(economics.outsideModelPec);
+	const leakPed = markupPed + efficiencyPed + unmodelledPed;
+	const houseEdgePed = ped(economics.houseEdgePec);
+	return {
+		cycledPed: ped(ttPerUse),
+		leakPed,
+		markupPed,
+		efficiencyPed,
+		unmodelledPed,
+		houseEdgePed,
+		lossPed: houseEdgePed + leakPed,
+		seconds: economics.usesPerMinute === null ? null : (uses * 60) / economics.usesPerMinute,
+		uses,
+		overkillShare: Math.max(
+			0,
+			1 - hp / (usesPerKill * economics.damagePerPec * economics.costPerUsePec),
+		),
+	};
+}
+
+/** How many of each limited part `uses` wears out: its decay over its full TT. */
+export function partsUsedUp(
+	setup: ComparedSetup,
+	uses: number,
+): { role: ComparedSetup['components'][number]['role']; count: number }[] {
+	return setup.components.flatMap((component) => {
+		if (!component.isLimited || component.maxTtPed === null || component.decayPecPerUse <= 0)
+			return [];
+		return [
+			{ role: component.role, count: (uses * component.decayPecPerUse) / 100 / component.maxTtPed },
+		];
+	});
+}
+
+/** Expected uses per kill at `hp`, between the curve's sampled points. */
+function usesAt(setup: ComparedSetup, hp: number): number | null {
+	const curve = setup.curve;
+	if (curve.length === 0 || hp < curve[0].hp || hp > curve[curve.length - 1].hp) return null;
+	const right = curve.findIndex((point) => point.hp >= hp);
+	if (right <= 0) return curve[0].uses;
+	const [a, b] = [curve[right - 1], curve[right]];
+	return a.uses + ((hp - a.hp) / (b.hp - a.hp)) * (b.uses - a.uses);
+}
+
+/** A PED figure for the budget columns. */
+export function formatPed(value: number): string {
+	if (!Number.isFinite(value)) return NO_DATA;
+	if (Math.abs(value) >= 100) return Math.round(value).toLocaleString('en-GB');
+	return value.toFixed(value >= 10 ? 1 : 2);
+}
+
+/** A whole count, grouped. */
+export function formatCount(value: number | null): string {
+	if (value === null || !Number.isFinite(value)) return NO_DATA;
+	return Math.floor(value).toLocaleString('en-GB');
+}
+
+/** A long duration as hours and minutes. */
+export function formatDuration(seconds: number | null): string {
+	if (seconds === null || !Number.isFinite(seconds)) return NO_DATA;
+	const minutes = Math.round(seconds / 60);
+	if (minutes < 60) return `${minutes} min`;
+	return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`;
+}
+
+/** A typed amount: "250k", "1.5m", "150,000", or a plain number. */
+export function parseAmount(text: string): number | null {
+	const match = text
+		.trim()
+		.toLowerCase()
+		.replace(/,/g, '')
+		.match(/^\+?(\d+(?:\.\d+)?)\s*([km]?)$/);
+	if (!match) return null;
+	const scale = match[2] === 'k' ? 1e3 : match[2] === 'm' ? 1e6 : 1;
+	return Number(match[1]) * scale;
+}
+
+/** Whether a setup's weapon is a limited item. */
+export function isLimitedSetup(setup: ComparedSetup): boolean {
+	return setup.components.some((component) => component.role === 'weapon' && component.isLimited);
+}
+
+/** A setup's expected loss per kill of `hp`, PED. */
+export function lossPerKill(setup: ComparedSetup, hp: number): number | null {
+	return planFigures(setup, 1, hp)?.lossPed ?? null;
+}
+
+/** How many kills a year make held capital worth it against a reference. */
+export type Payback =
+	| {
+			kind: 'pays_back';
+			/** Kills a year that save the yearly charge on the capital. */
+			perYear: number;
+			capitalCostPed: number;
+			/** PED saved per kill. */
+			saving: number;
+	  }
+	| { kind: 'never'; capitalCostPed: number; saving: number };
+
+export function payback(
+	setup: ComparedSetup,
+	reference: ComparedSetup,
+	hp: number,
+	capitalPed: number,
+	rate: number,
+): Payback | null {
+	const own = lossPerKill(setup, hp);
+	const theirs = lossPerKill(reference, hp);
+	if (own === null || theirs === null) return null;
+	const capitalCostPed = capitalPed * rate;
+	const saving = theirs - own;
+	if (!(saving > 0)) return { kind: 'never', capitalCostPed, saving };
+	return { kind: 'pays_back', perYear: capitalCostPed / saving, capitalCostPed, saving };
+}
+
+const compactNumber = new Intl.NumberFormat('en-GB', {
+	notation: 'compact',
+	maximumFractionDigits: 1,
+});
+
+/** A large figure in short form: 375K, 1.2M. */
+export function formatCompact(value: number): string {
+	if (!Number.isFinite(value)) return NO_DATA;
+	return compactNumber.format(value);
+}

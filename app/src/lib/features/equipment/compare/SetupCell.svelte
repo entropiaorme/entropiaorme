@@ -84,6 +84,22 @@
 				/>
 				%
 			</label>
+		{:else if selected}
+			<!-- An unlimited item's markup is one-off capital, in PED. -->
+			<label class="flex shrink-0 items-center gap-1.5 text-xs text-text-tertiary">
+				+
+				<Input
+					id="{idPrefix}-{role}-capital"
+					align="right"
+					class="h-7 w-24"
+					placeholder="0"
+					value={draft.capitalTextFor(role)}
+					aria-label="{ROLE_LABEL[role]} markup paid, PED"
+					title="Markup paid over TT, e.g. 150k"
+					oninput={(event) => draft.setCapitalText(role, (event.currentTarget as HTMLInputElement).value)}
+				/>
+				PED
+			</label>
 		{/if}
 		{#if role !== 'weapon'}
 			<button

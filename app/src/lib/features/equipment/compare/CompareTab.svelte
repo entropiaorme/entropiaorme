@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { ErrorNotice } from '$lib/components';
+	import BreakpointSlider from './BreakpointSlider.svelte';
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import ComparisonAssumptionsTip from './ComparisonAssumptionsTip.svelte';
 	import ComparisonTable from './ComparisonTable.svelte';
 	import LossChart from './LossChart.svelte';
 	import { type Comparator, sessionComparator } from './compareModel.svelte';
-	import { buildChart, type ChartModel } from './comparisonView';
+	import { buildChart, type ChartModel, formatCompact, planFigures, setupLabels } from './comparisonView';
 
 	/** The comparator to drive; the app session's own unless a test supplies one. */
 	let { comparator = sessionComparator() }: { comparator?: Comparator } = $props();
@@ -20,6 +22,17 @@
 	});
 
 	const comparison = $derived(comparator.comparison);
+	// What the kill count costs in PED with the reference setup, for anyone
+	// who thinks of a year's hunting as spend.
+	const spendHint = $derived.by(() => {
+		const id = comparator.referenceDraftId ?? comparator.computedIds[0] ?? null;
+		const setup = id === null ? null : comparator.figuresFor(id);
+		if (!setup || !comparison) return null;
+		const figures = planFigures(setup, comparator.killCount, comparator.pinnedHp);
+		if (!figures) return null;
+		return { ped: figures.cycledPed, label: setupLabels(comparison)[setup.index] ?? setup.name };
+	});
+
 	const ready = $derived(comparator.requestKey !== null);
 	const chart = $derived.by(() => {
 		if (!ready || !comparison) return null;
@@ -28,7 +41,12 @@
 	});
 	// The chart's frame stands from the first paint, so adding a setup fills
 	// it in place rather than growing the page.
-	const EMPTY_CHART: ChartModel = { series: [], markers: [], hpMax: 1000, lossMax: 0 };
+	const EMPTY_CHART = $derived<ChartModel>({
+		series: [],
+		markers: [],
+		hpMax: comparator.hpMax,
+		lossMax: 0,
+	});
 </script>
 
 <!-- Chart series colours: the categorical palette, stepped per theme and
@@ -50,10 +68,70 @@
 		<LossChart
 			chart={chart ?? EMPTY_CHART}
 			emptyMessage={ready ? undefined : 'Add a weapon to plot its loss per kill'}
+			pinnedHp={comparator.pinnedHp}
+			onPin={(hp) => (comparator.pinnedHp = hp)}
 		/>
 	</section>
 
-	<ComparisonTable {comparator} />
+	<section aria-label="Setups">
+		<!-- What the table's answers are for: a year's kills, the pinned mob HP, and the looter level. -->
+		<div class="mb-4 grid grid-cols-1 gap-x-10 gap-y-3 sm:grid-cols-3">
+			<BreakpointSlider
+				label="Mobs killed"
+				unit="mobs"
+				value={comparator.killCount}
+				max={comparator.killMax}
+				breakpoint={10_000}
+				onValue={(value) => (comparator.killCount = value)}
+				onMax={(max) => (comparator.killMax = max)}
+			>
+				{#snippet note()}
+					{#if spendHint}≈ {formatCompact(spendHint.ped)} PED cycled with {spendHint.label}{/if}
+				{/snippet}
+			</BreakpointSlider>
+			<BreakpointSlider
+				label="Mob HP"
+				unit="HP"
+				value={comparator.pinnedHp}
+				max={comparator.hpMax}
+				breakpoint={500}
+				significant={3}
+				onValue={(value) => (comparator.pinnedHp = value)}
+				onMax={(max) => (comparator.hpMax = max)}
+			/>
+			{#if comparator.ownLooterLevel !== null}
+				{@const own = comparator.ownLooterLevel}
+				<BreakpointSlider
+					label="Looter level"
+					unit=""
+					value={comparator.looterLevel ?? Math.min(100, own)}
+					max={100}
+					step={0.1}
+					decimals={1}
+					fixedMax
+					marker={{ value: Math.min(100, own), label: 'yours' }}
+					onValue={(value) =>
+						(comparator.looterLevel =
+							Math.abs(value - Math.min(100, own)) < 0.05 ? null : value)}
+				>
+					{#snippet info()}
+						<InfoTip label="About the looter level" width="w-80">
+							<p class="text-xs leading-relaxed text-text-secondary">
+								The three-looter mean the return model runs at; it starts at yours, marked on the
+								track. Levels go past 100 in game, but the community model assumes looter skill
+								stops counting at 100, so the slider stops there too.
+							</p>
+							<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
+								It changes what each extra PED cycled costs, so it matters most between setups that
+								cycle different amounts per kill; two setups that cycle the same barely move apart.
+							</p>
+						</InfoTip>
+					{/snippet}
+				</BreakpointSlider>
+			{/if}
+		</div>
+		<ComparisonTable {comparator} />
+	</section>
 </div>
 
 <style>

@@ -1,5 +1,5 @@
 /**
- * The Market page's item list: every observed item's latest readings,
+ * The Market tab's item list: every observed item's latest readings,
  * one resolved markup per row, and an expandable detail carrying all
  * five horizons and the item's history. Presentation lives in the page.
  */

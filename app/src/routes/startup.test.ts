@@ -32,7 +32,6 @@ const PAGES = {
 	character: () => import('./character/+page.svelte'),
 	quests: () => import('./quests/+page.svelte'),
 	equipment: () => import('./equipment/+page.svelte'),
-	market: () => import('./market/+page.svelte'),
 	settings: () => import('./settings/+page.svelte'),
 };
 

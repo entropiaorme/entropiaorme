@@ -25,7 +25,6 @@
 		NavCharacter,
 		NavQuests,
 		NavEquipment,
-		NavMarket,
 		NavInventory,
 		NavSettings,
 		NavNews,
@@ -126,7 +125,6 @@
 		{ id: '/character', label: 'Character', icon: NavCharacter },
 		{ id: '/quests', label: 'Quests', icon: NavQuests },
 		{ id: '/equipment', label: 'Equipment', icon: NavEquipment },
-		{ id: '/market', label: 'Market', icon: NavMarket },
 	];
 
 	let footerNavItems = $derived([

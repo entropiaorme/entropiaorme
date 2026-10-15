@@ -1,5 +1,5 @@
 /**
- * The Market page's paste box: the text parses as it arrives (a short
+ * The Market tab's paste box: the text parses as it arrives (a short
  * debounce absorbs typing), the parse summary shows what an import would
  * store, and one action commits it. Also the PED-per-unit quote form.
  *

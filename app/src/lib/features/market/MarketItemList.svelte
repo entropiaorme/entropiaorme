@@ -29,7 +29,10 @@
 	const columns = 'grid grid-cols-[minmax(0,1fr)_6.5rem_7rem_5rem] items-baseline gap-3';
 </script>
 
-<section class="space-y-3" aria-label="Market observations">
+<!-- Fills the space its parent leaves and scrolls the item rows inside
+     it; the search and column headings stay put. The minimum height keeps
+     the list usable when the paste area above grows tall. -->
+<section class="flex min-h-[14rem] flex-1 flex-col gap-3" aria-label="Market observations">
 	{#if model.error}
 		<ErrorNotice message={model.error} />
 	{:else if !model.loading && model.items.length === 0}
@@ -37,7 +40,7 @@
 			No market observations yet. Paste a market-ledger export above.
 		</p>
 	{:else}
-		<div class="flex items-center justify-between gap-3">
+		<div class="flex shrink-0 items-center justify-between gap-3">
 			<SearchInput bind:value={model.search} placeholder="Find an item" class="max-w-56" />
 			<span class="text-xs text-text-tertiary tabular-nums">
 				{model.items.length}
@@ -45,7 +48,7 @@
 			</span>
 		</div>
 
-		<div class="{columns} border-b border-border/60 px-2.5 pb-2 text-text-tertiary">
+		<div class="{columns} shrink-0 border-b border-border/60 px-2.5 pb-2 pr-3.5 text-text-tertiary">
 			<span class="eyebrow">Item</span>
 			<span class="eyebrow text-right">Markup</span>
 			<span class="eyebrow text-right">Volume</span>
@@ -58,7 +61,7 @@
 			</p>
 		{/if}
 
-		<ul class="flex flex-col">
+		<ul class="flex min-h-0 flex-1 flex-col overflow-y-auto pr-1">
 			{#each model.visibleItems as item (item.row.itemName)}
 				{@const expanded = model.expandedItem === item.row.itemName}
 				{@const detailId = `market-item-${item.row.itemName.replace(/\W+/g, '-')}`}

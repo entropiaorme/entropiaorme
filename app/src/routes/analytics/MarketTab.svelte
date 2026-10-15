@@ -10,8 +10,8 @@
 	});
 </script>
 
-<div class="space-y-8">
-	<div class="space-y-3">
+<div class="flex h-full min-h-0 flex-col gap-8">
+	<div class="shrink-0 space-y-3">
 		<p class="text-sm text-text-tertiary">
 			Markup observations from the in-game market ledger. Estimates only: they never enter your
 			P&amp;L.

@@ -15,11 +15,15 @@
 	];
 
 	let activeTab = $state('overview');
+
+	// The Market tab scrolls its item list inside the tab, so the page
+	// becomes a viewport-height column with the header and tabs fixed.
+	const fillsViewport = $derived(activeTab === 'market');
 </script>
 
-<div class="px-6 pb-6 space-y-6">
+<div class="px-6 pb-6 {fillsViewport ? 'flex h-full min-h-0 flex-col gap-6' : 'space-y-6'}">
 	<!-- Page header -->
-	<div class="flex items-center justify-between">
+	<div class="flex shrink-0 items-center justify-between">
 		<header class="flex flex-col gap-1.5">
 			<h1 class="text-xl font-semibold text-text tracking-tight">Analytics</h1>
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
@@ -28,10 +32,10 @@
 	</div>
 
 	<!-- Tab bar -->
-	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} />
+	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="shrink-0" />
 
 	<!-- Tab content (lazy-loaded). -->
-	<div>
+	<div class={fillsViewport ? 'min-h-0 flex-1' : ''}>
 		{#if activeTab === 'overview'}
 			<OverviewTab />
 		{:else if activeTab === 'ledger'}

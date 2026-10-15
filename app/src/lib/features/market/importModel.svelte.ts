@@ -1,7 +1,7 @@
 /**
- * Import-tab view model: the paste box, the parse preview
- * (review-before-accept), and the commit. Presentation lives in the tab
- * component; it composes over this state.
+ * The Market page's paste box: the text parses as it arrives (a short
+ * debounce absorbs typing), the parse summary shows what an import would
+ * store, and one action commits it. Also the PED-per-unit quote form.
  *
  * The commit sends the raw text again rather than echoing the preview:
  * the backend re-parses, so what gets stored always comes from the one
@@ -11,6 +11,9 @@
 import type { MarketCommitResult, MarketPastePreview, MarketUnitPriceResult } from '$lib/api';
 import { commitMarketPaste, previewMarketPaste, setMarketUnitPrice } from '$lib/api';
 import { describeError } from '$lib/view/errorState';
+
+/** Quiet period after the last edit before the text is parsed. */
+export const PREVIEW_DEBOUNCE_MS = 250;
 
 export function createImportModel() {
 	let text = $state('');
@@ -28,8 +31,8 @@ export function createImportModel() {
 	// Monotonic token so a slow preview for superseded text cannot
 	// overwrite the newer preview (or its error) after an edit.
 	let previewEpoch = 0;
+	let previewTimer: ReturnType<typeof setTimeout> | null = null;
 
-	const canPreview = $derived(text.trim().length > 0 && !previewing && !committing);
 	const canCommit = $derived(
 		preview !== null && preview.rows.length > 0 && !previewing && !committing,
 	);
@@ -54,6 +57,14 @@ export function createImportModel() {
 		// epoch moved, so this is the only place left to reset it.
 		previewEpoch++;
 		previewing = false;
+		if (previewTimer !== null) clearTimeout(previewTimer);
+		previewTimer = null;
+		if (value.trim()) {
+			previewTimer = setTimeout(() => {
+				previewTimer = null;
+				void runPreview();
+			}, PREVIEW_DEBOUNCE_MS);
+		}
 	}
 
 	async function runPreview() {
@@ -134,9 +145,6 @@ export function createImportModel() {
 		},
 		get committed() {
 			return committed;
-		},
-		get canPreview() {
-			return canPreview;
 		},
 		get canCommit() {
 			return canCommit;

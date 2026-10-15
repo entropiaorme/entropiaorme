@@ -51,9 +51,8 @@ use crate::maps::{
     PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry,
 };
 use crate::market::{
-    MarketAuctionPacketThreshold, MarketBreakEven, MarketCommitResult, MarketContributionBatch,
-    MarketHarvestData, MarketHistoryPoint, MarketHorizon, MarketMobRankingRow, MarketOverviewRow,
-    MarketPastePreview, MarketUnitPriceResult,
+    MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
+    MarketHorizon, MarketOverviewRow, MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1232,30 +1231,12 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(Vec<MarketOverviewRow>))),
         },
         CommandSpec {
-            name: "market_contribution_batch",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(Nullable<MarketContributionBatch>))),
-        },
-        CommandSpec {
             name: "market_auction_packet_threshold",
             args: vec![ArgSpec {
                 name: "max_fee_share_pct",
                 schema: schema(schema_for!(f64)),
             }],
             returns: Some(schema(schema_for!(MarketAuctionPacketThreshold))),
-        },
-        CommandSpec {
-            name: "market_break_even",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(MarketBreakEven))),
-        },
-        CommandSpec {
-            name: "market_mob_ranking",
-            args: vec![ArgSpec {
-                name: "horizon",
-                schema: schema(schema_for!(MarketHorizon)),
-            }],
-            returns: Some(schema(schema_for!(Vec<MarketMobRankingRow>))),
         },
         CommandSpec {
             name: "market_harvest_markups",

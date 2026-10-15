@@ -1795,27 +1795,6 @@ export interface MarketAuctionPacketThreshold {
 }
 
 /**
- * The break-even readout: the player's exact three hunting-looter
- * professions and every library weapon's modelled offensive economics.
- */
-export interface MarketBreakEven {
-	looters: MarketLooterLevel[];
-	weapons: MarketWeaponBreakEven[];
-}
-
-/**
- * One loadout's break-even figures at every looter basis: the
- * three-looter mean, or the one hunting looter a known target class
- * applies.
- */
-export interface MarketBreakEvenByLooter {
-	threeLooterMean: MarketLooterBreakEven;
-	animal: MarketLooterBreakEven;
-	mutant: MarketLooterBreakEven;
-	robot: MarketLooterBreakEven;
-}
-
-/**
  * A committed paste: the submission it created.
  */
 export interface MarketCommitResult {
@@ -1824,31 +1803,6 @@ export interface MarketCommitResult {
 	skippedCount: number;
 	/** Epoch seconds. */
 	observedAt: number;
-}
-
-/**
- * The most recent accepted paste as a contributable batch: exactly
- * what an opted-in contributor shares, nothing more. The frontend
- * owns the send, strictly behind the contribution opt-in.
- */
-export interface MarketContributionBatch {
-	/** Epoch seconds of the submission. */
-	observedAt: number;
-	items: MarketContributionItem[];
-}
-
-/**
- * One item of a contributable batch: the pasted readings verbatim,
- * by horizon name.
- */
-export interface MarketContributionItem {
-	itemName: string;
-	tier: number;
-	day: MarketReading;
-	week: MarketReading;
-	month: MarketReading;
-	year: MarketReading;
-	decade: MarketReading;
 }
 
 /**
@@ -1910,39 +1864,6 @@ export interface MarketHistoryPoint {
  * One of the export's five aggregation horizons.
  */
 export type MarketHorizon = 'day' | 'week' | 'month' | 'year' | 'decade';
-
-/**
- * A loadout's expected return and break-even loot markup at one looter
- * basis.
- */
-export interface MarketLooterBreakEven {
-	looterLevel: number;
-	expectedTtReturnPct: number | null;
-	breakEvenLootMarkupPct: number | null;
-}
-
-/**
- * One looter profession and its believed-current level.
- */
-export interface MarketLooterLevel {
-	name: string;
-	level: number;
-}
-
-/**
- * One species' estimated-markup row: recorded loot composition
- * TT-weighted by the latest markup observations on one horizon.
- * Coverage keeps a thin sample honest: the estimate weights only the
- * covered TT, and the row says how much that is.
- */
-export interface MarketMobRankingRow {
-	mobSpecies: string;
-	lootTt: number;
-	coveredTt: number;
-	itemCount: number;
-	coveredItemCount: number;
-	estMarkupPct: number | null;
-}
 
 /**
  * One overview row: an item's latest readings (from the most recent
@@ -2007,22 +1928,6 @@ export interface MarketUnitPriceResult {
 	pedPerUnit: number;
 	/** Epoch seconds. */
 	observedAt: number;
-}
-
-/**
- * One configured loadout's offensive-only expected return and break-even
- * loot markup under Community Model v1.
- */
-export interface MarketWeaponBreakEven {
-	name: string;
-	amplifierName: string | null;
-	weightedEfficiencyPct: number | null;
-	offensiveTtRecoveryPct: number | null;
-	/** The looter-dependent figures at each basis the player can choose; null when the loadout has no modelled offensive stream. */
-	byLooter: MarketBreakEvenByLooter | null;
-	coverage: number | null;
-	incomplete: boolean;
-	modelVersion: string | null;
 }
 
 /**
@@ -4429,20 +4334,8 @@ export async function marketOverview(): Promise<MarketOverviewRow[]> {
 	return invokeCommand('market_overview', {});
 }
 
-export async function marketContributionBatch(): Promise<MarketContributionBatch | null> {
-	return invokeCommand('market_contribution_batch', {});
-}
-
 export async function marketAuctionPacketThreshold(maxFeeSharePct: number): Promise<MarketAuctionPacketThreshold> {
 	return invokeCommand('market_auction_packet_threshold', { max_fee_share_pct: maxFeeSharePct });
-}
-
-export async function marketBreakEven(): Promise<MarketBreakEven> {
-	return invokeCommand('market_break_even', {});
-}
-
-export async function marketMobRanking(horizon: MarketHorizon): Promise<MarketMobRankingRow[]> {
-	return invokeCommand('market_mob_ranking', { horizon });
 }
 
 export async function marketHarvestMarkups(): Promise<MarketHarvestData> {

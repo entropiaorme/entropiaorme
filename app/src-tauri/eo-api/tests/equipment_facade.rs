@@ -650,42 +650,6 @@ async fn a_weapon_reads_its_expected_return_at_every_looter_basis() {
     };
     assert!(markup(&returns.robot) < markup(&returns.mutant));
     assert!(markup(&returns.mutant) < markup(&returns.animal));
-
-    // Market's break-even reads the same per-basis figures, in percent.
-    let break_even = api.market_break_even().await.unwrap();
-    let levels: Vec<(&str, f64)> = break_even
-        .looters
-        .iter()
-        .map(|looter| (looter.name.as_str(), looter.level))
-        .collect();
-    assert_eq!(
-        levels,
-        [
-            ("Animal Looter", 20.0),
-            ("Mutant Looter", 50.0),
-            ("Robot Looter", 80.0)
-        ]
-    );
-    let row = break_even.weapons[0]
-        .by_looter
-        .as_ref()
-        .expect("a modelled row");
-    for (market, expected) in [
-        (&row.three_looter_mean, &returns.three_looter_mean),
-        (&row.animal, &returns.animal),
-        (&row.mutant, &returns.mutant),
-        (&row.robot, &returns.robot),
-    ] {
-        assert_eq!(market.looter_level, expected.looter_level);
-        assert_eq!(
-            market.break_even_loot_markup_pct.0,
-            expected.break_even_loot_markup.0.map(|value| value * 100.0)
-        );
-        assert_eq!(
-            market.expected_tt_return_pct.0,
-            expected.expected_tt_rate.0.map(|value| value * 100.0)
-        );
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

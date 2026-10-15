@@ -1,11 +1,11 @@
 /**
- * Overview-tab view model: every observed item's latest readings on a
- * selected aggregation horizon, with the observation age as the
- * staleness signal. Presentation lives in the tab component.
+ * The Market page's item list: every observed item's latest readings,
+ * one resolved markup per row, and an expandable detail carrying all
+ * five horizons and the item's history. Presentation lives in the page.
  */
 
-import type { MarketHorizon, MarketOverviewRow, MarketReading } from '$lib/api';
-import { getMarketOverview } from '$lib/api';
+import type { MarketHistoryPoint, MarketHorizon, MarketOverviewRow } from '$lib/api';
+import { getMarketItemHistory, getMarketOverview } from '$lib/api';
 import { describeError } from '$lib/view/errorState';
 import { filterByQuery } from '$lib/view/search';
 
@@ -17,14 +17,26 @@ export const HORIZONS: { id: MarketHorizon; label: string }[] = [
 	{ id: 'decade', label: 'Decade' },
 ];
 
-/** One table row: the selected horizon's reading flattened beside the
- * item identity and the staleness signal. */
-export interface OverviewTableRow {
-	itemName: string;
-	tier: number;
+/** The horizons a row's markup resolves through, in preference order:
+ * the same week, then month, then year fallback the analytics apply. */
+const RESOLUTION_ORDER: MarketHorizon[] = ['week', 'month', 'year'];
+
+/** One row's resolved reading: the first horizon in the resolution order
+ * that carries a markup, else the week with no markup (no recent sales). */
+export interface ResolvedReading {
+	horizon: MarketHorizon;
 	markupPct: number | null;
 	salesPed: number;
-	observedAt: number;
+}
+
+export function resolveReading(row: MarketOverviewRow): ResolvedReading {
+	for (const horizon of RESOLUTION_ORDER) {
+		const reading = row[horizon];
+		if (reading.markupPct !== null) {
+			return { horizon, markupPct: reading.markupPct, salesPed: reading.salesPed };
+		}
+	}
+	return { horizon: 'week', markupPct: null, salesPed: row.week.salesPed };
 }
 
 /** Compact volume label: `13.5K PED`, `6.4M PED`, `451.90 PED`. */
@@ -47,18 +59,24 @@ export function formatAge(observedAt: number, nowEpoch: number): string {
 	return `${Math.floor(days / 7)}w ago`;
 }
 
-export type OverviewSortKey = keyof OverviewTableRow & string;
+export interface MarketItemRow {
+	row: MarketOverviewRow;
+	resolved: ResolvedReading;
+}
 
 export function createOverviewModel() {
 	let rows = $state<MarketOverviewRow[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let horizon = $state<MarketHorizon>('week');
 	let search = $state('');
-	let sortKey = $state<OverviewSortKey>('itemName');
-	let sortDir = $state<'asc' | 'desc'>('asc');
+
+	let expandedItem = $state<string | null>(null);
+	let history = $state<MarketHistoryPoint[]>([]);
+	let historyLoading = $state(false);
+	let historyError = $state<string | null>(null);
 
 	let loadEpoch = 0;
+	let historyEpoch = 0;
 
 	async function loadData() {
 		const epoch = ++loadEpoch;
@@ -68,6 +86,9 @@ export function createOverviewModel() {
 			const loaded = await getMarketOverview();
 			if (epoch !== loadEpoch) return;
 			rows = loaded;
+			if (expandedItem !== null && !loaded.some((row) => row.itemName === expandedItem)) {
+				collapse();
+			}
 		} catch (e) {
 			if (epoch !== loadEpoch) return;
 			error = describeError(e, 'Failed to load market data');
@@ -76,62 +97,54 @@ export function createOverviewModel() {
 		}
 	}
 
-	function readingFor(row: MarketOverviewRow): MarketReading {
-		switch (horizon) {
-			case 'day':
-				return row.day;
-			case 'week':
-				return row.week;
-			case 'month':
-				return row.month;
-			case 'year':
-				return row.year;
-			case 'decade':
-				return row.decade;
+	const items = $derived<MarketItemRow[]>(
+		rows.map((row) => ({ row, resolved: resolveReading(row) })),
+	);
+
+	// The backend serves rows sorted by item name; the search keeps that order.
+	const visibleItems = $derived(filterByQuery(items, search, (item) => item.row.itemName));
+
+	function collapse() {
+		historyEpoch++;
+		expandedItem = null;
+		history = [];
+		historyLoading = false;
+		historyError = null;
+	}
+
+	/** Expands an item (collapsing any other) and loads its history on the
+	 * row's resolved horizon; toggling the open item collapses it. */
+	async function toggle(itemName: string) {
+		if (expandedItem === itemName) {
+			collapse();
+			return;
+		}
+		const item = items.find((candidate) => candidate.row.itemName === itemName);
+		if (!item) return;
+		const epoch = ++historyEpoch;
+		expandedItem = itemName;
+		history = [];
+		historyError = null;
+		historyLoading = true;
+		try {
+			const loaded = await getMarketItemHistory(itemName, item.resolved.horizon);
+			if (epoch !== historyEpoch) return;
+			// Newest first: the detail reads as a recent log.
+			history = [...loaded].reverse();
+		} catch (e) {
+			if (epoch !== historyEpoch) return;
+			historyError = describeError(e, 'Failed to load the item history');
+		} finally {
+			if (epoch === historyEpoch) historyLoading = false;
 		}
 	}
 
-	const tableRows = $derived.by<OverviewTableRow[]>(() =>
-		rows.map((row) => {
-			const reading = readingFor(row);
-			return {
-				itemName: row.itemName,
-				tier: row.tier,
-				markupPct: reading.markupPct,
-				salesPed: reading.salesPed,
-				observedAt: row.observedAt,
-			};
-		}),
-	);
-
-	const itemNames = $derived(rows.map((row) => row.itemName));
-
-	// Search-filtered, sorted view of the flattened rows. Null markups
-	// (no sales in the horizon) sort last in both directions.
-	const sortedRows = $derived.by<OverviewTableRow[]>(() => {
-		const filtered = filterByQuery(tableRows, search, (row) => row.itemName);
-		const dir = sortDir === 'asc' ? 1 : -1;
-		const key = sortKey;
-		return [...filtered].sort((a, b) => {
-			const aVal = a[key];
-			const bVal = b[key];
-			if (aVal == null && bVal == null) return 0;
-			if (aVal == null) return 1;
-			if (bVal == null) return -1;
-			if (typeof aVal === 'number' && typeof bVal === 'number') return dir * (aVal - bVal);
-			return dir * String(aVal).localeCompare(String(bVal));
-		});
-	});
-
 	return {
-		get rows() {
-			return rows;
+		get items() {
+			return items;
 		},
-		get tableRows() {
-			return tableRows;
-		},
-		get sortedRows() {
-			return sortedRows;
+		get visibleItems() {
+			return visibleItems;
 		},
 		get search() {
 			return search;
@@ -139,34 +152,26 @@ export function createOverviewModel() {
 		set search(value: string) {
 			search = value;
 		},
-		get sortKey() {
-			return sortKey;
-		},
-		set sortKey(value: OverviewSortKey) {
-			sortKey = value;
-		},
-		get sortDir() {
-			return sortDir;
-		},
-		set sortDir(value: 'asc' | 'desc') {
-			sortDir = value;
-		},
-		get itemNames() {
-			return itemNames;
-		},
 		get loading() {
 			return loading;
 		},
 		get error() {
 			return error;
 		},
-		get horizon() {
-			return horizon;
+		get expandedItem() {
+			return expandedItem;
 		},
-		set horizon(value: MarketHorizon) {
-			horizon = value;
+		get history() {
+			return history;
+		},
+		get historyLoading() {
+			return historyLoading;
+		},
+		get historyError() {
+			return historyError;
 		},
 		loadData,
+		toggle,
 	};
 }
 

@@ -9,10 +9,10 @@
 //!
 //! Everything here is the INFORMATIONAL market layer: estimated markup
 //! never joins the ledger, the analytics aggregates, or any realised
-//! P&L figure. Writes stay on the `market_*` tables; the one sanctioned
-//! read of the accounting tables is `mob_ranking`'s loot-composition
-//! join, the one-way direction of the market boundary, and nothing
-//! flows back.
+//! P&L figure. Writes stay on the `market_*` tables; the sanctioned
+//! reads of the accounting tables are the harvest and hunting
+//! loot-item scopes, the one-way direction of the market boundary, and
+//! nothing flows back.
 
 use std::sync::Arc;
 
@@ -71,44 +71,6 @@ pub struct HistoryPoint {
     pub observed_at: f64,
     pub markup_pct: Option<f64>,
     pub sales_ped: f64,
-}
-
-/// One item of a contributable batch: the pasted readings verbatim.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BatchItem {
-    pub item_name: String,
-    pub tier: i64,
-    /// Indexed in [`MarketHorizon::ALL`] order.
-    pub readings: [MarketReading; 5],
-}
-
-/// The most recent accepted paste, verbatim: what a user who opts in
-/// to contributing shares, nothing more. Sending it anywhere is the
-/// caller's decision behind its own explicit consent gate.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubmissionBatch {
-    /// Epoch seconds of the submission.
-    pub observed_at: f64,
-    pub items: Vec<BatchItem>,
-}
-
-/// One species' estimated-markup row: the recorded loot composition
-/// TT-weighted by the latest markup observations on one horizon.
-/// `est_markup_pct` is None when no composing item has an observation;
-/// the coverage fields keep a thin sample from masquerading as a
-/// verdict (estimates are weighted over the covered TT only).
-#[derive(Debug, Clone, PartialEq)]
-pub struct MobRankingRow {
-    pub mob_species: String,
-    /// Total active recorded loot TT for the species (PED).
-    pub loot_tt: f64,
-    /// The share of that TT whose items have a markup observation (PED).
-    pub covered_tt: f64,
-    pub item_count: i64,
-    pub covered_item_count: i64,
-    /// TT-weighted average of the latest markup observations over the
-    /// covered composition. Estimated markup: informational only.
-    pub est_markup_pct: Option<f64>,
 }
 
 /// The estimated market signals for the harvest-looted items, plus the
@@ -340,158 +302,6 @@ impl MarketService {
                 Ok(points)
             })
             .await
-    }
-
-    /// The most recent accepted paste as a contributable batch, or None
-    /// before the first commit. Most recent by `submitted_at` (the id only
-    /// breaks a tie), so a restored or replayed older paste written later
-    /// never displaces the newest one. Rows come back exactly as stored;
-    /// the batch never blends submissions, so what a contributor shares
-    /// is precisely the export they pasted.
-    pub async fn latest_submission(&self) -> Result<Option<SubmissionBatch>, DbError> {
-        self.db
-            .with_reader(|connection| {
-                let mut stmt = connection.prepare(
-                    "SELECT o.item_name, o.tier, s.submitted_at, o.horizon, \
-                            o.markup_pct, o.sales_ped \
-                     FROM market_observations o \
-                     JOIN market_submissions s ON s.id = o.submission_id \
-                     WHERE o.submission_id = (SELECT id FROM market_submissions \
-                                              ORDER BY submitted_at DESC, id DESC LIMIT 1) \
-                     ORDER BY o.item_name, o.id",
-                )?;
-                let mut rows = stmt.query([])?;
-                let mut observed_at = 0.0;
-                let mut items: Vec<BatchItem> = Vec::new();
-                while let Some(row) = rows.next()? {
-                    let item_name: String = row.get(0)?;
-                    let horizon: String = row.get(3)?;
-                    let Some(horizon) = MarketHorizon::from_stored(&horizon) else {
-                        // A vocabulary value outside the enum never gets
-                        // written; tolerate rather than fail the read.
-                        continue;
-                    };
-                    observed_at = row.get(2)?;
-                    if items.last().map(|entry| entry.item_name.as_str())
-                        != Some(item_name.as_str())
-                    {
-                        items.push(BatchItem {
-                            item_name,
-                            tier: row.get(1)?,
-                            readings: [MarketReading {
-                                markup_pct: None,
-                                sales_ped: 0.0,
-                            }; 5],
-                        });
-                    }
-                    let entry = items.last_mut().expect("pushed above");
-                    entry.readings[horizon as usize] = MarketReading {
-                        markup_pct: row.get(4)?,
-                        sales_ped: row.get(5)?,
-                    };
-                }
-                Ok(if items.is_empty() {
-                    None
-                } else {
-                    Some(SubmissionBatch { observed_at, items })
-                })
-            })
-            .await
-    }
-
-    /// Every hunted species' estimated loot markup on one horizon: the
-    /// species' recorded loot composition (active items across all
-    /// recorded kills) TT-weighted by each item's latest markup
-    /// observation. Reading the accounting tables here is the sanctioned
-    /// direction of the market boundary; nothing flows back.
-    pub async fn mob_ranking(&self, horizon: MarketHorizon) -> Result<Vec<MobRankingRow>, DbError> {
-        let started = std::time::Instant::now();
-        self.db.with_writer(crate::session_rollup::heal).await?;
-        let result = self
-            .db
-            .with_reader(move |connection| {
-                // The latest markup observation per item on the horizon.
-                let mut markup_stmt = connection.prepare(
-                    "SELECT o.item_name, o.markup_pct \
-                     FROM market_observations o \
-                     WHERE o.horizon = ?1 \
-                       AND o.submission_id = (SELECT o2.submission_id \
-                                              FROM market_observations o2 \
-                                              JOIN market_submissions s2 ON s2.id = o2.submission_id \
-                                              WHERE o2.item_name = o.item_name \
-                                              ORDER BY s2.submitted_at DESC, s2.id DESC LIMIT 1)",
-                )?;
-                let mut markups: std::collections::HashMap<String, Option<f64>> =
-                    std::collections::HashMap::new();
-                let mut rows = markup_stmt.query(rusqlite::params![horizon.as_str()])?;
-                while let Some(row) = rows.next()? {
-                    markups.insert(row.get(0)?, row.get(1)?);
-                }
-
-                // The per-species, per-item composition over active loot
-                // (enhancer-shrapnel returns are enhancer accounting, not
-                // loot composition).
-                let loot = crate::session_rollup::effective_hunting_loot_cells(connection, None)?;
-                let mut ranking: std::collections::BTreeMap<String, MobRankingRow> =
-                    std::collections::BTreeMap::new();
-                let mut weighted: std::collections::HashMap<String, f64> =
-                    std::collections::HashMap::new();
-                let mut composition: std::collections::BTreeMap<(String, String), f64> =
-                    std::collections::BTreeMap::new();
-                for cell in loot
-                    .into_iter()
-                    .filter(|cell| !cell.is_enhancer_shrapnel && !cell.mob_species.is_empty())
-                {
-                    *composition
-                        .entry((cell.mob_species, cell.item_name))
-                        .or_insert(0.0) += cell.value_ped;
-                }
-                for ((species, item), tt) in composition {
-                    let entry = ranking
-                        .entry(species.clone())
-                        .or_insert_with(|| MobRankingRow {
-                            mob_species: species.clone(),
-                            loot_tt: 0.0,
-                            covered_tt: 0.0,
-                            item_count: 0,
-                            covered_item_count: 0,
-                            est_markup_pct: None,
-                        });
-                    entry.loot_tt += tt;
-                    entry.item_count += 1;
-                    if let Some(Some(markup)) = markups.get(&item) {
-                        entry.covered_tt += tt;
-                        entry.covered_item_count += 1;
-                        *weighted.entry(species).or_insert(0.0) += tt * markup;
-                    }
-                }
-                let mut result: Vec<MobRankingRow> = ranking
-                    .into_values()
-                    .map(|mut row| {
-                        if row.covered_tt > 0.0 {
-                            row.est_markup_pct = Some(weighted[&row.mob_species] / row.covered_tt);
-                        }
-                        row
-                    })
-                    .collect();
-                // Best estimated markup first; no-data species last, by TT.
-                result.sort_by(|a, b| match (a.est_markup_pct, b.est_markup_pct) {
-                    (Some(x), Some(y)) => y.total_cmp(&x),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => b.loot_tt.total_cmp(&a.loot_tt),
-                });
-                Ok(result)
-            })
-            .await?;
-        tracing::debug!(
-            target: "eo::performance",
-            operation = "market.mob_ranking",
-            elapsed_us = started.elapsed().as_micros() as u64,
-            result_count = result.len(),
-            "analytical read complete"
-        );
-        Ok(result)
     }
 
     /// The estimated market signals for every active harvest-looted
@@ -805,42 +615,15 @@ Carabok Leg Fur\t0\tN/A\t0.000 PEC\tN/A\t0.000 PEC\tN/A\t0.000 PEC\t109.380%\t6.
     }
 
     #[test]
-    fn latest_submission_serves_the_newest_batch_verbatim() {
-        let dir = tempfile::tempdir().unwrap();
-        let (runtime, service, clock) = rig(dir.path());
-
-        // Before any commit there is nothing to contribute.
-        assert_eq!(runtime.block_on(service.latest_submission()).unwrap(), None);
-
-        runtime.block_on(service.commit_paste(SAMPLE)).unwrap();
-        clock.advance(7.0 * 24.0 * 3600.0).unwrap();
-        let later = "Carabok Hide\t0\t101.000%\t10.000 PED\t101.000%\t10.000 PED\t\
-101.000%\t10.000 PED\t101.000%\t10.000 PED\t101.000%\t10.000 PED";
-        let second = runtime.block_on(service.commit_paste(later)).unwrap();
-
-        // The newest paste only, verbatim: never a blend across
-        // submissions (the earlier batch's other item is absent).
-        let batch = runtime
-            .block_on(service.latest_submission())
-            .unwrap()
-            .unwrap();
-        assert_eq!(batch.observed_at, second.observed_at);
-        assert_eq!(batch.items.len(), 1);
-        assert_eq!(batch.items[0].item_name, "Carabok Hide");
-        assert_eq!(batch.items[0].readings[0].markup_pct, Some(101.000));
-        assert_eq!(batch.items[0].readings[4].sales_ped, 10.0);
-    }
-
-    #[test]
-    fn latest_submission_is_latest_in_time_not_the_highest_id() {
+    fn overview_is_latest_in_time_not_the_highest_id() {
         let dir = tempfile::tempdir().unwrap();
         let (runtime, service, clock) = rig(dir.path());
 
         // The newer paste is committed first; an older export is then
         // committed with the clock wound back (a restored backup, a
         // replayed log), so it carries the higher id but the earlier
-        // submitted_at. Both the contributable batch and the per-item
-        // overview read the paste latest in time.
+        // submitted_at. The per-item overview reads the paste latest in
+        // time.
         let newest = runtime.block_on(service.commit_paste(SAMPLE)).unwrap();
         clock.freeze_at(
             chrono::NaiveDateTime::parse_from_str("2026-07-01 12:00:00", "%Y-%m-%d %H:%M:%S")
@@ -851,79 +634,11 @@ Carabok Leg Fur\t0\tN/A\t0.000 PEC\tN/A\t0.000 PEC\tN/A\t0.000 PEC\t109.380%\t6.
         let stale = runtime.block_on(service.commit_paste(older)).unwrap();
         assert!(stale.observed_at < newest.observed_at);
 
-        let batch = runtime
-            .block_on(service.latest_submission())
-            .unwrap()
-            .unwrap();
-        assert_eq!(batch.observed_at, newest.observed_at);
-        assert_eq!(batch.items.len(), 2);
-        assert_eq!(batch.items[0].readings[0].markup_pct, Some(106.880));
-
         let overview = runtime.block_on(service.overview()).unwrap();
         assert_eq!(overview.len(), 2);
         assert_eq!(overview[0].item_name, "Carabok Hide");
         assert_eq!(overview[0].observed_at, newest.observed_at);
         assert_eq!(overview[0].readings[0].markup_pct, Some(106.880));
-    }
-
-    #[test]
-    fn mob_ranking_weights_composition_by_latest_markup_with_coverage() {
-        let dir = tempfile::tempdir().unwrap();
-        let (runtime, service, _clock) = rig(dir.path());
-        // Seed loot composition: Carabok drops 100 PED of Hide (observed)
-        // and 100 PED of Leg Fur (unobserved); Atrox drops 50 PED of an
-        // item with no observation at all. The effective loot boundary is
-        // session-owned, matching production tracking and orphan recovery.
-        runtime
-            .block_on(service.db.with_writer(|connection| {
-                connection.execute_batch(
-                    "INSERT INTO tracking_sessions \
-                         (id, started_at, ended_at, is_active) \
-                     VALUES ('s1', 0, 1, 0); \
-                     INSERT INTO kills (id, session_id, mob_species, timestamp) VALUES \
-                       ('k1', 's1', 'Carabok', 0), ('k2', 's1', 'Atrox', 0), \
-                       ('k3', 's1', '', 0); \
-                     INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) VALUES \
-                       ('k1', 'Carabok Hide', 1, 60.0, 0), \
-                       ('k1', 'Carabok Hide', 1, 40.0, 0), \
-                       ('k1', 'Carabok Leg Fur', 1, 100.0, 0), \
-                       ('k1', 'Shrapnel', 1, 999.0, 1), \
-                       ('k2', 'Animal Oil Residue', 1, 50.0, 0), \
-                       ('k3', 'Orphan Loot', 1, 10.0, 0);",
-                )?;
-                Ok(())
-            }))
-            .unwrap();
-        runtime.block_on(service.commit_paste(SAMPLE)).unwrap();
-
-        let ranking = runtime
-            .block_on(service.mob_ranking(MarketHorizon::Day))
-            .unwrap();
-        assert_eq!(ranking.len(), 2, "unattributed kills are excluded");
-
-        // Carabok: half covered (Hide day 106.880; Leg Fur's day is N/A,
-        // which is no observation, not zero). Atrox: no observed items at
-        // all, so no estimate, and it sorts after the estimated species.
-        assert_eq!(ranking[0].mob_species, "Carabok");
-        assert_eq!(ranking[0].loot_tt, 200.0);
-        assert_eq!(ranking[0].covered_tt, 100.0);
-        assert_eq!(ranking[0].item_count, 2);
-        assert_eq!(ranking[0].covered_item_count, 1);
-        assert_eq!(ranking[0].est_markup_pct, Some(106.88));
-        assert_eq!(ranking[1].mob_species, "Atrox");
-        assert_eq!(ranking[1].loot_tt, 50.0);
-        assert_eq!(ranking[1].covered_tt, 0.0);
-        assert_eq!(ranking[1].est_markup_pct, None);
-
-        // On the decade horizon both Carabok items carry observations,
-        // so the estimate TT-weights across the full composition.
-        let decade = runtime
-            .block_on(service.mob_ranking(MarketHorizon::Decade))
-            .unwrap();
-        assert_eq!(decade[0].mob_species, "Carabok");
-        assert_eq!(decade[0].covered_tt, 200.0);
-        let est = decade[0].est_markup_pct.unwrap();
-        assert!((est - 249.01).abs() < 1e-9, "got {est}");
     }
 
     #[test]

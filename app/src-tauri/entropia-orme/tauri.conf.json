@@ -107,7 +107,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' https://entropiaorme.com https://market-data.entropiaorme.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' https://entropiaorme.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
     }
   },
   "plugins": {

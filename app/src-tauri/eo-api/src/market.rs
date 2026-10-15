@@ -7,8 +7,6 @@
 //! DTOs stay in this module so the accounting surfaces cannot consume
 //! them by accident.
 
-use crate::equipment::{EquipmentExpectedReturn, EquipmentExpectedReturns, EquipmentKind};
-use eo_services::expected_hunting::HuntingLooterLevels;
 use eo_services::market_paste::{self, MarketPasteRow};
 use eo_services::market_service::{self, MarketError};
 use schemars::JsonSchema;
@@ -179,46 +177,6 @@ pub struct MarketHistoryPoint {
     pub sales_ped: f64,
 }
 
-/// One item of a contributable batch: the pasted readings verbatim,
-/// by horizon name.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketContributionItem {
-    pub item_name: String,
-    pub tier: i64,
-    pub day: MarketReading,
-    pub week: MarketReading,
-    pub month: MarketReading,
-    pub year: MarketReading,
-    pub decade: MarketReading,
-}
-
-/// The most recent accepted paste as a contributable batch: exactly
-/// what an opted-in contributor shares, nothing more. The frontend
-/// owns the send, strictly behind the contribution opt-in.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketContributionBatch {
-    /// Epoch seconds of the submission.
-    pub observed_at: f64,
-    pub items: Vec<MarketContributionItem>,
-}
-
-/// One species' estimated-markup row: recorded loot composition
-/// TT-weighted by the latest markup observations on one horizon.
-/// Coverage keeps a thin sample honest: the estimate weights only the
-/// covered TT, and the row says how much that is.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketMobRankingRow {
-    pub mob_species: String,
-    pub loot_tt: f64,
-    pub covered_tt: f64,
-    pub item_count: i64,
-    pub covered_item_count: i64,
-    pub est_markup_pct: Nullable<f64>,
-}
-
 /// One horizon's reading for a harvest item: its markup (null where the
 /// game reported N/A) and TT turnover (PED).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -275,91 +233,6 @@ pub struct MarketHarvestData {
 pub struct MarketAuctionPacketThreshold {
     pub max_fee_share_pct: f64,
     pub gross_markup_ped: f64,
-}
-
-/// One looter profession and its believed-current level.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketLooterLevel {
-    pub name: String,
-    pub level: f64,
-}
-
-/// One configured loadout's offensive-only expected return and break-even
-/// loot markup under Community Model v1.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketWeaponBreakEven {
-    pub name: String,
-    pub amplifier_name: Nullable<String>,
-    pub weighted_efficiency_pct: Nullable<f64>,
-    pub offensive_tt_recovery_pct: Nullable<f64>,
-    /// The looter-dependent figures at each basis the player can choose;
-    /// null when the loadout has no modelled offensive stream.
-    pub by_looter: Nullable<MarketBreakEvenByLooter>,
-    pub coverage: Nullable<f64>,
-    pub incomplete: bool,
-    pub model_version: Nullable<String>,
-}
-
-/// A loadout's expected return and break-even loot markup at one looter
-/// basis.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketLooterBreakEven {
-    pub looter_level: f64,
-    pub expected_tt_return_pct: Nullable<f64>,
-    pub break_even_loot_markup_pct: Nullable<f64>,
-}
-
-/// One loadout's break-even figures at every looter basis: the
-/// three-looter mean, or the one hunting looter a known target class
-/// applies.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketBreakEvenByLooter {
-    pub three_looter_mean: MarketLooterBreakEven,
-    pub animal: MarketLooterBreakEven,
-    pub mutant: MarketLooterBreakEven,
-    pub robot: MarketLooterBreakEven,
-}
-
-impl From<&EquipmentExpectedReturn> for MarketLooterBreakEven {
-    fn from(expected: &EquipmentExpectedReturn) -> Self {
-        Self {
-            looter_level: expected.looter_level,
-            expected_tt_return_pct: expected
-                .expected_tt_rate
-                .0
-                .map(|value| value * 100.0)
-                .into(),
-            break_even_loot_markup_pct: expected
-                .break_even_loot_markup
-                .0
-                .map(|value| value * 100.0)
-                .into(),
-        }
-    }
-}
-
-impl From<&EquipmentExpectedReturns> for MarketBreakEvenByLooter {
-    fn from(returns: &EquipmentExpectedReturns) -> Self {
-        Self {
-            three_looter_mean: (&returns.three_looter_mean).into(),
-            animal: (&returns.animal).into(),
-            mutant: (&returns.mutant).into(),
-            robot: (&returns.robot).into(),
-        }
-    }
-}
-
-/// The break-even readout: the player's exact three hunting-looter
-/// professions and every library weapon's modelled offensive economics.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketBreakEven {
-    pub looters: Vec<MarketLooterLevel>,
-    pub weapons: Vec<MarketWeaponBreakEven>,
 }
 
 // ── Operations ──────────────────────────────────────────────────────
@@ -496,126 +369,6 @@ impl Api {
                 observed_at: point.observed_at,
                 markup_pct: point.markup_pct.into(),
                 sales_ped: point.sales_ped,
-            })
-            .collect())
-    }
-
-    /// The most recent accepted paste as a contributable batch, or null
-    /// before the first commit.
-    pub async fn market_contribution_batch(
-        &self,
-    ) -> Result<Nullable<MarketContributionBatch>, ApiError> {
-        let batch = self
-            .market
-            .latest_submission()
-            .await
-            .map_err(ApiError::internal("market contribution batch"))?;
-        Ok(batch
-            .map(|batch| MarketContributionBatch {
-                observed_at: batch.observed_at,
-                items: batch
-                    .items
-                    .into_iter()
-                    .map(|item| {
-                        let (day, week, month, year, decade) = horizon_fields(item.readings);
-                        MarketContributionItem {
-                            item_name: item.item_name,
-                            tier: item.tier,
-                            day,
-                            week,
-                            month,
-                            year,
-                            decade,
-                        }
-                    })
-                    .collect(),
-            })
-            .into())
-    }
-
-    /// Configured loadout economics under the shared component-weighted
-    /// expected-hunting core. The three exact hunting looters are returned
-    /// beside each row's figures at every basis, so the reader chooses the
-    /// mean or the one looter their target's class applies.
-    pub async fn market_break_even(&self) -> Result<MarketBreakEven, ApiError> {
-        let professions = self.character_professions().await?;
-        let profession_level = |name: &str| {
-            professions
-                .iter()
-                .find(|profession| profession.name == name)
-                .map(|profession| profession.level)
-                .unwrap_or(0.0)
-        };
-        let looter_basis = HuntingLooterLevels {
-            animal: profession_level("Animal Looter"),
-            mutant: profession_level("Mutant Looter"),
-            robot: profession_level("Robot Looter"),
-        };
-        let looters = ["Animal Looter", "Mutant Looter", "Robot Looter"]
-            .into_iter()
-            .map(|name| MarketLooterLevel {
-                name: name.to_string(),
-                level: profession_level(name),
-            })
-            .collect();
-
-        let mut weapons = Vec::new();
-        for item in self
-            .equipment_library()
-            .await?
-            .into_iter()
-            .filter(|item| matches!(item.kind, EquipmentKind::Weapon))
-        {
-            let item_id = item
-                .id
-                .parse::<i64>()
-                .map_err(ApiError::internal("equipment id parse for break-even"))?;
-            let detail = self
-                .equipment_detail_with_looters(item_id, Some(looter_basis))
-                .await?;
-            let returns = detail.expected_returns.0;
-            // The basis-independent figures read the same at every basis.
-            let expected = returns.as_ref().map(|returns| &returns.three_looter_mean);
-            weapons.push(MarketWeaponBreakEven {
-                name: item.name,
-                amplifier_name: item.amplifier_name,
-                weighted_efficiency_pct: expected
-                    .and_then(|value| value.weighted_efficiency_pct.0)
-                    .into(),
-                offensive_tt_recovery_pct: expected
-                    .and_then(|value| value.offensive_tt_recovery.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                by_looter: returns.as_ref().map(Into::into).into(),
-                coverage: expected.map(|value| value.coverage).into(),
-                incomplete: expected.is_none_or(|value| value.incomplete),
-                model_version: expected.map(|value| value.model_version.clone()).into(),
-            });
-        }
-
-        Ok(MarketBreakEven { looters, weapons })
-    }
-
-    /// Every hunted species' estimated loot markup on one horizon,
-    /// best estimate first (species with no observed items last).
-    pub async fn market_mob_ranking(
-        &self,
-        horizon: MarketHorizon,
-    ) -> Result<Vec<MarketMobRankingRow>, ApiError> {
-        let rows = self
-            .market
-            .mob_ranking(horizon.into())
-            .await
-            .map_err(ApiError::internal("market mob ranking"))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| MarketMobRankingRow {
-                mob_species: row.mob_species,
-                loot_tt: row.loot_tt,
-                covered_tt: row.covered_tt,
-                item_count: row.item_count,
-                covered_item_count: row.covered_item_count,
-                est_markup_pct: row.est_markup_pct.into(),
             })
             .collect())
     }

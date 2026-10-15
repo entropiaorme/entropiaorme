@@ -14,10 +14,8 @@
 	import { initNews, newsOptIn, newsHasUnread, NEWS_PREFERENCE_KEYS } from '$lib/news.svelte';
 	import { initUpdater, maybeCheckOnLaunch, updateAvailable } from '$lib/updater.svelte';
 	import { maybeRefreshOnMount } from '$lib/newsFetch';
-	import { initMarketData, MARKET_DATA_PREFERENCE_KEYS } from '$lib/marketData.svelte';
 	import { initLooterBasis } from '$lib/looterBasis.svelte';
-	import { maybeRefreshMarketSnapshotOnMount } from '$lib/marketDataFetch';
-	import { getPreference } from '$lib/preferences';
+	import { getPreference, purgeRetiredPreferences } from '$lib/preferences';
 	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
 	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
 	import StartupIndicator from '$lib/features/startup/StartupIndicator.svelte';
@@ -81,11 +79,10 @@
 			initStatsScope(),
 			initNews(),
 			initUpdater(),
-			initMarketData(),
+			purgeRetiredPreferences(),
 			initLooterBasis(),
 		]);
 		void maybeRefreshOnMount();
-		void maybeRefreshMarketSnapshotOnMount();
 		if (
 			typeof sessionStorage !== 'undefined' &&
 			sessionStorage.getItem('welcome_just_finished') === '1'
@@ -107,10 +104,7 @@
 				await goto('/welcome', { replaceState: true });
 			} else if (!(await isTosAccepted())) {
 				await goto('/welcome/terms', { replaceState: true });
-			} else if (
-				!(await getPreference<boolean>(NEWS_PREFERENCE_KEYS.optInSeen, false)) ||
-				!(await getPreference<boolean>(MARKET_DATA_PREFERENCE_KEYS.optInSeen, false))
-			) {
+			} else if (!(await getPreference<boolean>(NEWS_PREFERENCE_KEYS.optInSeen, false))) {
 				// The networking-consent reprompt: shown until every online
 				// feature's choice has been seen, so features added after a
 				// user onboarded still get an explicit yes/no.

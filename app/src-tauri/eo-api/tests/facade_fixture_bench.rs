@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use eo_api::analytics::Profession;
-use eo_api::market::MarketHorizon;
 use eo_api::Api;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
@@ -188,10 +187,6 @@ fn facade_fixture_bench() {
                 api.hunting_realised_markup(),
             )
         });
-        bench!(
-            "market_mobs_week",
-            api.market_mob_ranking(MarketHorizon::Week)
-        );
         bench!("harvest", api.analytics_harvest("all"));
         bench!("session_list", api.tracking_sessions(None, None, None));
         bench!("ledger_page", api.ledger_list(None, None));
@@ -230,11 +225,6 @@ fn facade_fixture_bench() {
             "hunting_tab_bundle".to_string(),
             payloads.iter().map(|(_, bytes)| bytes).sum(),
         ));
-        let mobs = api
-            .market_mob_ranking(MarketHorizon::Week)
-            .await
-            .expect("market mobs payload");
-        payloads.push(("market_mobs_week".to_string(), wire_bytes(&mobs)));
     });
 
     println!("\ntyped-facade fixture bench (read path over a real-scale database copy)");

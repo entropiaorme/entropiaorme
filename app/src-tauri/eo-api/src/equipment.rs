@@ -1373,16 +1373,6 @@ impl Api {
 
     /// The expanded detail for a stored entry.
     pub async fn equipment_detail(&self, item_id: i64) -> Result<EquipmentDetail, ApiError> {
-        self.equipment_detail_with_looters(item_id, None).await
-    }
-
-    /// Internal batch seam for callers that already derived the exact three
-    /// hunting looters. Avoids repeating the character calculation per row.
-    pub(crate) async fn equipment_detail_with_looters(
-        &self,
-        item_id: i64,
-        supplied_looters: Option<HuntingLooterLevels>,
-    ) -> Result<EquipmentDetail, ApiError> {
         let row = self
             .db
             .equipment_detail_row(item_id)
@@ -1396,22 +1386,18 @@ impl Api {
         let props = serde_json::from_str::<Value>(&raw_props)
             .map_err(ApiError::internal("stored equipment props parse"))?;
         let looters = if item_type == "weapon" {
-            if let Some(looters) = supplied_looters {
-                looters
-            } else {
-                let professions = self.character_professions().await?;
-                let level = |name: &str| {
-                    professions
-                        .iter()
-                        .find(|profession| profession.name == name)
-                        .map(|profession| profession.level)
-                        .unwrap_or(0.0)
-                };
-                HuntingLooterLevels {
-                    animal: level("Animal Looter"),
-                    mutant: level("Mutant Looter"),
-                    robot: level("Robot Looter"),
-                }
+            let professions = self.character_professions().await?;
+            let level = |name: &str| {
+                professions
+                    .iter()
+                    .find(|profession| profession.name == name)
+                    .map(|profession| profession.level)
+                    .unwrap_or(0.0)
+            };
+            HuntingLooterLevels {
+                animal: level("Animal Looter"),
+                mutant: level("Mutant Looter"),
+                robot: level("Robot Looter"),
             }
         } else {
             HuntingLooterLevels {

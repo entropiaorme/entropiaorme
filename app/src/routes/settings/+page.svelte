@@ -3,7 +3,6 @@
 	import { Button, Divider, Toggle, Input, SegmentedControl } from '$lib/components';
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
 	import { newsOptIn, setNewsOptIn } from '$lib/news.svelte';
-	import MarketDataSettings from '$lib/features/market/MarketDataSettings.svelte';
 	import AuctionFeeResearchSettings from '$lib/features/settings/AuctionFeeResearchSettings.svelte';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
@@ -477,8 +476,6 @@
 					label="Enable automatic updates"
 				/>
 			</div>
-
-			<MarketDataSettings />
 		</div>
 	</section>
 

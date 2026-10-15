@@ -938,11 +938,10 @@ mod tests {
             .split(';')
             .find(|directive| directive.trim_start().starts_with("connect-src "))
             .expect("connect-src is configured");
-        assert!(
-            connect_src
-                .split_whitespace()
-                .any(|source| source == "https://market-data.entropiaorme.com"),
-            "the market-data origin must stay pinned in connect-src: {csp}"
+        assert_eq!(
+            connect_src.split_whitespace().collect::<Vec<_>>(),
+            ["connect-src", "'self'", "https://entropiaorme.com"],
+            "the news feed is the only external origin the webview may reach: {csp}"
         );
         assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
         assert!(

@@ -176,6 +176,26 @@ describe('setPreference (inTauri = false)', () => {
 	});
 });
 
+describe('purgeRetiredPreferences', () => {
+	it('deletes every retired key from the store', async () => {
+		const deleteMock = vi.fn().mockResolvedValue(true);
+		loadMock.mockResolvedValue({ get: getMock, set: setMock, delete: deleteMock });
+		const { purgeRetiredPreferences, RETIRED_PREFERENCE_KEYS } = await importPreferences(true);
+		await purgeRetiredPreferences();
+		expect(deleteMock.mock.calls.map(([key]) => key)).toEqual([...RETIRED_PREFERENCE_KEYS]);
+		expect(RETIRED_PREFERENCE_KEYS).toContain('market_contributor_token');
+	});
+
+	it('clears the retired keys from localStorage outside Tauri, leaving the rest', async () => {
+		const { purgeRetiredPreferences, RETIRED_PREFERENCE_KEYS } = await importPreferences(false);
+		for (const key of RETIRED_PREFERENCE_KEYS) localStorage.setItem(key, 'true');
+		localStorage.setItem('theme', '"dark"');
+		await purgeRetiredPreferences();
+		for (const key of RETIRED_PREFERENCE_KEYS) expect(localStorage.getItem(key)).toBeNull();
+		expect(localStorage.getItem('theme')).toBe('"dark"');
+	});
+});
+
 describe('localStorage absent (typeof localStorage === undefined)', () => {
 	// The final fall-through arm of both functions, unreachable under happy-dom
 	// unless localStorage is stubbed away. Covers a frozen/headless runtime with

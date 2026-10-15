@@ -18,7 +18,6 @@ use eo_api::analytics::{
     AuctionConfirmInput, AuctionExpireInput, AuctionListingInput, InventorySellInput,
     LedgerEntryInput, LedgerPresetInput, Profession,
 };
-use eo_api::market::MarketHorizon;
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
@@ -118,10 +117,6 @@ async fn settled_hunting_facades_cannot_read_raw_fact_tables() {
         "Animal Hide"
     );
     assert_eq!(api.market_hunt_markups().await.unwrap().items.len(), 1);
-    assert_eq!(
-        api.market_mob_ranking(MarketHorizon::Week).await.unwrap()[0].mob_species,
-        "Atrox"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

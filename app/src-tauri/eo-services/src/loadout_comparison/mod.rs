@@ -268,6 +268,10 @@ pub struct KillFigures {
     pub cycled_pec: f64,
     /// Firing time, when the setup's attack rate is known.
     pub seconds: Option<f64>,
+    /// The share of the damage fired at the mob that lands past the kill,
+    /// and so of the uses, PEC cycled, loss, and firing time it accounts
+    /// for. Misses are not overkill: a miss deals nothing.
+    pub overkill_share: f64,
 }
 
 /// A stretch of the curve where one setup is the cheapest per kill.
@@ -331,6 +335,16 @@ pub fn kill_figures(setup: &SetupEconomics, curve: &KillCurve, hp: f64) -> KillF
         loss_pec: uses * setup.loss_per_use_pec,
         cycled_pec: uses * setup.cost_per_use_pec,
         seconds: setup.uses_per_minute.map(|rate| uses * 60.0 / rate),
+        overkill_share: overkill_share(uses * setup.expected_damage_per_use, hp),
+    }
+}
+
+/// The share of `dealt` damage beyond the `hp` it took to kill.
+fn overkill_share(dealt: f64, hp: f64) -> f64 {
+    if dealt.is_finite() && dealt > 0.0 {
+        (1.0 - hp / dealt).max(0.0)
+    } else {
+        0.0
     }
 }
 

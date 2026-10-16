@@ -255,6 +255,9 @@ pub struct SkillingRouteForecast {
     /// Firing time plus the time between kills; null when the attack rate
     /// is unknown.
     pub seconds_per_kill: Nullable<f64>,
+    /// The share of the damage fired that lands past the kill, and so of
+    /// the PED cycled, the TT lost, and the firing time.
+    pub overkill_share: f64,
     pub kills: f64,
     pub cycled_ped: f64,
     /// Expected TT lost on the way: cycled less expected loot TT.
@@ -520,6 +523,7 @@ impl Api {
             cycled_per_kill_pec: 0.0,
             loss_per_kill_pec: 0.0,
             seconds_per_kill: None.into(),
+            overkill_share: 0.0,
             kills: 0.0,
             cycled_ped: 0.0,
             ped_lost: 0.0,
@@ -572,6 +576,7 @@ impl Api {
             .seconds
             .map(|seconds| round_half_even(seconds, 2))
             .into();
+        route.overkill_share = round_half_even(kill.overkill_share, 4);
         let PlannedForecast {
             status,
             cycled_ped,

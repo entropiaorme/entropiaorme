@@ -161,6 +161,9 @@ pub struct RouteKill {
     /// Seconds per kill: firing plus the time between kills; None when the
     /// weapon's attack rate is unknown.
     pub seconds: Option<f64>,
+    /// The share of the damage fired that lands past the kill, and so of
+    /// the PED cycled, the loss, and the firing time.
+    pub overkill_share: f64,
 }
 
 impl RouteKill {
@@ -187,6 +190,7 @@ impl RouteKill {
             cycled_pec: figures.cycled_pec,
             loss_pec: figures.loss_pec,
             seconds: figures.seconds.map(|seconds| seconds + between_kills),
+            overkill_share: figures.overkill_share,
         })
     }
 
@@ -371,6 +375,7 @@ mod tests {
             cycled_pec: 2.0,
             loss_pec: 0.16,
             seconds: Some(2.0),
+            overkill_share: 0.5,
         };
         let rates = kill.rates(&[
             ("Longblades".to_string(), 0.75),

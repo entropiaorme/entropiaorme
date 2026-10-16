@@ -3320,6 +3320,8 @@ export interface SkillingRouteForecast {
 	lossPerKillPec: number;
 	/** Firing time plus the time between kills; null when the attack rate is unknown. */
 	secondsPerKill: number | null;
+	/** The share of the damage fired that lands past the kill, and so of the PED cycled, the TT lost, and the firing time. */
+	overkillShare: number;
 	kills: number;
 	cycledPed: number;
 	/** Expected TT lost on the way: cycled less expected loot TT. */

@@ -261,6 +261,14 @@ async fn a_planned_route_prices_the_goal_per_weapon_and_mob() {
     // The small mob is the cheaper place to earn the same skill.
     assert!(robber.cycled_per_kill_pec < carabok.cycled_per_kill_pec);
     assert!(robber.ped_lost < carabok.ped_lost);
+    // Yet the sword overkills the small mob far more: every landed hit
+    // (6.12 damage on average) kills its 2 HP.
+    assert!(
+        (robber.overkill_share - 0.6732).abs() < 1e-9,
+        "{}",
+        robber.overkill_share
+    );
+    assert!(carabok.overkill_share > 0.0 && carabok.overkill_share < robber.overkill_share);
 
     // The recorded sessions are still answered beside the planned routes.
     assert!(result.sources.is_empty());

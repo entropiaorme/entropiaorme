@@ -123,6 +123,7 @@ fn band_average(setup: &SetupEconomics, from: f64, to: f64, step: f64) -> KillFi
         seconds: setup
             .uses_per_minute
             .map(|_| mean(|point| point.seconds.unwrap_or(0.0))),
+        overkill_share: mean(|point| point.overkill_share),
     }
 }
 
@@ -812,4 +813,41 @@ fn the_standard_assumptions_are_the_disclosed_ones() {
         1e-12,
     );
     assert_eq!(RETURN_MODEL, "community_v1");
+}
+
+/// Overkill is the damage fired past the kill as a share of all of it: on
+/// a mob below the smallest hit, every landed hit kills and all but the
+/// mob's HP of it is overkill; on a mob of many hits only the last one
+/// overshoots, so the share falls away as the mob grows.
+#[test]
+fn overkill_is_the_share_of_damage_dealt_past_the_kill() {
+    let setup = economics(
+        &props(
+            weapon("Blade", 8.0, 60.0, 0.0, 1.0, 50.0),
+            100.0,
+            None,
+            None,
+            None,
+        ),
+        50.0,
+    );
+    let curve = KillCurve::solve(setup.max_damage, 1_000.0, &STANDARD).unwrap();
+    // A 2 HP mob dies to the first landed hit, which averages 8 x 0.75
+    // with criticals: 6.12 damage dealt for 2 HP removed.
+    let one_hit = kill_figures(&setup, &curve, 2.0);
+    assert_close(
+        "one-hit overkill",
+        one_hit.overkill_share,
+        1.0 - 2.0 / 6.12,
+        1e-9,
+    );
+    let shares: Vec<f64> = [2.0, 10.0, 50.0, 200.0, 1_000.0]
+        .iter()
+        .map(|hp| kill_figures(&setup, &curve, *hp).overkill_share)
+        .collect();
+    assert!(
+        shares.windows(2).all(|pair| pair[1] < pair[0]),
+        "{shares:?}"
+    );
+    assert!(shares[4] > 0.0 && shares[4] < 0.005, "{shares:?}");
 }

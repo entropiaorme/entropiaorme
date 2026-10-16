@@ -48,6 +48,15 @@ export function formatRoutePed(value: number): string {
 	return Math.abs(value) >= 100 ? Math.round(value).toLocaleString('en-GB') : value.toFixed(2);
 }
 
+/** An overkill share: whole percent from 10%, one place below, so a small
+ * share never reads as none. */
+export function formatOverkill(share: number): string {
+	const percent = share * 100;
+	if (percent <= 0) return '0%';
+	if (percent < 0.1) return '<0.1%';
+	return `${percent >= 10 ? Math.round(percent) : percent.toFixed(1)}%`;
+}
+
 /** A kill count, whole and grouped. */
 export function formatKills(kills: number): string {
 	return Math.round(kills).toLocaleString('en-GB');

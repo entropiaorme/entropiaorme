@@ -115,6 +115,56 @@ describe('SkillingRoutes', () => {
 		expect(screen.getByText(/2\.0 s \(1\.0 s firing, 1\.0 s to the next mob\)/)).toBeTruthy();
 	});
 
+	it("shows each route's overkill and the most a better fit could save", async () => {
+		await renderWith(
+			[
+				robber({ overkillShare: 0.6732, pedLost: 2160 }),
+				routeForecast({ index: 1, overkillShare: 0.22, pedLost: 3770 }),
+			],
+			[ROBBER, CARABOK],
+		);
+		expect(screen.getByText('67%')).toBeTruthy();
+		expect(screen.getByText('up to 1,454 PED')).toBeTruthy();
+		expect(screen.getByText('22%')).toBeTruthy();
+		expect(screen.getByText('up to 829 PED')).toBeTruthy();
+		// The cheapest route is selected: its overkill reads as headroom.
+		expect(
+			screen.getByText(/A lighter weapon on Default Bank Robber could save up to 1,454 PED/),
+		).toBeTruthy();
+		expect(screen.getByText(/4\.1 HP dealt past the kill/)).toBeTruthy();
+	});
+
+	it('says whether overkill is why a dearer route loses', async () => {
+		const hub = await renderWith(
+			[
+				robber({ overkillShare: 0.1, pedLost: 2160 }),
+				routeForecast({ index: 1, overkillShare: 0.22, pedLost: 3770 }),
+			],
+			[ROBBER, CARABOK],
+		);
+		hub.selectRow('route:1');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(
+			screen.getByText(/Overkill accounts for 829 PED of this route's 1,610 PED premium/),
+		).toBeTruthy();
+	});
+
+	it('says when a better-fitted weapon could make a dearer route the cheapest', async () => {
+		const hub = await renderWith(
+			[
+				robber({ overkillShare: 0.1, pedLost: 2160 }),
+				routeForecast({ index: 1, overkillShare: 0.6, pedLost: 3000 }),
+			],
+			[ROBBER, CARABOK],
+		);
+		hub.selectRow('route:1');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(screen.getByText(/Overkill costs more than this route's 840 PED premium/)).toBeTruthy();
+		expect(
+			screen.getByText(/would lose 1,200 PED, against the cheapest route's 2,160/),
+		).toBeTruthy();
+	});
+
 	it('takes the time to the next mob from your recorded pace when there is one', async () => {
 		await renderWith([
 			robber({ secondsPerKill: 1.6, pace: { betweenKillSeconds: 0.6, kills: 5000 } }),

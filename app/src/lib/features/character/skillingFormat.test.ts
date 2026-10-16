@@ -6,6 +6,7 @@ import {
 	formatKills,
 	formatLevel,
 	formatLift,
+	formatOverkill,
 	formatPes,
 	formatRoutePed,
 	formatTargetGain,
@@ -77,6 +78,13 @@ describe('route figures', () => {
 		expect(formatRoutePed(100)).toBe('100');
 		expect(formatRoutePed(5.9)).toBe('5.90');
 		expect(formatKills(1213004.4)).toBe('1,213,004');
+	});
+
+	it('shows overkill whole from 10%, to one place below so a small share never reads as none', () => {
+		expect(formatOverkill(0.6732)).toBe('67%');
+		expect(formatOverkill(0.0834)).toBe('8.3%');
+		expect(formatOverkill(0.0004)).toBe('<0.1%');
+		expect(formatOverkill(0)).toBe('0%');
 	});
 });
 

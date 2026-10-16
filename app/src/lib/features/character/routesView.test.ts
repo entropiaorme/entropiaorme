@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { forecastResult, routeForecast, STORED_ROUTE } from './__fixtures__/skilling';
-import { isStoredRoute, routePick, routeRows, routeStatusLabel, sameRoute } from './routesView';
+import {
+	hpPastTheKill,
+	isStoredRoute,
+	overkillReading,
+	routePick,
+	routeRows,
+	routeStatusLabel,
+	sameRoute,
+} from './routesView';
 
 const ROBBER = {
 	...STORED_ROUTE,
@@ -46,6 +54,58 @@ describe('routeRows', () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].route).toBeNull();
 		expect(rows[0].status).toBeNull();
+	});
+});
+
+describe('overkill', () => {
+	it("reads the cheapest route's overkill as headroom, however large", () => {
+		const rows = routeRows(
+			forecastResult({
+				routes: [
+					routeForecast({ index: 0, pedLost: 3770, overkillShare: 0.22 }),
+					routeForecast({ index: 1, pedLost: 2160, overkillShare: 0.67 }),
+				],
+			}),
+			[STORED_ROUTE, ROBBER],
+		);
+		const cheapest = rows[1].overkill;
+		expect(cheapest?.kind).toBe('headroom');
+		expect(cheapest?.ped).toBeCloseTo(1447.2);
+		expect(cheapest?.fittedPed).toBeCloseTo(712.8);
+		// The dearer route's overkill (829.4) is only part of its 1,610 premium.
+		expect(rows[0].overkill).toMatchObject({ kind: 'part_of_premium', premium: 1610 });
+		expect(rows[0].overkill?.ped).toBeCloseTo(829.4);
+	});
+
+	it('says when overkill alone outweighs the premium', () => {
+		const reading = overkillReading(routeForecast({ pedLost: 100, overkillShare: 0.5 }), 40, 60);
+		expect(reading).toMatchObject({
+			kind: 'covers_premium',
+			ped: 50,
+			fittedPed: 50,
+			premium: 40,
+			cheapestPed: 60,
+		});
+	});
+
+	it('reads the only route as headroom, and leaves an unpriced row without', () => {
+		const rows = routeRows(
+			forecastResult({
+				routes: [
+					routeForecast({ index: 0, pedLost: 10, overkillShare: 0.3 }),
+					routeForecast({ index: 1, status: 'unknown_mob', pedLost: 0, overkillShare: 0 }),
+				],
+			}),
+			[STORED_ROUTE, ROBBER],
+		);
+		expect(rows[0].overkill?.kind).toBe('headroom');
+		expect(rows[1].overkill).toBeNull();
+	});
+
+	it('turns the share back into HP dealt past each kill', () => {
+		// Two thirds wasted on a 2 HP mob: 4 HP past each kill.
+		expect(hpPastTheKill(2, 2 / 3)).toBeCloseTo(4);
+		expect(hpPastTheKill(100, 0)).toBe(0);
 	});
 });
 

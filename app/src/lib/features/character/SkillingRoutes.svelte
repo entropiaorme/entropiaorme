@@ -17,7 +17,7 @@
 	import SkillingPanel from './SkillingPanel.svelte';
 	import SkillingPremium from './SkillingPremium.svelte';
 	import SkillingRouteDetail from './SkillingRouteDetail.svelte';
-	import { formatHours, formatKills, formatRoutePed } from './skillingFormat';
+	import { formatHours, formatKills, formatOverkill, formatRoutePed } from './skillingFormat';
 	import { MAX_SKILL_BOOST, type SkillingModel } from './skillingModel.svelte';
 
 	// Skilling methods compared: each row a weapon on a mob you set up in
@@ -189,6 +189,22 @@
 						<th class="px-3 py-2 text-right eyebrow">TT lost</th>
 						<th class="px-3 py-2 text-right eyebrow">Time</th>
 						<th class="px-3 py-2 text-right eyebrow">Kills</th>
+						<th class="px-3 py-2 text-right eyebrow">
+							<span class="inline-flex items-center justify-end gap-1.5">
+								Overkill
+								<InfoTip label="About overkill" width="w-80">
+									<p class="text-xs leading-relaxed text-text-secondary">
+										The share of the damage fired that lands past the kill, and so of the TT lost and the
+										firing time. Beneath it, what that comes to over the route: the most a weapon that fits
+										the mob better could save.
+									</p>
+									<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
+										It is a ceiling, not a promise: a lighter weapon often deals less damage per PEC or
+										returns less, and even a perfect fit overshoots a little on the last hit.
+									</p>
+								</InfoTip>
+							</span>
+						</th>
 						<th class="py-2 pl-3 text-right eyebrow">Over cheapest</th>
 						<th class="w-6"><span class="sr-only">Remove</span></th>
 					</tr>
@@ -259,11 +275,11 @@
 								{/if}
 							</td>
 							{#if route === null}
-								<td colspan="5" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan="6" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{hub.forecastLoading ? 'Pricing…' : NO_DATA}
 								</td>
 							{:else if route.status !== 'ready'}
-								<td colspan="5" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan="6" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{routeStatusLabel(route.status)}
 								</td>
 							{:else}
@@ -273,6 +289,16 @@
 									{route.hours !== null ? formatHours(route.hours) : NO_DATA}
 								</td>
 								<td class="{COL_FIGURE} text-text-secondary">{formatKills(route.kills)}</td>
+								<td class="{COL_FIGURE} whitespace-nowrap text-text-secondary">
+									{#if row.overkill}
+										{formatOverkill(row.overkill.share)}
+										<span class="block text-xs text-text-tertiary">
+											up to {formatRoutePed(row.overkill.ped)} PED
+										</span>
+									{:else}
+										{NO_DATA}
+									{/if}
+								</td>
 								<td class="whitespace-nowrap py-2.5 pl-3 text-right tabular-nums">
 									<SkillingPremium premium={row.premium} perHour={row.premiumPerHour} />
 								</td>
@@ -316,7 +342,7 @@
 								class="min-w-44"
 							/>
 						</td>
-						<td colspan="6"></td>
+						<td colspan="7"></td>
 					</tr>
 				</tbody>
 			</table>

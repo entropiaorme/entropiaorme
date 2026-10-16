@@ -33,6 +33,7 @@ export function routeForecast(
 		cycledPerKillPec: 4.56,
 		lossPerKillPec: 0.36,
 		secondsPerKill: 3.1,
+		overkillShare: 0.22,
 		kills: 1000,
 		cycledPed: 45.6,
 		pedLost: 3.6,

@@ -3,11 +3,12 @@
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 	import { targetLabel } from './codexRankingTarget';
-	import { type RouteRow, routeStatusLabel } from './routesView';
+	import { hpPastTheKill, MEANINGFUL_OVERKILL, type RouteRow, routeStatusLabel } from './routesView';
 	import SkillingBar from './SkillingBar.svelte';
 	import {
 		formatKills,
 		formatLevel,
+		formatRoutePed,
 		formatTargetGain,
 	} from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
@@ -31,6 +32,12 @@
 		route.skills.filter((skill) => !skill.movesTarget || skill.targetGain < minorGain),
 	);
 	const topShare = $derived(Math.max(0, ...onTarget.map((skill) => skill.pesShare ?? 0)));
+	const overkill = $derived(row.overkill);
+	const pastTheKill = $derived(
+		route.mobHp !== null && route.overkillShare > 0
+			? hpPastTheKill(route.mobHp, route.overkillShare)
+			: null,
+	);
 	const firing = $derived(
 		route.secondsPerKill !== null
 			? route.secondsPerKill - (route.pace?.betweenKillSeconds ?? 1)
@@ -54,6 +61,12 @@
 			<span class="text-text-secondary">{formatPed(route.cycledPerKillPec)} PEC cycled</span>
 			<span aria-hidden="true">·</span>
 			<span class="text-text-secondary">{formatPed(route.lossPerKillPec)} PEC lost</span>
+			{#if pastTheKill !== null}
+				<span aria-hidden="true">·</span>
+				<span class="text-text-secondary">
+					{pastTheKill.toFixed(pastTheKill < 0.1 ? 2 : 1)} HP dealt past the kill
+				</span>
+			{/if}
 			{#if route.secondsPerKill !== null && firing !== null}
 				<span aria-hidden="true">·</span>
 				<span class="text-text-secondary">
@@ -79,6 +92,26 @@
 				</p>
 			</InfoTip>
 		</div>
+
+		<!-- What the weapon's fit to the mob costs, read by the route's rank:
+			 headroom on the cheapest, the deciding factor or a part of the gap on the rest. -->
+		{#if overkill && overkill.share >= MEANINGFUL_OVERKILL}
+			<p class="mt-3 max-w-2xl text-xs leading-relaxed text-text-secondary">
+				{#if overkill.kind === 'headroom'}
+					A lighter weapon on {row.stored.display} could save up to {formatRoutePed(overkill.ped)} PED:
+					with every hit's damage used, this route would lose {formatRoutePed(overkill.fittedPed)} PED.
+				{:else if overkill.kind === 'covers_premium'}
+					Overkill costs more than this route's {formatRoutePed(overkill.premium)} PED premium, so a
+					better-fitted weapon on {row.stored.display} could make it the cheapest: with every hit's damage
+					used it would lose {formatRoutePed(overkill.fittedPed)} PED, against the cheapest route's
+					{formatRoutePed(overkill.cheapestPed)}.
+				{:else}
+					Overkill accounts for {formatRoutePed(overkill.ped)} PED of this route's
+					{formatRoutePed(overkill.premium)} PED premium; the rest is down to the mob and the weapon's own
+					economy.
+				{/if}
+			</p>
+		{/if}
 
 		{#if onTarget.length > 0}
 			<div class="mt-7 overflow-x-auto">

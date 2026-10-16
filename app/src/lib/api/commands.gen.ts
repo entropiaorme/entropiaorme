@@ -3153,6 +3153,11 @@ export interface ShrapnelConversionInput {
 }
 
 /**
+ * The skill pill a planned route assumes.
+ */
+export type SkillBoostLevel = 'none' | 'fifty' | 'hundred';
+
+/**
  * One per-skill gain (attributes excluded).
  */
 export interface SkillGain {
@@ -3192,6 +3197,12 @@ export interface SkillingForecastQuery {
 	target: SkillingTargetKind;
 	professions?: string[];
 	goal: number;
+	/** Planned routes to price beside the recorded sessions. */
+	routes?: SkillingRoutePick[];
+	/** The pill planned routes assume; absent reads as the most recent session's. */
+	skillBoost?: SkillBoostLevel | null;
+	/** The looter level planned routes are priced at; absent reads as the player's three-looter mean. */
+	looterLevel?: number | null;
 }
 
 /**
@@ -3205,6 +3216,12 @@ export interface SkillingForecastResult {
 	current: number;
 	goal: number;
 	sources: SkillingForecastSource[];
+	/** The planned routes, in request order. */
+	routes: SkillingRouteForecast[];
+	/** The pill the planned routes assumed. */
+	skillBoost: SkillBoostLevel;
+	/** The looter level the planned routes were priced at. */
+	looterLevel: number;
 }
 
 /**
@@ -3265,6 +3282,49 @@ export interface SkillingForecastSource {
  * Whether a definition answers, and if not, why.
  */
 export type SkillingForecastStatus = 'ready' | 'reached' | 'does_not_train' | 'no_evidence' | 'out_of_range';
+
+/**
+ * One planned route's forecast, in request order. The projected figures
+ * are zero unless the status is `ready`; the per-kill figures are zero
+ * when the route could not be priced.
+ */
+export interface SkillingRouteForecast {
+	index: number;
+	weapon: string;
+	/** The maturity and species as the mob picker shows them. */
+	mob: string;
+	mobHp: number | null;
+	mobLevel: number | null;
+	status: SkillingRouteStatus;
+	/** PES one kill yields, PEC. */
+	skillPerKillPec: number;
+	cycledPerKillPec: number;
+	/** Expected loss per kill, PEC. */
+	lossPerKillPec: number;
+	/** Firing time plus the retarget allowance; null when the attack rate is unknown. */
+	secondsPerKill: number | null;
+	kills: number;
+	cycledPed: number;
+	/** Expected TT lost on the way: cycled less expected loot TT. */
+	pedLost: number;
+	hours: number | null;
+	skills: SkillingForecastSkill[];
+}
+
+/**
+ * A planned route: a setup hunting one mob maturity. `species` is the
+ * catalogue's species name, or the mob's own name when it has none.
+ */
+export interface SkillingRoutePick {
+	setup: SetupPick;
+	species: string;
+	maturity: string;
+}
+
+/**
+ * Whether a planned route answers, and if not, why.
+ */
+export type SkillingRouteStatus = 'ready' | 'reached' | 'out_of_range' | 'does_not_train' | 'unknown_weapon' | 'unknown_mob' | 'unmodelled';
 
 /**
  * A sample-quality caveat on a forecast.

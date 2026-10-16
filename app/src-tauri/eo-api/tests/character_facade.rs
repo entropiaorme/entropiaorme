@@ -383,6 +383,9 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
         target: SkillingTargetKind::Profession,
         professions: vec!["Marksman".into()],
         goal: 6.0,
+        routes: Vec::new(),
+        skill_boost: None,
+        looter_level: None,
     };
     let result = api.character_skilling_forecast(&query).await.unwrap();
     assert!(result.error.is_none());
@@ -423,8 +426,8 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
     let hp = api
         .character_skilling_forecast(&SkillingForecastQuery {
             target: SkillingTargetKind::Hp,
-            professions: Vec::new(),
             goal: 150.0,
+            ..query.clone()
         })
         .await
         .unwrap();

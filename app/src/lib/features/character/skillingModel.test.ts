@@ -110,7 +110,7 @@ function source(overrides: Partial<SkillingForecastSource> = {}): SkillingForeca
 }
 
 function forecast(sources: SkillingForecastSource[] = [source()]): SkillingForecastResult {
-	return { current: 42.37, goal: 43, sources };
+	return { current: 42.37, goal: 43, sources, routes: [], skillBoost: 'fifty', looterLevel: 40 };
 }
 
 function makeModel() {

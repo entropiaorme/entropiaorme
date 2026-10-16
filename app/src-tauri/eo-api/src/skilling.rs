@@ -1,17 +1,24 @@
 //! The skilling forecast: how much of each named session (session
 //! definition) it takes to reach a goal on a profession or HP, from that
-//! definition's recorded play, with its own realised markup applied.
-//! Read-only; the projection lives in `eo_services::skilling_forecast`.
+//! definition's recorded play, with its own realised markup applied; and,
+//! beside them, planned routes (a weapon on a mob maturity), priced by the
+//! skill-per-kill law and the loadout comparison engine before any of it
+//! is played. Read-only; the projections live in
+//! `eo_services::skilling_forecast` and `eo_services::skilling_routes`.
 
+use eo_services::loadout_comparison::setup_economics;
+use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::skilling_forecast::{
-    load_forecast_sessions, skilling_forecast, ForecastSkill, ForecastStatus, ForecastTarget,
-    SampleWarning, SourceForecast,
+    forecast_planned, latest_skill_boost, load_forecast_sessions, skilling_forecast, ForecastSkill,
+    ForecastStatus, ForecastTarget, PlannedForecast, SampleWarning, SourceForecast,
 };
+use eo_services::skilling_routes::{skill_shares, weapon_professions, RouteKill, SkillBoost};
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::analytics::analytics_error;
+use crate::loadout_comparison::{SetupPick, ASSUMPTIONS};
 use crate::Nullable;
 use crate::{Api, ApiError};
 
@@ -35,6 +42,56 @@ pub struct SkillingForecastQuery {
     #[serde(default)]
     pub professions: Vec<String>,
     pub goal: f64,
+    /// Planned routes to price beside the recorded sessions.
+    #[serde(default)]
+    pub routes: Vec<SkillingRoutePick>,
+    /// The pill planned routes assume; absent reads as the most recent
+    /// session's.
+    #[serde(default)]
+    pub skill_boost: Option<SkillBoostLevel>,
+    /// The looter level planned routes are priced at; absent reads as the
+    /// player's three-looter mean.
+    #[serde(default)]
+    pub looter_level: Option<f64>,
+}
+
+/// The skill pill a planned route assumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillBoostLevel {
+    None,
+    Fifty,
+    Hundred,
+}
+
+impl From<SkillBoostLevel> for SkillBoost {
+    fn from(level: SkillBoostLevel) -> Self {
+        match level {
+            SkillBoostLevel::None => Self::None,
+            SkillBoostLevel::Fifty => Self::Fifty,
+            SkillBoostLevel::Hundred => Self::Hundred,
+        }
+    }
+}
+
+impl From<SkillBoost> for SkillBoostLevel {
+    fn from(boost: SkillBoost) -> Self {
+        match boost {
+            SkillBoost::None => Self::None,
+            SkillBoost::Fifty => Self::Fifty,
+            SkillBoost::Hundred => Self::Hundred,
+        }
+    }
+}
+
+/// A planned route: a setup hunting one mob maturity. `species` is the
+/// catalogue's species name, or the mob's own name when it has none.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillingRoutePick {
+    pub setup: SetupPick,
+    pub species: String,
+    pub maturity: String,
 }
 
 /// Whether a definition answers, and if not, why.
@@ -137,6 +194,63 @@ pub struct SkillingForecastSource {
     pub warnings: Vec<SkillingSampleWarning>,
 }
 
+/// Whether a planned route answers, and if not, why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillingRouteStatus {
+    Ready,
+    Reached,
+    /// The weapon's professions do not move the target.
+    DoesNotTrain,
+    OutOfRange,
+    /// The weapon is not in the catalogue, or names no professions.
+    UnknownWeapon,
+    /// The catalogue records no HP or level for the maturity.
+    UnknownMob,
+    /// The setup cannot be priced (no damage, cost, or Efficiency).
+    Unmodelled,
+}
+
+impl From<ForecastStatus> for SkillingRouteStatus {
+    fn from(status: ForecastStatus) -> Self {
+        match status {
+            ForecastStatus::Ready => Self::Ready,
+            ForecastStatus::Reached => Self::Reached,
+            ForecastStatus::DoesNotTrain => Self::DoesNotTrain,
+            ForecastStatus::NoEvidence | ForecastStatus::OutOfRange => Self::OutOfRange,
+        }
+    }
+}
+
+/// One planned route's forecast, in request order. The projected figures
+/// are zero unless the status is `ready`; the per-kill figures are zero
+/// when the route could not be priced.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillingRouteForecast {
+    pub index: u32,
+    pub weapon: String,
+    /// The maturity and species as the mob picker shows them.
+    pub mob: String,
+    pub mob_hp: Nullable<f64>,
+    pub mob_level: Nullable<f64>,
+    pub status: SkillingRouteStatus,
+    /// PES one kill yields, PEC.
+    pub skill_per_kill_pec: f64,
+    pub cycled_per_kill_pec: f64,
+    /// Expected loss per kill, PEC.
+    pub loss_per_kill_pec: f64,
+    /// Firing time plus the retarget allowance; null when the attack rate
+    /// is unknown.
+    pub seconds_per_kill: Nullable<f64>,
+    pub kills: f64,
+    pub cycled_ped: f64,
+    /// Expected TT lost on the way: cycled less expected loot TT.
+    pub ped_lost: f64,
+    pub hours: Nullable<f64>,
+    pub skills: Vec<SkillingForecastSkill>,
+}
+
 /// The forecast from every named session, ready ones first (least TT
 /// cost to the goal leading). `error` is present only on the soft
 /// unknown-profession path.
@@ -149,7 +263,16 @@ pub struct SkillingForecastResult {
     pub current: f64,
     pub goal: f64,
     pub sources: Vec<SkillingForecastSource>,
+    /// The planned routes, in request order.
+    pub routes: Vec<SkillingRouteForecast>,
+    /// The pill the planned routes assumed.
+    pub skill_boost: SkillBoostLevel,
+    /// The looter level the planned routes were priced at.
+    pub looter_level: f64,
 }
+
+/// The most planned routes one forecast prices.
+pub const MAX_ROUTES: usize = 12;
 
 fn skill_dto(skill: ForecastSkill) -> SkillingForecastSkill {
     SkillingForecastSkill {
@@ -201,6 +324,17 @@ impl Api {
         if !query.goal.is_finite() || query.goal <= 0.0 {
             return Err(ApiError::bad_request("goal must be positive"));
         }
+        if query
+            .looter_level
+            .is_some_and(|level| !(level.is_finite() && (0.0..=200.0).contains(&level)))
+        {
+            return Err(ApiError::bad_request("a looter level is between 0 and 200"));
+        }
+        if query.routes.len() > MAX_ROUTES {
+            return Err(ApiError::bad_request(format!(
+                "a forecast prices at most {MAX_ROUTES} planned routes"
+            )));
+        }
         let skill_levels = self
             .skill_calibrations(None)
             .await
@@ -218,6 +352,9 @@ impl Api {
                         current: 0.0,
                         goal: query.goal,
                         sources: Vec::new(),
+                        routes: Vec::new(),
+                        skill_boost: query.skill_boost.unwrap_or(SkillBoostLevel::Fifty),
+                        looter_level: 0.0,
                     });
                 }
             },
@@ -240,11 +377,134 @@ impl Api {
             .map(|row| (row.definition_id, row.net_markup))
             .collect();
         let sources = skilling_forecast(&skill_levels, &target, query.goal, &sessions, &markups);
+
+        let boost = match query.skill_boost {
+            Some(level) => SkillBoost::from(level),
+            None => SkillBoost::from_percent(
+                latest_skill_boost(&self.db)
+                    .await
+                    .map_err(ApiError::internal("skilling forecast latest pill"))?,
+            ),
+        };
+        let (_, looters) = self.planning_looters(query.looter_level).await?;
+        let routes = query
+            .routes
+            .iter()
+            .enumerate()
+            .map(|(index, pick)| {
+                self.forecast_route(
+                    index,
+                    pick,
+                    &skill_levels,
+                    &target,
+                    query.goal,
+                    boost,
+                    looters,
+                )
+            })
+            .collect();
+
         Ok(SkillingForecastResult {
             error: None,
             current: round_half_even(target.current(), 2),
             goal: query.goal,
             sources: sources.into_iter().map(source_dto).collect(),
+            routes,
+            skill_boost: boost.into(),
+            looter_level: round_half_even(looters.three_looter_mean(), 2),
         })
+    }
+
+    /// One planned route priced toward the goal. A route the catalogue can
+    /// no longer resolve (a stored pick outliving a data refresh) answers
+    /// with a status rather than failing the forecast.
+    #[allow(clippy::too_many_arguments)]
+    fn forecast_route(
+        &self,
+        index: usize,
+        pick: &SkillingRoutePick,
+        skill_levels: &serde_json::Map<String, serde_json::Value>,
+        target: &ForecastTarget,
+        goal: f64,
+        boost: SkillBoost,
+        looters: eo_services::expected_hunting::HuntingLooterLevels,
+    ) -> SkillingRouteForecast {
+        let mob =
+            MobLookupService::new(&self.game_data).maturity_stats(&pick.species, &pick.maturity);
+        let mut route = SkillingRouteForecast {
+            index: index as u32,
+            weapon: String::new(),
+            mob: if pick.maturity.trim().is_empty() {
+                pick.species.trim().to_string()
+            } else {
+                format!("{} {}", pick.maturity.trim(), pick.species.trim())
+            },
+            mob_hp: mob.map(|mob| mob.hp).into(),
+            mob_level: mob.map(|mob| mob.level).into(),
+            status: SkillingRouteStatus::UnknownWeapon,
+            skill_per_kill_pec: 0.0,
+            cycled_per_kill_pec: 0.0,
+            loss_per_kill_pec: 0.0,
+            seconds_per_kill: None.into(),
+            kills: 0.0,
+            cycled_ped: 0.0,
+            ped_lost: 0.0,
+            hours: None.into(),
+            skills: Vec::new(),
+        };
+        let Ok(setup) = self.resolve_setup(index, &pick.setup) else {
+            return route;
+        };
+        route.weapon = setup.name.clone();
+        let professions = setup
+            .props
+            .get("weapon_entity")
+            .map(weapon_professions)
+            .unwrap_or_default();
+        let shares = skill_shares(
+            self.game_data.get_entities("professions"),
+            &professions,
+            skill_levels,
+        );
+        if shares.is_empty() {
+            return route;
+        }
+        let Some(mob) = mob else {
+            route.status = SkillingRouteStatus::UnknownMob;
+            return route;
+        };
+        let rate = self
+            .weapon_pricing
+            .attack_rate(&setup.props)
+            .map(|rate| rate.effective_per_minute);
+        let kill = setup_economics(&setup.props, looters, rate, &ASSUMPTIONS)
+            .ok()
+            .and_then(|economics| RouteKill::plan(&economics, mob, boost, &ASSUMPTIONS));
+        let Some(kill) = kill else {
+            route.status = SkillingRouteStatus::Unmodelled;
+            return route;
+        };
+        route.skill_per_kill_pec = round_half_even(kill.skill_pec, 4);
+        route.cycled_per_kill_pec = round_half_even(kill.cycled_pec, 4);
+        route.loss_per_kill_pec = round_half_even(kill.loss_pec, 4);
+        route.seconds_per_kill = kill
+            .seconds
+            .map(|seconds| round_half_even(seconds, 2))
+            .into();
+        let PlannedForecast {
+            status,
+            cycled_ped,
+            ped_lost,
+            hours,
+            kills,
+            skills,
+        } = forecast_planned(skill_levels, target, goal, &kill.rates(&shares));
+        route.status = status.into();
+        route.kills = kills;
+        route.cycled_ped = cycled_ped;
+        route.ped_lost = ped_lost;
+        route.hours = hours.into();
+        route.skills = skills.into_iter().map(skill_dto).collect();
+        route
     }
 }

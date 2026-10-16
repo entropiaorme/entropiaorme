@@ -4,6 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::game_data_store::GameDataStore;
+use crate::skilling_routes::MobMaturity;
 
 pub struct MobLookupService<'a> {
     game_data: &'a GameDataStore,
@@ -106,6 +107,32 @@ impl<'a> MobLookupService<'a> {
         }
         false
     }
+
+    /// A maturity's HP and level, from the first catalogue mob of that
+    /// species (or uncatalogued mob name) listing it with both. None when
+    /// no mob records them.
+    pub fn maturity_stats(&self, species: &str, maturity: &str) -> Option<MobMaturity> {
+        let species = species.trim_matches(python_whitespace);
+        let maturity = maturity.trim_matches(python_whitespace);
+        self.game_data
+            .get_entities("mobs")
+            .iter()
+            .filter(|mob| species_name(mob) == species)
+            .flat_map(|mob| {
+                mob.get("maturities")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|entry| {
+                entry.get("name").and_then(Value::as_str).map(str::trim) == Some(maturity)
+            })
+            .find_map(|entry| {
+                let hp = entry.get("hp").and_then(Value::as_f64)?;
+                let level = entry.get("level").and_then(Value::as_f64)?;
+                Some(MobMaturity { hp, level })
+            })
+    }
 }
 
 /// Python's whitespace class: Unicode White_Space plus the file/group/
@@ -189,5 +216,39 @@ mod tests {
         assert!(!lookup.has_mob_name("Daikiba", "Young"));
         assert!(!lookup.has_mob_name("", "Young"));
         assert!(!lookup.has_mob_name("Unknown", ""));
+    }
+
+    /// HP and level come from the first mob listing the maturity with
+    /// both, matched by species or, for an uncatalogued mob, its name.
+    #[test]
+    fn maturity_stats_read_hp_and_level() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mobs.json"),
+            r#"[
+                {"name": "Atrox", "species": {"name": "Atrox"}, "maturities": [{"name": "Young", "hp": null, "level": null}]},
+                {"name": "Atrox", "species": {"name": "Atrox"}, "maturities": [{"name": "Young", "hp": 300, "level": 12}]},
+                {"name": "Bank Robber", "species": {"name": null}, "maturities": [{"name": "Default", "hp": 2, "level": 4}]}
+            ]"#,
+        )
+        .unwrap();
+        let store = GameDataStore::new(dir.path()).unwrap();
+        let lookup = MobLookupService::new(&store);
+        assert_eq!(
+            lookup.maturity_stats("Atrox", " Young "),
+            Some(MobMaturity {
+                hp: 300.0,
+                level: 12.0
+            })
+        );
+        assert_eq!(
+            lookup.maturity_stats("Bank Robber", "Default"),
+            Some(MobMaturity {
+                hp: 2.0,
+                level: 4.0
+            })
+        );
+        assert_eq!(lookup.maturity_stats("Atrox", "Old"), None);
+        assert_eq!(lookup.maturity_stats("Nobody", "Young"), None);
     }
 }

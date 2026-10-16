@@ -112,7 +112,14 @@ async function renderWith(sources: SkillingForecastSource[]) {
 		totalPed: 3.26,
 		excluded: [],
 	});
-	mocked.getSkillingForecast.mockResolvedValue({ current: 40.79, goal: 41, sources });
+	mocked.getSkillingForecast.mockResolvedValue({
+		current: 40.79,
+		goal: 41,
+		sources,
+		routes: [],
+		skillBoost: 'fifty',
+		looterLevel: 40,
+	});
 	const hub = createSkillingModel({ professions: () => PROFESSIONS, hp: () => 188 });
 	hub.setTarget({ kind: 'profession', name: 'Animal Looter' });
 	await new Promise((resolve) => setTimeout(resolve, 0));

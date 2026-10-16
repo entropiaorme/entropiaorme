@@ -18,6 +18,7 @@
 //! returned above TT so far, never a market estimate, and it is absent
 //! (not zero) when nothing from the definition has sold.
 
+use rusqlite::OptionalExtension;
 use serde_json::{Map, Value};
 
 use crate::character_calc::{
@@ -280,6 +281,126 @@ fn cycled_to_reach(
     Some(upper)
 }
 
+/// The cycled spend that reaches the goal at `rates` and the skills it
+/// trains on the way, or why the rates cannot reach it. `start` seeds the
+/// search (the sample's own cycling, or one PED).
+fn reach(
+    skill_levels: &Map<String, Value>,
+    target: &ForecastTarget,
+    rates: &Rates,
+    start: f64,
+    needed: f64,
+) -> Result<(f64, Vec<ForecastSkill>), ForecastStatus> {
+    let trains_target = rates
+        .skills
+        .iter()
+        .chain(&rates.attributes)
+        .any(|(name, _)| target.weight_of(name) > 0.0);
+    if !trains_target {
+        return Err(ForecastStatus::DoesNotTrain);
+    }
+    let cycled = cycled_to_reach(skill_levels, target, rates, start, needed)
+        .ok_or(ForecastStatus::OutOfRange)?;
+
+    let pes_rate: f64 = rates.skills.iter().map(|(_, rate)| rate).sum();
+    let gains = project(skill_levels, rates, cycled);
+    let mut skills: Vec<ForecastSkill> = gains
+        .iter()
+        .map(|(name, gain)| {
+            let current_level = level_of(skill_levels, name);
+            let weight = target.weight_of(name);
+            ForecastSkill {
+                name: name.clone(),
+                is_attribute: is_attribute(name),
+                current_level: round_half_even(current_level, 2),
+                pes_share: lookup(&rates.skills, name)
+                    .filter(|_| pes_rate > 0.0)
+                    .map(|rate| round_half_even(rate / pes_rate, 4)),
+                level_gain: round_half_even(*gain, 2),
+                end_level: round_half_even(current_level + gain, 2),
+                target_gain: round_half_even(gain * weight, 4),
+                moves_target: weight > 0.0,
+            }
+        })
+        .collect();
+    skills.sort_by(|a, b| {
+        b.target_gain
+            .total_cmp(&a.target_gain)
+            .then_with(|| b.level_gain.total_cmp(&a.level_gain))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok((cycled, skills))
+}
+
+/// A planned route's rates per PED cycled: what a modelled route projects
+/// in place of a recorded sample.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedRates {
+    /// PES per PED cycled, per regular skill.
+    pub skills: Vec<(String, f64)>,
+    /// Expected loss per PED cycled.
+    pub loss_per_ped: f64,
+    /// Hours per PED cycled; None when the attack rate is unknown.
+    pub hours_per_ped: Option<f64>,
+    pub kills_per_ped: f64,
+}
+
+/// A planned route's forecast. The projected figures are zero unless the
+/// status is `Ready`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedForecast {
+    pub status: ForecastStatus,
+    pub cycled_ped: f64,
+    /// Expected loss on the cycling: cycled less expected loot TT.
+    pub ped_lost: f64,
+    pub hours: Option<f64>,
+    pub kills: f64,
+    pub skills: Vec<ForecastSkill>,
+}
+
+/// Forecast `goal` on `target` along a planned route.
+pub fn forecast_planned(
+    skill_levels: &Map<String, Value>,
+    target: &ForecastTarget,
+    goal: f64,
+    planned: &PlannedRates,
+) -> PlannedForecast {
+    let unanswered = |status: ForecastStatus| PlannedForecast {
+        status,
+        cycled_ped: 0.0,
+        ped_lost: 0.0,
+        hours: None,
+        kills: 0.0,
+        skills: Vec::new(),
+    };
+    let needed = goal - target.current();
+    if needed <= 0.0 {
+        return unanswered(ForecastStatus::Reached);
+    }
+    let rates = Rates {
+        skills: planned
+            .skills
+            .iter()
+            .filter(|(_, rate)| *rate > 0.0)
+            .cloned()
+            .collect(),
+        attributes: Vec::new(),
+    };
+    match reach(skill_levels, target, &rates, 1.0, needed) {
+        Ok((cycled, skills)) => PlannedForecast {
+            status: ForecastStatus::Ready,
+            cycled_ped: round_half_even(cycled, 2),
+            ped_lost: round_half_even(cycled * planned.loss_per_ped, 2),
+            hours: planned
+                .hours_per_ped
+                .map(|hours| round_half_even(cycled * hours, 2)),
+            kills: (cycled * planned.kills_per_ped).round(),
+            skills,
+        },
+        Err(status) => unanswered(status),
+    }
+}
+
 /// Group sessions by definition, in first-seen order.
 fn group_by_definition(sessions: &[ForecastSession]) -> Vec<Vec<&ForecastSession>> {
     let mut groups: Vec<Vec<&ForecastSession>> = Vec::new();
@@ -361,45 +482,10 @@ fn forecast_source(
             .map(|(name, levels)| (name.clone(), levels / cycled))
             .collect(),
     };
-    let trains_target = rates
-        .skills
-        .iter()
-        .chain(&rates.attributes)
-        .any(|(name, _)| target.weight_of(name) > 0.0);
-    if !trains_target {
-        return unanswered(ForecastStatus::DoesNotTrain);
-    }
-    let Some(forecast_cycled) = cycled_to_reach(skill_levels, target, &rates, cycled, needed)
-    else {
-        return unanswered(ForecastStatus::OutOfRange);
+    let (forecast_cycled, skills) = match reach(skill_levels, target, &rates, cycled, needed) {
+        Ok(reached) => reached,
+        Err(status) => return unanswered(status),
     };
-
-    let gains = project(skill_levels, &rates, forecast_cycled);
-    let mut skills: Vec<ForecastSkill> = gains
-        .iter()
-        .map(|(name, gain)| {
-            let current_level = level_of(skill_levels, name);
-            let weight = target.weight_of(name);
-            ForecastSkill {
-                name: name.clone(),
-                is_attribute: is_attribute(name),
-                current_level: round_half_even(current_level, 2),
-                pes_share: lookup(&skill_pes, name)
-                    .filter(|_| pes > 0.0)
-                    .map(|skill| round_half_even(skill / pes, 4)),
-                level_gain: round_half_even(*gain, 2),
-                end_level: round_half_even(current_level + gain, 2),
-                target_gain: round_half_even(gain * weight, 4),
-                moves_target: weight > 0.0,
-            }
-        })
-        .collect();
-    skills.sort_by(|a, b| {
-        b.target_gain
-            .total_cmp(&a.target_gain)
-            .then_with(|| b.level_gain.total_cmp(&a.level_gain))
-            .then_with(|| a.name.cmp(&b.name))
-    });
 
     let forecast_loot = forecast_cycled * loot / cycled;
     let markup = evidence.markup_lift().map(|lift| forecast_loot * lift);
@@ -518,6 +604,25 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    })
+    .await
+}
+
+/// The skill boost percent of the most recently started session, None
+/// when no session recorded one: the pill a planned route assumes unless
+/// the player picks another.
+pub async fn latest_skill_boost(db: &Db) -> Result<Option<i64>, DbError> {
+    db.with_reader(|conn| {
+        let boost = conn
+            .query_row(
+                "SELECT skill_boost_percent FROM tracking_sessions \
+                 ORDER BY started_at DESC, id DESC LIMIT 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(boost)
     })
     .await
 }
@@ -643,6 +748,60 @@ mod tests {
         assert!(source.skills.iter().all(|skill| skill.moves_target));
         // Thin on sessions (one) but not on hours or cycling.
         assert_eq!(source.warnings, vec![SampleWarning::ThinSessions]);
+    }
+
+    /// A planned route at the same per-PED skill rates as a recorded
+    /// sample reaches the goal at the same cycling, with loss, kills, and
+    /// time read off its own per-PED rates.
+    #[test]
+    fn a_planned_route_reaches_the_goal_like_a_recorded_one() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        let sessions = [session(
+            7,
+            "Rifle work",
+            200.0,
+            &[("Rifle", 4.0), ("Anatomy", 1.0)],
+        )];
+        let recorded = &skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[])[0];
+        let planned = forecast_planned(
+            &skill_levels,
+            &target,
+            5.5,
+            &PlannedRates {
+                skills: vec![("Rifle".into(), 0.02), ("Anatomy".into(), 0.005)],
+                loss_per_ped: 0.08,
+                hours_per_ped: Some(0.01),
+                kills_per_ped: 40.0,
+            },
+        );
+        assert_eq!(planned.status, ForecastStatus::Ready);
+        assert_eq!(planned.cycled_ped, recorded.cycled_ped);
+        assert!((planned.ped_lost - planned.cycled_ped * 0.08).abs() < 0.01);
+        assert!((planned.hours.unwrap() - planned.cycled_ped * 0.01).abs() < 0.01);
+        assert_eq!(planned.kills, (planned.cycled_ped * 40.0).round());
+        assert_eq!(planned.skills, recorded.skills);
+
+        let unknown_time = PlannedRates {
+            skills: vec![("Rifle".into(), 0.02)],
+            loss_per_ped: 0.08,
+            hours_per_ped: None,
+            kills_per_ped: 40.0,
+        };
+        assert_eq!(
+            forecast_planned(&skill_levels, &target, 5.5, &unknown_time).hours,
+            None
+        );
+        let reached = forecast_planned(&skill_levels, &target, 4.0, &unknown_time);
+        assert_eq!(reached.status, ForecastStatus::Reached);
+        let elsewhere = PlannedRates {
+            skills: vec![("Mining".into(), 0.02)],
+            ..unknown_time
+        };
+        assert_eq!(
+            forecast_planned(&skill_levels, &target, 5.5, &elsewhere).status,
+            ForecastStatus::DoesNotTrain
+        );
     }
 
     #[test]

@@ -185,7 +185,7 @@ pub struct LoadoutComparison {
 
 // ── Assembly ────────────────────────────────────────────────────────
 
-const ASSUMPTIONS: ComparisonAssumptions = ComparisonAssumptions::STANDARD;
+pub(crate) const ASSUMPTIONS: ComparisonAssumptions = ComparisonAssumptions::STANDARD;
 
 /// The most setups one comparison takes: a readable chart's worth.
 pub const MAX_COMPARED_SETUPS: usize = 8;
@@ -239,10 +239,10 @@ fn economics_view(economics: &SetupEconomics) -> SetupEconomicsView {
 
 /// One setup resolved against the catalogue: weapon props in the stored
 /// library shape, and the parts as priced.
-struct ResolvedSetup {
-    name: String,
+pub(crate) struct ResolvedSetup {
+    pub(crate) name: String,
     components: Vec<SetupComponentView>,
-    props: Value,
+    pub(crate) props: Value,
 }
 
 impl Api {
@@ -276,27 +276,7 @@ impl Api {
             .map(|(index, pick)| self.resolve_setup(index, pick))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // The player's looters drive the return model.
-        let professions = self.character_professions().await?;
-        let levels: HashMap<String, f64> = professions
-            .iter()
-            .map(|profession| (profession.name.clone(), profession.level))
-            .collect();
-        let level = |name: &str| levels.get(name).copied().unwrap_or(0.0);
-        let own = HuntingLooterLevels {
-            animal: level("Animal Looter"),
-            mutant: level("Mutant Looter"),
-            robot: level("Robot Looter"),
-        };
-        // A looter level given for the comparison stands in for all three.
-        let looters = match looter_level {
-            Some(level) => HuntingLooterLevels {
-                animal: level,
-                mutant: level,
-                robot: level,
-            },
-            None => own,
-        };
+        let (own, looters) = self.planning_looters(looter_level).await?;
 
         let economics: Vec<Result<SetupEconomics, UnmodelledReason>> = resolved
             .iter()
@@ -387,11 +367,43 @@ impl Api {
         })
     }
 
+    /// The player's own looter levels, and the levels a planning figure is
+    /// read at: a given level stands in for all three, otherwise their own.
+    pub(crate) async fn planning_looters(
+        &self,
+        looter_level: Option<f64>,
+    ) -> Result<(HuntingLooterLevels, HuntingLooterLevels), ApiError> {
+        let professions = self.character_professions().await?;
+        let levels: HashMap<String, f64> = professions
+            .iter()
+            .map(|profession| (profession.name.clone(), profession.level))
+            .collect();
+        let level = |name: &str| levels.get(name).copied().unwrap_or(0.0);
+        let own = HuntingLooterLevels {
+            animal: level("Animal Looter"),
+            mutant: level("Mutant Looter"),
+            robot: level("Robot Looter"),
+        };
+        let looters = match looter_level {
+            Some(level) => HuntingLooterLevels {
+                animal: level,
+                mutant: level,
+                robot: level,
+            },
+            None => own,
+        };
+        Ok((own, looters))
+    }
+
     /// Build a setup's props from the catalogue, in the stored library
     /// shape, enriched with the attack rate in force. A limited item runs
     /// at its given markup; an unlimited one at TT, since it is repaired at
     /// TT whatever it cost.
-    fn resolve_setup(&self, index: usize, pick: &SetupPick) -> Result<ResolvedSetup, ApiError> {
+    pub(crate) fn resolve_setup(
+        &self,
+        index: usize,
+        pick: &SetupPick,
+    ) -> Result<ResolvedSetup, ApiError> {
         let parts = [
             (
                 SetupComponentRole::Weapon,

@@ -1,7 +1,11 @@
 <script lang="ts">
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
+	import InfoTip from '$lib/components/InfoTip.svelte';
+	import LooterBasisSelect from '$lib/components/LooterBasisSelect.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import Skeleton from '$lib/components/Skeleton.svelte';
+	import { looterLevelsFrom, setLooterBasis } from '$lib/looterBasis.svelte';
+	import type { ProfessionLevel } from '$lib/types/analytics';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 	import { targetLabel } from './codexRankingTarget';
 	import SkillingBar from './SkillingBar.svelte';
@@ -24,8 +28,10 @@
 	// own pace, loot return, markup, and the whole spread of skills they
 	// train, not only the ones the goal counts. Narrowed to one weapon, each
 	// is only that weapon's part of it, so a session played with several
-	// does not blend them.
-	let { hub }: { hub: SkillingModel } = $props();
+	// does not blend them. Each loss is shown twice: expected from its
+	// weapons, which the premium compares, and as recorded.
+	let { hub, professions }: { hub: SkillingModel; professions: ProfessionLevel[] } = $props();
+	const looterLevels = $derived(looterLevelsFrom(professions));
 
 	const name = $derived(targetLabel(hub.target));
 	const isHp = $derived(hub.target.kind === 'hp');
@@ -89,7 +95,8 @@
 					<tr class="border-b border-border/60">
 						<th class="py-2 pr-3 text-left eyebrow">Session</th>
 						<th class="px-3 py-2 text-right eyebrow">Cycled</th>
-						<th class="px-3 py-2 text-right eyebrow">TT lost</th>
+						<th class="px-3 py-2 text-right eyebrow">Expected loss</th>
+						<th class="px-3 py-2 text-right eyebrow">Recorded loss</th>
 						<th class="px-3 py-2 text-right eyebrow">After markup</th>
 						<th class="px-3 py-2 text-right eyebrow">Time</th>
 						<th class="px-3 py-2 text-right eyebrow">Kills</th>
@@ -112,12 +119,15 @@
 								{/if}
 							</td>
 							{#if row.status !== 'ready'}
-								<td colspan="6" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan="7" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{statusMessage(row.status, row.name, name)}
 								</td>
 							{:else}
 								<td class="{COL_FIGURE} text-text-secondary">{formatRoutePed(row.cycledPed)}</td>
-								<td class="{COL_FIGURE} font-medium text-text">{formatRoutePed(row.ttCost)}</td>
+								<td class="{COL_FIGURE} font-medium text-text">
+									{row.expected !== null ? formatRoutePed(row.expected.ttCost) : NO_DATA}
+								</td>
+								<td class="{COL_FIGURE} text-text-secondary">{formatRoutePed(row.ttCost)}</td>
 								<td class="{COL_FIGURE} text-text-secondary">
 									{row.netCost !== null ? formatRoutePed(row.netCost) : NO_DATA}
 								</td>
@@ -149,6 +159,37 @@
 					<span class="text-text-secondary">
 						{formatPercent(source.sample.lootTt / source.sample.cycledPed)} loot return
 					</span>
+					<span aria-hidden="true">·</span>
+					{#if source.expected !== null}
+						<span class="inline-flex items-center gap-1 text-text-secondary">
+							<span>
+								{formatPercent(source.expected.weaponReturn)} expected on
+								{source.expected.coverage < 0.995 ? `${Math.round(source.expected.coverage * 100)}% of` : ''}
+								weapon spend at
+								<LooterBasisSelect
+									levels={looterLevels}
+									onchange={(basis) => {
+										void setLooterBasis(basis);
+										hub.reloadForecast();
+									}}
+								/>
+							</span>
+							<InfoTip label="About the expected loss" width="w-80">
+								<p class="text-xs font-semibold leading-relaxed text-text">Community Model v1</p>
+								<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+									The loot return community research expects from these weapons' Efficiency at the looter
+									level chosen, a planning estimate rather than game truth. Spend it does not cover, such
+									as armour and healing, counts as lost.
+								</p>
+								<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
+									A recorded run usually trails it until it meets the rare large loot events the long-run
+									average includes, so sessions are compared on their expected loss.
+								</p>
+							</InfoTip>
+						</span>
+					{:else}
+						<span>no expected return modelled</span>
+					{/if}
 					<span aria-hidden="true">·</span>
 					<span class="text-text-secondary">
 						{#if source.sample.markupLift !== null}

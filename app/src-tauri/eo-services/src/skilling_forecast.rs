@@ -18,6 +18,15 @@
 //! same definition's loot TT: it is what this activity's loot has actually
 //! returned above TT so far, never a market estimate, and it is absent
 //! (not zero) when nothing from the definition has sold.
+//!
+//! Beside the recorded loss stands an expected one: the same cycling with
+//! the loot Community Model v1 expects from the weapons the definition
+//! fired, at the planning looter basis, so a recorded run that has not yet
+//! met its rare large loot events is not mistaken for the long-run cost.
+//! Each weapon's expected return per PED of its spend comes from the caller
+//! (the loadout engine planned routes price with); spend the model does not
+//! cover (protection, healing, enhancer breaks, a weapon it cannot price)
+//! returns nothing under it.
 
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value};
@@ -54,6 +63,11 @@ pub struct ForecastSession {
     pub kills: u64,
     /// PES earned per regular skill, in first-seen order.
     pub skill_pes: Vec<(String, f64)>,
+    /// The weapon spend within `cycled_ped`.
+    pub weapon_ped: f64,
+    /// How that spend splits across the weapons fired, as each weapon's
+    /// spend on the kills it made alone (shared kills carry no split).
+    pub weapons: Vec<(String, f64)>,
 }
 
 /// What the forecast measures progress on: the per-level weight each
@@ -194,8 +208,24 @@ pub struct SourceForecast {
     pub tt_cost: f64,
     /// The TT cost less realised markup; absent with the markup.
     pub net_cost: Option<f64>,
+    /// The TT cost under Community Model v1; absent when the model prices
+    /// none of the definition's weapon spend.
+    pub expected: Option<ExpectedLoss>,
     pub skills: Vec<ForecastSkill>,
     pub warnings: Vec<SampleWarning>,
+}
+
+/// A forecast's TT cost with the loot Community Model v1 expects in place
+/// of the recorded loot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExpectedLoss {
+    /// Forecast cycled minus the expected loot TT.
+    pub tt_cost: f64,
+    /// Expected loot TT over the weapon spend the model priced: the
+    /// offensive return, never charged with protection or healing.
+    pub weapon_return: f64,
+    /// The share of the sample's weapon spend the model priced.
+    pub coverage: f64,
 }
 
 /// The per-PED rates a definition's sample projects forward.
@@ -414,6 +444,7 @@ fn forecast_source(
     goal: f64,
     group: &[&ForecastSession],
     realised_markup: Option<f64>,
+    weapon_returns: &[(String, f64)],
 ) -> SourceForecast {
     let first = group[0];
     let hours: f64 = group.iter().map(|s| s.hours).sum();
@@ -451,6 +482,7 @@ fn forecast_source(
         markup: None,
         tt_cost: 0.0,
         net_cost: None,
+        expected: None,
         skills: Vec::new(),
         warnings: Vec::new(),
     };
@@ -476,6 +508,7 @@ fn forecast_source(
     let forecast_loot = forecast_cycled * loot / cycled;
     let markup = evidence.markup_lift().map(|lift| forecast_loot * lift);
     let tt_cost = forecast_cycled - forecast_loot;
+    let expected = expected_loss(group, weapon_returns, cycled, forecast_cycled);
 
     let mut warnings = Vec::new();
     if group.len() < THIN_SESSIONS {
@@ -501,9 +534,57 @@ fn forecast_source(
         markup: markup.map(|value| round_half_even(value, 2)),
         tt_cost: round_half_even(tt_cost, 2),
         net_cost: markup.map(|value| round_half_even(tt_cost - value, 2)),
+        expected,
         skills,
         warnings,
     }
+}
+
+/// The forecast's TT cost under Community Model v1: each session's weapon
+/// spend split across its weapons by what each spent on its own kills,
+/// priced at that weapon's expected return, and carried forward at the
+/// sample's ratio of expected loot to cycling.
+fn expected_loss(
+    group: &[&ForecastSession],
+    weapon_returns: &[(String, f64)],
+    cycled: f64,
+    forecast_cycled: f64,
+) -> Option<ExpectedLoss> {
+    let mut weapon_spend = 0.0;
+    let mut priced = 0.0;
+    let mut loot = 0.0;
+    for session in group {
+        weapon_spend += session.weapon_ped.max(0.0);
+        let split: f64 = session.weapons.iter().map(|(_, ped)| ped.max(0.0)).sum();
+        if split <= 0.0 {
+            continue;
+        }
+        for (weapon, ped) in &session.weapons {
+            let Some(rate) = lookup(weapon_returns, weapon) else {
+                continue;
+            };
+            let spend = session.weapon_ped.max(0.0) * ped.max(0.0) / split;
+            priced += spend;
+            loot += spend * rate;
+        }
+    }
+    if priced <= 0.0 || cycled <= 0.0 {
+        return None;
+    }
+    let tt_cost = forecast_cycled - forecast_cycled * loot / cycled;
+    Some(ExpectedLoss {
+        tt_cost: round_half_even(tt_cost, 2),
+        weapon_return: round_half_even(loot / priced, 6),
+        coverage: round_half_even((priced / weapon_spend).min(1.0), 4),
+    })
+}
+
+/// What a forecast is ranked on: the expected TT cost where the model
+/// prices it, else the recorded one.
+fn ranked_cost(source: &SourceForecast) -> f64 {
+    source
+        .expected
+        .map_or(source.tt_cost, |expected| expected.tt_cost)
 }
 
 fn status_rank(status: ForecastStatus) -> u8 {
@@ -518,16 +599,19 @@ fn status_rank(status: ForecastStatus) -> u8 {
 
 /// Forecast `goal` on `target` from every definition's recorded sessions.
 /// Definitions that answer come first, cheapest to the goal (least TT
-/// burned, then least cycling) leading: cycling alone would favour a
-/// low-burn activity that takes far longer and costs more. The rest follow
-/// by how much play they recorded.
-/// `realised_markup` maps a definition id to its net realised markup.
+/// burned, expected where the model prices it, then least cycling)
+/// leading: cycling alone would favour a low-burn activity that takes far
+/// longer and costs more. The rest follow by how much play they recorded.
+/// `realised_markup` maps a definition id to its net realised markup;
+/// `weapon_returns` maps a weapon to its expected loot TT per PED of its
+/// spend under Community Model v1.
 pub fn skilling_forecast(
     skill_levels: &Map<String, Value>,
     target: &ForecastTarget,
     goal: f64,
     sessions: &[ForecastSession],
     realised_markup: &[(i64, f64)],
+    weapon_returns: &[(String, f64)],
 ) -> Vec<SourceForecast> {
     let mut sources: Vec<SourceForecast> = group_by_definition(sessions)
         .iter()
@@ -536,13 +620,13 @@ pub fn skilling_forecast(
                 .iter()
                 .find(|(id, _)| *id == group[0].definition_id)
                 .map(|&(_, markup)| markup);
-            forecast_source(skill_levels, target, goal, group, markup)
+            forecast_source(skill_levels, target, goal, group, markup, weapon_returns)
         })
         .collect();
     sources.sort_by(|a, b| {
         status_rank(a.status)
             .cmp(&status_rank(b.status))
-            .then_with(|| a.tt_cost.total_cmp(&b.tt_cost))
+            .then_with(|| ranked_cost(a).total_cmp(&ranked_cost(b)))
             .then_with(|| a.cycled_ped.total_cmp(&b.cycled_ped))
             .then_with(|| b.evidence.cycled_ped.total_cmp(&a.evidence.cycled_ped))
             .then_with(|| a.evidence.name.cmp(&b.evidence.name))
@@ -564,13 +648,26 @@ fn json_pairs(text: Option<String>) -> Vec<(String, f64)> {
 }
 
 /// Every ended, summarised session that ran under a definition, healing
-/// missing or stale summaries first (the prospect loader's contract).
+/// missing or stale summaries first (the prospect loader's contract). Its
+/// weapon spend splits across the weapons fired by their cells
+/// ([`crate::session_weapon_rollup`]).
 pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbError> {
     db.with_writer(|conn| heal_summaries(conn)).await?;
+    db.with_writer(crate::session_rollup::heal).await?;
     db.with_reader(|conn| {
+        let mut weapons: std::collections::HashMap<String, Vec<(String, f64)>> =
+            std::collections::HashMap::new();
+        for (session_id, cell) in crate::session_weapon_rollup::effective_weapon_cells(conn, None)?
+        {
+            weapons
+                .entry(session_id)
+                .or_default()
+                .push((cell.tool, cell.cycled_ped));
+        }
         let mut stmt = conn.prepare(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, ss.cycled_ped, \
-                    ss.loot_tt, ss.regular_skill_ped_json, ss.kills \
+                    ss.loot_tt, ss.regular_skill_ped_json, ss.kills, \
+                    COALESCE(ss.weapon_cost, 0), s.id \
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
@@ -587,6 +684,10 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
                     loot_tt: row.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
                     kills: row.get::<_, Option<i64>>(7)?.unwrap_or(0).max(0) as u64,
                     skill_pes: json_pairs(row.get(6)?),
+                    weapon_ped: row.get(8)?,
+                    weapons: weapons
+                        .remove(&row.get::<_, String>(9)?)
+                        .unwrap_or_default(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -653,6 +754,8 @@ pub async fn load_weapon_forecast_sessions(
                     loot_tt: cell.loot_tt,
                     kills: cell.kills,
                     skill_pes: cell.pes,
+                    weapon_ped: cell.cycled_ped,
+                    weapons: vec![(cell.tool, cell.cycled_ped)],
                 },
             ));
         }
@@ -750,6 +853,8 @@ mod tests {
             loot_tt: cycled * 0.9,
             kills: 0,
             skill_pes: skills.iter().map(|(n, p)| (n.to_string(), *p)).collect(),
+            weapon_ped: 0.0,
+            weapons: Vec::new(),
         }
     }
 
@@ -796,7 +901,7 @@ mod tests {
             200.0,
             &[("Rifle", 4.0), ("Anatomy", 1.0)],
         )];
-        let sources = skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[], &[]);
         assert_eq!(sources.len(), 1);
         let source = &sources[0];
         assert_eq!(source.status, ForecastStatus::Ready);
@@ -855,7 +960,7 @@ mod tests {
             200.0,
             &[("Rifle", 4.0), ("Anatomy", 1.0)],
         )];
-        let recorded = &skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[])[0];
+        let recorded = &skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[], &[])[0];
         let planned = forecast_planned(
             &skill_levels,
             &target,
@@ -902,7 +1007,7 @@ mod tests {
         let target = ForecastTarget::profession(&marksman(), &skill_levels);
         let sessions = [session(7, "Rifle work", 200.0, &[("Rifle", 5.0)])];
         // 18 PED net markup on 180 PED loot TT: a 10% lift.
-        let sources = skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[(7, 18.0)]);
+        let sources = skilling_forecast(&skill_levels, &target, 5.5, &sessions, &[(7, 18.0)], &[]);
         let source = &sources[0];
         assert_eq!(source.evidence.markup_lift(), Some(0.1));
         let markup = source.markup.unwrap();
@@ -922,7 +1027,7 @@ mod tests {
             idle,
             session(4, "Fast rifle", 100.0, &[("Rifle", 5.0)]),
         ];
-        let sources = skilling_forecast(&skill_levels, &target, 5.2, &sessions, &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 5.2, &sessions, &[], &[]);
         let order: Vec<(&str, ForecastStatus)> = sources
             .iter()
             .map(|s| (s.evidence.name.as_str(), s.status))
@@ -949,7 +1054,7 @@ mod tests {
         burner.loot_tt = 50.0;
         let mut grinder = session(2, "Grinder", 100.0, &[("Rifle", 2.0)]);
         grinder.loot_tt = 99.0;
-        let sources = skilling_forecast(&skill_levels, &target, 5.2, &[burner, grinder], &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 5.2, &[burner, grinder], &[], &[]);
         assert_eq!(sources[0].evidence.name, "Grinder");
         assert!(sources[0].cycled_ped > sources[1].cycled_ped);
         assert!(sources[0].tt_cost < sources[1].tt_cost);
@@ -960,7 +1065,7 @@ mod tests {
         let skill_levels = start();
         let target = ForecastTarget::profession(&marksman(), &skill_levels);
         let sessions = [session(7, "Rifle work", 200.0, &[("Rifle", 5.0)])];
-        let sources = skilling_forecast(&skill_levels, &target, 4.0, &sessions, &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 4.0, &sessions, &[], &[]);
         assert_eq!(sources[0].status, ForecastStatus::Reached);
         assert_eq!(sources[0].cycled_ped, 0.0);
         assert!(sources[0].skills.is_empty());
@@ -971,7 +1076,7 @@ mod tests {
         let skill_levels = start();
         let target = ForecastTarget::profession(&marksman(), &skill_levels);
         let sessions = [session(7, "Rifle work", 200.0, &[("Rifle", 5.0)])];
-        let sources = skilling_forecast(&skill_levels, &target, 10_000.0, &sessions, &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 10_000.0, &sessions, &[], &[]);
         assert_eq!(sources[0].status, ForecastStatus::OutOfRange);
     }
 
@@ -984,7 +1089,7 @@ mod tests {
             session(8, "Other", 100.0, &[("Anatomy", 2.0)]),
             session(7, "Rifle work", 150.0, &[("Rifle", 3.0), ("Anatomy", 1.0)]),
         ];
-        let sources = skilling_forecast(&skill_levels, &target, 5.1, &sessions, &[]);
+        let sources = skilling_forecast(&skill_levels, &target, 5.1, &sessions, &[], &[]);
         let rifle = sources
             .iter()
             .find(|s| s.evidence.definition_id == 7)
@@ -993,5 +1098,67 @@ mod tests {
         assert_eq!(rifle.evidence.cycled_ped, 250.0);
         assert_eq!(rifle.evidence.pes, 6.0);
         assert_eq!(rifle.warnings, vec![SampleWarning::ThinSessions]);
+    }
+
+    #[test]
+    fn the_expected_loss_prices_each_weapon_and_counts_the_rest_as_spent() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        // 200 PED cycled, 180 of it weapon spend: a sword that made 100 PED
+        // of lone kills and a chip that made 50, which the model cannot price.
+        let mut run = session(7, "Rifle work", 200.0, &[("Rifle", 4.0)]);
+        run.weapon_ped = 180.0;
+        run.weapons = vec![("Sword".into(), 100.0), ("Chip".into(), 50.0)];
+        let sources = skilling_forecast(
+            &skill_levels,
+            &target,
+            5.5,
+            &[run],
+            &[],
+            &[("Sword".into(), 0.95)],
+        );
+        let source = &sources[0];
+        let expected = source.expected.expect("the sword is priced");
+        // The sword's two thirds of 180 PED is priced at 95%: 114 PED of
+        // expected loot per 200 PED cycled, so 57% of the cycling is lost.
+        assert_eq!(expected.weapon_return, 0.95);
+        assert!((expected.coverage - 2.0 / 3.0).abs() < 1e-4);
+        assert!((expected.tt_cost - source.cycled_ped * 0.43).abs() < 0.011);
+        // The recorded figure stands beside it, untouched.
+        assert!((source.tt_cost - source.cycled_ped * 0.1).abs() < 0.011);
+    }
+
+    #[test]
+    fn no_priced_weapon_leaves_the_expected_loss_absent() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        let mut run = session(7, "Rifle work", 200.0, &[("Rifle", 4.0)]);
+        run.weapon_ped = 200.0;
+        run.weapons = vec![("Unknown".into(), 200.0)];
+        let sources = skilling_forecast(&skill_levels, &target, 5.5, &[run], &[], &[]);
+        assert_eq!(sources[0].status, ForecastStatus::Ready);
+        assert_eq!(sources[0].expected, None);
+    }
+
+    #[test]
+    fn the_expected_loss_ranks_ahead_of_a_lucky_recorded_run() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        // Same skill per PED. Lucky hit a large loot event on an inefficient
+        // weapon; Steady has not, on an efficient one.
+        let mut lucky = session(1, "Lucky", 100.0, &[("Rifle", 4.0)]);
+        lucky.loot_tt = 99.0;
+        lucky.weapon_ped = 100.0;
+        lucky.weapons = vec![("Blunt".into(), 100.0)];
+        let mut steady = session(2, "Steady", 100.0, &[("Rifle", 4.0)]);
+        steady.loot_tt = 88.0;
+        steady.weapon_ped = 100.0;
+        steady.weapons = vec![("Keen".into(), 100.0)];
+        let returns = [("Blunt".to_string(), 0.90), ("Keen".to_string(), 0.94)];
+        let sources =
+            skilling_forecast(&skill_levels, &target, 5.2, &[lucky, steady], &[], &returns);
+        assert_eq!(sources[0].evidence.name, "Steady");
+        assert!(sources[0].tt_cost > sources[1].tt_cost);
+        assert!(sources[0].expected.unwrap().tt_cost < sources[1].expected.unwrap().tt_cost);
     }
 }

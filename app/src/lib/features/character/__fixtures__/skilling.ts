@@ -67,6 +67,7 @@ export function sourceForecast(
 		markup: null,
 		ttCost: 4,
 		netCost: null,
+		expected: null,
 		skills: [],
 		warnings: [],
 		...overrides,

@@ -644,3 +644,71 @@ async fn named_sessions_narrow_to_one_weapon() {
     .await;
     assert!(none.sources.is_empty());
 }
+
+/// A named session's expected loss prices its weapons with the engine the
+/// routes use, at the planning looter basis, beside the recorded loss.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_sessions_price_an_expected_loss_like_a_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+    seed_definition(&db, 7, "Mixed Skilling").await;
+    let start = 1.7e9;
+    seed_kills(
+        &db,
+        "m",
+        Some(7),
+        false,
+        "Laconian Sword",
+        "Longblades",
+        start,
+        150,
+    )
+    .await;
+    seed_kills(
+        &db,
+        "m",
+        Some(7),
+        false,
+        "SET-P1 Civilian Sidearm, Adjusted",
+        "Handgun",
+        start + 300.0,
+        120,
+    )
+    .await;
+
+    let sword_query = |looter_level: Option<f64>| SkillingForecastQuery {
+        session_weapon: Some("Laconian Sword".into()),
+        looter_level,
+        ..swordsman_query(20.0, vec![route("sword", "Carabok", "Puny")])
+    };
+    let sword = forecast(&api, &sword_query(Some(40.0))).await;
+    let source = &sword.sources[0];
+    let expected = source.expected.expect("the sword is priced");
+    let route = &sword.routes[0];
+    let route_return = 1.0 - route.loss_per_kill_pec / route.cycled_per_kill_pec;
+    assert!((expected.weapon_return - route_return).abs() < 1e-4);
+    assert_eq!(expected.coverage, 1.0);
+    // All of the narrowed cycling is the sword's.
+    assert!((expected.tt_cost - source.cycled_ped * (1.0 - expected.weapon_return)).abs() < 0.02);
+    // The recorded loss stands beside it at the recorded return.
+    assert!((source.tt_cost - (source.cycled_ped - source.loot_tt)).abs() < 0.011);
+
+    // A higher looter basis expects more back.
+    let richer = forecast(&api, &sword_query(Some(80.0))).await;
+    let richer = richer.sources[0].expected.expect("priced");
+    assert!(richer.weapon_return > expected.weapon_return);
+
+    // Whole, both weapons are priced by their spend.
+    let whole = forecast(
+        &api,
+        &SkillingForecastQuery {
+            looter_level: Some(40.0),
+            ..swordsman_query(20.0, Vec::new())
+        },
+    )
+    .await;
+    let whole = whole.sources[0].expected.expect("priced");
+    assert_eq!(whole.coverage, 1.0);
+    assert!(whole.weapon_return > expected.weapon_return);
+}

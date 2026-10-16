@@ -3183,6 +3183,19 @@ export interface SkillScanPending {
 }
 
 /**
+ * A named session's TT cost to the goal with the loot Community Model v1
+ * expects from its weapons in place of the recorded loot.
+ */
+export interface SkillingExpectedLoss {
+	/** Cycled minus the expected loot TT. */
+	ttCost: number;
+	/** Expected loot TT over the weapon spend the model priced. */
+	weaponReturn: number;
+	/** The share of the recorded weapon spend the model priced; the rest returns nothing under it. */
+	coverage: number;
+}
+
+/**
  * The forecast query. `professions` names a `profession` target (one
  * name, or several for a family forecast as their summed level) and is
  * ignored for `hp`; `goal` is the level (summed, for several) or HP to
@@ -3276,6 +3289,8 @@ export interface SkillingForecastSource {
 	ttCost: number;
 	/** TT cost less realised markup; null with the markup. */
 	netCost: number | null;
+	/** The TT cost under Community Model v1 at the planning looter basis; null when the model prices none of the definition's weapon spend. */
+	expected: SkillingExpectedLoss | null;
 	skills: SkillingForecastSkill[];
 	warnings: SkillingSampleWarning[];
 }

@@ -68,7 +68,7 @@
 				{#if hub.view === 'routes'}
 					<SkillingRoutes {hub} professions={model.professions} />
 				{:else if hub.view === 'sessions'}
-					<SkillingSessions {hub} />
+					<SkillingSessions {hub} professions={model.professions} />
 				{:else if hub.view === 'activities'}
 					<SkillingActivities {hub} />
 				{:else}

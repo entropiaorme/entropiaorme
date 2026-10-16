@@ -3,15 +3,18 @@
 //! definition's recorded play, with its own realised markup applied; and,
 //! beside them, planned routes (a weapon on a mob maturity), priced by the
 //! skill-per-kill law and the loadout comparison engine before any of it
-//! is played. Read-only; the projections live in
+//! is played. A named session's TT cost is given twice: at its recorded
+//! loot return, and at the return Community Model v1 expects from the
+//! weapons it fired, priced by the same engine as the routes. Read-only; the projections live in
 //! `eo_services::skilling_forecast` and `eo_services::skilling_routes`.
 
+use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::loadout_comparison::setup_economics;
 use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::skilling_forecast::{
     forecast_planned, latest_skill_boost, load_forecast_sessions, load_weapon_forecast_sessions,
-    session_weapons, skilling_forecast, ForecastSkill, ForecastStatus, ForecastTarget,
-    PlannedForecast, SampleWarning, SourceForecast,
+    session_weapons, skilling_forecast, ExpectedLoss, ForecastSession, ForecastSkill,
+    ForecastStatus, ForecastTarget, PlannedForecast, SampleWarning, SourceForecast,
 };
 use eo_services::skilling_routes::{
     between_kill_seconds, mob_pace, skill_shares, weapon_professions, RouteKill, SkillBoost,
@@ -172,8 +175,35 @@ pub struct SkillingForecastSource {
     pub tt_cost: f64,
     /// TT cost less realised markup; null with the markup.
     pub net_cost: Nullable<f64>,
+    /// The TT cost under Community Model v1 at the planning looter basis;
+    /// null when the model prices none of the definition's weapon spend.
+    pub expected: Nullable<SkillingExpectedLoss>,
     pub skills: Vec<SkillingForecastSkill>,
     pub warnings: Vec<SkillingSampleWarning>,
+}
+
+/// A named session's TT cost to the goal with the loot Community Model v1
+/// expects from its weapons in place of the recorded loot.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillingExpectedLoss {
+    /// Cycled minus the expected loot TT.
+    pub tt_cost: f64,
+    /// Expected loot TT over the weapon spend the model priced.
+    pub weapon_return: f64,
+    /// The share of the recorded weapon spend the model priced; the rest
+    /// returns nothing under it.
+    pub coverage: f64,
+}
+
+impl From<ExpectedLoss> for SkillingExpectedLoss {
+    fn from(expected: ExpectedLoss) -> Self {
+        Self {
+            tt_cost: expected.tt_cost,
+            weapon_return: expected.weapon_return,
+            coverage: expected.coverage,
+        }
+    }
 }
 
 /// Whether a planned route answers, and if not, why.
@@ -323,6 +353,7 @@ fn source_dto(source: SourceForecast) -> SkillingForecastSource {
         markup: source.markup.into(),
         tt_cost: source.tt_cost,
         net_cost: source.net_cost.into(),
+        expected: source.expected.map(Into::into).into(),
         skills: source.skills.into_iter().map(skill_dto).collect(),
         warnings: source.warnings.into_iter().map(Into::into).collect(),
     }
@@ -399,7 +430,16 @@ impl Api {
             .into_iter()
             .map(|row| (row.definition_id, row.net_markup))
             .collect();
-        let sources = skilling_forecast(&skill_levels, &target, query.goal, &sessions, &markups);
+        let (_, looters) = self.planning_looters(query.looter_level).await?;
+        let weapon_returns = self.weapon_returns(&sessions, looters).await?;
+        let sources = skilling_forecast(
+            &skill_levels,
+            &target,
+            query.goal,
+            &sessions,
+            &markups,
+            &weapon_returns,
+        );
         let hunting_target = match query.target {
             SkillingTargetKind::Hp => true,
             SkillingTargetKind::Profession => {
@@ -416,7 +456,6 @@ impl Api {
                     .map_err(ApiError::internal("skilling forecast latest pill"))?,
             ),
         };
-        let (_, looters) = self.planning_looters(query.looter_level).await?;
         let mut routes = Vec::with_capacity(query.routes.len());
         let picks = if hunting_target {
             query.routes.as_slice()
@@ -574,6 +613,67 @@ impl Api {
         )
     }
 
+    /// Each weapon the sessions fired, priced under Community Model v1 at
+    /// the planning looter basis: its expected loot TT per PED of its spend.
+    /// The weapon is the player's own library loadout of that name (with
+    /// its amplifier and markups) at current catalogue Efficiency, else the
+    /// catalogue weapon alone at TT; one neither resolves, or the model
+    /// cannot price, is left out.
+    async fn weapon_returns(
+        &self,
+        sessions: &[ForecastSession],
+        looters: HuntingLooterLevels,
+    ) -> Result<Vec<(String, f64)>, ApiError> {
+        let mut names: Vec<&str> = sessions
+            .iter()
+            .flat_map(|session| session.weapons.iter().map(|(name, _)| name.as_str()))
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let library = self
+            .db
+            .equipment_library_rows()
+            .await
+            .map_err(ApiError::internal("skilling forecast equipment library"))?;
+        let mut returns = Vec::with_capacity(names.len());
+        for name in names {
+            // The newest library row of the name, as the library lists it.
+            let props = library
+                .iter()
+                .rev()
+                .find(|(_, row_name, kind, _)| kind == "weapon" && row_name == name)
+                .and_then(|(_, _, _, json)| serde_json::from_str::<serde_json::Value>(json).ok())
+                .map(|props| {
+                    self.weapon_pricing
+                        .prepare(&with_current_offensive_efficiencies(
+                            &props,
+                            &self.game_data,
+                        ))
+                })
+                .or_else(|| self.catalogue_weapon_props(name));
+            let Some(props) = props else {
+                continue;
+            };
+            let rate = self
+                .weapon_pricing
+                .attack_rate(&props)
+                .map(|rate| rate.effective_per_minute);
+            let Ok(economics) = setup_economics(&props, looters, rate, &ASSUMPTIONS) else {
+                continue;
+            };
+            if economics.cost_per_use_pec > 0.0 {
+                returns.push((
+                    name.to_string(),
+                    economics.expected_loot_pec / economics.cost_per_use_pec,
+                ));
+            }
+        }
+        Ok(returns)
+    }
+
     /// The weapons the named sessions used, most used first.
     async fn session_weapons(&self) -> Result<Vec<SkillingSessionWeapon>, ApiError> {
         let weapons: Vec<SkillingSessionWeapon> =
@@ -609,24 +709,30 @@ impl Api {
 
     /// The attack rate in force for a weapon named as a recorded tool.
     fn weapon_rate_by_name(&self, name: &str) -> Option<f64> {
-        let id = self.weapon_by_name(name)?.get("id")?.as_str()?.to_string();
-        let setup = self
-            .resolve_setup(
-                0,
-                &SetupPick {
-                    weapon: crate::loadout_comparison::ComponentPick {
-                        catalog_id: id,
-                        markup_percent: None,
-                    },
-                    amplifier: None,
-                    absorber: None,
-                    implant: None,
-                },
-            )
-            .ok()?;
+        let props = self.catalogue_weapon_props(name)?;
         self.weapon_pricing
-            .attack_rate(&setup.props)
+            .attack_rate(&props)
             .map(|rate| rate.effective_per_minute)
+    }
+
+    /// The setup props of the catalogue weapon a recorded tool name names,
+    /// alone and at TT.
+    fn catalogue_weapon_props(&self, name: &str) -> Option<serde_json::Value> {
+        let id = self.weapon_by_name(name)?.get("id")?.as_str()?.to_string();
+        self.resolve_setup(
+            0,
+            &SetupPick {
+                weapon: crate::loadout_comparison::ComponentPick {
+                    catalog_id: id,
+                    markup_percent: None,
+                },
+                amplifier: None,
+                absorber: None,
+                implant: None,
+            },
+        )
+        .ok()
+        .map(|setup| setup.props)
     }
 }
 

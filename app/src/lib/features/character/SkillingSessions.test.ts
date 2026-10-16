@@ -77,7 +77,7 @@ async function renderWith(overrides: Partial<SkillingForecastResult>) {
 	const hub = createSkillingModel({ professions: () => PROFESSIONS, hp: () => 188 });
 	hub.setTarget({ kind: 'profession', name: 'Animal Looter' });
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	render(SkillingSessions, { hub });
+	render(SkillingSessions, { hub, professions: PROFESSIONS });
 	return hub;
 }
 
@@ -86,20 +86,42 @@ beforeEach(() => {
 });
 
 describe('SkillingSessions', () => {
-	it('carries each named session to the goal as recorded, in the table', async () => {
+	it('carries each named session to the goal, expected and as recorded, in the table', async () => {
 		await renderWith({
 			sources: [
-				TREES(),
-				sourceForecast({ definitionId: 4, name: 'Carabok Skilling', ttCost: 50, hours: 2 }),
+				TREES({ expected: { ttCost: 30.5, weaponReturn: 0.92, coverage: 1 } }),
+				sourceForecast({
+					definitionId: 4,
+					name: 'Carabok Skilling',
+					ttCost: 20,
+					expected: { ttCost: 39.12, weaponReturn: 0.9, coverage: 1 },
+					hours: 2,
+				}),
 			],
 		});
 		expect(screen.getByText('252')).toBeTruthy();
+		expect(screen.getByText('30.50')).toBeTruthy();
 		expect(screen.getByText('41.38')).toBeTruthy();
 		expect(screen.getByText('9.6h')).toBeTruthy();
 		expect(screen.getByText('Cheapest')).toBeTruthy();
-		// 8.62 more over the two hours of that session.
+		// The expected losses compare: 8.62 more over the two hours of that
+		// session, though its recorded loss is the lower.
 		expect(screen.getByText('+8.62')).toBeTruthy();
 		expect(screen.getByText('4.31/h')).toBeTruthy();
+	});
+
+	it('names the expected return beside the recorded one, with what it covers', async () => {
+		await renderWith({
+			sources: [TREES({ expected: { ttCost: 30.5, weaponReturn: 0.9216, coverage: 0.8 } })],
+		});
+		expect(screen.getByText(/92\.2% expected on\s+80% of\s+weapon spend at/)).toBeTruthy();
+		// The looter basis it is read at is the shared picker.
+		expect(screen.getByRole('button', { name: /Looter/ })).toBeTruthy();
+	});
+
+	it('dashes the expected loss the model cannot price', async () => {
+		await renderWith({ sources: [TREES()] });
+		expect(screen.getByText('no expected return modelled')).toBeTruthy();
 	});
 
 	it('shows every skill the session trains, dashing those the goal does not count', async () => {

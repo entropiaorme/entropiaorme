@@ -4,14 +4,15 @@ import type {
 	HpOptimizerResult,
 	PathOptimizerResult,
 	SkillingForecastResult,
-	SkillingForecastSource,
 } from '$lib/api/commands.gen';
 import { setLooterBasis } from '$lib/looterBasis.svelte';
 import type { ProfessionLevel } from '$lib/types/analytics';
+import { forecastResult, sourceForecast } from './__fixtures__/skilling';
 import {
 	createSkillingModel,
 	defaultGoal,
 	GOAL_DEBOUNCE_MS,
+	parseBoost,
 	parseGoal,
 } from './skillingModel.svelte';
 
@@ -82,35 +83,8 @@ function hpResult(): HpOptimizerResult {
 	return { currentHp: 142, skills: [], attributes: [] };
 }
 
-function source(overrides: Partial<SkillingForecastSource> = {}): SkillingForecastSource {
-	return {
-		definitionId: 7,
-		name: 'Carabok Skilling',
-		archived: false,
-		sample: {
-			sessions: 75,
-			hours: 120,
-			cycledPed: 45000,
-			lootTt: 40800,
-			pes: 3679,
-			realisedMarkup: null,
-			markupLift: null,
-		},
-		status: 'ready',
-		cycledPed: 1240,
-		hours: 3.3,
-		lootTt: 1124,
-		markup: null,
-		ttCost: 116,
-		netCost: null,
-		skills: [],
-		warnings: [],
-		...overrides,
-	};
-}
-
-function forecast(sources: SkillingForecastSource[] = [source()]): SkillingForecastResult {
-	return { current: 42.37, goal: 43, sources, routes: [], skillBoost: 'fifty', looterLevel: 40 };
+function forecast(sources = [sourceForecast()]): SkillingForecastResult {
+	return forecastResult({ current: 42.37, goal: 43, sources });
 }
 
 function makeModel() {
@@ -133,9 +107,10 @@ afterEach(() => {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-/** What a forecast asks with no planned route, the pill left to the latest
- * session, and the looter basis at the player's own mean. */
-const UNPLANNED = { routes: [], skillBoost: null, looterLevel: null };
+/** What a forecast asks with no planned route, the boost left to the
+ * latest session, the looter basis at the player's own mean, and the
+ * named sessions taken whole. */
+const UNPLANNED = { routes: [], skillBoostPercent: null, looterLevel: null, sessionWeapon: null };
 
 const SWORD_ON_ROBBERS = {
 	weaponId: 'sword',
@@ -158,33 +133,35 @@ describe('the pure helpers', () => {
 		expect(parseGoal('-2')).toBeNull();
 		expect(parseGoal('abc')).toBeNull();
 	});
+
+	it('reads a boost as a whole percent, capped at the game limit', () => {
+		expect(parseBoost('0')).toBe(0);
+		expect(parseBoost('37.6')).toBe(38);
+		expect(parseBoost('150')).toBe(100);
+		expect(parseBoost('-1')).toBeNull();
+		expect(parseBoost('')).toBeNull();
+	});
 });
 
 describe('setTarget', () => {
-	it('answers a profession at its default goal across every facet', async () => {
+	it('answers a profession at its default goal in the open view only', async () => {
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		expect(model.view).toBe('routes');
 		expect(model.current).toBe(42.37);
 		expect(model.goalInput).toBe('43');
 		expect(model.goalActive).toBe(true);
 		await settle();
 
-		expect(mocked.getActivityRecommender).toHaveBeenCalledWith({
-			target: 'profession',
-			professions: ['Laser Sniper (Hit)'],
-		});
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(['Laser Sniper (Hit)'], {
-			targetLevel: 43,
-		});
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
 			target: 'profession',
 			professions: ['Laser Sniper (Hit)'],
 			goal: 43,
 			...UNPLANNED,
 		});
-		expect(model.path?.totalPed).toBe(120);
-		expect(model.selectedRow?.name).toBe('Carabok Skilling');
-		expect(model.pathLoading).toBe(false);
+		expect(mocked.getActivityRecommender).not.toHaveBeenCalled();
+		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
+		expect(model.selectedSource?.name).toBe('Carabok Skilling');
 		expect(model.forecastLoading).toBe(false);
 		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_hub_target', {
 			kind: 'profession',
@@ -197,17 +174,19 @@ describe('setTarget', () => {
 		model.setTarget({ kind: 'hp' });
 		expect(model.goalInput).toBe('143');
 		await settle();
-		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
-		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
 			target: 'hp',
 			goal: 143,
 			...UNPLANNED,
 		});
+		model.setView('optimiser');
+		await settle();
+		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
+		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
 		expect(model.hpPath?.currentHp).toBe(142);
 	});
 
-	it('answers a family on its combined level across every facet', async () => {
+	it('answers a family on its combined level in each view', async () => {
 		const model = makeModel();
 		model.setTarget({ kind: 'family', key: 'looter' });
 		// 30.5 + 20.25 + 0 (Robot Looter, uncalibrated) = 50.75.
@@ -218,19 +197,22 @@ describe('setTarget', () => {
 			['Mutant Looter', 20.25],
 			['Robot Looter', 0],
 		]);
-		await settle();
 		const looters = ['Animal Looter', 'Mutant Looter', 'Robot Looter'];
-		expect(mocked.getActivityRecommender).toHaveBeenCalledWith({
-			target: 'profession',
-			professions: looters,
-		});
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(looters, { targetLevel: 51 });
+		await settle();
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
 			target: 'profession',
 			professions: looters,
 			goal: 51,
 			...UNPLANNED,
 		});
+		model.setView('activities');
+		model.setView('optimiser');
+		await settle();
+		expect(mocked.getActivityRecommender).toHaveBeenCalledWith({
+			target: 'profession',
+			professions: looters,
+		});
+		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(looters, { targetLevel: 51 });
 	});
 
 	it('discards a response that a newer target superseded', async () => {
@@ -242,17 +224,66 @@ describe('setTarget', () => {
 		);
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
-		mocked.getSkillingForecast.mockResolvedValueOnce(forecast([source({ name: 'Newer' })]));
+		mocked.getSkillingForecast.mockResolvedValueOnce(forecast([sourceForecast({ name: 'Newer' })]));
 		model.setTarget({ kind: 'profession', name: 'Animal Looter' });
 		await settle();
-		resolveFirst(forecast([source({ name: 'Stale' })]));
+		resolveFirst(forecast([sourceForecast({ name: 'Stale' })]));
 		await settle();
-		expect(model.selectedRow?.name).toBe('Newer');
+		expect(model.selectedSource?.name).toBe('Newer');
+	});
+});
+
+describe('the views', () => {
+	it('loads a view when it opens, once per target and goal', async () => {
+		const model = makeModel();
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		model.setView('activities');
+		await settle();
+		expect(mocked.getActivityRecommender).toHaveBeenCalledTimes(1);
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_view', 'activities');
+
+		// Back to Routes, and on to Sessions, which reads the same forecast:
+		// nothing is asked again.
+		model.setView('routes');
+		model.setView('sessions');
+		model.setView('activities');
+		await settle();
+		expect(mocked.getSkillingForecast).toHaveBeenCalledTimes(1);
+		expect(mocked.getActivityRecommender).toHaveBeenCalledTimes(1);
+		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
+	});
+
+	it('defers a goal change until a view that answers it opens', async () => {
+		vi.useFakeTimers();
+		const model = makeModel();
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		model.setView('activities');
+		await vi.runAllTimersAsync();
+		vi.clearAllMocks();
+
+		model.setGoal('45');
+		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
+		// The ranking does not depend on the goal, and the forecast waits.
+		expect(mocked.getActivityRecommender).not.toHaveBeenCalled();
+		expect(mocked.getSkillingForecast).not.toHaveBeenCalled();
+		model.setView('sessions');
+		await vi.runAllTimersAsync();
+		expect(mocked.getSkillingForecast).toHaveBeenCalledWith(expect.objectContaining({ goal: 45 }));
+	});
+
+	it('reopens the last view', async () => {
+		prefs.getPreference.mockImplementation(async (key: string) =>
+			key === 'skilling_view' ? 'optimiser' : null,
+		);
+		const model = makeModel();
+		await model.restore();
+		expect(model.view).toBe('optimiser');
 	});
 });
 
 describe('the goal', () => {
-	it('reloads only the goal-bound facets once typing settles', async () => {
+	it('reloads the open view once typing settles', async () => {
 		vi.useFakeTimers();
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
@@ -267,9 +298,6 @@ describe('the goal', () => {
 
 		expect(mocked.getSkillingForecast).toHaveBeenCalledTimes(1);
 		expect(mocked.getSkillingForecast).toHaveBeenCalledWith(expect.objectContaining({ goal: 45 }));
-		expect(mocked.getProfessionPathOptimizer).toHaveBeenCalledWith(['Laser Sniper (Hit)'], {
-			targetLevel: 45,
-		});
 		expect(mocked.getActivityRecommender).not.toHaveBeenCalled();
 	});
 
@@ -299,9 +327,11 @@ describe('the goal', () => {
 		model.setGoal('42');
 		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
 		expect(model.goalActive).toBe(false);
-		expect(model.path).toBeNull();
 		expect(model.forecast).toBeNull();
 		expect(mocked.getSkillingForecast).not.toHaveBeenCalled();
+		model.setView('optimiser');
+		await vi.runAllTimersAsync();
+		expect(model.path).toBeNull();
 		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
 	});
 
@@ -309,32 +339,47 @@ describe('the goal', () => {
 		vi.useFakeTimers();
 		const model = makeModel();
 		model.setTarget({ kind: 'hp' });
+		model.setView('optimiser');
 		await vi.runAllTimersAsync();
 		model.setGoal('150');
 		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
 		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
-		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith({
-			target: 'hp',
-			goal: 150,
-			...UNPLANNED,
-		});
 	});
 });
 
-describe('the forecast', () => {
-	it('lets the player choose another named session', async () => {
+describe('the named sessions', () => {
+	it('selects the first that answers, and another on request', async () => {
 		mocked.getSkillingForecast.mockResolvedValue(
 			forecast([
-				source({ definitionId: 1, name: 'Quick' }),
-				source({ definitionId: 2, name: 'Slow' }),
+				sourceForecast({ definitionId: 1, name: 'Out of reach', status: 'out_of_range' }),
+				sourceForecast({ definitionId: 2, name: 'Quick' }),
+				sourceForecast({ definitionId: 3, name: 'Slow' }),
 			]),
 		);
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
 		await settle();
-		expect(model.selectedRow?.name).toBe('Quick');
-		model.selectRow('session:2');
-		expect(model.selectedRow?.name).toBe('Slow');
+		expect(model.selectedSource?.name).toBe('Quick');
+		model.selectSource(3);
+		expect(model.selectedSource?.name).toBe('Slow');
+	});
+
+	it('narrows to one weapon, remembers it, and takes them whole again', async () => {
+		const model = makeModel();
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		model.setSessionWeapon('Laconian Sword');
+		await settle();
+		expect(model.sessionWeapon).toBe('Laconian Sword');
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_session_weapon', 'Laconian Sword');
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ sessionWeapon: 'Laconian Sword' }),
+		);
+		model.setSessionWeapon(null);
+		await settle();
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ sessionWeapon: null }),
+		);
 	});
 
 	it('lands soft and thrown failures in their own facet only', async () => {
@@ -345,6 +390,9 @@ describe('the forecast', () => {
 		mocked.getProfessionPathOptimizer.mockRejectedValueOnce(new Error('boom'));
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		model.setView('optimiser');
+		model.setView('activities');
 		await settle();
 		expect(model.forecastError).toBe("Profession 'X' not found");
 		expect(model.forecast).toBeNull();
@@ -374,41 +422,71 @@ describe('planned routes', () => {
 		);
 		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_routes', [SWORD_ON_ROBBERS]);
 		expect(model.routes).toEqual([SWORD_ON_ROBBERS]);
+		expect(model.selectedRow?.key).toBe('route:0');
 
 		// The same route again adds nothing.
 		model.addRoute({ ...SWORD_ON_ROBBERS });
 		expect(model.routes).toHaveLength(1);
+
+		model.updateRoute(0, { ...SWORD_ON_ROBBERS, weaponId: 'chip', weaponName: 'Chip' });
+		expect(model.routes[0].weaponName).toBe('Chip');
 
 		model.removeRoute(0);
 		expect(model.routes).toEqual([]);
 		expect(prefs.setPreference).toHaveBeenLastCalledWith('skilling_routes', []);
 	});
 
-	it('re-prices at a chosen pill and at the looter basis in force', async () => {
+	it('takes the target as priceable until the forecast says otherwise', async () => {
+		mocked.getSkillingForecast.mockResolvedValue(forecastResult({ huntingTarget: false }));
+		const model = makeModel();
+		expect(model.huntingTarget).toBe(true);
+		model.setTarget({ kind: 'profession', name: 'Animal Looter' });
+		await settle();
+		expect(model.huntingTarget).toBe(false);
+	});
+
+	it('re-prices once a typed boost settles, and at the looter basis in force', async () => {
+		vi.useFakeTimers();
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
-		await settle();
-		model.setSkillBoost('hundred');
-		await settle();
-		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_route_pill', 'hundred');
+		await vi.runAllTimersAsync();
+		// Unset, the field shows the boost the forecast priced at.
+		expect(model.boostInput).toBe('50');
+		vi.clearAllMocks();
+
+		model.setSkillBoost('7');
+		model.setSkillBoost('75');
+		expect(model.boostInput).toBe('75');
+		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
+		expect(mocked.getSkillingForecast).toHaveBeenCalledTimes(1);
 		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
-			expect.objectContaining({ skillBoost: 'hundred', looterLevel: null }),
+			expect.objectContaining({ skillBoostPercent: 75, looterLevel: null }),
+		);
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_route_pill', 75);
+
+		// Past the cap, leaving the field settles on the cap.
+		model.setSkillBoost('150');
+		model.commitSkillBoost();
+		expect(model.boostInput).toBe('100');
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ skillBoostPercent: 100 }),
 		);
 
 		// Another basis sends its level: Animal Looter 30.5.
 		await setLooterBasis('animal');
 		model.reloadForecast();
-		await settle();
+		await vi.runAllTimersAsync();
 		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
 			expect.objectContaining({ looterLevel: 30.5 }),
 		);
 		await setLooterBasis('three_looter_mean');
 	});
 
-	it('restores remembered routes and pill, dropping malformed ones', async () => {
+	it('restores routes, boost, and session weapon, reading a pill saved before the percent', async () => {
 		prefs.getPreference.mockImplementation(async (key: string) => {
 			if (key === 'skilling_routes') return [SWORD_ON_ROBBERS, { weaponId: 3 }];
-			if (key === 'skilling_route_pill') return 'none';
+			if (key === 'skilling_route_pill') return 'hundred';
+			if (key === 'skilling_session_weapon') return 'Laconian Sword';
 			return null;
 		});
 		const model = makeModel();
@@ -417,14 +495,16 @@ describe('planned routes', () => {
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
 		await settle();
 		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
-			expect.objectContaining({ skillBoost: 'none' }),
+			expect.objectContaining({ skillBoostPercent: 100, sessionWeapon: 'Laconian Sword' }),
 		);
 	});
 });
 
 describe('restore', () => {
 	it('reopens the last target once', async () => {
-		prefs.getPreference.mockResolvedValue({ kind: 'profession', name: 'Animal Looter' });
+		prefs.getPreference.mockImplementation(async (key: string) =>
+			key === 'skilling_hub_target' ? { kind: 'profession', name: 'Animal Looter' } : null,
+		);
 		const model = makeModel();
 		await model.restore();
 		expect(model.target).toEqual({ kind: 'profession', name: 'Animal Looter' });
@@ -437,10 +517,12 @@ describe('restore', () => {
 	});
 
 	it('ignores a malformed or unknown saved target', async () => {
-		prefs.getPreference.mockResolvedValue({ kind: 'family', key: 'nope' });
+		prefs.getPreference.mockImplementation(async (key: string) =>
+			key === 'skilling_hub_target' ? { kind: 'family', key: 'nope' } : null,
+		);
 		const model = makeModel();
 		await model.restore();
 		expect(model.target).toEqual({ kind: 'none' });
-		expect(mocked.getActivityRecommender).not.toHaveBeenCalled();
+		expect(mocked.getSkillingForecast).not.toHaveBeenCalled();
 	});
 });

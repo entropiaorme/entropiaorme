@@ -3153,11 +3153,6 @@ export interface ShrapnelConversionInput {
 }
 
 /**
- * The skill pill a planned route assumes.
- */
-export type SkillBoostLevel = 'none' | 'fifty' | 'hundred';
-
-/**
  * One per-skill gain (attributes excluded).
  */
 export interface SkillGain {
@@ -3199,10 +3194,12 @@ export interface SkillingForecastQuery {
 	goal: number;
 	/** Planned routes to price beside the recorded sessions. */
 	routes?: SkillingRoutePick[];
-	/** The pill planned routes assume; absent reads as the most recent session's. */
-	skillBoost?: SkillBoostLevel | null;
+	/** The skill boost percent planned routes assume (capped at 100); absent reads as the most recent session's. */
+	skillBoostPercent?: number | null;
 	/** The looter level planned routes are priced at; absent reads as the player's three-looter mean. */
 	looterLevel?: number | null;
+	/** Narrow the named sessions to this weapon's part of them; absent forecasts each session whole. */
+	sessionWeapon?: string | null;
 }
 
 /**
@@ -3218,8 +3215,12 @@ export interface SkillingForecastResult {
 	sources: SkillingForecastSource[];
 	/** The planned routes, in request order. */
 	routes: SkillingRouteForecast[];
-	/** The pill the planned routes assumed. */
-	skillBoost: SkillBoostLevel;
+	/** The weapons the named sessions used, most used first, to narrow the sessions to one of. */
+	sessionWeapons: SkillingSessionWeapon[];
+	/** Whether hunting prices this target: HP, or professions a weapon trains. Any other target grows from hunting only as a byproduct, so no route is priced toward it. */
+	huntingTarget: boolean;
+	/** The skill boost percent the planned routes assumed. */
+	skillBoostPercent: number;
 	/** The looter level the planned routes were priced at. */
 	looterLevel: number;
 }
@@ -3244,9 +3245,8 @@ export interface SkillingForecastSample {
  */
 export interface SkillingForecastSkill {
 	name: string;
-	isAttribute: boolean;
 	currentLevel: number;
-	/** Share of the definition's skill PES; null for attributes. */
+	/** Share of the definition's skill PES; null when it earned none. */
 	pesShare: number | null;
 	levelGain: number;
 	endLevel: number;
@@ -3268,6 +3268,8 @@ export interface SkillingForecastSource {
 	cycledPed: number;
 	hours: number;
 	lootTt: number;
+	/** Kills at the recorded kills per PED cycled; null when the definition recorded none. */
+	kills: number | null;
 	/** Realised markup lift applied to the forecast loot; null when the definition has no confirmed sales. */
 	markup: number | null;
 	/** Cycled minus loot TT. */
@@ -3282,14 +3284,6 @@ export interface SkillingForecastSource {
  * Whether a definition answers, and if not, why.
  */
 export type SkillingForecastStatus = 'ready' | 'reached' | 'does_not_train' | 'no_evidence' | 'out_of_range';
-
-/**
- * The recorded kills behind a measured route.
- */
-export interface SkillingRouteEvidence {
-	kills: number;
-	sessions: number;
-}
 
 /**
  * One planned route's forecast, in request order. The projected figures
@@ -3309,16 +3303,25 @@ export interface SkillingRouteForecast {
 	cycledPerKillPec: number;
 	/** Expected loss per kill, PEC. */
 	lossPerKillPec: number;
-	/** Firing time plus the retarget allowance; null when the attack rate is unknown. */
+	/** Firing time plus the time between kills; null when the attack rate is unknown. */
 	secondsPerKill: number | null;
 	kills: number;
 	cycledPed: number;
 	/** Expected TT lost on the way: cycled less expected loot TT. */
 	pedLost: number;
 	hours: number | null;
-	/** The player's own kills the route is priced from; null when it is priced from the model alone. */
-	measured: SkillingRouteEvidence | null;
+	/** The player's recorded pace between kills on the mob; null when they have too few recorded kills of it and a fixed allowance stands in. */
+	pace: SkillingRoutePace | null;
 	skills: SkillingForecastSkill[];
+}
+
+/**
+ * The player's own time between kills on a mob, from their recorded kills
+ * of it with any weapon, firing time taken out.
+ */
+export interface SkillingRoutePace {
+	betweenKillSeconds: number;
+	kills: number;
 }
 
 /**
@@ -3340,6 +3343,14 @@ export type SkillingRouteStatus = 'ready' | 'reached' | 'out_of_range' | 'does_n
  * A sample-quality caveat on a forecast.
  */
 export type SkillingSampleWarning = 'thin_sessions' | 'thin_hours' | 'thin_cycling' | 'long_extrapolation';
+
+/**
+ * A weapon the named sessions used, with the kills it made alone.
+ */
+export interface SkillingSessionWeapon {
+	name: string;
+	kills: number;
+}
 
 /**
  * What the forecast measures progress on. A closed vocabulary: the

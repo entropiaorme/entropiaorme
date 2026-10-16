@@ -19,6 +19,30 @@ import type { PageErrorSlot } from './errorSlot.svelte';
 
 const HIDDEN_PREFERENCE = 'recommender_hidden_activities';
 
+/** True when `a` ranks ahead of `b`: fewer PES to add one, then more gain
+ * at the cap, then by name (the ranking's own order). */
+function ranksBefore(a: RecommenderActivity, b: RecommenderActivity): boolean {
+	if (a.pesToPlusOne !== null && b.pesToPlusOne !== null && a.pesToPlusOne !== b.pesToPlusOne) {
+		return a.pesToPlusOne < b.pesToPlusOne;
+	}
+	if ((a.pesToPlusOne === null) !== (b.pesToPlusOne === null)) return a.pesToPlusOne !== null;
+	if (a.gainAtCap !== b.gainAtCap) return a.gainAtCap > b.gainAtCap;
+	return a.activity < b.activity;
+}
+
+/** The ranking with the target's own activity in its place, so how close
+ * the others come to training it directly reads off the list. */
+export function withDirect(
+	candidates: RecommenderActivity[],
+	direct: RecommenderActivity | null,
+): RecommenderActivity[] {
+	if (!direct) return candidates;
+	const at = candidates.findIndex((candidate) => ranksBefore(direct, candidate));
+	return at === -1
+		? [...candidates, direct]
+		: [...candidates.slice(0, at), direct, ...candidates.slice(at)];
+}
+
 export function createRecommenderModel(errors: PageErrorSlot) {
 	let target = $state<CodexRankingTarget>({ kind: 'none' });
 	let result = $state<ActivityRecommenderResult | null>(null);
@@ -26,20 +50,26 @@ export function createRecommenderModel(errors: PageErrorSlot) {
 	let loading = $state(false);
 	const hidden = createHiddenSet(HIDDEN_PREFERENCE);
 
+	const direct = $derived(result?.direct ?? null);
 	const candidates = $derived(
-		orderByVisibility(result?.candidates ?? [], (c) => hidden.has(c.activity)),
+		orderByVisibility(withDirect(result?.candidates ?? [], direct), (c) => hidden.has(c.activity)),
 	);
 	const visibleCount = $derived(candidates.filter((c) => !hidden.has(c.activity)).length);
 	const selected = $derived<RecommenderActivity | null>(
 		candidates.find((candidate) => candidate.activity === selectedActivity) ??
-			candidates[0] ??
+			candidates.find((candidate) => candidate.activity === firstVisible()) ??
 			null,
 	);
 
-	/** The first activity worth showing: the top one not hidden. */
+	/** The first activity worth showing: the top one not hidden, other than
+	 * the target's own (the chart draws that beside it anyway). */
 	function firstVisible(): string {
+		const shown = candidates.filter((c) => !hidden.has(c.activity));
 		return (
-			candidates.find((c) => !hidden.has(c.activity))?.activity ?? candidates[0]?.activity ?? ''
+			shown.find((c) => c.activity !== direct?.activity)?.activity ??
+			shown[0]?.activity ??
+			candidates[0]?.activity ??
+			''
 		);
 	}
 
@@ -104,6 +134,14 @@ export function createRecommenderModel(errors: PageErrorSlot) {
 		},
 		get candidates() {
 			return candidates;
+		},
+		/** The target's own activity, ranked among the others; null for HP
+		 * and family targets, which have none. */
+		get direct() {
+			return direct;
+		},
+		isDirect(activity: string) {
+			return direct?.activity === activity;
 		},
 		get selected() {
 			return selected;

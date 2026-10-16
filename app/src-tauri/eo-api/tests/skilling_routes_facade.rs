@@ -1,16 +1,17 @@
 //! Behavioural pins for planned skilling routes over the typed facade: a
 //! weapon on a mob maturity priced toward a profession goal from the
 //! skill-per-kill law and the loadout comparison engine, beside (never
-//! instead of) the recorded sessions; the pill and the looter level; and
-//! routes the catalogue cannot resolve.
+//! instead of) the recorded sessions; the skill boost and the looter level;
+//! the player's own pace on a mob; which targets hunting prices; routes the
+//! catalogue cannot resolve; and named sessions narrowed to one weapon.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eo_api::loadout_comparison::{ComponentPick, SetupPick};
 use eo_api::skilling::{
-    SkillBoostLevel, SkillingForecastQuery, SkillingForecastResult, SkillingRoutePick,
-    SkillingRouteStatus, SkillingTargetKind, MAX_ROUTES,
+    SkillingForecastQuery, SkillingForecastResult, SkillingRoutePick, SkillingRouteStatus,
+    SkillingTargetKind, MAX_ROUTES,
 };
 use eo_api::Api;
 use eo_services::db::Db;
@@ -192,8 +193,9 @@ fn swordsman_query(goal: f64, routes: Vec<SkillingRoutePick>) -> SkillingForecas
         professions: vec!["Swordsman (Hit)".into()],
         goal,
         routes,
-        skill_boost: Some(SkillBoostLevel::Fifty),
+        skill_boost_percent: Some(50),
         looter_level: None,
+        session_weapon: None,
     }
 }
 
@@ -223,7 +225,8 @@ async fn a_planned_route_prices_the_goal_per_weapon_and_mob() {
     )
     .await;
     assert!(result.error.is_none());
-    assert_eq!(result.skill_boost, SkillBoostLevel::Fifty);
+    assert!(result.hunting_target);
+    assert_eq!(result.skill_boost_percent, 50);
     assert_eq!(result.looter_level, 40.0);
     assert_eq!(result.routes.len(), 2);
 
@@ -263,11 +266,12 @@ async fn a_planned_route_prices_the_goal_per_weapon_and_mob() {
     assert!(result.sources.is_empty());
 }
 
-/// The pill scales skill per kill (none is two thirds of the 50% pill),
-/// so the unpilled route needs half again the kills; with no pill given,
-/// the most recent session's decides.
+/// The boost scales skill per kill (none is two thirds of the 50% boost,
+/// a boost between the measured points is read between them), so the
+/// unboosted route needs half again the kills; with no boost given, the
+/// most recent session's decides, capped at the game's 100%.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_pill_scales_a_route_and_defaults_to_the_latest_session() {
+async fn the_boost_scales_a_route_and_defaults_to_the_latest_session() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db) = api_over(dir.path()).await;
     seed_skills(&db, standard_levels()).await;
@@ -277,25 +281,43 @@ async fn the_pill_scales_a_route_and_defaults_to_the_latest_session() {
     let none = forecast(
         &api,
         &SkillingForecastQuery {
-            skill_boost: Some(SkillBoostLevel::None),
+            skill_boost_percent: Some(0),
             ..swordsman_query(20.0, routes.clone())
         },
     )
     .await;
     let ratio = none.routes[0].kills / fifty.routes[0].kills;
     assert!((ratio - 1.5).abs() < 1e-3, "kill ratio {ratio}");
+    // 75% sits halfway between the 50% boost and the 100% one (x1.27).
+    let three_quarters = forecast(
+        &api,
+        &SkillingForecastQuery {
+            skill_boost_percent: Some(75),
+            ..swordsman_query(20.0, routes.clone())
+        },
+    )
+    .await;
+    let ratio = fifty.routes[0].kills / three_quarters.routes[0].kills;
+    assert!((ratio - 1.135).abs() < 1e-3, "kill ratio {ratio}");
+    // Past the cap prices at the cap.
+    let over = forecast(
+        &api,
+        &SkillingForecastQuery {
+            skill_boost_percent: Some(150),
+            ..swordsman_query(20.0, routes.clone())
+        },
+    )
+    .await;
+    assert_eq!(over.skill_boost_percent, 100);
 
-    // No pill given and no session recorded: unpilled.
+    // No boost given and no session recorded: unboosted.
     let unstated = SkillingForecastQuery {
-        skill_boost: None,
+        skill_boost_percent: None,
         ..swordsman_query(20.0, routes.clone())
     };
-    assert_eq!(
-        forecast(&api, &unstated).await.skill_boost,
-        SkillBoostLevel::None
-    );
+    assert_eq!(forecast(&api, &unstated).await.skill_boost_percent, 0);
 
-    // The latest session ran the 100% pill (stacks above it cap there).
+    // The latest session recorded 150%, which the game caps at 100%.
     db.with_writer(|conn| {
         conn.execute_batch(
             "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, skill_boost_percent) \
@@ -306,10 +328,7 @@ async fn the_pill_scales_a_route_and_defaults_to_the_latest_session() {
     })
     .await
     .unwrap();
-    assert_eq!(
-        forecast(&api, &unstated).await.skill_boost,
-        SkillBoostLevel::Hundred
-    );
+    assert_eq!(forecast(&api, &unstated).await.skill_boost_percent, 100);
 
     // A lower looter level loses more on the same route.
     let low_looter = forecast(
@@ -362,7 +381,7 @@ async fn unresolvable_and_untrained_routes_say_why() {
     assert_eq!(result.routes[3].mob_hp, None::<f64>);
     let wire = serde_json::to_value(&result).unwrap();
     assert_eq!(wire["routes"][3]["status"], "unknown_mob");
-    assert_eq!(wire["skillBoost"], "fifty");
+    assert_eq!(wire["skillBoostPercent"], 50);
 
     let reached = forecast(
         &api,
@@ -391,20 +410,71 @@ async fn a_forecast_refuses_too_many_routes_or_a_wild_looter_level() {
     assert!(api.character_skilling_forecast(&wild).await.is_err());
 }
 
-/// Recorded kills: `count` single-sword kills of the 2 HP mob two seconds
-/// apart from `start`, each costing 2 PEC and preceded by 0.6 PEC of skill,
-/// in one session at `boost`.
-async fn seed_kills(db: &Db, session: &str, boost: Option<i64>, start: f64, count: usize) {
-    let session = session.to_string();
+/// Only HP and professions some weapon trains are priced by hunting; any
+/// other target grows from hunting only as a byproduct, so its routes are
+/// left unpriced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hunting_prices_only_targets_a_weapon_trains() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+    let routes = vec![route("sword", "Bank Robber", "Default")];
+
+    let looter = forecast(
+        &api,
+        &SkillingForecastQuery {
+            professions: vec!["Animal Looter".into()],
+            ..swordsman_query(200.0, routes.clone())
+        },
+    )
+    .await;
+    assert!(!looter.hunting_target);
+    assert!(looter.routes.is_empty());
+
+    let hp = forecast(
+        &api,
+        &SkillingForecastQuery {
+            target: SkillingTargetKind::Hp,
+            professions: Vec::new(),
+            ..swordsman_query(200.0, routes)
+        },
+    )
+    .await;
+    assert!(hp.hunting_target);
+    assert_eq!(hp.routes.len(), 1);
+}
+
+/// Recorded kills: `count` kills by `tool` of the 2 HP mob two seconds
+/// apart from `start`, each costing 2 PEC and preceded by 0.6 PEC of
+/// `skill`, in session `session` (ended unless `live`).
+#[allow(clippy::too_many_arguments)]
+async fn seed_kills(
+    db: &Db,
+    session: &str,
+    definition: Option<i64>,
+    live: bool,
+    tool: &str,
+    skill: &str,
+    start: f64,
+    count: usize,
+) {
+    let (session, tool, skill) = (session.to_string(), tool.to_string(), skill.to_string());
     db.with_writer(move |conn| {
         conn.execute(
-            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, skill_boost_percent) \
-             VALUES (?1, ?2, ?3, 0, ?4)",
-            rusqlite::params![session, start, start + 10_000.0, boost],
+            "INSERT OR IGNORE INTO tracking_sessions \
+               (id, started_at, ended_at, is_active, skill_boost_percent, definition_id) \
+             VALUES (?1, ?2, ?3, ?4, 50, ?5)",
+            rusqlite::params![
+                session,
+                start,
+                (!live).then_some(start + 10_000.0),
+                i64::from(live),
+                definition
+            ],
         )?;
         for index in 0..count {
             let timestamp = start + 2.0 * index as f64;
-            let id = format!("{session}-{index}");
+            let id = format!("{session}-{tool}-{index}");
             conn.execute(
                 "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
                    shots_fired, damage_dealt, cost_ped) \
@@ -413,13 +483,13 @@ async fn seed_kills(db: &Db, session: &str, boost: Option<i64>, start: f64, coun
             )?;
             conn.execute(
                 "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, cost_per_shot) \
-                 VALUES (?1, 'Laconian Sword', 1, 3.0, 0.02)",
-                rusqlite::params![id],
+                 VALUES (?1, ?2, 1, 3.0, 0.02)",
+                rusqlite::params![id, tool],
             )?;
             conn.execute(
                 "INSERT INTO skill_gains (session_id, timestamp, skill_name, amount, ped_value) \
-                 VALUES (?1, ?2, 'Longblades', 0.1, 0.006)",
-                rusqlite::params![session, timestamp - 0.5],
+                 VALUES (?1, ?2, ?3, 0.1, 0.006)",
+                rusqlite::params![session, timestamp - 0.5, skill],
             )?;
         }
         Ok(())
@@ -428,78 +498,149 @@ async fn seed_kills(db: &Db, session: &str, boost: Option<i64>, start: f64, coun
     .unwrap();
 }
 
-/// With enough recorded kills of the weapon on the maturity, the route is
-/// priced from them: their skill per kill (restated for the pill asked),
-/// their cycling, and their pace. Kills whose damage belongs to another
-/// maturity are left out, and a new kill refreshes the evidence.
+/// Once the player has recorded enough kills of a mob, a route on it takes
+/// their own time between kills (with the weapon's firing time taken out)
+/// in place of the fixed allowance. Ended sessions count from their
+/// settled rollups and the live one from its raw kills.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn enough_recorded_kills_price_a_route_from_play() {
+async fn recorded_pace_on_a_mob_replaces_the_allowance() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db) = api_over(dir.path()).await;
     seed_skills(&db, standard_levels()).await;
     let routes = vec![route("sword", "Bank Robber", "Default")];
 
-    // Too few kills: the model prices it.
-    seed_kills(&db, "a", Some(50), 1_700_000_000.0, 200).await;
-    let modelled = forecast(&api, &swordsman_query(20.0, routes.clone())).await;
-    assert!(modelled.routes[0].measured.is_none());
-    assert!((modelled.routes[0].skill_per_kill_pec - 0.4906).abs() < 1e-9);
+    let allowance = forecast(&api, &swordsman_query(20.0, routes.clone())).await;
+    assert!(allowance.routes[0].pace.is_none());
+    let firing = allowance.routes[0].seconds_per_kill.unwrap() - 1.0;
 
-    seed_kills(&db, "b", Some(50), 1_700_100_000.0, 150).await;
-    // A kill of a bigger maturity in the same declared session.
-    db.with_writer(|conn| {
+    // 60 kills: 59 gaps, too few to stand in.
+    seed_kills(
+        &db,
+        "a",
+        None,
+        false,
+        "Laconian Sword",
+        "Longblades",
+        1.7e9,
+        60,
+    )
+    .await;
+    let thin = forecast(&api, &swordsman_query(20.0, routes.clone())).await;
+    assert!(thin.routes[0].pace.is_none());
+
+    // A live session's kills join the ended one's: 59 + 59 gaps.
+    seed_kills(
+        &db,
+        "b",
+        None,
+        true,
+        "Laconian Sword",
+        "Longblades",
+        1.8e9,
+        60,
+    )
+    .await;
+    let paced = forecast(&api, &swordsman_query(20.0, routes)).await;
+    let route = &paced.routes[0];
+    let pace = route.pace.as_ref().expect("recorded pace");
+    assert_eq!(pace.kills, 118);
+    // Two seconds from kill to kill, less the one recorded swing at the
+    // sword's 67 a minute (0.9 s).
+    assert!((pace.between_kill_seconds - 1.1).abs() < 0.01);
+    // The route fires at its modelled pace, then waits the recorded time.
+    let seconds = route.seconds_per_kill.unwrap();
+    assert!((seconds - (firing + pace.between_kill_seconds)).abs() < 0.01);
+}
+
+async fn seed_definition(db: &Db, id: i64, name: &str) {
+    let name = name.to_string();
+    db.with_writer(move |conn| {
         conn.execute(
-            "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
-               shots_fired, damage_dealt, cost_ped) \
-             VALUES ('big', 'b', 'Bank Robber', 'Bank Robber', 'Default', 1700100999, 9, 400.0, 2.0)",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, damage_dealt, cost_per_shot) \
-             VALUES ('big', 'Laconian Sword', 9, 400.0, 0.22)",
-            [],
+            "INSERT INTO session_definitions (id, name) VALUES (?1, ?2)",
+            rusqlite::params![id, name],
         )?;
         Ok(())
     })
     .await
     .unwrap();
-    let measured = forecast(&api, &swordsman_query(20.0, routes.clone())).await;
-    let route = &measured.routes[0];
-    let evidence = route.measured.as_ref().expect("measured from play");
-    assert_eq!((evidence.kills, evidence.sessions), (350, 2));
-    assert!((route.skill_per_kill_pec - 0.6).abs() < 1e-9);
-    assert!((route.cycled_per_kill_pec - 2.0).abs() < 1e-9);
-    assert_eq!(route.seconds_per_kill, Some(2.0));
-    // The loss rate is still the setup's modelled one.
-    let modelled_rate =
-        modelled.routes[0].loss_per_kill_pec / modelled.routes[0].cycled_per_kill_pec;
-    assert!((route.loss_per_kill_pec / 2.0 - modelled_rate).abs() < 1e-3);
+}
 
-    // Unpilled play earns two thirds of the 50% pill's skill.
-    let unpilled = forecast(
+/// A named session played with two weapons forecasts whole, or narrowed to
+/// one weapon's part: that weapon's own kills, their cost, the skill gains
+/// that led up to them, and its share of the session's time. The weapons
+/// the named sessions used are offered, most used first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_sessions_narrow_to_one_weapon() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+    seed_definition(&db, 7, "Mixed Skilling").await;
+    let start = 1.7e9;
+    seed_kills(
+        &db,
+        "m",
+        Some(7),
+        false,
+        "Laconian Sword",
+        "Longblades",
+        start,
+        150,
+    )
+    .await;
+    seed_kills(
+        &db,
+        "m",
+        Some(7),
+        false,
+        "SET-P1 Civilian Sidearm, Adjusted",
+        "Handgun",
+        start + 300.0,
+        120,
+    )
+    .await;
+
+    let whole = forecast(&api, &swordsman_query(20.0, Vec::new())).await;
+    let names: Vec<(&str, u64)> = whole
+        .session_weapons
+        .iter()
+        .map(|weapon| (weapon.name.as_str(), weapon.kills))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ("Laconian Sword", 150),
+            ("SET-P1 Civilian Sidearm, Adjusted", 120)
+        ]
+    );
+    let whole_source = &whole.sources[0];
+    assert_eq!(whole_source.name, "Mixed Skilling");
+    assert!((whole_source.sample.pes - 270.0 * 0.006).abs() < 1e-6);
+
+    let sword = forecast(
         &api,
         &SkillingForecastQuery {
-            skill_boost: Some(SkillBoostLevel::None),
-            ..swordsman_query(20.0, routes.clone())
+            session_weapon: Some("Laconian Sword".into()),
+            ..swordsman_query(20.0, Vec::new())
         },
     )
     .await;
-    assert!((unpilled.routes[0].skill_per_kill_pec - 0.4).abs() < 1e-9);
+    let source = &sword.sources[0];
+    // Only the sword's kills and the Longblades gains before them.
+    assert!((source.sample.pes - 150.0 * 0.006).abs() < 1e-6);
+    assert!((source.sample.cycled_ped - 150.0 * 0.02).abs() < 1e-6);
+    // The sword's 149 gaps against the pistol's 120 (its first kill came
+    // two seconds after the sword's last): its share of the session's
+    // 10,000 seconds.
+    let share = 149.0 / (149.0 + 120.0);
+    assert!((source.sample.hours - 10_000.0 / 3600.0 * share).abs() < 0.01);
 
-    // A session recorded without a pill counts at two thirds as well, so
-    // its kills restate up to the same 50% figure.
-    seed_kills(&db, "c", None, 1_700_200_000.0, 100).await;
-    db.with_writer(|conn| {
-        conn.execute(
-            "UPDATE skill_gains SET ped_value = 0.004 WHERE session_id = 'c'",
-            [],
-        )?;
-        Ok(())
-    })
-    .await
-    .unwrap();
-    let refreshed = forecast(&api, &swordsman_query(20.0, routes)).await;
-    let evidence = refreshed.routes[0].measured.as_ref().unwrap();
-    assert_eq!((evidence.kills, evidence.sessions), (450, 3));
-    assert!((refreshed.routes[0].skill_per_kill_pec - 0.6).abs() < 1e-9);
+    let none = forecast(
+        &api,
+        &SkillingForecastQuery {
+            session_weapon: Some("Unheard Of".into()),
+            ..swordsman_query(20.0, Vec::new())
+        },
+    )
+    .await;
+    assert!(none.sources.is_empty());
 }

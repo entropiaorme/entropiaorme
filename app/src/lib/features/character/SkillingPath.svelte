@@ -5,7 +5,7 @@
 	import { formatPed } from '$lib/utils/format';
 	import { targetLabel } from './codexRankingTarget';
 	import SkillingBar from './SkillingBar.svelte';
-	import SkillingSection from './SkillingSection.svelte';
+	import SkillingPanel from './SkillingPanel.svelte';
 	import { formatGoal, formatLevel, groupByReason } from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
 
@@ -46,7 +46,26 @@
 	</InfoTip>
 {/snippet}
 
-<SkillingSection id="skilling-path" title="Optimiser" busy={hub.pathLoading}>
+<SkillingPanel id="skilling-path" label="Optimiser" busy={hub.pathLoading}>
+	{#snippet lead()}
+		{#if hub.pathLoading || hub.pathError}
+			<!-- The body says what is happening. -->
+		{:else if isHp}
+			{#if hpSkills[0]}
+				<span class="font-medium text-text">{hpSkills[0].name}</span> adds HP cheapest:
+				{formatPed(hpSkills[0].pedPerHp)} PES an HP.
+			{/if}
+		{:else if !hub.goalActive}
+			Set a goal above where you stand.
+		{:else if path && allocated.length > 0}
+			<span class="font-medium text-text">{formatPed(path.totalPed)} PES</span> of codex rewards or chips
+			reaches {formatGoal(hub.target, hub.goal ?? 0)}, over {allocated.length}
+			{allocated.length === 1 ? 'skill' : 'skills'}.
+		{:else if path}
+			Already there.
+		{/if}
+	{/snippet}
+
 	{#snippet info()}
 		<p class="text-xs font-semibold leading-relaxed text-text">Where skill PES goes furthest</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
@@ -134,8 +153,6 @@
 				{/if}
 			</div>
 		{/if}
-	{:else if !hub.goalActive}
-		<p class="text-sm text-text-tertiary">Set a goal above where you stand.</p>
 	{:else if path}
 		{#if allocated.length > 0}
 			<div class="overflow-x-auto">
@@ -175,21 +192,8 @@
 							</tr>
 						{/each}
 					</tbody>
-					<tfoot>
-						<tr>
-							<td></td>
-							<td class="pt-3 pr-3 text-xs text-text-secondary" colspan="4">
-								Total to {formatGoal(hub.target, hub.goal ?? 0)}
-							</td>
-							<td class="pt-3 pl-3 text-right font-semibold tabular-nums text-text">
-								{formatPed(path.totalPed)}
-							</td>
-						</tr>
-					</tfoot>
 				</table>
 			</div>
-		{:else}
-			<p class="text-sm text-text-tertiary">Already there.</p>
 		{/if}
 
 		{#if leftOut.length > 0 || path.attributes.length > 0}
@@ -211,4 +215,4 @@
 			</div>
 		{/if}
 	{/if}
-</SkillingSection>
+</SkillingPanel>

@@ -11,18 +11,16 @@
 //! maturity's HP, so a route is priced exactly as the Equipment comparison
 //! prices the same setup.
 //!
-//! Once the player has recorded enough kills of a weapon on a maturity,
-//! [`measured_route`] reads what those kills actually yielded and cost, so
-//! a route can be priced from the player's own play instead of the model.
+//! The one thing the model cannot know is the player's own pace between
+//! kills on a mob: spawn density, walking, sharing a public spawn. That
+//! comes from their recorded kills of the mob ([`mob_pace`]), whatever
+//! weapon they used, so it carries over to a weapon never used there.
 
-use std::collections::{HashMap, HashSet};
-
-use rusqlite::params;
 use serde_json::{Map, Value};
 
 use crate::db::{Db, DbError};
 
-use crate::character_calc::{is_attribute, iter_profession_skills, ATTRIBUTE_SKILLS};
+use crate::character_calc::{is_attribute, iter_profession_skills};
 use crate::loadout_comparison::{kill_figures, ComparisonAssumptions, KillCurve, SetupEconomics};
 use crate::skilling_forecast::PlannedRates;
 
@@ -30,38 +28,57 @@ use crate::skilling_forecast::PlannedRates;
 pub const KILL_BONUS_PEC_PER_LEVEL: f64 = 0.121;
 /// PES per HP removed, PEC, at a 50% skill pill.
 pub const PES_PEC_PER_HP: f64 = 0.0033;
+/// The part of a kill's skill that lands in the weapon's own hit and damage
+/// professions. Recorded single-weapon hunting puts about 98% there; the
+/// rest goes to looter skills (Skinning, Butchering) and, when the mob
+/// lands hits, defensive ones, which a route does not model.
+pub const WEAPON_PROFESSION_SHARE: f64 = 0.98;
 /// Seconds between kills spent on anything but firing (finding and
-/// reaching the next mob), allowed for every planned kill.
+/// reaching the next mob), allowed for every kill on a mob the player has
+/// no recorded pace for.
 pub const RETARGET_SECONDS_PER_KILL: f64 = 1.0;
+/// Fewest recorded kills of a mob before its pace stands in for the
+/// allowance.
+pub const MIN_PACE_KILLS: u64 = 100;
 
-/// The skill pill in force: none, the 50% pill, or the 100% pill.
+/// The skill boost in force, a whole percent from 0 to 100. The game caps
+/// stacked boosts at 100%, whatever its display shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillBoost {
-    None,
-    Fifty,
-    Hundred,
-}
+pub struct SkillBoost(u8);
 
 impl SkillBoost {
-    /// Skill gained relative to the 50% pill the law was fitted at. The
-    /// 50% pill measured about x1.5 over none; the 100% pill measured
-    /// x1.21 to x1.33 over the 50% one.
+    pub const NONE: Self = Self(0);
+    pub const FIFTY: Self = Self(50);
+    pub const HUNDRED: Self = Self(100);
+    pub const MAX_PERCENT: u8 = 100;
+
+    /// A boost of `percent`, capped at 100%.
+    pub fn new(percent: u8) -> Self {
+        Self(percent.min(Self::MAX_PERCENT))
+    }
+
+    pub fn percent(self) -> u8 {
+        self.0
+    }
+
+    /// Skill gained relative to the 50% boost the law was fitted at,
+    /// interpolated between the measured points: none about 1 / 1.5 of it,
+    /// the 100% boost x1.21 to x1.33 over it (1.27 taken).
     pub fn factor(self) -> f64 {
-        match self {
-            Self::None => 1.0 / 1.5,
-            Self::Fifty => 1.0,
-            Self::Hundred => 1.27,
+        const NONE: f64 = 1.0 / 1.5;
+        const HUNDRED: f64 = 1.27;
+        let percent = f64::from(self.0);
+        if percent <= 50.0 {
+            NONE + (1.0 - NONE) * percent / 50.0
+        } else {
+            1.0 + (HUNDRED - 1.0) * (percent - 50.0) / 50.0
         }
     }
 
-    /// The pill a session's recorded boost percent stands for. The game
-    /// caps the stacked boost at 100%.
+    /// The boost a session recorded; none recorded reads as no boost.
     pub fn from_percent(percent: Option<i64>) -> Self {
-        match percent {
-            Some(percent) if percent >= 100 => Self::Hundred,
-            Some(percent) if percent > 0 => Self::Fifty,
-            _ => Self::None,
-        }
+        let percent = percent.unwrap_or(0).clamp(0, i64::from(Self::MAX_PERCENT));
+        Self::new(u8::try_from(percent).unwrap_or(0))
     }
 }
 
@@ -141,18 +158,20 @@ pub struct RouteKill {
     pub cycled_pec: f64,
     /// Expected loss on the kill, PEC.
     pub loss_pec: f64,
-    /// Seconds per kill including the retarget allowance; None when the
+    /// Seconds per kill: firing plus the time between kills; None when the
     /// weapon's attack rate is unknown.
     pub seconds: Option<f64>,
 }
 
 impl RouteKill {
-    /// A setup's kill on a mob maturity. None when the setup's damage
-    /// cannot define a kill curve or the maturity has no HP.
+    /// A setup's kill on a mob maturity, with `between_kills` seconds spent
+    /// reaching each next mob. None when the setup's damage cannot define a
+    /// kill curve or the maturity has no HP.
     pub fn plan(
         setup: &SetupEconomics,
         mob: MobMaturity,
         boost: SkillBoost,
+        between_kills: f64,
         assumptions: &ComparisonAssumptions,
     ) -> Option<Self> {
         if !(mob.hp.is_finite() && mob.hp > 0.0) {
@@ -167,16 +186,15 @@ impl RouteKill {
             skill_pec: skill_per_kill_pec(mob, boost),
             cycled_pec: figures.cycled_pec,
             loss_pec: figures.loss_pec,
-            seconds: figures
-                .seconds
-                .map(|seconds| seconds + RETARGET_SECONDS_PER_KILL),
+            seconds: figures.seconds.map(|seconds| seconds + between_kills),
         })
     }
 
     /// The route as per-PED rates the forecast solver projects: each
-    /// skill's PES per PED cycled, and the loss and time per PED.
+    /// skill's PES per PED cycled (the weapon professions' part of the
+    /// kill's skill), and the loss and time per PED.
     pub fn rates(&self, shares: &[(String, f64)]) -> PlannedRates {
-        let pes_per_ped = self.skill_pec / self.cycled_pec;
+        let pes_per_ped = self.skill_pec * WEAPON_PROFESSION_SHARE / self.cycled_pec;
         PlannedRates {
             skills: shares
                 .iter()
@@ -191,165 +209,64 @@ impl RouteKill {
     }
 }
 
-/// Fewest recorded kills of a weapon on a maturity before a route is
-/// priced from them rather than from the model.
-pub const MIN_MEASURED_KILLS: u64 = 300;
-/// The longest gap between kills counted as time spent on the route;
-/// longer ones are breaks.
-const MAX_KILL_GAP_SECONDS: f64 = 60.0;
-
-/// What the player's own kills of a weapon on a maturity yielded and cost.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MeasuredRoute {
+/// The player's recorded pace with one weapon on a mob maturity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolPace {
+    pub tool: String,
     pub kills: u64,
-    pub sessions: u64,
-    /// PES per kill, PEC, restated at the 50% pill from each session's own.
-    pub skill_pec_at_fifty: f64,
-    pub cycled_pec: f64,
-    /// Mean seconds from the previous kill, breaks left out; None when no
-    /// kill had a recorded predecessor within reach.
-    pub seconds: Option<f64>,
+    /// Mean seconds from the previous kill in the session, breaks left out.
+    pub mean_gap: f64,
+    pub mean_shots: f64,
 }
 
-impl MeasuredRoute {
-    /// The route's kill from this evidence: measured skill (at `boost`),
-    /// cycling, and time, with loss at the setup's modelled loss rate on
-    /// the measured cycling (recorded loot is too noisy to price a route).
-    pub fn kill(&self, planned: &RouteKill, boost: SkillBoost) -> RouteKill {
-        let loss_rate = planned.loss_pec / planned.cycled_pec;
-        RouteKill {
-            skill_pec: self.skill_pec_at_fifty * boost.factor(),
-            cycled_pec: self.cycled_pec,
-            loss_pec: self.cycled_pec * loss_rate,
-            seconds: self.seconds.or(planned.seconds),
-        }
-    }
-}
-
-/// A recorded kill: its timestamp, PEC cycled, and session skill boost.
-type RecordedKill = (f64, f64, Option<i64>);
-
-/// The newest recorded kill's timestamp: recorded evidence can only have
-/// changed since a read if this has.
-pub async fn latest_kill_timestamp(db: &Db) -> Result<Option<f64>, DbError> {
-    db.with_reader(|conn| {
-        Ok(
-            conn.query_row("SELECT MAX(timestamp) FROM kills", [], |row| {
-                row.get::<_, Option<f64>>(0)
-            })?,
-        )
-    })
-    .await
-}
-
-/// The player's single-weapon kills of `tool` on one maturity, when there
-/// are at least [`MIN_MEASURED_KILLS`]. A kill's damage must fit the
-/// maturity (from its HP to `max_overkill` above it), because a session
-/// declared as one mob can hold others. Skill gains are attributed to the
-/// kill they precede in their session.
-pub async fn measured_route(
-    db: &Db,
-    tool: &str,
-    species: &str,
-    maturity: &str,
-    hp: f64,
-    max_overkill: f64,
-) -> Result<Option<MeasuredRoute>, DbError> {
-    let (tool, species, maturity) = (tool.to_string(), species.to_string(), maturity.to_string());
+/// The player's pace on a mob maturity with each weapon, from the
+/// weapon's own kills there that came within a break of the kill before.
+pub async fn mob_pace(db: &Db, species: &str, maturity: &str) -> Result<Vec<ToolPace>, DbError> {
+    db.with_writer(crate::session_rollup::heal).await?;
+    let (species, maturity) = (species.to_string(), maturity.to_string());
     db.with_reader(move |conn| {
-        // (session, timestamp, PEC cycled, skill boost percent)
-        let mut stmt = conn.prepare(
-            "SELECT k.session_id, k.timestamp, \
-                    (COALESCE(k.cost_ped, 0) + COALESCE(k.enhancer_cost, 0)) * 100.0, \
-                    s.skill_boost_percent \
-             FROM kills k \
-             JOIN tracking_sessions s ON s.id = k.session_id \
-             WHERE k.mob_species = ?1 AND k.mob_maturity = ?2 \
-               AND k.damage_dealt >= ?4 * 0.9 AND k.damage_dealt <= ?4 + ?5 \
-               AND EXISTS (SELECT 1 FROM kill_tool_stats t \
-                           WHERE t.kill_id = k.id AND t.tool_name = ?3) \
-               AND NOT EXISTS (SELECT 1 FROM kill_tool_stats t \
-                               WHERE t.kill_id = k.id AND t.tool_name <> ?3)",
-        )?;
-        let candidates = stmt
-            .query_map(params![species, maturity, tool, hp, max_overkill], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if (candidates.len() as u64) < MIN_MEASURED_KILLS {
-            return Ok(None);
-        }
-        let mut by_session: HashMap<&str, Vec<RecordedKill>> = HashMap::new();
-        for (session, timestamp, cycled, boost) in &candidates {
-            by_session
-                .entry(session.as_str())
-                .or_default()
-                .push((*timestamp, *cycled, *boost));
-        }
-
-        let attributes = ATTRIBUTE_SKILLS
-            .iter()
-            .map(|name| format!("'{name}'"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut kills_stmt =
-            conn.prepare("SELECT timestamp FROM kills WHERE session_id = ?1 ORDER BY timestamp")?;
-        let mut gains_stmt = conn.prepare(&format!(
-            "SELECT timestamp, ped_value FROM skill_gains \
-             WHERE session_id = ?1 AND ped_value IS NOT NULL AND skill_name NOT IN ({attributes})"
-        ))?;
-        let (mut skill_at_fifty, mut cycled_total) = (0.0, 0.0);
-        let (mut gap_total, mut gaps) = (0.0, 0u64);
-        for (session, kills) in &by_session {
-            let all: Vec<f64> = kills_stmt
-                .query_map(params![session], |row| row.get::<_, f64>(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            // Skill gained up to each kill of the session, since the one before.
-            let mut skill_by_kill = vec![0.0; all.len()];
-            for gain in gains_stmt.query_map(params![session], |row| {
-                Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
-            })? {
-                let (timestamp, pes) = gain?;
-                let index = all.partition_point(|kill| *kill < timestamp);
-                if let Some(slot) = skill_by_kill.get_mut(index) {
-                    *slot += pes;
+        let mut paces: Vec<ToolPace> = Vec::new();
+        let mut totals: Vec<(String, u64, f64, f64)> = Vec::new();
+        for cell in crate::session_weapon_rollup::effective_pace_cells(conn, &species, &maturity)? {
+            match totals.iter_mut().find(|(tool, ..)| *tool == cell.tool) {
+                Some((_, kills, gaps, shots)) => {
+                    *kills += cell.kills;
+                    *gaps += cell.gap_seconds;
+                    *shots += cell.shots;
                 }
-            }
-            // Kills sharing a second each take their own slot.
-            let mut taken = HashSet::new();
-            for (timestamp, cycled, boost) in kills {
-                let mut index = all.partition_point(|kill| kill < timestamp);
-                while taken.contains(&index) && all.get(index + 1) == Some(timestamp) {
-                    index += 1;
-                }
-                taken.insert(index);
-                let factor = SkillBoost::from_percent(*boost).factor();
-                skill_at_fifty += skill_by_kill.get(index).copied().unwrap_or(0.0) * 100.0 / factor;
-                cycled_total += cycled;
-                if let Some(previous) = index.checked_sub(1).and_then(|i| all.get(i)) {
-                    let gap = timestamp - previous;
-                    if gap > 0.0 && gap <= MAX_KILL_GAP_SECONDS {
-                        gap_total += gap;
-                        gaps += 1;
-                    }
-                }
+                None => totals.push((cell.tool, cell.kills, cell.gap_seconds, cell.shots)),
             }
         }
-        let kills = candidates.len() as u64;
-        Ok(Some(MeasuredRoute {
-            kills,
-            sessions: by_session.len() as u64,
-            skill_pec_at_fifty: skill_at_fifty / kills as f64,
-            cycled_pec: cycled_total / kills as f64,
-            seconds: (gaps > 0).then(|| gap_total / gaps as f64),
-        }))
+        for (tool, kills, gaps, shots) in totals {
+            if kills > 0 {
+                paces.push(ToolPace {
+                    tool,
+                    kills,
+                    mean_gap: gaps / kills as f64,
+                    mean_shots: shots / kills as f64,
+                });
+            }
+        }
+        Ok(paces)
     })
     .await
+}
+
+/// The time between kills on a mob, from the recorded pace with each
+/// weapon less that weapon's own firing time (`uses_per_minute` of the
+/// weapon named, None when it cannot be resolved), weighted by kills.
+/// None below [`MIN_PACE_KILLS`] resolvable kills.
+pub fn between_kill_seconds(paces: &[(ToolPace, Option<f64>)]) -> Option<(f64, u64)> {
+    let (mut weighted, mut kills) = (0.0, 0u64);
+    for (pace, rate) in paces {
+        let Some(rate) = rate.filter(|rate| rate.is_finite() && *rate > 0.0) else {
+            continue;
+        };
+        let firing = pace.mean_shots * 60.0 / rate;
+        weighted += (pace.mean_gap - firing).max(0.0) * pace.kills as f64;
+        kills += pace.kills;
+    }
+    (kills >= MIN_PACE_KILLS).then(|| (weighted / kills as f64, kills))
 }
 
 #[cfg(test)]
@@ -374,20 +291,27 @@ mod tests {
             hp: 1380.0,
             level: 31.0,
         };
-        assert!((skill_per_kill_pec(robber, SkillBoost::Fifty) - 0.4906).abs() < 1e-12);
-        assert!((skill_per_kill_pec(mortirex, SkillBoost::Fifty) - 8.305).abs() < 1e-9);
-        let none = skill_per_kill_pec(robber, SkillBoost::None);
+        assert!((skill_per_kill_pec(robber, SkillBoost::FIFTY) - 0.4906).abs() < 1e-12);
+        assert!((skill_per_kill_pec(mortirex, SkillBoost::FIFTY) - 8.305).abs() < 1e-9);
+        let none = skill_per_kill_pec(robber, SkillBoost::NONE);
         assert!((none * 1.5 - 0.4906).abs() < 1e-12);
-        assert!(skill_per_kill_pec(robber, SkillBoost::Hundred) > 0.4906);
+        assert!(skill_per_kill_pec(robber, SkillBoost::HUNDRED) > 0.4906);
     }
 
     #[test]
-    fn a_recorded_boost_percent_names_its_pill() {
-        assert_eq!(SkillBoost::from_percent(None), SkillBoost::None);
-        assert_eq!(SkillBoost::from_percent(Some(0)), SkillBoost::None);
-        assert_eq!(SkillBoost::from_percent(Some(50)), SkillBoost::Fifty);
-        assert_eq!(SkillBoost::from_percent(Some(100)), SkillBoost::Hundred);
-        assert_eq!(SkillBoost::from_percent(Some(150)), SkillBoost::Hundred);
+    fn a_boost_between_the_measured_points_interpolates() {
+        assert!((SkillBoost::new(25).factor() - (1.0 / 1.5 + 1.0) / 2.0).abs() < 1e-12);
+        assert!((SkillBoost::new(75).factor() - 1.135).abs() < 1e-12);
+        assert!((SkillBoost::HUNDRED.factor() - 1.27).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_recorded_boost_percent_is_capped_at_the_game_limit() {
+        assert_eq!(SkillBoost::from_percent(None), SkillBoost::NONE);
+        assert_eq!(SkillBoost::from_percent(Some(-5)), SkillBoost::NONE);
+        assert_eq!(SkillBoost::from_percent(Some(30)), SkillBoost::new(30));
+        assert_eq!(SkillBoost::from_percent(Some(150)), SkillBoost::HUNDRED);
+        assert_eq!(SkillBoost::new(200), SkillBoost::HUNDRED);
     }
 
     #[test]
@@ -452,14 +376,14 @@ mod tests {
             ("Longblades".to_string(), 0.75),
             ("Anatomy".to_string(), 0.25),
         ]);
-        // 0.5 PEC of skill per 2 PEC cycled: 0.25 PES per PED, split.
-        assert_eq!(
-            rates.skills,
-            vec![
-                ("Longblades".to_string(), 0.1875),
-                ("Anatomy".to_string(), 0.0625)
-            ]
-        );
+        // 0.5 PEC of skill per 2 PEC cycled: 0.25 PES per PED, of which the
+        // weapon professions' share is split.
+        let expected = [("Longblades", 0.75), ("Anatomy", 0.25)];
+        assert_eq!(rates.skills.len(), expected.len());
+        for ((name, rate), (want, share)) in rates.skills.iter().zip(expected) {
+            assert_eq!(name, want);
+            assert!((rate - 0.25 * WEAPON_PROFESSION_SHARE * share).abs() < 1e-12);
+        }
         assert!((rates.loss_per_ped - 0.08).abs() < 1e-12);
         assert!((rates.kills_per_ped - 50.0).abs() < 1e-12);
         // 50 kills of 2 seconds per PED.

@@ -9,14 +9,14 @@
 use eo_services::loadout_comparison::setup_economics;
 use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::skilling_forecast::{
-    forecast_planned, latest_skill_boost, load_forecast_sessions, skilling_forecast, ForecastSkill,
-    ForecastStatus, ForecastTarget, PlannedForecast, SampleWarning, SourceForecast,
+    forecast_planned, latest_skill_boost, load_forecast_sessions, load_weapon_forecast_sessions,
+    session_weapons, skilling_forecast, ForecastSkill, ForecastStatus, ForecastTarget,
+    PlannedForecast, SampleWarning, SourceForecast,
 };
 use eo_services::skilling_routes::{
-    latest_kill_timestamp, measured_route, skill_shares, weapon_professions, MeasuredRoute,
-    RouteKill, SkillBoost,
+    between_kill_seconds, mob_pace, skill_shares, weapon_professions, RouteKill, SkillBoost,
+    RETARGET_SECONDS_PER_KILL,
 };
-use std::collections::HashMap;
 
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
@@ -50,43 +50,18 @@ pub struct SkillingForecastQuery {
     /// Planned routes to price beside the recorded sessions.
     #[serde(default)]
     pub routes: Vec<SkillingRoutePick>,
-    /// The pill planned routes assume; absent reads as the most recent
-    /// session's.
+    /// The skill boost percent planned routes assume (capped at 100);
+    /// absent reads as the most recent session's.
     #[serde(default)]
-    pub skill_boost: Option<SkillBoostLevel>,
+    pub skill_boost_percent: Option<u8>,
     /// The looter level planned routes are priced at; absent reads as the
     /// player's three-looter mean.
     #[serde(default)]
     pub looter_level: Option<f64>,
-}
-
-/// The skill pill a planned route assumes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SkillBoostLevel {
-    None,
-    Fifty,
-    Hundred,
-}
-
-impl From<SkillBoostLevel> for SkillBoost {
-    fn from(level: SkillBoostLevel) -> Self {
-        match level {
-            SkillBoostLevel::None => Self::None,
-            SkillBoostLevel::Fifty => Self::Fifty,
-            SkillBoostLevel::Hundred => Self::Hundred,
-        }
-    }
-}
-
-impl From<SkillBoost> for SkillBoostLevel {
-    fn from(boost: SkillBoost) -> Self {
-        match boost {
-            SkillBoost::None => Self::None,
-            SkillBoost::Fifty => Self::Fifty,
-            SkillBoost::Hundred => Self::Hundred,
-        }
-    }
+    /// Narrow the named sessions to this weapon's part of them; absent
+    /// forecasts each session whole.
+    #[serde(default)]
+    pub session_weapon: Option<String>,
 }
 
 /// A planned route: a setup hunting one mob maturity. `species` is the
@@ -164,9 +139,8 @@ pub struct SkillingForecastSample {
 #[serde(rename_all = "camelCase")]
 pub struct SkillingForecastSkill {
     pub name: String,
-    pub is_attribute: bool,
     pub current_level: f64,
-    /// Share of the definition's skill PES; null for attributes.
+    /// Share of the definition's skill PES; null when it earned none.
     pub pes_share: Nullable<f64>,
     pub level_gain: f64,
     pub end_level: f64,
@@ -188,6 +162,9 @@ pub struct SkillingForecastSource {
     pub cycled_ped: f64,
     pub hours: f64,
     pub loot_tt: f64,
+    /// Kills at the recorded kills per PED cycled; null when the
+    /// definition recorded none.
+    pub kills: Nullable<f64>,
     /// Realised markup lift applied to the forecast loot; null when the
     /// definition has no confirmed sales.
     pub markup: Nullable<f64>,
@@ -245,7 +222,7 @@ pub struct SkillingRouteForecast {
     pub cycled_per_kill_pec: f64,
     /// Expected loss per kill, PEC.
     pub loss_per_kill_pec: f64,
-    /// Firing time plus the retarget allowance; null when the attack rate
+    /// Firing time plus the time between kills; null when the attack rate
     /// is unknown.
     pub seconds_per_kill: Nullable<f64>,
     pub kills: f64,
@@ -253,19 +230,32 @@ pub struct SkillingRouteForecast {
     /// Expected TT lost on the way: cycled less expected loot TT.
     pub ped_lost: f64,
     pub hours: Nullable<f64>,
-    /// The player's own kills the route is priced from; null when it is
-    /// priced from the model alone.
-    pub measured: Nullable<SkillingRouteEvidence>,
+    /// The player's recorded pace between kills on the mob; null when
+    /// they have too few recorded kills of it and a fixed allowance stands in.
+    pub pace: Nullable<SkillingRoutePace>,
     pub skills: Vec<SkillingForecastSkill>,
 }
 
-/// The recorded kills behind a measured route.
+/// The player's own time between kills on a mob, from their recorded kills
+/// of it with any weapon, firing time taken out.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillingRoutePace {
+    pub between_kill_seconds: f64,
+    pub kills: u64,
+}
+
+/// A weapon the named sessions used, with the kills it made alone.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct SkillingRouteEvidence {
+pub struct SkillingSessionWeapon {
+    pub name: String,
     pub kills: u64,
-    pub sessions: u64,
 }
+
+/// Fewest kills a weapon made alone in named sessions to be offered as
+/// the weapon to narrow them to.
+const SESSION_WEAPON_MIN_KILLS: u64 = 100;
 
 /// The forecast from every named session, ready ones first (least TT
 /// cost to the goal leading). `error` is present only on the soft
@@ -281,8 +271,15 @@ pub struct SkillingForecastResult {
     pub sources: Vec<SkillingForecastSource>,
     /// The planned routes, in request order.
     pub routes: Vec<SkillingRouteForecast>,
-    /// The pill the planned routes assumed.
-    pub skill_boost: SkillBoostLevel,
+    /// The weapons the named sessions used, most used first, to narrow the
+    /// sessions to one of.
+    pub session_weapons: Vec<SkillingSessionWeapon>,
+    /// Whether hunting prices this target: HP, or professions a weapon
+    /// trains. Any other target grows from hunting only as a byproduct, so
+    /// no route is priced toward it.
+    pub hunting_target: bool,
+    /// The skill boost percent the planned routes assumed.
+    pub skill_boost_percent: u8,
     /// The looter level the planned routes were priced at.
     pub looter_level: f64,
 }
@@ -290,19 +287,9 @@ pub struct SkillingForecastResult {
 /// The most planned routes one forecast prices.
 pub const MAX_ROUTES: usize = 12;
 
-/// How far past a maturity's HP a recorded kill's damage may run, in the
-/// setup's maximum hits, before it reads as another maturity.
-const MEASURED_OVERKILL_HITS: f64 = 2.5;
-
-/// Measured route evidence keyed by weapon, species, and maturity, with
-/// the newest recorded kill it was read at.
-pub(crate) type MeasuredRouteCache =
-    HashMap<(String, String, String), (Option<f64>, Option<MeasuredRoute>)>;
-
 fn skill_dto(skill: ForecastSkill) -> SkillingForecastSkill {
     SkillingForecastSkill {
         name: skill.name,
-        is_attribute: skill.is_attribute,
         current_level: skill.current_level,
         pes_share: skill.pes_share.into(),
         level_gain: skill.level_gain,
@@ -332,6 +319,7 @@ fn source_dto(source: SourceForecast) -> SkillingForecastSource {
         cycled_ped: source.cycled_ped,
         hours: source.hours,
         loot_tt: source.loot_tt,
+        kills: source.kills.into(),
         markup: source.markup.into(),
         tt_cost: source.tt_cost,
         net_cost: source.net_cost.into(),
@@ -378,7 +366,12 @@ impl Api {
                         goal: query.goal,
                         sources: Vec::new(),
                         routes: Vec::new(),
-                        skill_boost: query.skill_boost.unwrap_or(SkillBoostLevel::Fifty),
+                        hunting_target: false,
+                        session_weapons: Vec::new(),
+                        skill_boost_percent: query
+                            .skill_boost_percent
+                            .map_or(SkillBoost::FIFTY, SkillBoost::new)
+                            .percent(),
                         looter_level: 0.0,
                     });
                 }
@@ -386,9 +379,14 @@ impl Api {
         };
         let (sessions, markups) = tokio::try_join!(
             async {
-                load_forecast_sessions(&self.db)
-                    .await
-                    .map_err(ApiError::internal("skilling forecast sessions"))
+                match &query.session_weapon {
+                    Some(weapon) => load_weapon_forecast_sessions(&self.db, weapon)
+                        .await
+                        .map_err(ApiError::internal("skilling forecast weapon sessions")),
+                    None => load_forecast_sessions(&self.db)
+                        .await
+                        .map_err(ApiError::internal("skilling forecast sessions")),
+                }
             },
             async {
                 self.analytics
@@ -402,9 +400,16 @@ impl Api {
             .map(|row| (row.definition_id, row.net_markup))
             .collect();
         let sources = skilling_forecast(&skill_levels, &target, query.goal, &sessions, &markups);
+        let hunting_target = match query.target {
+            SkillingTargetKind::Hp => true,
+            SkillingTargetKind::Profession => {
+                let trained = self.weapon_trained_professions();
+                query.professions.iter().all(|name| trained.contains(name))
+            }
+        };
 
-        let boost = match query.skill_boost {
-            Some(level) => SkillBoost::from(level),
+        let boost = match query.skill_boost_percent {
+            Some(percent) => SkillBoost::new(percent),
             None => SkillBoost::from_percent(
                 latest_skill_boost(&self.db)
                     .await
@@ -412,18 +417,19 @@ impl Api {
             ),
         };
         let (_, looters) = self.planning_looters(query.looter_level).await?;
-        let newest_kill = latest_kill_timestamp(&self.db)
-            .await
-            .map_err(ApiError::internal("skilling forecast newest kill"))?;
         let mut routes = Vec::with_capacity(query.routes.len());
-        for (index, pick) in query.routes.iter().enumerate() {
+        let picks = if hunting_target {
+            query.routes.as_slice()
+        } else {
+            &[]
+        };
+        for (index, pick) in picks.iter().enumerate() {
             let context = RouteContext {
                 skill_levels: &skill_levels,
                 target: &target,
                 goal: query.goal,
                 boost,
                 looters,
-                newest_kill,
             };
             routes.push(self.forecast_route(index, pick, &context).await?);
         }
@@ -434,7 +440,9 @@ impl Api {
             goal: query.goal,
             sources: sources.into_iter().map(source_dto).collect(),
             routes,
-            skill_boost: boost.into(),
+            hunting_target,
+            session_weapons: self.session_weapons().await?,
+            skill_boost_percent: boost.percent(),
             looter_level: round_half_even(looters.three_looter_mean(), 2),
         })
     }
@@ -455,7 +463,6 @@ impl Api {
             goal,
             boost,
             looters,
-            newest_kill,
         } = *context;
         let mob =
             MobLookupService::new(&self.game_data).maturity_stats(&pick.species, &pick.maturity);
@@ -478,7 +485,7 @@ impl Api {
             cycled_ped: 0.0,
             ped_lost: 0.0,
             hours: None.into(),
-            measured: None.into(),
+            pace: None.into(),
             skills: Vec::new(),
         };
         let Ok(setup) = self.resolve_setup(index, &pick.setup) else {
@@ -506,34 +513,18 @@ impl Api {
             .weapon_pricing
             .attack_rate(&setup.props)
             .map(|rate| rate.effective_per_minute);
-        let economics = setup_economics(&setup.props, looters, rate, &ASSUMPTIONS).ok();
-        let planned = economics
-            .as_ref()
-            .and_then(|economics| RouteKill::plan(economics, mob, boost, &ASSUMPTIONS));
-        let (Some(economics), Some(planned)) = (economics, planned) else {
+        let pace = self.mob_pace(&pick.species, &pick.maturity).await?;
+        route.pace = pace.into();
+        let between_kills =
+            pace.map_or(RETARGET_SECONDS_PER_KILL, |pace| pace.between_kill_seconds);
+        let kill = setup_economics(&setup.props, looters, rate, &ASSUMPTIONS)
+            .ok()
+            .and_then(|economics| {
+                RouteKill::plan(&economics, mob, boost, between_kills, &ASSUMPTIONS)
+            });
+        let Some(kill) = kill else {
             route.status = SkillingRouteStatus::Unmodelled;
             return Ok(route);
-        };
-        let measured = self
-            .measured_route(
-                &setup.name,
-                &pick.species,
-                &pick.maturity,
-                mob.hp,
-                economics.max_damage * MEASURED_OVERKILL_HITS,
-                newest_kill,
-            )
-            .await?;
-        let kill = match measured {
-            Some(measured) => {
-                route.measured = Some(SkillingRouteEvidence {
-                    kills: measured.kills,
-                    sessions: measured.sessions,
-                })
-                .into();
-                measured.kill(&planned, boost)
-            }
-            None => planned,
         };
         route.skill_per_kill_pec = round_half_even(kill.skill_pec, 4);
         route.cycled_per_kill_pec = round_half_even(kill.cycled_pec, 4);
@@ -559,40 +550,83 @@ impl Api {
         Ok(route)
     }
 
-    /// The measured evidence for a weapon on a maturity, read again only
-    /// when a kill has landed since the cached read.
-    async fn measured_route(
+    /// The player's recorded time between kills on a mob maturity.
+    async fn mob_pace(
         &self,
-        tool: &str,
         species: &str,
         maturity: &str,
-        hp: f64,
-        max_overkill: f64,
-        newest_kill: Option<f64>,
-    ) -> Result<Option<MeasuredRoute>, ApiError> {
-        let key = (
-            tool.to_string(),
-            species.trim().to_string(),
-            maturity.trim().to_string(),
-        );
-        if let Some((read_at, evidence)) = self.measured_routes_cache().get(&key) {
-            if *read_at == newest_kill {
-                return Ok(*evidence);
-            }
-        }
-        let evidence = measured_route(&self.db, tool, &key.1, &key.2, hp, max_overkill)
+    ) -> Result<Option<SkillingRoutePace>, ApiError> {
+        let paces = mob_pace(&self.db, species.trim(), maturity.trim())
             .await
-            .map_err(ApiError::internal("skilling route measured kills"))?;
-        self.measured_routes_cache()
-            .insert(key, (newest_kill, evidence));
-        Ok(evidence)
+            .map_err(ApiError::internal("skilling route mob pace"))?;
+        let rated: Vec<_> = paces
+            .into_iter()
+            .map(|pace| {
+                let rate = self.weapon_rate_by_name(&pace.tool);
+                (pace, rate)
+            })
+            .collect();
+        Ok(
+            between_kill_seconds(&rated).map(|(seconds, kills)| SkillingRoutePace {
+                between_kill_seconds: round_half_even(seconds, 2),
+                kills,
+            }),
+        )
     }
 
-    fn measured_routes_cache(&self) -> std::sync::MutexGuard<'_, MeasuredRouteCache> {
-        // A poisoned cache only ever held derived reads; carry on with it.
-        self.measured_routes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// The weapons the named sessions used, most used first.
+    async fn session_weapons(&self) -> Result<Vec<SkillingSessionWeapon>, ApiError> {
+        let weapons: Vec<SkillingSessionWeapon> =
+            session_weapons(&self.db, SESSION_WEAPON_MIN_KILLS)
+                .await
+                .map_err(ApiError::internal("skilling forecast session weapons"))?
+                .into_iter()
+                .map(|weapon| SkillingSessionWeapon {
+                    name: weapon.name,
+                    kills: weapon.kills,
+                })
+                .collect();
+        Ok(weapons)
+    }
+
+    /// Every profession some catalogue weapon trains as its hit or damage
+    /// profession.
+    fn weapon_trained_professions(&self) -> std::collections::HashSet<String> {
+        self.game_data
+            .get_entities("weapons")
+            .iter()
+            .flat_map(weapon_professions)
+            .collect()
+    }
+
+    /// The catalogue weapon a recorded tool name names.
+    fn weapon_by_name(&self, name: &str) -> Option<&serde_json::Value> {
+        self.game_data
+            .get_entities("weapons")
+            .iter()
+            .find(|weapon| weapon.get("name").and_then(serde_json::Value::as_str) == Some(name))
+    }
+
+    /// The attack rate in force for a weapon named as a recorded tool.
+    fn weapon_rate_by_name(&self, name: &str) -> Option<f64> {
+        let id = self.weapon_by_name(name)?.get("id")?.as_str()?.to_string();
+        let setup = self
+            .resolve_setup(
+                0,
+                &SetupPick {
+                    weapon: crate::loadout_comparison::ComponentPick {
+                        catalog_id: id,
+                        markup_percent: None,
+                    },
+                    amplifier: None,
+                    absorber: None,
+                    implant: None,
+                },
+            )
+            .ok()?;
+        self.weapon_pricing
+            .attack_rate(&setup.props)
+            .map(|rate| rate.effective_per_minute)
     }
 }
 
@@ -604,5 +638,4 @@ struct RouteContext<'a> {
     goal: f64,
     boost: SkillBoost,
     looters: eo_services::expected_hunting::HuntingLooterLevels,
-    newest_kill: Option<f64>,
 }

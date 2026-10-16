@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityRecommenderResult, RecommenderActivity } from '$lib/api/commands.gen';
 import type { PageErrorSlot } from './errorSlot.svelte';
-import { createRecommenderModel } from './recommenderModel.svelte';
+import { createRecommenderModel, withDirect } from './recommenderModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	getActivityRecommender: vi.fn(),
@@ -216,9 +216,9 @@ describe('hidden activities', () => {
 		const { model } = makeModel();
 		await model.load({ kind: 'profession', name: 'Animal Looter' });
 		expect(prefs.getPreference).toHaveBeenCalledWith('recommender_hidden_activities', []);
-		expect(names(model.candidates)).toEqual(['Gardener', 'Resource Gatherer']);
+		expect(names(model.candidates)).toEqual(['Animal Looter', 'Gardener', 'Resource Gatherer']);
 		expect(model.selected?.activity).toBe('Gardener');
-		expect(model.visibleCount).toBe(1);
+		expect(model.visibleCount).toBe(2);
 		expect(model.isHidden('Resource Gatherer')).toBe(true);
 	});
 
@@ -229,14 +229,14 @@ describe('hidden activities', () => {
 		expect(model.selected?.activity).toBe('Resource Gatherer');
 
 		model.hide('Resource Gatherer');
-		expect(names(model.candidates)).toEqual(['Gardener', 'Resource Gatherer']);
+		expect(names(model.candidates)).toEqual(['Animal Looter', 'Gardener', 'Resource Gatherer']);
 		expect(model.selected?.activity).toBe('Gardener');
 		expect(prefs.setPreference).toHaveBeenLastCalledWith('recommender_hidden_activities', [
 			'Resource Gatherer',
 		]);
 
 		model.restore('Resource Gatherer');
-		expect(names(model.candidates)).toEqual(['Resource Gatherer', 'Gardener']);
+		expect(names(model.candidates)).toEqual(['Animal Looter', 'Resource Gatherer', 'Gardener']);
 		expect(prefs.setPreference).toHaveBeenLastCalledWith('recommender_hidden_activities', []);
 	});
 
@@ -246,7 +246,7 @@ describe('hidden activities', () => {
 		await model.load({ kind: 'profession', name: 'Animal Looter' });
 		model.hide('Gardener');
 		await model.load({ kind: 'hp' });
-		expect(names(model.candidates)).toEqual(['Resource Gatherer', 'Gardener']);
+		expect(names(model.candidates)).toEqual(['Animal Looter', 'Resource Gatherer', 'Gardener']);
 		expect(prefs.getPreference).toHaveBeenCalledTimes(1);
 	});
 
@@ -256,5 +256,44 @@ describe('hidden activities', () => {
 		const { model } = makeModel();
 		await model.load({ kind: 'profession', name: 'Animal Looter' });
 		expect(model.hidden).toEqual([]);
+	});
+});
+
+describe('the direct activity', () => {
+	const rank = (activities: RecommenderActivity[]) => activities.map((a) => a.activity);
+
+	it('takes its place in the ranking: fewer PES first, then more gain at the cap', () => {
+		const candidates = [
+			activity({ activity: 'Quick', pesToPlusOne: 10 }),
+			activity({ activity: 'Slow', pesToPlusOne: 30 }),
+			activity({ activity: 'Capped', pesToPlusOne: null, gainAtCap: 0.4 }),
+		];
+		expect(rank(withDirect(candidates, activity({ activity: 'Own', pesToPlusOne: 20 })))).toEqual([
+			'Quick',
+			'Own',
+			'Slow',
+			'Capped',
+		]);
+		expect(rank(withDirect(candidates, activity({ activity: 'Own', pesToPlusOne: 5 })))[0]).toBe(
+			'Own',
+		);
+		// Short of +1 at the cap, it ranks among the others by gain.
+		expect(
+			rank(
+				withDirect(candidates, activity({ activity: 'Own', pesToPlusOne: null, gainAtCap: 0.9 })),
+			),
+		).toEqual(['Quick', 'Slow', 'Own', 'Capped']);
+		expect(withDirect(candidates, null)).toBe(candidates);
+	});
+
+	it('ranks among the candidates but is not the default choice', async () => {
+		const { model } = makeModel();
+		mocked.getActivityRecommender.mockResolvedValue(recommenderResult());
+		await model.load({ kind: 'profession', name: 'Animal Looter' });
+		expect(rank(model.candidates)).toEqual(['Animal Looter', 'Resource Gatherer', 'Gardener']);
+		expect(model.isDirect('Animal Looter')).toBe(true);
+		expect(model.isDirect('Gardener')).toBe(false);
+		// The chart opens on the quickest other activity, drawn against it.
+		expect(model.selected?.activity).toBe('Resource Gatherer');
 	});
 });

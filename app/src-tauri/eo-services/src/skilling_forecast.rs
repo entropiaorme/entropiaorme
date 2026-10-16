@@ -6,8 +6,9 @@
 //! summarised session that ran under a definition contributes its cycled
 //! spend, loot TT, and skill gains; the forecast then assumes future play
 //! of that definition keeps the observed mix: the same PES earned per PED
-//! cycled, split across the same skills, and the same attribute gains per
-//! PED. Each skill's gain is read off the TT value curve from its current
+//! cycled, split across the same skills. Attributes are left out: they
+//! have no TT value curve to read a gain off. Each skill's gain is read off
+//! the TT value curve from its current
 //! calibrated level, so diminishing returns are priced in, and the cycled
 //! spend that reaches the goal is found by bisection over that projection.
 //!
@@ -21,9 +22,7 @@
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value};
 
-use crate::character_calc::{
-    effective_points, is_attribute, iter_hp_skills, iter_profession_skills,
-};
+use crate::character_calc::{effective_points, iter_hp_skills, iter_profession_skills};
 use crate::db::{Db, DbError};
 use crate::session_summary::heal_summaries;
 use crate::tt_value_curve::levels_for_tt_value;
@@ -51,10 +50,10 @@ pub struct ForecastSession {
     pub hours: f64,
     pub cycled_ped: f64,
     pub loot_tt: f64,
+    /// Kills recorded (for a weapon's part, the kills it made alone).
+    pub kills: u64,
     /// PES earned per regular skill, in first-seen order.
     pub skill_pes: Vec<(String, f64)>,
-    /// Levels gained per attribute.
-    pub attribute_levels: Vec<(String, f64)>,
 }
 
 /// What the forecast measures progress on: the per-level weight each
@@ -143,10 +142,8 @@ pub enum SampleWarning {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForecastSkill {
     pub name: String,
-    pub is_attribute: bool,
     pub current_level: f64,
-    /// Share of the definition's regular-skill PES (none for attributes,
-    /// which carry no PES).
+    /// Share of the definition's skill PES; none when it earned none.
     pub pes_share: Option<f64>,
     pub level_gain: f64,
     pub end_level: f64,
@@ -165,6 +162,7 @@ pub struct ForecastEvidence {
     pub hours: f64,
     pub cycled_ped: f64,
     pub loot_tt: f64,
+    pub kills: u64,
     pub pes: f64,
     /// Net markup realised from confirmed sales of this definition's stock.
     pub realised_markup: Option<f64>,
@@ -186,6 +184,9 @@ pub struct SourceForecast {
     pub cycled_ped: f64,
     pub hours: f64,
     pub loot_tt: f64,
+    /// Kills at the recorded kills per PED cycled; absent when the
+    /// definition recorded none (harvesting, crafting).
+    pub kills: Option<f64>,
     /// The realised markup lift applied to the forecast loot; absent when
     /// the definition has no confirmed sales.
     pub markup: Option<f64>,
@@ -201,8 +202,6 @@ pub struct SourceForecast {
 struct Rates {
     /// PES per PED cycled, per regular skill.
     skills: Vec<(String, f64)>,
-    /// Levels per PED cycled, per attribute.
-    attributes: Vec<(String, f64)>,
 }
 
 fn level_of(skill_levels: &Map<String, Value>, name: &str) -> f64 {
@@ -228,18 +227,14 @@ fn accumulate(entries: &mut Vec<(String, f64)>, name: &str, amount: f64) {
 
 /// Skill level gains after cycling `cycled` PED at the sample's rates.
 fn project(skill_levels: &Map<String, Value>, rates: &Rates, cycled: f64) -> Vec<(String, f64)> {
-    let mut gains: Vec<(String, f64)> = rates
+    rates
         .skills
         .iter()
         .map(|(name, rate)| {
             let gain = levels_for_tt_value(level_of(skill_levels, name), rate * cycled);
             (name.clone(), gain)
         })
-        .collect();
-    for (name, rate) in &rates.attributes {
-        gains.push((name.clone(), rate * cycled));
-    }
-    gains
+        .collect()
 }
 
 fn target_gain(target: &ForecastTarget, gains: &[(String, f64)]) -> f64 {
@@ -294,7 +289,6 @@ fn reach(
     let trains_target = rates
         .skills
         .iter()
-        .chain(&rates.attributes)
         .any(|(name, _)| target.weight_of(name) > 0.0);
     if !trains_target {
         return Err(ForecastStatus::DoesNotTrain);
@@ -311,7 +305,6 @@ fn reach(
             let weight = target.weight_of(name);
             ForecastSkill {
                 name: name.clone(),
-                is_attribute: is_attribute(name),
                 current_level: round_half_even(current_level, 2),
                 pes_share: lookup(&rates.skills, name)
                     .filter(|_| pes_rate > 0.0)
@@ -384,7 +377,6 @@ pub fn forecast_planned(
             .filter(|(_, rate)| *rate > 0.0)
             .cloned()
             .collect(),
-        attributes: Vec::new(),
     };
     match reach(skill_levels, target, &rates, 1.0, needed) {
         Ok((cycled, skills)) => PlannedForecast {
@@ -427,18 +419,14 @@ fn forecast_source(
     let hours: f64 = group.iter().map(|s| s.hours).sum();
     let cycled: f64 = group.iter().map(|s| s.cycled_ped).sum();
     let loot: f64 = group.iter().map(|s| s.loot_tt).sum();
+    let kills: u64 = group.iter().map(|s| s.kills).sum();
     let mut skill_pes: Vec<(String, f64)> = Vec::new();
-    let mut attribute_levels: Vec<(String, f64)> = Vec::new();
     for session in group {
         for (name, pes) in &session.skill_pes {
             accumulate(&mut skill_pes, name, *pes);
         }
-        for (name, levels) in &session.attribute_levels {
-            accumulate(&mut attribute_levels, name, *levels);
-        }
     }
     skill_pes.retain(|(_, pes)| *pes > 0.0);
-    attribute_levels.retain(|(_, levels)| *levels > 0.0);
     let pes: f64 = skill_pes.iter().map(|(_, pes)| pes).sum();
 
     let evidence = ForecastEvidence {
@@ -449,6 +437,7 @@ fn forecast_source(
         hours: round_half_even(hours, 2),
         cycled_ped: round_half_even(cycled, 2),
         loot_tt: round_half_even(loot, 2),
+        kills,
         pes: round_half_even(pes, 2),
         realised_markup: realised_markup.map(|markup| round_half_even(markup, 2)),
     };
@@ -458,6 +447,7 @@ fn forecast_source(
         cycled_ped: 0.0,
         hours: 0.0,
         loot_tt: 0.0,
+        kills: None,
         markup: None,
         tt_cost: 0.0,
         net_cost: None,
@@ -476,10 +466,6 @@ fn forecast_source(
         skills: skill_pes
             .iter()
             .map(|(name, pes)| (name.clone(), pes / cycled))
-            .collect(),
-        attributes: attribute_levels
-            .iter()
-            .map(|(name, levels)| (name.clone(), levels / cycled))
             .collect(),
     };
     let (forecast_cycled, skills) = match reach(skill_levels, target, &rates, cycled, needed) {
@@ -511,6 +497,7 @@ fn forecast_source(
         cycled_ped: round_half_even(forecast_cycled, 2),
         hours: round_half_even(forecast_cycled * hours / cycled, 2),
         loot_tt: round_half_even(forecast_loot, 2),
+        kills: (kills > 0).then(|| (forecast_cycled * kills as f64 / cycled).round()),
         markup: markup.map(|value| round_half_even(value, 2)),
         tt_cost: round_half_even(tt_cost, 2),
         net_cost: markup.map(|value| round_half_even(tt_cost - value, 2)),
@@ -583,7 +570,7 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
     db.with_reader(|conn| {
         let mut stmt = conn.prepare(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, ss.cycled_ped, \
-                    ss.loot_tt, ss.regular_skill_ped_json, ss.attribute_levels_json \
+                    ss.loot_tt, ss.regular_skill_ped_json, ss.kills \
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
@@ -598,12 +585,118 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
                     hours: row.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
                     cycled_ped: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
                     loot_tt: row.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                    kills: row.get::<_, Option<i64>>(7)?.unwrap_or(0).max(0) as u64,
                     skill_pes: json_pairs(row.get(6)?),
-                    attribute_levels: json_pairs(row.get(7)?),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    })
+    .await
+}
+
+/// Every ended, summarised session that used `weapon`, narrowed to that
+/// weapon's part of it, so a definition played with several weapons
+/// forecasts only the one asked about. The part is the weapon's cell
+/// ([`crate::session_weapon_rollup`]): its own kills' cost, loot, and skill
+/// gains, and the session's time and overhead (armour, heals, consumables)
+/// in the share of its active time those kills took.
+pub async fn load_weapon_forecast_sessions(
+    db: &Db,
+    weapon: &str,
+) -> Result<Vec<ForecastSession>, DbError> {
+    db.with_writer(|conn| heal_summaries(conn)).await?;
+    db.with_writer(crate::session_rollup::heal).await?;
+    let weapon = weapon.to_string();
+    db.with_reader(move |conn| {
+        let cells = crate::session_weapon_rollup::effective_weapon_cells(conn, Some(&weapon))?;
+        let mut stmt = conn.prepare(
+            "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, \
+                    COALESCE(ss.armour_cost, 0) + COALESCE(ss.heal_cost, 0) \
+                      + COALESCE(ss.consumable_cost, 0) + COALESCE(ss.dangling_cost, 0), \
+                    s.started_at \
+             FROM session_summaries ss \
+             JOIN tracking_sessions s ON s.id = ss.session_id \
+             JOIN session_definitions d ON d.id = s.definition_id \
+             WHERE s.id = ?1",
+        )?;
+        let mut sessions: Vec<(f64, ForecastSession)> = Vec::new();
+        for (session_id, cell) in cells {
+            if cell.cycled_ped <= 0.0 || cell.play_seconds <= 0.0 || cell.active_seconds <= 0.0 {
+                continue;
+            }
+            let summary = stmt
+                .query_row(rusqlite::params![session_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? == 0,
+                        row.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, f64>(5)?,
+                    ))
+                })
+                .optional()?;
+            let Some((definition_id, name, archived, duration, overhead, started_at)) = summary
+            else {
+                continue;
+            };
+            let share = cell.play_seconds / cell.active_seconds;
+            sessions.push((
+                started_at,
+                ForecastSession {
+                    definition_id,
+                    definition_name: name,
+                    definition_archived: archived,
+                    hours: duration * share,
+                    cycled_ped: cell.cycled_ped + overhead * share,
+                    loot_tt: cell.loot_tt,
+                    kills: cell.kills,
+                    skill_pes: cell.pes,
+                },
+            ));
+        }
+        sessions.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Ok(sessions.into_iter().map(|(_, session)| session).collect())
+    })
+    .await
+}
+
+/// A weapon used in named sessions, with how many kills it made alone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionWeapon {
+    pub name: String,
+    pub kills: u64,
+}
+
+/// The weapons the player's named sessions used, with at least
+/// `min_kills` kills made by each alone, most used first.
+pub async fn session_weapons(db: &Db, min_kills: u64) -> Result<Vec<SessionWeapon>, DbError> {
+    db.with_writer(crate::session_rollup::heal).await?;
+    db.with_reader(move |conn| {
+        let named: std::collections::HashSet<String> = {
+            let mut stmt =
+                conn.prepare("SELECT id FROM tracking_sessions WHERE definition_id IS NOT NULL")?;
+            let ids = stmt.query_map([], |row| row.get(0))?;
+            ids.collect::<rusqlite::Result<_>>()?
+        };
+        let mut weapons: Vec<SessionWeapon> = Vec::new();
+        for (session_id, cell) in crate::session_weapon_rollup::effective_weapon_cells(conn, None)?
+        {
+            if !named.contains(&session_id) {
+                continue;
+            }
+            match weapons.iter_mut().find(|weapon| weapon.name == cell.tool) {
+                Some(weapon) => weapon.kills += cell.kills,
+                None => weapons.push(SessionWeapon {
+                    name: cell.tool,
+                    kills: cell.kills,
+                }),
+            }
+        }
+        weapons.retain(|weapon| weapon.kills >= min_kills);
+        weapons.sort_by(|a, b| b.kills.cmp(&a.kills).then_with(|| a.name.cmp(&b.name)));
+        Ok(weapons)
     })
     .await
 }
@@ -655,8 +748,8 @@ mod tests {
             hours: 2.0,
             cycled_ped: cycled,
             loot_tt: cycled * 0.9,
+            kills: 0,
             skill_pes: skills.iter().map(|(n, p)| (n.to_string(), *p)).collect(),
-            attribute_levels: Vec::new(),
         }
     }
 
@@ -717,7 +810,6 @@ mod tests {
                 ("Rifle".into(), 4.0 / 200.0),
                 ("Anatomy".into(), 1.0 / 200.0),
             ],
-            attributes: Vec::new(),
         };
         let reached = target_gain(
             &target,
@@ -881,22 +973,6 @@ mod tests {
         let sessions = [session(7, "Rifle work", 200.0, &[("Rifle", 5.0)])];
         let sources = skilling_forecast(&skill_levels, &target, 10_000.0, &sessions, &[]);
         assert_eq!(sources[0].status, ForecastStatus::OutOfRange);
-    }
-
-    #[test]
-    fn attribute_gains_count_toward_the_target_at_their_observed_rate() {
-        let skill_levels = start();
-        let target = ForecastTarget::profession(&marksman(), &skill_levels);
-        let mut only_agility = session(9, "Agility", 100.0, &[]);
-        only_agility.attribute_levels = vec![("Agility".into(), 0.5)];
-        let sources = skilling_forecast(&skill_levels, &target, 5.01, &[only_agility], &[]);
-        let source = &sources[0];
-        assert_eq!(source.status, ForecastStatus::Ready);
-        // 0.01 profession levels at 0.01 per Agility level: one level, at
-        // 0.005 levels per PED, is 200 PED.
-        assert!((source.cycled_ped - 200.0).abs() < 0.01);
-        assert_eq!(source.skills[0].pes_share, None);
-        assert!(source.skills[0].is_attribute);
     }
 
     #[test]

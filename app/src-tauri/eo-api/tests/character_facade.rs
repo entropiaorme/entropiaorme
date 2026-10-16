@@ -384,8 +384,9 @@ async fn the_skilling_forecast_answers_from_named_sessions() {
         professions: vec!["Marksman".into()],
         goal: 6.0,
         routes: Vec::new(),
-        skill_boost: None,
+        skill_boost_percent: None,
         looter_level: None,
+        session_weapon: None,
     };
     let result = api.character_skilling_forecast(&query).await.unwrap();
     assert!(result.error.is_none());

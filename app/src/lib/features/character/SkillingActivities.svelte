@@ -4,7 +4,7 @@
 	import { targetLabel } from './codexRankingTarget';
 	import RecommenderChart from './RecommenderChart.svelte';
 	import SkillingBar from './SkillingBar.svelte';
-	import SkillingSection from './SkillingSection.svelte';
+	import SkillingPanel from './SkillingPanel.svelte';
 	import { formatPes } from './skillingFormat';
 	import type { SkillingModel } from './skillingModel.svelte';
 
@@ -20,20 +20,37 @@
 		Math.max(0, ...(selected?.contributors.map((c) => c.targetGain) ?? [0])),
 	);
 	const SHOWN_CONTRIBUTORS = 5;
+	const shown = $derived(
+		activities.candidates.filter((candidate) => !activities.isHidden(candidate.activity)),
+	);
+	// The quickest activity other than the target's own, and whether the
+	// target's own beats it.
+	const top = $derived(shown.find((candidate) => !activities.isDirect(candidate.activity)) ?? null);
+	const directLeads = $derived(shown[0] !== undefined && activities.isDirect(shown[0].activity));
 </script>
 
-<SkillingSection id="skilling-activities" title="Activity Recommender" busy={activities.loading}>
+<SkillingPanel id="skilling-activities" label="Activities" busy={activities.loading}>
+	{#snippet lead()}
+		{#if top && !activities.loading}
+			{#if directLeads && activities.direct}
+				Other than skilling {activities.direct.activity} directly,
+			{/if}
+			<span class="font-medium text-text">{top.activity}</span> trains {targetLabel(hub.target)} quickest{#if top.pesToPlusOne !== null}:
+				{formatPes(top.pesToPlusOne)} PES of skilling {isHp ? 'an HP' : 'a level'}{/if}.
+		{/if}
+	{/snippet}
+
 	{#snippet info()}
 		<p class="text-xs font-semibold leading-relaxed text-text">A model, per PES of skilling</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			Every activity ranked by the skilling PES it takes to add one {isHp ? 'HP' : 'level'}, from the
 			profession weights and your current skill levels. How much PES an hour of each activity yields
-			is not modelled here: Routes prices that per weapon and mob, and from your own sessions.
+			is not modelled here: Routes prices that per weapon and mob.
 		</p>
-		{#if activities.result?.direct}
+		{#if activities.direct}
 			<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
-				The faded line is {activities.result.direct.activity} itself, for reference; some professions
-				have no direct grind path.
+				{activities.direct.activity} itself is ranked among the others, marked direct, so you can see
+				how close each comes; the chart draws it as a faded line beside the one you pick.
 			</p>
 		{/if}
 	{/snippet}
@@ -57,6 +74,7 @@
 				{#each activities.candidates as candidate, i (candidate.activity)}
 					{@const active = selected?.activity === candidate.activity}
 					{@const hidden = activities.isHidden(candidate.activity)}
+					{@const isDirect = activities.isDirect(candidate.activity)}
 					<li
 						class="group relative flex items-center rounded-md transition-colors duration-[var(--duration-fast)]
 							{active ? 'bg-accent/[0.07]' : 'hover:bg-surface-hover/60'}
@@ -81,11 +99,16 @@
 							</span>
 							<span class="min-w-0 flex-1 truncate">
 								{candidate.activity}
+								{#if isDirect}
+									<span class="ml-1.5 text-[0.625rem] font-medium uppercase tracking-wide text-text-tertiary">
+										Direct
+									</span>
+								{/if}
 							</span>
 							<span
 								class="shrink-0 whitespace-nowrap text-xs tabular-nums
 									{active && !hidden ? 'text-accent' : 'text-text-tertiary'}
-									{hidden ? 'opacity-60' : 'group-hover:hidden group-focus-within:hidden'}"
+									{hidden ? 'opacity-60' : isDirect ? '' : 'group-hover:hidden group-focus-within:hidden'}"
 							>
 								{#if candidate.pesToPlusOne !== null}
 									{formatPes(candidate.pesToPlusOne)} PES
@@ -103,7 +126,7 @@
 							>
 								Restore
 							</button>
-						{:else}
+						{:else if !isDirect}
 							<button
 								type="button"
 								class="linklet hidden shrink-0 px-2 group-hover:block group-focus-within:block"
@@ -122,7 +145,7 @@
 				{#if selected}
 					<RecommenderChart
 						{selected}
-						direct={activities.result.direct}
+						direct={activities.isDirect(selected.activity) ? null : activities.direct}
 						pesCap={activities.result.pesCap}
 						sampleStep={activities.result.sampleStep}
 						{unitLabel}
@@ -154,4 +177,4 @@
 			</div>
 		</div>
 	{/if}
-</SkillingSection>
+</SkillingPanel>

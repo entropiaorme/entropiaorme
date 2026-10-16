@@ -1,14 +1,18 @@
 <script lang="ts">
+	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import type { CharacterModel } from './characterModel.svelte';
 	import SkillingActivities from './SkillingActivities.svelte';
 	import SkillingPath from './SkillingPath.svelte';
 	import SkillingRoutes from './SkillingRoutes.svelte';
+	import SkillingSessions from './SkillingSessions.svelte';
+	import type { SkillingView } from './skillingModel.svelte';
 	import SkillingTargetHeader from './SkillingTargetHeader.svelte';
 
 	// The skilling hub: "I want to skill up X; what do I need to know?"
-	// answered in one place. The target and goal lead; the routes (what each
-	// way there costs), the activity recommender, and the optimiser each
-	// answer against them.
+	// answered in one place. The target and goal lead and stay put; under
+	// them one view at a time answers against them: the routes (what each
+	// way there costs), your sessions as recorded, the activities that
+	// train it, and the optimiser.
 	let { model }: { model: CharacterModel } = $props();
 	const hub = $derived(model.skilling);
 
@@ -21,6 +25,13 @@
 	$effect(() => () => hub.dispose());
 
 	const quickPicks = $derived(model.stats.topProfessions.slice(0, 5));
+
+	const VIEWS: { id: SkillingView; label: string }[] = [
+		{ id: 'routes', label: 'Routes' },
+		{ id: 'sessions', label: 'Sessions' },
+		{ id: 'activities', label: 'Activities' },
+		{ id: 'optimiser', label: 'Optimiser' },
+	];
 </script>
 
 <div class="space-y-8 pb-4">
@@ -44,8 +55,26 @@
 			</button>
 		</div>
 	{:else}
-		<SkillingRoutes {hub} professions={model.professions} />
-		<SkillingActivities {hub} />
-		<SkillingPath {hub} />
+		<div>
+			<div class="border-b border-border/40 pb-4">
+				<SegmentedControl
+					size="md"
+					options={VIEWS}
+					active={hub.view}
+					onchange={(id) => hub.setView(id as SkillingView)}
+				/>
+			</div>
+			<div class="pt-6">
+				{#if hub.view === 'routes'}
+					<SkillingRoutes {hub} professions={model.professions} />
+				{:else if hub.view === 'sessions'}
+					<SkillingSessions {hub} />
+				{:else if hub.view === 'activities'}
+					<SkillingActivities {hub} />
+				{:else}
+					<SkillingPath {hub} />
+				{/if}
+			</div>
+		</div>
 	{/if}
 </div>

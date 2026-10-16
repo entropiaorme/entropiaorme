@@ -1838,11 +1838,12 @@ mod tests {
         // table and 2 indexes + session-grain protection costs' 2 indexes
         // + healing corrections' table and 6 indexes + weapon attribution's
         // 3 tables and 4 indexes + weapon effect windows' table and 2 indexes
-        // + consumable doses' table and 3 indexes
+        // + consumable doses' table and 3 indexes + session weapon rollups'
+        // 3 tables and 2 indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 217);
+        assert_eq!(master.len(), 222);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

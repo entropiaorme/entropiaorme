@@ -5,13 +5,14 @@
 //!
 //! ## The model
 //!
-//! An ended session's events aggregate to five cell sets no activity
+//! An ended session's events aggregate to cell sets no activity
 //! consumer folds finer than: kill cells by `(context, species, maturity)`
 //! (`session_kill_rollups`), active loot cells by `(species, shrapnel,
 //! item)` (`session_loot_rollups`, species pre-folded to the empty string
 //! for shrapnel rows exactly as the position reads fold it), loot-
-//! composition cells by context (`session_context_loot_rollups`), and
-//! skill-gain cells by context (`session_pes_rollups`). Model-neutral
+//! composition cells by context (`session_context_loot_rollups`),
+//! skill-gain cells by context (`session_pes_rollups`), and what each
+//! weapon did alone ([`crate::session_weapon_rollup`]). Model-neutral
 //! offensive evidence settles by `(context, species, evidence fingerprint)` in
 //! `session_offensive_evidence_rollups`, so Community Model replay remains
 //! independent of lifetime raw kill history. The raw tables
@@ -34,7 +35,7 @@ use crate::db::DbError;
 
 /// Bump when a cell's meaning changes: below-version sessions are served
 /// raw and heal on the next read.
-pub const ROLLUP_VERSION: i64 = 4;
+pub const ROLLUP_VERSION: i64 = 5;
 
 /// Drop one session's cells and marker. The session reads raw from this
 /// commit on; the delete path wants exactly that, and [`recompute_session`]
@@ -52,7 +53,10 @@ pub fn drop_session(conn: &rusqlite::Connection, session_id: &str) -> Result<(),
         "session_context_loot_rollups",
         "session_pes_rollups",
         "session_offensive_evidence_rollups",
-    ] {
+    ]
+    .into_iter()
+    .chain(crate::session_weapon_rollup::TABLES)
+    {
         conn.execute(
             &format!("DELETE FROM {table} WHERE session_id = ?"),
             rusqlite::params![session_id],
@@ -148,6 +152,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
                   ts.expected_economics_json",
         rusqlite::params![session_id],
     )?;
+    crate::session_weapon_rollup::settle(conn, session_id)?;
     conn.execute(
         "INSERT INTO session_rollup_meta (session_id, rollup_version) VALUES (?, ?)",
         rusqlite::params![session_id, ROLLUP_VERSION],
@@ -169,6 +174,9 @@ pub fn rebuild(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
          DELETE FROM session_pes_rollups; \
          DELETE FROM session_offensive_evidence_rollups;",
     )?;
+    for table in crate::session_weapon_rollup::TABLES {
+        conn.execute(&format!("DELETE FROM {table}"), [])?;
+    }
     heal(conn)
 }
 
@@ -407,7 +415,10 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         "session_context_loot_rollups",
         "session_pes_rollups",
         "session_offensive_evidence_rollups",
-    ] {
+    ]
+    .into_iter()
+    .chain(crate::session_weapon_rollup::TABLES)
+    {
         tx.execute(
             &format!(
                 "DELETE FROM {table} \
@@ -484,6 +495,17 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
                   ts.expected_economics_json",
         [],
     )?;
+    // The weapon cells attribute each skill gain to the next event in its
+    // session, an ordered walk no grouped pass expresses, so they settle
+    // one pending session at a time over the per-session indexes.
+    let pending_ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM pending_settlement")?;
+        let ids = stmt.query_map([], |row| row.get(0))?;
+        ids.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for session_id in &pending_ids {
+        crate::session_weapon_rollup::settle(&tx, session_id)?;
+    }
     tx.execute(
         "INSERT INTO session_rollup_meta (session_id, rollup_version) \
          SELECT id, ?1 FROM pending_settlement",
@@ -518,6 +540,15 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
          WHERE session_id NOT IN (SELECT id FROM tracking_sessions)",
         [],
     )?;
+    for table in crate::session_weapon_rollup::TABLES {
+        tx.execute(
+            &format!(
+                "DELETE FROM {table} \
+                 WHERE session_id NOT IN (SELECT id FROM tracking_sessions)"
+            ),
+            [],
+        )?;
+    }
     tx.execute(
         "DELETE FROM session_rollup_meta \
          WHERE session_id NOT IN (SELECT id FROM tracking_sessions)",

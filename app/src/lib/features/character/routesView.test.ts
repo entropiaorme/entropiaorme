@@ -36,6 +36,7 @@ function route(overrides: Partial<SkillingRouteForecast> = {}): SkillingRouteFor
 		cycledPed: 45.6,
 		pedLost: 3.6,
 		hours: 0.86,
+		measured: null,
 		skills: [],
 		...overrides,
 	};

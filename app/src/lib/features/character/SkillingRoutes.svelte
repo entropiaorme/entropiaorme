@@ -99,6 +99,13 @@
 										<span class="shrink-0 text-[0.625rem] font-medium uppercase tracking-wide text-text-tertiary">
 											Recorded
 										</span>
+									{:else if row.route.measured}
+										<span
+											class="shrink-0 text-[0.625rem] font-medium uppercase tracking-wide text-text-tertiary"
+											title="Priced from your own kills"
+										>
+											Measured
+										</span>
 									{/if}
 								</button>
 							</td>

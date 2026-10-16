@@ -109,6 +109,7 @@ function planned(overrides: Partial<SkillingRouteForecast> = {}): SkillingRouteF
 		cycledPed: 260,
 		pedLost: 20.39,
 		hours: 6.67,
+		measured: null,
 		skills: source().skills,
 		...overrides,
 	};
@@ -226,6 +227,13 @@ describe('SkillingRoutes', () => {
 		expect(screen.getByText('12,000')).toBeTruthy();
 		expect(screen.getByText('0.49 PEC of skill per kill')).toBeTruthy();
 		expect(screen.getByText(/Planned routes: community model v1/)).toBeTruthy();
+	});
+
+	it('marks a route priced from your own kills', async () => {
+		await renderWith([], [planned({ measured: { kills: 51435, sessions: 8 } })]);
+		expect(screen.getByText('Measured')).toBeTruthy();
+		expect(screen.getByText(/Measured from 51,435 of your kills over 8/)).toBeTruthy();
+		expect(screen.getByText('2.0 s per kill, at your recorded pace.')).toBeTruthy();
 	});
 
 	it('names why a planned route cannot be priced, and removes it', async () => {

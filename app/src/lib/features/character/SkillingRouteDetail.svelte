@@ -79,9 +79,11 @@
 					{#if row.kind === 'planned'}
 						<InfoTip label="About the time">
 							<p class="text-xs leading-relaxed text-text-secondary">
-								{row.route.secondsPerKill !== null
-									? `${row.route.secondsPerKill.toFixed(1)} s per kill: firing at the weapon's attack rate plus a second to reach the next mob.`
-									: "The weapon's attack rate is unknown."}
+								{row.route.secondsPerKill === null
+									? "The weapon's attack rate is unknown."
+									: row.route.measured
+										? `${row.route.secondsPerKill.toFixed(1)} s per kill, at your recorded pace.`
+										: `${row.route.secondsPerKill.toFixed(1)} s per kill: firing at the weapon's attack rate plus a second to reach the next mob.`}
 							</p>
 						</InfoTip>
 					{/if}
@@ -95,11 +97,20 @@
 							<p class="text-xs font-semibold leading-relaxed text-text">
 								{formatPed(row.route.skillPerKillPec)} PEC of skill per kill
 							</p>
-							<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-								A kill yields skill by the mob alone: a bonus for its level ({row.route.mobLevel ??
-									NO_DATA}) and skill for each HP removed ({row.route.mobHp ?? NO_DATA}), whatever the
-								weapon. The weapon sets what the kill costs and which skills receive it.
-							</p>
+							{#if row.route.measured}
+								<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+									Measured from {formatKills(row.route.measured.kills)} of your kills over {row.route
+										.measured.sessions}
+									{row.route.measured.sessions === 1 ? 'session' : 'sessions'}: their skill, cycling, and
+									pace, restated for the pill chosen. The loss rate is still the model's.
+								</p>
+							{:else}
+								<p class="mt-1 text-xs leading-relaxed text-text-secondary">
+									A kill yields skill by the mob alone: a bonus for its level ({row.route.mobLevel ??
+										NO_DATA}) and skill for each HP removed ({row.route.mobHp ?? NO_DATA}), whatever
+									the weapon. The weapon sets what the kill costs and which skills receive it.
+								</p>
+							{/if}
 						</InfoTip>
 					{/snippet}
 				</StatDisplay>

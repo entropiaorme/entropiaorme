@@ -120,6 +120,11 @@ pub struct Api {
     /// once and cleared, and never persisted, because a capture nobody came
     /// back for is one worth taking again.
     last_sale_capture: std::sync::Mutex<Option<analytics::SaleWindowCapture>>,
+    /// Measured skilling-route evidence per weapon and mob maturity, with
+    /// the newest recorded kill it was read at. Reading it scans every
+    /// matching kill, and recorded play only changes when a kill lands, so
+    /// a forecast re-reads it only after one has.
+    measured_routes: std::sync::Mutex<skilling::MeasuredRouteCache>,
     /// How a stored weapon's props are prepared before pricing or showing
     /// them: the attack rate under the reload speed the declared passive
     /// effects put in force. Shared with the weapon review service, so
@@ -269,6 +274,7 @@ impl Api {
             sale_window_ocr,
             auction_fee_research,
             last_sale_capture: std::sync::Mutex::new(None),
+            measured_routes: std::sync::Mutex::new(Default::default()),
             codex,
             quests,
             analytics,

@@ -3284,6 +3284,14 @@ export interface SkillingForecastSource {
 export type SkillingForecastStatus = 'ready' | 'reached' | 'does_not_train' | 'no_evidence' | 'out_of_range';
 
 /**
+ * The recorded kills behind a measured route.
+ */
+export interface SkillingRouteEvidence {
+	kills: number;
+	sessions: number;
+}
+
+/**
  * One planned route's forecast, in request order. The projected figures
  * are zero unless the status is `ready`; the per-kill figures are zero
  * when the route could not be priced.
@@ -3308,6 +3316,8 @@ export interface SkillingRouteForecast {
 	/** Expected TT lost on the way: cycled less expected loot TT. */
 	pedLost: number;
 	hours: number | null;
+	/** The player's own kills the route is priced from; null when it is priced from the model alone. */
+	measured: SkillingRouteEvidence | null;
 	skills: SkillingForecastSkill[];
 }
 

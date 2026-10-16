@@ -10,10 +10,19 @@
 //! firing time per kill come from the loadout comparison engine at the
 //! maturity's HP, so a route is priced exactly as the Equipment comparison
 //! prices the same setup.
+//!
+//! Once the player has recorded enough kills of a weapon on a maturity,
+//! [`measured_route`] reads what those kills actually yielded and cost, so
+//! a route can be priced from the player's own play instead of the model.
 
+use std::collections::{HashMap, HashSet};
+
+use rusqlite::params;
 use serde_json::{Map, Value};
 
-use crate::character_calc::{is_attribute, iter_profession_skills};
+use crate::db::{Db, DbError};
+
+use crate::character_calc::{is_attribute, iter_profession_skills, ATTRIBUTE_SKILLS};
 use crate::loadout_comparison::{kill_figures, ComparisonAssumptions, KillCurve, SetupEconomics};
 use crate::skilling_forecast::PlannedRates;
 
@@ -180,6 +189,167 @@ impl RouteKill {
             kills_per_ped: 100.0 / self.cycled_pec,
         }
     }
+}
+
+/// Fewest recorded kills of a weapon on a maturity before a route is
+/// priced from them rather than from the model.
+pub const MIN_MEASURED_KILLS: u64 = 300;
+/// The longest gap between kills counted as time spent on the route;
+/// longer ones are breaks.
+const MAX_KILL_GAP_SECONDS: f64 = 60.0;
+
+/// What the player's own kills of a weapon on a maturity yielded and cost.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeasuredRoute {
+    pub kills: u64,
+    pub sessions: u64,
+    /// PES per kill, PEC, restated at the 50% pill from each session's own.
+    pub skill_pec_at_fifty: f64,
+    pub cycled_pec: f64,
+    /// Mean seconds from the previous kill, breaks left out; None when no
+    /// kill had a recorded predecessor within reach.
+    pub seconds: Option<f64>,
+}
+
+impl MeasuredRoute {
+    /// The route's kill from this evidence: measured skill (at `boost`),
+    /// cycling, and time, with loss at the setup's modelled loss rate on
+    /// the measured cycling (recorded loot is too noisy to price a route).
+    pub fn kill(&self, planned: &RouteKill, boost: SkillBoost) -> RouteKill {
+        let loss_rate = planned.loss_pec / planned.cycled_pec;
+        RouteKill {
+            skill_pec: self.skill_pec_at_fifty * boost.factor(),
+            cycled_pec: self.cycled_pec,
+            loss_pec: self.cycled_pec * loss_rate,
+            seconds: self.seconds.or(planned.seconds),
+        }
+    }
+}
+
+/// A recorded kill: its timestamp, PEC cycled, and session skill boost.
+type RecordedKill = (f64, f64, Option<i64>);
+
+/// The newest recorded kill's timestamp: recorded evidence can only have
+/// changed since a read if this has.
+pub async fn latest_kill_timestamp(db: &Db) -> Result<Option<f64>, DbError> {
+    db.with_reader(|conn| {
+        Ok(
+            conn.query_row("SELECT MAX(timestamp) FROM kills", [], |row| {
+                row.get::<_, Option<f64>>(0)
+            })?,
+        )
+    })
+    .await
+}
+
+/// The player's single-weapon kills of `tool` on one maturity, when there
+/// are at least [`MIN_MEASURED_KILLS`]. A kill's damage must fit the
+/// maturity (from its HP to `max_overkill` above it), because a session
+/// declared as one mob can hold others. Skill gains are attributed to the
+/// kill they precede in their session.
+pub async fn measured_route(
+    db: &Db,
+    tool: &str,
+    species: &str,
+    maturity: &str,
+    hp: f64,
+    max_overkill: f64,
+) -> Result<Option<MeasuredRoute>, DbError> {
+    let (tool, species, maturity) = (tool.to_string(), species.to_string(), maturity.to_string());
+    db.with_reader(move |conn| {
+        // (session, timestamp, PEC cycled, skill boost percent)
+        let mut stmt = conn.prepare(
+            "SELECT k.session_id, k.timestamp, \
+                    (COALESCE(k.cost_ped, 0) + COALESCE(k.enhancer_cost, 0)) * 100.0, \
+                    s.skill_boost_percent \
+             FROM kills k \
+             JOIN tracking_sessions s ON s.id = k.session_id \
+             WHERE k.mob_species = ?1 AND k.mob_maturity = ?2 \
+               AND k.damage_dealt >= ?4 * 0.9 AND k.damage_dealt <= ?4 + ?5 \
+               AND EXISTS (SELECT 1 FROM kill_tool_stats t \
+                           WHERE t.kill_id = k.id AND t.tool_name = ?3) \
+               AND NOT EXISTS (SELECT 1 FROM kill_tool_stats t \
+                               WHERE t.kill_id = k.id AND t.tool_name <> ?3)",
+        )?;
+        let candidates = stmt
+            .query_map(params![species, maturity, tool, hp, max_overkill], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if (candidates.len() as u64) < MIN_MEASURED_KILLS {
+            return Ok(None);
+        }
+        let mut by_session: HashMap<&str, Vec<RecordedKill>> = HashMap::new();
+        for (session, timestamp, cycled, boost) in &candidates {
+            by_session
+                .entry(session.as_str())
+                .or_default()
+                .push((*timestamp, *cycled, *boost));
+        }
+
+        let attributes = ATTRIBUTE_SKILLS
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut kills_stmt =
+            conn.prepare("SELECT timestamp FROM kills WHERE session_id = ?1 ORDER BY timestamp")?;
+        let mut gains_stmt = conn.prepare(&format!(
+            "SELECT timestamp, ped_value FROM skill_gains \
+             WHERE session_id = ?1 AND ped_value IS NOT NULL AND skill_name NOT IN ({attributes})"
+        ))?;
+        let (mut skill_at_fifty, mut cycled_total) = (0.0, 0.0);
+        let (mut gap_total, mut gaps) = (0.0, 0u64);
+        for (session, kills) in &by_session {
+            let all: Vec<f64> = kills_stmt
+                .query_map(params![session], |row| row.get::<_, f64>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            // Skill gained up to each kill of the session, since the one before.
+            let mut skill_by_kill = vec![0.0; all.len()];
+            for gain in gains_stmt.query_map(params![session], |row| {
+                Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
+            })? {
+                let (timestamp, pes) = gain?;
+                let index = all.partition_point(|kill| *kill < timestamp);
+                if let Some(slot) = skill_by_kill.get_mut(index) {
+                    *slot += pes;
+                }
+            }
+            // Kills sharing a second each take their own slot.
+            let mut taken = HashSet::new();
+            for (timestamp, cycled, boost) in kills {
+                let mut index = all.partition_point(|kill| kill < timestamp);
+                while taken.contains(&index) && all.get(index + 1) == Some(timestamp) {
+                    index += 1;
+                }
+                taken.insert(index);
+                let factor = SkillBoost::from_percent(*boost).factor();
+                skill_at_fifty += skill_by_kill.get(index).copied().unwrap_or(0.0) * 100.0 / factor;
+                cycled_total += cycled;
+                if let Some(previous) = index.checked_sub(1).and_then(|i| all.get(i)) {
+                    let gap = timestamp - previous;
+                    if gap > 0.0 && gap <= MAX_KILL_GAP_SECONDS {
+                        gap_total += gap;
+                        gaps += 1;
+                    }
+                }
+            }
+        }
+        let kills = candidates.len() as u64;
+        Ok(Some(MeasuredRoute {
+            kills,
+            sessions: by_session.len() as u64,
+            skill_pec_at_fifty: skill_at_fifty / kills as f64,
+            cycled_pec: cycled_total / kills as f64,
+            seconds: (gaps > 0).then(|| gap_total / gaps as f64),
+        }))
+    })
+    .await
 }
 
 #[cfg(test)]

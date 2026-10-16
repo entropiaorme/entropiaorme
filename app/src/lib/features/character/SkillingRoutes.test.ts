@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SkillingForecastSource } from '$lib/api/commands.gen';
+import type { SkillingForecastSource, SkillingRouteForecast } from '$lib/api/commands.gen';
 import type { ProfessionLevel } from '$lib/types/analytics';
-import { NO_DATA } from '$lib/utils/format';
-import SkillingForecast from './SkillingForecast.svelte';
+import SkillingRoutes from './SkillingRoutes.svelte';
 import { createSkillingModel } from './skillingModel.svelte';
 
 vi.mock('$lib/api', () => ({
@@ -21,8 +20,10 @@ vi.mock('$lib/preferences', () => ({
 }));
 
 import * as api from '$lib/api';
+import * as preferences from '$lib/preferences';
 
 const mocked = vi.mocked(api);
+const prefs = vi.mocked(preferences);
 
 const PROFESSIONS: ProfessionLevel[] = [
 	{
@@ -92,7 +93,40 @@ function source(overrides: Partial<SkillingForecastSource> = {}): SkillingForeca
 	};
 }
 
-async function renderWith(sources: SkillingForecastSource[]) {
+function planned(overrides: Partial<SkillingRouteForecast> = {}): SkillingRouteForecast {
+	return {
+		index: 0,
+		weapon: 'Laconian Sword',
+		mob: 'Default Bank Robber',
+		mobHp: 2,
+		mobLevel: 4,
+		status: 'ready',
+		skillPerKillPec: 0.4906,
+		cycledPerKillPec: 2.1667,
+		lossPerKillPec: 0.1699,
+		secondsPerKill: 2,
+		kills: 12000,
+		cycledPed: 260,
+		pedLost: 20.39,
+		hours: 6.67,
+		skills: source().skills,
+		...overrides,
+	};
+}
+
+const STORED = {
+	weaponId: 'sword',
+	weaponName: 'Laconian Sword',
+	species: 'Bank Robber',
+	maturity: 'Default',
+	display: 'Default Bank Robber',
+};
+
+async function renderWith(sources: SkillingForecastSource[], routes: SkillingRouteForecast[] = []) {
+	prefs.getPreference.mockImplementation(async (key: string) =>
+		key === 'skilling_routes' ? routes.map(() => STORED) : null,
+	);
+	prefs.setPreference.mockResolvedValue(undefined);
 	mocked.getActivityRecommender.mockResolvedValue({
 		pesCap: 1000,
 		sampleStep: 20,
@@ -116,14 +150,15 @@ async function renderWith(sources: SkillingForecastSource[]) {
 		current: 40.79,
 		goal: 41,
 		sources,
-		routes: [],
+		routes,
 		skillBoost: 'fifty',
 		looterLevel: 40,
 	});
 	const hub = createSkillingModel({ professions: () => PROFESSIONS, hp: () => 188 });
+	await hub.restore();
 	hub.setTarget({ kind: 'profession', name: 'Animal Looter' });
 	await new Promise((resolve) => setTimeout(resolve, 0));
-	render(SkillingForecast, { hub });
+	render(SkillingRoutes, { hub, professions: PROFESSIONS });
 	return hub;
 }
 
@@ -131,14 +166,15 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-describe('SkillingForecast', () => {
-	it('reads the chosen session to the goal, with no markup until something sells', async () => {
+describe('SkillingRoutes', () => {
+	it('reads a recorded session to the goal, with no markup until something sells', async () => {
 		await renderWith([source()]);
-		expect(screen.getByText('252.43')).toBeTruthy();
-		expect(screen.getByText('9.6h')).toBeTruthy();
-		expect(screen.getByText('41.38')).toBeTruthy();
+		// The row and the detail both carry the figures.
+		expect(screen.getAllByText('252').length).toBe(2);
+		expect(screen.getAllByText('9.6h').length).toBe(2);
+		expect(screen.getAllByText('41.38').length).toBe(2);
+		expect(screen.getByText('Recorded')).toBeTruthy();
 		// No confirmed sales: the after-markup slot is empty, never a copy of TT.
-		expect(screen.getByText(NO_DATA)).toBeTruthy();
 		expect(screen.getByText('No sales yet')).toBeTruthy();
 		// The skill that moves the target is a row; the negligible one and the
 		// off-target one sit behind a tip.
@@ -160,21 +196,46 @@ describe('SkillingForecast', () => {
 		expect(screen.getByText('+1.8% realised on loot')).toBeTruthy();
 	});
 
-	it('says why a session cannot answer', async () => {
+	it('says why a route cannot answer', async () => {
 		await renderWith([source({ status: 'does_not_train', skills: [] })]);
+		expect(screen.getByText('Does not train this')).toBeTruthy();
 		expect(screen.getByText('Tree Cutting does not train Animal Looter.')).toBeTruthy();
 	});
 
-	it('points at tracking when no named session exists', async () => {
+	it('asks for a route when there is nothing to price', async () => {
 		await renderWith([]);
-		expect(screen.getByText(/No named sessions recorded yet/)).toBeTruthy();
+		expect(screen.getByText(/Add a route \(a weapon on a mob\)/)).toBeTruthy();
 	});
 
 	it('flags a thin sample with the figure behind it', async () => {
 		await renderWith([
 			source({ warnings: ['thin_sessions'], sample: { ...source().sample, sessions: 2 } }),
 		]);
-		expect(screen.getByText('Thin sample')).toBeTruthy();
-		expect(screen.getByText('only 2 sessions recorded.')).toBeTruthy();
+		expect(screen.getByText('Thin sample: only 2 sessions recorded.')).toBeTruthy();
+	});
+
+	it('prices a planned route beside the sessions, with the premium over the cheapest', async () => {
+		// The planned route loses 20.39; the session 41.38 over 9.6h.
+		await renderWith([source()], [planned()]);
+		// The row and the detail heading both name it.
+		expect(screen.getAllByText('Laconian Sword on Default Bank Robber').length).toBe(2);
+		expect(screen.getByText('Cheapest')).toBeTruthy();
+		expect(screen.getByText('+20.99')).toBeTruthy();
+		expect(screen.getByText('2.19/h')).toBeTruthy();
+		// The cheapest is shown in detail: its kills and what a kill yields.
+		expect(screen.getByText('12,000')).toBeTruthy();
+		expect(screen.getByText('0.49 PEC of skill per kill')).toBeTruthy();
+		expect(screen.getByText(/Planned routes: community model v1/)).toBeTruthy();
+	});
+
+	it('names why a planned route cannot be priced, and removes it', async () => {
+		const hub = await renderWith(
+			[],
+			[planned({ status: 'unknown_mob', mobHp: null, mobLevel: null, pedLost: 0, hours: null })],
+		);
+		expect(screen.getAllByText(/No HP or level for this mob/).length).toBeGreaterThan(0);
+		await fireEvent.click(screen.getByLabelText('Remove Laconian Sword on Default Bank Robber'));
+		expect(hub.routes).toEqual([]);
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_routes', []);
 	});
 });

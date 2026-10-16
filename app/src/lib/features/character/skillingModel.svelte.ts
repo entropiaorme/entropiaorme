@@ -1,9 +1,9 @@
 /**
  * Skilling hub view model: one target ("skill up X") and one goal answered
  * three ways at once. Where to train it (the activity recommender's
- * modelled ranking), what your own named sessions say it takes (the
- * skilling forecast, from recorded play and its realised markup), and the
- * cheapest skill path (the path optimiser for a profession or a family's
+ * modelled ranking), what each route there costs (planned weapon-and-mob
+ * routes priced by the model, beside your named sessions priced by what
+ * they recorded), and the cheapest skill path (the path optimiser for a profession or a family's
  * combined level, the HP optimiser for HP). Each facet loads into its own
  * error slot so one failure never blanks the others; each load claims a
  * generation so an out-of-order response can never repopulate a newer
@@ -14,20 +14,25 @@ import { getHpOptimizer, getProfessionPathOptimizer, getSkillingForecast } from 
 import type {
 	HpOptimizerResult,
 	PathOptimizerResult,
+	SkillBoostLevel,
 	SkillingForecastResult,
-	SkillingForecastSource,
 } from '$lib/api/commands.gen';
+import { looterBasis, looterBasisLevel, looterLevelsFrom } from '$lib/looterBasis.svelte';
 import { getPreference, setPreference } from '$lib/preferences';
 import type { ProfessionLevel } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { type CodexRankingTarget, familyByKey, targetProfessions } from './codexRankingTarget';
 import { createErrorSlot } from './errorSlot.svelte';
 import { createRecommenderModel } from './recommenderModel.svelte';
+import { isStoredRoute, type RouteRow, routePick, routeRows, type StoredRoute } from './routesView';
 
 /** How long goal typing settles before the goal-bound facets reload. */
 export const GOAL_DEBOUNCE_MS = 350;
 
 const TARGET_PREFERENCE = 'skilling_hub_target';
+const ROUTES_PREFERENCE = 'skilling_routes';
+const PILL_PREFERENCE = 'skilling_route_pill';
+const PILLS: readonly SkillBoostLevel[] = ['none', 'fifty', 'hundred'];
 
 export interface SkillingInputs {
 	/** The calibrated profession levels (the character surface's list). */
@@ -45,14 +50,6 @@ export function defaultGoal(current: number): number {
 export function parseGoal(input: string): number | null {
 	const value = Number.parseFloat(input);
 	return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-/** The source a forecast shows by default: the quickest one that answers. */
-export function defaultSource(
-	result: SkillingForecastResult | null,
-): SkillingForecastSource | null {
-	if (!result || result.sources.length === 0) return null;
-	return result.sources.find((source) => source.status === 'ready') ?? result.sources[0];
 }
 
 function isTarget(value: unknown): value is CodexRankingTarget {
@@ -87,7 +84,10 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	let forecast = $state<SkillingForecastResult | null>(null);
 	let forecastLoading = $state(false);
 	let forecastError = $state<string | null>(null);
-	let selectedSourceId = $state<number | null>(null);
+	let selectedKey = $state<string | null>(null);
+	let routes = $state<StoredRoute[]>([]);
+	/** The pill planned routes assume; null leaves it to the latest session. */
+	let skillBoost = $state<SkillBoostLevel | null>(null);
 
 	let pathGeneration = 0;
 	let forecastGeneration = 0;
@@ -117,10 +117,21 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	const goal = $derived(parseGoal(goalInput));
 	/** A goal the goal-bound facets can answer: set, and above current. */
 	const goalActive = $derived(current !== null && goal !== null && goal > current);
-	const sources = $derived(forecast?.sources ?? []);
-	const selectedSource = $derived<SkillingForecastSource | null>(
-		sources.find((source) => source.definitionId === selectedSourceId) ?? defaultSource(forecast),
+	const rows = $derived<RouteRow[]>(routeRows(forecast, routes));
+	/** The chosen row, or the cheapest that answers. */
+	const selectedRow = $derived<RouteRow | null>(
+		rows.find((row) => row.key === selectedKey) ??
+			rows.find((row) => row.status === 'ready') ??
+			rows[0] ??
+			null,
 	);
+
+	/** The looter level planned routes are priced at: null asks for the
+	 * player's own mean, so only another basis sends its level. */
+	function requestedLooterLevel(): number | null {
+		if (looterBasis.current === 'three_looter_mean') return null;
+		return looterBasisLevel(looterLevelsFrom(inputs.professions()), looterBasis.current);
+	}
 
 	async function loadPath() {
 		const claimed = ++pathGeneration;
@@ -179,10 +190,15 @@ export function createSkillingModel(inputs: SkillingInputs) {
 		}
 		forecastLoading = true;
 		try {
+			const planned = {
+				routes: routes.map(routePick),
+				skillBoost,
+				looterLevel: requestedLooterLevel(),
+			};
 			const loaded = await getSkillingForecast(
 				current.kind === 'hp'
-					? { target: 'hp', goal }
-					: { target: 'profession', professions: targetProfessions(current), goal },
+					? { target: 'hp', goal, ...planned }
+					: { target: 'profession', professions: targetProfessions(current), goal, ...planned },
 			);
 			if (claimed !== forecastGeneration) return;
 			if (loaded.error) {
@@ -209,7 +225,7 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	/** Pick a target: every facet reloads against it at its default goal. */
 	function setTarget(next: CodexRankingTarget) {
 		target = next;
-		selectedSourceId = null;
+		selectedKey = null;
 		hpPath = null;
 		goalInput = current === null ? '' : String(defaultGoal(current));
 		void activities.load(next);
@@ -229,8 +245,42 @@ export function createSkillingModel(inputs: SkillingInputs) {
 		if (goalTimer !== undefined) loadGoalBound();
 	}
 
-	function selectSource(definitionId: number) {
-		selectedSourceId = definitionId;
+	function selectRow(key: string) {
+		selectedKey = key;
+	}
+
+	/** Add a planned route (a repeat of one already listed is ignored) and
+	 * show it. */
+	function addRoute(route: StoredRoute) {
+		const same = (other: StoredRoute) =>
+			other.weaponId === route.weaponId &&
+			other.species === route.species &&
+			other.maturity === route.maturity;
+		const existing = routes.findIndex(same);
+		if (existing === -1) {
+			routes = [...routes, route];
+			void setPreference(ROUTES_PREFERENCE, routes);
+		}
+		selectedKey = `route:${existing === -1 ? routes.length - 1 : existing}`;
+		void loadForecast();
+	}
+
+	function removeRoute(index: number) {
+		routes = routes.filter((_, position) => position !== index);
+		selectedKey = null;
+		void setPreference(ROUTES_PREFERENCE, routes);
+		void loadForecast();
+	}
+
+	function setSkillBoost(level: SkillBoostLevel) {
+		skillBoost = level;
+		void setPreference(PILL_PREFERENCE, level);
+		void loadForecast();
+	}
+
+	/** Re-price after something the routes read changed (the looter basis). */
+	function reloadForecast() {
+		void loadForecast();
 	}
 
 	/** Restore the last target once per page, after the profession list
@@ -238,6 +288,12 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	async function restore() {
 		if (restored) return;
 		restored = true;
+		const [savedRoutes, savedPill] = await Promise.all([
+			getPreference<unknown>(ROUTES_PREFERENCE, []),
+			getPreference<unknown>(PILL_PREFERENCE, null),
+		]);
+		if (Array.isArray(savedRoutes)) routes = savedRoutes.filter(isStoredRoute);
+		if (PILLS.includes(savedPill as SkillBoostLevel)) skillBoost = savedPill as SkillBoostLevel;
 		const saved = await getPreference<unknown>(TARGET_PREFERENCE, null);
 		if (target.kind === 'none' && isTarget(saved) && saved.kind !== 'none') setTarget(saved);
 	}
@@ -293,17 +349,28 @@ export function createSkillingModel(inputs: SkillingInputs) {
 		get forecastError() {
 			return forecastError;
 		},
-		get sources() {
-			return sources;
+		get rows() {
+			return rows;
 		},
-		get selectedSource() {
-			return selectedSource;
+		get selectedRow() {
+			return selectedRow;
+		},
+		get routes() {
+			return routes;
+		},
+		/** The pill the planned routes were priced at. */
+		get skillBoost() {
+			return forecast?.skillBoost ?? skillBoost;
 		},
 
 		setTarget,
 		setGoal,
 		commitGoal,
-		selectSource,
+		selectRow,
+		addRoute,
+		removeRoute,
+		setSkillBoost,
+		reloadForecast,
 		restore,
 		dispose,
 	};

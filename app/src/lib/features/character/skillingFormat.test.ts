@@ -3,13 +3,14 @@ import type { SkillingForecastSample } from '$lib/api/commands.gen';
 import {
 	formatGoal,
 	formatHours,
+	formatKills,
 	formatLevel,
 	formatLift,
 	formatPes,
+	formatRoutePed,
 	formatTargetGain,
 	formatTargetValue,
 	groupByReason,
-	statusLabel,
 	statusMessage,
 	warningText,
 } from './skillingFormat';
@@ -70,6 +71,15 @@ describe('figures', () => {
 	});
 });
 
+describe('route figures', () => {
+	it('shows PED whole and grouped from 100, to two places below', () => {
+		expect(formatRoutePed(27571.6)).toBe('27,572');
+		expect(formatRoutePed(100)).toBe('100');
+		expect(formatRoutePed(5.9)).toBe('5.90');
+		expect(formatKills(1213004.4)).toBe('1,213,004');
+	});
+});
+
 describe('statuses and caveats', () => {
 	it('says why a session cannot answer', () => {
 		expect(statusMessage('ready', 'A', 'B')).toBe('');
@@ -79,8 +89,6 @@ describe('statuses and caveats', () => {
 		expect(statusMessage('out_of_range', 'Tree Cutting', 'Evader')).toBe(
 			"Out of Tree Cutting's reach.",
 		);
-		expect(statusLabel('no_evidence')).toBe('No recorded cycling');
-		expect(statusLabel('ready')).toBe('');
 	});
 
 	it('names the figure behind each sample caveat', () => {

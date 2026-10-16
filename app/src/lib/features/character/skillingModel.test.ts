@@ -6,11 +6,11 @@ import type {
 	SkillingForecastResult,
 	SkillingForecastSource,
 } from '$lib/api/commands.gen';
+import { setLooterBasis } from '$lib/looterBasis.svelte';
 import type { ProfessionLevel } from '$lib/types/analytics';
 import {
 	createSkillingModel,
 	defaultGoal,
-	defaultSource,
 	GOAL_DEBOUNCE_MS,
 	parseGoal,
 } from './skillingModel.svelte';
@@ -133,6 +133,18 @@ afterEach(() => {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** What a forecast asks with no planned route, the pill left to the latest
+ * session, and the looter basis at the player's own mean. */
+const UNPLANNED = { routes: [], skillBoost: null, looterLevel: null };
+
+const SWORD_ON_ROBBERS = {
+	weaponId: 'sword',
+	weaponName: 'Laconian Sword',
+	species: 'Bank Robber',
+	maturity: 'Default',
+	display: 'Default Bank Robber',
+};
+
 describe('the pure helpers', () => {
 	it('defaults the goal to the next whole value', () => {
 		expect(defaultGoal(42.37)).toBe(43);
@@ -145,15 +157,6 @@ describe('the pure helpers', () => {
 		expect(parseGoal('0')).toBeNull();
 		expect(parseGoal('-2')).toBeNull();
 		expect(parseGoal('abc')).toBeNull();
-	});
-
-	it('defaults to the quickest source that answers', () => {
-		expect(defaultSource(null)).toBeNull();
-		expect(defaultSource(forecast([]))).toBeNull();
-		const blocked = source({ definitionId: 1, status: 'does_not_train' });
-		const ready = source({ definitionId: 2 });
-		expect(defaultSource(forecast([blocked, ready]))?.definitionId).toBe(2);
-		expect(defaultSource(forecast([blocked]))?.definitionId).toBe(1);
 	});
 });
 
@@ -177,9 +180,10 @@ describe('setTarget', () => {
 			target: 'profession',
 			professions: ['Laser Sniper (Hit)'],
 			goal: 43,
+			...UNPLANNED,
 		});
 		expect(model.path?.totalPed).toBe(120);
-		expect(model.selectedSource?.name).toBe('Carabok Skilling');
+		expect(model.selectedRow?.name).toBe('Carabok Skilling');
 		expect(model.pathLoading).toBe(false);
 		expect(model.forecastLoading).toBe(false);
 		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_hub_target', {
@@ -195,7 +199,11 @@ describe('setTarget', () => {
 		await settle();
 		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
 		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
-		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({ target: 'hp', goal: 143 });
+		expect(mocked.getSkillingForecast).toHaveBeenCalledWith({
+			target: 'hp',
+			goal: 143,
+			...UNPLANNED,
+		});
 		expect(model.hpPath?.currentHp).toBe(142);
 	});
 
@@ -221,6 +229,7 @@ describe('setTarget', () => {
 			target: 'profession',
 			professions: looters,
 			goal: 51,
+			...UNPLANNED,
 		});
 	});
 
@@ -238,7 +247,7 @@ describe('setTarget', () => {
 		await settle();
 		resolveFirst(forecast([source({ name: 'Stale' })]));
 		await settle();
-		expect(model.selectedSource?.name).toBe('Newer');
+		expect(model.selectedRow?.name).toBe('Newer');
 	});
 });
 
@@ -304,7 +313,11 @@ describe('the goal', () => {
 		model.setGoal('150');
 		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
 		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
-		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith({ target: 'hp', goal: 150 });
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith({
+			target: 'hp',
+			goal: 150,
+			...UNPLANNED,
+		});
 	});
 });
 
@@ -319,9 +332,9 @@ describe('the forecast', () => {
 		const model = makeModel();
 		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
 		await settle();
-		expect(model.selectedSource?.name).toBe('Quick');
-		model.selectSource(2);
-		expect(model.selectedSource?.name).toBe('Slow');
+		expect(model.selectedRow?.name).toBe('Quick');
+		model.selectRow('session:2');
+		expect(model.selectedRow?.name).toBe('Slow');
 	});
 
 	it('lands soft and thrown failures in their own facet only', async () => {
@@ -338,6 +351,74 @@ describe('the forecast', () => {
 		expect(model.pathError).toContain('boom');
 		expect(model.activitiesError).toBeNull();
 		expect(model.activities.result).not.toBeNull();
+	});
+});
+
+describe('planned routes', () => {
+	it('prices an added route, remembers it, and selects it', async () => {
+		const model = makeModel();
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		model.addRoute(SWORD_ON_ROBBERS);
+		await settle();
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				routes: [
+					{
+						setup: { weapon: { catalogId: 'sword' } },
+						species: 'Bank Robber',
+						maturity: 'Default',
+					},
+				],
+			}),
+		);
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_routes', [SWORD_ON_ROBBERS]);
+		expect(model.routes).toEqual([SWORD_ON_ROBBERS]);
+
+		// The same route again adds nothing.
+		model.addRoute({ ...SWORD_ON_ROBBERS });
+		expect(model.routes).toHaveLength(1);
+
+		model.removeRoute(0);
+		expect(model.routes).toEqual([]);
+		expect(prefs.setPreference).toHaveBeenLastCalledWith('skilling_routes', []);
+	});
+
+	it('re-prices at a chosen pill and at the looter basis in force', async () => {
+		const model = makeModel();
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		model.setSkillBoost('hundred');
+		await settle();
+		expect(prefs.setPreference).toHaveBeenCalledWith('skilling_route_pill', 'hundred');
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ skillBoost: 'hundred', looterLevel: null }),
+		);
+
+		// Another basis sends its level: Animal Looter 30.5.
+		await setLooterBasis('animal');
+		model.reloadForecast();
+		await settle();
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ looterLevel: 30.5 }),
+		);
+		await setLooterBasis('three_looter_mean');
+	});
+
+	it('restores remembered routes and pill, dropping malformed ones', async () => {
+		prefs.getPreference.mockImplementation(async (key: string) => {
+			if (key === 'skilling_routes') return [SWORD_ON_ROBBERS, { weaponId: 3 }];
+			if (key === 'skilling_route_pill') return 'none';
+			return null;
+		});
+		const model = makeModel();
+		await model.restore();
+		expect(model.routes).toEqual([SWORD_ON_ROBBERS]);
+		model.setTarget({ kind: 'profession', name: 'Laser Sniper (Hit)' });
+		await settle();
+		expect(mocked.getSkillingForecast).toHaveBeenLastCalledWith(
+			expect.objectContaining({ skillBoost: 'none' }),
+		);
 	});
 });
 

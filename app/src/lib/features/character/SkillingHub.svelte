@@ -1,14 +1,14 @@
 <script lang="ts">
 	import type { CharacterModel } from './characterModel.svelte';
 	import SkillingActivities from './SkillingActivities.svelte';
-	import SkillingForecast from './SkillingForecast.svelte';
 	import SkillingPath from './SkillingPath.svelte';
+	import SkillingRoutes from './SkillingRoutes.svelte';
 	import SkillingTargetHeader from './SkillingTargetHeader.svelte';
 
 	// The skilling hub: "I want to skill up X; what do I need to know?"
-	// answered in one place. The target and goal lead; the session
-	// forecast, the activity recommender, and the optimiser each answer
-	// against them.
+	// answered in one place. The target and goal lead; the routes (what each
+	// way there costs), the activity recommender, and the optimiser each
+	// answer against them.
 	let { model }: { model: CharacterModel } = $props();
 	const hub = $derived(model.skilling);
 
@@ -44,7 +44,7 @@
 			</button>
 		</div>
 	{:else}
-		<SkillingForecast {hub} />
+		<SkillingRoutes {hub} professions={model.professions} />
 		<SkillingActivities {hub} />
 		<SkillingPath {hub} />
 	{/if}

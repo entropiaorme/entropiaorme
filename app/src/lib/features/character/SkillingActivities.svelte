@@ -28,7 +28,7 @@
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			Every activity ranked by the skilling PES it takes to add one {isHp ? 'HP' : 'level'}, from the
 			profession weights and your current skill levels. How much PES an hour of each activity yields
-			is not modelled: the Session Forecast measures that from your own sessions.
+			is not modelled here: Routes prices that per weapon and mob, and from your own sessions.
 		</p>
 		{#if activities.result?.direct}
 			<p class="mt-2 text-xs leading-relaxed text-text-tertiary">

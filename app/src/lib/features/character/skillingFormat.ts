@@ -43,6 +43,16 @@ export function formatTargetGain(target: CodexRankingTarget, gain: number): stri
 	return `+${gain.toFixed(target.kind === 'hp' ? 2 : 3)}`;
 }
 
+/** PED in a routes row: whole and grouped from 100, two places below. */
+export function formatRoutePed(value: number): string {
+	return Math.abs(value) >= 100 ? Math.round(value).toLocaleString('en-GB') : value.toFixed(2);
+}
+
+/** A kill count, whole and grouped. */
+export function formatKills(kills: number): string {
+	return Math.round(kills).toLocaleString('en-GB');
+}
+
 /** A signed fraction as a percentage: "+4.2%". */
 export function formatLift(lift: number): string {
 	const percent = lift * 100;
@@ -82,22 +92,6 @@ export function statusMessage(
 			return `${sessionName} has no recorded cycling.`;
 		case 'out_of_range':
 			return `Out of ${sessionName}'s reach.`;
-	}
-}
-
-/** A short status for a picker row. */
-export function statusLabel(status: SkillingForecastStatus): string {
-	switch (status) {
-		case 'ready':
-			return '';
-		case 'reached':
-			return 'Goal reached';
-		case 'does_not_train':
-			return 'Does not train this';
-		case 'no_evidence':
-			return 'No recorded cycling';
-		case 'out_of_range':
-			return 'Out of reach';
 	}
 }
 

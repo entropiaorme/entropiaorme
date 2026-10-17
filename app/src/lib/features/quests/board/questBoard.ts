@@ -373,6 +373,24 @@ export function buildBoard(input: BoardInput): BoardPlanet[] {
 	return planets;
 }
 
+/** Rewards still to settle that no row on the board carries: completions of
+ * a quest that has since been deleted. Listed apart so none is unreachable. */
+export function unplacedRewards(
+	planets: BoardPlanet[],
+	unresolved: UnresolvedQuestReward[],
+): UnresolvedQuestReward[] {
+	const placed = new Set(
+		planets.flatMap((planet) =>
+			planet.sections.flatMap((section) =>
+				section.rows.flatMap((row) => row.unresolved.map((reward) => reward.completionId)),
+			),
+		),
+	);
+	return unresolved
+		.filter((reward) => !placed.has(reward.completionId))
+		.sort((a, b) => b.completedAt - a.completedAt);
+}
+
 /** When a gate lifts, as a player plans around it: a time today, "tomorrow"
  * with a time, or a weekday with a time within the week. */
 export function formatBackAt(backAt: number, now: number): string {

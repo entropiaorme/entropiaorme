@@ -1,7 +1,8 @@
 <script lang="ts">
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import QuestBoardRow from './QuestBoardRow.svelte';
-	import type { QuestBoardModel } from './questBoardModel.svelte';
+	import QuestSettlePanel from './QuestSettlePanel.svelte';
+	import { EARLIER_KEY, type QuestBoardModel } from './questBoardModel.svelte';
 	import type { BoardRow } from './questBoard';
 
 	let {
@@ -21,6 +22,7 @@
 	} = $props();
 
 	const current = $derived(model.current);
+	let earlierOpen = $state(false);
 	const offersHere = $derived(model.planet !== null && model.offeredPlanet === model.planet);
 </script>
 
@@ -112,6 +114,32 @@
 					</ul>
 				</section>
 			{/each}
+
+			{#if model.earlierRewards.length > 0}
+				<!-- Completions of quests since deleted: no row carries them, so
+					 they are settled here rather than left unreachable. -->
+				<section class="mb-1 border-t border-border/50 pt-3" aria-label="Earlier rewards to settle">
+					<button
+						type="button"
+						class="text-xs font-medium text-warning hover:text-text cursor-pointer transition-colors"
+						aria-expanded={earlierOpen}
+						onclick={() => (earlierOpen = !earlierOpen)}
+					>
+						{model.earlierRewards.length === 1
+							? '1 earlier reward to settle'
+							: `${model.earlierRewards.length} earlier rewards to settle`}
+					</button>
+					{#if earlierOpen}
+						<div class="pt-2">
+							<QuestSettlePanel
+								rewards={model.earlierRewards}
+								busy={model.busy === EARLIER_KEY}
+								onSettle={(input) => model.settleEarlier(input)}
+							/>
+						</div>
+					{/if}
+				</section>
+			{/if}
 		</div>
 	{:else}
 		<div class="flex-1 flex items-center justify-center text-center">

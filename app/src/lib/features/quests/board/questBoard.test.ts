@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOGUE, curatedRows, family, HOUR, NOW, quest, unresolved } from './boardFixtures';
 import type { BoardInput, BoardPlanet, BoardRow } from './questBoard';
-import { buildBoard, formatBackAt, variantOf, waypointLabel } from './questBoard';
+import { buildBoard, formatBackAt, unplacedRewards, variantOf, waypointLabel } from './questBoard';
 
 function input(overrides: Partial<BoardInput> = {}): BoardInput {
 	const rows = curatedRows();
@@ -251,6 +251,18 @@ describe('a quest', () => {
 		expect(calypso.sections[0].rows.map((entry) => [entry.kind, entry.label])).toEqual([
 			['slot', 'My Daily'],
 		]);
+	});
+});
+
+describe('rewards no row carries', () => {
+	it("lists a deleted quest's rewards apart, newest first", () => {
+		const rewards = [
+			unresolved({ completionId: 1, questId: '10' }),
+			unresolved({ completionId: 2, questId: '35', completedAt: 100 }),
+			unresolved({ completionId: 3, questId: '35', completedAt: 200 }),
+		];
+		const board = buildBoard(input({ unresolved: rewards }));
+		expect(unplacedRewards(board, rewards).map((reward) => reward.completionId)).toEqual([3, 2]);
 	});
 });
 

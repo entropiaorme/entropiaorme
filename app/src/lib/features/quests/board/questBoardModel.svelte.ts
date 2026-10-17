@@ -17,7 +17,7 @@ import type {
 	UnresolvedQuestReward,
 } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
-import { type BoardPlanet, type BoardRow, buildBoard } from './questBoard';
+import { type BoardPlanet, type BoardRow, buildBoard, unplacedRewards } from './questBoard';
 
 export interface QuestBoardDeps {
 	quests(): Quest[];
@@ -40,6 +40,9 @@ export interface QuestBoardDeps {
 	getPreference<T>(key: string, fallback: T): Promise<T>;
 	setPreference<T>(key: string, value: T): Promise<void>;
 }
+
+/** The busy key for the rewards no row carries. */
+export const EARLIER_KEY = 'earlier-rewards';
 
 /** The persisted planet the board last showed. */
 export const BOARD_PLANET_PREFERENCE = 'quest_board_planet';
@@ -101,6 +104,9 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 			now,
 		}),
 	);
+
+	/** Rewards to settle that no row carries (their quest was deleted). */
+	const earlierRewards = $derived(unplacedRewards(planets, unresolved));
 
 	/** The planet the selected session offers in the overlay. */
 	const offeredPlanet = $derived(deps.definition()?.questPlanet ?? null);
@@ -221,6 +227,20 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 		await loadUnresolved();
 	}
 
+	/** Settle one of the rewards no row carries. */
+	async function settleEarlier(input: QuestRewardReviewInput) {
+		busy = EARLIER_KEY;
+		error = null;
+		try {
+			await deps.reviewReward(input);
+		} catch (e) {
+			error = describeError(e, 'Failed to settle the reward');
+		} finally {
+			busy = null;
+		}
+		await loadUnresolved();
+	}
+
 	/** Make the selected session offer this planet's quests in the overlay. */
 	async function offerInOverlay(name: string) {
 		const definition = deps.definition();
@@ -247,6 +267,9 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 		},
 		get offeredPlanet() {
 			return offeredPlanet;
+		},
+		get earlierRewards() {
+			return earlierRewards;
 		},
 		get definitionName() {
 			return deps.definition()?.name ?? null;
@@ -285,6 +308,7 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 		undoReward,
 		toggleSettle,
 		settle,
+		settleEarlier,
 		offerInOverlay,
 	};
 }

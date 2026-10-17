@@ -79,7 +79,9 @@
 								{new Date(row.completedAt * 1000).toLocaleString()} · {row.reason ?? 'Capture was ambiguous'}
 							</p>
 						</div>
-						<span class="text-xs text-text-secondary">{row.isolated ? 'Isolated tick' : 'Mixed tick'}</span>
+						{#if row.isolated !== null}
+							<span class="text-xs text-text-secondary">{row.isolated ? 'Isolated tick' : 'Mixed tick'}</span>
+						{/if}
 					</div>
 					<div class="mt-3 space-y-1.5">
 						{#each row.loot as item, index (`${row.completionId}-${index}`)}

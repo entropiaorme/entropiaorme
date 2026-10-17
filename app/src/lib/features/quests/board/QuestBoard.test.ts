@@ -175,6 +175,18 @@ describe('the quest board', () => {
 		).toEqual(['No reward']);
 	});
 
+	it("settles a deleted quest's reward from the foot of the board", async () => {
+		const { deps } = await mount({
+			unresolved: [
+				unresolved({ completionId: 9, questId: '35', questName: 'ARIS - Daily Samples' }),
+			],
+		});
+		await fireEvent.click(screen.getByRole('button', { name: '1 earlier reward to settle' }));
+		const panel = screen.getByTestId('quest-settle-panel');
+		await fireEvent.click(within(panel).getByRole('button', { name: 'It was paid' }));
+		expect(deps.reviewReward).toHaveBeenCalledWith({ completionId: 9, declarePaid: true });
+	});
+
 	it('opens a custom quest on the planet in view', async () => {
 		const { handlers } = await mount();
 		await fireEvent.click(screen.getByRole('button', { name: 'Cyrene' }));

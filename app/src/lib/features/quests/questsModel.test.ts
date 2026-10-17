@@ -49,6 +49,10 @@ function quest(overrides: Partial<Quest> = {}): Quest {
 		familyCooldownAnchor: null,
 		familyCooldownExpiresAt: null,
 		rewardUndoAvailable: false,
+		curated: false,
+		catalogueKey: null,
+		lastAbandonedAt: null,
+		lastCompletedAt: null,
 		...overrides,
 	};
 }

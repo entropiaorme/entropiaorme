@@ -1660,6 +1660,7 @@ async fn the_session_list_scopes_to_one_definitions_instances() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -1717,6 +1718,7 @@ async fn re_filing_moves_the_instance_and_restamps_its_name() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -1773,6 +1775,7 @@ async fn re_filing_replaces_a_legacy_free_text_name() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -1811,6 +1814,7 @@ async fn re_filing_refuses_an_active_session() {
             name: "Carabok Skilling".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -1860,6 +1864,7 @@ async fn re_filing_refuses_an_archived_definition() {
             name: "Retired".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -1900,6 +1905,7 @@ async fn an_archived_definition_keeps_its_instances_reachable() {
             name: "Retired".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: true,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -2241,5 +2247,112 @@ async fn an_unresolved_hit_is_marked_an_effects_tick_across_the_facade() {
                 .unwrap_err()
         ),
         "notFound"
+    );
+}
+
+/// A quest created on a named planet through the facade.
+async fn seed_planet_quest(api: &Api, name: &str, planet: &str, extra: serde_json::Value) -> i64 {
+    let mut payload = serde_json::json!({ "name": name, "planet": planet, "family_id": null });
+    if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        payload.extend(extra.clone());
+    }
+    let quest = api
+        .quest_create(serde_json::from_value(payload).expect("quest input shape"))
+        .await
+        .unwrap();
+    serde_json::to_value(&quest).unwrap()["id"]
+        .as_str()
+        .expect("quest id")
+        .parse()
+        .expect("numeric quest id")
+}
+
+/// A session that follows a planet offers that planet's quests in place of
+/// its roster's quest entries: every family slot and standing run, plus any
+/// plain mission already in the log. A mission not yet received, and every
+/// other planet's business, stay off the control; roster segments remain.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_planet_following_session_offers_that_planets_quests() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, selection) = make_api_with_selection(dir.path(), "Cyrene Dailies").await;
+
+    let slot = api
+        .quest_family_create(
+            serde_json::from_value(serde_json::json!({
+                "name": "Duvall's Daily", "planet": "Cyrene",
+                "cooldown_hours": 21.0, "cooldown_anchor": "pickup",
+            }))
+            .expect("family input shape"),
+        )
+        .await
+        .unwrap();
+    let slot_id: i64 = serde_json::to_value(&slot).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let variant = seed_planet_quest(
+        &api,
+        "Duvall's Daily: Stalker Bots",
+        "Cyrene",
+        serde_json::json!({ "family_id": slot_id }),
+    )
+    .await;
+    api.quest_start(variant).await.unwrap();
+    seed_planet_quest(
+        &api,
+        "Cyrene Boss",
+        "Cyrene",
+        serde_json::json!({ "signal_loot_item": "Boss Token" }),
+    )
+    .await;
+    let received = seed_planet_quest(&api, "Getting Slimed!", "Cyrene", serde_json::json!({})).await;
+    api.quest_start(received).await.unwrap();
+    seed_planet_quest(&api, "Lord Pyscidon", "Cyrene", serde_json::json!({})).await;
+    let elsewhere = seed_planet_quest(&api, "Touch a Nerve", "Calypso", serde_json::json!({})).await;
+    api.quest_start(elsewhere).await.unwrap();
+
+    seed_definition(
+        &api,
+        &selection,
+        serde_json::json!({
+            "name": "Cyrene Dailies",
+            "quest_planet": "Cyrene",
+            "roster": [
+                { "kind": "quest", "ref_id": elsewhere },
+                { "kind": "segment", "label": "Travel" },
+            ],
+        }),
+    )
+    .await;
+    api.tracking_start().await.unwrap();
+
+    let options = api.tracking_activity_options().await.unwrap();
+    assert!(options.visible);
+    let names: Vec<&str> = options
+        .options
+        .iter()
+        .map(|option| option.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "Cyrene Boss",
+            "Duvall's Daily: Stalker Bots",
+            "Getting Slimed!",
+            "Travel"
+        ],
+        "the planet's slot, standing run and received mission, plus the segment"
+    );
+    assert_eq!(options.ready_count, 4);
+
+    let definitions = api.session_definitions_list(None).await.unwrap();
+    let definition = definitions
+        .iter()
+        .find(|definition| definition.name == "Cyrene Dailies")
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(definition).unwrap()["questPlanet"],
+        "Cyrene"
     );
 }

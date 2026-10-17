@@ -454,3 +454,69 @@ async fn delete_soft_deletes_off_the_active_list() {
         ApiError::not_found("Quest not found")
     );
 }
+
+/// The curated catalogue is served whole, in the order the board lays it
+/// out: planet, category, entries, with each family's known variants.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_curated_catalogue_is_served_in_board_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = quests_api(dir.path()).await;
+    let catalogue = api.quest_catalogue();
+    let planets: Vec<&str> = catalogue
+        .planets
+        .iter()
+        .map(|planet| planet.name.as_str())
+        .collect();
+    assert_eq!(planets, vec!["ARIS", "Cyrene"]);
+    let aris = &catalogue.planets[0];
+    let slots: Vec<&str> = aris.categories[0]
+        .entries
+        .iter()
+        .map(|entry| entry.label.as_str())
+        .collect();
+    assert_eq!(slots, vec!["Hunting 1", "Hunting 2", "Hunting 3", "Samples"]);
+    assert!(aris.categories[0]
+        .entries
+        .iter()
+        .all(|entry| !entry.member_keys.is_empty()));
+    let bosses = &aris.categories[1];
+    assert_eq!(bosses.name, "Bosses");
+    assert!(bosses
+        .entries
+        .iter()
+        .all(|entry| entry.member_keys.is_empty() && entry.reward_label == "Hyperion voucher"));
+}
+
+/// Abandon answers the refreshed quest, and a reward is settled by exactly
+/// one route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abandon_answers_the_quest_and_review_takes_one_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = quests_api(dir.path()).await;
+    let mut input = minimal("Getting Slimed!");
+    input.cooldown_hours = Some(21.0);
+    let quest = api.quest_create(input).await.unwrap();
+    let quest_id: i64 = quest.id.parse().unwrap();
+    assert!(!quest.curated);
+
+    let refused = api.quest_abandon(quest_id).await.unwrap_err();
+    assert!(matches!(refused, ApiError::BadRequest { .. }));
+    api.quest_start(quest_id).await.unwrap();
+    let abandoned = api.quest_abandon(quest_id).await.unwrap();
+    assert!(abandoned.started_at.0.is_none());
+    assert!(abandoned.last_abandoned_at.0.is_some());
+    assert!(abandoned.cooldown_expires_at.0.is_some());
+    assert!(matches!(
+        api.quest_abandon(999_999).await.unwrap_err(),
+        ApiError::NotFound { .. }
+    ));
+
+    let input: eo_api::quests::QuestRewardReviewInput = serde_json::from_value(
+        serde_json::json!({"completionId": 1, "declarePaid": true, "declareNone": true}),
+    )
+    .unwrap();
+    assert!(matches!(
+        api.quest_reward_review(input).await.unwrap_err(),
+        ApiError::BadRequest { .. }
+    ));
+}

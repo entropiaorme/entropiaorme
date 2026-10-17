@@ -24,6 +24,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'Default Tracking',
 		adHocSegments: false,
 		trackProtectionCosts: true,
+		questPlanet: null,
 		isProtected: true,
 		isActive: true,
 		instanceCount: 0,

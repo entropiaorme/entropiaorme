@@ -59,8 +59,8 @@ use eo_api::protection::{
     ProtectionStream, ProtectionUndoTarget,
 };
 use eo_api::quests::{
-    Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
-    QuestRewardReviewInput, UnresolvedQuestReward,
+    Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
+    QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
 use eo_api::scan::{
     AcceptResult, CaptureResult, RejectResult, ScanStatus, SkillScanPending, SpacebarResult,
@@ -663,6 +663,16 @@ pub async fn quest_cancel(
     undo_reward: bool,
 ) -> Result<Quest, ApiError> {
     facade(&app)?.quest_cancel(quest_id, undo_reward).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn quest_abandon(app: tauri::AppHandle, quest_id: i64) -> Result<Quest, ApiError> {
+    facade(&app)?.quest_abandon(quest_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn quest_catalogue(app: tauri::AppHandle) -> Result<QuestCatalogue, ApiError> {
+    Ok(facade(&app)?.quest_catalogue())
 }
 
 #[tauri::command(rename_all = "snake_case")]

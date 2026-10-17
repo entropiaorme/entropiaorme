@@ -72,6 +72,7 @@ fn definition(name: &str, roster: Vec<SessionRosterEntryInput>) -> SessionDefini
         name: name.to_string(),
         ad_hoc_segments: false,
         track_protection_costs: true,
+        quest_planet: None,
         roster,
     }
 }
@@ -158,6 +159,7 @@ async fn a_create_reads_back_the_wire_shape() {
             name: "ARIS Dailies".to_string(),
             ad_hoc_segments: true,
             track_protection_costs: true,
+            quest_planet: None,
             roster: vec![
                 SessionRosterEntryInput {
                     kind: SessionRosterEntryKind::QuestFamily,
@@ -231,6 +233,7 @@ async fn the_update_archive_and_restore_ladder_holds() {
                 name: "General Hunting".to_string(),
                 ad_hoc_segments: true,
                 track_protection_costs: true,
+                quest_planet: None,
                 roster: vec![segment("Grind"), segment("Wind-down")],
             },
         )

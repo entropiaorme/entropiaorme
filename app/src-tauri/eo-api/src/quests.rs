@@ -275,6 +275,15 @@ pub struct Quest {
     pub family_cooldown_expires_at: Nullable<String>,
     /// Whether the latest completion owns an unreversed economic reward.
     pub reward_undo_available: bool,
+    /// A quest the app ships and maintains: read-only to the player.
+    pub curated: bool,
+    /// The curated catalogue key, null for a quest the player authored.
+    pub catalogue_key: Nullable<String>,
+    /// The latest abandon (fractional epoch seconds), null when none.
+    pub last_abandoned_at: Nullable<f64>,
+    /// The latest completion not disavowed by a cooldown reset
+    /// (fractional epoch seconds).
+    pub last_completed_at: Nullable<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -372,6 +381,10 @@ impl Quest {
                 .into(),
             family_cooldown_expires_at: opt_string(&quest["family_cooldown_expires_at"]).into(),
             reward_undo_available: quest["reward_undo_available"].as_bool().unwrap_or(false),
+            curated: quest["curated"].as_bool().unwrap_or(false),
+            catalogue_key: opt_string(&quest["catalogue_key"]).into(),
+            last_abandoned_at: opt_f64(&quest["last_abandoned_at"]).into(),
+            last_completed_at: opt_f64(&quest["last_completed_at"]).into(),
         }
     }
 }
@@ -426,6 +439,9 @@ pub struct QuestFamily {
     pub last_started_at: Nullable<f64>,
     /// The latest member completion (fractional epoch seconds).
     pub last_completed_at: Nullable<f64>,
+    /// A family the app ships and maintains: read-only to the player.
+    pub curated: bool,
+    pub catalogue_key: Nullable<String>,
 }
 
 impl QuestFamily {
@@ -440,6 +456,8 @@ impl QuestFamily {
             member_count: family["member_count"].as_i64().unwrap_or(0),
             last_started_at: opt_f64(&family["last_started_at"]).into(),
             last_completed_at: opt_f64(&family["last_completed_at"]).into(),
+            curated: family["curated"].as_bool().unwrap_or(false),
+            catalogue_key: opt_string(&family["catalogue_key"]).into(),
         }
     }
 }
@@ -486,7 +504,28 @@ pub struct UnresolvedQuestReward {
     pub policy: Nullable<String>,
     pub reason: Nullable<String>,
     pub loot: Vec<QuestRewardCandidate>,
-    pub isolated: bool,
+    /// Whether the completion's own tick carried nothing else; null when no
+    /// tick was recorded for it, so no tick shape is named.
+    pub isolated: Nullable<bool>,
+    /// The quest's named reward items.
+    pub expected_items: Vec<String>,
+    /// Recorded ordinary-loot lines that could be the named reward, latest
+    /// first.
+    pub candidates: Vec<QuestRewardLootLine>,
+    /// Whether the reward may be declared paid when no line can show it.
+    pub declarable: bool,
+}
+
+/// One recorded loot line a named reward can be settled with.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestRewardLootLine {
+    pub id: i64,
+    pub item_name: String,
+    pub quantity: i64,
+    pub value_ped: f64,
+    /// What the line dropped from, when recorded.
+    pub mob_name: Nullable<String>,
 }
 
 impl UnresolvedQuestReward {
@@ -508,7 +547,21 @@ impl UnresolvedQuestReward {
                     value_ped: item["value"].as_f64().unwrap_or(0.0).max(0.0),
                 })
                 .collect(),
-            isolated: row["isolated"].as_bool().unwrap_or(false),
+            isolated: row["isolated"].as_bool().into(),
+            expected_items: string_list(&row["expected_items"]),
+            candidates: row["candidates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|line| QuestRewardLootLine {
+                    id: line["id"].as_i64().unwrap_or(0),
+                    item_name: string_field(&line["item_name"]),
+                    quantity: line["quantity"].as_i64().unwrap_or(1).max(1),
+                    value_ped: round_half_even(line["value_ped"].as_f64().unwrap_or(0.0).max(0.0), 4),
+                    mob_name: opt_string(&line["mob_name"]).into(),
+                })
+                .collect(),
+            declarable: row["declarable"].as_bool().unwrap_or(false),
         }
     }
 }
@@ -517,10 +570,17 @@ impl UnresolvedQuestReward {
 #[serde(rename_all = "camelCase")]
 pub struct QuestRewardReviewInput {
     pub completion_id: i64,
+    /// Lines of the completion's own recorded tick.
     #[serde(default)]
     pub selected_indices: Vec<i64>,
     #[serde(default)]
     pub declare_none: bool,
+    /// Recorded ordinary-loot lines (from `candidates`) that were the reward.
+    #[serde(default)]
+    pub loot_item_ids: Vec<i64>,
+    /// The named reward was paid, though nothing recorded shows it.
+    #[serde(default)]
+    pub declare_paid: bool,
 }
 
 impl QuestAnalyticsRow {
@@ -548,6 +608,107 @@ impl QuestAnalyticsRow {
                 })
                 .collect(),
             linked_sessions: row["linked_sessions"].as_i64().unwrap_or(0),
+        }
+    }
+}
+
+/// The curated catalogue as the board lays it out.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestCatalogue {
+    pub planets: Vec<QuestCataloguePlanet>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestCataloguePlanet {
+    pub key: String,
+    /// The planet as quest rows carry it.
+    pub name: String,
+    pub categories: Vec<QuestCatalogueCategory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestCatalogueCategory {
+    pub key: String,
+    pub name: String,
+    pub entries: Vec<QuestCatalogueEntry>,
+}
+
+/// A family is one rotating slot; a quest stands alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestCatalogueEntryKind {
+    Family,
+    Quest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestCatalogueEntry {
+    pub kind: QuestCatalogueEntryKind,
+    /// Matches `catalogueKey` on the family or quest row.
+    pub key: String,
+    /// What the board calls it.
+    pub label: String,
+    /// A short qualifier shown beside the label.
+    pub detail: Nullable<String>,
+    /// How the board states the reward.
+    pub reward_label: String,
+    /// A family's known variants, by catalogue key; empty for a quest.
+    pub member_keys: Vec<String>,
+}
+
+impl QuestCatalogue {
+    fn from_catalogue(catalogue: &eo_services::quests::catalogue::Catalogue) -> Self {
+        use eo_services::quests::catalogue::CatalogueEntry;
+        Self {
+            planets: catalogue
+                .planets
+                .iter()
+                .map(|planet| QuestCataloguePlanet {
+                    key: planet.key.clone(),
+                    name: planet.name.clone(),
+                    categories: planet
+                        .categories
+                        .iter()
+                        .map(|category| QuestCatalogueCategory {
+                            key: category.key.clone(),
+                            name: category.name.clone(),
+                            entries: category
+                                .entries
+                                .iter()
+                                .map(|entry| match entry {
+                                    CatalogueEntry::Family(family) => QuestCatalogueEntry {
+                                        kind: QuestCatalogueEntryKind::Family,
+                                        key: family.key.clone(),
+                                        label: family.label.clone(),
+                                        detail: None.into(),
+                                        reward_label: family.reward.label.clone(),
+                                        member_keys: family
+                                            .members
+                                            .iter()
+                                            .map(|member| member.key.clone())
+                                            .collect(),
+                                    },
+                                    CatalogueEntry::Quest(quest) => QuestCatalogueEntry {
+                                        kind: QuestCatalogueEntryKind::Quest,
+                                        key: quest.key.clone(),
+                                        label: quest
+                                            .label
+                                            .clone()
+                                            .unwrap_or_else(|| quest.name.clone()),
+                                        detail: quest.detail.clone().into(),
+                                        reward_label: quest.reward.label.clone(),
+                                        member_keys: Vec::new(),
+                                    },
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -796,15 +957,57 @@ impl Api {
             .collect())
     }
 
+    /// Settle an unresolved completion by exactly one route: its own tick's
+    /// lines, recorded ordinary-loot lines, a declared payment, or no reward.
     pub async fn quest_reward_review(&self, input: QuestRewardReviewInput) -> Result<(), ApiError> {
-        self.quests
-            .resolve_reward_review(
-                input.completion_id,
-                &input.selected_indices,
-                input.declare_none,
-            )
+        let routes = [
+            !input.selected_indices.is_empty(),
+            !input.loot_item_ids.is_empty(),
+            input.declare_paid,
+            input.declare_none,
+        ];
+        if routes.iter().filter(|route| **route).count() > 1 {
+            return Err(ApiError::bad_request(
+                "settle a reward by exactly one route".to_string(),
+            ));
+        }
+        let result = if !input.loot_item_ids.is_empty() {
+            self.quests
+                .settle_reward_with_loot(input.completion_id, &input.loot_item_ids)
+                .await
+        } else if input.declare_paid {
+            self.quests.declare_reward_paid(input.completion_id).await
+        } else {
+            self.quests
+                .resolve_reward_review(
+                    input.completion_id,
+                    &input.selected_indices,
+                    input.declare_none,
+                )
+                .await
+        };
+        result.map_err(quest_error("quest reward review"))
+    }
+
+    /// Give up a quest in progress, as the player just did in game: no
+    /// reward, and the slot stays held until the next mission can be
+    /// collected. A missing quest is a 404.
+    pub async fn quest_abandon(&self, quest_id: i64) -> Result<Quest, ApiError> {
+        match self
+            .quests
+            .abandon_quest(quest_id)
             .await
-            .map_err(quest_error("quest reward review"))
+            .map_err(quest_error("quest abandon"))?
+        {
+            Some(quest) => Ok(Quest::from_service(&quest)),
+            None => Err(quest_not_found()),
+        }
+    }
+
+    /// The curated catalogue's structure: planets, their categories, and
+    /// the entries in authored order. Static data, served whole.
+    pub fn quest_catalogue(&self) -> QuestCatalogue {
+        QuestCatalogue::from_catalogue(&eo_services::quests::catalogue::CATALOGUE)
     }
 
     /// All active quest families, with their derived availability.

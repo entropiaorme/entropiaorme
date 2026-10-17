@@ -83,6 +83,8 @@ macro_rules! app_command_surface {
             quest_rewards_unresolved,
             quest_reward_review,
             quest_cancel,
+            quest_abandon,
+            quest_catalogue,
             quests_mobs,
             quests_analytics,
             quest_families_list,

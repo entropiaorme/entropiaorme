@@ -353,6 +353,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session weapon rollups",
         sql: include_str!("../../migrations/0063_session_weapon_rollups.sql"),
     },
+    Migration {
+        version: 64,
+        description: "curated quests",
+        sql: include_str!("../../migrations/0064_curated_quests.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -424,6 +429,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "67983B1055CD53D142AD2143F1D2DB12CF57B3262CE600987B25952234D0708962CDB55E4C17A3ADD30257CD714004DE",
     "AACB75D4FD6C47510EB8AA2E6505AFBC4803D7F5591521CCD56A53045301A0EBE6F40DB3B11531C3DAC30F049B222FE9",
     "D7D416FB7026FD9FE007DF02BB5F55E8E32D0D1C35BE5E9BC89BC6FE3AA054E2052B0B2898F0BD2B8AF0EB87E3FEF9B3",
+    "EA6118EDAADCD5FD29CC594DDFC6E4DA4235E9AEFBE812CB0088D6BEE48F65DB791B23195DC9354F3FB814ABB31DD1AC",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

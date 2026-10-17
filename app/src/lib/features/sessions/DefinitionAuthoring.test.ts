@@ -14,6 +14,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'Easter Mayhem 2026',
 		adHocSegments: false,
 		trackProtectionCosts: true,
+		questPlanet: null,
 		isProtected: false,
 		isActive: true,
 		instanceCount: 35,

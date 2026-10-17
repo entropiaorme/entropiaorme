@@ -131,9 +131,11 @@ async fn creates_apply_defaults_normalisation_and_mob_rules() {
             "is_active": 1, "created_at": 1000.0, "category": null,
             "reward_description": null, "updated_at": 1000.0, "signal_loot_item": null,
             "completion_trigger": "mission_log", "reward_policy": "none",
-            "family_id": null, "cooldown_anchor": "completion", "last_started_at": null,
+            "family_id": null, "curated": false, "catalogue_key": null,
+            "cooldown_anchor": "completion", "last_started_at": null,
             "family_name": null, "family_cooldown_hours": null,
             "family_cooldown_anchor": null, "last_completed_at": null,
+            "last_abandoned_at": null,
             "cooldown_expires_at": null, "family_cooldown_expires_at": null,
             "reward_undo_available": false, "mobs": [], "reward_item_names": [],
         })

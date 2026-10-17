@@ -50,6 +50,7 @@ fn input(name: &str, roster: Vec<RosterEntryInput>) -> SessionDefinitionInput {
         name: name.to_string(),
         ad_hoc_segments: false,
         track_protection_costs: true,
+        quest_planet: None,
         roster,
     }
 }
@@ -90,6 +91,7 @@ async fn definition_crud_round_trips() {
             name: "  ARIS Dailies  ".to_string(),
             ad_hoc_segments: true,
             track_protection_costs: true,
+            quest_planet: None,
             roster: vec![
                 family_entry(family_id),
                 quest_entry(quest_id),
@@ -146,6 +148,7 @@ async fn a_definition_can_opt_out_of_armour_costs() {
             name: "Offensive costs only".to_string(),
             ad_hoc_segments: false,
             track_protection_costs: false,
+            quest_planet: None,
             roster: Vec::new(),
         })
         .await
@@ -175,6 +178,7 @@ async fn update_replaces_the_roster_wholesale() {
                 name: "General Hunting".to_string(),
                 ad_hoc_segments: true,
                 track_protection_costs: true,
+                quest_planet: None,
                 roster: vec![segment_entry("Grind")],
             },
         )

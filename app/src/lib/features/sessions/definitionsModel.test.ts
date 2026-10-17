@@ -10,6 +10,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'ARIS Dailies',
 		adHocSegments: false,
 		trackProtectionCosts: true,
+		questPlanet: null,
 		isProtected: false,
 		isActive: true,
 		instanceCount: 0,
@@ -31,6 +32,8 @@ function family(id: string, name: string): QuestFamily {
 		memberCount: 0,
 		lastStartedAt: null,
 		lastCompletedAt: null,
+		curated: false,
+		catalogueKey: null,
 	};
 }
 
@@ -64,6 +67,10 @@ function quest(overrides: Partial<Quest> = {}): Quest {
 		familyCooldownAnchor: null,
 		familyCooldownExpiresAt: null,
 		rewardUndoAvailable: false,
+		curated: false,
+		catalogueKey: null,
+		lastAbandonedAt: null,
+		lastCompletedAt: null,
 		...overrides,
 	};
 }

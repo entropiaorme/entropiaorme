@@ -61,8 +61,8 @@ use crate::protection::{
     ProtectionStream, ProtectionUndoTarget,
 };
 use crate::quests::{
-    Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
-    QuestRewardReviewInput, UnresolvedQuestReward,
+    Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
+    QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
 use crate::scan::{
     AcceptResult, CaptureResult, RejectResult, ScanStatus, SkillScanPending, SpacebarResult,
@@ -794,6 +794,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(Quest))),
+        },
+        CommandSpec {
+            name: "quest_abandon",
+            args: vec![ArgSpec {
+                name: "quest_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Quest))),
+        },
+        CommandSpec {
+            name: "quest_catalogue",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(QuestCatalogue))),
         },
         CommandSpec {
             name: "quests_mobs",

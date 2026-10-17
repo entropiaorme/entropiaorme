@@ -108,6 +108,9 @@ pub struct SessionDefinition {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
+    /// The planet whose quests this session offers, in place of the quest
+    /// entries of its roster. `None` keeps the authored roster.
+    pub quest_planet: Option<String>,
     pub is_active: bool,
     /// A definition that must not be archived: tracking always has one
     /// to be an instance of, and this is the one that guarantees it.
@@ -181,6 +184,8 @@ pub struct SessionDefinitionInput {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
+    /// Blank reads as none.
+    pub quest_planet: Option<String>,
     pub roster: Vec<RosterEntryInput>,
 }
 
@@ -198,7 +203,7 @@ pub struct SessionDefinitionService {
 
 const DEFINITION_SELECT: &str = "\
     SELECT d.id, d.name, d.ad_hoc_segments, d.track_protection_costs, \
-           d.is_active, d.is_protected, \
+           d.quest_planet, d.is_active, d.is_protected, \
            d.created_at, d.updated_at, \
            (SELECT COUNT(*) FROM tracking_sessions s \
             WHERE s.definition_id = d.id) AS instance_count \
@@ -372,6 +377,7 @@ impl SessionDefinitionService {
 
         let ad_hoc = input.ad_hoc_segments;
         let track_protection_costs = input.track_protection_costs;
+        let quest_planet = normalized_planet(input.quest_planet.as_deref());
         let definition_id = self
             .db
             .with_writer(move |conn| {
@@ -380,9 +386,15 @@ impl SessionDefinitionService {
                     // The per-segment armour flag is retired; see the
                     // protection service for why costs no longer need it.
                     "INSERT INTO session_definitions \
-                     (name, ad_hoc_segments, track_protection_costs, track_protection_by_segment) \
-                     VALUES (?, ?, ?, 0)",
-                    rusqlite::params![name, ad_hoc as i64, track_protection_costs as i64],
+                     (name, ad_hoc_segments, track_protection_costs, track_protection_by_segment, \
+                      quest_planet) \
+                     VALUES (?, ?, ?, 0, ?)",
+                    rusqlite::params![
+                        name,
+                        ad_hoc as i64,
+                        track_protection_costs as i64,
+                        quest_planet
+                    ],
                 )?;
                 let definition_id = tx.last_insert_rowid();
                 write_roster(&tx, definition_id, &roster)?;
@@ -414,6 +426,7 @@ impl SessionDefinitionService {
 
         let ad_hoc = input.ad_hoc_segments;
         let track_protection_costs = input.track_protection_costs;
+        let quest_planet = normalized_planet(input.quest_planet.as_deref());
         let now = self.now_epoch();
         self.db
             .with_writer(move |conn| {
@@ -421,12 +434,13 @@ impl SessionDefinitionService {
                 tx.execute(
                     "UPDATE session_definitions \
                      SET name = ?, ad_hoc_segments = ?, track_protection_costs = ?, \
-                         updated_at = ? \
+                         quest_planet = ?, updated_at = ? \
                      WHERE id = ?",
                     rusqlite::params![
                         name,
                         ad_hoc as i64,
                         track_protection_costs as i64,
+                        quest_planet,
                         now,
                         definition_id
                     ],
@@ -833,6 +847,7 @@ fn row_to_definition(row: &rusqlite::Row) -> Result<SessionDefinition, rusqlite:
         name: row.get("name")?,
         ad_hoc_segments: row.get::<_, i64>("ad_hoc_segments")? != 0,
         track_protection_costs: row.get::<_, i64>("track_protection_costs")? != 0,
+        quest_planet: row.get("quest_planet")?,
         is_active: row.get::<_, i64>("is_active")? != 0,
         is_protected: row.get::<_, i64>("is_protected")? != 0,
         created_at: row.get("created_at")?,
@@ -889,6 +904,14 @@ fn write_roster(
         )?;
     }
     Ok(())
+}
+
+/// A quest planet, trimmed; blank means none.
+fn normalized_planet(planet: Option<&str>) -> Option<String> {
+    planet
+        .map(str::trim)
+        .filter(|planet| !planet.is_empty())
+        .map(str::to_string)
 }
 
 /// A definition's name, trimmed and required non-empty.

@@ -1839,11 +1839,11 @@ mod tests {
         // + healing corrections' table and 6 indexes + weapon attribution's
         // 3 tables and 4 indexes + weapon effect windows' table and 2 indexes
         // + consumable doses' table and 3 indexes + session weapon rollups'
-        // 3 tables and 2 indexes
+        // 3 tables and 2 indexes + curated quests' 2 catalogue-key indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 222);
+        assert_eq!(master.len(), 224);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

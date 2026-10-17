@@ -60,17 +60,30 @@ impl QuestService {
                     let evidence: Option<String> = row.get(6)?;
                     let parsed = evidence
                         .as_deref()
-                        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-                        .unwrap_or_else(|| json!({}));
+                        .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+                    let completion_id = row.get::<_, i64>(0)?;
+                    let quest_id = row.get::<_, i64>(1)?;
+                    let policy = row.get::<_, Option<String>>(4)?;
                     out.push(json!({
-                        "completion_id": row.get::<_, i64>(0)?,
-                        "quest_id": row.get::<_, i64>(1)?,
+                        "completion_id": completion_id,
+                        "quest_id": quest_id,
                         "quest_name": row.get::<_, String>(2)?,
                         "completed_at": row.get::<_, f64>(3)?,
-                        "policy": row.get::<_, Option<String>>(4)?,
+                        "policy": policy,
                         "reason": row.get::<_, Option<String>>(5)?,
-                        "loot": parsed.get("loot").cloned().unwrap_or_else(|| json!([])),
-                        "isolated": parsed.get("isolated").and_then(Value::as_bool).unwrap_or(false),
+                        "loot": parsed
+                            .as_ref()
+                            .and_then(|parsed| parsed.get("loot").cloned())
+                            .unwrap_or_else(|| json!([])),
+                        // A tick shape is named only where a tick was
+                        // recorded; a completion with no evidence has none.
+                        "isolated": parsed
+                            .as_ref()
+                            .and_then(|parsed| parsed.get("isolated"))
+                            .and_then(Value::as_bool),
+                        "expected_items": expected_items(conn, quest_id)?,
+                        "candidates": loot_candidates(conn, completion_id)?,
+                        "declarable": policy.as_deref() == Some("named_items"),
                     }));
                 }
                 Ok(out)
@@ -337,6 +350,7 @@ impl QuestService {
                         &item_name,
                         quantity,
                         value_ped,
+                        super::lifecycle::EvidenceBasis::Observed,
                     )?;
                 }
                 for kill_id in affected_kill_ids {
@@ -366,4 +380,263 @@ impl QuestService {
             ReviewResolution::Refused(message) => Err(QuestError::Invalid(message)),
         }
     }
+
+    /// Settle an unresolved completion with recorded loot lines: the
+    /// quest's named reward arrived as ordinary loot (a pickup the chat log
+    /// split from its completion line), so the exact acquisition moves from
+    /// ordinary loot to the quest reward. Each line is revalidated: active,
+    /// unclaimed, in the completion's session (and declared activity, when
+    /// it has one), and one of the quest's named reward items.
+    pub async fn settle_reward_with_loot(
+        &self,
+        completion_id: i64,
+        loot_item_ids: &[i64],
+    ) -> Result<(), QuestError> {
+        if loot_item_ids.is_empty() {
+            return Err(QuestError::Invalid(
+                "select at least one reward line".to_string(),
+            ));
+        }
+        let mut ids = loot_item_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() != loot_item_ids.len() {
+            return Err(QuestError::Invalid(
+                "reward selection contains a duplicate line".to_string(),
+            ));
+        }
+        let now = self.now_epoch();
+        let resolution = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(completion) = open_completion(&tx, completion_id)? else {
+                    return Ok(ReviewResolution::Refused(
+                        "unresolved completion not found".to_string(),
+                    ));
+                };
+                let candidates = loot_candidates(&tx, completion_id)?;
+                let mut chosen = Vec::with_capacity(ids.len());
+                for id in &ids {
+                    let Some(candidate) = candidates
+                        .iter()
+                        .find(|candidate| candidate["id"].as_i64() == Some(*id))
+                    else {
+                        return Ok(ReviewResolution::Refused(
+                            "that loot line is no longer available for this reward".to_string(),
+                        ));
+                    };
+                    chosen.push(candidate.clone());
+                }
+                tx.execute(
+                    "INSERT INTO quest_reward_reviews \
+                     (completion_id, outcome, policy, note, reviewed_at, basis) \
+                     VALUES (?, 'confirmed', 'named_items', \
+                             'Confirmed from a recorded loot line', ?, 'observed')",
+                    rusqlite::params![completion_id, now],
+                )?;
+                let review_id = tx.last_insert_rowid();
+                let mut kill_ids = BTreeSet::new();
+                let mut loot_sources = BTreeSet::new();
+                for candidate in chosen {
+                    let id = candidate["id"].as_i64().unwrap_or_default();
+                    let item_name = candidate["item_name"].as_str().unwrap_or_default();
+                    let quantity = candidate["quantity"].as_i64().unwrap_or(1).max(1);
+                    let value_ped = candidate["value_ped"].as_f64().unwrap_or(0.0).max(0.0);
+                    tx.execute(
+                        "INSERT INTO quest_reward_review_items \
+                         (review_id, source_loot_item_id, item_name, quantity, value_ped) \
+                         VALUES (?, ?, ?, ?, ?)",
+                        rusqlite::params![review_id, id, item_name, quantity, value_ped],
+                    )?;
+                    tx.execute(
+                        "UPDATE kill_loot_items SET deactivated_at = ? WHERE id = ?",
+                        rusqlite::params![now, id],
+                    )?;
+                    super::lifecycle::insert_reward_item(
+                        &tx,
+                        completion_id,
+                        &completion.quest_name,
+                        completion.completed_at,
+                        item_name,
+                        quantity,
+                        value_ped,
+                        super::lifecycle::EvidenceBasis::Observed,
+                    )?;
+                    if let Some(kill_id) = candidate["kill_id"].as_str() {
+                        kill_ids.insert(kill_id.to_string());
+                    }
+                    if let Some(source) = candidate["loot_source_id"].as_str() {
+                        loot_sources.insert(source.to_string());
+                    }
+                }
+                for kill_id in kill_ids {
+                    super::lifecycle::recompute_kill_loot_total(&tx, &kill_id)?;
+                }
+                crate::session_rollup::recompute_session(&tx, &completion.session_id)?;
+                crate::daily_rollup::refresh_session_days(&tx, &completion.session_id)?;
+                crate::daily_rollup::refresh_days(
+                    &tx,
+                    [crate::daily_rollup::epoch_day(completion.completed_at)],
+                )?;
+                tx.commit()?;
+                Ok(ReviewResolution::Applied(loot_sources.into_iter().collect()))
+            })
+            .await?;
+        match resolution {
+            ReviewResolution::Applied(source_ids) => {
+                for source_id in source_ids {
+                    self.report_loot_reconciled(source_id).await;
+                }
+                Ok(())
+            }
+            ReviewResolution::Refused(message) => Err(QuestError::Invalid(message)),
+        }
+    }
+
+    /// Settle an unresolved named-item completion by the player's word that
+    /// the reward was paid, when nothing recorded can show it. The items are
+    /// recorded once at no observed value and marked declared, so nothing
+    /// downstream mistakes them for captured evidence. Refused while a
+    /// recorded line could settle it instead: declaring then would count the
+    /// same item twice.
+    pub async fn declare_reward_paid(&self, completion_id: i64) -> Result<(), QuestError> {
+        let now = self.now_epoch();
+        let resolution = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(completion) = open_completion(&tx, completion_id)? else {
+                    return Ok(ReviewResolution::Refused(
+                        "unresolved completion not found".to_string(),
+                    ));
+                };
+                if completion.policy.as_deref() != Some("named_items") {
+                    return Ok(ReviewResolution::Refused(
+                        "only a named reward can be declared paid".to_string(),
+                    ));
+                }
+                if !loot_candidates(&tx, completion_id)?.is_empty() {
+                    return Ok(ReviewResolution::Refused(
+                        "a recorded loot line can settle this reward; use it instead".to_string(),
+                    ));
+                }
+                let items = expected_items(&tx, completion.quest_id)?;
+                if items.is_empty() {
+                    return Ok(ReviewResolution::Refused(
+                        "the quest names no reward item to declare".to_string(),
+                    ));
+                }
+                tx.execute(
+                    "INSERT INTO quest_reward_reviews \
+                     (completion_id, outcome, policy, note, reviewed_at, basis) \
+                     VALUES (?, 'confirmed', 'named_items', 'Declared paid by the player', ?, \
+                             'declared')",
+                    rusqlite::params![completion_id, now],
+                )?;
+                for item in &items {
+                    super::lifecycle::insert_reward_item(
+                        &tx,
+                        completion_id,
+                        &completion.quest_name,
+                        completion.completed_at,
+                        item,
+                        1,
+                        0.0,
+                        super::lifecycle::EvidenceBasis::Declared,
+                    )?;
+                }
+                crate::daily_rollup::refresh_days(
+                    &tx,
+                    [crate::daily_rollup::epoch_day(completion.completed_at)],
+                )?;
+                tx.commit()?;
+                Ok(ReviewResolution::Applied(Vec::new()))
+            })
+            .await?;
+        match resolution {
+            ReviewResolution::Applied(_) => Ok(()),
+            ReviewResolution::Refused(message) => Err(QuestError::Invalid(message)),
+        }
+    }
+}
+
+/// An unresolved, unreviewed completion as the settlement paths need it.
+struct OpenCompletion {
+    quest_id: i64,
+    quest_name: String,
+    session_id: String,
+    completed_at: f64,
+    policy: Option<String>,
+}
+
+fn open_completion(
+    conn: &rusqlite::Connection,
+    completion_id: i64,
+) -> rusqlite::Result<Option<OpenCompletion>> {
+    conn.query_row(
+        "SELECT c.quest_id, q.name, c.session_id, c.completed_at, c.reward_policy_snapshot \
+         FROM session_quest_completions c \
+         JOIN quests q ON q.id = c.quest_id \
+         WHERE c.id = ? AND c.reward_outcome = 'unresolved' \
+           AND NOT EXISTS (SELECT 1 FROM quest_reward_reviews r WHERE r.completion_id = c.id)",
+        rusqlite::params![completion_id],
+        |row| {
+            Ok(OpenCompletion {
+                quest_id: row.get(0)?,
+                quest_name: row.get(1)?,
+                session_id: row.get(2)?,
+                completed_at: row.get(3)?,
+                policy: row.get(4)?,
+            })
+        },
+    )
+    .optional()
+}
+
+/// The quest's named reward items, in authored order.
+fn expected_items(conn: &rusqlite::Connection, quest_id: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT item_name FROM quest_reward_item_rules \
+         WHERE quest_id = ? ORDER BY sort_order, item_name",
+    )?;
+    let names = stmt.query_map(rusqlite::params![quest_id], |row| row.get(0))?;
+    names.collect()
+}
+
+/// Ordinary loot lines that could be this completion's named reward: one of
+/// the quest's named items, still active and unclaimed, recorded in the
+/// completion's session (and its declared activity, when it has one). Found
+/// by identity and scope alone, never by comparing the loot's game-clock
+/// timestamp with the completion's wall-clock instant; the observed time is
+/// carried only so the player can tell lines apart.
+fn loot_candidates(conn: &rusqlite::Connection, completion_id: i64) -> rusqlite::Result<Vec<Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT li.id, li.kill_id, k.loot_source_id, li.item_name, li.quantity, li.value_ped, \
+                k.timestamp, k.mob_name \
+         FROM session_quest_completions c \
+         JOIN quest_reward_item_rules rule ON rule.quest_id = c.quest_id \
+         JOIN kills k ON k.session_id = c.session_id \
+          AND (c.activity_context_id IS NULL OR k.context_id = c.activity_context_id) \
+         JOIN kill_loot_items li ON li.kill_id = k.id \
+          AND lower(trim(li.item_name)) = lower(trim(rule.item_name)) \
+         WHERE c.id = ? AND c.reward_policy_snapshot = 'named_items' \
+           AND li.deactivated_at IS NULL \
+           AND NOT EXISTS (SELECT 1 FROM quest_reward_review_items ri \
+                           WHERE ri.source_loot_item_id = li.id) \
+         ORDER BY k.timestamp DESC, li.id DESC",
+    )?;
+    let lines = stmt.query_map(rusqlite::params![completion_id], |row| {
+        Ok(json!({
+            "id": row.get::<_, i64>(0)?,
+            "kill_id": row.get::<_, String>(1)?,
+            "loot_source_id": row.get::<_, Option<String>>(2)?,
+            "item_name": row.get::<_, String>(3)?,
+            "quantity": row.get::<_, i64>(4)?,
+            "value_ped": row.get::<_, f64>(5)?,
+            "observed_at": row.get::<_, f64>(6)?,
+            "mob_name": row.get::<_, Option<String>>(7)?,
+        }))
+    })?;
+    lines.collect()
 }

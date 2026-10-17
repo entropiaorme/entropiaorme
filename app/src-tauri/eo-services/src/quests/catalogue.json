@@ -1,0 +1,790 @@
+{
+  "version": 1,
+  "planets": [
+    {
+      "key": "aris",
+      "name": "ARIS",
+      "categories": [
+        {
+          "key": "aris/daily-missions",
+          "name": "Daily missions",
+          "entries": [
+            {
+              "kind": "family",
+              "key": "aris/hunting-1",
+              "name": "ARIS - Daily Hunting 1",
+              "label": "Hunting 1",
+              "cooldownHours": 20,
+              "cooldownAnchor": "pickup",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "members": [
+                {
+                  "key": "aris/hunting-1/defective-destroyers",
+                  "name": "ARIS - Daily Hunting 1: Defective Destroyers",
+                  "waypoint": "/wp [Aris, 39655, 23345, 150, Defective Destroyer Gen 03]"
+                },
+                {
+                  "key": "aris/hunting-1/defective-drones",
+                  "name": "ARIS - Daily Hunting 1: Defective Drones",
+                  "waypoint": "/wp [Aris, 39655, 23345, 240, Defective Drone Gen 3]"
+                },
+                {
+                  "key": "aris/hunting-1/faint-fieroids",
+                  "name": "ARIS - Daily Hunting 1: Faint Fieroids",
+                  "waypoint": "/wp [Aris, 39076, 19980, 145, Faint Fieroid Drifter]"
+                },
+                {
+                  "key": "aris/hunting-1/weak-mortirex",
+                  "name": "ARIS - Daily Hunting 1: Weak Mortirex",
+                  "waypoint": "/wp [Aris, 38733, 22335, 165, Weak Mortirex Meekling]"
+                },
+                {
+                  "key": "aris/hunting-1/weak-verderons",
+                  "name": "ARIS - Daily Hunting 1: Weak Verderons",
+                  "waypoint": "/wp [Aris, 39733, 23879, 150, Weak Verderon Forager]"
+                }
+              ]
+            },
+            {
+              "kind": "family",
+              "key": "aris/hunting-2",
+              "name": "ARIS - Daily Hunting 2",
+              "label": "Hunting 2",
+              "cooldownHours": 20,
+              "cooldownAnchor": "pickup",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "members": [
+                {
+                  "key": "aris/hunting-2/cryomusoids",
+                  "name": "ARIS - Daily Hunting 2: Cryomusoids",
+                  "waypoint": "/wp [Aris, 35854, 21053, 120, Cryomusoid Scout - Raider]"
+                },
+                {
+                  "key": "aris/hunting-2/derelict-defendrons",
+                  "name": "ARIS - Daily Hunting 2: Derelict Defendrons",
+                  "waypoint": "/wp [Aris, 39376, 21944, 150, Derelict Defendron Gen 01]"
+                },
+                {
+                  "key": "aris/hunting-2/derelict-drokas",
+                  "name": "ARIS - Daily Hunting 2: Derelict Drokas",
+                  "waypoint": "/wp [Aris, 37605, 22445, 130, Derelict Droka Gen 01 - Gen 04]"
+                },
+                {
+                  "key": "aris/hunting-2/derelict-warriors",
+                  "name": "ARIS - Daily Hunting 2: Derelict Warriors",
+                  "waypoint": "/wp [Aris, 36163, 23699, 180, Derelict Warrior Gen 01 - Gen 03]"
+                },
+                {
+                  "key": "aris/hunting-2/fieroids",
+                  "name": "ARIS - Daily Hunting 2: Fieroids",
+                  "waypoint": "/wp [Aris, 38514, 20006, 145, Fieroid Outcast]"
+                },
+                {
+                  "key": "aris/hunting-2/primonauts",
+                  "name": "ARIS - Daily Hunting 2: Primonauts",
+                  "waypoint": "/wp [Aris, 39847, 22562, 150, Primonaut Outcast - Scout]"
+                }
+              ]
+            },
+            {
+              "kind": "family",
+              "key": "aris/hunting-3",
+              "name": "ARIS - Daily Hunting 3",
+              "label": "Hunting 3",
+              "cooldownHours": 20,
+              "cooldownAnchor": "pickup",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "members": [
+                {
+                  "key": "aris/hunting-3/derelict-destroyers",
+                  "name": "ARIS - Daily Hunting 3: Derelict Destroyers",
+                  "waypoint": "/wp [Aris, 36161, 23854, 150, Derelict Destroyer Gen 01]"
+                },
+                {
+                  "key": "aris/hunting-3/fieroid-elites",
+                  "name": "ARIS - Daily Hunting 3: Fieroid Elites",
+                  "waypoint": "/wp [Aris, 39092, 16931, 140, Fieroid Elite Scorcher - Elite Pyromancer]"
+                },
+                {
+                  "key": "aris/hunting-3/maulertrons",
+                  "name": "ARIS - Daily Hunting 3: Maulertrons",
+                  "waypoint": "/wp [Aris, 39166, 21495, 135, Maulertron Prototype - Enhanced]"
+                },
+                {
+                  "key": "aris/hunting-3/mortirex",
+                  "name": "ARIS - Daily Hunting 3: Mortirex",
+                  "waypoint": "/wp [Aris, 36773, 23200, 169, Mortirex Young - Adult]"
+                },
+                {
+                  "key": "aris/hunting-3/primonaut-elders",
+                  "name": "ARIS - Daily Hunting 3: Primonaut Elders",
+                  "waypoint": "/wp [Aris, 39960, 17673, 125, Primonaut Elder Disciple]"
+                },
+                {
+                  "key": "aris/hunting-3/verderons",
+                  "name": "ARIS - Daily Hunting 3: Verderons",
+                  "waypoint": "/wp [Aris, 39525, 21202, 135, Verderon Young]"
+                }
+              ]
+            },
+            {
+              "kind": "family",
+              "key": "aris/samples",
+              "name": "ARIS - Daily Samples",
+              "label": "Samples",
+              "cooldownHours": 20,
+              "cooldownAnchor": "pickup",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "members": [
+                {
+                  "key": "aris/samples/crater-rim",
+                  "name": "ARIS - Daily Samples: Crater Rim"
+                },
+                {
+                  "key": "aris/samples/cryomusoids",
+                  "name": "ARIS - Daily Samples: Cryomusoids"
+                },
+                {
+                  "key": "aris/samples/furor-lab",
+                  "name": "ARIS - Daily Samples: Furor Lab"
+                },
+                {
+                  "key": "aris/samples/lava-pool",
+                  "name": "ARIS - Daily Samples: Lava Pool"
+                },
+                {
+                  "key": "aris/samples/spina-site-1",
+                  "name": "ARIS - Daily Samples: Spina Site 1"
+                },
+                {
+                  "key": "aris/samples/spina-site-2",
+                  "name": "ARIS - Daily Samples: Spina Site 2"
+                },
+                {
+                  "key": "aris/samples/spina-site-3",
+                  "name": "ARIS - Daily Samples: Spina Site 3"
+                },
+                {
+                  "key": "aris/samples/volcanic-mining-site",
+                  "name": "ARIS - Daily Samples: Volcanic Mining Site"
+                },
+                {
+                  "key": "aris/samples/volcano",
+                  "name": "ARIS - Daily Samples: Volcano"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "aris/bosses",
+          "name": "Bosses",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "aris/verdathos",
+              "name": "ARIS - Creature Boss 1: Verdathos",
+              "label": "Verdathos",
+              "detail": "Creature boss",
+              "completion": "signal_item",
+              "signalItem": "Hyperion Daily Voucher",
+              "cooldownHours": 20,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "waypoint": "/wp [Aris, 36565, 20566, 120, Verdathos]"
+            },
+            {
+              "kind": "quest",
+              "key": "aris/droktimus-prime",
+              "name": "ARIS - Robot Boss 1: Droktimus Prime",
+              "label": "Droktimus Prime",
+              "detail": "Robot boss",
+              "completion": "signal_item",
+              "signalItem": "Hyperion Daily Voucher",
+              "cooldownHours": 20,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "waypoint": "/wp [Aris, 39764, 23375, 239, Droktimus Prime]",
+              "aliases": [
+                "ARIS - Robot Boss 1: Drokitmus Prime"
+              ]
+            },
+            {
+              "kind": "quest",
+              "key": "aris/defenatron",
+              "name": "ARIS - Robot Boss 2: Defenatron",
+              "label": "Defenatron",
+              "detail": "Robot boss",
+              "completion": "signal_item",
+              "signalItem": "Hyperion Daily Voucher",
+              "cooldownHours": 20,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "waypoint": "/wp [Aris, 36315, 23673, 178, Defenatron]"
+            },
+            {
+              "kind": "quest",
+              "key": "aris/broadcastus",
+              "name": "ARIS - Robot Boss 3: Broadcastus",
+              "label": "Broadcastus",
+              "detail": "Robot boss",
+              "completion": "signal_item",
+              "signalItem": "Hyperion Daily Voucher",
+              "cooldownHours": 20,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Hyperion Daily Voucher"
+                ],
+                "label": "Hyperion voucher"
+              },
+              "waypoint": "/wp [Aris, 34497, 21429, 195, Broadcastus]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "cyrene",
+      "name": "Cyrene",
+      "categories": [
+        {
+          "key": "cyrene/mission-tokens",
+          "name": "Mission Tokens",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "cyrene/destroy-the-robot-menace",
+              "name": "Destroy the Robot Menace",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138889, 77248, 101, Lt. Johnson]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/getting-slimed",
+              "name": "Getting Slimed!",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "2 tokens"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138377, 77671, 121, Captain Wrigley]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/lord-pyscidon",
+              "name": "Lord Pyscidon",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 132430, 75849, 104, Lord Pyscidon]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/merfolken-beach-head",
+              "name": "Merfolken Beach Head?",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138821, 77114, 113, Scout McCulloch]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/picts-pollen-issue",
+              "name": "Pict's Pollen Issue",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "8 tokens"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138353, 77634, 122, Zyn'Kimbro Gatherer Pict]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/regent-halbird",
+              "name": "Regent Halbird",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 132196, 75272, 115, Regent Halbird]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/test-of-strength",
+              "name": "Test of Strength!",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138350, 77613, 120, Zyn'Kimbro Farm Hand]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/the-chiefs-request",
+              "name": "The Chief's Request!",
+              "completion": "mission_log",
+              "cooldownHours": 96,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "40 tokens"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138315, 77717, 119, Zyn'Kimbro Chieftain Koban]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/theyre-taking-our-minerals",
+              "name": "They're taking our minerals!",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Cyrene Mission Token"
+                ],
+                "label": "1 token"
+              },
+              "waypoint": "/wp [Planet Cyrene, 133208, 75012, 110, Scout Thompkins]"
+            }
+          ]
+        },
+        {
+          "key": "cyrene/skill-rewards",
+          "name": "Skill rewards",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "cyrene/meet-the-tanhok",
+              "name": "Meet the Tanhok...",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.2,
+                "label": "0.2 PED Perception"
+              },
+              "waypoint": "/wp [Planet Cyrene, 139014, 77450, 104, Malbow]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/meet-the-turrelions",
+              "name": "Meet the Turrelions...",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.2,
+                "label": "0.2 PED Weapons Handling"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138730, 77863, 102, Zentab]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/meet-the-zynkimbro",
+              "name": "Meet the Zyn'Kimbro...",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.2,
+                "label": "0.2 PED Combat Reflexes"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138970, 77914, 108, Tornauk]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/duvalls-daily-living-vortex",
+              "name": "Duvall's Daily: Living Vortex",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.58,
+                "label": "0.58 PED of a combat skill"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138447, 77428, 102, Second Hand Hub Duvall]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/duvalls-daily-stalker-bots",
+              "name": "Duvall's Daily: Stalker Bots",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.14,
+                "label": "0.14 PED Dodge, Evade or First Aid"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138447, 77428, 102, Second Hand Hub Duvall]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/pluck-the-wing",
+              "name": "Pluck the Wing",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.34,
+                "label": "0.34 PED Combat Reflexes"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138851, 77077, 112, James Henry]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/poison-the-hive",
+              "name": "Poison the Hive",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.76,
+                "label": "0.76 PED Inflict Ranged Damage"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138851, 77077, 112, James Henry]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/scrap-the-drone",
+              "name": "Scrap the Drone",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.44,
+                "label": "0.44 PED Weapons Handling"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138851, 77077, 112, James Henry]"
+            }
+          ]
+        },
+        {
+          "key": "cyrene/tempo",
+          "name": "Tempo",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "cyrene/tempo-adult-horned-birds",
+              "name": "Zyn'Nix Tempo - Adult Horned Birds",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.1,
+                "label": "0.1 PED Inflict Melee Damage"
+              },
+              "waypoint": "/wp [Planet Cyrene, 134786, 75166, 119, Zyn'Nix Tempo Manager - Horned Bird]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/tempo-duster-workers",
+              "name": "Zyn'Nix Tempo - Duster Workers",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.1,
+                "label": "0.1 PED Weapons Handling"
+              },
+              "waypoint": "/wp [Planet Cyrene, 134376, 75137, 105, Zyn'Nix Tempo Manager - Duster Workers]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/tempo-guardian-dire-plants",
+              "name": "Zyn'Nix Tempo - Guardian Dire Plants",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.1,
+                "label": "0.1 PED Weapons Handling"
+              },
+              "waypoint": "/wp [Planet Cyrene, 134376, 75137, 105, Zyn'Nix Tempo Manager - Duster Workers]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/tempo-mature-skywraiths",
+              "name": "Zyn'Nix Tempo - Mature Skywraiths",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.1,
+                "label": "0.1 PED Inflict Ranged Damage"
+              },
+              "waypoint": "/wp [Planet Cyrene, 134736, 74587, 171, Zyn'Nix Tempo Manager - Sky Wraiths]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/tempo-old-tide-claws",
+              "name": "Zyn'Nix Tempo - Old Tide Claws",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "fixed_pes",
+                "amount": 0.1,
+                "label": "0.1 PED Courage"
+              },
+              "waypoint": "/wp [Planet Cyrene, 134742, 75107, 111, Zyn'Nix Tempo Manager - Tide Claw]"
+            }
+          ]
+        },
+        {
+          "key": "cyrene/imperium-rangers",
+          "name": "Imperium Rangers",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "cyrene/atlas-haven-ranger-hunt",
+              "name": "Atlas Haven Imperium Ranger Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "3 A.R.C. badges"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138583, 76341, 119, Imperium Ranger - Tier 1 - Atlas]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/manuthale-swamp-ranger-hunt",
+              "name": "Manuthale Swamp Imperium Ranger Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "3 A.R.C. badges"
+              },
+              "waypoint": "/wp [Planet Cyrene, 131901, 75632, 129, Imperium Ranger - Tier 1 - Swamp]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/robot-base-zrq-ranger-hunt",
+              "name": "Robot Base ZRQ Imperium Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "6 A.R.C. badges"
+              },
+              "waypoint": "/wp [Planet Cyrene, 131891, 77821, 110, Imperium Ranger - Tier 2 - ZRQ]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/turrelion-desert-ranger-hunt",
+              "name": "Turrelion Desert Imperium Ranger Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "6 A.R.C. badges"
+              },
+              "waypoint": "/wp [Planet Cyrene, 135886, 79766, 158, Imperium Ranger - Tier 2 - Desert]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/isle-de-zel-ranger-hunt",
+              "name": "Isle de Zel Imperium Ranger Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "10 A.R.C. badges"
+              },
+              "waypoint": "/wp [Planet Cyrene, 137955, 75290, 114, Imperium Ranger - Tier 3 - Zel]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/island-biome-ranger-hunt",
+              "name": "Island Biome Imperium Ranger Hunt!",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "A.R.C. Faction Badge"
+                ],
+                "label": "10 A.R.C. badges"
+              }
+            }
+          ]
+        },
+        {
+          "key": "cyrene/general",
+          "name": "General",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "cyrene/paneleon-hunter-jamesons-mission",
+              "name": "Paneleon Hunter Jameson’s Mission",
+              "completion": "mission_log",
+              "cooldownHours": 21,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "named_items",
+                "items": [
+                  "Universal Ammo"
+                ],
+                "label": "1.5 PED Universal Ammo"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138938, 77823, 134, Paneleon Hunter Jameson]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/doctor-bylar-weak-zeladoth-control",
+              "name": "Doctor Bylar - Weak Zeladoth Control",
+              "completion": "mission_log",
+              "cooldownHours": 168,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Zeladoth control capsule"
+              },
+              "waypoint": "/wp [Planet Cyrene, 137544, 80897, 100, Doctor Byler]"
+            },
+            {
+              "kind": "quest",
+              "key": "cyrene/arms-merchant-ozpyn",
+              "name": "Arms Merchant – Ozpyn Trader Laser and BLP",
+              "completion": "mission_log",
+              "cooldownHours": 336,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ozpyn weapon"
+              },
+              "waypoint": "/wp [Planet Cyrene, 138900, 77751, 132, Private ‘Snow’ Landon]"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

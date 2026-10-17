@@ -2536,6 +2536,14 @@ export interface Quest {
 	familyCooldownExpiresAt: string | null;
 	/** Whether the latest completion owns an unreversed economic reward. */
 	rewardUndoAvailable: boolean;
+	/** A quest the app ships and maintains: read-only to the player. */
+	curated: boolean;
+	/** The curated catalogue key, null for a quest the player authored. */
+	catalogueKey: string | null;
+	/** The latest abandon (fractional epoch seconds), null when none. */
+	lastAbandonedAt: number | null;
+	/** The latest completion not disavowed by a cooldown reset (fractional epoch seconds). */
+	lastCompletedAt: number | null;
 }
 
 /**
@@ -2560,6 +2568,45 @@ export interface QuestAnalyticsRow {
 	recordedRewardItems: QuestRewardCandidate[];
 	/** Completed sessions that recorded a stretch of the quest. */
 	linkedSessions: number;
+}
+
+/**
+ * The curated catalogue as the board lays it out.
+ */
+export interface QuestCatalogue {
+	planets: QuestCataloguePlanet[];
+}
+
+export interface QuestCatalogueCategory {
+	key: string;
+	name: string;
+	entries: QuestCatalogueEntry[];
+}
+
+export interface QuestCatalogueEntry {
+	kind: QuestCatalogueEntryKind;
+	/** Matches `catalogueKey` on the family or quest row. */
+	key: string;
+	/** What the board calls it. */
+	label: string;
+	/** A short qualifier shown beside the label. */
+	detail: string | null;
+	/** How the board states the reward. */
+	rewardLabel: string;
+	/** A family's known variants, by catalogue key; empty for a quest. */
+	memberKeys: string[];
+}
+
+/**
+ * A family is one rotating slot; a quest stands alone.
+ */
+export type QuestCatalogueEntryKind = 'family' | 'quest';
+
+export interface QuestCataloguePlanet {
+	key: string;
+	/** The planet as quest rows carry it. */
+	name: string;
+	categories: QuestCatalogueCategory[];
 }
 
 export type QuestCompletionTrigger = 'mission_log' | 'signal_item' | 'manual_hand_in';
@@ -2592,6 +2639,9 @@ export interface QuestFamily {
 	lastStartedAt: number | null;
 	/** The latest member completion (fractional epoch seconds). */
 	lastCompletedAt: number | null;
+	/** A family the app ships and maintains: read-only to the player. */
+	curated: boolean;
+	catalogueKey: string | null;
 }
 
 /**
@@ -2669,12 +2719,29 @@ export interface QuestRewardCandidate {
 	valuePed: number;
 }
 
+/**
+ * One recorded loot line a named reward can be settled with.
+ */
+export interface QuestRewardLootLine {
+	id: number;
+	itemName: string;
+	quantity: number;
+	valuePed: number;
+	/** What the line dropped from, when recorded. */
+	mobName: string | null;
+}
+
 export type QuestRewardPolicy = 'none' | 'fixed_pes' | 'named_items' | 'completion_clump';
 
 export interface QuestRewardReviewInput {
 	completionId: number;
+	/** Lines of the completion's own recorded tick. */
 	selectedIndices?: number[];
 	declareNone?: boolean;
+	/** Recorded ordinary-loot lines (from `candidates`) that were the reward. */
+	lootItemIds?: number[];
+	/** The named reward was paid, though nothing recorded shows it. */
+	declarePaid?: boolean;
 }
 
 export type RadarCalibrationStatus = 'idle' | 'awaitCentre' | 'awaitNorthEdge';
@@ -2910,6 +2977,8 @@ export interface SessionDefinition {
 	name: string;
 	adHocSegments: boolean;
 	trackProtectionCosts: boolean;
+	/** The planet whose quests the session offers; null when it offers its authored roster's quests instead. */
+	questPlanet: string | null;
 	/** A session that cannot be archived, because tracking always needs one to run under. It renames and takes a roster like any other. */
 	isProtected: boolean;
 	/** False for an archived definition: no longer offered for new sessions, but its recorded instances still reference it, so the review surface can still reach them. Only ever false in a listing that asked for the inactive ones. */
@@ -2930,6 +2999,8 @@ export interface SessionDefinitionInput {
 	name: string;
 	ad_hoc_segments?: boolean;
 	track_protection_costs?: boolean;
+	/** The planet whose quests the session offers; null or blank keeps the authored roster's quest entries. */
+	quest_planet?: string | null;
 	roster?: SessionRosterEntryInput[];
 }
 
@@ -3641,7 +3712,14 @@ export interface UnresolvedQuestReward {
 	policy: string | null;
 	reason: string | null;
 	loot: QuestRewardCandidate[];
-	isolated: boolean;
+	/** Whether the completion's own tick carried nothing else; null when no tick was recorded for it, so no tick shape is named. */
+	isolated: boolean | null;
+	/** The quest's named reward items. */
+	expectedItems: string[];
+	/** Recorded ordinary-loot lines that could be the named reward, latest first. */
+	candidates: QuestRewardLootLine[];
+	/** Whether the reward may be declared paid when no line can show it. */
+	declarable: boolean;
 }
 
 /**
@@ -4214,6 +4292,14 @@ export async function questRewardReview(input: QuestRewardReviewInput): Promise<
 
 export async function questCancel(questId: number, undoReward: boolean): Promise<Quest> {
 	return invokeCommand('quest_cancel', { quest_id: questId, undo_reward: undoReward });
+}
+
+export async function questAbandon(questId: number): Promise<Quest> {
+	return invokeCommand('quest_abandon', { quest_id: questId });
+}
+
+export async function questCatalogue(): Promise<QuestCatalogue> {
+	return invokeCommand('quest_catalogue', {});
 }
 
 export async function questsMobs(): Promise<string[]> {

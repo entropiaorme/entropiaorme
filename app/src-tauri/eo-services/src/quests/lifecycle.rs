@@ -46,6 +46,24 @@ enum CompletionWrite {
     Refused(String),
 }
 
+/// Where a reward item's existence comes from: a line the chat log recorded,
+/// or the player's own statement that it was paid when no line exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EvidenceBasis {
+    Observed,
+    Declared,
+}
+
+impl EvidenceBasis {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            EvidenceBasis::Observed => "observed",
+            EvidenceBasis::Declared => "declared",
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_reward_item(
     conn: &rusqlite::Connection,
     completion_id: i64,
@@ -54,18 +72,20 @@ pub(super) fn insert_reward_item(
     item_name: &str,
     quantity: i64,
     value_ped: f64,
+    basis: EvidenceBasis,
 ) -> rusqlite::Result<()> {
     let liquid = item_name.trim().eq_ignore_ascii_case("Universal Ammo");
     conn.execute(
         "INSERT INTO session_quest_completion_reward_items \
-         (completion_id, item_name, quantity, value_ped, accounting_kind) \
-         VALUES (?, ?, ?, ?, ?)",
+         (completion_id, item_name, quantity, value_ped, accounting_kind, evidence_basis) \
+         VALUES (?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             completion_id,
             item_name,
             quantity.max(1),
             value_ped.max(0.0),
             if liquid { "liquid" } else { "stock" },
+            basis.as_str(),
         ],
     )?;
     let reward_item_id = conn.last_insert_rowid();
@@ -509,6 +529,7 @@ impl QuestService {
                         &item.item_name,
                         item.quantity,
                         item.value_ped.value(),
+                        EvidenceBasis::Observed,
                     )?;
                 }
                 if has_item_reward {
@@ -635,6 +656,51 @@ impl QuestService {
             .await?)
     }
 
+    /// Give up a quest in progress, as the player just did in game. The run
+    /// ends cancelled with no completion and no reward, but the slot is held
+    /// until the next mission can be collected: a pickup-anchored timer keeps
+    /// running from the pickup, and a completion-anchored one runs from the
+    /// abandon. Any declared stretch of it closes, and the run keeps the
+    /// effort it was given.
+    pub async fn abandon_quest(&self, quest_id: i64) -> Result<Option<Value>, QuestError> {
+        let Some(quest) = self.get_quest(quest_id).await? else {
+            return Ok(None);
+        };
+        if quest["started_at"].is_null() {
+            return Err(QuestError::Invalid(
+                "Only a quest in progress can be abandoned".to_string(),
+            ));
+        }
+        let now = self.now_epoch();
+        self.report_stretch_closed(quest_id).await;
+        self.db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                tx.execute(
+                    "UPDATE quests SET started_at = NULL WHERE id = ?",
+                    rusqlite::params![quest_id],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO quest_run_intervals(run_id, interval_id) \
+                     SELECT r.id, i.id FROM quest_runs r \
+                     JOIN session_intervals i ON i.kind = 'quest' AND i.ref_id = r.quest_id \
+                     WHERE r.quest_id = ? AND r.status = 'in_progress' \
+                       AND i.started_at >= r.started_at AND i.started_at <= ?",
+                    rusqlite::params![quest_id, now],
+                )?;
+                tx.execute(
+                    "UPDATE quest_runs \
+                     SET status = 'cancelled', abandoned_at = ?, hand_in_waiting = 0 \
+                     WHERE quest_id = ? AND status = 'in_progress'",
+                    rusqlite::params![now, quest_id],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+        self.get_quest(quest_id).await
+    }
+
     /// Undo an in-progress quest, or disavow the active cooldown while
     /// preserving the completion and run. Economic undo is a separate,
     /// append-only reversal and refuses while reward stock has dependants.
@@ -675,6 +741,33 @@ impl QuestService {
         let cooling = self.is_quest_cooling(&quest);
         if !cooling && !undo_reward {
             return Ok(Some(quest));
+        }
+        // A completion-anchored timer held by an abandon (later than the
+        // last completion) is corrected by forgetting the abandon: the
+        // completion it would otherwise disavow was never the binding fact.
+        let abandon_binds = cooling
+            && !undo_reward
+            && quest.get("cooldown_anchor").and_then(Value::as_str) != Some("pickup")
+            && match (
+                quest.get("last_abandoned_at").and_then(Value::as_f64),
+                quest.get("last_completed_at").and_then(Value::as_f64),
+            ) {
+                (Some(abandoned), Some(completed)) => abandoned > completed,
+                (Some(_), None) => true,
+                _ => false,
+            };
+        if abandon_binds {
+            self.db
+                .with_writer(move |conn| {
+                    conn.execute(
+                        "UPDATE quest_runs SET abandoned_at = NULL \
+                         WHERE quest_id = ? AND abandoned_at IS NOT NULL",
+                        rusqlite::params![quest_id],
+                    )?;
+                    Ok(())
+                })
+                .await?;
+            return self.get_quest(quest_id).await;
         }
 
         // A pickup-anchored quest additionally clears its durable start
@@ -976,7 +1069,10 @@ impl QuestService {
         let anchor = quest.get("cooldown_anchor").and_then(Value::as_str);
         let last = match anchor {
             Some("pickup") => quest.get("last_started_at").and_then(Value::as_f64),
-            _ => quest.get("last_completed_at").and_then(Value::as_f64),
+            _ => super::families::completion_anchor_instant(
+                quest.get("last_completed_at").and_then(Value::as_f64),
+                quest.get("last_abandoned_at").and_then(Value::as_f64),
+            ),
         };
         let cooldown_hours = quest.get("cooldown_hours").and_then(Value::as_f64);
         let (Some(last), Some(cooldown_hours)) = (last, cooldown_hours) else {

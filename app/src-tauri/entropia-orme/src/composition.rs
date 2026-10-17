@@ -691,6 +691,25 @@ async fn compose_with(
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
 
+    // The curated quest catalogue ships with the binary and is materialised
+    // before any service reads quests. A failure leaves the catalogue as the
+    // last launch left it and the app keeps serving (degrade, never crash).
+    match eo_services::quests::catalogue::sync_catalogue(&db, clock.as_ref()).await {
+        Ok(report) if report != Default::default() => tracing::info!(
+            target: "eo::composition",
+            "quest catalogue synced: {} inserted, {} adopted, {} updated, {} retired",
+            report.inserted,
+            report.adopted,
+            report.updated,
+            report.retired
+        ),
+        Ok(_) => {}
+        Err(err) => tracing::error!(
+            target: "eo::composition",
+            "quest catalogue sync failed ({err}); the previous catalogue stays in place"
+        ),
+    }
+
     // The producer spine shares the substrate's single-owner pool with
     // the read surface: one connection, one owner, serialised access
     // (WAL + busy_timeout, max_connections(1)), so producer writes and

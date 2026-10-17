@@ -171,6 +171,7 @@ describe('createDefinitionsModel', () => {
 			name: 'General Hunting',
 			ad_hoc_segments: false,
 			track_protection_costs: true,
+			quest_planet: null,
 			roster: [{ kind: 'quest', ref_id: 9, label: null }],
 		});
 		expect(deps.selectDefinition).toHaveBeenCalledWith(7);
@@ -216,8 +217,37 @@ describe('createDefinitionsModel', () => {
 			name: 'ARIS Dailies',
 			ad_hoc_segments: false,
 			track_protection_costs: true,
+			quest_planet: null,
 			roster: [{ kind: 'segment', ref_id: null, label: 'Grind' }],
 		});
+	});
+
+	it('keeps the planet a session follows, and lists only its segments', async () => {
+		const deps = makeDeps();
+		const model = createDefinitionsModel(deps);
+		model.openEdit(
+			definition({
+				id: '2',
+				questPlanet: 'ARIS',
+				roster: [
+					{ id: '1', kind: 'quest', refId: '7', label: null, displayName: 'Old pick' },
+					{ id: '2', kind: 'segment', refId: null, label: 'Grind', displayName: 'Grind' },
+				],
+			}),
+		);
+		expect(model.questPlanet).toBe('ARIS');
+		expect(model.visibleRoster.map((entry) => entry.displayName)).toEqual(['Grind']);
+		expect(await model.save()).toBe(true);
+		expect(deps.updateDefinition).toHaveBeenCalledWith(
+			'2',
+			expect.objectContaining({
+				quest_planet: 'ARIS',
+				roster: [
+					{ kind: 'quest', ref_id: 7, label: null },
+					{ kind: 'segment', ref_id: null, label: 'Grind' },
+				],
+			}),
+		);
 	});
 
 	it('defaults new definitions to recording armour hits', () => {

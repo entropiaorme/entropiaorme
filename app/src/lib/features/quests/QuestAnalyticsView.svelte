@@ -9,14 +9,21 @@
 	} from './economics';
 	import type { QuestsModel } from './questsModel.svelte';
 
-	let { model }: { model: QuestsModel } = $props();
+	let {
+		model,
+		planet = null
+	}: {
+		model: QuestsModel;
+		/** Narrow the rows to one planet's quests; null shows every planet. */
+		planet?: string | null;
+	} = $props();
 
 	const computedAnalytics = $derived(
 		computeQuestAnalytics(
 			model.analyticsData,
 			model.analyticsRewardMode,
 			model.rewardMarket
-		)
+		).filter((row) => planet === null || row.planet === planet)
 	);
 
 	// The default table-model comparator sorts nulls last in both directions;

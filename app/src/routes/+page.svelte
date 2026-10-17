@@ -7,8 +7,22 @@
 	import { createLiveDefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
 	import { createLiveReviewModel } from '$lib/features/sessions/reviewModel.svelte';
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
-	import { getCooldownRemaining } from '$lib/features/quests/cooldown';
-	import { getActivityOptions, type ActivityOptionsResult } from '$lib/api';
+	import QuestFormModal from '$lib/features/quests/QuestFormModal.svelte';
+	import { createQuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
+	import type { BoardRow } from '$lib/features/quests/board/questBoard';
+	import {
+		abandonQuest,
+		cancelQuest,
+		completeQuest,
+		getActivityOptions,
+		getQuestCatalogue,
+		getUnresolvedQuestRewards,
+		reviewQuestReward,
+		startQuest,
+		updateSessionDefinition,
+		type ActivityOptionsResult,
+	} from '$lib/api';
+	import { getPreference, setPreference } from '$lib/preferences';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore.svelte';
 
@@ -36,12 +50,48 @@
 		activityOptions = options;
 	}
 
-	function openSessionAuthoring(definitionId: number | null) {
-		const editing = definitions.definitions.find(
-			(definition) => definition.id === String(definitionId),
-		);
-		if (editing) definitions.openEdit(editing);
-		else definitions.openCreate();
+	// The Quests widget's board: the curated catalogue laid out per planet, over
+	// the same quest rows and Activities picture this route already polls.
+	const board = createQuestBoardModel({
+		quests: () => questsModel.quests,
+		families: () => questsModel.families,
+		activityOptions: () => activityOptions,
+		definition: () =>
+			definitions.definitions.find(
+				(definition) => definition.id === String(activityOptions?.definitionId),
+			) ?? null,
+		getCatalogue: getQuestCatalogue,
+		getUnresolved: getUnresolvedQuestRewards,
+		startQuest,
+		completeQuest,
+		abandonQuest,
+		cancelQuest,
+		reviewReward: reviewQuestReward,
+		updateDefinition: updateSessionDefinition,
+		refresh: refreshQuestState,
+		refreshDefinitions: definitions.loadDefinitions,
+		getPreference,
+		setPreference,
+	});
+
+	// A completion (from the chat log or the board) may leave a reward to
+	// settle, so the list follows the recorded completions.
+	$effect(() => {
+		void board.completionSignature;
+		void board.loadUnresolved();
+	});
+
+	function createCustomQuest(planet: string | null) {
+		questsModel.openNewQuest();
+		if (planet) questsModel.questForm.planet = planet;
+	}
+
+	function editCustomQuest(row: BoardRow) {
+		if (row.quest) questsModel.openEditQuest(row.quest);
+	}
+
+	async function deleteCustomQuest(row: BoardRow) {
+		if (row.quest) await questsModel.handleDeleteQuest(row.quest.id);
 	}
 
 	// Poll quest state so chat.log auto-start/complete is reflected without
@@ -53,8 +103,10 @@
 
 	onMount(() => {
 		// The dashboard's initial load: the consolidated snapshot, then the
-		// quest roster and activity options.
+		// quest rows, the board's catalogue, and the activity options.
 		void hydrate();
+		void board.init();
+		const stopTick = useVisiblePoll(() => { board.now = Date.now(); }, { intervalMs: 1000 });
 		void (async () => {
 			const [, options] = await Promise.all([questsModel.loadData(), getActivityOptions()]);
 			activityOptions = options;
@@ -72,6 +124,7 @@
 		});
 		return () => {
 			unmounted = true;
+			stopTick();
 			unsubscribeTracking?.();
 		};
 	});
@@ -89,7 +142,7 @@
 		<header class="flex flex-col gap-1.5">
 			<h1 class="text-xl font-semibold text-text tracking-tight">Dashboard</h1>
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
-			<p class="text-sm text-text-secondary mt-0.5">Track sessions, monitor events, follow session quests</p>
+			<p class="text-sm text-text-secondary mt-0.5">Track sessions, monitor events, play your quests</p>
 		</header>
 	</div>
 
@@ -106,16 +159,13 @@
 		sessionId={status?.session_id ?? null}
 		multiplierHistory={status?.multiplierHistory ?? null}
 		cumulativeNetHistory={status?.cumulativeNetHistory ?? null}
-		{activityOptions}
-		quests={questsModel.quests}
-		pendingCancelChoiceQuestId={questsModel.pendingCancelChoiceQuestId}
+		{board}
 		copiedWp={questsModel.copiedWp}
-		onQuestStart={questsModel.handleStart}
-		onQuestComplete={questsModel.handleComplete}
-		onQuestCancel={questsModel.handleCancel}
-		onToggleCancelChoice={questsModel.toggleCancelChoice}
 		onCopyWaypoint={questsModel.copyWaypoint}
-		onEditSession={openSessionAuthoring}
-		getCooldownRemaining={(quest) => getCooldownRemaining(quest, Date.now())}
+		onCreateCustomQuest={createCustomQuest}
+		onEditCustomQuest={editCustomQuest}
+		onDeleteCustomQuest={deleteCustomQuest}
 	/>
 </SessionStage>
+
+<QuestFormModal model={questsModel} compact />

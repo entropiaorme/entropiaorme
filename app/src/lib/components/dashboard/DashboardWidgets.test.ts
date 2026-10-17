@@ -3,6 +3,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import type { RecentEvent } from '$lib/api';
+import type { QuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
 import DashboardWidgets from './DashboardWidgets.svelte';
 
 // The map tab mounts the full maps surface, whose reads go through the real
@@ -38,18 +39,14 @@ function props(recentEvents: RecentEvent[] | null) {
 		sessionId: 's1',
 		multiplierHistory: null,
 		cumulativeNetHistory: null,
-		// Unread, so the Quests tab holds a placeholder and needs no backend.
-		activityOptions: null,
-		quests: [],
-		pendingCancelChoiceQuestId: null,
+		// The catalogue is unread, so the Quests tab holds a placeholder and
+		// needs no backend.
+		board: { catalogueLoaded: false } as unknown as QuestBoardModel,
 		copiedWp: null,
-		onQuestStart: vi.fn(),
-		onQuestComplete: vi.fn(),
-		onQuestCancel: vi.fn(),
-		onToggleCancelChoice: vi.fn(),
 		onCopyWaypoint: vi.fn(),
-		onEditSession: vi.fn(),
-		getCooldownRemaining: () => null,
+		onCreateCustomQuest: vi.fn(),
+		onEditCustomQuest: vi.fn(),
+		onDeleteCustomQuest: vi.fn(),
 	};
 }
 

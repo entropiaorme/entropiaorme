@@ -90,7 +90,8 @@
 				onToggleCancelChoice={() => model.toggleCancelChoice(quest.id)}
 			/>
 
-			<!-- Three-dot menu -->
+			<!-- Three-dot menu: a curated quest is the app's to maintain. -->
+			{#if !quest.curated}
 			<Menu
 				ariaLabel="Quest actions"
 				items={[{ label: 'Edit', onSelect: () => model.openEditQuest(quest) }]}
@@ -113,6 +114,7 @@
 					>Delete</button>
 				{/if}
 			</Menu>
+			{/if}
 		</div>
 	</div>
 

@@ -1,19 +1,20 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { Skeleton, Tabs } from '$lib/components';
-	import QuestingWidget from './QuestingWidget.svelte';
 	import CustomiseStatsWidget from './CustomiseStatsWidget.svelte';
 	import LootCompositionWidget from './LootCompositionWidget.svelte';
 	import LootPulseWidget from './LootPulseWidget.svelte';
 	import RecentEventsWidget from './RecentEventsWidget.svelte';
 	import MapsSurface from '$lib/features/maps/MapsSurface.svelte';
+	import QuestBoard from '$lib/features/quests/board/QuestBoard.svelte';
+	import type { BoardRow } from '$lib/features/quests/board/questBoard';
+	import type { QuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
 	import {
 		acknowledgeHead,
 		feedHead,
 		hasUnseenEvents,
 	} from '$lib/features/dashboard/recentEvents';
-	import type { ActivityOptionsResult, RecentEvent } from '$lib/api';
-	import type { Quest } from '$lib/types/quests';
+	import type { RecentEvent } from '$lib/api';
 
 	let {
 		trackingPending,
@@ -21,17 +22,12 @@
 		sessionId,
 		multiplierHistory,
 		cumulativeNetHistory,
-		activityOptions,
-		quests,
-		pendingCancelChoiceQuestId,
+		board,
 		copiedWp,
-		onQuestStart,
-		onQuestComplete,
-		onQuestCancel,
-		onToggleCancelChoice,
 		onCopyWaypoint,
-		onEditSession,
-		getCooldownRemaining,
+		onCreateCustomQuest,
+		onEditCustomQuest,
+		onDeleteCustomQuest,
 	}: {
 		/** No tracking snapshot has been read yet, so whether a session is
 		 * running is still unknown. */
@@ -42,17 +38,13 @@
 		sessionId: string | null;
 		multiplierHistory: number[] | null;
 		cumulativeNetHistory: number[] | null;
-		activityOptions: ActivityOptionsResult | null;
-		quests: Quest[];
-		pendingCancelChoiceQuestId: string | null;
+		/** The quest board's view model (the Quests widget tab). */
+		board: QuestBoardModel;
 		copiedWp: string | null;
-		onQuestStart: (questId: string) => void;
-		onQuestComplete: (questId: string) => void;
-		onQuestCancel: (questId: string, undoReward: boolean) => void;
-		onToggleCancelChoice: (questId: string) => void;
-		onCopyWaypoint: (questId: string, waypoint: string) => void;
-		onEditSession: (definitionId: number | null) => void;
-		getCooldownRemaining: (quest: import('$lib/types/quests').Quest) => string | null;
+		onCopyWaypoint: (key: string, waypoint: string) => void;
+		onCreateCustomQuest: (planet: string | null) => void;
+		onEditCustomQuest: (row: BoardRow) => void;
+		onDeleteCustomQuest: (row: BoardRow) => void;
 	} = $props();
 
 	let activeTab = $state<string>('pulse');
@@ -80,7 +72,7 @@
 	]);
 
 	// Whether the open tab's data is still unread, so its empty state ("No
-	// active session", "Choose a session type") would be a claim, not a fact.
+	// active session", an empty board) would be a claim, not a fact.
 	// The map and the stats customiser load their own data and show their own
 	// loading states.
 	const tabPending = $derived.by(() => {
@@ -90,7 +82,7 @@
 			case 'loot':
 				return trackingPending;
 			case 'quests':
-				return activityOptions === null;
+				return !board.catalogueLoaded;
 			default:
 				return false;
 		}
@@ -115,18 +107,13 @@
 	{:else if activeTab === 'loot'}
 		<LootCompositionWidget {sessionId} />
 	{:else if activeTab === 'quests'}
-		<QuestingWidget
-			{activityOptions}
-			{quests}
-			{pendingCancelChoiceQuestId}
-			{copiedWp}
-			{onQuestStart}
-			{onQuestComplete}
-			{onQuestCancel}
-			{onToggleCancelChoice}
+		<QuestBoard
+			model={board}
+			copiedKey={copiedWp}
 			{onCopyWaypoint}
-			{onEditSession}
-			{getCooldownRemaining}
+			onCreateCustom={onCreateCustomQuest}
+			onEditCustom={onEditCustomQuest}
+			onDeleteCustom={onDeleteCustomQuest}
 		/>
 	{:else if activeTab === 'map'}
 		<MapsSurface class="flex-1" />

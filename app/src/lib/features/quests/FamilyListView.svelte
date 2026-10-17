@@ -77,7 +77,8 @@
 							<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20">ready</span>
 						{/if}
 
-						<!-- Three-dot menu -->
+						<!-- Three-dot menu: a curated family is the app's to maintain. -->
+						{#if !family.curated}
 						<Menu
 							ariaLabel="Family actions"
 							items={[{ label: 'Edit', onSelect: () => model.openEditFamily(family) }]}
@@ -100,6 +101,7 @@
 								>Delete</button>
 							{/if}
 						</Menu>
+						{/if}
 					</div>
 				</div>
 

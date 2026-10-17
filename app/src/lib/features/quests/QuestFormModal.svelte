@@ -2,7 +2,26 @@
 	import { Button, Input, Modal, SegmentedControl, Select } from '$lib/components';
 	import { PLANETS, type CooldownUnit, type QuestsModel } from './questsModel.svelte';
 
-	let { model }: { model: QuestsModel } = $props();
+	let {
+		model,
+		compact = false
+	}: {
+		model: QuestsModel;
+		/** The dashboard board's custom-quest form: the planet comes from the
+		 * board, and the fields the board does not use (family, target mobs)
+		 * stay out of the way. */
+		compact?: boolean;
+	} = $props();
+
+	const title = $derived(
+		compact
+			? model.editingQuest
+				? `Edit ${model.editingQuest.name}`
+				: `New quest on ${model.questForm.planet}`
+			: model.editingQuest
+				? 'Edit Quest'
+				: 'New Quest'
+	);
 
 	// Visible auto-attach: while creating and until the family select is
 	// touched, a name reading "Family: Variant" keeps the select on its
@@ -26,7 +45,7 @@
 	);
 </script>
 
-<Modal bind:open={model.showQuestModal} title={model.editingQuest ? 'Edit Quest' : 'New Quest'} class="max-w-lg">
+<Modal bind:open={model.showQuestModal} {title} class="max-w-lg">
 	{#snippet children()}
 		<form class="space-y-3" onsubmit={(e) => { e.preventDefault(); model.saveQuest(); }}>
 			<div class="grid grid-cols-2 gap-3">
@@ -35,6 +54,7 @@
 					<Input id="q-name" type="text" required bind:value={model.questForm.name}
 						placeholder="e.g., Atlas Haven Imperium Ranger Hunt!" />
 				</div>
+				{#if !compact}
 				<div>
 					<label class="block text-xs text-text-secondary mb-1" for="q-planet">Planet</label>
 					<Select id="q-planet" bind:value={model.questForm.planet}>
@@ -43,7 +63,8 @@
 						{/each}
 					</Select>
 				</div>
-				<div>
+				{/if}
+				<div class={compact ? 'col-span-2' : ''}>
 					<label class="block text-xs text-text-secondary mb-1" for="q-cat">Category</label>
 					<Input id="q-cat" type="text" bind:value={model.questForm.category}
 						placeholder="e.g., A.R.C. Faction" />
@@ -168,6 +189,7 @@
 			</div>
 
 			<!-- Family: variants of one repeatable slot cool as a unit. -->
+			{#if !compact}
 			<div>
 				<label class="block text-xs text-text-secondary mb-1" for="q-family">Family</label>
 				<Select id="q-family" bind:value={model.questForm.family_id}
@@ -185,6 +207,7 @@
 					{/if}
 				</p>
 			</div>
+			{/if}
 
 			{#if model.questForm.completion_trigger === 'signal_item'}
 			<div>
@@ -203,6 +226,7 @@
 			{/if}
 
 			<!-- Target Mobs -->
+			{#if !compact}
 			<div>
 				<div class="block text-xs text-text-secondary mb-1">Target Mobs</div>
 				{#if model.questForm.mobs.length > 0}
@@ -222,6 +246,7 @@
 					<Button type="button" size="sm" variant="secondary" onclick={() => model.addMob()}>{#snippet children()}Add{/snippet}</Button>
 				</div>
 			</div>
+			{/if}
 
 
 			<div class="flex justify-end gap-2 pt-1">

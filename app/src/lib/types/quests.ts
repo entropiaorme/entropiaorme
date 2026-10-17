@@ -7,6 +7,10 @@
 export type {
 	Quest,
 	QuestAnalyticsRow,
+	QuestCatalogue,
+	QuestCatalogueCategory,
+	QuestCatalogueEntry,
+	QuestCataloguePlanet,
 	QuestCompletionTrigger,
 	QuestCooldownAnchor,
 	QuestFamily,
@@ -17,5 +21,8 @@ export type {
 	QuestHandInState,
 	QuestInput as QuestCreateData,
 	QuestInput as QuestUpdateData,
+	QuestRewardLootLine,
 	QuestRewardPolicy,
+	QuestRewardReviewInput,
+	UnresolvedQuestReward,
 } from '$lib/api/commands.gen';

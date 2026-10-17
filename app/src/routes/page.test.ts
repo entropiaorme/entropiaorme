@@ -86,7 +86,7 @@ describe('dashboard while the backend starts', () => {
 			'Start tracking',
 			'No active session',
 			'Tracking active',
-			'Choose a session type, then add its quests.',
+			'No quests to show yet.',
 		]) {
 			expect(screen.queryByText(claim)).toBeNull();
 		}

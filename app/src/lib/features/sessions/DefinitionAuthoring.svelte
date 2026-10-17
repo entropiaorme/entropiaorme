@@ -93,7 +93,8 @@
 		if (model.mode === 'closed') return;
 		void model.editingId;
 		untrack(() => {
-			activitiesOpen = model.roster.length > 0 || model.adHocSegments;
+			activitiesOpen =
+				model.roster.length > 0 || model.adHocSegments || model.questPlanet !== null;
 			unfolded = new Set();
 		});
 		const previouslyFocused =
@@ -191,17 +192,48 @@
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
 						</svg>
 						<span class="text-sm font-semibold text-text">Activities</span>
-						{#if model.roster.length > 0}
-							<span class="text-sm text-text-secondary tabular-nums">{model.roster.length}</span>
+						{#if model.questPlanet}
+							<span class="text-sm text-text-secondary">{model.questPlanet} quests</span>
+						{:else if model.visibleRoster.length > 0}
+							<span class="text-sm text-text-secondary tabular-nums">{model.visibleRoster.length}</span>
 						{/if}
 					</button>
 				</div>
 
 				{#if activitiesOpen}
 					<div id="session-activities" class="flex flex-col gap-3 border-t border-border/50 p-4">
-						{#if model.roster.length > 0}
+						<!-- Quests: follow a planet (the overlay offers its slots,
+							 runs and received missions) or hand-pick them. -->
+						{#if model.questPlanets.length > 0}
+							<div class="flex items-start justify-between gap-6 border-b border-border/50 pb-3">
+								<div class="flex flex-col gap-0.5">
+									<label for="session-quest-planet" class="text-sm text-text">Quests</label>
+									<span class="text-sm text-text-secondary leading-relaxed max-w-sm">
+										{#if model.questPlanet}
+											The overlay offers {model.questPlanet}'s daily slots and runs, and any
+											mission you have picked up there.
+										{:else}
+											Follow a planet to offer its quests as you play, or hand-pick them below.
+										{/if}
+									</span>
+								</div>
+								<Select
+									id="session-quest-planet"
+									class="max-w-[12rem] shrink-0"
+									bind:value={model.questPlanet}
+									disabled={model.saving}
+								>
+									<option value={null}>Hand-picked</option>
+									{#each model.questPlanets as option (option)}
+										<option value={option}>{option}</option>
+									{/each}
+								</Select>
+							</div>
+						{/if}
+
+						{#if model.visibleRoster.length > 0}
 							<ul class="flex flex-col gap-1">
-								{#each model.roster as entry, i (entry.key)}
+								{#each model.visibleRoster as entry (entry.key)}
 									<li
 										class="flex items-center gap-2 rounded-md border border-border/60 bg-base/40 px-3 py-2"
 									>
@@ -219,7 +251,7 @@
 											aria-label="Remove from the session"
 											title="Remove"
 											disabled={model.saving}
-											onclick={() => model.removeEntry(i)}
+											onclick={() => model.removeEntryByKey(entry.key)}
 										>&times;</button>
 									</li>
 								{/each}
@@ -230,7 +262,9 @@
 							 what that planet offers appears, as a list rather than a
 							 field of chips. Depth is carried by indentation, weight and
 							 hairlines; nothing here is boxed. -->
-						{#if model.catalogPlanets.length > 0}
+						{#if model.questPlanet !== null}
+							<!-- A planet-following session hand-picks nothing. -->
+						{:else if model.catalogPlanets.length > 0}
 							<div class="flex items-center gap-2">
 								<label for="session-activity-planet" class="eyebrow-strong shrink-0">Planet</label>
 								<Select
@@ -247,11 +281,11 @@
 							</div>
 						{:else if !model.sourcesLoading}
 							<p class="text-sm text-text-secondary px-1">
-								No quests or quest families yet; they are authored on the Quests page.
+								No quests yet; add your own from the Quests board on the dashboard.
 							</p>
 						{/if}
 
-						{#if model.catalogPlanet !== null}
+						{#if model.questPlanet === null && model.catalogPlanet !== null}
 							<SearchInput
 								bind:value={model.catalogFilter}
 								placeholder="Filter {model.catalogPlanet}..."
@@ -376,7 +410,7 @@
 								<p class="text-sm text-text-secondary px-1">
 									{filtering
 										? 'Nothing matches the filter.'
-										: `Nothing on ${model.catalogPlanet} yet; quests are authored on the Quests page.`}
+										: `Nothing on ${model.catalogPlanet} yet; add your own from the Quests board on the dashboard.`}
 								</p>
 							{/if}
 						{/if}

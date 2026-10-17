@@ -5,13 +5,15 @@
 	import MarketTab from './MarketTab.svelte';
 	import HuntingTab from './HuntingTab.svelte';
 	import TreeCuttingTab from './TreeCuttingTab.svelte';
+	import QuestsTab from './QuestsTab.svelte';
 
 	const tabs = [
 		{ id: 'overview', label: 'Overview' },
 		{ id: 'ledger', label: 'Ledger' },
 		{ id: 'market', label: 'Market' },
 		{ id: 'hunting', label: 'Hunting' },
-		{ id: 'treecutting', label: 'Tree Cutting' }
+		{ id: 'treecutting', label: 'Tree Cutting' },
+		{ id: 'quests', label: 'Quests' }
 	];
 
 	let activeTab = $state('overview');
@@ -27,7 +29,7 @@
 		<header class="flex flex-col gap-1.5">
 			<h1 class="text-xl font-semibold text-text tracking-tight">Analytics</h1>
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
-			<p class="text-sm text-text-secondary mt-0.5">Lifetime totals, ledger activity, market observations, and per-profession performance</p>
+			<p class="text-sm text-text-secondary mt-0.5">Lifetime totals, ledger activity, market observations, per-profession performance, and quest rewards</p>
 		</header>
 	</div>
 
@@ -46,6 +48,8 @@
 			<HuntingTab />
 		{:else if activeTab === 'treecutting'}
 			<TreeCuttingTab />
+		{:else if activeTab === 'quests'}
+			<QuestsTab />
 		{/if}
 	</div>
 </div>

@@ -13,6 +13,7 @@ export const getUnresolvedQuestRewards = commands.questRewardsUnresolved;
 export const reviewQuestReward = commands.questRewardReview;
 export const createQuest = commands.questCreate;
 export const getQuestFamilies = commands.questFamiliesList;
+export const getQuestCatalogue = commands.questCatalogue;
 export const createQuestFamily = commands.questFamilyCreate;
 
 export async function updateQuestFamily(id: string, data: QuestFamilyInput): Promise<QuestFamily> {
@@ -51,4 +52,10 @@ export const confirmQuestHandIn = commands.questHandInConfirm;
 
 export async function cancelQuest(id: string, undoReward = false): Promise<Quest> {
 	return commands.questCancel(Number(id), undoReward);
+}
+
+/** Give up a quest in progress: no reward, and its slot stays held until
+ * the next mission can be collected. */
+export async function abandonQuest(id: string): Promise<Quest> {
+	return commands.questAbandon(Number(id));
 }

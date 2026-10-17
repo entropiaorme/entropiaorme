@@ -206,6 +206,14 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 		return act(row, () => deps.abandonQuest(quest.id), 'Failed to abandon the quest');
 	}
 
+	/** End a standing run (a boss run) that was started by mistake: it is
+	 * the app's alone, so nothing is held and it can start again. */
+	function stopRun(row: BoardRow) {
+		const quest = row.quest;
+		if (!quest) return;
+		return act(row, () => deps.cancelQuest(quest.id, false), 'Failed to stop the run');
+	}
+
 	function resetCooldown(row: BoardRow) {
 		const quest = row.quest;
 		if (!quest) return;
@@ -304,6 +312,7 @@ export function createQuestBoardModel(deps: QuestBoardDeps) {
 		start,
 		complete,
 		abandon,
+		stopRun,
 		resetCooldown,
 		undoReward,
 		toggleSettle,

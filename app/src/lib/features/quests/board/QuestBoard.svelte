@@ -103,6 +103,7 @@
 								onStart={() => model.start(row)}
 								onComplete={() => model.complete(row)}
 								onAbandon={() => model.abandon(row)}
+								onStopRun={() => model.stopRun(row)}
 								onResetCooldown={() => model.resetCooldown(row)}
 								onUndoReward={() => model.undoReward(row)}
 								onToggleSettle={() => model.toggleSettle(row)}

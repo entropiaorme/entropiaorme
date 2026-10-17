@@ -105,12 +105,26 @@ describe('the quest board', () => {
 		expect(within(slot).getByText('Weak Mortirex')).toBeTruthy();
 		expect(within(slot).getByText('In your mission log')).toBeTruthy();
 		await fireEvent.click(within(slot).getByRole('button', { name: 'Abandon' }));
-		expect(within(slot).getByText('Abandon it in game too?')).toBeTruthy();
+		expect(within(slot).getByText("Abandon today's mission?")).toBeTruthy();
 		await fireEvent.click(within(slot).getByRole('button', { name: 'Keep' }));
 		expect(deps.abandonQuest).not.toHaveBeenCalled();
 		await fireEvent.click(within(slot).getByRole('button', { name: 'Abandon' }));
 		await fireEvent.click(within(slot).getByRole('button', { name: 'Abandon' }));
 		expect(deps.abandonQuest).toHaveBeenCalledWith('10');
+	});
+
+	it('stops a boss run without holding the boss', async () => {
+		const { deps } = await mount({
+			edit: (rows) => {
+				rows.quests[2] = { ...rows.quests[2], startedAt: NOW / 1000 - 60 };
+			},
+		});
+		const boss = rowFor('Verdathos');
+		expect(within(boss).getByText('Run open')).toBeTruthy();
+		expect(within(boss).queryByRole('button', { name: 'Abandon' })).toBeNull();
+		await fireEvent.click(within(boss).getByRole('button', { name: 'Stop run' }));
+		expect(deps.cancelQuest).toHaveBeenCalledWith('20', false);
+		expect(deps.abandonQuest).not.toHaveBeenCalled();
 	});
 
 	it('settles a split reward with the exact loot line it arrived as', async () => {

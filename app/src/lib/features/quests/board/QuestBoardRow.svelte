@@ -15,6 +15,7 @@
 		onStart,
 		onComplete,
 		onAbandon,
+		onStopRun,
 		onResetCooldown,
 		onUndoReward,
 		onToggleSettle,
@@ -31,6 +32,7 @@
 		onStart: () => void;
 		onComplete: () => void;
 		onAbandon: () => void;
+		onStopRun: () => void;
 		onResetCooldown: () => void;
 		onUndoReward: () => void;
 		onToggleSettle: () => void;
@@ -52,6 +54,8 @@
 
 	const running = $derived(row.state === 'running' || row.state === 'recording' || row.state === 'waiting');
 	const standingRun = $derived(row.trigger === 'signal_item' || row.trigger === 'manual_hand_in');
+	/** A boss run is the app's alone: there is no mission to give up. */
+	const signalRun = $derived(row.trigger === 'signal_item');
 
 	const dotClass = $derived(
 		row.state === 'ready'
@@ -159,7 +163,10 @@
 				Keep
 			</button>
 		{:else if confirmingAbandon}
-			<span class="text-xs text-text-secondary">Abandon it in game too?</span>
+			<span
+				class="text-xs text-text-secondary"
+				title="The slot stays held until the next mission can be collected"
+			>{row.kind === 'slot' ? "Abandon today's mission?" : 'Abandon this mission?'}</span>
 			<button type="button" class="row-verb text-negative" disabled={busy} onclick={() => { confirmingAbandon = false; onAbandon(); }}>
 				Abandon
 			</button>
@@ -177,7 +184,9 @@
 				>{copied ? 'Copied' : 'WP'}</button>
 			{/if}
 			<div class="reveal flex items-center gap-1">
-				{#if running}
+				{#if running && signalRun}
+					<button type="button" class="row-verb" disabled={busy} onclick={onStopRun}>Stop run</button>
+				{:else if running}
 					<button type="button" class="row-verb" disabled={busy} onclick={() => (confirmingAbandon = true)}>
 						Abandon
 					</button>

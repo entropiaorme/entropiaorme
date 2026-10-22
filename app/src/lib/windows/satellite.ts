@@ -22,10 +22,11 @@
  *   flashes at a stale location. Focus is optional and best-effort. A
  *   satellite route that sizes and reveals itself from the state payload
  *   opts out of the host-side reveal (`reveal: false`).
- * - **Tolerant hide and emit.** `hide()` and `emitTo()` address whichever
- *   window can be resolved (the pending creation, else get-by-label) and are
- *   no-ops when none can: the satellite may never have been created, or its
- *   creation may have failed.
+ * - **Tolerant hide, emit, and focus query.** `hide()`, `emitTo()`, and
+ *   `isFocused()` address whichever window can be resolved (the pending
+ *   creation, else get-by-label) and are no-ops (or false) when none can:
+ *   the satellite may never have been created, or its creation may have
+ *   failed.
  */
 
 import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
@@ -101,6 +102,13 @@ export interface SatelliteWindow {
 	 * when the emit fails. Never creates the window.
 	 */
 	emitTo(event: string, payload?: unknown): Promise<void>;
+	/**
+	 * Whether the satellite holds keyboard focus (false when it does not
+	 * exist or the query fails). Never creates the window. A host that
+	 * dismisses a satellite when its own input blurs asks this first: a blur
+	 * caused by the pointer landing in the satellite is not a dismissal.
+	 */
+	isFocused(): Promise<boolean>;
 }
 
 export function createSatelliteWindow(options: SatelliteWindowOptions): SatelliteWindow {
@@ -241,5 +249,11 @@ export function createSatelliteWindow(options: SatelliteWindowOptions): Satellit
 		await satellite.emit(event, payload).catch(() => {});
 	}
 
-	return { ensure, show, hide, emitTo };
+	async function isFocused(): Promise<boolean> {
+		const satellite = await resolveExisting();
+		if (!satellite) return false;
+		return satellite.isFocused().catch(() => false);
+	}
+
+	return { ensure, show, hide, emitTo, isFocused };
 }

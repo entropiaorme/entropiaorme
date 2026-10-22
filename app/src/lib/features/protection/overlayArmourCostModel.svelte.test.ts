@@ -17,6 +17,7 @@ function satellite(): SatelliteWindow {
 		show: vi.fn(async () => {}),
 		hide: vi.fn(async () => {}),
 		emitTo: vi.fn(async () => {}),
+		isFocused: vi.fn(async () => false),
 	};
 }
 

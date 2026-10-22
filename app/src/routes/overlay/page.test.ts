@@ -23,6 +23,7 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {
 			this.label = label;
@@ -57,6 +58,7 @@ const seams = vi.hoisted(() => {
 			{ id: '2', name: 'Solo Run' },
 		]),
 		decideWeaponMismatch: vi.fn(async () => true),
+		getManualMobSuggestions: vi.fn(async (): Promise<unknown[]> => []),
 		getOverlayPosition: vi.fn(async () => ({ x: null, y: null })),
 		saveOverlayPosition: vi.fn(async () => {}),
 		updateSettings: vi.fn(async () => ({})),
@@ -91,7 +93,7 @@ vi.mock('$lib/api', () => {
 		setSessionConfig: vi.fn(),
 		getSessionDefinitions: seams.getSessionDefinitions,
 		selectDefinition: vi.fn(),
-		getManualMobSuggestions: vi.fn(async () => []),
+		getManualMobSuggestions: seams.getManualMobSuggestions,
 		lockManualMob: vi.fn(),
 		getActivityOptions: vi.fn(async () => ({
 			definitionId: null,
@@ -348,6 +350,57 @@ describe('overlay popup readiness handshake', () => {
 			'overlay-menu:show',
 			expect.objectContaining({ kind: 'definition' }),
 		);
+	});
+});
+
+describe('the mob suggestion menu', () => {
+	async function openMobMenu() {
+		const popup = new seams.FakeWebviewWindow('overlay-menu', {});
+		seams.FakeWebviewWindow.instances = [];
+		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(popup);
+		seams.getManualMobSuggestions.mockResolvedValue([
+			{ display: 'Atrox Young', species: 'Atrox', maturity: 'Young' },
+		]);
+		seams.getTrackingSnapshot.mockResolvedValue({ status: 'idle' });
+		render(OverlayPage);
+		const input = (await screen.findByPlaceholderText('Mob...')) as HTMLInputElement;
+		await act(async () => {
+			input.focus();
+			input.value = 'atr';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+		});
+		await waitFor(() => {
+			expect(popup.emit).toHaveBeenCalledWith(
+				'overlay-menu:show',
+				expect.objectContaining({ kind: 'mob' }),
+			);
+		});
+		popup.emit.mockClear();
+		return { popup, input };
+	}
+
+	it('stays open when the input blurs because the pointer landed in the menu', async () => {
+		const { popup, input } = await openMobMenu();
+		popup.isFocused.mockResolvedValue(true);
+
+		await act(async () => {
+			input.blur();
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		expect(popup.emit).not.toHaveBeenCalledWith('overlay-menu:hide');
+	});
+
+	it('closes when the input blurs to anywhere else', async () => {
+		const { popup, input } = await openMobMenu();
+		popup.isFocused.mockResolvedValue(false);
+
+		await act(async () => {
+			input.blur();
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		await waitFor(() => {
+			expect(popup.emit).toHaveBeenCalledWith('overlay-menu:hide');
+		});
 	});
 });
 

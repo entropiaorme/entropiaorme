@@ -838,7 +838,15 @@
 		mobInputFocused = false;
 		clearMobCloseTimer();
 		mobCloseTimer = setTimeout(() => {
-			void closeMobMenu();
+			mobCloseTimer = undefined;
+			void (async () => {
+				// The pointer landing on a suggestion moves focus into the
+				// menu window, which blurs the input: that is a pick in
+				// progress, not a dismissal. Asking the window settles it
+				// without racing the menu's own interaction signal.
+				if (await menuWindow.isFocused()) return;
+				await closeMobMenu();
+			})();
 		}, 120);
 	}
 

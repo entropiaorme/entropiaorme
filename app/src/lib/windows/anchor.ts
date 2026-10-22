@@ -11,10 +11,23 @@
  */
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { OVERLAY_SURFACE_ATTRIBUTE } from './windowSize';
 
 /**
- * Physical screen position for a satellite dropped below `anchor`, plus the
- * anchor's logical width (for sizing the satellite to its trigger). The
+ * The logical y a satellite dropped below `anchor` hangs from: the bottom
+ * of the drawn surface that holds the anchor (a control inside the strip
+ * drops its popup below the strip, never over the strip's own lower edge),
+ * or the anchor's own bottom when it sits in no marked surface.
+ */
+function dropEdge(anchor: HTMLElement, rect: DOMRect): number {
+	const surface = anchor.closest<HTMLElement>(`[${OVERLAY_SURFACE_ATTRIBUTE}]`);
+	return surface ? Math.max(rect.bottom, surface.getBoundingClientRect().bottom) : rect.bottom;
+}
+
+/**
+ * Physical screen position for a satellite dropped below `anchor` (below
+ * its surface; see `dropEdge`), plus the anchor's logical width (for
+ * sizing the satellite to its trigger). The
  * logical rect is scaled to physical BEFORE adding the (already physical)
  * window origin, and rounded only at the end, so fractional DPI scales
  * cannot accumulate off-by-one drift.
@@ -31,7 +44,7 @@ export async function anchorBelow(
 	const rect = anchor.getBoundingClientRect();
 	return {
 		x: Math.round(windowPosition.x + rect.left * scaleFactor),
-		y: Math.round(windowPosition.y + (rect.bottom + verticalGap) * scaleFactor),
+		y: Math.round(windowPosition.y + (dropEdge(anchor, rect) + verticalGap) * scaleFactor),
 		width: rect.width,
 	};
 }
@@ -58,7 +71,7 @@ export async function anchorCentreBelow(
 	const windowLogicalY = windowPosition.y / scaleFactor;
 	return {
 		centerX: windowLogicalX + rect.left + rect.width / 2,
-		top: windowLogicalY + rect.bottom + verticalGap,
+		top: windowLogicalY + dropEdge(anchor, rect) + verticalGap,
 	};
 }
 

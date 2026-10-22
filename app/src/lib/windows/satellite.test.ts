@@ -21,6 +21,7 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {
 			this.label = label;
@@ -345,6 +346,34 @@ describe('emitTo', () => {
 		const satellite = createSatelliteWindow(options);
 
 		await expect(satellite.emitTo('satellite-under-test:update', {})).resolves.toBeUndefined();
+	});
+});
+
+describe('isFocused', () => {
+	it("answers the existing window's focus state", async () => {
+		const existing = new seams.FakeWebviewWindow(options.label, {});
+		seams.FakeWebviewWindow.instances = [];
+		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
+		existing.isFocused.mockResolvedValueOnce(true);
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(true);
+	});
+
+	it('is false when the window does not exist, and never creates one', async () => {
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(false);
+		expect(seams.FakeWebviewWindow.instances).toHaveLength(0);
+	});
+
+	it('is false when the query fails', async () => {
+		const existing = new seams.FakeWebviewWindow(options.label, {});
+		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
+		existing.isFocused.mockRejectedValueOnce(new Error('window gone'));
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(false);
 	});
 });
 

@@ -25,6 +25,8 @@ mod actor;
 mod analytics;
 pub mod catalogue;
 mod crud;
+#[cfg(test)]
+mod curated_tests;
 mod families;
 mod hand_in;
 mod lifecycle;
@@ -32,8 +34,6 @@ mod missions;
 mod offers;
 mod payload;
 mod review;
-#[cfg(test)]
-mod curated_tests;
 #[cfg(test)]
 mod tests;
 

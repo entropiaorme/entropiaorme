@@ -205,7 +205,10 @@ impl Catalogue {
         for planet in &self.planets {
             claim_key(&planet.key)?;
             if planet.name.trim().is_empty() || planet.categories.is_empty() {
-                return Err(format!("planet '{}' needs a name and a category", planet.key));
+                return Err(format!(
+                    "planet '{}' needs a name and a category",
+                    planet.key
+                ));
             }
             for category in &planet.categories {
                 claim_key(&category.key)?;
@@ -424,7 +427,10 @@ fn find_row(
     if let Some(id) = keyed {
         return Ok(Some((id, false)));
     }
-    let wanted: Vec<String> = names.iter().map(|name| normalize_quest_name(name)).collect();
+    let wanted: Vec<String> = names
+        .iter()
+        .map(|name| normalize_quest_name(name))
+        .collect();
     let completions = if table == "quests" {
         "(SELECT COUNT(*) FROM session_quest_completions c WHERE c.quest_id = t.id)"
     } else {
@@ -441,7 +447,11 @@ fn find_row(
         if !wanted.contains(&normalize_quest_name(&name)) {
             continue;
         }
-        let candidate = (row.get::<_, i64>(0)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?);
+        let candidate = (
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        );
         let better = match best {
             None => true,
             Some((id, active, count)) => {

@@ -557,7 +557,10 @@ impl UnresolvedQuestReward {
                     id: line["id"].as_i64().unwrap_or(0),
                     item_name: string_field(&line["item_name"]),
                     quantity: line["quantity"].as_i64().unwrap_or(1).max(1),
-                    value_ped: round_half_even(line["value_ped"].as_f64().unwrap_or(0.0).max(0.0), 4),
+                    value_ped: round_half_even(
+                        line["value_ped"].as_f64().unwrap_or(0.0).max(0.0),
+                        4,
+                    ),
                     mob_name: opt_string(&line["mob_name"]).into(),
                 })
                 .collect(),

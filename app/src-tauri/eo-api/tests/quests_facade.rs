@@ -474,7 +474,10 @@ async fn the_curated_catalogue_is_served_in_board_order() {
         .iter()
         .map(|entry| entry.label.as_str())
         .collect();
-    assert_eq!(slots, vec!["Hunting 1", "Hunting 2", "Hunting 3", "Samples"]);
+    assert_eq!(
+        slots,
+        vec!["Hunting 1", "Hunting 2", "Hunting 3", "Samples"]
+    );
     assert!(aris.categories[0]
         .entries
         .iter()

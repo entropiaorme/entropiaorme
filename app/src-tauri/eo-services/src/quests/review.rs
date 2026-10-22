@@ -480,7 +480,9 @@ impl QuestService {
                     [crate::daily_rollup::epoch_day(completion.completed_at)],
                 )?;
                 tx.commit()?;
-                Ok(ReviewResolution::Applied(loot_sources.into_iter().collect()))
+                Ok(ReviewResolution::Applied(
+                    loot_sources.into_iter().collect(),
+                ))
             })
             .await?;
         match resolution {
@@ -610,7 +612,10 @@ fn expected_items(conn: &rusqlite::Connection, quest_id: i64) -> rusqlite::Resul
 /// by identity and scope alone, never by comparing the loot's game-clock
 /// timestamp with the completion's wall-clock instant; the observed time is
 /// carried only so the player can tell lines apart.
-fn loot_candidates(conn: &rusqlite::Connection, completion_id: i64) -> rusqlite::Result<Vec<Value>> {
+fn loot_candidates(
+    conn: &rusqlite::Connection,
+    completion_id: i64,
+) -> rusqlite::Result<Vec<Value>> {
     let mut stmt = conn.prepare(
         "SELECT li.id, li.kill_id, k.loot_source_id, li.item_name, li.quantity, li.value_ped, \
                 k.timestamp, k.mob_name \

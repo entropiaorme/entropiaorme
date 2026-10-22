@@ -2306,10 +2306,12 @@ async fn a_planet_following_session_offers_that_planets_quests() {
         serde_json::json!({ "signal_loot_item": "Boss Token" }),
     )
     .await;
-    let received = seed_planet_quest(&api, "Getting Slimed!", "Cyrene", serde_json::json!({})).await;
+    let received =
+        seed_planet_quest(&api, "Getting Slimed!", "Cyrene", serde_json::json!({})).await;
     api.quest_start(received).await.unwrap();
     seed_planet_quest(&api, "Lord Pyscidon", "Cyrene", serde_json::json!({})).await;
-    let elsewhere = seed_planet_quest(&api, "Touch a Nerve", "Calypso", serde_json::json!({})).await;
+    let elsewhere =
+        seed_planet_quest(&api, "Touch a Nerve", "Calypso", serde_json::json!({})).await;
     api.quest_start(elsewhere).await.unwrap();
 
     seed_definition(

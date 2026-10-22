@@ -115,7 +115,9 @@ async fn scalar(db: &Db, sql: &'static str) -> i64 {
 
 #[test]
 fn the_shipped_catalogue_is_well_formed() {
-    CATALOGUE.validate().expect("the shipped catalogue validates");
+    CATALOGUE
+        .validate()
+        .expect("the shipped catalogue validates");
     let planet = |name: &str| {
         CATALOGUE
             .planets
@@ -144,7 +146,10 @@ fn validation_refuses_a_member_outside_its_family_and_a_repeated_key() {
     if let CatalogueEntry::Family(family) = &mut catalogue.planets[0].categories[0].entries[0] {
         family.members[1].name = "ARIS - Daily Hunting 2: Defective Drones".to_string();
     }
-    assert!(catalogue.validate().unwrap_err().contains("does not belong"));
+    assert!(catalogue
+        .validate()
+        .unwrap_err()
+        .contains("does not belong"));
 
     let mut catalogue = fixture();
     if let CatalogueEntry::Quest(quest) = &mut catalogue.planets[1].categories[0].entries[0] {
@@ -168,12 +173,19 @@ async fn a_fresh_database_receives_the_catalogue_once() {
         "one family and four quests"
     );
     let again = sync(&db, fixture()).await;
-    assert_eq!(again, SyncReport::default(), "an unchanged catalogue writes nothing");
+    assert_eq!(
+        again,
+        SyncReport::default(),
+        "an unchanged catalogue writes nothing"
+    );
 
     let member = quest_row(&db, "aris/h1/mortirex").await;
     assert_eq!(member["planet"], "ARIS");
     assert_eq!(member["category"], "Daily missions");
-    assert!(member["cooldown_hours"].is_null(), "the family carries the cooldown");
+    assert!(
+        member["cooldown_hours"].is_null(),
+        "the family carries the cooldown"
+    );
     assert!(member["family_id"].is_i64());
     assert_eq!(member["policy"], "named_items");
     let boss = quest_row(&db, "aris/droktimus").await;
@@ -227,7 +239,9 @@ async fn existing_rows_are_adopted_with_their_history() {
         .create_quest(&json!({"name": "Zyn'Nix Tempo - Adult Horned Birds"}))
         .await
         .unwrap();
-    svc.delete_quest(stale["id"].as_i64().unwrap()).await.unwrap();
+    svc.delete_quest(stale["id"].as_i64().unwrap())
+        .await
+        .unwrap();
     let live = svc
         .create_quest(&json!({"name": "Zyn'Nix Tempo - Adult Horned Birds\t"}))
         .await
@@ -245,12 +259,18 @@ async fn existing_rows_are_adopted_with_their_history() {
     .unwrap();
 
     let report = sync(&db, fixture()).await;
-    assert_eq!(report.adopted, 4, "the family, a variant, the boss, the tempo");
+    assert_eq!(
+        report.adopted, 4,
+        "the family, a variant, the boss, the tempo"
+    );
     assert_eq!(report.inserted, 1, "only the unseen variant is new");
 
     let adopted_variant = quest_row(&db, "aris/h1/mortirex").await;
     assert_eq!(adopted_variant["id"], variant["id"]);
-    assert_eq!(adopted_variant["planet"], "ARIS", "a misfiled planet is corrected");
+    assert_eq!(
+        adopted_variant["planet"], "ARIS",
+        "a misfiled planet is corrected"
+    );
     assert!(adopted_variant["cooldown_hours"].is_null());
     assert_eq!(adopted_variant["family_id"], family_id);
     let adopted_boss = quest_row(&db, "aris/droktimus").await;
@@ -267,7 +287,10 @@ async fn existing_rows_are_adopted_with_their_history() {
         "the completion follows the adopted row"
     );
     let birds = quest_row(&db, "cyrene/birds").await;
-    assert_eq!(birds["id"], live["id"], "the active duplicate is the one adopted");
+    assert_eq!(
+        birds["id"], live["id"],
+        "the active duplicate is the one adopted"
+    );
     assert_eq!(birds["name"], "Zyn'Nix Tempo - Adult Horned Birds");
     assert_eq!(
         scalar(
@@ -379,7 +402,9 @@ async fn abandoning_a_daily_keeps_its_family_cooling_from_pickup() {
     let abandoned = svc.abandon_quest(variant_id).await.unwrap().unwrap();
     assert!(abandoned["started_at"].is_null());
     assert!(abandoned["family_cooldown_expires_at"].is_string());
-    let sibling_id = quest_row(&db, "aris/h1/drones").await["id"].as_i64().unwrap();
+    let sibling_id = quest_row(&db, "aris/h1/drones").await["id"]
+        .as_i64()
+        .unwrap();
     let sibling = svc.get_quest(sibling_id).await.unwrap().unwrap();
     assert_eq!(
         sibling["family_cooldown_expires_at"], abandoned["family_cooldown_expires_at"],

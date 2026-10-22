@@ -23,6 +23,24 @@ export async function toggleCartographyOverlay(): Promise<void> {
 	await invoke('toggle_cartography_overlay');
 }
 
+/** One surface an overlay window draws, in its logical (CSS) pixels
+ * (mirrors the Rust `HitShape`). */
+export interface HitShape {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	/** Corner radius; 0 for a square-cornered surface. */
+	radius: number;
+}
+
+/** Cut the calling window's pointer input to the surfaces it draws, so
+ * clicks anywhere else pass through to whatever lies beneath. An empty
+ * list restores input across the whole window. */
+export async function setWindowHitRegion(shapes: HitShape[]): Promise<void> {
+	await invoke('set_window_hit_region', { shapes });
+}
+
 export async function showNavigationOverlays(): Promise<void> {
 	await invoke('show_navigation_overlays');
 }

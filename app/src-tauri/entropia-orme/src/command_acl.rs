@@ -232,6 +232,7 @@ macro_rules! app_command_surface {
             show_navigation_overlays,
             hide_navigation_overlays,
             begin_navigation_area_selection,
+            hit_region::set_window_hit_region,
             updater::check_for_update,
             updater::download_update,
             updater::install_update,
@@ -274,12 +275,14 @@ pub fn app_commands() -> Vec<&'static str> {
 
 /// The capture overlay does one thing: read the sale window and take
 /// itself off screen. It gets those commands, the fee-research capture
-/// pair, and the startup readiness answer every window awaits.
+/// pair, the startup readiness answer every window awaits, and the input
+/// cut every overlay applies to its own window (`hit_region`).
 pub const SALE_CAPTURE_COMMANDS: &[&str] = &[
     "capture_sale_from_overlay",
     "dev_auction_fee_research_capture",
     "dev_auction_fee_research_overlay_status",
     "hide_sale_capture_overlay",
+    "set_window_hit_region",
     "substrate_ready",
 ];
 
@@ -290,6 +293,7 @@ pub const CARTOGRAPHY_COMMANDS: &[&str] = &[
     "maps_scan_coordinates",
     "pin_configs_list",
     "planet_maps_list",
+    "set_window_hit_region",
     "substrate_ready",
 ];
 
@@ -306,6 +310,7 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
     "navigation_undo",
     "navigation_end",
     "hide_navigation_overlays",
+    "set_window_hit_region",
     "substrate_ready",
 ];
 

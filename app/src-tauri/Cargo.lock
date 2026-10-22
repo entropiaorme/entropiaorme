@@ -1009,6 +1009,7 @@ dependencies = [
  "eo-api",
  "eo-services",
  "eo-wire",
+ "gtk",
  "libc",
  "ort",
  "rusqlite",

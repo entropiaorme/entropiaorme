@@ -69,6 +69,9 @@ windows = "0.61"
 # poll(2) and fcntl(2) calls that keep the reads interruptible.
 evdev = "0.13"
 libc = "0.2"
+# The GTK binding Tauri's Linux shell is built on (pinned to the line it
+# resolves), for the overlay input shapes the shell sets on its windows.
+gtk = "0.18"
 # Pure-Rust, safe X11 protocol bindings: the Linux game-window discovery
 # and geometry lookups run over XWayland (where the game and our windows
 # both live), mirroring the Windows EnumWindows/GetClientRect helpers.

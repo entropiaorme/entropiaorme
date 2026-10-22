@@ -64,6 +64,7 @@ chrono = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",
@@ -78,3 +79,6 @@ libc = { workspace = true }
 # the right place to enable the Linux ScreenCast-portal capture backend that
 # the backend member keeps optional to stay system-library-free.
 eo-services = { workspace = true, features = ["linux-capture"] }
+# The overlay windows' input shapes (hit_region.rs), on the GTK window
+# Tauri already runs.
+gtk = { workspace = true }

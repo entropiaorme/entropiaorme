@@ -6,6 +6,7 @@ mod command_acl;
 mod commands;
 mod composition;
 mod crash;
+mod hit_region;
 mod resources;
 mod substrate;
 mod telemetry;
@@ -1011,6 +1012,7 @@ mod tests {
                 "dev_auction_fee_research_capture",
                 "dev_auction_fee_research_overlay_status",
                 "hide_sale_capture_overlay",
+                "set_window_hit_region",
                 "substrate_ready"
             ]
         );
@@ -1065,6 +1067,7 @@ mod tests {
                 "maps_scan_coordinates",
                 "pin_configs_list",
                 "planet_maps_list",
+                "set_window_hit_region",
                 "substrate_ready"
             ]
         );
@@ -1104,6 +1107,7 @@ mod tests {
                 "navigation_undo",
                 "navigation_end",
                 "hide_navigation_overlays",
+                "set_window_hit_region",
                 "substrate_ready",
             ]
         );

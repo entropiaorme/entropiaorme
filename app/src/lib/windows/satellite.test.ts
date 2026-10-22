@@ -21,6 +21,7 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		setFocusable = vi.fn(async (_focusable: boolean) => {});
 		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {
@@ -273,6 +274,19 @@ describe('show', () => {
 		expect(order(existing.setPosition)).toBeLessThan(order(existing.emit));
 		expect(order(existing.emit)).toBeLessThan(order(existing.show));
 		expect(order(existing.show)).toBeLessThan(order(existing.setFocus));
+		// A satellite that is to take focus must accept it before it maps.
+		expect(existing.setFocusable).toHaveBeenCalledWith(true);
+		expect(order(existing.setFocusable)).toBeLessThan(order(existing.show));
+	});
+
+	it('reveals an unfocused satellite non-focusable, so the host keeps the keyboard', async () => {
+		const { satellite, existing } = await reusableSatellite();
+
+		await satellite.show({}, { x: 1, y: 2 });
+
+		expect(existing.setFocusable).toHaveBeenCalledWith(false);
+		expect(order(existing.setFocusable)).toBeLessThan(order(existing.show));
+		expect(existing.show).toHaveBeenCalledTimes(1);
 	});
 
 	it('defaults the size to the creation size and skips focus by default', async () => {
@@ -317,6 +331,7 @@ describe('show', () => {
 		expect(existing.emit).toHaveBeenCalledWith(options.showEvent, state);
 		expect(existing.show).not.toHaveBeenCalled();
 		expect(existing.setFocus).not.toHaveBeenCalled();
+		expect(existing.setFocusable).not.toHaveBeenCalled();
 	});
 });
 

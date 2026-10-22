@@ -19,7 +19,8 @@
  *   factory's state so a later `ensure()` retries creation from scratch.
  * - **Show protocol.** Size and position settle before the show payload goes
  *   out, and the window is revealed only after it, so the satellite never
- *   flashes at a stale location. Focus is optional and best-effort. A
+ *   flashes at a stale location. Focus is optional and best-effort; a
+ *   satellite revealed without it cannot take the keyboard at all. A
  *   satellite route that sizes and reveals itself from the state payload
  *   opts out of the host-side reveal (`reveal: false`).
  * - **Tolerant hide, emit, and focus query.** `hide()`, `emitTo()`, and
@@ -78,7 +79,13 @@ export interface SatellitePosition {
 }
 
 export interface SatelliteShowOptions {
-	/** Focus the satellite after revealing it (best-effort; failures are swallowed). */
+	/**
+	 * Focus the satellite after revealing it (best-effort; failures are
+	 * swallowed). A satellite revealed without focus is made non-focusable
+	 * first, so the reveal never takes the keyboard from the host (an X11
+	 * window manager otherwise focuses a newly mapped window); it still
+	 * takes clicks.
+	 */
 	focus?: boolean;
 	/**
 	 * Reveal the window after emitting the state (default true). A satellite
@@ -224,6 +231,7 @@ export function createSatelliteWindow(options: SatelliteWindowOptions): Satellit
 		}
 		await satellite.emit(options.showEvent, state);
 		if (opts?.reveal === false) return;
+		await satellite.setFocusable(opts?.focus === true).catch(() => {});
 		await satellite.show();
 		if (opts?.focus) {
 			await satellite.setFocus().catch(() => {});

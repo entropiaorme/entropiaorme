@@ -23,6 +23,7 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		setFocusable = vi.fn(async (_focusable: boolean) => {});
 		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {

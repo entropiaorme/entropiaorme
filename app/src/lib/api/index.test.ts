@@ -109,6 +109,12 @@ describe('tracking wrappers dispatch typed commands', () => {
 			{ session_id: 's1', cost: 1.25 },
 		],
 		[
+			'setSessionExclusion',
+			() => api.setSessionExclusion('s1', true, false, 'hotbar misread'),
+			'tracking_session_exclusion',
+			{ session_id: 's1', economy: true, progression: false, note: 'hotbar misread' },
+		],
+		[
 			'deleteSession',
 			() => api.deleteSession('s1'),
 			'tracking_session_delete',

@@ -3,10 +3,21 @@
 	import { Badge, Button, ErrorNotice, Menu } from '$lib/components';
 	import SessionDetailView from '$lib/components/SessionDetail.svelte';
 	import { shouldSettleInstantly } from '$lib/motion/testMotion';
-	import { formatDate, formatDuration, formatPed } from '$lib/utils/format';
+	import { formatDate, formatDateFull, formatDuration, formatPed } from '$lib/utils/format';
+	import {
+		countsEconomy,
+		countsProgression,
+		excludedFrom,
+		excludedSince,
+		exclusionMark,
+		INCLUDED,
+		toggled,
+		withNote
+	} from './exclusion';
 	import { PAGE_SIZE } from './instancesModel.svelte';
 	import ReviewDefinitionPicker from './ReviewDefinitionPicker.svelte';
 	import type { ReviewModel } from './reviewModel.svelte';
+	import type { TrackingSession } from '$lib/types/tracking';
 
 	let {
 		model
@@ -51,6 +62,12 @@
 	/** Some row on this page nets without an armour cost still to be recorded. */
 	const armourPendingOnPage = $derived(table.pageRows.some((session) => instances.armourPending(session.id)));
 	const unpricedOnPage = $derived(table.pageRows.some((session) => instances.unpriced(session.id)));
+
+	/** Commit an edited exclusion note, only when it actually changed. */
+	function commitNote(session: TrackingSession, value: string) {
+		if (value.trim() === (session.exclusion?.note ?? '')) return;
+		void instances.setExclusion(session.id, withNote(session.exclusion, value));
+	}
 
 	// An armour recording from the overlay, or a healing correction in a
 	// session's detail, moves session figures: follow both while open.
@@ -205,7 +222,12 @@
 									</td>
 									<td
 										class="border-b border-border/50 px-4 py-3 text-right font-semibold tabular-nums
-											{session.net >= 0 ? 'text-positive' : 'text-negative'}"
+											{!countsEconomy(session.exclusion)
+												? 'text-text-tertiary'
+												: session.net >= 0
+													? 'text-positive'
+													: 'text-negative'}"
+										title={countsEconomy(session.exclusion) ? undefined : 'Left out of the PED stats'}
 									>
 										{session.net >= 0 ? '+' : ''}{formatPed(session.net)}{#if instances.armourPending(session.id)}<span
 												class="ml-0.5 align-super text-[10px] font-normal text-warning"
@@ -224,6 +246,15 @@
 											{/if}
 											{#if session.hofs > 0}
 												<Badge variant="accent">{session.hofs}H</Badge>
+											{/if}
+											{#if exclusionMark(session.exclusion)}
+												<span
+													class="whitespace-nowrap text-xs text-text-tertiary"
+													title={session.exclusion?.note ?? undefined}
+													data-testid="exclusion-mark"
+												>
+													{exclusionMark(session.exclusion)}
+												</span>
 											{/if}
 										</div>
 									</td>
@@ -316,6 +347,109 @@
 													{/snippet}
 												</Menu>
 
+												<!-- Stats: keep the record, leave its figures out of
+													 the app-wide statistics. Instant and reversible, so
+													 the toggles apply in place and the menu stays open. -->
+												<Menu
+													overlay
+													align="right"
+													ariaLabel="Statistics this session counts towards"
+													panelClass="w-64 p-1"
+												>
+													{#snippet trigger({ open, toggle })}
+														<button
+															type="button"
+															class="icon-button-row p-1 {exclusionMark(session.exclusion)
+																? 'text-warning'
+																: ''}"
+															aria-haspopup="menu"
+															aria-expanded={open}
+															aria-label="Statistics this session counts towards"
+															title="Statistics this session counts towards"
+															onclick={toggle}
+														>
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 20 20"
+																fill="currentColor"
+																class="h-4 w-4"
+																aria-hidden="true"
+															>
+																<path
+																	d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z"
+																/>
+															</svg>
+														</button>
+													{/snippet}
+
+													{#snippet children()}
+														{@const running = session.endTime === null}
+														{@const busy = instances.excludingId !== null}
+														<p class="eyebrow px-2 py-1">Counts towards</p>
+														{#each [{ scope: 'economy', label: 'PED stats', detail: 'Loot, costs, profit and loss', counts: countsEconomy(session.exclusion) }, { scope: 'progression', label: 'Skill stats', detail: 'PES from skill gains', counts: countsProgression(session.exclusion) }] as const as item (item.scope)}
+															<button
+																type="button"
+																role="menuitemcheckbox"
+																aria-checked={item.counts}
+																class="mt-0.5 flex w-full items-start gap-2 rounded px-2 py-1.5 text-left
+																	cursor-pointer hover:bg-surface-hover
+																	disabled:cursor-not-allowed disabled:opacity-50"
+																disabled={running || busy}
+																onclick={() =>
+																	void instances.setExclusion(session.id, toggled(session.exclusion, item.scope))}
+															>
+																<span
+																	class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border
+																		{item.counts ? 'border-accent bg-accent text-text-inverse' : 'border-border-bright'}"
+																	aria-hidden="true"
+																>
+																	{#if item.counts}
+																		<svg viewBox="0 0 20 20" fill="currentColor" class="h-3 w-3">
+																			<path
+																				fill-rule="evenodd"
+																				d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+																				clip-rule="evenodd"
+																			/>
+																		</svg>
+																	{/if}
+																</span>
+																<span class="flex min-w-0 flex-col">
+																	<span class="text-sm text-text">{item.label}</span>
+																	<span class="text-xs text-text-tertiary">{item.detail}</span>
+																</span>
+															</button>
+														{/each}
+														{#if running}
+															<p class="px-2 pt-1.5 pb-1 text-xs text-text-tertiary">
+																Stop the session to change this.
+															</p>
+														{:else if exclusionMark(session.exclusion)}
+															<div class="mt-1 border-t border-border/60 px-2 pt-2 pb-1">
+																<label class="flex flex-col gap-1">
+																	<span class="text-xs text-text-tertiary">Why (optional)</span>
+																	<input
+																		type="text"
+																		class="h-7 w-full rounded border border-border bg-surface px-2 text-xs text-text
+																			outline-none transition-colors placeholder:text-text-tertiary
+																			focus:border-accent disabled:opacity-50"
+																		maxlength="500"
+																		placeholder="What went wrong with this recording"
+																		value={session.exclusion?.note ?? ''}
+																		disabled={busy}
+																		onkeydown={(e) => {
+																			if (e.key === 'Enter') {
+																				e.preventDefault();
+																				commitNote(session, e.currentTarget.value);
+																			}
+																		}}
+																		onblur={(e) => commitNote(session, e.currentTarget.value)}
+																	/>
+																</label>
+															</div>
+														{/if}
+													{/snippet}
+												</Menu>
+
 												<button
 													type="button"
 													class="icon-button-row p-1"
@@ -344,6 +478,32 @@
 									<tr>
 										<td colspan="6" class="border-b border-border/50 p-0">
 											<div class="bg-surface-hover/30 p-4">
+												{#if excludedFrom(session.exclusion)}
+													{@const since = excludedSince(session.exclusion)}
+													<div
+														class="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-text-secondary"
+														data-testid="exclusion-line"
+													>
+														<span>
+															{`Left out of ${excludedFrom(session.exclusion)}`}{since
+																? ` since ${formatDateFull(since)}`
+																: ''}
+														</span>
+														{#if session.exclusion?.note}
+															<span class="text-text-tertiary" aria-hidden="true">&middot;</span>
+															<span class="italic text-text-tertiary">{session.exclusion.note}</span>
+														{/if}
+														<span class="text-text-tertiary" aria-hidden="true">&middot;</span>
+														<button
+															type="button"
+															class="cursor-pointer text-accent hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+															disabled={instances.excludingId !== null}
+															onclick={() => void instances.setExclusion(session.id, INCLUDED)}
+														>
+															Include again
+														</button>
+													</div>
+												{/if}
 												{#if instances.loadingDetail}
 													<p class="animate-pulse text-xs text-text-tertiary">Loading detail...</p>
 												{:else if instances.expandedDetail}

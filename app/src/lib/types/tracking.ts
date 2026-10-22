@@ -11,6 +11,7 @@ export type {
 	MobEntryMode,
 	NotableEvent,
 	SessionDetail,
+	SessionExclusion,
 	SkillGain,
 	ToolStat,
 	TrackingSession,

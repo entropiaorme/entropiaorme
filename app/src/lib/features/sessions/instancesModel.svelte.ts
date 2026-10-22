@@ -21,6 +21,11 @@
  * be priced to, until they are assigned in the session's record. A
  * recording, a correction, or an assignment from any window re-reads the
  * loaded rows and their marks in place.
+ *
+ * A session can be kept on record while its PED side, its skill gains, or
+ * both are left out of the app-wide statistics. The write is instant and
+ * reversible, so it carries no confirmation; the row and any open detail
+ * take the stored state from the reply.
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -34,9 +39,10 @@ import {
 	HEALING_TOPIC,
 	PROTECTION_TOPIC,
 	reassignSession,
+	setSessionExclusion,
 	WEAPONS_TOPIC,
 } from '$lib/api';
-import type { SessionDetail, TrackingSession } from '$lib/types/tracking';
+import type { SessionDetail, SessionExclusion, TrackingSession } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 
@@ -72,6 +78,8 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 	// The in-flight guard for a re-file write. The chooser's own open
 	// state belongs to the menu that renders it.
 	let reassigning = $state(false);
+	// The session whose stats exclusion is being written, if any.
+	let excludingId = $state<string | null>(null);
 	// Loaded sessions whose armour cost no recording covers yet.
 	let armourPending = $state<ReadonlySet<string>>(new Set());
 	// Loaded sessions holding shots recorded without a price.
@@ -258,6 +266,34 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		}
 	}
 
+	/** Set which statistics a session is left out of (the whole desired
+	 * state: both scopes and the note). Returns whether it was stored. */
+	async function setExclusion(
+		id: string,
+		next: { economy: boolean; progression: boolean; note: string | null },
+	): Promise<boolean> {
+		if (excludingId !== null) return false;
+		error = null;
+		excludingId = id;
+		try {
+			const result = await setSessionExclusion(id, next.economy, next.progression, next.note);
+			applyExclusion(id, result.exclusion);
+			return true;
+		} catch (e) {
+			error = describeError(e, 'Failed to change what the session counts towards');
+			return false;
+		} finally {
+			excludingId = null;
+		}
+	}
+
+	function applyExclusion(id: string, exclusion: SessionExclusion | null) {
+		sessions = sessions.map((s) => (s.id === id ? { ...s, exclusion } : s));
+		if (expandedSessionId === id && expandedDetail) {
+			expandedDetail = { ...expandedDetail, exclusion };
+		}
+	}
+
 	function collapseAll() {
 		expandedSessionId = null;
 		expandedDetail = null;
@@ -317,6 +353,9 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		get reassigning() {
 			return reassigning;
 		},
+		get excludingId() {
+			return excludingId;
+		},
 
 		/** The session's armour cost awaits a recording, so its net is not final. */
 		armourPending(id: string): boolean {
@@ -336,6 +375,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		toggleSession,
 		handleDelete,
 		reassign,
+		setExclusion,
 		collapseAll,
 	};
 }

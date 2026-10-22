@@ -81,6 +81,12 @@ export const startTracking = commands.trackingStart;
 export const stopTracking = commands.trackingStop;
 export const releaseMob = commands.trackingReleaseMob;
 export const deleteSession = commands.trackingSessionDelete;
+/** Keep an ended session on record while leaving its PED side, its skill
+ * gains, or both out of the app-wide statistics. Full-state apply: both
+ * scopes and the note are sent every time, so a repeat is harmless; a
+ * scope switched back on clears its stamp, and the note is kept only while
+ * something is excluded. A running session answers 409. */
+export const setSessionExclusion = commands.trackingSessionExclusion;
 export const deactivateLootItem = commands.trackingLootItemDeactivate;
 export const activateLootItem = commands.trackingLootItemActivate;
 /** Re-file an ended session under a different (active) definition: the

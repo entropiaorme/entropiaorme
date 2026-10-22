@@ -32,8 +32,8 @@
 		trigger?: Snippet<[{ open: boolean; toggle: () => void; keydown: (event: KeyboardEvent) => void }]>;
 		/**
 		 * Custom panel content, rendered after `items`. Elements marked
-		 * `role="menuitem"` or `role="menuitemradio"` participate in the
-		 * keyboard roving focus.
+		 * `role="menuitem"`, `role="menuitemradio"`, or
+		 * `role="menuitemcheckbox"` participate in the keyboard roving focus.
 		 */
 		children?: Snippet<[{ close: () => void }]>;
 		class?: string;
@@ -112,7 +112,7 @@
 		return panelEl
 			? Array.from(
 					panelEl.querySelectorAll<HTMLElement>(
-						['menuitem', 'menuitemradio']
+						['menuitem', 'menuitemradio', 'menuitemcheckbox']
 							.map((role) => `[role="${role}"]:not([disabled]):not([aria-disabled="true"])`)
 							.join(', '),
 					),

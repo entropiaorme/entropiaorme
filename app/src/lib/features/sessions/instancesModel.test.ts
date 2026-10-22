@@ -13,6 +13,7 @@ vi.mock('$lib/api', () => ({
 	getUnpricedShotSessions: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
+	setSessionExclusion: vi.fn(),
 }));
 
 const costListeners: Array<{ topic: string; handler: () => void }> = [];
@@ -580,5 +581,88 @@ describe('armour still to record', () => {
 		mocked.getUnrecordedArmourSessions.mockRejectedValueOnce(new Error('offline'));
 		await model.refreshCosts();
 		expect(model.armourPending('s1')).toBe(true);
+	});
+});
+
+describe('setExclusion', () => {
+	const excluded = {
+		economyExcludedAt: '2026-10-22T10:00:00+00:00',
+		progressionExcludedAt: null,
+		note: 'hotbar misread',
+	};
+
+	it('sends the whole state and stores the reply on the row and the open detail', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session(), session({ id: 's2' })]));
+		mocked.getSessionDetail.mockResolvedValue(detail());
+		mocked.setSessionExclusion.mockResolvedValue({ sessionId: 's1', exclusion: excluded });
+		const model = createInstancesModel();
+		await model.loadSessions();
+		await model.toggleSession('s1');
+
+		const stored = await model.setExclusion('s1', {
+			economy: true,
+			progression: false,
+			note: 'hotbar misread',
+		});
+
+		expect(stored).toBe(true);
+		expect(mocked.setSessionExclusion).toHaveBeenCalledWith('s1', true, false, 'hotbar misread');
+		expect(model.sessions[0].exclusion).toEqual(excluded);
+		expect(model.sessions[1].exclusion).toBeUndefined();
+		expect(model.expandedDetail?.exclusion).toEqual(excluded);
+		expect(model.excludingId).toBeNull();
+	});
+
+	it('clears the row when the session counts everywhere again', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session({ exclusion: excluded })]));
+		mocked.setSessionExclusion.mockResolvedValue({ sessionId: 's1', exclusion: null });
+		const model = createInstancesModel();
+		await model.loadSessions();
+
+		await model.setExclusion('s1', { economy: false, progression: false, note: null });
+
+		expect(model.sessions[0].exclusion).toBeNull();
+	});
+
+	it('surfaces a refusal and leaves the row as it was', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session()]));
+		mocked.setSessionExclusion.mockRejectedValueOnce(
+			new Error('Stop the session before excluding it from stats'),
+		);
+		const model = createInstancesModel();
+		await model.loadSessions();
+
+		const stored = await model.setExclusion('s1', {
+			economy: true,
+			progression: false,
+			note: null,
+		});
+
+		expect(stored).toBe(false);
+		expect(model.error).toBe('Stop the session before excluding it from stats');
+		expect(model.sessions[0].exclusion).toBeUndefined();
+		expect(model.excludingId).toBeNull();
+	});
+
+	it('refuses a second write while one is in flight', async () => {
+		mocked.getTrackingSessions.mockResolvedValue(page([session()]));
+		let release: (value: { sessionId: string; exclusion: null }) => void = () => {};
+		mocked.setSessionExclusion.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		);
+		const model = createInstancesModel();
+		await model.loadSessions();
+
+		const first = model.setExclusion('s1', { economy: true, progression: false, note: null });
+		expect(model.excludingId).toBe('s1');
+		expect(await model.setExclusion('s1', { economy: false, progression: true, note: null })).toBe(
+			false,
+		);
+		release({ sessionId: 's1', exclusion: null });
+		expect(await first).toBe(true);
+		expect(mocked.setSessionExclusion).toHaveBeenCalledTimes(1);
 	});
 });

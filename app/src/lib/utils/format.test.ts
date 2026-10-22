@@ -6,6 +6,7 @@ import {
 	formatElapsed,
 	formatLedgerDate,
 	formatMultiplier,
+	formatOrdinal,
 	formatPed,
 	formatPedHalfEven,
 	formatPercent,
@@ -99,6 +100,20 @@ describe('formatPercent', () => {
 
 	it('formats zero', () => {
 		expect(formatPercent(0)).toBe('0.0%');
+	});
+});
+
+describe('formatOrdinal', () => {
+	it('suffixes a place by English ordinal rules', () => {
+		expect([1, 2, 3, 4, 10].map(formatOrdinal)).toEqual(['1st', '2nd', '3rd', '4th', '10th']);
+		expect([11, 12, 13].map(formatOrdinal)).toEqual(['11th', '12th', '13th']);
+		expect([21, 22, 23, 101, 111].map(formatOrdinal)).toEqual([
+			'21st',
+			'22nd',
+			'23rd',
+			'101st',
+			'111th',
+		]);
 	});
 });
 

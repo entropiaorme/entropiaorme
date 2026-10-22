@@ -5,6 +5,13 @@
  * (event-only or unreachable ones): a hidden species trails the ranking
  * with a restore control. The planet choice and the hidden set are both
  * UI preferences, so a planet-by-planet campaign survives app restarts.
+ *
+ * A row opens into its stage ladder: every meta left up to rank 25, what
+ * each stage costs, the running total from now, and where each stage
+ * would sit in the list as it stands. That is the figure for deciding to
+ * stay on a species past its next meta: while the player stays, no other
+ * species moves, so a later stage's place is exactly how many cheaper
+ * metas they pass up to finish there.
  */
 
 import { getCodexMetaTargets } from '$lib/api';
@@ -33,6 +40,42 @@ export function onPlanet(targets: readonly CodexMetaTarget[], planet: string): C
 	return targets.filter((target) => target.planets.includes(planet));
 }
 
+/** One meta still to earn on a species, priced for the stay-or-move call. */
+export interface LadderStage {
+	targetRank: number;
+	cost: number;
+	estimatedPed: number;
+	/** PED from now through this stage, the next meta included. */
+	cumulativePed: number;
+	/** Where this stage would sit among the competitors' next metas
+	 * (1-based, ties broken by name as the backend's ranking is). */
+	place: number;
+}
+
+/** Every remaining meta on `target`, from its next one to rank 25,
+ * placed against the `competitors`' next metas (the target itself is
+ * skipped wherever it appears among them). */
+export function stageLadder(
+	target: CodexMetaTarget,
+	competitors: readonly CodexMetaTarget[],
+): LadderStage[] {
+	const others = competitors.filter((other) => other.speciesName !== target.speciesName);
+	const stages = [
+		{ targetRank: target.targetRank, cost: target.cost, estimatedPed: target.estimatedPed },
+		...target.followingStages,
+	];
+	let cumulativePed = 0;
+	return stages.map((stage) => {
+		cumulativePed += stage.estimatedPed;
+		const ahead = others.filter(
+			(other) =>
+				other.cost < stage.cost ||
+				(other.cost === stage.cost && other.speciesName < target.speciesName),
+		).length;
+		return { ...stage, cumulativePed, place: ahead + 1 };
+	});
+}
+
 export function createCodexMetaTargetsModel() {
 	let result = $state<CodexMetaTargets | null>(null);
 	let loading = $state(true);
@@ -48,7 +91,9 @@ export function createCodexMetaTargetsModel() {
 	const rows = $derived(
 		orderByVisibility(onPlanet(targets, planet), (target) => hidden.has(target.speciesName)),
 	);
-	const visibleCount = $derived(rows.filter((row) => !hidden.has(row.speciesName)).length);
+	const visibleRows = $derived(rows.filter((row) => !hidden.has(row.speciesName)));
+	const visibleCount = $derived(visibleRows.length);
+	let expanded = $state<string[]>([]);
 
 	async function loadPlanet() {
 		const saved = await getPreference<unknown>(PLANET_PREFERENCE, ALL_PLANETS);
@@ -66,6 +111,12 @@ export function createCodexMetaTargetsModel() {
 		} finally {
 			loading = false;
 		}
+	}
+
+	function toggleStages(speciesName: string) {
+		expanded = expanded.includes(speciesName)
+			? expanded.filter((name) => name !== speciesName)
+			: [...expanded, speciesName];
 	}
 
 	function setPlanet(next: string) {
@@ -99,8 +150,19 @@ export function createCodexMetaTargetsModel() {
 			return visibleCount;
 		},
 
+		/** Whether a species' stage ladder is open. */
+		stagesOpen(speciesName: string): boolean {
+			return expanded.includes(speciesName);
+		},
+		/** A species' remaining metas, placed against the list in view
+		 * (the chosen planet, hidden species left out). */
+		ladder(target: CodexMetaTarget): LadderStage[] {
+			return stageLadder(target, visibleRows);
+		},
+
 		load,
 		setPlanet,
+		toggleStages,
 		isHidden: hidden.has,
 		hide: hidden.hide,
 		restore: hidden.restore,

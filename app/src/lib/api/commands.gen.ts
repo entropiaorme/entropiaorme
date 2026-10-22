@@ -478,10 +478,32 @@ export interface CodexMetaClaimResult {
 }
 
 /**
+ * The metas earned against the cap: `tracked` is what the recorded
+ * species ranks account for, `earned` adds the player's calibration.
+ */
+export interface CodexMetaProgress {
+	earned: number;
+	tracked: number;
+	cap: number;
+}
+
+/**
+ * One meta stage past a species' next meta: the five ranks up to
+ * `targetRank`, as codex cost and estimated PED cycled.
+ */
+export interface CodexMetaStage {
+	targetRank: number;
+	cost: number;
+	estimatedPed: number;
+}
+
+/**
  * One species' next meta reward: the breakpoint it reaches next, the
  * codex cost of the ranks left before it, and that cost as estimated PED
  * cycled (a planning estimate, never an accounting figure). `planets` is
- * sorted and empty when the catalogue names none.
+ * sorted and empty when the catalogue names none. `followingStages`
+ * prices every later breakpoint up to rank 25, in order, each from the
+ * breakpoint before it.
  */
 export interface CodexMetaTarget {
 	speciesName: string;
@@ -490,6 +512,7 @@ export interface CodexMetaTarget {
 	targetRank: number;
 	cost: number;
 	estimatedPed: number;
+	followingStages: CodexMetaStage[];
 }
 
 /**
@@ -4204,6 +4227,14 @@ export async function codexMetaAttributes(): Promise<CodexMetaAttribute[]> {
 
 export async function codexMetaTargets(): Promise<CodexMetaTargets> {
 	return invokeCommand('codex_meta_targets', {});
+}
+
+export async function codexMetaProgress(): Promise<CodexMetaProgress> {
+	return invokeCommand('codex_meta_progress', {});
+}
+
+export async function codexMetaCalibrate(earned: number): Promise<CodexMetaProgress> {
+	return invokeCommand('codex_meta_calibrate', { earned });
 }
 
 export async function codexCalibrate(speciesName: string, rank: number): Promise<CodexCalibrateResult> {

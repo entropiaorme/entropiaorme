@@ -4,7 +4,8 @@
 //! ranking and its earned tally), the
 //! path-parameter not-found, the recommend rank bound, and the write
 //! ladder (calibrate's success and out-of-domain refusal, the claim /
-//! unclaim / meta-claim error mapping, a meta-claim success).
+//! unclaim / meta-claim error mapping, a meta-claim success), and the
+//! meta calibration riding on the tracked count.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -229,4 +230,28 @@ async fn meta_targets_count_earned_metas_from_recorded_ranks() {
     assert_eq!(ranked.metas_earned, 7);
     assert!(ranked.targets.is_empty());
     assert!(ranked.ped_per_cost > 0.0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn meta_calibration_adjusts_the_earned_count_and_bounds_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = codex_api(dir.path()).await;
+    api.codex_calibrate("Atrox", 10).await.unwrap();
+
+    let tracked = api.codex_meta_progress().await.unwrap();
+    assert_eq!((tracked.earned, tracked.tracked, tracked.cap), (2, 2, 750));
+
+    // The calibration rides on top of the tracked count, and the ranking
+    // reports the same total.
+    let calibrated = api.codex_meta_calibrate(9).await.unwrap();
+    assert_eq!((calibrated.earned, calibrated.tracked), (9, 2));
+    api.codex_calibrate("Daikiba", 5).await.unwrap();
+    assert_eq!(api.codex_meta_progress().await.unwrap().earned, 10);
+    assert_eq!(api.codex_meta_targets().await.unwrap().metas_earned, 10);
+
+    // An out-of-domain count is the service's bad_request.
+    assert_eq!(
+        api.codex_meta_calibrate(751).await.unwrap_err(),
+        ApiError::bad_request("Metas earned must be 0-750")
+    );
 }

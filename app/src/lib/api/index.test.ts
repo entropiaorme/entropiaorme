@@ -442,6 +442,13 @@ describe('codex wrappers dispatch typed commands', () => {
 		],
 		['getCodexMetaAttributes', () => api.getCodexMetaAttributes(), 'codex_meta_attributes', {}],
 		['getCodexMetaTargets', () => api.getCodexMetaTargets(), 'codex_meta_targets', {}],
+		['getCodexMetaProgress', () => api.getCodexMetaProgress(), 'codex_meta_progress', {}],
+		[
+			'calibrateCodexMeta',
+			() => api.calibrateCodexMeta(42),
+			'codex_meta_calibrate',
+			{ earned: 42 },
+		],
 		[
 			'claimCodexMeta',
 			() => api.claimCodexMeta('Strength'),

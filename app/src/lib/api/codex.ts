@@ -1,7 +1,7 @@
 /**
  * The codex family: species, rank breakdowns, claims, calibration, the
- * reward recommendation, the meta attributes, and the meta-target
- * ranking. Thin wrappers over the generated typed commands; argument
+ * reward recommendation, the meta attributes, the meta-target ranking,
+ * and the metas earned with their calibration. Thin wrappers over the generated typed commands; argument
  * shaping only.
  */
 
@@ -15,6 +15,8 @@ export const unclaimCodexRank = commands.codexUnclaim;
 export const calibrateCodex = commands.codexCalibrate;
 export const getCodexMetaAttributes = commands.codexMetaAttributes;
 export const getCodexMetaTargets = commands.codexMetaTargets;
+export const getCodexMetaProgress = commands.codexMetaProgress;
+export const calibrateCodexMeta = commands.codexMetaCalibrate;
 export const claimCodexMeta = commands.codexMetaClaim;
 export const claimCodexMastery = commands.codexMasteryClaim;
 export const unclaimCodexMastery = commands.codexMasteryUnclaim;

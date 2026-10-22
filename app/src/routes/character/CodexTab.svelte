@@ -4,7 +4,6 @@
 		CodexRankBreakdown,
 		CodexRankItem,
 		CodexSkillOption,
-		CodexMetaAttribute,
 		ProfessionLevel,
 	} from '$lib/types/analytics';
 	import {
@@ -18,8 +17,6 @@
 		claimCodexMastery,
 		unclaimCodexMastery,
 		getCharacterProfessions,
-		getCodexMetaAttributes,
-		claimCodexMeta,
 	} from '$lib/api';
 	import { formatPed, formatPedHalfEven } from '$lib/utils/format';
 	import Card from '$lib/components/Card.svelte';
@@ -28,6 +25,7 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import CodexProfessionPicker from '$lib/features/character/CodexProfessionPicker.svelte';
 	import CodexSkillOptionList from '$lib/features/character/CodexSkillOptionList.svelte';
+	import CodexMeta from '$lib/features/character/CodexMeta.svelte';
 	import CodexMetaTargets from '$lib/features/character/CodexMetaTargets.svelte';
 	import {
 		targetProfessions,
@@ -46,12 +44,6 @@
 	let species = $state([] as CodexSpecies[]);
 	let professions = $state([] as ProfessionLevel[]);
 	let loading = $state(true);
-
-	// ── Meta state ──────────────────────────────────────────────────────────────
-
-	let metaAttributes = $state([] as CodexMetaAttribute[]);
-	let metaLoading = $state(false);
-	let metaClaimMessage = $state<string | null>(null);
 
 	// ── Controls ────────────────────────────────────────────────────────────────
 
@@ -116,36 +108,6 @@
 			loading = false;
 		}
 	}
-
-	// ── Meta functions ──────────────────────────────────────────────────────────
-
-	async function loadMeta() {
-		metaLoading = true;
-		metaClaimMessage = null;
-		try {
-			metaAttributes = await getCodexMetaAttributes();
-		} catch {
-			metaAttributes = [];
-		} finally {
-			metaLoading = false;
-		}
-	}
-
-	async function handleMetaClaim(attributeName: string) {
-		try {
-			const result = await claimCodexMeta(attributeName);
-			metaClaimMessage = `Claimed! ${result.attributeName} +${formatPed(result.pedValue)} PES`;
-			metaAttributes = await getCodexMetaAttributes();
-		} catch (err: any) {
-			metaClaimMessage = `Error: ${err.message}`;
-		}
-	}
-
-	$effect(() => {
-		if (codexMode === 'meta' && metaAttributes.length === 0) {
-			loadMeta();
-		}
-	});
 
 	// ── Filtering & pagination ──────────────────────────────────────────────────
 
@@ -364,42 +326,7 @@
 	{#if codexMode === 'recommended'}
 		<CodexMetaTargets onOpenSpecies={openSpecies} />
 	{:else if codexMode === 'meta'}
-		<!-- ═══ Meta codex view ═══ -->
-		<Card class="p-4 space-y-4">
-			<div>
-				<h3 class="text-sm font-medium text-text">Meta Codex Reward</h3>
-			</div>
-
-			{#if metaLoading}
-				<p class="text-sm text-text-tertiary py-4 text-center">Loading...</p>
-			{:else}
-				<div class="space-y-1">
-					{#each metaAttributes as attr}
-						<div class="flex items-center justify-between py-2 px-3 rounded hover:bg-surface-hover/50 transition-colors group">
-							<div class="flex items-center gap-3">
-								<span class="text-sm font-medium text-text w-24">{attr.name}</span>
-								{#if attr.currentLevel != null}
-									<span class="text-xs text-text-secondary tabular-nums">Lv {attr.currentLevel.toFixed(1)}</span>
-								{:else}
-									<span class="text-xs text-text-tertiary">Not scanned</span>
-								{/if}
-							</div>
-							<button
-								class="px-3 py-1 text-xs font-medium text-accent bg-accent/10 hover:bg-accent/20 rounded transition-colors cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-								onclick={() => handleMetaClaim(attr.name)}
-							>Claim 1 PES</button>
-						</div>
-					{/each}
-				</div>
-			{/if}
-
-			{#if metaClaimMessage}
-				<div class="text-sm text-center {metaClaimMessage.startsWith('Error') ? 'text-negative' : 'text-positive'}">
-					{metaClaimMessage}
-				</div>
-			{/if}
-		</Card>
-
+		<CodexMeta />
 	{:else}
 		<!-- ═══ Mobs codex view ═══ -->
 

@@ -30,8 +30,8 @@ use crate::character::{
 };
 use crate::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
-    CodexMetaClaimResult, CodexMetaTargets, CodexRecommendTarget, CodexSkillOption, CodexSpecies,
-    CodexSpeciesRanks,
+    CodexMetaClaimResult, CodexMetaProgress, CodexMetaTargets, CodexRecommendTarget,
+    CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
 };
 use crate::consumables::{ConsumableDose, ConsumableDoses};
 use crate::dev::{
@@ -572,6 +572,19 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "codex_meta_targets",
             args: Vec::new(),
             returns: Some(schema(schema_for!(CodexMetaTargets))),
+        },
+        CommandSpec {
+            name: "codex_meta_progress",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(CodexMetaProgress))),
+        },
+        CommandSpec {
+            name: "codex_meta_calibrate",
+            args: vec![ArgSpec {
+                name: "earned",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(CodexMetaProgress))),
         },
         CommandSpec {
             name: "codex_calibrate",

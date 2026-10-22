@@ -5,6 +5,7 @@ import {
 	createCodexMetaTargetsModel,
 	onPlanet,
 	planetsOf,
+	stageLadder,
 } from './codexMetaTargetsModel.svelte';
 
 vi.mock('$lib/api', () => ({
@@ -30,6 +31,7 @@ function target(overrides: Partial<CodexMetaTarget> = {}): CodexMetaTarget {
 		targetRank: 5,
 		cost: 112,
 		estimatedPed: 168,
+		followingStages: [],
 		...overrides,
 	};
 }
@@ -147,5 +149,93 @@ describe('createCodexMetaTargetsModel', () => {
 		expect(model.loading).toBe(false);
 		expect(model.error).toBe('backend down');
 		expect(model.rows).toEqual([]);
+	});
+});
+
+describe('stageLadder', () => {
+	// Atrox at rank 3: its next meta (ranks 4-5) costs 10, then whole stages.
+	const atrox = target({
+		speciesName: 'Atrox',
+		currentRank: 3,
+		targetRank: 5,
+		cost: 10,
+		estimatedPed: 15,
+		followingStages: [
+			{ targetRank: 10, cost: 60, estimatedPed: 90 },
+			{ targetRank: 15, cost: 122, estimatedPed: 183 },
+		],
+	});
+	const competitors = [
+		atrox,
+		target({ speciesName: 'Berycled', cost: 30 }),
+		target({ speciesName: 'Cornundacauda', cost: 60 }),
+		target({ speciesName: 'Allophyl', cost: 60 }),
+		target({ speciesName: 'Daikiba', cost: 200 }),
+	];
+
+	it('runs the total from now and places each stage among the other next metas', () => {
+		expect(stageLadder(atrox, competitors)).toEqual([
+			{ targetRank: 5, cost: 10, estimatedPed: 15, cumulativePed: 15, place: 1 },
+			// Tied at 60 with Cornundacauda and Allophyl: names break the
+			// tie as the backend ranking does, so only Allophyl and
+			// Berycled sit ahead.
+			{ targetRank: 10, cost: 60, estimatedPed: 90, cumulativePed: 105, place: 3 },
+			{ targetRank: 15, cost: 122, estimatedPed: 183, cumulativePed: 288, place: 4 },
+		]);
+	});
+
+	it('is the next meta alone when no stage follows it, first when alone in the list', () => {
+		const last = target({ speciesName: 'Atrox', currentRank: 21, targetRank: 25, cost: 500 });
+		expect(stageLadder(last, [last])).toEqual([
+			{ targetRank: 25, cost: 500, estimatedPed: 168, cumulativePed: 168, place: 1 },
+		]);
+	});
+});
+
+describe('stage ladders in the model', () => {
+	const ladderTarget = (name: string, cost: number, planets: string[]) =>
+		target({
+			speciesName: name,
+			cost,
+			planets,
+			followingStages: [{ targetRank: 10, cost: cost * 4, estimatedPed: cost * 6 }],
+		});
+
+	it('opens and closes a species independently of the others', async () => {
+		mocked.getCodexMetaTargets.mockResolvedValue(ranking(RANKED));
+		const model = createCodexMetaTargetsModel();
+		await model.load();
+
+		model.toggleStages('Mermoth');
+		model.toggleStages('Kerberos');
+		expect(model.stagesOpen('Mermoth')).toBe(true);
+		expect(model.stagesOpen('Kerberos')).toBe(true);
+		model.toggleStages('Mermoth');
+		expect(model.stagesOpen('Mermoth')).toBe(false);
+		expect(model.stagesOpen('Kerberos')).toBe(true);
+	});
+
+	it('places stages against the list in view: the chosen planet, hidden species left out', async () => {
+		const atrox = ladderTarget('Atrox', 10, ['Calypso']);
+		mocked.getCodexMetaTargets.mockResolvedValue(
+			ranking([
+				atrox,
+				ladderTarget('Berycled', 20, ['Calypso']),
+				ladderTarget('Cornundacauda', 30, ['Calypso']),
+				ladderTarget('Kerberos', 15, ['Cyrene']),
+			]),
+		);
+		const model = createCodexMetaTargetsModel();
+		await model.load();
+
+		// Every planet: Berycled, Cornundacauda and Kerberos all undercut
+		// Atrox's 40-point second stage.
+		expect(model.ladder(atrox).map((stage) => stage.place)).toEqual([1, 4]);
+
+		model.setPlanet('Calypso');
+		expect(model.ladder(atrox).map((stage) => stage.place)).toEqual([1, 3]);
+
+		model.hide('Berycled');
+		expect(model.ladder(atrox).map((stage) => stage.place)).toEqual([1, 2]);
 	});
 });

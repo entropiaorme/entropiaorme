@@ -27,6 +27,18 @@ export function formatPercent(ratio: number): string {
 	return `${(ratio * 100).toFixed(1)}%`;
 }
 
+const ORDINAL_RULES = new Intl.PluralRules('en-GB', { type: 'ordinal' });
+const ORDINAL_SUFFIX: Partial<Record<Intl.LDMLPluralRule, string>> = {
+	one: 'st',
+	two: 'nd',
+	few: 'rd',
+};
+
+/** Format a place in a list (1 → "1st", 12 → "12th", 23 → "23rd"). */
+export function formatOrdinal(place: number): string {
+	return `${place}${ORDINAL_SUFFIX[ORDINAL_RULES.select(place)] ?? 'th'}`;
+}
+
 /** Format a multiplier value (1.5 → "1.50x", 25.0 → "25.0x"). */
 export function formatMultiplier(value: number): string {
 	return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)}x`;

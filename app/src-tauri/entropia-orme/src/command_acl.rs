@@ -61,6 +61,8 @@ macro_rules! app_command_surface {
             codex_recommend,
             codex_meta_attributes,
             codex_meta_targets,
+            codex_meta_progress,
+            codex_meta_calibrate,
             codex_calibrate,
             codex_claim,
             codex_unclaim,

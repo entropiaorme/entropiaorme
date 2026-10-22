@@ -20,7 +20,7 @@ use eo_services::activity_recommender::{
     RECOMMENDER_SAMPLE_STEP,
 };
 use eo_services::character_calc::{
-    all_profession_levels, combined_profession, hp_skill_optimizer, is_attribute,
+    all_profession_levels, combined_profession, hp_path_optimizer, is_attribute,
     profession_path_optimizer, skill_rank,
 };
 use eo_services::db::DbError;
@@ -145,38 +145,54 @@ pub struct PathOptimizerResult {
     pub error: Option<String>,
 }
 
-/// One skill row of the HP optimizer.
+/// One allocation of the HP optimizer: a skill's share of the cheapest
+/// climb to the target HP.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct HpOptimizerSkill {
+pub struct HpOptimizerAllocation {
     pub name: String,
-    pub hp_increase: f64,
-    pub current_level: f64,
     pub levels_per_hp: f64,
-    pub ped_per_hp: f64,
-    pub hp_per_ped: f64,
+    pub current_level: f64,
+    pub levels_to_gain: f64,
+    pub new_level: f64,
+    pub hp_gain: f64,
+    pub ped_cost: f64,
     pub codex_category: Nullable<String>,
     pub codex_divisor: Nullable<f64>,
 }
 
-/// One attribute row of the HP optimizer.
+/// One attribute row of the HP optimizer: its HP rate if a reward offers
+/// it (attributes are never allocated).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HpOptimizerAttribute {
     pub name: String,
-    pub hp_increase: f64,
     pub current_level: f64,
     pub levels_per_hp: f64,
 }
 
-/// GET hp-optimizer: the HP-per-PED breakdown across contributing
-/// skills and attributes.
+/// An HP skill the HP optimizer left out, with the reason.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HpOptimizerExcluded {
+    pub name: String,
+    pub levels_per_hp: f64,
+    pub reason: String,
+}
+
+/// GET hp-optimizer: the cheapest skill allocation from the current HP to
+/// `targetHp`, allocated rows first (by PED cost, descending). `endHp`
+/// falls short of the target only when every skill tops out first.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HpOptimizerResult {
+    pub target_hp: f64,
     pub current_hp: f64,
-    pub skills: Vec<HpOptimizerSkill>,
+    pub end_hp: f64,
+    pub total_ped: f64,
+    pub allocations: Vec<HpOptimizerAllocation>,
     pub attributes: Vec<HpOptimizerAttribute>,
+    pub excluded: Vec<HpOptimizerExcluded>,
 }
 
 /// What the activity recommender optimises toward. A closed vocabulary:
@@ -520,27 +536,34 @@ impl Api {
         })
     }
 
-    /// The HP optimizer: HP-per-PED across contributing skills and
-    /// attributes.
-    pub async fn character_hp_optimizer(&self) -> Result<HpOptimizerResult, ApiError> {
+    /// The HP optimizer: the cheapest skill allocation from the current HP
+    /// to `target_hp`.
+    pub async fn character_hp_optimizer(
+        &self,
+        target_hp: f64,
+    ) -> Result<HpOptimizerResult, ApiError> {
         let skill_levels = self
             .skill_calibrations(None)
             .await
             .map_err(ApiError::internal("hp optimizer skill calibrations"))?;
         let skills_data = self.game_data.get_entities("skills");
-        let result = hp_skill_optimizer(&skill_levels, skills_data);
+        let result = hp_path_optimizer(&skill_levels, skills_data, target_hp);
         Ok(HpOptimizerResult {
+            target_hp: result.target_hp,
             current_hp: result.current_hp,
-            skills: result
-                .skills
+            end_hp: result.end_hp,
+            total_ped: result.total_ped,
+            allocations: result
+                .allocations
                 .into_iter()
-                .map(|row| HpOptimizerSkill {
+                .map(|row| HpOptimizerAllocation {
                     name: row.name,
-                    hp_increase: row.hp_increase,
-                    current_level: row.current_level,
                     levels_per_hp: row.levels_per_hp,
-                    ped_per_hp: row.ped_per_hp,
-                    hp_per_ped: row.hp_per_ped,
+                    current_level: row.current_level,
+                    levels_to_gain: row.levels_to_gain,
+                    new_level: row.new_level,
+                    hp_gain: row.hp_gain,
+                    ped_cost: row.ped_cost,
                     codex_category: row.codex_category.map(str::to_string).into(),
                     codex_divisor: row.codex_divisor.map(|divisor| divisor as f64).into(),
                 })
@@ -550,9 +573,17 @@ impl Api {
                 .into_iter()
                 .map(|row| HpOptimizerAttribute {
                     name: row.name,
-                    hp_increase: row.hp_increase,
                     current_level: row.current_level,
                     levels_per_hp: row.levels_per_hp,
+                })
+                .collect(),
+            excluded: result
+                .excluded
+                .into_iter()
+                .map(|row| HpOptimizerExcluded {
+                    name: row.name,
+                    levels_per_hp: row.levels_per_hp,
+                    reason: row.reason.to_string(),
                 })
                 .collect(),
         })

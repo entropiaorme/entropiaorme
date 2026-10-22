@@ -4,12 +4,13 @@
  * mob pairs priced by the model), what your named sessions would take as
  * recorded (every skill they train, at their own pace and return), where
  * to train it (the activity recommender's modelled ranking), and the
- * cheapest skill path (the path optimiser for a profession or a family's
- * combined level, the HP optimiser for HP). A facet loads when its view is shown and what it answers has
- * changed since, so a target or goal change costs only the open view. Each
- * facet loads into its own error slot so one failure never blanks the
- * others; each load claims a generation so an out-of-order response can
- * never repopulate a newer target or goal.
+ * cheapest skill path to the goal (the path optimiser for a profession or
+ * a family's combined level, the HP optimiser for HP). A facet loads when
+ * its view is shown and what it answers has changed since, so a target or
+ * goal change costs only the open view. Each facet loads into its own
+ * error slot so one failure never blanks the others; each load claims a
+ * generation so an out-of-order response can never repopulate a newer
+ * target or goal.
  */
 
 import { getHpOptimizer, getProfessionPathOptimizer, getSkillingForecast } from '$lib/api';
@@ -196,33 +197,22 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	async function loadPath() {
 		const claimed = ++pathGeneration;
 		pathError = null;
-		const current = target;
-		if (current.kind === 'hp') {
-			if (hpPath) {
-				pathLoading = false;
-				return;
-			}
-			pathLoading = true;
-			try {
-				const loaded = await getHpOptimizer();
-				if (claimed === pathGeneration) hpPath = loaded;
-			} catch (e) {
-				if (claimed === pathGeneration) {
-					pathError = describeError(e, 'Failed to load the cheapest HP skills');
-				}
-			} finally {
-				if (claimed === pathGeneration) pathLoading = false;
-			}
-			return;
-		}
 		path = null;
+		hpPath = null;
+		const current = target;
 		const professions = targetProfessions(current);
-		if (professions.length === 0 || !goalActive || goal === null) {
+		const answerable = current.kind === 'hp' || professions.length > 0;
+		if (!answerable || !goalActive || goal === null) {
 			pathLoading = false;
 			return;
 		}
 		pathLoading = true;
 		try {
+			if (current.kind === 'hp') {
+				const loaded = await getHpOptimizer(goal);
+				if (claimed === pathGeneration) hpPath = loaded;
+				return;
+			}
 			const loaded = await getProfessionPathOptimizer(professions, { targetLevel: goal });
 			if (claimed !== pathGeneration) return;
 			if (loaded.error) {
@@ -232,7 +222,12 @@ export function createSkillingModel(inputs: SkillingInputs) {
 			path = loaded;
 		} catch (e) {
 			if (claimed === pathGeneration) {
-				pathError = describeError(e, 'Failed to compute the skill path');
+				pathError = describeError(
+					e,
+					current.kind === 'hp'
+						? 'Failed to compute the cheapest HP path'
+						: 'Failed to compute the skill path',
+				);
 			}
 		} finally {
 			if (claimed === pathGeneration) pathLoading = false;
@@ -297,7 +292,6 @@ export function createSkillingModel(inputs: SkillingInputs) {
 	function setTarget(next: CodexRankingTarget) {
 		target = next;
 		selectedKey = null;
-		hpPath = null;
 		goalInput = current === null ? '' : String(defaultGoal(current));
 		stale.add('activities');
 		loadGoalBound();

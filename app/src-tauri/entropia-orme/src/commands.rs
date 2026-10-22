@@ -422,8 +422,11 @@ pub async fn character_path_optimizer(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn character_hp_optimizer(app: tauri::AppHandle) -> Result<HpOptimizerResult, ApiError> {
-    facade(&app)?.character_hp_optimizer().await
+pub async fn character_hp_optimizer(
+    app: tauri::AppHandle,
+    target_hp: f64,
+) -> Result<HpOptimizerResult, ApiError> {
+    facade(&app)?.character_hp_optimizer(target_hp).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

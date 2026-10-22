@@ -1351,37 +1351,53 @@ export interface HistogramSnapshot {
 }
 
 /**
- * One attribute row of the HP optimizer.
+ * One allocation of the HP optimizer: a skill's share of the cheapest
+ * climb to the target HP.
+ */
+export interface HpOptimizerAllocation {
+	name: string;
+	levelsPerHp: number;
+	currentLevel: number;
+	levelsToGain: number;
+	newLevel: number;
+	hpGain: number;
+	pedCost: number;
+	codexCategory: string | null;
+	codexDivisor: number | null;
+}
+
+/**
+ * One attribute row of the HP optimizer: its HP rate if a reward offers
+ * it (attributes are never allocated).
  */
 export interface HpOptimizerAttribute {
 	name: string;
-	hpIncrease: number;
 	currentLevel: number;
 	levelsPerHp: number;
 }
 
 /**
- * GET hp-optimizer: the HP-per-PED breakdown across contributing
- * skills and attributes.
+ * An HP skill the HP optimizer left out, with the reason.
+ */
+export interface HpOptimizerExcluded {
+	name: string;
+	levelsPerHp: number;
+	reason: string;
+}
+
+/**
+ * GET hp-optimizer: the cheapest skill allocation from the current HP to
+ * `targetHp`, allocated rows first (by PED cost, descending). `endHp`
+ * falls short of the target only when every skill tops out first.
  */
 export interface HpOptimizerResult {
+	targetHp: number;
 	currentHp: number;
-	skills: HpOptimizerSkill[];
+	endHp: number;
+	totalPed: number;
+	allocations: HpOptimizerAllocation[];
 	attributes: HpOptimizerAttribute[];
-}
-
-/**
- * One skill row of the HP optimizer.
- */
-export interface HpOptimizerSkill {
-	name: string;
-	hpIncrease: number;
-	currentLevel: number;
-	levelsPerHp: number;
-	pedPerHp: number;
-	hpPerPed: number;
-	codexCategory: string | null;
-	codexDivisor: number | null;
+	excluded: HpOptimizerExcluded[];
 }
 
 /**
@@ -4181,8 +4197,8 @@ export async function characterPathOptimizer(professions: string[], targetLevel:
 	return invokeCommand('character_path_optimizer', { professions, target_level: targetLevel, ped_budget: pedBudget });
 }
 
-export async function characterHpOptimizer(): Promise<HpOptimizerResult> {
-	return invokeCommand('character_hp_optimizer', {});
+export async function characterHpOptimizer(targetHp: number): Promise<HpOptimizerResult> {
+	return invokeCommand('character_hp_optimizer', { target_hp: targetHp });
 }
 
 export async function characterActivityRecommender(query: ActivityRecommenderQuery): Promise<ActivityRecommenderResult> {

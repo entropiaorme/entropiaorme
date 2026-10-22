@@ -584,7 +584,7 @@ describe('character wrappers dispatch typed commands', () => {
 		['getCharacterStats', () => api.getCharacterStats(), 'character_stats', {}],
 		['getCharacterSkills', () => api.getCharacterSkills(), 'character_skills', {}],
 		['getCharacterProfessions', () => api.getCharacterProfessions(), 'character_professions', {}],
-		['getHpOptimizer', () => api.getHpOptimizer(), 'character_hp_optimizer', {}],
+		['getHpOptimizer', () => api.getHpOptimizer(150), 'character_hp_optimizer', { target_hp: 150 }],
 		[
 			'getActivityRecommender',
 			() => api.getActivityRecommender({ target: 'hp', professions: [] }),

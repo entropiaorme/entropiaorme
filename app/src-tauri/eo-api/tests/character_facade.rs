@@ -214,10 +214,16 @@ async fn the_facade_shapes_the_seeded_state() {
         .await
         .is_err());
 
-    // The HP optimizer reconciles current HP to the truncated Health
-    // skill (the Stats-panel reading).
-    let hp = api.character_hp_optimizer().await.unwrap();
-    assert_eq!(hp.current_hp, 142.0);
+    // The HP optimizer starts from the Health attribute, fraction and all
+    // (the Stats panel shows its integer part), and answers the target it
+    // is given. The seeded skills carry no hp_increase, so nothing can
+    // climb: the answer stops where it starts, short of the target.
+    let hp = api.character_hp_optimizer(150.0).await.unwrap();
+    assert_eq!(hp.current_hp, 142.7);
+    assert_eq!(hp.target_hp, 150.0);
+    assert_eq!(hp.end_hp, 142.7);
+    assert_eq!(hp.total_ped, 0.0);
+    assert!(hp.allocations.is_empty());
 }
 
 /// The computed reads over the family's richest responses carry the
@@ -249,8 +255,8 @@ async fn the_computed_reads_carry_the_expected_figures() {
     assert_eq!(health.tt_value, 0.18);
     assert!(health.is_attribute);
 
-    let hp = api.character_hp_optimizer().await.unwrap();
-    assert_eq!(hp.current_hp, 142.0);
+    let hp = api.character_hp_optimizer(143.0).await.unwrap();
+    assert_eq!(hp.current_hp, 142.7);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

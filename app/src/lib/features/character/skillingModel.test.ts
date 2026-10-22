@@ -79,8 +79,17 @@ function path(overrides: Partial<PathOptimizerResult> = {}): PathOptimizerResult
 	};
 }
 
-function hpResult(): HpOptimizerResult {
-	return { currentHp: 142, skills: [], attributes: [] };
+function hpResult(overrides: Partial<HpOptimizerResult> = {}): HpOptimizerResult {
+	return {
+		targetHp: 143,
+		currentHp: 142.4,
+		endHp: 143,
+		totalPed: 3.5,
+		allocations: [],
+		attributes: [],
+		excluded: [],
+		...overrides,
+	};
 }
 
 function forecast(sources = [sourceForecast()]): SkillingForecastResult {
@@ -182,8 +191,9 @@ describe('setTarget', () => {
 		model.setView('optimiser');
 		await settle();
 		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
+		expect(mocked.getHpOptimizer).toHaveBeenCalledWith(143);
 		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
-		expect(model.hpPath?.currentHp).toBe(142);
+		expect(model.hpPath?.targetHp).toBe(143);
 	});
 
 	it('answers a family on its combined level in each view', async () => {
@@ -335,15 +345,59 @@ describe('the goal', () => {
 		expect(mocked.getProfessionPathOptimizer).not.toHaveBeenCalled();
 	});
 
-	it('reuses the HP ranking, which no goal changes', async () => {
+	it('answers the HP path at the goal set, not just the next HP', async () => {
 		vi.useFakeTimers();
 		const model = makeModel();
 		model.setTarget({ kind: 'hp' });
 		model.setView('optimiser');
 		await vi.runAllTimersAsync();
+		expect(mocked.getHpOptimizer).toHaveBeenLastCalledWith(143);
+
+		mocked.getHpOptimizer.mockResolvedValueOnce(hpResult({ targetHp: 150, endHp: 150 }));
 		model.setGoal('150');
 		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
-		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(1);
+		await vi.runAllTimersAsync();
+		expect(mocked.getHpOptimizer).toHaveBeenCalledTimes(2);
+		expect(mocked.getHpOptimizer).toHaveBeenLastCalledWith(150);
+		expect(model.hpPath?.targetHp).toBe(150);
+	});
+
+	it('asks no HP path of a goal at or below the HP you have', async () => {
+		vi.useFakeTimers();
+		const model = makeModel();
+		model.setTarget({ kind: 'hp' });
+		model.setView('optimiser');
+		await vi.runAllTimersAsync();
+		vi.clearAllMocks();
+
+		model.setGoal('142');
+		await vi.advanceTimersByTimeAsync(GOAL_DEBOUNCE_MS);
+		expect(model.goalActive).toBe(false);
+		expect(model.hpPath).toBeNull();
+		expect(mocked.getHpOptimizer).not.toHaveBeenCalled();
+	});
+
+	it('keeps the HP path of the newest goal when answers cross', async () => {
+		vi.useFakeTimers();
+		let resolveFirst!: (value: HpOptimizerResult) => void;
+		mocked.getHpOptimizer.mockReturnValueOnce(
+			new Promise((resolve) => {
+				resolveFirst = resolve;
+			}),
+		);
+		const model = makeModel();
+		model.setTarget({ kind: 'hp' });
+		model.setView('optimiser');
+		await vi.advanceTimersByTimeAsync(0);
+
+		mocked.getHpOptimizer.mockResolvedValueOnce(hpResult({ targetHp: 160, endHp: 160 }));
+		model.setGoal('160');
+		model.commitGoal();
+		await vi.advanceTimersByTimeAsync(0);
+		resolveFirst(hpResult());
+		await vi.runAllTimersAsync();
+		expect(model.hpPath?.targetHp).toBe(160);
+		expect(model.pathLoading).toBe(false);
 	});
 });
 

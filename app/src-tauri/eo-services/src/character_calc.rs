@@ -3,6 +3,9 @@
 //! in the catalogue's nested JSON shape, and two adapter helpers hide
 //! that shape from the maths.
 
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -60,37 +63,54 @@ pub struct PathOptimizerBreakdown {
     pub excluded: Vec<ExcludedSkillRow>,
 }
 
-/// One regular-skill row of the HP optimizer.
+/// One allocation of the HP optimizer: a regular skill's share of the
+/// cheapest climb to the target HP.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HpSkillRow {
+pub struct HpAllocationRow {
     pub name: String,
-    pub hp_increase: f64,
-    pub current_level: f64,
     pub levels_per_hp: f64,
-    pub ped_per_hp: f64,
-    pub hp_per_ped: f64,
+    pub current_level: f64,
+    pub levels_to_gain: f64,
+    pub new_level: f64,
+    pub hp_gain: f64,
+    pub ped_cost: f64,
     pub codex_category: Option<&'static str>,
     pub codex_divisor: Option<i64>,
 }
 
-/// One attribute row of the HP optimizer.
+/// One attribute row of the HP optimizer: its HP rate if a reward offers
+/// it (attributes carry no skill PES, so they are never allocated).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HpAttributeRow {
     pub name: String,
-    pub hp_increase: f64,
     pub current_level: f64,
     pub levels_per_hp: f64,
 }
 
-/// The HP optimizer's breakdown.
+/// An HP skill the HP optimizer left out, with the reason.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HpExcludedRow {
+    pub name: String,
+    pub levels_per_hp: f64,
+    pub reason: &'static str,
+}
+
+/// The HP optimizer's breakdown: the cheapest allocation from the current
+/// HP to the target. `end_hp` falls short of the target only when every
+/// contributing skill tops out on the curve first.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HpOptimizerBreakdown {
+    pub target_hp: f64,
     pub current_hp: f64,
-    pub skills: Vec<HpSkillRow>,
+    pub end_hp: f64,
+    pub total_ped: f64,
+    pub allocations: Vec<HpAllocationRow>,
     pub attributes: Vec<HpAttributeRow>,
+    pub excluded: Vec<HpExcludedRow>,
 }
 
 /// Attribute skills receive a x20 multiplier in profession calculations.
@@ -408,28 +428,11 @@ pub fn profession_path_optimizer(
                 excluded,
             ));
         }
-        let mut points_remaining = (target - current_prof) * 10000.0;
-
-        while points_remaining > 0.0 {
-            let Some((best_idx, _)) = best_marginal(&skills, max_skill_level) else {
-                break;
-            };
-            let s = &mut skills[best_idx];
-            if points_remaining < s.weight {
-                let frac_levels = points_remaining / s.weight;
-                let pos = s.current_level + s.allocated;
-                let frac_ped = tt_value_at(pos + frac_levels) - tt_value_at(pos);
-                s.allocated += frac_levels;
-                s.ped += frac_ped;
-                points_remaining = 0.0;
-            } else {
-                let pos = s.current_level + s.allocated;
-                let step_ped = tt_value_at(pos + 1.0) - tt_value_at(pos);
-                s.allocated += 1.0;
-                s.ped += step_ped;
-                points_remaining -= s.weight;
-            }
-        }
+        allocate_to_target(
+            &mut skills,
+            (target - current_prof) * 10000.0,
+            max_skill_level,
+        );
     } else {
         let mut budget_remaining = ped_budget.expect("validated by the entry check");
 
@@ -474,6 +477,87 @@ pub fn profession_path_optimizer(
         attributes,
         excluded,
     ))
+}
+
+/// A skill's next whole level, queued by its marginal PED per target unit.
+/// Ordered as [`best_marginal`] scans: the cheapest ratio pops first, ties
+/// to the first skill in order.
+struct NextLevel {
+    ratio: f64,
+    index: usize,
+    ped: f64,
+}
+
+impl Ord for NextLevel {
+    // Reversed, so the max-heap pops the cheapest step.
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .ratio
+            .total_cmp(&self.ratio)
+            .then_with(|| other.index.cmp(&self.index))
+    }
+}
+
+impl PartialOrd for NextLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for NextLevel {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for NextLevel {}
+
+/// The next whole level of `skills[index]`, or None at the curve ceiling.
+fn next_level(skills: &[PathSkill], index: usize, max_skill_level: f64) -> Option<NextLevel> {
+    let s = &skills[index];
+    let pos = s.current_level + s.allocated;
+    if pos >= max_skill_level {
+        return None;
+    }
+    let ped = tt_value_at(pos + 1.0) - tt_value_at(pos);
+    Some(NextLevel {
+        ratio: ped / s.weight,
+        index,
+        ped,
+    })
+}
+
+/// The target-mode greedy: spend `remaining` target units (each skill's
+/// `weight` is the units one of its levels adds) a level at a time on the
+/// cheapest marginal step, then the final fraction. Profession points and
+/// HP both run through it. Stops short when every skill tops out.
+///
+/// The steps queue in a heap, so a step re-prices only the skill it
+/// climbed: a goal far up the curve takes hundreds of thousands of steps,
+/// and re-pricing every skill on each one made such a goal take seconds.
+fn allocate_to_target(skills: &mut [PathSkill], mut remaining: f64, max_skill_level: f64) {
+    let mut queue: BinaryHeap<NextLevel> = (0..skills.len())
+        .filter_map(|index| next_level(skills, index, max_skill_level))
+        .collect();
+    while remaining > 0.0 {
+        let Some(step) = queue.pop() else {
+            break;
+        };
+        let s = &mut skills[step.index];
+        if remaining < s.weight {
+            let frac_levels = remaining / s.weight;
+            let pos = s.current_level + s.allocated;
+            let frac_ped = tt_value_at(pos + frac_levels) - tt_value_at(pos);
+            s.allocated += frac_levels;
+            s.ped += frac_ped;
+            remaining = 0.0;
+        } else {
+            s.allocated += 1.0;
+            s.ped += step.ped;
+            remaining -= s.weight;
+            queue.extend(next_level(skills, step.index, max_skill_level));
+        }
+    }
 }
 
 /// The greedy step: the first skill (in order) with the strictly best
@@ -525,15 +609,6 @@ fn path_result(
         });
     }
 
-    // Filtered on the ROUNDED gain (the rows store rendered figures).
-    let (mut allocated, mut unallocated): (Vec<PathAllocationRow>, Vec<PathAllocationRow>) =
-        allocations
-            .into_iter()
-            .partition(|row| row.levels_to_gain > 0.0);
-    sort_stable_by_f64(&mut allocated, |row| row.ped_cost, true);
-    unallocated.sort_by(|a, b| a.name.cmp(&b.name));
-    allocated.extend(unallocated);
-
     let total_ped = round_half_even(skills.iter().map(|s| s.ped).sum::<f64>(), 2);
 
     PathOptimizerBreakdown {
@@ -544,10 +619,32 @@ fn path_result(
         end_level: round_half_even(end_prof, 2),
         profession_levels_gained: round_half_even(end_prof - current_prof, 2),
         total_ped,
-        allocations: allocated,
+        allocations: order_allocations(
+            allocations,
+            |row| row.levels_to_gain,
+            |row| row.ped_cost,
+            |row| &row.name,
+        ),
         attributes,
         excluded,
     }
+}
+
+/// An optimizer's allocation order: the allocated rows first (by PED cost,
+/// descending), then the unallocated alphabetically. Filtered on the
+/// ROUNDED gain (the rows store rendered figures).
+fn order_allocations<T>(
+    rows: Vec<T>,
+    gain: impl Fn(&T) -> f64,
+    cost: impl Fn(&T) -> f64,
+    name: impl Fn(&T) -> &str,
+) -> Vec<T> {
+    let (mut allocated, mut unallocated): (Vec<T>, Vec<T>) =
+        rows.into_iter().partition(|row| gain(row) > 0.0);
+    sort_stable_by_f64(&mut allocated, cost, true);
+    unallocated.sort_by(|a, b| name(a).cmp(name(b)));
+    allocated.extend(unallocated);
+    allocated
 }
 
 /// `80 + sum(effective_points(skill) / hp_increase)` over contributing
@@ -557,9 +654,9 @@ fn path_result(
 /// counts the attributes with the ×20 profession multiplier (`effective_points`),
 /// which is correct for profession levels but inflates HP, so the sum runs well
 /// above the avatar's real HP. It is no longer the Optimiser's current-HP source
-/// (`hp_skill_optimizer` reconciles to the Stats panel's truncated `Health`
-/// skill, the reading that matches real HP); it stays here as the frozen HP
-/// equivalence golden and the overshoot's documented cause.
+/// (`hp_path_optimizer` reads the `Health` attribute, the reading that matches
+/// real HP); it stays here as the frozen HP equivalence golden and the
+/// overshoot's documented cause.
 pub fn calculate_hp(skill_levels: &Map<String, Value>, skills_data: &[Value]) -> f64 {
     let mut hp = 80.0;
     for (name, hp_inc) in iter_hp_skills(skills_data) {
@@ -571,72 +668,96 @@ pub fn calculate_hp(skill_levels: &Map<String, Value>, skills_data: &[Value]) ->
     hp
 }
 
-/// Rank skills by cost-efficiency for gaining HP: regular skills by
-/// PED cost per +1 HP, attributes by HP contribution factor.
-pub fn hp_skill_optimizer(
+/// Cheapest skill allocation from the current HP to `target_hp`, by the
+/// profession path's greedy marginal-cost steps (each regular skill adds
+/// one HP per `hp_increase` levels). HP skills not yet unlocked are left
+/// out. Attributes add HP at their raw level, not the ×20 profession
+/// figure (observed attribute gains move real HP by the raw amount), but
+/// carry no skill PES, so they are reported for a reward that offers one
+/// and never allocated.
+pub fn hp_path_optimizer(
     skill_levels: &Map<String, Value>,
     skills_data: &[Value],
+    target_hp: f64,
 ) -> HpOptimizerBreakdown {
-    // Current HP reconciles to the Stats panel's source of truth: the truncated
-    // `Health` skill level (mirrors `character_stats`' `int(Health)`). The older
-    // `calculate_hp` sum overshot real HP by counting attributes with the ×20
-    // profession multiplier; the `Health`-skill reading matches the avatar's
-    // actual HP, so the Optimiser and Stats panels now agree by construction.
-    let current_hp = skill_levels
-        .get("Health")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0)
-        .trunc();
+    // HP reads off the `Health` attribute: its integer part is the HP the
+    // Stats panel shows and its fraction the progress toward the next
+    // point, the skilling forecast's reading, so every view of an HP goal
+    // starts from the same place. (`calculate_hp` above is not a source.)
+    let current_hp = level_of(skill_levels, "Health");
 
-    let mut skills: Vec<HpSkillRow> = Vec::new();
+    let mut skills: Vec<PathSkill> = Vec::new();
+    let mut levels_per_hp: Vec<f64> = Vec::new();
     let mut attributes: Vec<HpAttributeRow> = Vec::new();
-
+    let mut excluded: Vec<HpExcludedRow> = Vec::new();
     for (name, hp_inc) in iter_hp_skills(skills_data) {
-        let current_level = level_of(skill_levels, &name);
-
         if is_attribute(&name) {
-            // `levelsPerHp` (the ×20-aware "levels per +1 HP" gaining rate) is the
-            // actionable metric when an attribute is offered as a reward. A current
-            // per-attribute HP contribution is deliberately not surfaced: HP now
-            // reconciles to the truncated `Health` skill (see the current-HP note),
-            // a model that has no per-attribute decomposition to report.
-            let levels_per_hp = hp_inc / 20.0;
             attributes.push(HpAttributeRow {
+                current_level: level_of(skill_levels, &name),
                 name,
-                hp_increase: hp_inc,
-                current_level,
-                levels_per_hp: round_half_even(levels_per_hp, 2),
+                levels_per_hp: round_half_even(hp_inc, 2),
+            });
+        } else if !skill_levels.contains_key(&name) {
+            excluded.push(HpExcludedRow {
+                name,
+                levels_per_hp: round_half_even(hp_inc, 2),
+                reason: "not unlocked",
             });
         } else {
-            let levels_per_hp = hp_inc;
-            let target_level = current_level + levels_per_hp;
-            let ped_per_hp = tt_value_at(target_level) - tt_value_at(current_level);
-            let hp_per_ped = if ped_per_hp > 0.0 {
-                1.0 / ped_per_hp
-            } else {
-                0.0
-            };
-            let (codex_category, codex_divisor) = codex_fields(&name);
-            skills.push(HpSkillRow {
+            skills.push(PathSkill {
+                current_level: level_of(skill_levels, &name),
                 name,
-                hp_increase: hp_inc,
-                current_level,
-                levels_per_hp: round_half_even(levels_per_hp, 1),
-                ped_per_hp: round_half_even(ped_per_hp, 2),
-                hp_per_ped: round_half_even(hp_per_ped, 4),
-                codex_category,
-                codex_divisor,
+                weight: 1.0 / hp_inc,
+                allocated: 0.0,
+                ped: 0.0,
             });
+            levels_per_hp.push(hp_inc);
         }
     }
-
-    sort_stable_by_f64(&mut skills, |row| row.ped_per_hp, false);
     sort_stable_by_f64(&mut attributes, |row| row.levels_per_hp, false);
+    excluded.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if target_hp > current_hp {
+        allocate_to_target(
+            &mut skills,
+            target_hp - current_hp,
+            max_tt_curve_level() as f64,
+        );
+    }
+    let hp_gained: f64 = skills.iter().map(|s| s.allocated * s.weight).sum();
+
+    let allocations = skills
+        .iter()
+        .zip(levels_per_hp)
+        .map(|(s, hp_inc)| {
+            let (codex_category, codex_divisor) = codex_fields(&s.name);
+            HpAllocationRow {
+                name: s.name.clone(),
+                levels_per_hp: round_half_even(hp_inc, 2),
+                current_level: s.current_level,
+                levels_to_gain: round_half_even(s.allocated, 2),
+                new_level: round_half_even(s.current_level + s.allocated, 2),
+                hp_gain: round_half_even(s.allocated / hp_inc, 2),
+                ped_cost: round_half_even(s.ped, 2),
+                codex_category,
+                codex_divisor,
+            }
+        })
+        .collect();
 
     HpOptimizerBreakdown {
+        target_hp,
         current_hp: round_half_even(current_hp, 2),
-        skills,
+        end_hp: round_half_even(current_hp + hp_gained, 2),
+        total_ped: round_half_even(skills.iter().map(|s| s.ped).sum::<f64>(), 2),
+        allocations: order_allocations(
+            allocations,
+            |row| row.levels_to_gain,
+            |row| row.ped_cost,
+            |row| &row.name,
+        ),
         attributes,
+        excluded,
     }
 }
 
@@ -802,17 +923,222 @@ mod tests {
         assert_eq!(calculate_hp(&level_map, &skills_data), 190.0);
         assert_eq!(calculate_hp(&Map::new(), &skills_data), 80.0);
 
-        let result = to_json(hp_skill_optimizer(&level_map, &skills_data));
-        // The Optimiser's current HP now reconciles to the Stats source: the
-        // truncated `Health` skill level (30), not the `calculate_hp` sum (190).
+        let result = to_json(hp_path_optimizer(&level_map, &skills_data, 31.0));
+        // The Optimiser's current HP reads the `Health` attribute (30), not
+        // the `calculate_hp` sum (190).
         assert_eq!(result["currentHp"], 30.0);
-        let skills = result["skills"].as_array().unwrap();
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0]["name"], "Athletics");
-        assert_eq!(skills[0]["levelsPerHp"], 80.0);
+        let allocations = result["allocations"].as_array().unwrap();
+        assert_eq!(allocations.len(), 1);
+        assert_eq!(allocations[0]["name"], "Athletics");
+        assert_eq!(allocations[0]["levelsPerHp"], 80.0);
+        // Attributes count at their raw level: Health's 6 levels per HP,
+        // not the ×20 reading's 0.3.
         let attrs = result["attributes"].as_array().unwrap();
         assert_eq!(attrs[0]["name"], "Health");
-        assert_eq!(attrs[0]["levelsPerHp"], 0.3);
+        assert_eq!(attrs[0]["levelsPerHp"], 6.0);
+    }
+
+    fn hp_climb_skills() -> Vec<Value> {
+        vec![
+            json!({"name": "Cheap", "hp_increase": 200}),
+            json!({"name": "Dear", "hp_increase": 800}),
+            json!({"name": "Locked", "hp_increase": 100}),
+            json!({"name": "Stamina", "hp_increase": 9.25}),
+        ]
+    }
+
+    fn hp_climb_levels() -> Map<String, Value> {
+        levels(&[
+            ("Cheap", 3000.0),
+            ("Dear", 3000.0),
+            ("Stamina", 40.0),
+            ("Health", 120.4),
+        ])
+    }
+
+    #[test]
+    fn the_hp_path_reaches_the_target_it_is_given() {
+        let near = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 121.0);
+        let far = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 130.0);
+        // The fraction of `Health` already counts: 0.6 HP to 121, 9.6 to 130.
+        assert_eq!(near.current_hp, 120.4);
+        assert_eq!(near.target_hp, 121.0);
+        assert_eq!(near.end_hp, 121.0);
+        assert_eq!(far.end_hp, 130.0);
+        assert!(far.total_ped > near.total_ped);
+        let hp_gained = |breakdown: &HpOptimizerBreakdown| {
+            breakdown
+                .allocations
+                .iter()
+                .map(|row| row.hp_gain)
+                .sum::<f64>()
+        };
+        assert!((hp_gained(&near) - 0.6).abs() < 0.015);
+        assert!((hp_gained(&far) - 9.6).abs() < 0.015);
+        // Each row's figures agree with its own rate.
+        for row in &far.allocations {
+            assert_eq!(
+                row.new_level,
+                round_half_even(row.current_level + row.levels_to_gain, 2)
+            );
+            assert!((row.hp_gain - row.levels_to_gain / row.levels_per_hp).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn the_hp_path_climbs_the_cheapest_hp_first_then_spreads() {
+        // At equal levels a level costs the same PES in either skill, so
+        // the one needing fewer levels per HP takes a small goal alone.
+        let near = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 121.0);
+        assert_eq!(near.allocations[0].name, "Cheap");
+        assert!(near.allocations[0].levels_to_gain > 0.0);
+        assert_eq!(near.allocations[1].name, "Dear");
+        assert_eq!(near.allocations[1].levels_to_gain, 0.0);
+        // A far goal climbs Cheap until its marginal level costs four of
+        // Dear's, then both share the rest: the curve is convex.
+        let far = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 160.0);
+        assert!(far.allocations.iter().all(|row| row.levels_to_gain > 0.0));
+        let cheap = far
+            .allocations
+            .iter()
+            .find(|row| row.name == "Cheap")
+            .unwrap();
+        let dear = far
+            .allocations
+            .iter()
+            .find(|row| row.name == "Dear")
+            .unwrap();
+        assert!(cheap.hp_gain > dear.hp_gain);
+        assert_eq!(far.end_hp, 160.0);
+    }
+
+    #[test]
+    fn the_hp_path_leaves_out_locked_skills_and_never_allocates_attributes() {
+        let result = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 125.0);
+        assert_eq!(result.excluded.len(), 1);
+        assert_eq!(result.excluded[0].name, "Locked");
+        assert_eq!(result.excluded[0].reason, "not unlocked");
+        assert!(result.allocations.iter().all(|row| row.name != "Locked"));
+        assert!(result.allocations.iter().all(|row| row.name != "Stamina"));
+        assert_eq!(result.attributes.len(), 1);
+        assert_eq!(result.attributes[0].name, "Stamina");
+        assert_eq!(result.attributes[0].levels_per_hp, 9.25);
+        assert_eq!(result.attributes[0].current_level, 40.0);
+    }
+
+    #[test]
+    fn an_hp_target_already_reached_allocates_nothing() {
+        let result = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), 120.0);
+        assert_eq!(result.total_ped, 0.0);
+        assert_eq!(result.end_hp, 120.4);
+        // Every row is unallocated, so alphabetical.
+        let names: Vec<&str> = result
+            .allocations
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(names, ["Cheap", "Dear"]);
+        assert!(result
+            .allocations
+            .iter()
+            .all(|row| row.levels_to_gain == 0.0));
+    }
+
+    #[test]
+    fn an_hp_target_beyond_every_skill_ceiling_stops_short() {
+        let ceiling = max_tt_curve_level() as f64;
+        let skills_data = vec![json!({"name": "Solo", "hp_increase": 1000})];
+        let level_map = levels(&[("Solo", ceiling - 500.0), ("Health", 100.0)]);
+        // 500 levels at 1000 per HP: the curve allows half an HP.
+        let result = hp_path_optimizer(&level_map, &skills_data, 110.0);
+        assert_eq!(result.end_hp, 100.5);
+        assert_eq!(result.allocations[0].new_level, ceiling);
+        assert!(result.end_hp < result.target_hp);
+    }
+
+    #[test]
+    fn an_unscanned_avatar_has_nothing_to_allocate() {
+        let result = hp_path_optimizer(&Map::new(), &hp_climb_skills(), 90.0);
+        assert!(result.allocations.is_empty());
+        assert_eq!(result.excluded.len(), 3);
+        assert_eq!(result.total_ped, 0.0);
+        assert_eq!(result.end_hp, 0.0);
+    }
+
+    /// The greedy as first written: re-price every skill on every step.
+    /// The heap must answer exactly as this does.
+    fn allocate_by_scan(skills: &mut [PathSkill], mut remaining: f64, max_skill_level: f64) {
+        while remaining > 0.0 {
+            let Some((best_idx, step_ped)) = best_marginal(skills, max_skill_level) else {
+                break;
+            };
+            let s = &mut skills[best_idx];
+            let pos = s.current_level + s.allocated;
+            if remaining < s.weight {
+                let frac_levels = remaining / s.weight;
+                s.allocated += frac_levels;
+                s.ped += tt_value_at(pos + frac_levels) - tt_value_at(pos);
+                remaining = 0.0;
+            } else {
+                s.allocated += 1.0;
+                s.ped += step_ped;
+                remaining -= s.weight;
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+
+        /// The heap steps through exactly the levels the full scan does,
+        /// ties and the final fraction included.
+        #[test]
+        fn the_heap_greedy_matches_the_full_scan(
+            starts in proptest::collection::vec((0.0f64..19_990.0, 1u8..6), 1..6),
+            remaining in 0.0f64..2_000.0,
+        ) {
+            let build = || -> Vec<PathSkill> {
+                starts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (level, weight))| PathSkill {
+                        name: format!("S{i}"),
+                        weight: f64::from(*weight),
+                        current_level: level.floor(),
+                        allocated: 0.0,
+                        ped: 0.0,
+                    })
+                    .collect()
+            };
+            let max_level = max_tt_curve_level() as f64;
+            let mut heap = build();
+            let mut scan = build();
+            allocate_to_target(&mut heap, remaining, max_level);
+            allocate_by_scan(&mut scan, remaining, max_level);
+            for (h, s) in heap.iter().zip(&scan) {
+                proptest::prop_assert_eq!(h.allocated, s.allocated);
+                proptest::prop_assert_eq!(h.ped, s.ped);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+
+        /// Any reachable goal is met, and a higher goal never costs less:
+        /// the optimiser answers the goal it is given.
+        #[test]
+        fn a_higher_hp_target_reaches_further_for_at_least_as_much(
+            lower in 120.5f64..140.0,
+            step in 0.0f64..20.0,
+        ) {
+            let upper = lower + step;
+            let low = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), lower);
+            let high = hp_path_optimizer(&hp_climb_levels(), &hp_climb_skills(), upper);
+            proptest::prop_assert_eq!(low.end_hp, round_half_even(lower, 2));
+            proptest::prop_assert_eq!(high.end_hp, round_half_even(upper, 2));
+            proptest::prop_assert!(high.total_ped >= low.total_ped);
+        }
     }
 
     #[test]
@@ -879,8 +1205,8 @@ mod tests {
             "path_budget",
         );
         pin(
-            &to_json(hp_skill_optimizer(&hp_levels, &skills_data)),
-            r#"{"attributes": [{"currentLevel": 30.0, "hpIncrease": 6.0, "levelsPerHp": 0.3, "name": "Health"}, {"currentLevel": 12.0, "hpIncrease": 12.0, "levelsPerHp": 0.6, "name": "Strength"}], "currentHp": 30.0, "skills": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpIncrease": 80.0, "hpPerPed": 3.0303, "levelsPerHp": 80.0, "name": "Athletics", "pedPerHp": 0.33}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpIncrease": 320.0, "hpPerPed": 0.3704, "levelsPerHp": 320.0, "name": "Rifle", "pedPerHp": 2.7}]}"#,
+            &to_json(hp_path_optimizer(&hp_levels, &skills_data, 70.0)),
+            r#"{"allocations": [{"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 800.0, "hpGain": 39.23, "levelsPerHp": 80.0, "levelsToGain": 3138.0, "name": "Athletics", "newLevel": 3938.0, "pedCost": 61.92}, {"codexCategory": "cat1", "codexDivisor": 200, "currentLevel": 1500.25, "hpGain": 0.77, "levelsPerHp": 320.0, "levelsToGain": 248.0, "name": "Rifle", "newLevel": 1748.25, "pedCost": 2.17}], "attributes": [{"currentLevel": 30.0, "levelsPerHp": 6.0, "name": "Health"}, {"currentLevel": 12.0, "levelsPerHp": 12.0, "name": "Strength"}], "currentHp": 30.0, "endHp": 70.0, "excluded": [], "targetHp": 70.0, "totalPed": 64.09}"#,
             "hp_optimizer",
         );
         assert_eq!(calculate_hp(&hp_levels, &skills_data), 214.68828125);
@@ -954,17 +1280,6 @@ mod tests {
             .map(|a| a["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["Alpha", "Zeta"]);
-    }
-
-    #[test]
-    fn flat_curve_hp_costs_report_zero_efficiency() {
-        // Levels 0 to 1 sit on the curve's flat start: zero PED per HP,
-        // and the inverse reports 0.0 rather than dividing by zero.
-        let skills_data = vec![json!({"name": "Flat Skill", "hp_increase": 1})];
-        let result = to_json(hp_skill_optimizer(&Map::new(), &skills_data));
-        let skill = &result["skills"][0];
-        assert_eq!(skill["pedPerHp"], 0.0);
-        assert_eq!(skill["hpPerPed"], 0.0);
     }
 
     #[test]

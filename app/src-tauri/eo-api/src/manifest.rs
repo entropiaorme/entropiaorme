@@ -477,7 +477,10 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "character_hp_optimizer",
-            args: Vec::new(),
+            args: vec![ArgSpec {
+                name: "target_hp",
+                schema: schema(schema_for!(f64)),
+            }],
             returns: Some(schema(schema_for!(HpOptimizerResult))),
         },
         CommandSpec {

@@ -176,6 +176,7 @@ macro_rules! app_command_surface {
             tracking_loot_item_deactivate,
             tracking_armour_cost,
             tracking_repair_scan,
+            tracking_session_exclusion,
             tracking_session_delete,
             dev_metrics,
             dev_crash_reporting,

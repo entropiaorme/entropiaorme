@@ -72,8 +72,8 @@ use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
     ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
     ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
-    TrackingSnapshot,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
+    StartResult, StopResult, TrackingSnapshot,
 };
 use eo_api::weapons::{
     WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
@@ -1419,6 +1419,19 @@ pub async fn tracking_repair_scan(
     tokio::task::spawn_blocking(move || api.tracking_repair_scan(session_id))
         .await
         .map_err(|_| ApiError::invalid_state("repair scan task failed"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_session_exclusion(
+    app: tauri::AppHandle,
+    session_id: String,
+    economy: bool,
+    progression: bool,
+    note: Option<String>,
+) -> Result<SessionExclusionResult, ApiError> {
+    facade(&app)?
+        .tracking_session_exclusion(session_id, economy, progression, note)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

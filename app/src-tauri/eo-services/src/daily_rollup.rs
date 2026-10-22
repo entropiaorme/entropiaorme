@@ -46,9 +46,10 @@ use crate::db::DbError;
 /// on the next read.
 // Bumped to 3 when confirmed non-ammo quest-item TT joined the projection;
 // to 4 when protection costs were re-attributed by hit count; to 5 when
-// consumed doses gained their own cost bucket. Below-version rows heal on the
-// next read.
-pub const ROLLUP_VERSION: i64 = 5;
+// consumed doses gained their own cost bucket; to 6 when sessions excluded from
+// a stats scope left that scope's families (`crate::session_scope`).
+// Below-version rows heal on the next read.
+pub const ROLLUP_VERSION: i64 = 6;
 
 /// The UTC day of an epoch second, rendered as SQLite's
 /// `date(epoch, 'unixepoch')` renders it (`YYYY-MM-DD`).
@@ -113,42 +114,59 @@ fn window_sums(
 /// tables. The caller owns the surrounding commit semantics (the write
 /// hooks run this inside their transaction; the heal wraps its own).
 pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbError> {
+    use crate::session_scope::{counts, counts_on, StatsScope};
+
     let mut has_rows = false;
     let mut families: [Option<f64>; 13] = [None; 13];
 
     if let Some(date) = canonical_day(day) {
         let (start, end) = day_bounds(date);
 
+        // Each session-scoped family reads only the sessions its scope
+        // still counts; an excluded session's rows leave the day as if
+        // they had never been recorded (has_rows included).
         let (kill_count, kill_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(loot_total_ped), SUM(enhancer_cost) \
-             FROM kills WHERE timestamp >= ? AND timestamp < ?",
+            &format!(
+                "SELECT COUNT(*), SUM(loot_total_ped), SUM(enhancer_cost) \
+                 FROM kills WHERE timestamp >= ? AND timestamp < ? AND {}",
+                counts(StatsScope::Economy, "kills.session_id")
+            ),
             start,
             end,
             2,
         )?;
         let (weapon_count, weapon_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(ts.cost_per_shot * ts.shots_fired) \
-             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
-             WHERE k.timestamp >= ? AND k.timestamp < ?",
+            &format!(
+                "SELECT COUNT(*), SUM(ts.cost_per_shot * ts.shots_fired) \
+                 FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
+                 WHERE k.timestamp >= ? AND k.timestamp < ? AND {}",
+                counts(StatsScope::Economy, "k.session_id")
+            ),
             start,
             end,
             1,
         )?;
         let (session_count, session_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
-             SUM(consumable_cost) \
-             FROM tracking_sessions WHERE started_at >= ? AND started_at < ?",
+            &format!(
+                "SELECT COUNT(*), SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
+                 SUM(consumable_cost) \
+                 FROM tracking_sessions WHERE started_at >= ? AND started_at < ? AND {}",
+                counts_on(StatsScope::Economy, "tracking_sessions")
+            ),
             start,
             end,
             4,
         )?;
         let (skill_count, skill_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(ped_value) \
-             FROM skill_gains WHERE timestamp >= ? AND timestamp < ?",
+            &format!(
+                "SELECT COUNT(*), SUM(ped_value) \
+                 FROM skill_gains WHERE timestamp >= ? AND timestamp < ? AND {}",
+                counts(StatsScope::Progression, "skill_gains.session_id")
+            ),
             start,
             end,
             1,
@@ -171,8 +189,11 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         )?;
         let (harvest_count, harvest_sums) = window_sums(
             conn,
-            "SELECT COUNT(*), SUM(loot_total_ped), SUM(cost_ped) \
-             FROM harvest_events WHERE timestamp >= ? AND timestamp < ?",
+            &format!(
+                "SELECT COUNT(*), SUM(loot_total_ped), SUM(cost_ped) \
+                 FROM harvest_events WHERE timestamp >= ? AND timestamp < ? AND {}",
+                counts(StatsScope::Economy, "harvest_events.session_id")
+            ),
             start,
             end,
             2,
@@ -225,12 +246,33 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         rusqlite::params![day],
     )?;
     let ledger_rows = conn.execute(
-        "INSERT INTO daily_ledger_rollups (day, entry_type, tag, amount) \
-         SELECT date, type, tag, SUM(amount) FROM ledger_entries \
-         WHERE date = ? GROUP BY type, tag",
+        &format!(
+            "INSERT INTO daily_ledger_rollups (day, entry_type, tag, amount) \
+             SELECT date, type, tag, SUM(amount) FROM ledger_entries \
+             WHERE date = ? AND {} GROUP BY type, tag",
+            counts(StatsScope::Economy, "ledger_entries.source_session_id")
+        ),
         rusqlite::params![day],
     )?;
     has_rows = has_rows || ledger_rows > 0;
+
+    // A stray key has a row exactly while some ledger entry carries it, as
+    // the heal's sweep (and so a rebuild) creates them: once its last entry
+    // is deleted the row goes too, rather than lingering empty.
+    if canonical_day(day).is_none() {
+        let carried: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM ledger_entries WHERE date = ?)",
+            rusqlite::params![day],
+            |row| row.get(0),
+        )?;
+        if !carried {
+            conn.execute(
+                "DELETE FROM daily_rollups WHERE day = ?",
+                rusqlite::params![day],
+            )?;
+            return Ok(());
+        }
+    }
 
     conn.execute(
         "INSERT OR REPLACE INTO daily_rollups (\
@@ -298,29 +340,34 @@ where
     Ok(())
 }
 
-/// Refresh every day a session's rows touch: its start and end days
-/// plus the distinct days of its kills and skill gains (a session can
-/// span midnight). The session-stop, orphan-recovery and loot-edit
-/// transactions run this after their writes; the auto-generated ledger
-/// entries those paths add are not enumerated here because their
-/// creators refresh their own date keys (orphan recovery backdates
-/// them below the watermark).
+/// Every rollup key a session's rows touch: its start and end days, the
+/// distinct days of its kills, skill gains, and harvest events (a session
+/// can span midnight), and the date keys of the ledger entries derived
+/// from it. Capture these before a delete empties the tables.
+pub fn session_day_keys(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT date(timestamp, 'unixepoch') FROM kills WHERE session_id = ?1 \
+         UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM skill_gains WHERE session_id = ?1 \
+         UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM harvest_events WHERE session_id = ?1 \
+         UNION SELECT date(started_at, 'unixepoch') FROM tracking_sessions WHERE id = ?1 \
+         UNION SELECT date(ended_at, 'unixepoch') FROM tracking_sessions \
+               WHERE id = ?1 AND ended_at IS NOT NULL \
+         UNION SELECT DISTINCT date FROM ledger_entries WHERE source_session_id = ?1",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Refresh every key a session's rows touch ([`session_day_keys`]). The
+/// session-stop, orphan-recovery, loot-edit, and stats-exclusion
+/// transactions run this after their writes; the ledger entries derived
+/// at session stop also refresh their own date keys as they are written
+/// (orphan recovery backdates them below the watermark).
 pub fn refresh_session_days(conn: &rusqlite::Connection, session_id: &str) -> Result<(), DbError> {
-    let days: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT date(timestamp, 'unixepoch') FROM kills WHERE session_id = ? \
-             UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM skill_gains WHERE session_id = ? \
-             UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM harvest_events WHERE session_id = ? \
-             UNION SELECT date(started_at, 'unixepoch') FROM tracking_sessions WHERE id = ? \
-             UNION SELECT date(ended_at, 'unixepoch') FROM tracking_sessions \
-                   WHERE id = ? AND ended_at IS NOT NULL",
-        )?;
-        let rows = stmt.query_map(
-            rusqlite::params![session_id, session_id, session_id, session_id, session_id],
-            |row| row.get::<_, String>(0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let days = session_day_keys(conn, session_id)?;
     refresh_days(conn, days)
 }
 

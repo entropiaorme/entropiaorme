@@ -25,6 +25,7 @@ use crate::clock::Clock;
 use crate::daily_rollup;
 use crate::db::{Db, DbError};
 use crate::harvest_yield::HarvestYieldTier;
+use crate::session_scope::{self, StatsScope};
 use crate::stock_allocation;
 use crate::time::{naive_to_epoch, to_iso_utc};
 
@@ -916,10 +917,16 @@ fn raw_family_sums(
 
     let (start, end) = range;
     let mut sums: FamilySums = [None; 13];
+    // The same scope filters as `daily_rollup::recompute_day`: the raw
+    // edges and the rollup rows must agree on which sessions count.
+    let economy = |session: &str| session_scope::counts(StatsScope::Economy, session);
     let (w, p) = where_epoch("timestamp", start, end);
     let kills = fetch(
         conn,
-        format!("SELECT SUM(loot_total_ped), SUM(enhancer_cost) FROM kills WHERE {w}"),
+        format!(
+            "SELECT SUM(loot_total_ped), SUM(enhancer_cost) FROM kills WHERE {w} AND {}",
+            economy("kills.session_id")
+        ),
         &p,
         2,
     )?;
@@ -931,7 +938,8 @@ fn raw_family_sums(
         conn,
         format!(
             "SELECT SUM(ts.cost_per_shot * ts.shots_fired) \
-             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w}"
+             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w} AND {}",
+            economy("k.session_id")
         ),
         &p,
         1,
@@ -943,7 +951,8 @@ fn raw_family_sums(
         conn,
         format!(
             "SELECT SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
-             SUM(consumable_cost) FROM tracking_sessions WHERE {w}"
+             SUM(consumable_cost) FROM tracking_sessions WHERE {w} AND {}",
+            session_scope::counts_on(StatsScope::Economy, "tracking_sessions")
         ),
         &p,
         4,
@@ -956,7 +965,10 @@ fn raw_family_sums(
     let (w, p) = where_epoch("timestamp", start, end);
     sums[6] = fetch(
         conn,
-        format!("SELECT SUM(ped_value) FROM skill_gains WHERE {w}"),
+        format!(
+            "SELECT SUM(ped_value) FROM skill_gains WHERE {w} AND {}",
+            session_scope::counts(StatsScope::Progression, "skill_gains.session_id")
+        ),
         &p,
         1,
     )?[0];
@@ -977,7 +989,10 @@ fn raw_family_sums(
     let (w, p) = where_epoch("timestamp", start, end);
     let harvest = fetch(
         conn,
-        format!("SELECT SUM(loot_total_ped), SUM(cost_ped) FROM harvest_events WHERE {w}"),
+        format!(
+            "SELECT SUM(loot_total_ped), SUM(cost_ped) FROM harvest_events WHERE {w} AND {}",
+            economy("harvest_events.session_id")
+        ),
         &p,
         2,
     )?;
@@ -1097,7 +1112,8 @@ fn ledger_by_tag(
     let (extra, params) = bounds("le.date");
     let sql = format!(
         "SELECT le.tag, SUM(le.amount) FROM ledger_entries le \
-         WHERE le.type = ? AND le.date > ?{extra} GROUP BY le.tag"
+         WHERE le.type = ? AND le.date > ?{extra} AND {} GROUP BY le.tag",
+        session_scope::counts(StatsScope::Economy, "le.source_session_id")
     );
     let mut p: Vec<String> = vec![entry_type.to_string(), watermark.to_string()];
     p.extend(params);
@@ -1266,7 +1282,8 @@ fn ledger_buckets(
     };
     let sql = format!(
         "SELECT {bucket_expr} AS bucket, le.tag, SUM(le.amount) FROM ledger_entries le \
-         WHERE le.type = ? AND le.date > ?{extra} GROUP BY bucket, le.tag"
+         WHERE le.type = ? AND le.date > ?{extra} AND {} GROUP BY bucket, le.tag",
+        session_scope::counts(StatsScope::Economy, "le.source_session_id")
     );
     let mut p: Vec<String> = vec![entry_type.to_string(), watermark.to_string()];
     if let Some(start) = &start_iso {
@@ -1539,12 +1556,35 @@ fn raw_breakdown(
         BucketKind::Day => format!("date({col}, 'unixepoch')"),
         BucketKind::Month => format!("strftime('%Y-%m', {col}, 'unixepoch')"),
     };
-    let (enc_w, enc_p) = where_epoch("k.timestamp", start, end);
-    let (sg_w, sg_p) = where_epoch("sg.timestamp", start, end);
+    // The same scope filters as `daily_rollup::recompute_day`.
+    let scoped = |(w, p): (String, Vec<f64>), scope: StatsScope, session: &str| {
+        (
+            format!("{w} AND {}", session_scope::counts(scope, session)),
+            p,
+        )
+    };
+    let (enc_w, enc_p) = scoped(
+        where_epoch("k.timestamp", start, end),
+        StatsScope::Economy,
+        "k.session_id",
+    );
+    let (sg_w, sg_p) = scoped(
+        where_epoch("sg.timestamp", start, end),
+        StatsScope::Progression,
+        "sg.session_id",
+    );
     let (cc_w, cc_p) = where_epoch("cc.claimed_at", start, end);
     let (qc_w, qc_p) = where_epoch("qc.claimed_at", start, end);
     let (sess_w, sess_p) = where_epoch("s.started_at", start, end);
-    let (hv_w, hv_p) = where_epoch("h.timestamp", start, end);
+    let sess_w = format!(
+        "{sess_w} AND {}",
+        session_scope::counts_on(StatsScope::Economy, "s")
+    );
+    let (hv_w, hv_p) = scoped(
+        where_epoch("h.timestamp", start, end),
+        StatsScope::Economy,
+        "h.session_id",
+    );
     let (qri_w, qri_p) = where_epoch("c.completed_at", start, end);
 
     let sources: [(
@@ -1758,6 +1798,11 @@ struct SessionAgg {
     /// session reads its migrated name here).
     session_name: Option<String>,
     cycled_ped: f64,
+    /// Whether the session's skill gains count (`session_scope`). A
+    /// session excluded from the economy never reaches the slice builders;
+    /// one excluded from progression keeps its economy figures but leaves
+    /// the PES rate's numerator and denominator alike.
+    progression_counts: bool,
 }
 
 async fn load_activity_sessions(db: &Db) -> Result<Vec<SessionAgg>, DbError> {
@@ -1816,6 +1861,18 @@ fn activity_sessions_read(conn: &mut rusqlite::Connection) -> Result<Vec<Session
         sessions.insert(id, agg);
     }
 
+    // Stats exclusion: an economy-excluded session leaves Activity whole
+    // (every figure it carries is economy evidence); a progression-excluded
+    // one stays, flagged so the PES rate skips it.
+    for id in session_scope::excluded_ids(conn, StatsScope::Economy)? {
+        sessions.remove(&id);
+    }
+    for id in session_scope::excluded_ids(conn, StatsScope::Progression)? {
+        if let Some(agg) = sessions.get_mut(&id) {
+            agg.progression_counts = false;
+        }
+    }
+
     // Activity's own qualifying filter. Order-independent: the slice builders
     // regroup and re-sort by (-kills, -cycled, name), and each group's name is
     // unique, so the map iteration order never reaches the response.
@@ -1852,6 +1909,7 @@ fn read_summary_activity_aggs(
                 dominant_mob: row.get::<_, Option<String>>(6)?,
                 dominant_mob_kills: row.get::<_, i64>(7).unwrap_or(0),
                 session_name: row.get::<_, Option<String>>(8)?,
+                progression_counts: true,
                 ..SessionAgg::default()
             },
         );
@@ -1887,6 +1945,7 @@ fn raw_session_agg(
         // Carried from the caller's own read of the session row rather
         // than re-queried per session.
         session_name: session_name.filter(|name| !name.is_empty()),
+        progression_counts: true,
         ..SessionAgg::default()
     };
 
@@ -1980,11 +2039,15 @@ fn build_activity_slice_rows(
         let hours: f64 = matched.iter().map(|s| s.duration_hours).sum();
         let cycled: f64 = matched.iter().map(|s| s.cycled_ped).sum();
         let loot_tt: f64 = matched.iter().map(|s| s.loot_tt).sum();
-        let skill_tt: f64 = matched.iter().map(|s| s.skill_tt).sum();
+        // The PES rate spans both scopes, so it reads only the sessions
+        // whose progression counts (every session here counts economically).
+        let pes_sessions = || matched.iter().filter(|s| s.progression_counts);
+        let skill_tt: f64 = pes_sessions().map(|s| s.skill_tt).sum();
+        let pes_cycled: f64 = pes_sessions().map(|s| s.cycled_ped).sum();
         let hours_r = eo_wire::normalizer::round_half_even(hours, 2);
         let cycled_r = eo_wire::normalizer::round_half_even(cycled, 2);
-        let pes_per_100 = if cycled > 0.0 {
-            eo_wire::normalizer::round_half_even((skill_tt / cycled) * 100.0, 2)
+        let pes_per_100 = if pes_cycled > 0.0 {
+            eo_wire::normalizer::round_half_even((skill_tt / pes_cycled) * 100.0, 2)
         } else {
             0.0
         };
@@ -2048,13 +2111,14 @@ type HarvestTierItemTotals = (String, String, i64, f64);
 async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, DbError> {
     let (raw, composition): (Vec<HarvestTierTotals>, Vec<HarvestTierItemTotals>) = db
         .with_reader(move |conn| {
-            let mut stmt = conn.prepare(
+            let economy = session_scope::counts(StatsScope::Economy, "h.session_id");
+            let mut stmt = conn.prepare(&format!(
                 "SELECT yield_tier, COUNT(*), \
                  COALESCE(SUM(cost_ped), 0), \
                  COALESCE(SUM(loot_total_ped), 0) FROM harvest_events h \
-                 WHERE (?1 IS NULL OR h.timestamp >= ?1) \
-                 GROUP BY yield_tier",
-            )?;
+                 WHERE (?1 IS NULL OR h.timestamp >= ?1) AND {economy} \
+                 GROUP BY yield_tier"
+            ))?;
             let raw = stmt
                 .query_map([epoch_start], |row| {
                     Ok((
@@ -2069,15 +2133,15 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
             // Active item composition follows the durable tier. Deactivated
             // rows stay evidence for migration but never enter the accounting
             // totals served here.
-            let mut comp_stmt = conn.prepare(
+            let mut comp_stmt = conn.prepare(&format!(
                 "SELECT h.yield_tier, l.item_name, \
                  SUM(l.quantity), \
                  COALESCE(SUM(l.value_ped), 0) \
                  FROM harvest_loot_items l JOIN harvest_events h ON h.id = l.harvest_id \
                  WHERE (?1 IS NULL OR h.timestamp >= ?1) \
-                   AND l.deactivated_at IS NULL \
-                 GROUP BY h.yield_tier, l.item_name",
-            )?;
+                   AND l.deactivated_at IS NULL AND {economy} \
+                 GROUP BY h.yield_tier, l.item_name"
+            ))?;
             let composition = comp_stmt
                 .query_map([epoch_start], |row| {
                     Ok((
@@ -2161,6 +2225,20 @@ struct HuntingSessionAgg {
     cycled: f64,
     loot_tt: f64,
     pes: f64,
+    /// Whether the session's skill gains count (`session_scope`); when
+    /// they do not, `pes` stays zero and its cycled leaves the PES rate.
+    progression_counts: bool,
+}
+
+impl HuntingSessionAgg {
+    /// The cycled PED this session contributes to a PES rate's denominator.
+    fn pes_cycled(&self) -> f64 {
+        if self.progression_counts {
+            self.cycled
+        } else {
+            0.0
+        }
+    }
 }
 
 /// One activity signature's accumulating totals, keyed by its member set.
@@ -2170,6 +2248,9 @@ struct SignatureAgg {
     cycled: f64,
     loot_tt: f64,
     pes: f64,
+    /// The cycled PED of the contexts whose session's skill gains count:
+    /// the PES rate's denominator, paired with `pes`.
+    pes_cycled: f64,
     duration_hours: f64,
     confirmed_reward_ped: f64,
     realised_reward_markup: f64,
@@ -2253,13 +2334,20 @@ fn hunting_sessions(
 > {
     // Session facts first, so the grain fold can stamp each session's
     // definition without re-joining per consumer.
-    let mut meta: std::collections::HashMap<String, (Option<i64>, f64, Option<f64>)> =
+    //
+    // This is the one scope gate for the whole Hunting view: a session
+    // excluded from the economy never enters `meta`, so no kill cell,
+    // context, reward, or expected-return fold can reach it; one excluded
+    // from progression stays, its PES cells dropped below.
+    let mut meta: std::collections::HashMap<String, (Option<i64>, f64, Option<f64>, bool)> =
         std::collections::HashMap::new();
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, definition_id, started_at, ended_at FROM tracking_sessions \
-             WHERE (?1 IS NULL OR started_at >= ?1)",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, definition_id, started_at, ended_at, {} FROM tracking_sessions \
+             WHERE (?1 IS NULL OR started_at >= ?1) AND {}",
+            session_scope::counts_on(StatsScope::Progression, "tracking_sessions"),
+            session_scope::counts_on(StatsScope::Economy, "tracking_sessions"),
+        ))?;
         let mut rows = stmt.query(rusqlite::params![epoch_start])?;
         while let Some(row) = rows.next()? {
             meta.insert(
@@ -2268,6 +2356,7 @@ fn hunting_sessions(
                     row.get(1)?,
                     row.get::<_, f64>(2).unwrap_or(0.0),
                     row.get(3)?,
+                    row.get::<_, bool>(4)?,
                 ),
             );
         }
@@ -2300,8 +2389,12 @@ fn hunting_sessions(
             crate::session_rollup::ROLLUP_VERSION
         ])?;
         while let Some(row) = rows.next()? {
+            let session_id: String = row.get(0)?;
+            if !meta.contains_key(&session_id) {
+                continue;
+            }
             grain.push(HuntingKillGrainRow {
-                session_id: row.get(0)?,
+                session_id,
                 context_id: row.get(1)?,
                 mob_species: row.get(2)?,
                 mob_maturity: row.get(3)?,
@@ -2341,7 +2434,9 @@ fn hunting_sessions(
     let mut sessions: std::collections::HashMap<String, HuntingSessionAgg> =
         std::collections::HashMap::new();
     for cell in &grain {
-        let Some((definition_id, started_at, ended_at)) = meta.get(&cell.session_id) else {
+        let Some((definition_id, started_at, ended_at, progression_counts)) =
+            meta.get(&cell.session_id)
+        else {
             continue;
         };
         let agg = sessions
@@ -2350,6 +2445,7 @@ fn hunting_sessions(
                 definition_id: *definition_id,
                 started_at: *started_at,
                 ended_at: *ended_at,
+                progression_counts: *progression_counts,
                 ..HuntingSessionAgg::default()
             });
         agg.kills += cell.kills;
@@ -2413,6 +2509,12 @@ fn hunting_sessions(
             }
         }
     }
+    // A session excluded from progression contributes no PES cell at all,
+    // so every downstream fold (definition, signature, ambient) agrees.
+    pes_grain.retain(|cell| {
+        meta.get(&cell.session_id)
+            .is_none_or(|(_, _, _, progression_counts)| *progression_counts)
+    });
     for cell in &pes_grain {
         if let Some(agg) = sessions.get_mut(&cell.session_id) {
             agg.pes += cell.pes;
@@ -2607,6 +2709,7 @@ fn hunting_activity_read(
         let cycled: f64 = sessions.values().map(|s| s.cycled).sum();
         let loot_tt: f64 = sessions.values().map(|s| s.loot_tt).sum();
         let pes: f64 = sessions.values().map(|s| s.pes).sum();
+        let pes_cycled: f64 = sessions.values().map(HuntingSessionAgg::pes_cycled).sum();
         let duration: f64 = sessions.values().map(|s| s.duration_hours).sum();
         HuntingOverall {
             sessions: sessions.len() as i64,
@@ -2616,7 +2719,7 @@ fn hunting_activity_read(
             returns: round2(loot_tt),
             loot_rate: rate(loot_tt, cycled),
             pes: round4(pes),
-            pes_per100_ped: pes_per100(pes, cycled),
+            pes_per100_ped: pes_per100(pes, pes_cycled),
             expected: overall_expected,
         }
     };
@@ -2744,6 +2847,11 @@ fn hunting_activity_read(
         let Some(agg) = sessions.get(&session_id) else {
             continue;
         };
+        // The species PES columns are progression evidence: a session whose
+        // skill gains are excluded is not a PES session.
+        if !agg.progression_counts {
+            continue;
+        }
         counts.retain(|(species, _)| !species.is_empty());
         let total: i64 = counts.iter().map(|(_, kills)| kills).sum();
         if total == 0 {
@@ -3185,6 +3293,9 @@ fn hunting_activity_read(
                 agg.kills += kills;
                 agg.cycled += cycled;
                 agg.loot_tt += loot;
+                if session.progression_counts {
+                    agg.pes_cycled += cycled;
+                }
             }
             if let Some(pes) = context_pes.get(context_id) {
                 agg.pes += pes;
@@ -3244,6 +3355,9 @@ fn hunting_activity_read(
             ambient.kills += kills;
             ambient.cycled += cycled;
             ambient.loot_tt += loot;
+            if agg.progression_counts {
+                ambient.pes_cycled += cycled;
+            }
         }
         if let Some(pes) = pes {
             ambient.pes += pes;
@@ -3283,6 +3397,7 @@ fn hunting_activity_read(
             let cycled: f64 = group.iter().map(|(_, s)| s.cycled).sum();
             let loot_tt: f64 = group.iter().map(|(_, s)| s.loot_tt).sum();
             let pes: f64 = group.iter().map(|(_, s)| s.pes).sum();
+            let pes_cycled: f64 = group.iter().map(|(_, s)| s.pes_cycled()).sum();
             let duration: f64 = group.iter().map(|(_, s)| s.duration_hours).sum();
 
             let mut instance_rows: Vec<HuntingInstanceRow> = group
@@ -3353,7 +3468,7 @@ fn hunting_activity_read(
                 returns: round2(loot_tt),
                 loot_rate: rate(loot_tt, cycled),
                 pes: round4(pes),
-                pes_per100_ped: pes_per100(pes, cycled),
+                pes_per100_ped: pes_per100(pes, pes_cycled),
                 expected: definition_expected.remove(&definition_id),
                 activities,
                 mobs,
@@ -3452,8 +3567,8 @@ fn assemble_signatures(
             cycled: round2(agg.cycled),
             returns: round2(agg.loot_tt),
             pes: round4(agg.pes),
-            pes_per100_ped: if agg.cycled > 0.0 {
-                round2((agg.pes / agg.cycled) * 100.0)
+            pes_per100_ped: if agg.pes_cycled > 0.0 {
+                round2((agg.pes / agg.pes_cycled) * 100.0)
             } else {
                 0.0
             },
@@ -4034,6 +4149,15 @@ struct RealisedStockOutcome {
 /// sales, private trades, and Shrapnel conversion differ operationally, but
 /// their activity attribution is the same calculation over the immutable
 /// source movements that funded them.
+/// SQL expression: the stock movement draws on loot of a session excluded
+/// from the economy. The realised-markup reads keep such a share in the
+/// sale's denominator but credit it to no activity, exactly as stock sold
+/// beyond tracking stays unclaimed. Only context-stamped movements carry a
+/// session; earlier ones always count.
+fn excluded_source() -> String {
+    session_scope::excluded(StatsScope::Economy, session_scope::STOCK_MOVEMENT_SESSION)
+}
+
 fn realised_stock_outcomes(
     conn: &rusqlite::Connection,
 ) -> rusqlite::Result<Vec<RealisedStockOutcome>> {
@@ -6830,26 +6954,31 @@ impl AnalyticsService {
                     // Attributed quantity spans every provenance dimension, so the
                     // share denominator does too: a sale drawing on boards
                     // AND hides credits each side only what it supplied.
-                    let contributions: Vec<(Option<String>, f64)> = {
-                        let mut stmt = conn.prepare(
-                            "SELECT yield_tier, SUM(-quantity) FROM stock_movements \
+                    let contributions: Vec<(Option<String>, f64, bool)> = {
+                        let mut stmt = conn.prepare(&format!(
+                            "SELECT yield_tier, SUM(-quantity), {} AS excluded \
+                             FROM stock_movements \
                              WHERE ref_id = ? AND movement_kind = ? \
                                AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY yield_tier",
-                        )?;
+                             GROUP BY yield_tier, excluded",
+                            excluded_source()
+                        ))?;
                         let rows = stmt
                             .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
+                                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                             })?
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         rows
                     };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
+                    let contributed_quantity: f64 =
+                        contributions.iter().map(|(_, qty, _)| qty).sum();
                     if contributed_quantity <= STOCK_EPSILON {
                         continue;
                     }
-                    for (tier, quantity) in contributions {
-                        let Some(tier) = tier else { continue };
+                    for (tier, quantity, excluded) in contributions {
+                        let Some(tier) = tier.filter(|_| !excluded) else {
+                            continue;
+                        };
                         let share = quantity / contributed_quantity;
                         *totals.entry(tier).or_insert(0.0) += outcome.activity_net_markup * share;
                     }
@@ -6893,28 +7022,32 @@ impl AnalyticsService {
                     // Attributed quantity spans every provenance dimension; the
                     // share denominator has to as well, or a joint sale
                     // would credit the species side more than it supplied.
-                    let contributions: Vec<(Option<String>, f64)> = {
-                        let mut stmt = conn.prepare(
+                    let contributions: Vec<(Option<String>, f64, bool)> = {
+                        let mut stmt = conn.prepare(&format!(
                             "SELECT CASE WHEN source_kind = 'hunt' OR mob_species IS NOT NULL \
                                          THEN COALESCE(mob_species, '') ELSE NULL END, \
-                                    SUM(-quantity) FROM stock_movements \
+                                    SUM(-quantity), {} AS excluded FROM stock_movements \
                              WHERE ref_id = ? AND movement_kind = ? \
                                AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY 1",
-                        )?;
+                             GROUP BY 1, excluded",
+                            excluded_source()
+                        ))?;
                         let rows = stmt
                             .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
+                                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                             })?
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         rows
                     };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
+                    let contributed_quantity: f64 =
+                        contributions.iter().map(|(_, qty, _)| qty).sum();
                     if contributed_quantity <= STOCK_EPSILON {
                         continue;
                     }
-                    for (species, quantity) in contributions {
-                        let Some(species) = species else { continue };
+                    for (species, quantity, excluded) in contributions {
+                        let Some(species) = species.filter(|_| !excluded) else {
+                            continue;
+                        };
                         let share = quantity / contributed_quantity;
                         *totals.entry(species).or_insert(0.0) +=
                             outcome.activity_net_markup * share;
@@ -6952,27 +7085,29 @@ impl AnalyticsService {
                     if outcome.activity_net_markup.abs() <= STOCK_EPSILON {
                         continue;
                     }
-                    let contributions: Vec<(Option<i64>, f64)> = {
-                        let mut stmt = conn.prepare(
-                            "SELECT session_definition_id, SUM(-quantity) \
+                    let contributions: Vec<(Option<i64>, f64, bool)> = {
+                        let mut stmt = conn.prepare(&format!(
+                            "SELECT session_definition_id, SUM(-quantity), {} AS excluded \
                              FROM stock_movements \
                              WHERE ref_id = ? AND movement_kind = ? \
                                AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY session_definition_id",
-                        )?;
+                             GROUP BY session_definition_id, excluded",
+                            excluded_source()
+                        ))?;
                         let rows = stmt
                             .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
+                                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                             })?
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         rows
                     };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
+                    let contributed_quantity: f64 =
+                        contributions.iter().map(|(_, qty, _)| qty).sum();
                     if contributed_quantity <= STOCK_EPSILON {
                         continue;
                     }
-                    for (definition_id, quantity) in contributions {
-                        let Some(definition_id) = definition_id else {
+                    for (definition_id, quantity, excluded) in contributions {
+                        let Some(definition_id) = definition_id.filter(|_| !excluded) else {
                             continue;
                         };
                         *totals.entry(definition_id).or_insert(0.0) +=

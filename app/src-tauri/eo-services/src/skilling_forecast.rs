@@ -651,6 +651,10 @@ fn json_pairs(text: Option<String>) -> Vec<(String, f64)> {
 /// missing or stale summaries first (the prospect loader's contract). Its
 /// weapon spend splits across the weapons fired by their cells
 /// ([`crate::session_weapon_rollup`]).
+///
+/// A forecast session is evidence for a rate spanning both stats scopes
+/// (skill per PED, skill per hour), so a session excluded from either is
+/// left out whole ([`crate::session_scope`]).
 pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbError> {
     db.with_writer(|conn| heal_summaries(conn)).await?;
     db.with_writer(crate::session_rollup::heal).await?;
@@ -664,15 +668,17 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
                 .or_default()
                 .push((cell.tool, cell.cycled_ped));
         }
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, ss.cycled_ped, \
                     ss.loot_tt, ss.regular_skill_ped_json, ss.kills, \
                     COALESCE(ss.weapon_cost, 0), s.id \
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
+             WHERE {} \
              ORDER BY s.started_at, s.id",
-        )?;
+            crate::session_scope::counts_in_all(&crate::session_scope::StatsScope::ALL, "s.id")
+        ))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(ForecastSession {
@@ -701,7 +707,9 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
 /// forecasts only the one asked about. The part is the weapon's cell
 /// ([`crate::session_weapon_rollup`]): its own kills' cost, loot, and skill
 /// gains, and the session's time and overhead (armour, heals, consumables)
-/// in the share of its active time those kills took.
+/// in the share of its active time those kills took. Scoped as
+/// [`load_forecast_sessions`]: a session excluded from either stats scope is
+/// left out.
 pub async fn load_weapon_forecast_sessions(
     db: &Db,
     weapon: &str,
@@ -711,7 +719,7 @@ pub async fn load_weapon_forecast_sessions(
     let weapon = weapon.to_string();
     db.with_reader(move |conn| {
         let cells = crate::session_weapon_rollup::effective_weapon_cells(conn, Some(&weapon))?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, \
                     COALESCE(ss.armour_cost, 0) + COALESCE(ss.heal_cost, 0) \
                       + COALESCE(ss.consumable_cost, 0) + COALESCE(ss.dangling_cost, 0), \
@@ -719,8 +727,9 @@ pub async fn load_weapon_forecast_sessions(
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
-             WHERE s.id = ?1",
-        )?;
+             WHERE s.id = ?1 AND {}",
+            crate::session_scope::counts_in_all(&crate::session_scope::StatsScope::ALL, "s.id")
+        ))?;
         let mut sessions: Vec<(f64, ForecastSession)> = Vec::new();
         for (session_id, cell) in cells {
             if cell.cycled_ped <= 0.0 || cell.play_seconds <= 0.0 || cell.active_seconds <= 0.0 {
@@ -773,13 +782,19 @@ pub struct SessionWeapon {
 }
 
 /// The weapons the player's named sessions used, with at least
-/// `min_kills` kills made by each alone, most used first.
+/// `min_kills` kills made by each alone, most used first. Kill counts are
+/// economy evidence, so a session excluded from the economy is not counted.
 pub async fn session_weapons(db: &Db, min_kills: u64) -> Result<Vec<SessionWeapon>, DbError> {
     db.with_writer(crate::session_rollup::heal).await?;
     db.with_reader(move |conn| {
         let named: std::collections::HashSet<String> = {
-            let mut stmt =
-                conn.prepare("SELECT id FROM tracking_sessions WHERE definition_id IS NOT NULL")?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT id FROM tracking_sessions WHERE definition_id IS NOT NULL AND {}",
+                crate::session_scope::counts_on(
+                    crate::session_scope::StatsScope::Economy,
+                    "tracking_sessions"
+                )
+            ))?;
             let ids = stmt.query_map([], |row| row.get(0))?;
             ids.collect::<rusqlite::Result<_>>()?
         };

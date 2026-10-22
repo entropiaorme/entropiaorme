@@ -37,6 +37,7 @@ use eo_services::config_service::{load_config_readonly, AppConfig};
 use eo_services::db::Db;
 use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::session_definitions::SessionDefinitionService;
+use eo_services::session_scope::{self, StatsScope};
 use eo_services::time::{local_isoformat, naive_to_epoch};
 use eo_services::tracker::{HuntTracker, TrackerCommandError};
 use eo_services::tracking_models::ActiveSessionView;
@@ -188,6 +189,30 @@ pub enum NotableEventType {
 
 // ── Response DTOs ───────────────────────────────────────────────────
 
+/// Which app-wide statistics a recorded session is kept out of. The
+/// session stays on record with every figure of its own; an excluded
+/// scope's aggregates read as if it had never been recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExclusion {
+    /// When the PED side (loot, costs, activity evidence) was excluded;
+    /// `null` while it counts.
+    pub economy_excluded_at: Nullable<String>,
+    /// When the skill gains (PES) were excluded; `null` while they count.
+    pub progression_excluded_at: Nullable<String>,
+    /// Why, as the player wrote it.
+    pub note: Nullable<String>,
+}
+
+/// The stats-exclusion write result: the session's exclusion as stored.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExclusionResult {
+    pub session_id: String,
+    /// `null` once the session counts in every scope again.
+    pub exclusion: Nullable<SessionExclusion>,
+}
+
 /// One row of the session list.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -204,6 +229,8 @@ pub struct TrackingSession {
     pub return_rate: f64,
     pub globals: i64,
     pub hofs: i64,
+    /// `null` while the session counts in every stats scope.
+    pub exclusion: Nullable<SessionExclusion>,
 }
 
 /// A keyset page of session-list rows plus the opaque cursor for the
@@ -444,6 +471,8 @@ pub struct SessionDetail {
     /// a session starts.
     pub session_name: Nullable<String>,
     pub mob_entry_mode: MobEntryMode,
+    /// `null` while the session counts in every stats scope.
+    pub exclusion: Nullable<SessionExclusion>,
     pub notable_events: Vec<NotableEvent>,
     pub loot_breakdown: Vec<LootEntry>,
     pub deactivated_loot_breakdown: Vec<LootEntry>,
@@ -1418,6 +1447,27 @@ impl Api {
         serde_json::from_value(value).map_err(ApiError::internal("repair scan shaping"))
     }
 
+    /// Set which app-wide statistics an ended session is kept out of: the
+    /// whole desired state (`economy`, `progression`) plus an optional
+    /// note, so repeating a request is harmless. An active session is a
+    /// conflict, a missing one a not-found. The aggregate surfaces read the
+    /// flags on their next load, as they do after a delete.
+    pub async fn tracking_session_exclusion(
+        &self,
+        session_id: String,
+        economy: bool,
+        progression: bool,
+        note: Option<String>,
+    ) -> Result<SessionExclusionResult, ApiError> {
+        let now = naive_to_epoch(self.clock.now());
+        let value =
+            set_session_exclusion_impl(&self.db, &session_id, economy, progression, note, now)
+                .await
+                .map_err(edit_error("tracking session exclusion"))?;
+        serde_json::from_value(value)
+            .map_err(ApiError::internal("tracking session exclusion shaping"))
+    }
+
     /// Delete a session and all of its data (an active session cannot be
     /// deleted; a missing one is a not-found). The rollups are repaired for
     /// the days it touched. Its healing evidence can explain another
@@ -1482,10 +1532,13 @@ async fn lifetime_stats(
     let mut unpriced_shots = db
         .with_reader(move |conn| {
             Ok(conn.query_row(
-                "SELECT COUNT(*) FROM weapon_shot_evidence e \
-                 JOIN tracking_sessions s ON s.id = e.session_id \
-                 WHERE s.definition_id = ?1 AND s.is_active = 0 \
-                   AND e.attribution = 'unresolved' AND e.tool_name IS NULL",
+                &format!(
+                    "SELECT COUNT(*) FROM weapon_shot_evidence e \
+                     JOIN tracking_sessions s ON s.id = e.session_id \
+                     WHERE s.definition_id = ?1 AND s.is_active = 0 \
+                       AND e.attribution = 'unresolved' AND e.tool_name IS NULL AND {}",
+                    session_scope::counts_on(StatsScope::Economy, "s")
+                ),
                 [definition_id],
                 |row| row.get::<_, i64>(0),
             )?)

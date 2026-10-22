@@ -1840,11 +1840,12 @@ mod tests {
         // 3 tables and 4 indexes + weapon effect windows' table and 2 indexes
         // + consumable doses' table and 3 indexes + session weapon rollups'
         // 3 tables and 2 indexes + curated quests' 2 catalogue-key indexes
-        // + the codex meta calibration table
+        // + the codex meta calibration table + session stats exclusion's
+        // derived-ledger source index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 225);
+        assert_eq!(master.len(), 226);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

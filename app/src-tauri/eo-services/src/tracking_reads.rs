@@ -16,6 +16,7 @@ use serde_json::{json, Map, Value};
 use crate::character_calc::ATTRIBUTE_SKILLS;
 use crate::config_service::AppConfig;
 use crate::db::{Db, DbError};
+use crate::session_scope::SessionExclusion;
 use crate::time::to_iso_utc;
 use eo_wire::normalizer::round_half_even;
 
@@ -214,7 +215,10 @@ pub fn list_sessions_read(
     // Both predicates are optional and compose, so the seek's own `OR`
     // is parenthesised: unwrapped it would bind looser than the AND and
     // silently widen a scoped page back to the whole table.
-    let mut sql = String::from("SELECT id, started_at, ended_at, is_active FROM tracking_sessions");
+    let mut sql = format!(
+        "SELECT id, started_at, ended_at, is_active, {} FROM tracking_sessions",
+        crate::session_scope::EXCLUSION_COLUMNS
+    );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     let mut clauses: Vec<&str> = Vec::new();
     if let Some(id) = definition_id {
@@ -235,7 +239,7 @@ pub fn list_sessions_read(
     sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
     params.push(Box::new(page + 1));
 
-    let meta: Vec<(String, Option<f64>, Option<f64>, bool)> = {
+    let meta: Vec<ListRowMeta> = {
         let mut stmt = conn.prepare(&sql)?;
         let map_row = |row: &rusqlite::Row| -> rusqlite::Result<_> {
             Ok((
@@ -243,6 +247,7 @@ pub fn list_sessions_read(
                 row.get::<_, Option<f64>>(1)?,
                 row.get::<_, Option<f64>>(2)?,
                 row.get::<_, i64>(3)? != 0,
+                crate::session_scope::read_exclusion(row, 4)?,
             ))
         };
         let rows = stmt
@@ -264,13 +269,16 @@ pub fn list_sessions_read(
     let summaries = fetch_list_summaries(conn, &ids)?;
 
     let mut sessions = Vec::with_capacity(kept.len());
-    for (sid, started_at, ended_at, is_active) in kept {
-        let session = match summaries.get(sid) {
+    for (sid, started_at, ended_at, is_active, exclusion) in kept {
+        let mut session = match summaries.get(sid) {
             Some(summary) if !*is_active => {
                 list_row_from_summary(sid, *started_at, *ended_at, *is_active, now, summary)
             }
             _ => list_row_from_raw(conn, sid, *started_at, *ended_at, *is_active, now)?,
         };
+        if let Value::Object(row) = &mut session {
+            row.insert("exclusion".to_string(), exclusion_json(exclusion));
+        }
         sessions.push(session);
     }
     let next_cursor = has_more
@@ -283,6 +291,10 @@ pub fn list_sessions_read(
         total,
     })
 }
+
+/// One session-list row's own facts, as the page read selects them: id,
+/// start, end, whether it is running, and its stats exclusion.
+type ListRowMeta = (String, Option<f64>, Option<f64>, bool, SessionExclusion);
 
 fn fetch_list_summaries(
     conn: &rusqlite::Connection,
@@ -505,8 +517,11 @@ pub fn get_session_read(
 
     let session_meta = conn
         .query_row(
-            "SELECT id, started_at, ended_at, is_active, mob_tracking_mode, session_name \
-             FROM tracking_sessions WHERE id = ?",
+            &format!(
+                "SELECT id, started_at, ended_at, is_active, mob_tracking_mode, session_name, {} \
+                 FROM tracking_sessions WHERE id = ?",
+                crate::session_scope::EXCLUSION_COLUMNS
+            ),
             rusqlite::params![session_id],
             |row| {
                 Ok((
@@ -515,11 +530,13 @@ pub fn get_session_read(
                     row.get::<_, i64>(3)? != 0,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    crate::session_scope::read_exclusion(row, 6)?,
                 ))
             },
         )
         .optional()?;
-    let Some((started_at, ended_at, is_active, mob_mode, session_name)) = session_meta else {
+    let Some((started_at, ended_at, is_active, mob_mode, session_name, exclusion)) = session_meta
+    else {
         return Ok(None);
     };
 
@@ -802,6 +819,7 @@ pub fn get_session_read(
         },
         "sessionName": session_name,
         "mobEntryMode": mob_entry_mode,
+        "exclusion": exclusion_json(&exclusion),
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "deactivatedLootBreakdown": deactivated_loot_breakdown,
@@ -1481,11 +1499,130 @@ pub async fn set_armour_cost_impl(
     }))
 }
 
-/// Delete a tracking session and every row that references it. An active
-/// session cannot be deleted (its writes are still in flight); a missing one
-/// is a not-found. The cascade runs in one transaction, child-scoped rows
-/// first, and repairs the daily rollups for exactly the calendar days the
-/// session touched (captured before the deletes empty those tables).
+/// A session's stats exclusion on the wire: `null` while the session
+/// counts in every scope, otherwise when each scope was excluded and why.
+pub fn exclusion_json(exclusion: &SessionExclusion) -> Value {
+    if !exclusion.any() {
+        return Value::Null;
+    }
+    json!({
+        "economyExcludedAt": list_ts_to_iso(exclusion.economy_excluded_at),
+        "progressionExcludedAt": list_ts_to_iso(exclusion.progression_excluded_at),
+        "note": exclusion.note,
+    })
+}
+
+/// The longest exclusion note kept, in characters; longer input is cut.
+pub const EXCLUSION_NOTE_MAX_CHARS: usize = 500;
+
+/// Set which stats scopes a session is excluded from ([`crate::session_scope`]).
+///
+/// The request names the whole desired state, so repeating it is harmless:
+/// a scope already excluded keeps its original stamp, a scope switched back
+/// on clears it, and the note (trimmed, blank as none) is kept only while
+/// some scope is excluded. Only an ended session can be excluded: a running
+/// one is still being written and folded into the live figures. The write,
+/// the daily rollup repair for every key the session touches, and the
+/// summary refresh commit together.
+pub async fn set_session_exclusion_impl(
+    db: &Db,
+    session_id: &str,
+    economy: bool,
+    progression: bool,
+    note: Option<String>,
+    now: f64,
+) -> Result<Value, EditError> {
+    enum Outcome {
+        NotFound,
+        Active,
+        Set(SessionExclusion),
+    }
+
+    let note = note
+        .map(|note| {
+            note.trim()
+                .chars()
+                .take(EXCLUSION_NOTE_MAX_CHARS)
+                .collect::<String>()
+        })
+        .filter(|note| !note.is_empty())
+        .filter(|_| economy || progression);
+    let sid = session_id.to_string();
+    let outcome = db
+        .with_writer(move |conn| {
+            use rusqlite::OptionalExtension as _;
+            let tx = conn.transaction()?;
+            let current = tx
+                .query_row(
+                    &format!(
+                        "SELECT is_active, {} FROM tracking_sessions WHERE id = ?",
+                        crate::session_scope::EXCLUSION_COLUMNS
+                    ),
+                    rusqlite::params![sid],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)? != 0,
+                            crate::session_scope::read_exclusion(row, 1)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((is_active, current)) = current else {
+                return Ok(Outcome::NotFound);
+            };
+            if is_active {
+                return Ok(Outcome::Active);
+            }
+            let stamp = |wanted: bool, existing: Option<f64>| {
+                if wanted {
+                    Some(existing.unwrap_or(now))
+                } else {
+                    None
+                }
+            };
+            let next = SessionExclusion {
+                economy_excluded_at: stamp(economy, current.economy_excluded_at),
+                progression_excluded_at: stamp(progression, current.progression_excluded_at),
+                note,
+            };
+            tx.execute(
+                "UPDATE tracking_sessions SET economy_excluded_at = ?, \
+                 progression_excluded_at = ?, exclusion_note = ? WHERE id = ?",
+                rusqlite::params![
+                    next.economy_excluded_at,
+                    next.progression_excluded_at,
+                    next.note,
+                    sid
+                ],
+            )?;
+            // Readers filter by the flag at read time, so only the daily
+            // rollup (which stores pre-filtered sums) needs recomputing; the
+            // per-session projections keep the session's own figures.
+            crate::daily_rollup::refresh_session_days(&tx, &sid)?;
+            tx.commit()?;
+            Ok(Outcome::Set(next))
+        })
+        .await?;
+    match outcome {
+        Outcome::NotFound => Err(EditError::NotFound("Session not found".to_string())),
+        Outcome::Active => Err(EditError::Conflict(
+            "Stop the session before excluding it from stats".to_string(),
+        )),
+        Outcome::Set(exclusion) => Ok(json!({
+            "sessionId": session_id,
+            "exclusion": exclusion_json(&exclusion),
+        })),
+    }
+}
+
+/// Delete a tracking session and every row that feeds the statistics from
+/// it. An active session cannot be deleted (its writes are still in
+/// flight); a missing one is a not-found. The cascade runs in one
+/// transaction, child-scoped rows first, and repairs the daily rollups for
+/// exactly the keys the session touched (captured before the deletes empty
+/// those tables). Quest completions, protection cost allocations, stock
+/// movements, and the session's interval and context records are kept:
+/// they are records of their own surfaces, not statistics of the session.
 pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditError> {
     // The domain outcome of the writer-core transaction: the guard branches the
     // original raised as edit errors, or the completed cascade.
@@ -1519,23 +1656,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 return Ok(DeleteOutcome::Active);
             }
 
-            // Capture the days this session touches before its rows are deleted,
-            // so the rollup repair below recomputes exactly those days.
-            let days: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT DISTINCT date(timestamp, 'unixepoch') FROM kills WHERE session_id = ? \
-                     UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM skill_gains \
-                           WHERE session_id = ? \
-                     UNION SELECT date(started_at, 'unixepoch') FROM tracking_sessions WHERE id = ? \
-                     UNION SELECT date(ended_at, 'unixepoch') FROM tracking_sessions \
-                           WHERE id = ? AND ended_at IS NOT NULL",
-                )?;
-                let rows = stmt.query_map(
-                    rusqlite::params![sid, sid, sid, sid],
-                    |row| row.get::<_, String>(0),
-                )?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
-            };
+            // Capture the keys this session touches before its rows are
+            // deleted, so the rollup repair below recomputes exactly those
+            // days (harvest days and derived ledger dates included).
+            let days = crate::daily_rollup::session_day_keys(&tx, &sid)?;
 
             // Child-scoped rows first (the kill-scoped tables have no ON DELETE
             // cascade), then the kills, the session-scoped rows, and the session.
@@ -1555,6 +1679,24 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
             )?;
             tx.execute(
                 "DELETE FROM skill_gains WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
+            // Harvest events and their loot feed the same aggregates as
+            // kills (the daily rollup sums them by timestamp), so they leave
+            // with the session.
+            tx.execute(
+                "DELETE FROM harvest_loot_items \
+                 WHERE harvest_id IN (SELECT id FROM harvest_events WHERE session_id = ?)",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
+                "DELETE FROM harvest_events WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
+            // Ledger entries computed from this session's events (the
+            // enhancer rebate) describe nothing once those events are gone.
+            tx.execute(
+                "DELETE FROM ledger_entries WHERE source_session_id = ?",
                 rusqlite::params![sid],
             )?;
             tx.execute(
@@ -2493,6 +2635,7 @@ mod tests {
                 },
                 "sessionName": null,
                 "mobEntryMode": "mob",
+                "exclusion": null,
                 "notableEvents": [
                     {"type": "global", "eventType": "global_kill", "target": "Argonaut", "item": "Argonaut", "value": 50.0},
                     {"type": "hof", "eventType": "hof_item", "target": "Sword", "item": "Sword", "value": 100.0},
@@ -2638,6 +2781,7 @@ mod tests {
                 },
                 "sessionName": null,
                 "mobEntryMode": "mob",
+                "exclusion": null,
                 "notableEvents": [],
                 "lootBreakdown": [
                     {"name": "Oil", "quantity": 2, "ttValue": 20.0},

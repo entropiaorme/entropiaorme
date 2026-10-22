@@ -3057,6 +3057,8 @@ export interface SessionDetail {
 	/** The session-name facet as recorded. Present here because the record is where the name is corrected: the overlay fixes it once a session starts. */
 	sessionName: string | null;
 	mobEntryMode: MobEntryMode;
+	/** `null` while the session counts in every stats scope. */
+	exclusion: SessionExclusion | null;
 	notableEvents: NotableEvent[];
 	lootBreakdown: LootEntry[];
 	deactivatedLootBreakdown: LootEntry[];
@@ -3066,6 +3068,29 @@ export interface SessionDetail {
 	skillGains: SkillGain[];
 	weaponAttribution: WeaponAttributionSummary;
 	healing: HealingSessionSummary;
+}
+
+/**
+ * Which app-wide statistics a recorded session is kept out of. The
+ * session stays on record with every figure of its own; an excluded
+ * scope's aggregates read as if it had never been recorded.
+ */
+export interface SessionExclusion {
+	/** When the PED side (loot, costs, activity evidence) was excluded; `null` while it counts. */
+	economyExcludedAt: string | null;
+	/** When the skill gains (PES) were excluded; `null` while they count. */
+	progressionExcludedAt: string | null;
+	/** Why, as the player wrote it. */
+	note: string | null;
+}
+
+/**
+ * The stats-exclusion write result: the session's exclusion as stored.
+ */
+export interface SessionExclusionResult {
+	sessionId: string;
+	/** `null` once the session counts in every scope again. */
+	exclusion: SessionExclusion | null;
 }
 
 /**
@@ -3627,6 +3652,8 @@ export interface TrackingSession {
 	returnRate: number;
 	globals: number;
 	hofs: number;
+	/** `null` while the session counts in every stats scope. */
+	exclusion: SessionExclusion | null;
 }
 
 /**
@@ -4710,6 +4737,10 @@ export async function trackingArmourCost(sessionId: string, cost: number): Promi
 
 export async function trackingRepairScan(sessionId: string): Promise<RepairScanResult> {
 	return invokeCommand('tracking_repair_scan', { session_id: sessionId });
+}
+
+export async function trackingSessionExclusion(sessionId: string, economy: boolean, progression: boolean, note: string | null): Promise<SessionExclusionResult> {
+	return invokeCommand('tracking_session_exclusion', { session_id: sessionId, economy, progression, note });
 }
 
 export async function trackingSessionDelete(sessionId: string): Promise<void> {

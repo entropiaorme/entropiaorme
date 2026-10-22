@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
+use crate::session_scope::{self, StatsScope};
 
 /// The service's error surface: `Invalid` is a caller error carrying
 /// the rejection message verbatim, `Conflict` protects live state, and
@@ -342,15 +343,23 @@ impl SessionDefinitionService {
         Ok(self
             .db
             .with_reader(move |conn| {
+                // Stats exclusion: the instance count, spend, loot, and time
+                // are economy evidence; the PES is progression. Each figure
+                // sums only the instances its scope still counts.
+                let economy = session_scope::counts_on(StatsScope::Economy, "s");
+                let progression = session_scope::counts_on(StatsScope::Progression, "s");
                 Ok(conn.query_row(
-                    "SELECT COUNT(*), \
-                            COALESCE(SUM(ss.cycled_ped), 0), \
-                            COALESCE(SUM(ss.loot_tt), 0), \
-                            COALESCE(SUM(ss.activity_skill_tt), 0), \
-                            COALESCE(SUM(ss.duration_hours), 0) \
-                     FROM session_summaries ss \
-                     JOIN tracking_sessions s ON s.id = ss.session_id \
-                     WHERE s.definition_id = ?",
+                    &format!(
+                        "SELECT COUNT(CASE WHEN {economy} THEN 1 END), \
+                                COALESCE(SUM(CASE WHEN {economy} THEN ss.cycled_ped END), 0), \
+                                COALESCE(SUM(CASE WHEN {economy} THEN ss.loot_tt END), 0), \
+                                COALESCE(SUM(CASE WHEN {progression} \
+                                                  THEN ss.activity_skill_tt END), 0), \
+                                COALESCE(SUM(CASE WHEN {economy} THEN ss.duration_hours END), 0) \
+                         FROM session_summaries ss \
+                         JOIN tracking_sessions s ON s.id = ss.session_id \
+                         WHERE s.definition_id = ?"
+                    ),
                     rusqlite::params![definition_id],
                     |row| {
                         Ok(DefinitionLifetimeStats {

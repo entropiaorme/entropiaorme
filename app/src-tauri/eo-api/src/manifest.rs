@@ -74,8 +74,8 @@ use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
     ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
     ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
-    TrackingSnapshot,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
+    StartResult, StopResult, TrackingSnapshot,
 };
 use crate::weapons::{
     WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
@@ -1582,6 +1582,28 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(RepairScanResult))),
+        },
+        CommandSpec {
+            name: "tracking_session_exclusion",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "economy",
+                    schema: schema(schema_for!(bool)),
+                },
+                ArgSpec {
+                    name: "progression",
+                    schema: schema(schema_for!(bool)),
+                },
+                ArgSpec {
+                    name: "note",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionExclusionResult))),
         },
         CommandSpec {
             name: "tracking_session_delete",

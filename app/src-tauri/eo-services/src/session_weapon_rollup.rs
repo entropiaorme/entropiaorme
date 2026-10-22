@@ -326,7 +326,9 @@ pub fn effective_weapon_cells(
 }
 
 /// Every pace cell on one mob maturity across all sessions, settled from
-/// the rollups and the rest computed raw. The caller heals first.
+/// the rollups and the rest computed raw. The caller heals first. Pace is
+/// economy evidence (kills and time), so a session excluded from the
+/// economy contributes no cell ([`crate::session_scope`]).
 pub fn effective_pace_cells(
     conn: &rusqlite::Connection,
     species: &str,
@@ -334,13 +336,14 @@ pub fn effective_pace_cells(
 ) -> rusqlite::Result<Vec<PaceCell>> {
     let mut cells: Vec<PaceCell> = Vec::new();
     {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT r.tool_name, r.kills, r.gap_seconds, r.shots \
              FROM session_weapon_pace_rollups r \
              JOIN session_rollup_meta m ON m.session_id = r.session_id \
                   AND m.rollup_version >= ?1 \
-             WHERE r.mob_species = ?2 AND r.mob_maturity = ?3",
-        )?;
+             WHERE r.mob_species = ?2 AND r.mob_maturity = ?3 AND {}",
+            crate::session_scope::counts(crate::session_scope::StatsScope::Economy, "r.session_id")
+        ))?;
         let mut rows = stmt.query(rusqlite::params![
             crate::session_rollup::ROLLUP_VERSION,
             species,
@@ -357,7 +360,12 @@ pub fn effective_pace_cells(
             });
         }
     }
+    let excluded =
+        crate::session_scope::excluded_ids(conn, crate::session_scope::StatsScope::Economy)?;
     for session_id in crate::session_rollup::unsettled_sessions(conn)? {
+        if excluded.contains(&session_id) {
+            continue;
+        }
         cells.extend(
             compute(conn, &session_id)?
                 .paces

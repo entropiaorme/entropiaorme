@@ -66,6 +66,7 @@ pub mod scan_presets;
 pub mod screen_capture;
 pub mod session_definitions;
 pub mod session_rollup;
+pub mod session_scope;
 pub mod session_summary;
 pub mod session_weapon_rollup;
 pub mod skill_panel;

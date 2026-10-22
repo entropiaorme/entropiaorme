@@ -363,6 +363,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "codex meta calibration",
         sql: include_str!("../../migrations/0065_codex_meta_calibration.sql"),
     },
+    Migration {
+        version: 66,
+        description: "session stats exclusion",
+        sql: include_str!("../../migrations/0066_session_stats_exclusion.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -436,6 +441,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "D7D416FB7026FD9FE007DF02BB5F55E8E32D0D1C35BE5E9BC89BC6FE3AA054E2052B0B2898F0BD2B8AF0EB87E3FEF9B3",
     "EA6118EDAADCD5FD29CC594DDFC6E4DA4235E9AEFBE812CB0088D6BEE48F65DB791B23195DC9354F3FB814ABB31DD1AC",
     "252CDF5ADB6A037EE49CEB83411ADE4500F2AFBE5B57AC8419F1E2B3B29591E1CEEF9EFBBC02E8C079553F8FAE302D96",
+    "4D2E40992705446482AB32A9BD5DE00EAE8316978079E6F2FF38D8ABFEA332B4AFCFD76DC240BFA2F48DE041DD4EB492",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

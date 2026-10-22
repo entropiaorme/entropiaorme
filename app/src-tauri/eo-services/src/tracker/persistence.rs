@@ -267,7 +267,8 @@ impl TrackerActor {
     }
 
     /// Session-end rebate on enhancer-break Shrapnel (full TT value
-    /// returned by breaks), recorded as a markup ledger gain.
+    /// returned by breaks), recorded as a markup ledger gain derived from
+    /// the session.
     pub(super) fn create_enhancer_rebate_ledger_entry(
         conn: &rusqlite::Connection,
         session_id: &str,
@@ -286,9 +287,11 @@ impl TrackerActor {
             return Ok(());
         }
         let date = local_isoformat(end_time);
+        // Linked to its session, so the entry follows that session's
+        // economy scope (`crate::session_scope`) and leaves with it on delete.
         conn.execute(
-            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag, \
+             source_session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 uuid::Uuid::new_v4().to_string(),
                 date,
@@ -296,6 +299,7 @@ impl TrackerActor {
                 "Enhancer Shrapnel Rebate",
                 round_half_even(rebate, 4),
                 "enhancer",
+                session_id,
             ],
         )?;
         // Same watermark reasoning as the shrapnel-conversion entry:

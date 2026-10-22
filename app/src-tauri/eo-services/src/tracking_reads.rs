@@ -1676,14 +1676,11 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
 
 // ── Producer helpers ────────────────────────────────────────────────
 
-/// Tracking is workable once the player has configured a tool: a bound
-/// hotbar slot (a non-null library id) or a weapon carried without one.
-/// With neither, no shot could ever be priced.
+/// Tracking is workable once the player has configured a tool: a slot
+/// bound on any hotbar preset or a weapon carried without one. With
+/// neither, no shot could ever be priced.
 pub fn validate_tools(config: &AppConfig) -> (bool, Option<String>) {
-    let any_bound = config
-        .hotbar
-        .values()
-        .any(|library_id| !library_id.is_null());
+    let any_bound = !config.hotbar_ids_live_first().is_empty();
     if any_bound || !config.carried_weapon_ids.is_empty() {
         (true, None)
     } else {
@@ -3387,6 +3384,11 @@ mod tests {
         config.carried_weapon_ids.clear();
         config.hotbar.insert("1".to_string(), json!(5));
         assert_eq!(validate_tools(&config), (true, None));
+
+        // Including one on a preset that is not live.
+        let mut parked = AppConfig::default();
+        parked.hotbar_presets[2].insert("4".to_string(), json!(6));
+        assert_eq!(validate_tools(&parked), (true, None));
     }
 
     #[test]

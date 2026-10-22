@@ -266,8 +266,12 @@ export interface AppSettings {
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
 	declaredSkillBoostPercent?: number | null;
-	/** The slot-to-equipment map, carried through in its stored insertion order (`serde_json`'s `preserve_order`), so slot "0" stays last. */
+	/** The slot-to-equipment map, carried through in its stored insertion order (`serde_json`'s `preserve_order`), so slot "0" stays last. This is the live preset's: what a hotbar key press resolves against. */
 	hotbar: Record<string, unknown>;
+	/** The hotbar preset in force, 1 to 3. */
+	activeHotbarPreset: number;
+	/** Every preset's slot map in preset order; the live one equals `hotbar`. */
+	hotbarPresets: (Record<string, unknown>)[];
 	/** Weapons carried without a hotbar slot: with the slotted weapons, the candidates weapon attribution chooses among. */
 	carriedWeaponIds: number[];
 	passiveEffectSources: PassiveEffectSourceView[];
@@ -3191,7 +3195,10 @@ export interface SettingsPatch {
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
 	declared_skill_boost_percent?: number | null;
+	/** Written to the live preset, after any `active_hotbar_preset` switch in the same patch. */
 	hotbar?: Record<string, unknown> | null;
+	/** Switch the live hotbar preset, 1 to 3. */
+	active_hotbar_preset?: number | null;
 	carried_weapon_ids?: number[] | null;
 	passive_effect_sources?: PassiveEffectSourceInput[] | null;
 	harvest_guardrail?: HarvestGuardrailInput | null;

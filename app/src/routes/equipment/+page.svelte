@@ -6,11 +6,11 @@
 	import CompareTab from '$lib/features/equipment/compare/CompareTab.svelte';
 	import EquipmentFormModal from '$lib/features/equipment/EquipmentFormModal.svelte';
 	import EquipmentListView from '$lib/features/equipment/EquipmentListView.svelte';
+	import HotbarPresetSwitcher from '$lib/features/equipment/HotbarPresetSwitcher.svelte';
 	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
 	import ProtectionTab from '$lib/features/protection/ProtectionTab.svelte';
 	import { createProtectionModel } from '$lib/features/protection/protectionModel.svelte';
 	import { inDevelopment } from '$lib/inDevelopment';
-	import type { Hotbar } from '$lib/types/settings';
 	import GuardrailsTab from './GuardrailsTab.svelte';
 	import EffectsTab from './EffectsTab.svelte';
 	import HotbarTab from './HotbarTab.svelte';
@@ -68,7 +68,11 @@
 				Gear library with automatic cost-per-use calculation
 			</p>
 		</header>
-		<div class="flex items-center gap-2">
+		<div class="flex items-center gap-4">
+			<HotbarPresetSwitcher
+				active={model.activeHotbarPreset}
+				onchange={(preset) => void model.switchHotbarPreset(preset)}
+			/>
 			{#if activeTab === 'library'}
 				<Button size="sm" onclick={() => model.openAddModal()}>
 					<svg
@@ -96,11 +100,11 @@
 		<HotbarTab
 			equipment={model.allEquipment}
 			hotbar={model.hotbar}
+			hotbarPresets={model.hotbarPresets}
+			activeHotbarPreset={model.activeHotbarPreset}
 			carriedWeaponIds={model.carriedWeaponIds}
 			hotbarHooksEnabled={model.hotbarHooksEnabled}
-			onchange={(value: Hotbar) => {
-				model.hotbar = { ...value };
-			}}
+			onassign={(slot, id) => void model.assignHotbarSlot(slot, id)}
 			oncarriedchange={(ids) => {
 				model.carriedWeaponIds = ids;
 			}}

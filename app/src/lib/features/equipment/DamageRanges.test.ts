@@ -19,6 +19,7 @@ const band = (
 	max,
 	critMax: max * 3,
 	slot,
+	parked: null,
 	tick: null,
 });
 
@@ -42,6 +43,18 @@ describe('damage ranges', () => {
 			['Rifle', 'None', '8.0–16.0', 'up to 48.0', '\u2014'],
 		]);
 		expect(screen.getByTitle('Carried without a hotkey')).toBeTruthy();
+	});
+
+	it('names the preset and slot of a weapon only a preset that is not live holds', () => {
+		render(DamageRanges, {
+			props: {
+				banded: [{ ...band('2', 'Cannon', 20, 40, null), parked: { preset: 2, slot: '4' } }],
+				bandless: [],
+			},
+		});
+		const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+		expect(within(row).getAllByRole('cell')[1].textContent?.trim()).toBe('Hotbar preset 2, slot 4');
+		expect(screen.getByTitle('Hotbar preset 2, slot 4')).toBeTruthy();
 	});
 
 	it('says where two weapons can only be told apart by the hotbar', () => {

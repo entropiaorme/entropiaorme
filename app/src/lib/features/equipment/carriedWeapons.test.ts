@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Equipment } from '$lib/types';
+import type { Hotbar } from '$lib/types/settings';
 import {
 	addableWeapons,
 	axisTicks,
@@ -7,6 +8,7 @@ import {
 	carriedWeapons,
 	effectOverlaps,
 	formatRange,
+	parkedHotbars,
 	sharedRanges,
 	weaponBands,
 } from './carriedWeapons';
@@ -60,6 +62,35 @@ describe('the carried weapons', () => {
 		expect(addableWeapons([], {}, [])).toEqual([]);
 	});
 
+	it('carries the weapons on presets that are not live, after the live ones', () => {
+		const presets: Hotbar[] = [{ '1': 1 }, { '4': 2, '5': 1, '6': 4 }, { '0': 3 }];
+		const parked = parkedHotbars(presets, 1);
+		expect(parked.map((p) => p.preset)).toEqual([2, 3]);
+
+		const carried = carriedWeapons(library, presets[0], [3, 5], parked);
+		expect(carried.map((c) => [c.weapon.name, c.slot, c.parked])).toEqual([
+			['Pistol', '1', null],
+			['Cannon', null, { preset: 2, slot: '4' }],
+			['Rifle', null, { preset: 3, slot: '0' }],
+			['Mystery', null, null],
+		]);
+		// A weapon on any preset is not offered for carrying again.
+		expect(addableWeapons(library, presets[0], [], parked).map((w) => w.name)).toEqual(['Mystery']);
+		// The band keeps where the player reaches it from.
+		expect(weaponBands(carried).banded.map((band) => band.parked)).toEqual([
+			null,
+			{ preset: 2, slot: '4' },
+			{ preset: 3, slot: '0' },
+		]);
+		// With the third preset live, its key declares the rifle.
+		const third = carriedWeapons(library, presets[2], [], parkedHotbars(presets, 3));
+		expect(third.map((c) => [c.weapon.name, c.slot, c.parked])).toEqual([
+			['Rifle', '0', null],
+			['Pistol', null, { preset: 1, slot: '1' }],
+			['Cannon', null, { preset: 2, slot: '4' }],
+		]);
+	});
+
 	it('splits weapons with a damage figure from those without', () => {
 		const { banded, bandless } = weaponBands(carriedWeapons(library, { '1': 1 }, [5]));
 		expect(banded).toEqual([
@@ -70,6 +101,7 @@ describe('the carried weapons', () => {
 				max: 10,
 				critMax: 10 * CRITICAL_REACH,
 				slot: '1',
+				parked: null,
 				tick: null,
 			},
 		]);

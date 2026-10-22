@@ -1,7 +1,9 @@
 /**
  * The weapons the player carries, as weapon attribution sees them: every
- * weapon bound to a hotbar slot plus the ones carried without a hotkey,
- * each with the damage band its hits are checked against.
+ * weapon bound to a slot on any hotbar preset plus the ones carried without
+ * a hotkey, each with the damage band its hits are checked against. Only
+ * the live preset's keys declare a weapon; a weapon on another preset is
+ * still on the player, so its band still counts.
  *
  * A hotbar press says which weapon is in hand; each carried weapon's band
  * checks it. A hit only one other carried weapon explains is recorded to
@@ -16,7 +18,7 @@
  */
 
 import type { Equipment } from '$lib/types';
-import type { Hotbar } from '$lib/types/settings';
+import type { Hotbar, HotbarPreset } from '$lib/types/settings';
 import { activationRange } from './weaponEffect';
 
 /** A critical hit reaches at most this multiple of a weapon's maximum. */
@@ -24,6 +26,30 @@ export const CRITICAL_REACH = 3;
 
 /** The hotbar's slot keys, in the order the game shows them. */
 export const HOTBAR_SLOT_ORDER = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'] as const;
+
+/** The hotbar presets, in the order the game shows them. */
+export const HOTBAR_PRESETS: readonly HotbarPreset[] = [1, 2, 3];
+
+/** A hotbar preset that is not live: its keys declare nothing until the
+ * game switches to it, but the weapons on it are carried. */
+export interface ParkedHotbar {
+	preset: HotbarPreset;
+	slots: Hotbar;
+}
+
+/** Where a weapon sits on a preset that is not live. */
+export interface ParkedSlot {
+	preset: HotbarPreset;
+	slot: string;
+}
+
+export interface CarriedWeapon {
+	weapon: Equipment;
+	/** The live preset's key that declares it, or none. */
+	slot: string | null;
+	/** Where it sits when only a preset that is not live holds it. */
+	parked: ParkedSlot | null;
+}
 
 export interface WeaponBand {
 	id: string;
@@ -35,6 +61,8 @@ export interface WeaponBand {
 	critMax: number;
 	/** How the player reaches it: a hotbar slot key, or none. */
 	slot: string | null;
+	/** Where it sits when only a preset that is not live holds it. */
+	parked: ParkedSlot | null;
 	/** The range its effect's ticks print, when it declares one. */
 	tick: { min: number; max: number } | null;
 }
@@ -59,40 +87,52 @@ function weaponById(equipment: Equipment[], id: number | string | null | undefin
 	return equipment.find((item) => item.type === 'weapon' && String(item.id) === String(id)) ?? null;
 }
 
-/** The carried weapons in attribution order: the hotbar's in slot order,
- * then those carried without a slot, each once, with the slot they sit in. */
+/** The presets other than the live one, in preset order. */
+export function parkedHotbars(presets: readonly Hotbar[], live: HotbarPreset): ParkedHotbar[] {
+	return HOTBAR_PRESETS.filter((preset) => preset !== live).map((preset) => ({
+		preset,
+		slots: presets[preset - 1] ?? {},
+	}));
+}
+
+/** The carried weapons in attribution order: the live hotbar's in slot
+ * order, then the other presets' in preset and slot order, then those
+ * carried without a slot, each once. */
 export function carriedWeapons(
 	equipment: Equipment[],
 	hotbar: Hotbar,
 	carriedIds: readonly number[],
-): { weapon: Equipment; slot: string | null }[] {
+	parked: readonly ParkedHotbar[] = [],
+): CarriedWeapon[] {
 	const seen = new Set<string>();
-	const out: { weapon: Equipment; slot: string | null }[] = [];
-	for (const slot of HOTBAR_SLOT_ORDER) {
-		const weapon = weaponById(equipment, hotbar[slot]);
+	const out: CarriedWeapon[] = [];
+	const take = (weapon: Equipment | null, slot: string | null, at: ParkedSlot | null) => {
 		if (weapon && !seen.has(weapon.id)) {
 			seen.add(weapon.id);
-			out.push({ weapon, slot });
+			out.push({ weapon, slot, parked: at });
+		}
+	};
+	for (const slot of HOTBAR_SLOT_ORDER) take(weaponById(equipment, hotbar[slot]), slot, null);
+	for (const { preset, slots } of parked) {
+		for (const slot of HOTBAR_SLOT_ORDER) {
+			take(weaponById(equipment, slots[slot]), null, { preset, slot });
 		}
 	}
-	for (const id of carriedIds) {
-		const weapon = weaponById(equipment, id);
-		if (weapon && !seen.has(weapon.id)) {
-			seen.add(weapon.id);
-			out.push({ weapon, slot: null });
-		}
-	}
+	for (const id of carriedIds) take(weaponById(equipment, id), null, null);
 	return out;
 }
 
 /** The weapons still offered for carrying without a hotkey: every weapon not
- * already on a hotbar slot or in the carried list, by name. */
+ * already on a hotbar preset or in the carried list, by name. */
 export function addableWeapons(
 	equipment: Equipment[],
 	hotbar: Hotbar,
 	carriedIds: readonly number[],
+	parked: readonly ParkedHotbar[] = [],
 ): Equipment[] {
-	const taken = new Set(carriedWeapons(equipment, hotbar, carriedIds).map((c) => c.weapon.id));
+	const taken = new Set(
+		carriedWeapons(equipment, hotbar, carriedIds, parked).map((c) => c.weapon.id),
+	);
 	return equipment
 		.filter((item) => item.type === 'weapon' && !taken.has(item.id))
 		.sort((a, b) => a.name.localeCompare(b.name));
@@ -100,13 +140,13 @@ export function addableWeapons(
 
 /** Each carried weapon's band; those with no damage figure are listed apart,
  * because evidence can neither name nor contradict them. */
-export function weaponBands(carried: { weapon: Equipment; slot: string | null }[]): {
+export function weaponBands(carried: CarriedWeapon[]): {
 	banded: WeaponBand[];
 	bandless: Equipment[];
 } {
 	const banded: WeaponBand[] = [];
 	const bandless: Equipment[] = [];
-	for (const { weapon, slot } of carried) {
+	for (const { weapon, slot, parked } of carried) {
 		const effect = weapon.effectProfile;
 		const cast = effect
 			? activationRange(effect)
@@ -124,6 +164,7 @@ export function weaponBands(carried: { weapon: Equipment; slot: string | null }[
 			max: cast.max,
 			critMax: cast.max * CRITICAL_REACH,
 			slot,
+			parked,
 			tick: effect ? { min: effect.tickMin, max: effect.tickMax } : null,
 		});
 	}

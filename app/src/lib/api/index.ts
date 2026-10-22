@@ -62,6 +62,7 @@ export type {
 	QuestRewardReviewInput,
 	RealisedSpeciesMarkup,
 	RealisedTierMarkup,
+	SettingsPatch,
 	ShrapnelConversionInput,
 	StockConversionInput,
 	StockPosition,

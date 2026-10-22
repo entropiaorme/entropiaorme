@@ -3,16 +3,23 @@ import type { AppSettings, EquipmentDetail } from '$lib/api/commands.gen';
 import type { Equipment } from '$lib/types';
 import { createLibraryModel } from './libraryModel.svelte';
 
-vi.mock('$lib/api', () => ({
-	getEquipmentLibrary: vi.fn(),
-	getSettings: vi.fn(),
-	hotbarFromSettings: vi.fn(() => ({ '1': null })),
-	searchEquipmentItems: vi.fn(),
-	addToLibrary: vi.fn(),
-	updateLibrary: vi.fn(),
-	removeFromLibrary: vi.fn(),
-	getEquipmentDetail: vi.fn(),
-}));
+vi.mock('$lib/api', async () => {
+	// The wire narrowing is pure, so the model is tested through the real one.
+	const narrowing = await vi.importActual<typeof import('$lib/api/settings')>('$lib/api/settings');
+	return {
+		getEquipmentLibrary: vi.fn(),
+		getSettings: vi.fn(),
+		updateSettings: vi.fn(),
+		hotbarFromSettings: narrowing.hotbarFromSettings,
+		hotbarPresetFromSettings: narrowing.hotbarPresetFromSettings,
+		hotbarPresetsFromSettings: narrowing.hotbarPresetsFromSettings,
+		searchEquipmentItems: vi.fn(),
+		addToLibrary: vi.fn(),
+		updateLibrary: vi.fn(),
+		removeFromLibrary: vi.fn(),
+		getEquipmentDetail: vi.fn(),
+	};
+});
 
 import * as api from '$lib/api';
 
@@ -68,12 +75,26 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 	};
 }
 
-function settings(): AppSettings {
+function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 	return {
 		hotbarHooksEnabled: false,
-		hotbar: {},
+		hotbar: { '1': null },
+		activeHotbarPreset: 1,
+		hotbarPresets: [{ '1': null }, { '1': 31 }, {}],
 		carriedWeaponIds: [7],
+		...overrides,
 	} as unknown as AppSettings;
+}
+
+/** A promise settled by hand, to hold a write in flight. */
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
 }
 
 const weaponHit = {
@@ -169,6 +190,112 @@ describe('loadData', () => {
 		const reload = model.loadData();
 		expect(model.loading).toBe(false);
 		await reload;
+	});
+});
+
+describe('hotbar presets', () => {
+	it('loads every preset and the one in force', async () => {
+		mocked.getSettings.mockResolvedValue(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		const model = createLibraryModel();
+		await model.loadData();
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.hotbar).toEqual({ '1': 31 });
+		expect(model.hotbarPresets).toEqual([{ '1': null }, { '1': 31 }, {}]);
+	});
+
+	it('brings a preset live at once, persists the switch, and settles on the stored state', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		const write = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValue(write.promise);
+
+		const switching = model.switchHotbarPreset(2);
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.hotbar).toEqual({ '1': 31 });
+		expect(mocked.updateSettings).toHaveBeenCalledWith({ active_hotbar_preset: 2 });
+
+		write.resolve(
+			settings({
+				activeHotbarPreset: 2,
+				hotbar: { '1': 31, '2': 5 },
+				hotbarPresets: [{ '1': null }, { '1': 31, '2': 5 }, {}],
+			}),
+		);
+		await switching;
+		expect(model.hotbar).toEqual({ '1': 31, '2': 5 });
+	});
+
+	it('does nothing for the preset already live, or before settings load', async () => {
+		const model = createLibraryModel();
+		await model.switchHotbarPreset(2);
+		expect(mocked.updateSettings).not.toHaveBeenCalled();
+
+		await model.loadData();
+		await model.switchHotbarPreset(1);
+		expect(mocked.updateSettings).not.toHaveBeenCalled();
+	});
+
+	it('restores the view and re-reads the stored hotbar when a switch fails', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		mocked.updateSettings.mockRejectedValue(new Error('disk full'));
+		mocked.getSettings.mockResolvedValue(settings());
+
+		await model.switchHotbarPreset(3);
+		expect(model.activeHotbarPreset).toBe(1);
+		expect(model.hotbar).toEqual({ '1': null });
+		expect(model.error).toBe('disk full');
+		expect(mocked.getSettings).toHaveBeenCalledTimes(2);
+	});
+
+	it('writes a slot to the live preset, naming it', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		mocked.updateSettings.mockResolvedValue(
+			settings({ hotbar: { '1': 12 }, hotbarPresets: [{ '1': 12 }, { '1': 31 }, {}] }),
+		);
+
+		const assigning = model.assignHotbarSlot('1', 12);
+		expect(model.hotbar).toEqual({ '1': 12 });
+		expect(model.hotbarPresets[0]).toEqual({ '1': 12 });
+		expect(mocked.updateSettings).toHaveBeenCalledWith({
+			active_hotbar_preset: 1,
+			hotbar: { '1': 12 },
+		});
+		await assigning;
+		expect(model.hotbarPresets[1]).toEqual({ '1': 31 });
+	});
+
+	it('keeps the latest write when an earlier reply arrives after it', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		const first = deferred<AppSettings>();
+		const second = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+		const toTwo = model.switchHotbarPreset(2);
+		const toThree = model.switchHotbarPreset(3);
+		expect(model.activeHotbarPreset).toBe(3);
+
+		second.resolve(settings({ activeHotbarPreset: 3, hotbar: {} }));
+		await toThree;
+		first.resolve(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		await toTwo;
+		expect(model.activeHotbarPreset).toBe(3);
+		expect(model.hotbar).toEqual({});
+
+		// A late failure of the earlier write is not reported either.
+		const third = deferred<AppSettings>();
+		const fourth = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValueOnce(third.promise).mockReturnValueOnce(fourth.promise);
+		const toOne = model.switchHotbarPreset(1);
+		const backToTwo = model.switchHotbarPreset(2);
+		fourth.resolve(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		await backToTwo;
+		third.reject(new Error('stale'));
+		await toOne;
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.error).toBeNull();
 	});
 });
 

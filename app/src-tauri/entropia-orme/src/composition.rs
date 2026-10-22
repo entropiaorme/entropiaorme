@@ -72,9 +72,7 @@ use eo_services::character_calc::all_profession_levels;
 use eo_services::chatlog_time::ChatLogClock;
 use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::clock::{Clock, RealClock};
-use eo_services::config_service::{
-    load_config_readonly, AppConfig, ConfigReader, ConfigService, HOTBAR_SLOTS,
-};
+use eo_services::config_service::{load_config_readonly, AppConfig, ConfigReader, ConfigService};
 use eo_services::consumables::{
     consumable_profile_from_props, on_use_effect_from_props, DoseBoard,
 };
@@ -1709,17 +1707,15 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
     }
 
     fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
-        // The hotbar's weapons in slot order, then the weapons carried
-        // without a slot, each once. A slot holding a healer, harvesting
-        // tool, or consumable, and an id no longer in the library, carry
-        // nothing. Each weapon's props are prepared as the profile lookup's
-        // are, so its band carries the same attack rate its cost does.
+        // Every preset's weapons (the live preset's first, in slot order),
+        // then the weapons carried without a slot, each once. A slot holding
+        // a healer, harvesting tool, or consumable, and an id no longer in
+        // the library, carry nothing. Each weapon's props are prepared as
+        // the profile lookup's are, so its band carries the same attack rate
+        // its cost does.
         let config = self.reader.current();
-        let mut ids: Vec<i64> = Vec::new();
-        let slotted = HOTBAR_SLOTS
-            .iter()
-            .filter_map(|slot| config.hotbar.get(*slot).and_then(Value::as_i64));
-        for id in slotted.chain(config.carried_weapon_ids.iter().copied()) {
+        let mut ids = config.hotbar_ids_live_first();
+        for id in config.carried_weapon_ids.iter().copied() {
             if !ids.contains(&id) {
                 ids.push(id);
             }
@@ -2767,6 +2763,19 @@ mod tests {
         assert_eq!(providers.config.session_name(), "Solo Run");
         assert_eq!(providers.config.declared_skill_boost_percent(), Some(100));
         assert_eq!(providers.equipment.carried_weapons().len(), 1);
+
+        // Switching to an empty preset parks the Korss, and a weapon on a
+        // parked preset is still carried.
+        let mut updates = serde_json::Map::new();
+        updates.insert("active_hotbar_preset".into(), serde_json::json!(2));
+        config_service.update(&updates).expect("preset switch");
+        let carried: Vec<i64> = providers
+            .equipment
+            .carried_weapons()
+            .into_iter()
+            .map(|profile| profile.weapon.equipment_id)
+            .collect();
+        assert_eq!(carried, vec![1]);
     }
 
     /// REGRESSION: the equipment seam must resolve from a plain OS

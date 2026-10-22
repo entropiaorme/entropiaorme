@@ -41,6 +41,13 @@
 		return `left: ${left}%; width: ${width}%;`;
 	}
 
+	/** Where the player reaches a weapon from, in words. */
+	function reach(band: WeaponBand): string {
+		if (band.slot) return `Hotbar slot ${band.slot}`;
+		if (band.parked) return `Hotbar preset ${band.parked.preset}, slot ${band.parked.slot}`;
+		return 'Carried without a hotkey';
+	}
+
 	function showTip(event: PointerEvent, text: string) {
 		const rect = chart?.getBoundingClientRect();
 		if (!rect) return;
@@ -81,7 +88,7 @@
 							<span
 								class="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-semibold
 									{band.slot ? 'bg-accent/15 text-accent' : 'bg-surface text-text-tertiary'}"
-								title={band.slot ? `Hotbar slot ${band.slot}` : 'Carried without a hotkey'}
+								title={reach(band)}
 							>
 								{band.slot ?? '·'}
 							</span>
@@ -162,7 +169,7 @@
 					{#each banded as band (band.id)}
 						<tr>
 							<td>{band.name}</td>
-							<td>{band.slot ?? 'None'}</td>
+							<td>{band.slot ?? (band.parked ? reach(band) : 'None')}</td>
 							<td>{formatRange(band.min, band.max)}</td>
 							<td>up to {band.critMax.toFixed(1)}</td>
 							<td>{band.tick ? formatRange(band.tick.min, band.tick.max) : NO_DATA}</td>

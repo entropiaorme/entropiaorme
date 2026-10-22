@@ -85,6 +85,8 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "sessionName",
             "declaredSkillBoostPercent",
             "hotbar",
+            "activeHotbarPreset",
+            "hotbarPresets",
             "carriedWeaponIds",
             "passiveEffectSources",
             "reloadSpeed",
@@ -123,6 +125,9 @@ async fn the_settings_assembly_shapes_the_default_config() {
         serde_json::json!(["Universal Ammo"])
     );
     assert_eq!(body["carriedWeaponIds"], serde_json::json!([]));
+    assert_eq!(body["activeHotbarPreset"], 1);
+    assert_eq!(body["hotbarPresets"].as_array().unwrap().len(), 3);
+    assert_eq!(body["hotbarPresets"][0], body["hotbar"]);
     assert_eq!(body["passiveEffectSources"], serde_json::json!([]));
     assert_eq!(body["appVersion"], env!("CARGO_PKG_VERSION"));
     assert!(body["dbPath"]
@@ -179,6 +184,72 @@ async fn a_partial_update_writes_and_returns_the_assembly() {
     assert_eq!(cfg["hotbar_hooks_enabled"], true);
     assert_eq!(cfg["session_name"], "Daily Hunt");
     assert_eq!(cfg["declared_skill_boost_percent"], 50);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preset_switch_brings_its_own_slots_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    let slots = |value: Value| value.as_object().unwrap().clone();
+
+    api.settings_update(SettingsPatch {
+        hotbar: Some(slots(serde_json::json!({"1": 4}))),
+        ..SettingsPatch::default()
+    })
+    .await
+    .unwrap();
+
+    // A switch and a write in one patch: the write lands on the preset the
+    // switch names, and the preset left behind keeps its slots.
+    let updated = api
+        .settings_update(SettingsPatch {
+            active_hotbar_preset: Some(2),
+            hotbar: Some(slots(serde_json::json!({"3": 9}))),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated.active_hotbar_preset, 2);
+    assert_eq!(updated.hotbar["3"], 9);
+    assert_eq!(updated.hotbar["1"], Value::Null);
+    assert_eq!(updated.hotbar_presets[1], updated.hotbar);
+    assert_eq!(updated.hotbar_presets[0]["1"], 4);
+
+    // Switching back restores the first preset's slots.
+    let back = api
+        .settings_update(SettingsPatch {
+            active_hotbar_preset: Some(1),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(back.hotbar["1"], 4);
+    assert_eq!(back.hotbar["3"], Value::Null);
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["active_hotbar_preset"], 1);
+    assert_eq!(cfg["hotbar"]["1"], 4);
+    assert_eq!(cfg["hotbar_presets"][1]["3"], 9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preset_outside_the_three_is_refused_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    for preset in [0, 4] {
+        assert_eq!(
+            api.settings_update(SettingsPatch {
+                active_hotbar_preset: Some(preset),
+                player_name: Some("Unwritten".into()),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap_err(),
+            ApiError::bad_request("Hotbar preset must be 1 to 3")
+        );
+    }
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["active_hotbar_preset"], 1);
+    assert_ne!(cfg["player_name"], "Unwritten");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

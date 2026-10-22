@@ -1,51 +1,52 @@
 <script lang="ts">
 	import type { Equipment } from '$lib/types';
-	import type { Hotbar } from '$lib/types/settings';
-	import { hotbarFromSettings, updateSettings } from '$lib/api';
+	import type { Hotbar, HotbarPreset } from '$lib/types/settings';
 	import { Divider, Select } from '$lib/components';
 	import CarriedWeapons from '$lib/features/equipment/CarriedWeapons.svelte';
 	import DamageRanges from '$lib/features/equipment/DamageRanges.svelte';
 	import {
 		addableWeapons,
 		carriedWeapons,
+		parkedHotbars,
 		weaponBands
 	} from '$lib/features/equipment/carriedWeapons';
 
 	let {
 		equipment,
-		hotbar: initialHotbar,
+		hotbar,
+		hotbarPresets,
+		activeHotbarPreset,
 		carriedWeaponIds,
 		hotbarHooksEnabled,
-		onchange,
+		onassign,
 		oncarriedchange
 	}: {
 		equipment: Equipment[];
+		/** The live preset's slots. */
 		hotbar: Hotbar;
+		hotbarPresets: Hotbar[];
+		activeHotbarPreset: HotbarPreset;
 		carriedWeaponIds: number[];
 		/** The hotbar key listener setting: presses declare the weapon in hand. */
 		hotbarHooksEnabled: boolean;
-		onchange?: (value: Hotbar) => void;
+		onassign: (slot: string, equipmentId: number | null) => void;
 		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
-
-	let hotbar: Hotbar = $state({});
-	let error: string | null = $state(null);
 
 	let weapons = $derived(equipment.filter((e) => e.type === 'weapon'));
 	let healingTools = $derived(equipment.filter((e) => e.type === 'healing'));
 	let consumablesList = $derived(equipment.filter((e) => e.type === 'consumable'));
 	let harvestingToolsList = $derived(equipment.filter((e) => e.type === 'tool'));
 
-	// The weapons attribution chooses among: the slotted ones and the ones
+	// The weapons attribution chooses among: every preset's and the ones
 	// carried without a hotkey, with the damage band each is checked against.
-	let carried = $derived(carriedWeapons(equipment, hotbar, carriedWeaponIds));
-	let unslotted = $derived(carried.filter((entry) => entry.slot === null).map((entry) => entry.weapon));
-	let addable = $derived(addableWeapons(equipment, hotbar, carriedWeaponIds));
+	let parked = $derived(parkedHotbars(hotbarPresets, activeHotbarPreset));
+	let carried = $derived(carriedWeapons(equipment, hotbar, carriedWeaponIds, parked));
+	let unslotted = $derived(
+		carried.filter((entry) => entry.slot === null && entry.parked === null).map((entry) => entry.weapon)
+	);
+	let addable = $derived(addableWeapons(equipment, hotbar, carriedWeaponIds, parked));
 	let bands = $derived(weaponBands(carried));
-
-	$effect(() => {
-		hotbar = { ...initialHotbar };
-	});
 
 	function slotItem(slot: string): Equipment | null {
 		const id = hotbar[slot];
@@ -65,33 +66,13 @@
 		return slotItem(slot)?.type ?? null;
 	}
 
-	async function assignSlot(slot: string, equipId: string | null) {
-		error = null;
-		const previous = { ...hotbar };
-		const nextHotbar = {
-			...hotbar,
-			[slot]: equipId ? parseInt(equipId, 10) : null
-		};
-		hotbar = nextHotbar;
-
-		try {
-			const updated = await updateSettings({ hotbar: nextHotbar });
-			hotbar = hotbarFromSettings(updated);
-			onchange?.(hotbar);
-		} catch (e) {
-			hotbar = previous;
-			error = e instanceof Error ? e.message : 'Failed to save hotbar';
-		}
+	function assignSlot(slot: string, value: string) {
+		const id = Number.parseInt(value, 10);
+		onassign(slot, Number.isNaN(id) ? null : id);
 	}
 </script>
 
 <div class="space-y-4">
-	{#if error}
-		<div class="rounded-md border border-error/20 bg-error/10 px-3 py-2">
-			<p class="text-sm text-error">{error}</p>
-		</div>
-	{/if}
-
 	<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
 		{#if hotbarHooksEnabled}
 			The hotbar key listener is on: a press tells the app which weapon is in hand, and each
@@ -137,7 +118,7 @@
 						<div class="flex-1 min-w-0">
 							<Select
 								value={hotbar[slot] != null ? String(hotbar[slot]) : ''}
-								onchange={(e) => assignSlot(slot, e.currentTarget.value || null)}
+								onchange={(e) => assignSlot(slot, e.currentTarget.value)}
 							>
 								<option value="">— Empty slot —</option>
 								{#if weapons.length > 0}

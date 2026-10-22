@@ -12,9 +12,13 @@ import {
 	getEquipmentLibrary,
 	getSettings,
 	hotbarFromSettings,
+	hotbarPresetFromSettings,
+	hotbarPresetsFromSettings,
 	removeFromLibrary,
+	type SettingsPatch,
 	searchEquipmentItems,
 	updateLibrary,
+	updateSettings,
 } from '$lib/api';
 import {
 	blankDoseFields,
@@ -29,6 +33,7 @@ import type {
 	AppSettings,
 	HarvestGuardrailSettings,
 	Hotbar,
+	HotbarPreset,
 	PassiveEffectSourceView,
 	ReloadSpeedInEffect,
 } from '$lib/types/settings';
@@ -59,7 +64,14 @@ export function createLibraryModel() {
 	let healingTools = $state<HealingTool[]>([]);
 	let consumables = $state<Equipment[]>([]);
 	let harvestingTools = $state<Equipment[]>([]);
+	// The live preset's slots, and every preset's (empty until settings load).
 	let hotbar = $state<Hotbar>({});
+	let hotbarPresets = $state<Hotbar[]>([]);
+	let activeHotbarPreset = $state<HotbarPreset>(1);
+	// Each hotbar write takes a ticket, and only the latest write's reply is
+	// applied, so a slower reply to an earlier switch never overwrites a
+	// later one.
+	let hotbarWrite = 0;
 	let hotbarHooksEnabled = $state(true);
 	let carriedWeaponIds = $state<number[]>([]);
 	let harvestGuardrail = $state<HarvestGuardrailSettings>({
@@ -233,7 +245,7 @@ export function createLibraryModel() {
 			const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
 			allEquipment = library;
 			splitByKind(library);
-			hotbar = hotbarFromSettings(settings);
+			applyHotbar(settings);
 			hotbarHooksEnabled = settings.hotbarHooksEnabled;
 			carriedWeaponIds = [...settings.carriedWeaponIds];
 			harvestGuardrail = settings.harvestGuardrail;
@@ -245,6 +257,65 @@ export function createLibraryModel() {
 		} finally {
 			loading = false;
 		}
+	}
+
+	function applyHotbar(settings: AppSettings) {
+		hotbar = hotbarFromSettings(settings);
+		hotbarPresets = hotbarPresetsFromSettings(settings);
+		activeHotbarPreset = hotbarPresetFromSettings(settings);
+	}
+
+	/** Show a hotbar change at once, persist it, and settle on what was
+	 * stored. A failed latest write restores the view, then re-reads the
+	 * stored hotbar, since an earlier write may have landed meanwhile. */
+	async function writeHotbar(patch: SettingsPatch, show: () => void, failure: string) {
+		const ticket = ++hotbarWrite;
+		const before = { hotbar, hotbarPresets, activeHotbarPreset };
+		show();
+		try {
+			const settings = await updateSettings(patch);
+			if (ticket === hotbarWrite) applyHotbar(settings);
+		} catch (e) {
+			if (ticket !== hotbarWrite) return;
+			({ hotbar, hotbarPresets, activeHotbarPreset } = before);
+			error = describeError(e, failure);
+			try {
+				const settings = await getSettings();
+				if (ticket === hotbarWrite) applyHotbar(settings);
+			} catch {
+				// The restored view stands until the next load.
+			}
+		}
+	}
+
+	/** Bring a preset live, as the game's preset switch does. */
+	function switchHotbarPreset(preset: HotbarPreset): Promise<void> {
+		if (preset === activeHotbarPreset || hotbarPresets.length === 0) return Promise.resolve();
+		return writeHotbar(
+			{ active_hotbar_preset: preset },
+			() => {
+				const leaving = activeHotbarPreset;
+				hotbarPresets = hotbarPresets.map((slots, i) => (i === leaving - 1 ? hotbar : slots));
+				activeHotbarPreset = preset;
+				hotbar = { ...hotbarPresets[preset - 1] };
+			},
+			'Could not switch the hotbar preset',
+		);
+	}
+
+	/** Bind a slot on the live preset, or empty it. The write names the
+	 * preset, so it lands there even behind a switch still in flight. */
+	function assignHotbarSlot(slot: string, equipmentId: number | null): Promise<void> {
+		const live = activeHotbarPreset;
+		const next = { ...hotbar, [slot]: equipmentId };
+		return writeHotbar(
+			{ active_hotbar_preset: live, hotbar: next },
+			() => {
+				hotbar = next;
+				hotbarPresets = hotbarPresets.map((slots, i) => (i === live - 1 ? next : slots));
+			},
+			'Failed to save hotbar',
+		);
 	}
 
 	function replaceEquipment(updated: Equipment) {
@@ -642,9 +713,14 @@ export function createLibraryModel() {
 		get hotbar() {
 			return hotbar;
 		},
-		set hotbar(value: Hotbar) {
-			hotbar = value;
+		get hotbarPresets() {
+			return hotbarPresets;
 		},
+		get activeHotbarPreset() {
+			return activeHotbarPreset;
+		},
+		switchHotbarPreset,
+		assignHotbarSlot,
 		get hotbarHooksEnabled() {
 			return hotbarHooksEnabled;
 		},

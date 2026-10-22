@@ -17,3 +17,6 @@ export type {
  * equipment-library id or null. The wire carries the stored JSON map
  * verbatim; `hotbarFromSettings` ($lib/api) narrows it to this shape. */
 export type Hotbar = Record<string, number | null>;
+
+/** A hotbar preset, as the game numbers its three. */
+export type HotbarPreset = 1 | 2 | 3;

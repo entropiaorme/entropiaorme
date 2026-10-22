@@ -20,7 +20,7 @@
 
 use std::path::Path;
 
-use eo_services::config_service::load_config_readonly;
+use eo_services::config_service::{load_config_readonly, HOTBAR_PRESET_COUNT};
 use eo_services::paths::DB_FILE_NAME;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -109,7 +109,12 @@ pub struct AppSettings {
     pub declared_skill_boost_percent: Option<i64>,
     /// The slot-to-equipment map, carried through in its stored insertion
     /// order (`serde_json`'s `preserve_order`), so slot "0" stays last.
+    /// This is the live preset's: what a hotbar key press resolves against.
     pub hotbar: Map<String, Value>,
+    /// The hotbar preset in force, 1 to 3.
+    pub active_hotbar_preset: u8,
+    /// Every preset's slot map in preset order; the live one equals `hotbar`.
+    pub hotbar_presets: Vec<Map<String, Value>>,
     /// Weapons carried without a hotbar slot: with the slotted weapons,
     /// the candidates weapon attribution chooses among.
     pub carried_weapon_ids: Vec<i64>,
@@ -186,8 +191,13 @@ pub struct SettingsPatch {
     /// number (including 0) declares it.
     #[serde(default, deserialize_with = "double_option")]
     pub declared_skill_boost_percent: Option<Option<i64>>,
+    /// Written to the live preset, after any `active_hotbar_preset` switch
+    /// in the same patch.
     #[serde(default)]
     pub hotbar: Option<Map<String, Value>>,
+    /// Switch the live hotbar preset, 1 to 3.
+    #[serde(default)]
+    pub active_hotbar_preset: Option<u8>,
     #[serde(default)]
     pub carried_weapon_ids: Option<Vec<i64>>,
     #[serde(default)]
@@ -252,6 +262,9 @@ impl SettingsPatch {
         if let Some(value) = self.hotbar {
             updates.insert("hotbar".into(), Value::Object(value));
         }
+        if let Some(value) = self.active_hotbar_preset {
+            updates.insert("active_hotbar_preset".into(), Value::from(value));
+        }
         if let Some(value) = self.carried_weapon_ids {
             updates.insert("carried_weapon_ids".into(), json!(value));
         }
@@ -291,6 +304,8 @@ impl Api {
                 .declared_skill_boost_percent
                 .filter(|percent| *percent >= 0),
             hotbar: config.hotbar.clone(),
+            active_hotbar_preset: config.active_hotbar_preset,
+            hotbar_presets: config.hotbar_presets.clone(),
             carried_weapon_ids: config.carried_weapon_ids.clone(),
             passive_effect_sources: config
                 .passive_effect_sources
@@ -384,6 +399,14 @@ impl Api {
         let disables_developer_mode = patch.developer_mode_enabled == Some(false);
         if let Some(sources) = patch.passive_effect_sources.as_deref() {
             validate_passive_effect_sources(sources)?;
+        }
+        if patch
+            .active_hotbar_preset
+            .is_some_and(|preset| !(1..=HOTBAR_PRESET_COUNT).contains(&preset))
+        {
+            return Err(ApiError::bad_request(format!(
+                "Hotbar preset must be 1 to {HOTBAR_PRESET_COUNT}"
+            )));
         }
         let mut updates = patch.into_updates();
         // An empty patch is the backend's 400 (nothing to update).

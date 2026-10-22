@@ -12,9 +12,12 @@
 //!
 //! Update semantics: unknown update keys are
 //! ignored; the hotbar always re-normalises to its full slot shape; the
-//! carried weapons re-normalise to distinct positive ids. Where a stored or
-//! submitted value does not fit its typed field, this implementation
-//! coalesces or skips instead of carrying the raw value; the divergence
+//! carried weapons re-normalise to distinct positive ids. The hotbar is
+//! the live preset of three, as in the game: a preset switch applies
+//! before a hotbar write in the same update, so the write lands on the
+//! preset it names. Where a stored or submitted value does not fit its
+//! typed field, this implementation coalesces or skips instead of
+//! carrying the raw value; the divergence
 //! register's configuration entry records those cases and their
 //! reachability.
 
@@ -26,6 +29,8 @@ use serde_json::{Map, Value};
 use crate::passive_effects::{PassiveEffect, PassiveEffectKind, PassiveEffectSource};
 
 pub const HOTBAR_SLOTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+/// The hotbar presets the game offers, numbered from 1.
+pub const HOTBAR_PRESET_COUNT: u8 = 3;
 /// The harvesting tool guardrail: the tool the user intends to use for
 /// each board-output class. While enabled, harvest swings whose loot
 /// identifies a board class are attributed to its intended tool, and a
@@ -69,7 +74,13 @@ pub struct AppConfig {
     /// not hold the middle state (its 0 meant "not declared"), so it is
     /// left to the carry-forward map rather than reinterpreted.
     pub declared_skill_boost_percent: Option<i64>,
+    /// The live preset's slots: what a hotbar key press resolves against.
     pub hotbar: Map<String, Value>,
+    /// The preset in force, 1 to [`HOTBAR_PRESET_COUNT`].
+    pub active_hotbar_preset: u8,
+    /// Every preset's slots in preset order, each in the full slot shape.
+    /// The live preset's entry always equals `hotbar`.
+    pub hotbar_presets: Vec<Map<String, Value>>,
     /// Weapons the player carries without a hotbar slot. With the hotbar
     /// slots' weapons they are the candidates weapon attribution chooses
     /// among when the damage evidence disagrees with the hotbar, or when
@@ -96,10 +107,7 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let mut hotbar = Map::new();
-        for slot in HOTBAR_SLOTS {
-            hotbar.insert(slot.to_string(), Value::Null);
-        }
+        let hotbar = normalize_hotbar(None);
         Self {
             chatlog_path: String::new(),
             player_name: String::new(),
@@ -111,7 +119,9 @@ impl Default for AppConfig {
             session_name: String::new(),
             session_definition_id: None,
             declared_skill_boost_percent: None,
+            hotbar_presets: vec![hotbar.clone(); usize::from(HOTBAR_PRESET_COUNT)],
             hotbar,
+            active_hotbar_preset: 1,
             carried_weapon_ids: Vec::new(),
             passive_effect_sources: Vec::new(),
             harvest_guardrail: HarvestGuardrailConfig::default(),
@@ -136,6 +146,62 @@ impl AppConfig {
             .join("chat.log")
             .to_string_lossy()
             .into_owned()
+    }
+
+    /// Every library id bound to a slot on any preset, each once: the live
+    /// preset's in slot order first, then the other presets' in preset and
+    /// slot order. Items on a preset are items the player carries, so they
+    /// stay attribution candidates whichever preset is live.
+    pub fn hotbar_ids_live_first(&self) -> Vec<i64> {
+        let live = self.live_preset_index();
+        let parked = self
+            .hotbar_presets
+            .iter()
+            .enumerate()
+            .filter(move |(index, _)| *index != live)
+            .map(|(_, preset)| preset);
+        let mut ids: Vec<i64> = Vec::new();
+        for preset in std::iter::once(&self.hotbar).chain(parked) {
+            for id in HOTBAR_SLOTS
+                .iter()
+                .filter_map(|slot| preset.get(*slot).and_then(Value::as_i64))
+            {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
+    }
+
+    /// Make `preset` the live one: the live slots are kept on the preset
+    /// being left, and the arriving preset's become the live slots. A
+    /// number outside 1 to [`HOTBAR_PRESET_COUNT`] changes nothing.
+    pub fn switch_hotbar_preset(&mut self, preset: u8) {
+        if !(1..=HOTBAR_PRESET_COUNT).contains(&preset) {
+            return;
+        }
+        self.set_live_hotbar(self.hotbar.clone());
+        self.active_hotbar_preset = preset;
+        self.hotbar = self
+            .hotbar_presets
+            .get(self.live_preset_index())
+            .cloned()
+            .unwrap_or_else(|| normalize_hotbar(None));
+    }
+
+    /// Replace the live preset's slots.
+    fn set_live_hotbar(&mut self, hotbar: Map<String, Value>) {
+        let live = self.live_preset_index();
+        if let Some(preset) = self.hotbar_presets.get_mut(live) {
+            *preset = hotbar.clone();
+        }
+        self.hotbar = hotbar;
+    }
+
+    /// The live preset's position in `hotbar_presets`.
+    fn live_preset_index(&self) -> usize {
+        usize::from(self.active_hotbar_preset.clamp(1, HOTBAR_PRESET_COUNT) - 1)
     }
 }
 
@@ -343,6 +409,14 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         data.get(key).map(json_truthy).unwrap_or(false)
     };
     let hotbar = normalize_hotbar(data.get("hotbar"));
+    let active_hotbar_preset = data
+        .get("active_hotbar_preset")
+        .and_then(Value::as_u64)
+        .and_then(|preset| u8::try_from(preset).ok())
+        .filter(|preset| (1..=HOTBAR_PRESET_COUNT).contains(preset))
+        .unwrap_or(1);
+    let hotbar_presets =
+        normalize_hotbar_presets(data.get("hotbar_presets"), active_hotbar_preset, &hotbar);
     let carried_weapon_ids = carried_weapons_from_stored(data, &hotbar);
     let known: std::collections::BTreeSet<&str> = KNOWN_KEYS.iter().copied().collect();
     let extra: Map<String, Value> = data
@@ -385,6 +459,8 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
             .and_then(Value::as_i64)
             .filter(|percent| *percent >= 0),
         hotbar,
+        active_hotbar_preset,
+        hotbar_presets,
         carried_weapon_ids,
         passive_effect_sources: normalize_passive_effect_sources(
             data.get("passive_effect_sources"),
@@ -434,7 +510,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // hotbar and every carried weapon's damage band. They stay unknown and
 // carry through untouched, and a store written before `carried_weapon_ids`
 // seeds it once from them (see `carried_weapons_from_stored`).
-const KNOWN_KEYS: [&str; 18] = [
+const KNOWN_KEYS: [&str; 20] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
@@ -446,6 +522,8 @@ const KNOWN_KEYS: [&str; 18] = [
     "session_definition_id",
     "declared_skill_boost_percent",
     "hotbar",
+    "active_hotbar_preset",
+    "hotbar_presets",
     "carried_weapon_ids",
     "passive_effect_sources",
     "harvest_guardrail",
@@ -541,6 +619,25 @@ fn normalize_hotbar(raw: Option<&Value>) -> Map<String, Value> {
     hotbar
 }
 
+/// Normalise the stored presets to [`HOTBAR_PRESET_COUNT`] full slot maps.
+/// A store written before presets existed has none, so its hotbar becomes
+/// the live preset and the others start empty. The stored `hotbar` is the
+/// authority for the live preset either way: a build that knows only the
+/// single hotbar edits that key and leaves the presets untouched, and its
+/// edit must not be undone.
+fn normalize_hotbar_presets(
+    raw: Option<&Value>,
+    active: u8,
+    hotbar: &Map<String, Value>,
+) -> Vec<Map<String, Value>> {
+    let stored = raw.and_then(Value::as_array);
+    let mut presets: Vec<Map<String, Value>> = (0..usize::from(HOTBAR_PRESET_COUNT))
+        .map(|index| normalize_hotbar(stored.and_then(|presets| presets.get(index))))
+        .collect();
+    presets[usize::from(active - 1)] = hotbar.clone();
+    presets
+}
+
 /// The most weapons carried without a hotkey that the config keeps: far
 /// beyond any real loadout, and a bound on the work every read repeats.
 const MAX_CARRIED_WEAPONS: usize = 64;
@@ -601,8 +698,16 @@ fn carried_weapons_from_stored(data: &Map<String, Value>, hotbar: &Map<String, V
 
 /// Apply partial updates: unknown keys are ignored; hotbar and carried
 /// weapon updates re-normalise; a value that does not fit its field is
-/// skipped.
+/// skipped. A preset switch applies first, whatever the key order, so a
+/// hotbar write beside it lands on the preset it names.
 fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
+    if let Some(preset) = updates
+        .get("active_hotbar_preset")
+        .and_then(Value::as_u64)
+        .and_then(|preset| u8::try_from(preset).ok())
+    {
+        config.switch_hotbar_preset(preset);
+    }
     for (key, value) in updates {
         match key.as_str() {
             "chatlog_path" => assign_string(&mut config.chatlog_path, value),
@@ -629,7 +734,7 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     config.declared_skill_boost_percent = Some(percent);
                 }
             }
-            "hotbar" => config.hotbar = normalize_hotbar(Some(value)),
+            "hotbar" => config.set_live_hotbar(normalize_hotbar(Some(value))),
             "carried_weapon_ids" => {
                 config.carried_weapon_ids = normalize_carried_weapon_ids(Some(value));
             }
@@ -953,6 +1058,186 @@ mod tests {
         assert_eq!(hotbar["1"], Value::Null);
         let keys: Vec<&String> = hotbar.keys().collect();
         assert_eq!(keys[9], "0", "slot order preserved");
+    }
+
+    fn update(svc: &mut ConfigService, updates: Value) {
+        svc.update(updates.as_object().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_fresh_store_has_three_empty_presets_with_the_first_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets.len(), 3);
+        for preset in &config.hotbar_presets {
+            assert_eq!(preset, &normalize_hotbar(None));
+        }
+        let body = read_settings(dir.path());
+        assert!(body.contains("\"active_hotbar_preset\": 1"));
+        assert!(body.contains("\"hotbar_presets\""));
+    }
+
+    #[test]
+    fn a_store_from_before_presets_keeps_its_hotbar_as_the_first_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({"hotbar": {"1": 12, "4": 7}}).to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets[0], config.hotbar);
+        assert_eq!(config.hotbar["1"], 12);
+        assert_eq!(config.hotbar_presets[1], normalize_hotbar(None));
+        assert_eq!(config.hotbar_presets[2], normalize_hotbar(None));
+    }
+
+    #[test]
+    fn switching_presets_keeps_each_presets_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        update(&mut svc, serde_json::json!({"active_hotbar_preset": 2}));
+        assert_eq!(svc.get().active_hotbar_preset, 2);
+        assert_eq!(
+            svc.get().hotbar,
+            normalize_hotbar(None),
+            "preset 2 starts empty"
+        );
+
+        update(&mut svc, serde_json::json!({"hotbar": {"3": 40}}));
+        assert_eq!(svc.get().hotbar_presets[1]["3"], 40);
+        assert_eq!(svc.get().hotbar_presets[0]["1"], 12, "preset 1 untouched");
+
+        update(&mut svc, serde_json::json!({"active_hotbar_preset": 1}));
+        assert_eq!(svc.get().hotbar["1"], 12);
+        assert_eq!(svc.get().hotbar["3"], Value::Null);
+
+        // Everything survives a reload from disk.
+        let reloaded = service(dir.path());
+        assert_eq!(reloaded.get().active_hotbar_preset, 1);
+        assert_eq!(reloaded.get().hotbar["1"], 12);
+        assert_eq!(reloaded.get().hotbar_presets[1]["3"], 40);
+    }
+
+    #[test]
+    fn a_hotbar_write_beside_a_switch_lands_on_the_named_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        // The hotbar key comes first in the update; the switch still
+        // applies before it.
+        update(
+            &mut svc,
+            serde_json::json!({"hotbar": {"2": 9}, "active_hotbar_preset": 3}),
+        );
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 3);
+        assert_eq!(config.hotbar["2"], 9);
+        assert_eq!(config.hotbar_presets[2]["2"], 9);
+        assert_eq!(config.hotbar_presets[0]["1"], 12);
+        assert_eq!(config.hotbar_presets[0]["2"], Value::Null);
+    }
+
+    #[test]
+    fn a_preset_outside_the_three_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(4),
+            serde_json::json!(-1),
+            serde_json::json!(300),
+            serde_json::json!("2"),
+            Value::Null,
+        ] {
+            update(
+                &mut svc,
+                serde_json::json!({"active_hotbar_preset": invalid}),
+            );
+            assert_eq!(svc.get().active_hotbar_preset, 1);
+            assert_eq!(svc.get().hotbar["1"], 12);
+        }
+
+        // A malformed stored preset reads as the first, and malformed
+        // stored presets read as empty ones.
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "hotbar": {"1": 5},
+                "active_hotbar_preset": 9,
+                "hotbar_presets": [null, "garbled"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reloaded = service(dir.path());
+        let config = reloaded.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets.len(), 3);
+        assert_eq!(config.hotbar_presets[0]["1"], 5);
+        assert_eq!(config.hotbar_presets[1], normalize_hotbar(None));
+        assert_eq!(config.hotbar_presets[2], normalize_hotbar(None));
+    }
+
+    /// A build that knows only the single hotbar edits that key and leaves
+    /// the presets alone; its edit is the live preset's slots, not a value
+    /// the stale preset entry may overwrite.
+    #[test]
+    fn the_stored_hotbar_is_the_authority_for_the_live_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = normalize_hotbar(None);
+        let mut second = empty.clone();
+        second.insert("5".into(), Value::from(31));
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "hotbar": {"1": 77},
+                "active_hotbar_preset": 2,
+                "hotbar_presets": [{"1": 12}, second, empty],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 2);
+        assert_eq!(config.hotbar["1"], 77);
+        assert_eq!(config.hotbar["5"], Value::Null);
+        assert_eq!(config.hotbar_presets[1], config.hotbar);
+        assert_eq!(config.hotbar_presets[0]["1"], 12);
+    }
+
+    #[test]
+    fn hotbar_ids_list_the_live_preset_first_then_the_others_once_each() {
+        let mut config = AppConfig::default();
+        config.hotbar_presets[0].insert("1".into(), Value::from(4));
+        config.hotbar_presets[0].insert("2".into(), Value::from(5));
+        config.hotbar_presets[2].insert("0".into(), Value::from(9));
+        config.hotbar_presets[2].insert("1".into(), Value::from(5));
+        config.switch_hotbar_preset(2);
+        config.set_live_hotbar(normalize_hotbar(Some(&serde_json::json!({"7": 8, "8": 4}))));
+        assert_eq!(config.hotbar_ids_live_first(), vec![8, 4, 5, 9]);
+
+        assert!(AppConfig::default().hotbar_ids_live_first().is_empty());
+    }
+
+    #[test]
+    fn reset_returns_to_three_empty_presets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(
+            &mut svc,
+            serde_json::json!({"active_hotbar_preset": 3, "hotbar": {"1": 2}}),
+        );
+        svc.reset().unwrap();
+        assert_eq!(svc.get().active_hotbar_preset, 1);
+        assert!(svc.get().hotbar_ids_live_first().is_empty());
     }
 
     #[test]

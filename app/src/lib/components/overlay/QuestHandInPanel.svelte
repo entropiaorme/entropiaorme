@@ -99,7 +99,7 @@
 	}
 </script>
 
-<div class="hand-in-panel" aria-live="polite">
+<div class="hand-in-panel" aria-live="polite" data-overlay-surface>
 	<div class="hand-in-heading">
 		<div class="hand-in-kicker">Hand in quest</div>
 		<div class="hand-in-name">{handIn.questName}</div>
@@ -161,7 +161,6 @@
 		border-radius: 8px;
 		background: rgba(11, 15, 25, 0.97);
 		color: rgba(255, 255, 255, 0.9);
-		box-shadow: 0 14px 30px rgba(0, 0, 0, 0.48);
 	}
 
 	.hand-in-heading,

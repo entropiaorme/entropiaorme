@@ -210,8 +210,8 @@
 		notices.push(describeOverlayMenuError(error));
 	}
 
-	// Keep this window's OS size in step with the strip; each sync re-anchors
-	// the armour-cost popup, which hangs off a strip button.
+	// Keep this window's OS footprint exactly the strip and its notices; each
+	// sync re-anchors the armour-cost popup, which hangs off a strip button.
 	const windowSizeSync = createWindowSizeSync(() => overlayRoot, {
 		afterSync: () => armourCost.scheduleAnchorSync()
 	});
@@ -464,7 +464,7 @@
 	$effect(() => {
 		if (!overlayRoot) return;
 
-		windowSizeSync.schedule();
+		const disconnectSizeSync = windowSizeSync.connect();
 
 		const handleVisibilityChange = () => {
 			if (document.visibilityState === 'visible') {
@@ -483,20 +483,13 @@
 			armourCost.scheduleAnchorSync();
 		};
 
-		const resizeObserver = new ResizeObserver(() => {
-			windowSizeSync.schedule();
-			armourCost.scheduleAnchorSync();
-		});
-		resizeObserver.observe(overlayRoot);
-
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		window.addEventListener('focus', handleFocus);
 
 		return () => {
-			windowSizeSync.cancel();
+			disconnectSizeSync();
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('focus', handleFocus);
-			resizeObserver.disconnect();
 		};
 	});
 
@@ -883,7 +876,7 @@
 
 <!-- Kept: mousedown is the frameless overlay window's drag handle (pointer-only by nature); the controls inside are native buttons. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="p-2 flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
+<div class="flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
 	<OverlayStrip
 		{data}
 		{status}

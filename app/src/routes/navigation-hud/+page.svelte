@@ -35,16 +35,13 @@
 		void listen(ROUTE_AREA_SELECTION_CANCELLED_EVENT, (event) => c.applyRouteAreaSelectionCancelled(event.payload)).then(
 			(stop) => (unlistenAreaCancelled = stop),
 		);
-		sizeSync.schedule();
-		const observer = new ResizeObserver(() => sizeSync.schedule());
-		observer.observe(root);
+		const disconnectSizeSync = sizeSync.connect();
 		return () => {
 			unlisten?.();
 			unlistenContext?.();
 			unlistenAreaResult?.();
 			unlistenAreaCancelled?.();
-			observer.disconnect();
-			sizeSync.cancel();
+			disconnectSizeSync();
 			c.dispose();
 		};
 	});
@@ -66,8 +63,8 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div bind:this={root} class="p-2" onpointerdown={drag}>
-	<div class="glass-panel w-72 rounded-xl p-3 text-white shadow-xl">
+<div bind:this={root} class="w-max" onpointerdown={drag}>
+	<div class="glass-panel w-72 rounded-xl p-3 text-white" data-overlay-surface>
 		<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-2">
 			<div class="min-w-0">
 				<p class="text-[9px] font-bold uppercase tracking-wider text-white/35">{c.run ? 'Route guidance' : 'Plan route'}</p>

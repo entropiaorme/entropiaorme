@@ -12,8 +12,8 @@
 		OVERLAY_ARMOUR_COST_UPDATE_EVENT,
 		type OverlayArmourCostState
 	} from '$lib/windows/overlayArmourCost';
+	import { createWindowSizeSync } from '$lib/windows/windowSize';
 
-	const SIZE_SLACK = 4;
 	const FALLBACK_WIDTH = 320;
 	const FALLBACK_HEIGHT = 64;
 	const MIN_MEASURED_SIZE = 2;
@@ -22,6 +22,9 @@
 
 	let panelState = $state<OverlayArmourCostState | null>(null);
 	let shellEl: HTMLDivElement | null = $state(null);
+	// This window sizes and centres itself below; the shared sync only cuts
+	// its input to the panel's rounded shape.
+	const regionSync = createWindowSizeSync(() => shellEl, { resize: false });
 	let lastWidth: number | null = null;
 	let lastHeight: number | null = null;
 	let firstShowDone = false;
@@ -75,8 +78,8 @@
 			return;
 		}
 
-		const width = Math.max(1, Math.ceil(rect.width + SIZE_SLACK));
-		const height = Math.max(1, Math.ceil(rect.height + SIZE_SLACK));
+		const width = Math.max(1, Math.ceil(rect.width));
+		const height = Math.max(1, Math.ceil(rect.height));
 		const sizeChanged = width !== lastWidth || height !== lastHeight;
 		if (sizeChanged) {
 			lastWidth = width;
@@ -123,7 +126,11 @@
 		});
 		observer.observe(shellEl);
 		void syncSizeAndPosition();
-		return () => observer.disconnect();
+		const disconnectRegion = regionSync.connect();
+		return () => {
+			observer.disconnect();
+			disconnectRegion();
+		};
 	});
 
 	$effect(() => {
@@ -184,7 +191,9 @@
 
 {#if panelState}
 	<!-- The recording stays open while the player returns to the game to place items in a terminal. -->
-	<div class="armour-cost-shell" bind:this={shellEl}>
+	<!-- The shell is the measured surface: the panel inside slides in
+		 with a transform, which must not move the cut input region. -->
+	<div class="armour-cost-shell" bind:this={shellEl} data-overlay-surface>
 		<div
 			class="armour-cost-panel"
 			class:armour-cost-panel-visible={panelVisible}
@@ -200,6 +209,7 @@
 <style>
 	.armour-cost-shell {
 		display: inline-flex;
+		border-radius: 8px;
 	}
 
 	.armour-cost-panel {
@@ -210,9 +220,6 @@
 		border: 1px solid rgba(255, 255, 255, 0.12);
 		background: rgba(11, 15, 25, 0.96);
 		backdrop-filter: blur(16px) saturate(150%);
-		box-shadow:
-			0 14px 30px rgba(0, 0, 0, 0.48),
-			0 0 0 1px rgba(255, 255, 255, 0.03);
 		opacity: 0;
 		pointer-events: none;
 		transform: translateY(-6px);

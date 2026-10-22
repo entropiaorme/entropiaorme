@@ -148,13 +148,7 @@
 
 	$effect(() => {
 		if (!overlayRoot) return;
-		windowSizeSync.schedule();
-		const observer = new ResizeObserver(() => windowSizeSync.schedule());
-		observer.observe(overlayRoot);
-		return () => {
-			windowSizeSync.cancel();
-			observer.disconnect();
-		};
+		return windowSizeSync.connect();
 	});
 
 	let statusInFlight = false;
@@ -264,9 +258,9 @@
 
 <!-- Kept: mousedown is the frameless overlay window's drag handle (pointer-only by nature); the controls inside are native buttons. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="p-2 flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
+<div class="flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
 	<!-- Glass panel -->
-	<div class="overlay-strip glass-panel flex flex-col gap-3 rounded-xl px-4 py-3 w-72">
+	<div class="overlay-strip glass-panel flex flex-col gap-3 rounded-xl px-4 py-3 w-72" data-overlay-surface>
 			<!-- Header: title + close -->
 			<div class="flex items-center gap-3">
 				<span class="text-[10px] font-bold tracking-wider uppercase text-white/40 shrink-0">Skill scan</span>

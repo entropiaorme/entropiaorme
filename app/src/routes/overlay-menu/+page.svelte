@@ -15,11 +15,21 @@
 		type OverlayMenuSelection,
 		type OverlayMenuState
 	} from '$lib/windows/overlayMenu';
+	import { createWindowSizeSync } from '$lib/windows/windowSize';
 
 	const currentWindow = getCurrentWebviewWindow();
 
 	let menuState = $state<OverlayMenuState | null>(null);
+	let menuShell: HTMLDivElement | null = $state(null);
 	let suppressBlurCloseUntil = 0;
+
+	// The host sizes and places this window; the window itself cuts its
+	// input to the panel, so the rounded corners pass clicks through.
+	const regionSync = createWindowSizeSync(() => menuShell, { resize: false });
+	$effect(() => {
+		if (!menuShell) return;
+		return regionSync.connect();
+	});
 
 	const popupHeight = $derived(menuState ? computeMenuHeight(menuRowCount(menuState)) : 1);
 	const popupWidth = $derived(menuState?.width ?? 1);
@@ -105,6 +115,7 @@
 {#if menuState}
 	<div
 		class="overlay-menu-shell"
+		bind:this={menuShell}
 		role={menuState.kind === 'questHandIn' ? 'dialog' : 'menu'}
 		tabindex="-1"
 		style:width={`${popupWidth}px`}

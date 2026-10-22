@@ -128,7 +128,7 @@
 </script>
 
 <!-- Glassmorphic container -->
-<div class="overlay-strip glass-panel flex items-center gap-3 rounded-xl px-4 py-2 w-max">
+<div class="overlay-strip glass-panel flex items-center gap-3 rounded-xl px-4 py-2 w-max" data-overlay-surface>
 	<!-- Track Button + Timer -->
 	<div class="flex items-center gap-3 shrink-0 border-r border-white/10 pr-3">
 		<button

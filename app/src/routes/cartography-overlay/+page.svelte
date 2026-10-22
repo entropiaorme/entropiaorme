@@ -31,13 +31,10 @@
 
 	onMount(() => {
 		const stopOverlay = overlay.start();
-		sizeSync.schedule();
-		const observer = new ResizeObserver(() => sizeSync.schedule());
-		observer.observe(root);
+		const disconnectSizeSync = sizeSync.connect();
 		return () => {
 			stopOverlay();
-			observer.disconnect();
-			sizeSync.cancel();
+			disconnectSizeSync();
 			if (feedbackTimer) clearTimeout(feedbackTimer);
 		};
 	});
@@ -101,8 +98,8 @@
 <!-- The window surface is a drag handle except where an interactive control owns the pointer. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 
-<div bind:this={root} class="overlay-frame flex w-max items-start p-2" onpointerdown={startDraggingFromSurface}>
-	<div class="glass-panel overlay-strip flex w-max items-center gap-3 rounded-xl px-4 py-2">
+<div bind:this={root} class="overlay-frame flex w-max items-start" onpointerdown={startDraggingFromSurface}>
+	<div class="glass-panel overlay-strip flex w-max items-center gap-3 rounded-xl px-4 py-2" data-overlay-surface>
 		<div
 			class="flex min-w-0 max-w-48 shrink-0 flex-col justify-center border-r border-white/10 pr-3"
 			title={`${cartographyOverlay.context.planet ?? 'No planet'} · ${overlay.selectedMapName}`}

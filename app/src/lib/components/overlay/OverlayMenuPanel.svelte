@@ -67,7 +67,7 @@
 	}
 </script>
 
-<div class="menu-panel">
+<div class="menu-panel" data-overlay-surface>
 	{#if menuState.kind === 'activities'}
 		{#if menuState.options.length === 0 && !menuState.adHocSegments}
 			<div class="menu-empty">Nothing to declare</div>
@@ -241,9 +241,6 @@
 		border: 1px solid rgba(255, 255, 255, 0.12);
 		background: rgba(11, 15, 25, 0.96);
 		backdrop-filter: blur(16px) saturate(150%);
-		box-shadow:
-			0 14px 30px rgba(0, 0, 0, 0.48),
-			0 0 0 1px rgba(255, 255, 255, 0.03);
 	}
 
 	.menu-option {

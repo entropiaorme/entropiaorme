@@ -28,15 +28,7 @@
 
 	// The window is sized to whatever the panel measures, so the result line
 	// appearing does not leave it clipped.
-	onMount(() => {
-		windowSizeSync.schedule();
-		const observer = new ResizeObserver(() => windowSizeSync.schedule());
-		if (overlayRoot) observer.observe(overlayRoot);
-		return () => {
-			observer.disconnect();
-			windowSizeSync.cancel();
-		};
-	});
+	onMount(() => windowSizeSync.connect());
 
 	let busy = $state(false);
 	let message = $state('');
@@ -85,7 +77,8 @@
 
 <div
 	bind:this={overlayRoot}
-	class="bg-surface-raised/95 text-text-primary flex w-[240px] flex-col gap-2 rounded-md p-3 shadow-lg backdrop-blur"
+	class="bg-surface-raised/95 text-text-primary border-border-bright flex w-[240px] flex-col gap-2 rounded-md border p-3 backdrop-blur"
+	data-overlay-surface
 >
 	<div class="flex items-center gap-2">
 		<div data-tauri-drag-region class="text-text-tertiary flex-1 cursor-move text-xs">

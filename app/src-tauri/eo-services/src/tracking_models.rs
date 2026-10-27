@@ -206,6 +206,11 @@ pub struct ActiveSessionView {
     /// Shots recorded without a price because no single carried weapon
     /// explains them: the session's cost leaves them out.
     pub unpriced_shots: i64,
+    /// Whether a weapon is declared: pressed on the hotbar, or held from
+    /// a press before the session started. Without one, a hit several
+    /// carried weapons explain goes unpriced, and the weapon shown is only
+    /// what the damage last pointed to.
+    pub weapon_declared: bool,
     pub healing: HealingRuntimeView,
     /// Raw rows (event_type, mob_or_item, value_ped, timestamp): the
     /// presentation mapping lives in the HTTP layer.

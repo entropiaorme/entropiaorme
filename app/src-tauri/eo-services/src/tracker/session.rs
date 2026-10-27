@@ -10,7 +10,7 @@ use super::intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec,
     IntervalState, ACTIVITY_KINDS,
 };
-use crate::bus_events::{BusEvent, SessionLifecyclePayload};
+use crate::bus_events::{BusEvent, HotbarItemKind, SessionLifecyclePayload};
 use crate::db::DbError;
 use crate::expected_hunting::{
     evaluate as evaluate_expected_hunting, HuntingLooterLevels, LooterSource,
@@ -211,6 +211,7 @@ pub(super) struct SessionAggregate {
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
     pub(super) weapon_mismatch: Option<WeaponMismatch>,
     pub(super) unpriced_shots: i64,
+    pub(super) weapon_declared: bool,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
 }
@@ -469,6 +470,7 @@ impl TrackerActor {
             guardrail_mismatch: active.guardrail_mismatch.clone(),
             weapon_mismatch: active.weapons.attribution.mismatch().cloned(),
             unpriced_shots: active.weapons.attribution.counts().unresolved,
+            weapon_declared: active.weapons.attribution.declared().is_some(),
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
                 tool_name,
@@ -853,6 +855,17 @@ impl TrackerActor {
         // The carried weapons were prepared under the reload speed in
         // effect; shots and heals are stamped with it.
         active.reload_speed_percent = self.reload_speed_at(start_ts);
+        // The hand outlives the session: a weapon pressed before this start
+        // is still the one in hand unless the player switched while the
+        // hotbar was unobserved, and the overlay keeps showing it. Declare
+        // it from the start, as its press would have, so a hit several
+        // carried bands explain prices to it rather than to nothing, and
+        // damage that contradicts it raises the weapon cue.
+        if let Some((weapon, HotbarItemKind::Weapon)) = &self.held_item {
+            active.weapons.attribution.declare(weapon, start_ts);
+            Self::current_cost_for_tool(&self.providers, &mut active.weapons, weapon, Ped::ZERO);
+            tracing::info!(target: "eo::tracker", "weapon declared at session start from the held weapon");
+        }
 
         // Seed the declared mob from the configured declaration, when
         // one is set (the same seeding the declare command performs).
@@ -1222,6 +1235,7 @@ impl HuntTracker {
                 }
             }),
             unpriced_shots: aggregated.unpriced_shots,
+            weapon_declared: aggregated.weapon_declared,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,
             healing: aggregated.healing,

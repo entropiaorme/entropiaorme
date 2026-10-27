@@ -57,7 +57,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 50] = [
+const SNAPSHOT_FIELDS: [&str; 51] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -106,6 +106,7 @@ const SNAPSHOT_FIELDS: [&str; 50] = [
     "harvestGuardrail",
     "weaponGuardrail",
     "unpricedShots",
+    "weaponDeclared",
     "healing",
     "warnings",
 ];
@@ -732,6 +733,12 @@ pub struct TrackingSnapshot {
     /// carried weapon explains them: the cost leaves them out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpriced_shots: Option<i64>,
+    /// Whether the active session has a weapon declared (pressed on the
+    /// hotbar, or held from a press before the session). Without one,
+    /// `current_tool` is only what the damage last pointed to, and hits
+    /// several carried weapons explain go unpriced. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_declared: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing: Option<HealingStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1761,6 +1768,7 @@ pub(crate) async fn build_snapshot_value(
                 "harvestLoot": active.harvest_loot,
                 "harvestCost": active.harvest_cost,
                 "unpricedShots": active.unpriced_shots,
+                "weaponDeclared": active.weapon_declared,
                 "healing": {
                     "toolName": active.healing.tool_name.clone(),
                     "state": active.healing.state.clone(),

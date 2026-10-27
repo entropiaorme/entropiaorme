@@ -114,6 +114,17 @@
 				: null
 	);
 	const equipmentIcon = $derived(data.currentToolKind === 'healing' ? 'healing' : 'weapon');
+	// Shots are landing with no weapon declared while a press would be seen:
+	// the weapon shown is only what the damage last pointed to, and a hit
+	// several carried weapons explain goes unpriced until a slot press
+	// declares one. Quiet until something is fired, so a session that has
+	// not engaged yet is not nagged.
+	const weaponUndeclared = $derived(
+		data.weaponDeclared === false &&
+			data.hotbarListenerActive === true &&
+			data.currentToolKind !== 'harvesting' &&
+			(Boolean(data.currentTool) || (data.unpricedShots ?? 0) > 0),
+	);
 	const enabledPills = $derived(
 		scopedStats(overlayStats.current, overlayScope, { fallback: false }),
 	);
@@ -432,10 +443,24 @@
 			</div>
 		{:else}
 			<div class="flex flex-col min-w-0">
-				<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
+				<div
+					class="text-xs {data.currentTool ? (weaponUndeclared ? 'text-white/45' : 'text-white/70') : 'text-white/20'} truncate max-w-[120px]"
+					title={weaponUndeclared && data.currentTool ? `Inferred from damage, not declared` : undefined}
+				>
 					{data.currentTool || NO_DATA}
 				</div>
-				{#if activityLabel}
+				{#if weaponUndeclared}
+					<!-- The undeclared cue takes the activity line: until a press
+						 declares the weapon, what is shown above is a guess and
+						 overlapping hits cost nothing. -->
+					<div
+						class="text-[9px] leading-tight uppercase tracking-wider text-amber-300/90 whitespace-nowrap"
+						title="No weapon declared: hits that fit several carried weapons go unpriced until you press your weapon's hotbar slot"
+						data-testid="weapon-undeclared-cue"
+					>
+						Press weapon slot
+					</div>
+				{:else if activityLabel}
 					<!-- Derived, never declared: the held tool implies which
 						 activity the next action records as. What actually gets
 						 recorded still follows the loot evidence, so this reads

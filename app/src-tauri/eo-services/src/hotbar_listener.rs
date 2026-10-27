@@ -59,10 +59,13 @@ struct Gate {
     session_active: AtomicBool,
     active_session_id: Mutex<Option<String>>,
     source_running: AtomicBool,
-    // One-shot per start episode: whether the "first keystroke delivered"
+    // One-shot per start episode: whether the "first slot press admitted"
     // breadcrumb has been logged. Lets the rolling logfile show whether the
-    // OS hook actually delivered after attaching.
+    // OS hook actually delivered a press the tracker will see.
     first_delivery_logged: AtomicBool,
+    // One-shot per start episode: whether a slot press dropped for want of
+    // game focus has been logged at info. Later drops stay at debug.
+    focus_drop_logged: AtomicBool,
 }
 
 pub struct HotbarListener {
@@ -92,6 +95,7 @@ impl HotbarListener {
             active_session_id: Mutex::new(None),
             source_running: AtomicBool::new(false),
             first_delivery_logged: AtomicBool::new(false),
+            focus_drop_logged: AtomicBool::new(false),
         });
         let key_tap: Arc<Mutex<Option<KeyTap>>> = Arc::new(Mutex::new(None));
 
@@ -244,6 +248,7 @@ impl HotbarListener {
         self.gate
             .first_delivery_logged
             .store(false, Ordering::SeqCst);
+        self.gate.focus_drop_logged.store(false, Ordering::SeqCst);
         tracing::info!(target: "eo::input", attached, "hotbar keystroke source start requested");
     }
 
@@ -264,14 +269,6 @@ impl HotbarListener {
         {
             return;
         }
-        // One-shot per start: confirm the hook is actually delivering
-        // keystrokes. Non-content: no key value.
-        if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
-            tracing::info!(
-                target: "eo::input",
-                "hotbar listener received its first keystroke since start"
-            );
-        }
         if event.kind != KeystrokeKind::Press {
             return;
         }
@@ -283,12 +280,30 @@ impl HotbarListener {
         // cannot tell keeps admitting every press, as before the probe.
         if let Some(focus) = &self.focus {
             if focus() == GameFocus::Unfocused {
-                tracing::debug!(
-                    target: "eo::input",
-                    "hotbar press ignored: the game window does not hold focus"
-                );
+                // A dropped press silently changes which weapon is
+                // declared, so the first one per start is worth a line in
+                // the default log.
+                if !self.gate.focus_drop_logged.swap(true, Ordering::SeqCst) {
+                    tracing::info!(
+                        target: "eo::input",
+                        "hotbar press ignored: the game window does not hold focus"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "eo::input",
+                        "hotbar press ignored: the game window does not hold focus"
+                    );
+                }
                 return;
             }
+        }
+        // One-shot per start: confirm the hook is delivering slot presses
+        // the tracker will see. Non-content: no key value.
+        if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
+            tracing::info!(
+                target: "eo::input",
+                "hotbar listener admitted its first slot press since start"
+            );
         }
         let tap = self.key_tap.lock().expect("key tap").clone();
         if let Some(tap) = tap {
@@ -515,6 +530,10 @@ mod tests {
                 .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
                     session_id: "s1".into(),
                 }));
+            // A key that is no hotbar slot, and a slot release, prove
+            // nothing about slot presses: neither may claim the breadcrumb.
+            rig.source.inject("w", now(), KeystrokeKind::Press);
+            rig.source.inject("1", now(), KeystrokeKind::Release);
             rig.source.inject("1", now(), KeystrokeKind::Press);
             wait_for_intents(&rig, 1);
             rig.listener.stop();
@@ -530,11 +549,13 @@ mod tests {
                 .any(|(_, e)| e.message.contains("start requested") && e.attached == Some(true)),
             "the attach breadcrumb fires with attached=true: {input:?}"
         );
-        assert!(
+        assert_eq!(
             input
                 .iter()
-                .any(|(_, e)| e.message.contains("first keystroke since start")),
-            "the first-keystroke breadcrumb fires: {input:?}"
+                .filter(|(_, e)| e.message.contains("first slot press since start"))
+                .count(),
+            1,
+            "the first-press breadcrumb fires once, for the slot press: {input:?}"
         );
     }
 

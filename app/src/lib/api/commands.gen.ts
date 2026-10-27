@@ -3722,6 +3722,8 @@ export interface TrackingSnapshot {
 	weaponGuardrail?: WeaponGuardrailAlert | null;
 	/** Shots this session recorded without a price because no single carried weapon explains them: the cost leaves them out. */
 	unpricedShots?: number | null;
+	/** Whether the active session has a weapon declared (pressed on the hotbar, or held from a press before the session). Without one, `current_tool` is only what the damage last pointed to, and hits several carried weapons explain go unpriced. Absent while idle. */
+	weaponDeclared?: boolean | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 }

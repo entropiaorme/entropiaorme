@@ -413,6 +413,9 @@ impl TrackerActor {
             active.harvest_press_floor = active.session.harvests.len();
             let declared_changed = active.weapons.attribution.declared() != Some(tool_name);
             active.weapons.attribution.declare(tool_name, pressed_at);
+            if declared_changed {
+                tracing::info!(target: "eo::tracker", "weapon declared by a hotbar press");
+            }
             // Resolve the weapon's cost state now, so an enhancer break
             // before its first shot applies to it.
             Self::current_cost_for_tool(providers, &mut active.weapons, tool_name, Ped::ZERO);

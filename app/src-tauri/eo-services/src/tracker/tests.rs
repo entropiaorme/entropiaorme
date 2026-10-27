@@ -2559,6 +2559,10 @@ fn carried_weapons_attribute_shots_without_the_hotbar_and_heals_stay_uncosted() 
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
     assert_eq!(active.unpriced_shots, 3);
     assert!(active.weapon_guardrail_mismatch.is_none());
+    assert!(
+        !active.weapon_declared,
+        "the weapon shown is inferred from damage, never declared"
+    );
     let readout = rig.wait(tracker.snapshot()).unwrap();
     assert_eq!(readout.current_tool.as_deref(), Some("Cannon"));
 
@@ -2573,6 +2577,100 @@ fn carried_weapons_attribute_shots_without_the_hotbar_and_heals_stay_uncosted() 
         assert_eq!(active.heal_cost, Ped::ZERO);
         assert_eq!(active.healing.activation_count, 0);
     });
+}
+
+/// The hand outlives the session: a weapon pressed in one session is still
+/// the one in hand when the next starts with no press, so the next session
+/// declares it from its start. A hit both carried bands explain prices to
+/// it instead of going unpriced while the overlay names it.
+#[test]
+fn a_weapon_held_across_sessions_is_declared_from_the_next_start() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            carried: vec![
+                carried(1, "Pistol", 10.0, 0.05),
+                carried(2, "Cannon", 40.0, 0.2),
+            ],
+            ..Default::default()
+        }),
+        ..Providers::default()
+    });
+    let pistol = carried_cost(10.0, 0.05);
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+            tool_name: "Pistol".into(),
+            source: None,
+        }));
+    rig.bus.publish(&hit(7.0));
+    rig.wait(tracker.stop_session()).unwrap();
+
+    rig.wait(tracker.start_session()).unwrap();
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert!(active.weapon_declared, "declared before any hit lands");
+    // A critical 25 fits the pistol's critical reach and the cannon's
+    // regular band: the declared pistol explains it.
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::CriticalHit {
+            amount: 25.0,
+            timestamp: "2026-01-01T00:00:02".into(),
+        }));
+    rig.probe(&tracker, move |actor| {
+        let active = actor.session.active().unwrap();
+        assert_eq!(active.weapons.attribution.declared(), Some("Pistol"));
+        let stats: Vec<(String, i64, f64)> = active
+            .accumulator
+            .tool_stats
+            .iter()
+            .map(|(key, stats)| (key.clone(), stats.shots_fired, stats.cost_per_shot.value()))
+            .collect();
+        assert_eq!(stats, vec![("Pistol".to_string(), 1, pistol)]);
+    });
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(active.unpriced_shots, 0);
+}
+
+/// A healing tool pressed last leaves no weapon in hand, so the next
+/// session declares none: a hit several bands explain stays unpriced.
+#[test]
+fn a_healer_held_across_sessions_declares_no_weapon() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            carried: vec![
+                carried(1, "Pistol", 10.0, 0.05),
+                carried(2, "Cannon", 40.0, 0.2),
+            ],
+            ..Default::default()
+        }),
+        ..Providers::default()
+    });
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+            tool_name: "Pistol".into(),
+            source: None,
+        }));
+    rig.bus.publish(&BusEvent::ActiveHealToolChanged(
+        ActiveHealToolChangedPayload {
+            tool_name: "Healer".into(),
+            cost_per_use_ped: 0.02,
+            reload_seconds: 2.5,
+            source: None,
+        },
+    ));
+    rig.wait(tracker.stop_session()).unwrap();
+
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::CriticalHit {
+            amount: 25.0,
+            timestamp: "2026-01-01T00:00:02".into(),
+        }));
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert!(!active.weapon_declared);
+    assert_eq!(active.unpriced_shots, 1);
 }
 
 /// A session opens its interval context before anything can be recorded

@@ -684,6 +684,7 @@
 			net: snap.net,
 			returnRate: snap.returnRate,
 			hotbarKeysEnabled: snap.hotbarKeysEnabled,
+			hotbarListenerActive: snap.hotbarListenerActive,
 			repairOcrEnabled: snap.repairOcrEnabled,
 			sessionName: snap.sessionName,
 			sessionDefinitionId: snap.sessionDefinitionId,
@@ -697,6 +698,7 @@
 			harvestGuardrail: snap.harvestGuardrail,
 			weaponGuardrail: snap.weaponGuardrail,
 			unpricedShots: snap.unpricedShots,
+			weaponDeclared: snap.weaponDeclared,
 			warnings: snap.warnings,
 		};
 		const startedMs = snap.started_at ? new Date(snap.started_at).getTime() : NaN;

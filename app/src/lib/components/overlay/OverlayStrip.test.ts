@@ -252,6 +252,56 @@ describe('derived activity feedback', () => {
 	});
 });
 
+describe('the undeclared weapon cue', () => {
+	const undeclared = {
+		status: 'active' as const,
+		currentTool: 'Sollomate Opalo',
+		currentToolKind: 'weapon' as const,
+		currentActivity: 'hunting' as const,
+		weaponDeclared: false,
+		hotbarListenerActive: true,
+	};
+
+	it('asks for a slot press while the shown weapon is only inferred', () => {
+		render(OverlayStrip, { props: { data: liveData(undeclared) } });
+		expect(screen.getByTestId('weapon-undeclared-cue').textContent?.trim()).toBe(
+			'Press weapon slot',
+		);
+		expect(screen.getByText('Sollomate Opalo').getAttribute('title')).toBe(
+			'Inferred from damage, not declared',
+		);
+		expect(screen.queryByTestId('activity-feedback')).toBeNull();
+	});
+
+	it('asks once unpriced shots land with no weapon to show', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ ...undeclared, currentTool: null, unpricedShots: 4 }) },
+		});
+		expect(screen.getByTestId('weapon-undeclared-cue')).toBeTruthy();
+	});
+
+	it('stays quiet before anything is fired', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ ...undeclared, currentTool: null, unpricedShots: 0 }) },
+		});
+		expect(screen.queryByTestId('weapon-undeclared-cue')).toBeNull();
+	});
+
+	it('stays quiet once a weapon is declared', () => {
+		render(OverlayStrip, { props: { data: liveData({ ...undeclared, weaponDeclared: true }) } });
+		expect(screen.queryByTestId('weapon-undeclared-cue')).toBeNull();
+		expect(screen.getByText('Sollomate Opalo').getAttribute('title')).toBeNull();
+		expect(screen.getByTestId('activity-feedback').textContent?.trim()).toBe('Hunting');
+	});
+
+	it('stays quiet when no press could be seen', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ ...undeclared, hotbarListenerActive: false }) },
+		});
+		expect(screen.queryByTestId('weapon-undeclared-cue')).toBeNull();
+	});
+});
+
 describe('the equipment slot glyph', () => {
 	const glyph = () => screen.getByTestId('equipment-icon').dataset.icon;
 

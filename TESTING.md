@@ -273,7 +273,7 @@ Benchmarks run on demand rather than in CI: shared runners produce noisy timings
 
 Two policy files make the audit and licence gates deliberate rather than advisory:
 
-- `.cargo/audit.toml`: the RustSec ignore list, every entry a transitive crate inside the Tauri toolchain with a per-advisory rationale comment. `-D warnings` makes the list load-bearing: an advisory not explicitly ignored there fails CI.
+- `.cargo/audit.toml`: the RustSec ignore list, every entry a transitive crate (inside the Tauri toolchain or under the Linux capture portal client) with a per-advisory rationale comment. `-D warnings` makes the list load-bearing: an advisory not explicitly ignored there fails CI.
 - `deny.toml`: the supply-chain policy: an explicit licence allowlist (a new dependency carrying any other licence fails until the list is deliberately edited), crates-io-only sources, wildcard-version denial, and the advisory ignores.
 
 Review both files together on every Tauri bump; the Tauri version itself is pinned to a named minor in the workspace manifest. The shell tests live in `entropia-orme/src/lib.rs` under `#[cfg(test)]` and cover its pure logic; each backend member carries its own `#[cfg(test)]` suite alongside the replay corpus above.

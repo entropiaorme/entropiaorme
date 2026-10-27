@@ -29,7 +29,8 @@ version = 2
 yanked = "deny"
 # The shipped-graph subset of .cargo/audit.toml (single source of full
 # rationale). All are `unmaintained` / `unsound` warnings on transitive
-# Tauri-toolchain crates. Review both files together on every Tauri bump.
+# crates (the Tauri toolchain, and the zbus family under the Linux capture
+# portal client). Review both files together on every Tauri bump.
 ignore = [
     "RUSTSEC-2024-0370", # proc-macro-error (build-time macro crate)
     "RUSTSEC-2025-0075", # unic-char-range (build-time Unicode data)
@@ -38,6 +39,9 @@ ignore = [
     "RUSTSEC-2025-0098", # unic-ucd-version
     "RUSTSEC-2025-0100", # unic-ucd-ident
     "RUSTSEC-2025-0057", # fxhash (no trust-bearing usage)
+    "RUSTSEC-2026-0370", # zvariant (Linux portal D-Bus, via ashpd)
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
 ]
 
 [licenses]
@@ -71,6 +75,13 @@ wildcards = "deny"
 # from the wildcard ban so it still bites a real registry crate pinned to "*"
 # while the normal workspace shape is allowed.
 allow-wildcard-paths = true
+# zip: the updater plugin's archive extraction (Windows `.msi.zip` payloads)
+# carries unpatched extraction advisories, and the update payload here is a
+# raw signed MSI, so the plugin's `zip` feature is off. The ban keeps it off:
+# re-enabling the feature, or any other crate pulling zip in, fails this check.
+deny = [
+    { crate = "zip", reason = "update payloads are raw signed MSIs; archive extraction is not needed" },
+]
 
 [sources]
 unknown-registry = "deny"

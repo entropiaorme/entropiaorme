@@ -40,7 +40,11 @@ tauri = { version = "~2.11", features = ["tray-icon"] }
 tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
-tauri-plugin-updater = "2"
+# Default features off to drop `zip`: the update payload is a raw signed MSI
+# (`createUpdaterArtifacts: true`, the non-archived updater format), so the
+# plugin's archive extraction is never needed. deny.toml bans `zip` to keep
+# it that way.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps JSON object members in insertion order end to end,

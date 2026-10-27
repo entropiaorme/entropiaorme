@@ -6,8 +6,8 @@ use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 
 use super::{
-    CorrectionWeapon, EffectCandidate, ReviewShot, ReviewShotPage, ShotCandidate, ShotGroup,
-    WeaponCorrectionKind, WeaponReviewError,
+    BulkAssignOption, CorrectionWeapon, EffectCandidate, ReviewShot, ReviewShotPage, ShotCandidate,
+    ShotGroup, UnpricedExposure, WeaponCorrectionKind, WeaponReviewError, UNDECLARED_WARNING_SHOTS,
 };
 use crate::attack_rate::WeaponPricing;
 use crate::cost_engine::cost_per_shot_from_props;
@@ -224,30 +224,177 @@ pub(super) fn correction_weapons(
     Ok(weapons)
 }
 
-/// The subset of `session_ids` holding at least one unpriced shot.
-pub(super) fn sessions_with_unpriced_shots(
+/// Shots of one session left without a price that share everything pricing
+/// them needs: the carried weapons they remember, and the reload speed they
+/// were charged under.
+pub(super) struct UnpricedGroup {
+    pub(super) session_id: String,
+    pub(super) candidates: Vec<ShotCandidate>,
+    pub(super) reload_speed_percent: Option<f64>,
+    pub(super) shots: i64,
+}
+
+/// The uncorrected unresolved shots of `session_ids`, grouped. A play
+/// session's thousands of such shots fall into a handful of groups, since
+/// the carried set and the reload speed rarely change within one.
+pub(super) fn unpriced_groups(
     conn: &rusqlite::Connection,
     session_ids: &[String],
-) -> Result<std::collections::BTreeSet<String>, DbError> {
-    let mut unpriced = std::collections::BTreeSet::new();
-    // Bounded batches keep the statement under SQLite's parameter limit
-    // whatever page size a caller asks about.
+) -> Result<Vec<UnpricedGroup>, WeaponReviewError> {
+    let mut groups = Vec::new();
+    // Bounded batches keep the statement under SQLite's parameter limit.
     for chunk in session_ids.chunks(500) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
-            "SELECT DISTINCT session_id FROM weapon_shot_evidence \
+            "SELECT session_id, candidates_json, reload_speed_percent, COUNT(*) \
+             FROM weapon_shot_evidence \
              WHERE attribution = 'unresolved' AND tool_name IS NULL \
-               AND correction_id IS NULL AND session_id IN ({placeholders})"
+               AND correction_id IS NULL AND session_id IN ({placeholders}) \
+             GROUP BY session_id, candidates_json, reload_speed_percent"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
-            row.get::<_, String>(0)
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
         })?;
         for row in rows {
-            unpriced.insert(row?);
+            let (session_id, candidates, reload_speed_percent, shots) = row?;
+            groups.push(UnpricedGroup {
+                session_id,
+                candidates: parse_candidates(&candidates)?,
+                reload_speed_percent,
+                shots,
+            });
         }
     }
-    Ok(unpriced)
+    Ok(groups)
+}
+
+/// A weapon at one reload speed (its bits, so it can key a map).
+type PriceKey = (i64, Option<u64>);
+
+/// Weapon prices as an assignment would book them now, each looked up once.
+pub(super) struct PriceBook<'a> {
+    conn: &'a rusqlite::Connection,
+    pricing: Pricing<'a>,
+    prices: std::collections::HashMap<PriceKey, Option<(String, f64)>>,
+}
+
+impl<'a> PriceBook<'a> {
+    pub(super) fn new(conn: &'a rusqlite::Connection, pricing: Pricing<'a>) -> Self {
+        Self {
+            conn,
+            pricing,
+            prices: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The weapon's name and per-shot price at this reload speed; None when
+    /// it has left Equipment.
+    pub(super) fn price(
+        &mut self,
+        equipment_id: i64,
+        reload_speed_percent: Option<f64>,
+    ) -> Result<Option<(String, f64)>, WeaponReviewError> {
+        let key = (equipment_id, reload_speed_percent.map(f64::to_bits));
+        if let Some(known) = self.prices.get(&key) {
+            return Ok(known.clone());
+        }
+        let price = weapon_price(self.conn, equipment_id, self.pricing, reload_speed_percent)?;
+        self.prices.insert(key, price.clone());
+        Ok(price)
+    }
+}
+
+/// What each requested session's unpriced shots could cost at most, for the
+/// sessions holding any, in no particular order.
+pub(super) fn unpriced_exposure(
+    conn: &rusqlite::Connection,
+    session_ids: &[String],
+    pricing: Pricing<'_>,
+) -> Result<Vec<UnpricedExposure>, WeaponReviewError> {
+    let mut book = PriceBook::new(conn, pricing);
+    let mut exposures: std::collections::BTreeMap<String, UnpricedExposure> =
+        std::collections::BTreeMap::new();
+    for group in unpriced_groups(conn, session_ids)? {
+        // The dearest weapon that fitted: the most the shot can have cost.
+        let mut dearest: Option<f64> = None;
+        for candidate in group.candidates.iter().filter(|candidate| candidate.fits) {
+            if let Some((_, price)) =
+                book.price(candidate.equipment_id, group.reload_speed_percent)?
+            {
+                dearest = Some(dearest.map_or(price, |known| known.max(price)));
+            }
+        }
+        let exposure = exposures
+            .entry(group.session_id.clone())
+            .or_insert_with(|| UnpricedExposure {
+                session_id: group.session_id.clone(),
+                shots: 0,
+                no_fit_shots: 0,
+                cost_bound_ped: 0.0,
+            });
+        exposure.shots += group.shots;
+        match dearest {
+            Some(price) => exposure.cost_bound_ped += price * group.shots as f64,
+            None => exposure.no_fit_shots += group.shots,
+        }
+    }
+    Ok(exposures.into_values().collect())
+}
+
+/// The weapons a session's unpriced shots could all be assigned to at once:
+/// each still in Equipment that fitted at least one of them, with how many
+/// it fitted, how many it would leave, and the cost assigning it would add.
+pub(super) fn bulk_assign_options(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    pricing: Pricing<'_>,
+) -> Result<Vec<BulkAssignOption>, WeaponReviewError> {
+    let mut book = PriceBook::new(conn, pricing);
+    let groups = unpriced_groups(conn, &[session_id.to_string()])?;
+    let total: i64 = groups.iter().map(|group| group.shots).sum();
+    let mut options: std::collections::BTreeMap<i64, BulkAssignOption> =
+        std::collections::BTreeMap::new();
+    for group in &groups {
+        for candidate in group.candidates.iter().filter(|candidate| candidate.fits) {
+            let Some((name, price)) =
+                book.price(candidate.equipment_id, group.reload_speed_percent)?
+            else {
+                continue;
+            };
+            let option =
+                options
+                    .entry(candidate.equipment_id)
+                    .or_insert_with(|| BulkAssignOption {
+                        equipment_id: candidate.equipment_id,
+                        name,
+                        fitting_shots: 0,
+                        skipped_shots: 0,
+                        added_cost_ped: 0.0,
+                    });
+            option.fitting_shots += group.shots;
+            option.added_cost_ped += price * group.shots as f64;
+        }
+    }
+    let mut options: Vec<BulkAssignOption> = options
+        .into_values()
+        .map(|option| BulkAssignOption {
+            skipped_shots: total - option.fitting_shots,
+            ..option
+        })
+        .collect();
+    // The weapon that explains the most shots first.
+    options.sort_by(|a, b| {
+        b.fitting_shots
+            .cmp(&a.fitting_shots)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(options)
 }
 
 /// The session detail's weapon attribution block: the tallies the session
@@ -298,6 +445,35 @@ pub fn session_detail_block(
     )?;
     let [evidence, unresolved, unpriced, assigned, marked_ticks, effect_ticks, priced_ticks] =
         counts;
+    // Unresolved shots that landed with no weapon declared: the session ran
+    // undeclared once they pass the live warning's threshold. Counted
+    // however they were corrected since, so the record outlives the repair.
+    let undeclared: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM weapon_shot_evidence \
+         WHERE session_id = ?1 AND attribution = 'unresolved' AND hotbar_tool IS NULL",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    let batches: Vec<Value> = {
+        // Live bulk assignments, oldest first.
+        let mut stmt = conn.prepare(
+            "SELECT batch_id, MAX(tool_name), COUNT(*), COALESCE(SUM(cost_per_shot), 0), \
+                    MIN(corrected_at) \
+             FROM weapon_attribution_corrections \
+             WHERE session_id = ?1 AND batch_id IS NOT NULL AND undone_at IS NULL \
+             GROUP BY batch_id ORDER BY MIN(corrected_at), batch_id",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "toolName": row.get::<_, String>(1)?,
+                "shots": row.get::<_, i64>(2)?,
+                "costPed": row.get::<_, f64>(3)?,
+                "correctedAt": row.get::<_, f64>(4)?,
+            }))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
     let reviews: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT id, decision, hotbar_tool, evidence_tool, mismatch_since, decided_at, \
@@ -331,6 +507,9 @@ pub fn session_detail_block(
         "effectTicks": effect_ticks,
         "pricedTicks": priced_ticks,
         "unclaimedTicks": unclaimed_ticks(conn, session_id)?,
+        "undeclaredShots": undeclared,
+        "ranUndeclared": undeclared >= UNDECLARED_WARNING_SHOTS,
+        "batches": batches,
         "effects": session_effects(conn, session_id)?,
         "reviews": reviews,
     }))

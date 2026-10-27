@@ -3,9 +3,14 @@ import type { WeaponAttributionSummary, WeaponShot } from '$lib/api/weapons';
 import { formatClock } from '$lib/features/healing/healingReview';
 import {
 	attributionTally,
+	describeBatch,
+	describeBulkAssign,
+	describeBulkDone,
 	describeEffect,
+	describeNoFit,
 	describeReview,
 	describeShot,
+	describeUnpriced,
 	effectTickLine,
 	formatDamage,
 	hasWeaponEvidence,
@@ -27,6 +32,11 @@ function summary(overrides: Partial<WeaponAttributionSummary> = {}): WeaponAttri
 		effectTicks: 0,
 		pricedTicks: 0,
 		unclaimedTicks: 0,
+		undeclaredShots: 0,
+		ranUndeclared: false,
+		batches: [],
+		unpricedCostBound: 0,
+		unpricedNoFitShots: 0,
 		effects: [],
 		reviews: [],
 		...overrides,
@@ -257,5 +267,31 @@ describe('a decision and an offered weapon', () => {
 				v.toFixed(2),
 			),
 		).toBe('Cannon, fits · 0.20 PED');
+	});
+});
+
+describe('unpriced exposure copy', () => {
+	it('states the unpriced shots as a bound, or alone without one', () => {
+		expect(describeUnpriced(3, 0.6)).toBe('3 shots unpriced, up to +0.60 PED');
+		expect(describeUnpriced(1, 0)).toBe('1 shot unpriced');
+		expect(describeUnpriced(2)).toBe('2 shots unpriced');
+		expect(describeNoFit(2)).toBe('2 fit no carried weapon');
+	});
+
+	it('states a bulk assignment before and after', () => {
+		const option = {
+			equipmentId: 2,
+			name: 'Cannon',
+			fittingShots: 1,
+			skippedShots: 0,
+			addedCostPed: 0.2,
+		};
+		expect(describeBulkAssign(option)).toBe('Assign 1 shot to Cannon: +0.20 PED.');
+		expect(describeBulkDone({ assigned: 1, skipped: 0 }, 'Cannon')).toBe(
+			'Assigned 1 shot to Cannon.',
+		);
+		expect(
+			describeBatch({ id: 'b', toolName: 'Rifle', shots: 24, costPed: 1.2, correctedAt: 0 }),
+		).toBe('24 shots assigned to Rifle');
 	});
 });

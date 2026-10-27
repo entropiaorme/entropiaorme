@@ -412,10 +412,15 @@ describe('the weapon guardrail cue', () => {
 
 	it('marks a cost pill incomplete while shots are unpriced', () => {
 		overlayStats.current = [{ id: 'cycled' as StatId, enabled: true }];
-		const status = activeStatus({ cost: 10, returns: 12.5, unpricedShots: 2 });
+		const status = activeStatus({
+			cost: 10,
+			returns: 12.5,
+			unpricedShots: 2,
+			unpricedCostBound: 0.4,
+		});
 		render(OverlayStrip, { props: { data: liveData({ status: 'active' }), status } });
 		const value = screen.getByText('10.00');
-		expect(value.title).toBe('Leaves out 2 shots that could not be priced');
+		expect(value.title).toBe('2 shots unpriced, up to +0.40 PED');
 		expect(value.textContent).toContain('*');
 	});
 });

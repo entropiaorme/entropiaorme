@@ -1,0 +1,33 @@
+name: weapon_undeclared_fresh_launch
+flavour: scripted
+description: >
+  A session started on a fresh launch with no weapon ever pressed. A hit
+  only the pistol's band explains names it on the readout, inferred and
+  not declared. The critical hits both carried weapons could have dealt
+  then go unpriced, each bounded at the dearer cannon; the twenty-fifth
+  raises the warning that the session runs undeclared, once. A hit past
+  every reach is unpriced too, but adds nothing to the bound.
+surfaces:
+  - tracking-weapon-attribution-unresolved
+  - tracking-weapon-attribution-undeclared-warning
+  - tracking-weapon-attribution-unpriced-bound
+  - tracking-kill-creation
+events: 28
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. carried.json names two carried weapons whose bands
+  overlap on a critical (pistol 5-10, critical reach to 30; cannon 20-40).
+  steps.jsonl never presses a weapon and reads the readout before, at, and
+  past the warning's threshold.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

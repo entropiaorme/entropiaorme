@@ -78,7 +78,8 @@ use crate::tracking::{
     StartResult, StopResult, TrackingSnapshot,
 };
 use crate::weapons::{
-    WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
+    WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
+    WeaponShotGroup, WeaponShotPage, WeaponUnpricedExposure,
 };
 use crate::ApiError;
 use crate::Nullable;
@@ -386,12 +387,42 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(WeaponShotPage))),
         },
         CommandSpec {
-            name: "weapon_unpriced_sessions",
+            name: "weapon_unpriced_exposure",
             args: vec![ArgSpec {
                 name: "session_ids",
                 schema: schema(schema_for!(Vec<String>)),
             }],
-            returns: Some(schema(schema_for!(Vec<String>))),
+            returns: Some(schema(schema_for!(Vec<WeaponUnpricedExposure>))),
+        },
+        CommandSpec {
+            name: "weapon_bulk_options",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<WeaponBulkOption>))),
+        },
+        CommandSpec {
+            name: "weapon_assign_fitting",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(WeaponBulkAssignment))),
+        },
+        CommandSpec {
+            name: "weapon_batch_undo",
+            args: vec![ArgSpec {
+                name: "batch_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
         },
         CommandSpec {
             name: "weapon_correction_weapons",

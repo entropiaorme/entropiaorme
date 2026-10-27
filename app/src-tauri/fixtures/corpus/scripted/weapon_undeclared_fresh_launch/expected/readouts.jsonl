@@ -1,0 +1,4 @@
+{"currentTool":"Pistol","weaponDeclared":false,"unpricedShots":0,"unpricedCostBound":0.0,"unpricedNoFitShots":0,"warnings":[]}
+{"currentTool":"Pistol","weaponDeclared":false,"unpricedShots":24,"unpricedCostBound":4.8,"unpricedNoFitShots":0,"warnings":[]}
+{"currentTool":"Pistol","weaponDeclared":false,"unpricedShots":25,"unpricedCostBound":5.0,"unpricedNoFitShots":0,"warnings":["No weapon declared: 25 shots are unpriced so far. Assign them after the session."]}
+{"currentTool":"Pistol","weaponDeclared":false,"unpricedShots":26,"unpricedCostBound":5.0,"unpricedNoFitShots":1,"warnings":["No weapon declared: 25 shots are unpriced so far. Assign them after the session."]}

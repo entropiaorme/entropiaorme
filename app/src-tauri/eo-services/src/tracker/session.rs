@@ -85,6 +85,16 @@ pub(super) struct ActiveSession {
     pub(super) harvest_warning_emitted: bool,
     pub(super) protection_evidence_warning_emitted: bool,
     pub(super) warnings: Vec<String>,
+    /// The unpriced shots' upper bound: each at the dearest carried weapon
+    /// that fitted it. The session's cost leaves them out.
+    pub(super) unpriced_cost_bound: Ped,
+    /// Unpriced shots no carried weapon fitted: they add nothing to the
+    /// bound.
+    pub(super) unpriced_no_fit: i64,
+    /// Unpriced shots that landed with no weapon declared, and whether
+    /// their count has raised the warning yet.
+    pub(super) undeclared_unpriced: i64,
+    pub(super) undeclared_warning_emitted: bool,
     /// The declared mob that kills take their stamp from (None: no
     /// declaration; kills stamp "Unknown" with no stamp source).
     pub(super) declared_mob: Option<DeclaredMob>,
@@ -124,6 +134,10 @@ impl ActiveSession {
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
             warnings: Vec::new(),
+            unpriced_cost_bound: Ped::ZERO,
+            unpriced_no_fit: 0,
+            undeclared_unpriced: 0,
+            undeclared_warning_emitted: false,
             declared_mob: None,
             facets,
             intervals: IntervalState::default(),
@@ -211,6 +225,8 @@ pub(super) struct SessionAggregate {
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
     pub(super) weapon_mismatch: Option<WeaponMismatch>,
     pub(super) unpriced_shots: i64,
+    pub(super) unpriced_cost_bound: Ped,
+    pub(super) unpriced_no_fit: i64,
     pub(super) weapon_declared: bool,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
@@ -470,6 +486,8 @@ impl TrackerActor {
             guardrail_mismatch: active.guardrail_mismatch.clone(),
             weapon_mismatch: active.weapons.attribution.mismatch().cloned(),
             unpriced_shots: active.weapons.attribution.counts().unresolved,
+            unpriced_cost_bound: active.unpriced_cost_bound,
+            unpriced_no_fit: active.unpriced_no_fit,
             weapon_declared: active.weapons.attribution.declared().is_some(),
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
@@ -1235,6 +1253,8 @@ impl HuntTracker {
                 }
             }),
             unpriced_shots: aggregated.unpriced_shots,
+            unpriced_cost_bound: aggregated.unpriced_cost_bound.value(),
+            unpriced_no_fit: aggregated.unpriced_no_fit,
             weapon_declared: aggregated.weapon_declared,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,

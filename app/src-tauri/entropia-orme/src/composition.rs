@@ -1868,6 +1868,10 @@ impl TrackingConfig for LiveTrackingConfig {
     fn passive_effect_sources(&self) -> Vec<eo_services::passive_effects::PassiveEffectSource> {
         self.reader.current().passive_effect_sources.clone()
     }
+
+    fn hotbar_hooks_enabled(&self) -> bool {
+        self.reader.current().hotbar_hooks_enabled
+    }
 }
 
 /// Wire the hunt-tracker seams to their live sources: the equipment

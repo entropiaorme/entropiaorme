@@ -206,6 +206,12 @@ pub struct ActiveSessionView {
     /// Shots recorded without a price because no single carried weapon
     /// explains them: the session's cost leaves them out.
     pub unpriced_shots: i64,
+    /// The most those shots could have cost: each at the dearest carried
+    /// weapon that fitted it.
+    pub unpriced_cost_bound: f64,
+    /// Of those shots, the ones no carried weapon fitted, which add nothing
+    /// to the bound.
+    pub unpriced_no_fit: i64,
     /// Whether a weapon is declared: pressed on the hotbar, or held from
     /// a press before the session started. Without one, a hit several
     /// carried weapons explain goes unpriced, and the weapon shown is only

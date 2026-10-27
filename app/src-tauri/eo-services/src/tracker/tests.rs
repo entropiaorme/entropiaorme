@@ -76,6 +76,7 @@ struct ScriptedConfig {
     skill_boost_percent: Option<i64>,
     manual_mob: Option<ManualMobScript>,
     blacklist: Vec<String>,
+    hotbar_hooks_enabled: bool,
 }
 
 impl TrackingConfig for ScriptedConfig {
@@ -97,6 +98,10 @@ impl TrackingConfig for ScriptedConfig {
 
     fn loot_filter_blacklist(&self) -> Vec<String> {
         self.blacklist.clone()
+    }
+
+    fn hotbar_hooks_enabled(&self) -> bool {
+        self.hotbar_hooks_enabled
     }
 }
 
@@ -2629,6 +2634,99 @@ fn a_weapon_held_across_sessions_is_declared_from_the_next_start() {
     });
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
     assert_eq!(active.unpriced_shots, 0);
+}
+
+/// With nothing declared, every unpriced shot bounds what it could have
+/// cost at the dearest carried weapon that fitted it, a shot no band fits
+/// adds nothing, and once enough land the session warns that it is running
+/// undeclared: once, with the fix the hotbar toggle allows.
+#[test]
+fn undeclared_unpriced_shots_bound_their_cost_and_warn_past_the_threshold() {
+    use crate::weapon_review::UNDECLARED_WARNING_SHOTS;
+    for hooks in [false, true] {
+        let rig = rig();
+        let tracker = rig.tracker(Providers {
+            equipment: Arc::new(ScriptedEquipment {
+                carried: vec![
+                    carried(1, "Pistol", 10.0, 0.05),
+                    carried(2, "Cannon", 40.0, 0.2),
+                ],
+                ..Default::default()
+            }),
+            config: Arc::new(ScriptedConfig {
+                hotbar_hooks_enabled: hooks,
+                ..Default::default()
+            }),
+            ..Providers::default()
+        });
+        let cannon = carried_cost(40.0, 0.2);
+        rig.wait(tracker.start_session()).unwrap();
+        // A critical 25 fits the pistol's critical reach and the cannon's
+        // band: unpriced, bounded at the dearer cannon.
+        let overlap = || {
+            BusEvent::Combat(CombatPayload::CriticalHit {
+                amount: 25.0,
+                timestamp: "2026-01-01T00:00:02".into(),
+            })
+        };
+        for _ in 1..UNDECLARED_WARNING_SHOTS {
+            rig.bus.publish(&overlap());
+        }
+        // 90 fits no band: unpriced, adding nothing to the bound.
+        rig.bus.publish(&hit(90.0));
+        let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+        assert_eq!(active.unpriced_shots, UNDECLARED_WARNING_SHOTS);
+        assert_eq!(active.unpriced_no_fit, 1);
+        let bound = cannon * (UNDECLARED_WARNING_SHOTS - 1) as f64;
+        assert!((active.unpriced_cost_bound - bound).abs() < 1e-9);
+        assert!(!active.weapon_declared);
+        assert_eq!(active.warnings.len(), 1, "warned at the threshold");
+        let fix = if hooks {
+            "Press your weapon's hotbar slot, then assign the rest after the session."
+        } else {
+            "Assign them after the session."
+        };
+        assert_eq!(
+            active.warnings[0],
+            format!(
+                "No weapon declared: {UNDECLARED_WARNING_SHOTS} shots are unpriced so far. {fix}"
+            )
+        );
+        rig.bus.publish(&overlap());
+        let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+        assert_eq!(active.warnings.len(), 1, "the warning is one-shot");
+    }
+}
+
+/// Unpriced shots with a weapon declared (a hit past every reach) still
+/// bound the cost, but say nothing about running undeclared.
+#[test]
+fn declared_unpriced_shots_never_warn_of_running_undeclared() {
+    use crate::weapon_review::UNDECLARED_WARNING_SHOTS;
+    let rig = rig();
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            carried: vec![
+                carried(1, "Pistol", 10.0, 0.05),
+                carried(2, "Cannon", 40.0, 0.2),
+            ],
+            ..Default::default()
+        }),
+        ..Providers::default()
+    });
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+            tool_name: "Pistol".into(),
+            source: None,
+        }));
+    for _ in 0..UNDECLARED_WARNING_SHOTS {
+        rig.bus.publish(&hit(90.0));
+    }
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(active.unpriced_shots, UNDECLARED_WARNING_SHOTS);
+    assert_eq!(active.unpriced_no_fit, UNDECLARED_WARNING_SHOTS);
+    assert!(active.warnings.is_empty());
 }
 
 /// A healing tool pressed last leaves no weapon in hand, so the next

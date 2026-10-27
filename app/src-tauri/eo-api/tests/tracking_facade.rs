@@ -2073,11 +2073,18 @@ async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() 
     .await
     .unwrap();
 
+    // The one unpriced shot fits no carried weapon: counted, adding nothing
+    // to the bound.
     assert_eq!(
-        api.weapon_unpriced_sessions(vec!["none".into(), "shot".into()])
-            .await
-            .unwrap(),
-        vec!["shot".to_string()]
+        serde_json::to_value(
+            api.weapon_unpriced_exposure(vec!["none".into(), "shot".into()])
+                .await
+                .unwrap()
+        )
+        .unwrap(),
+        serde_json::json!([{
+            "sessionId": "shot", "shots": 1, "noFitShots": 1, "costBoundPed": 0.0
+        }])
     );
     let page = api
         .weapon_shots("shot".into(), WeaponShotGroup::Unresolved, 0, 10)

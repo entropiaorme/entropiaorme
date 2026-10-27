@@ -13,6 +13,11 @@
 //! Every function returns the refusal as the inner error, so the caller
 //! commits only a correction that was actually made; a database failure is
 //! the outer error and rolls everything back.
+//!
+//! The `*_shot` forms book one shot and leave the session's derived figures
+//! (summary, days, settled cells) for the caller to [`repair`]: a batch
+//! corrects many shots and repairs once, which lands on the same figures as
+//! repairing after each, since every repair recomputes from the shots.
 
 use rusqlite::OptionalExtension;
 
@@ -214,7 +219,7 @@ fn adjust_totals(
 }
 
 /// Recompute everything derived from the session's cost and shots.
-fn repair(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<(), DbError> {
+pub(super) fn repair(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<(), DbError> {
     crate::session_summary::write_session_summary(tx, session_id)?;
     crate::daily_rollup::refresh_session_days(tx, session_id)?;
     crate::session_rollup::recompute_session(tx, session_id)?;
@@ -222,8 +227,8 @@ fn repair(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<(), DbErro
 }
 
 /// Book a shot's move between shot and no-shot, or between phases: take it
-/// out of `from` (a phase, or None: it counted no shot), put it into `to`
-/// likewise, and repair. False when the shot is missing from its phase.
+/// out of `from` (a phase, or None: it counted no shot) and put it into `to`
+/// likewise. False when the shot is missing from its phase.
 fn book(
     tx: &rusqlite::Transaction<'_>,
     shot: &StoredShot,
@@ -252,7 +257,6 @@ fn book(
         shots_delta,
         shot.critical,
     )?;
-    repair(tx, &shot.session_id)?;
     Ok(true)
 }
 
@@ -278,12 +282,13 @@ fn uncorrected_refusal(
 fn insert_correction(
     tx: &rusqlite::Transaction<'_>,
     correction: &WeaponCorrection,
+    batch_id: Option<&str>,
 ) -> Result<(), DbError> {
     tx.execute(
         "INSERT INTO weapon_attribution_corrections \
          (id, session_id, evidence_id, equipment_id, tool_name, cost_per_shot, corrected_at, \
-          kind, effect_window_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+          kind, effect_window_id, batch_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             correction.id,
             correction.session_id,
@@ -294,9 +299,22 @@ fn insert_correction(
             correction.corrected_at,
             correction.kind.as_str(),
             correction.effect_window_id,
+            batch_id,
         ],
     )?;
     Ok(())
+}
+
+/// Repair the session a committed correction moved, passing the outcome on.
+fn repaired<T>(
+    tx: &rusqlite::Transaction<'_>,
+    outcome: Result<T, WeaponReviewError>,
+    session_id: impl Fn(&T) -> &str,
+) -> Outcome<T> {
+    if let Ok(done) = &outcome {
+        repair(tx, session_id(done))?;
+    }
+    Ok(outcome)
 }
 
 pub(super) fn assign(
@@ -305,6 +323,20 @@ pub(super) fn assign(
     equipment_id: i64,
     now: f64,
     pricing: Pricing<'_>,
+) -> Outcome<WeaponCorrection> {
+    let outcome = assign_shot(tx, evidence_id, equipment_id, now, pricing, None)?;
+    repaired(tx, outcome, |correction| &correction.session_id)
+}
+
+/// Price one shot from a weapon, as one of `batch_id`'s when given, without
+/// repairing its session.
+pub(super) fn assign_shot(
+    tx: &rusqlite::Transaction<'_>,
+    evidence_id: &str,
+    equipment_id: i64,
+    now: f64,
+    pricing: Pricing<'_>,
+    batch_id: Option<&str>,
 ) -> Outcome<WeaponCorrection> {
     let Some(shot) = stored_shot(tx, evidence_id)? else {
         return Ok(Err(WeaponReviewError::NotFound("Shot not found")));
@@ -362,7 +394,7 @@ pub(super) fn assign(
         effect_window_id: None,
         corrected_at: now,
     };
-    insert_correction(tx, &correction)?;
+    insert_correction(tx, &correction, batch_id)?;
     tx.execute(
         "UPDATE weapon_shot_evidence SET tool_name = ?1, cost_per_shot = ?2, correction_id = ?3 \
          WHERE id = ?4",
@@ -377,6 +409,16 @@ pub(super) fn assign(
 }
 
 pub(super) fn mark_effect_tick(
+    tx: &rusqlite::Transaction<'_>,
+    evidence_id: &str,
+    window_id: &str,
+    now: f64,
+) -> Outcome<WeaponCorrection> {
+    let outcome = mark_effect_tick_shot(tx, evidence_id, window_id, now)?;
+    repaired(tx, outcome, |correction| &correction.session_id)
+}
+
+fn mark_effect_tick_shot(
     tx: &rusqlite::Transaction<'_>,
     evidence_id: &str,
     window_id: &str,
@@ -437,7 +479,7 @@ pub(super) fn mark_effect_tick(
         effect_window_id: Some(window_id.to_string()),
         corrected_at: now,
     };
-    insert_correction(tx, &correction)?;
+    insert_correction(tx, &correction, None)?;
     tx.execute(
         "UPDATE weapon_shot_evidence SET correction_id = ?1 WHERE id = ?2",
         rusqlite::params![correction.id, evidence_id],
@@ -446,6 +488,17 @@ pub(super) fn mark_effect_tick(
 }
 
 pub(super) fn undo(
+    tx: &rusqlite::Transaction<'_>,
+    correction_id: &str,
+    now: f64,
+) -> Outcome<String> {
+    let outcome = undo_shot(tx, correction_id, now)?;
+    repaired(tx, outcome, String::as_str)
+}
+
+/// Undo one live correction without repairing its session. Answers with
+/// the session's id.
+pub(super) fn undo_shot(
     tx: &rusqlite::Transaction<'_>,
     correction_id: &str,
     now: f64,
@@ -517,4 +570,85 @@ pub(super) fn undo(
         rusqlite::params![now, correction_id],
     )?;
     Ok(Ok(session_id))
+}
+
+/// The session's unpriced shots (unresolved, without a price or a
+/// correction) the weapon's band fitted, oldest first, and how many others
+/// it would leave. Refuses a missing or running session, and a weapon no
+/// longer in Equipment.
+pub(super) fn fitting_shots(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    equipment_id: i64,
+    pricing: Pricing<'_>,
+) -> Outcome<(Vec<String>, i64)> {
+    if let Some(refusal) = session_refusal(tx, session_id)? {
+        return Ok(Err(refusal));
+    }
+    match weapon_price(tx, equipment_id, pricing, None) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return Ok(Err(WeaponReviewError::NotFound(
+                "That weapon is no longer in Equipment",
+            )));
+        }
+        Err(WeaponReviewError::Db(error)) => return Err(error),
+        Err(refusal) => return Ok(Err(refusal)),
+    }
+    let mut stmt = tx.prepare(
+        "SELECT id, candidates_json FROM weapon_shot_evidence \
+         WHERE session_id = ?1 AND attribution = 'unresolved' AND tool_name IS NULL \
+           AND correction_id IS NULL \
+         ORDER BY observed_at, id",
+    )?;
+    let rows = stmt.query_map([session_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut fitting = Vec::new();
+    let mut unfit = 0;
+    for row in rows {
+        let (id, candidates) = row?;
+        let candidates = match parse_candidates(&candidates) {
+            Ok(candidates) => candidates,
+            Err(refusal) => return Ok(Err(refusal)),
+        };
+        if candidates
+            .iter()
+            .any(|candidate| candidate.equipment_id == equipment_id && candidate.fits)
+        {
+            fitting.push(id);
+        } else {
+            unfit += 1;
+        }
+    }
+    Ok(Ok((fitting, unfit)))
+}
+
+/// A batch's session and its corrections still live, oldest first. Refuses
+/// a batch that never existed, and one whose session is running.
+pub(super) fn live_batch(
+    tx: &rusqlite::Transaction<'_>,
+    batch_id: &str,
+) -> Outcome<(String, Vec<String>)> {
+    let session_id: Option<String> = tx
+        .query_row(
+            "SELECT session_id FROM weapon_attribution_corrections WHERE batch_id = ?1 LIMIT 1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(session_id) = session_id else {
+        return Ok(Err(WeaponReviewError::NotFound("Batch not found")));
+    };
+    if let Some(refusal) = session_refusal(tx, &session_id)? {
+        return Ok(Err(refusal));
+    }
+    let mut stmt = tx.prepare(
+        "SELECT id FROM weapon_attribution_corrections \
+         WHERE batch_id = ?1 AND undone_at IS NULL ORDER BY corrected_at, id",
+    )?;
+    let live = stmt
+        .query_map([batch_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Ok((session_id, live)))
 }

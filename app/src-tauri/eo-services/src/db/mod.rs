@@ -1841,11 +1841,11 @@ mod tests {
         // + consumable doses' table and 3 indexes + session weapon rollups'
         // 3 tables and 2 indexes + curated quests' 2 catalogue-key indexes
         // + the codex meta calibration table + session stats exclusion's
-        // derived-ledger source index
+        // derived-ledger source index + weapon correction batches' index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 226);
+        assert_eq!(master.len(), 227);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

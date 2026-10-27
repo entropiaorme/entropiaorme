@@ -34,13 +34,14 @@ import {
 	deleteSession,
 	getSessionDetail,
 	getTrackingSessions,
-	getUnpricedShotSessions,
+	getUnpricedExposure,
 	getUnrecordedArmourSessions,
 	HEALING_TOPIC,
 	PROTECTION_TOPIC,
 	reassignSession,
 	setSessionExclusion,
 	WEAPONS_TOPIC,
+	type WeaponUnpricedExposure,
 } from '$lib/api';
 import type { SessionDetail, SessionExclusion, TrackingSession } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
@@ -82,8 +83,9 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 	let excludingId = $state<string | null>(null);
 	// Loaded sessions whose armour cost no recording covers yet.
 	let armourPending = $state<ReadonlySet<string>>(new Set());
-	// Loaded sessions holding shots recorded without a price.
-	let unpricedShots = $state<ReadonlySet<string>>(new Set());
+	// Loaded sessions holding shots recorded without a price, with the most
+	// those shots could have cost.
+	let unpricedShots = $state<ReadonlyMap<string, WeaponUnpricedExposure>>(new Map());
 
 	// Pure pager over the loaded window: no search, category, or sort, so
 	// the paged rows keep the backend's ordering unchanged.
@@ -99,16 +101,18 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		const ids = sessions.map((session) => session.id);
 		if (ids.length === 0) {
 			armourPending = new Set();
-			unpricedShots = new Set();
+			unpricedShots = new Map();
 			return;
 		}
 		const [armour, unpriced] = await Promise.allSettled([
 			(async () => getUnrecordedArmourSessions(ids))(),
-			(async () => getUnpricedShotSessions(ids))(),
+			(async () => getUnpricedExposure(ids))(),
 		]);
 		// A failed read waits for the next write to re-read.
 		if (armour.status === 'fulfilled') armourPending = new Set(armour.value);
-		if (unpriced.status === 'fulfilled') unpricedShots = new Set(unpriced.value);
+		if (unpriced.status === 'fulfilled') {
+			unpricedShots = new Map(unpriced.value.map((exposure) => [exposure.sessionId, exposure]));
+		}
 	}
 
 	/** After an armour recording, a healing correction, or a weapon
@@ -361,9 +365,10 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		armourPending(id: string): boolean {
 			return armourPending.has(id);
 		},
-		/** The session holds shots recorded without a price, so its net leaves them out. */
-		unpriced(id: string): boolean {
-			return unpricedShots.has(id);
+		/** The session's shots recorded without a price, which its net leaves
+		 * out, and the most they could have cost; null when it has none. */
+		unpriced(id: string): WeaponUnpricedExposure | null {
+			return unpricedShots.get(id) ?? null;
 		},
 
 		loadSessions,

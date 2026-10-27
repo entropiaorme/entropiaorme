@@ -123,6 +123,12 @@ pub trait TrackingConfig: Send + Sync {
     fn passive_effect_sources(&self) -> Vec<PassiveEffectSource> {
         Vec::new()
     }
+
+    /// Whether hotbar presses are observed (the listener's capability
+    /// toggle): only then can a press declare the weapon in hand.
+    fn hotbar_hooks_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks

@@ -7,7 +7,11 @@
 //!   now including the tracker's own session lifecycle and domain
 //!   events alongside the watcher's stream;
 //! - the catalogue database snapshot (`expected/db_state.json`),
-//!   produced by the tracker's real persistence writes.
+//!   produced by the tracker's real persistence writes;
+//! - for a script that asks for them, the live readouts it took
+//!   (`expected/readouts.jsonl`): what the running session's snapshot said
+//!   of its weapon attribution at that point, which the database does not
+//!   hold.
 //!
 //! The goldens pin the pipeline's end-to-end behaviour: a deliberate
 //! change regenerates them (`UPDATE_CORPUS_GOLDENS=1`) and the diff is
@@ -25,7 +29,9 @@
 //! chat log alone cannot drive: it interleaves the log's tick groups with
 //! clock steps, resolved hotbar presses (stamped at the clock's current
 //! instant, as the listener stamps the OS key occurrence), segment
-//! declarations, and process restarts. A restart is a crash: the old
+//! declarations, readouts, a new session in the same process (whatever the
+//! process remembers, such as the weapon in hand, carries into it), and
+//! process restarts. A restart is a crash: the old
 //! process's bus and tail go quiet, and a fresh bus, tail, and tracker
 //! open the same database, whose construction recovers the orphaned
 //! session before the next one starts. Every producer publish completes
@@ -179,6 +185,11 @@ enum Step {
     Segment(Option<String>),
     /// The process dies; a new one starts over the same database.
     Restart,
+    /// The session stops and the next starts in the same process.
+    NewSession,
+    /// Record what the running session's snapshot says of its weapon
+    /// attribution.
+    Readout,
     /// The player's call on the standing weapon mismatch.
     Decide(ScriptedDecision),
 }
@@ -427,6 +438,7 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     // scripted scenario interleaves its steps between tick groups.
     let content = std::fs::read_to_string(scenario.join("chat_replay.log")).expect("chat replay");
     let groups = tick_groups(&content);
+    let mut readouts: Vec<String> = Vec::new();
     match load_steps(&scenario) {
         None => stream(&chatlog, &mut process, &groups),
         Some(steps) => {
@@ -480,6 +492,35 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
                         );
                         segment = None;
                     }
+                    Step::NewSession => {
+                        clock.advance(plan.step_seconds).expect("plan step");
+                        runtime
+                            .block_on(process.tracker.stop_session())
+                            .expect("session stop");
+                        runtime
+                            .block_on(process.tracker.start_session())
+                            .expect("session start");
+                        segment = None;
+                    }
+                    Step::Readout => {
+                        let readout = runtime
+                            .block_on(process.tracker.snapshot())
+                            .expect("readout");
+                        let active = readout.active.expect("a readout needs a running session");
+                        readouts.push(
+                            serde_json::json!({
+                                "currentTool": readout.current_tool,
+                                "weaponDeclared": active.weapon_declared,
+                                "unpricedShots": active.unpriced_shots,
+                                // Summed shot by shot: pinned to the PEC
+                                // fraction, not the float residue.
+                                "unpricedCostBound": (active.unpriced_cost_bound * 1e9).round() / 1e9,
+                                "unpricedNoFitShots": active.unpriced_no_fit,
+                                "warnings": active.warnings,
+                            })
+                            .to_string(),
+                        );
+                    }
                     Step::Decide(decision) => {
                         let decision = match decision {
                             ScriptedDecision::Confirm => MismatchDecision::Confirm,
@@ -524,6 +565,13 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
         .expect("fingerprint golden writes");
         std::fs::write(scenario.join("expected/db_state.json"), &actual_snapshot)
             .expect("db_state golden writes");
+        if !readouts.is_empty() {
+            std::fs::write(
+                scenario.join("expected/readouts.jsonl"),
+                readouts.join("\n") + "\n",
+            )
+            .expect("readouts golden writes");
+        }
         return;
     }
 
@@ -544,6 +592,33 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
         "{name}: the native database snapshot diverged from its golden\n{}",
         first_divergence(&expected_snapshot, &actual_snapshot)
     );
+
+    let readouts_golden = scenario.join("expected/readouts.jsonl");
+    if readouts.is_empty() {
+        assert!(
+            !readouts_golden.exists(),
+            "{name}: a readouts golden with no readout step to produce it"
+        );
+    } else {
+        let actual_readouts = readouts.join("\n") + "\n";
+        let expected_readouts = std::fs::read_to_string(&readouts_golden).expect("readouts golden");
+        assert_eq!(
+            actual_readouts,
+            expected_readouts,
+            "{name}: the live readouts diverged from their golden\n{}",
+            first_divergence(&expected_readouts, &actual_readouts)
+        );
+    }
+}
+
+#[test]
+fn weapon_held_across_sessions_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_held_across_sessions", "");
+}
+
+#[test]
+fn weapon_undeclared_fresh_launch_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_undeclared_fresh_launch", "");
 }
 
 #[test]

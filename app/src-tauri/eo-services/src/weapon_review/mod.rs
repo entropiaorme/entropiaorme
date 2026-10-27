@@ -28,6 +28,13 @@
 //! it was undone. A shot carries at most one live correction. Every
 //! committed change announces itself through `changed`, so open surfaces
 //! re-read what they show.
+//!
+//! A session's unpriced shots can also be assigned all at once to one
+//! weapon: every one that weapon fitted, through the same per-shot
+//! correction, each keeping its own undoable row, tied together as a batch
+//! that can be undone as a whole. Until they are assigned, unpriced shots
+//! cost nothing in the session's cost, and the exposure read bounds what
+//! they could have cost: each at the dearest weapon that fitted it.
 
 mod correct;
 mod read;
@@ -166,6 +173,57 @@ pub struct CorrectionWeapon {
     pub fits: bool,
 }
 
+/// What a session's unpriced shots could have cost at most. The session's
+/// cost leaves them out; this bounds the gap without guessing a price.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnpricedExposure {
+    pub session_id: String,
+    /// Shots still without a price or correction.
+    pub shots: i64,
+    /// Of those, the ones no carried weapon can price: none fitted them (a
+    /// countered shot fits none), or the ones that did have left Equipment.
+    pub no_fit_shots: i64,
+    /// Each other shot priced at the dearest weapon that fitted it, as an
+    /// assignment would price it now.
+    pub cost_bound_ped: f64,
+}
+
+/// One weapon a session's unpriced shots could all be assigned to at once.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BulkAssignOption {
+    pub equipment_id: i64,
+    pub name: String,
+    /// The unpriced shots its damage band fitted: the ones it would price.
+    pub fitting_shots: i64,
+    /// The session's other unpriced shots, which it would leave.
+    pub skipped_shots: i64,
+    /// What pricing the fitting shots would add to the weapon cost, priced
+    /// as the weapon is configured now.
+    pub added_cost_ped: f64,
+}
+
+/// What a bulk assignment did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BulkAssignment {
+    pub session_id: String,
+    /// The batch its corrections share; None when it priced nothing.
+    pub batch_id: Option<String>,
+    pub assigned: i64,
+    /// Unpriced shots it left: the weapon did not fit them, or one was
+    /// corrected meanwhile.
+    pub skipped: i64,
+    pub added_cost_ped: f64,
+}
+
+/// What undoing a batch did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchUndo {
+    pub session_id: String,
+    /// Its corrections still live, now undone; any undone singly before
+    /// are left as they are.
+    pub undone: i64,
+}
+
 /// A committed correction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeaponCorrection {
@@ -209,6 +267,17 @@ pub type ChangedSink = Arc<dyn Fn() + Send + Sync>;
 
 /// The most shots one review page returns.
 pub const MAX_PAGE: i64 = 200;
+
+/// Unresolved shots landing with no weapon declared before a session counts
+/// as having run undeclared: past what a few stray hits before the first
+/// press can reach, well short of a stretch of play. The live warning and
+/// the review's record share it.
+pub const UNDECLARED_WARNING_SHOTS: i64 = 25;
+
+/// Shots one bulk transaction corrects. Each transaction commits whole
+/// shots or none, and the writer is free between them, so a bulk change of
+/// thousands of shots never holds play's writes back for long.
+const BULK_CHUNK: usize = 250;
 
 pub struct WeaponReviewService {
     db: Db,
@@ -343,22 +412,188 @@ impl WeaponReviewService {
             .await?
     }
 
-    /// Which of these sessions still hold an unpriced shot, in the caller's
-    /// order: their cost leaves those shots out.
-    pub async fn unpriced_sessions(
+    /// The sessions among these still holding an unpriced shot, in the
+    /// caller's order, each with the most those shots could have cost.
+    pub async fn unpriced_exposure(
         &self,
         session_ids: Vec<String>,
-    ) -> Result<Vec<String>, WeaponReviewError> {
+    ) -> Result<Vec<UnpricedExposure>, WeaponReviewError> {
+        let pricing = self.pricing.clone();
         self.db
             .with_reader(move |conn| {
-                let unpriced = read::sessions_with_unpriced_shots(conn, &session_ids)?;
-                Ok(session_ids
-                    .into_iter()
-                    .filter(|id| unpriced.contains(id))
-                    .collect())
+                let mut exposures = read::unpriced_exposure(conn, &session_ids, pricing.as_ref());
+                if let Ok(exposures) = &mut exposures {
+                    let order: std::collections::HashMap<&str, usize> = session_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| (id.as_str(), index))
+                        .collect();
+                    exposures.sort_by_key(|exposure| order.get(exposure.session_id.as_str()));
+                }
+                Ok(exposures)
             })
-            .await
-            .map_err(WeaponReviewError::from)
+            .await?
+    }
+
+    /// The weapons a session's unpriced shots could all be assigned to at
+    /// once, the one fitting the most first.
+    pub async fn bulk_assign_options(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<BulkAssignOption>, WeaponReviewError> {
+        let session_id = session_id.to_string();
+        let pricing = self.pricing.clone();
+        self.db
+            .with_reader(move |conn| {
+                Ok(read::bulk_assign_options(
+                    conn,
+                    &session_id,
+                    pricing.as_ref(),
+                ))
+            })
+            .await?
+    }
+
+    /// Assign every unpriced shot of an ended session that the weapon's band
+    /// fitted to the weapon, each through the single-shot correction, as one
+    /// batch. Shots it did not fit are left and counted as skipped; running
+    /// it again assigns nothing new.
+    ///
+    /// The shots are corrected a chunk per transaction: a failure part-way
+    /// leaves every shot either fully corrected (an earlier chunk, undoable
+    /// with the rest of the batch) or untouched.
+    pub async fn assign_fitting(
+        &self,
+        session_id: &str,
+        equipment_id: i64,
+    ) -> Result<BulkAssignment, WeaponReviewError> {
+        let now = self.now();
+        let owned_session = session_id.to_string();
+        let pricing = self.pricing.clone();
+        let (fitting, unfit) = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                correct::fitting_shots(&tx, &owned_session, equipment_id, pricing.as_ref())
+            })
+            .await??;
+        let mut done = BulkAssignment {
+            session_id: session_id.to_string(),
+            batch_id: None,
+            assigned: 0,
+            skipped: unfit,
+            added_cost_ped: 0.0,
+        };
+        if fitting.is_empty() {
+            return Ok(done);
+        }
+        let batch_id = uuid::Uuid::new_v4().to_string();
+        done.batch_id = Some(batch_id.clone());
+        for chunk in fitting.chunks(BULK_CHUNK) {
+            let chunk = chunk.to_vec();
+            let session_id = session_id.to_string();
+            let batch_id = batch_id.clone();
+            let pricing = self.pricing.clone();
+            let committed = self
+                .db
+                .with_writer(move |conn| {
+                    let tx = conn.transaction()?;
+                    let mut assigned = 0;
+                    let mut refused = 0;
+                    let mut added = 0.0;
+                    for evidence_id in &chunk {
+                        match correct::assign_shot(
+                            &tx,
+                            evidence_id,
+                            equipment_id,
+                            now,
+                            pricing.as_ref(),
+                            Some(&batch_id),
+                        )? {
+                            Ok(correction) => {
+                                assigned += 1;
+                                added += correction.cost_per_shot;
+                            }
+                            // Corrected since it was listed, or no longer
+                            // where its kill counts it: left as it stands.
+                            Err(_) => refused += 1,
+                        }
+                    }
+                    correct::repair(&tx, &session_id)?;
+                    tx.commit()?;
+                    Ok((assigned, refused, added))
+                })
+                .await;
+            let (assigned, refused, added) = match committed {
+                Ok(counts) => counts,
+                Err(error) => {
+                    if done.assigned > 0 {
+                        self.notify_changed();
+                    }
+                    return Err(error.into());
+                }
+            };
+            done.assigned += assigned;
+            done.skipped += refused;
+            done.added_cost_ped += added;
+        }
+        if done.assigned == 0 {
+            done.batch_id = None;
+        } else {
+            self.notify_changed();
+        }
+        Ok(done)
+    }
+
+    /// Undo every correction of a batch still live, a chunk per
+    /// transaction. Corrections already undone one by one stay as they are,
+    /// so undoing a batch twice changes nothing the second time.
+    pub async fn undo_batch(&self, batch_id: &str) -> Result<BatchUndo, WeaponReviewError> {
+        let now = self.now();
+        let owned_batch = batch_id.to_string();
+        let (session_id, live) = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                correct::live_batch(&tx, &owned_batch)
+            })
+            .await??;
+        let mut done = BatchUndo {
+            session_id: session_id.clone(),
+            undone: 0,
+        };
+        for chunk in live.chunks(BULK_CHUNK) {
+            let chunk = chunk.to_vec();
+            let session_id = session_id.clone();
+            let committed = self
+                .db
+                .with_writer(move |conn| {
+                    let tx = conn.transaction()?;
+                    let mut undone = 0;
+                    for correction_id in &chunk {
+                        if correct::undo_shot(&tx, correction_id, now)?.is_ok() {
+                            undone += 1;
+                        }
+                    }
+                    correct::repair(&tx, &session_id)?;
+                    tx.commit()?;
+                    Ok(undone)
+                })
+                .await;
+            match committed {
+                Ok(undone) => done.undone += undone,
+                Err(error) => {
+                    if done.undone > 0 {
+                        self.notify_changed();
+                    }
+                    return Err(error.into());
+                }
+            }
+        }
+        if done.undone > 0 {
+            self.notify_changed();
+        }
+        Ok(done)
     }
 
     /// The weapons an unpriced shot could be assigned to: the ones carried

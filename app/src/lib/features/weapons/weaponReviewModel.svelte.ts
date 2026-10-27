@@ -4,23 +4,29 @@
  * A correction (pricing a shot from a weapon, or marking a hit as an
  * effect's tick) answers with the session's refreshed detail, which the
  * owner applies; the review list then re-reads so the corrected shot
- * changes in place. Every correction is undoable, so none asks for
- * confirmation.
+ * changes in place. Every correction is undoable, so a single one asks for
+ * no confirmation; assigning a session's unpriced shots all at once states
+ * what it will do before it does it, since it moves many figures at once.
  */
 
 import {
+	assignFittingWeaponShots,
 	assignWeaponShot,
+	getWeaponBulkOptions,
 	getWeaponCorrectionWeapons,
 	getWeaponShots,
 	markWeaponShotEffectTick,
 	undoWeaponAssignment,
+	undoWeaponBatch,
+	type WeaponBulkAssignment,
+	type WeaponBulkOption,
 	type WeaponCorrectionWeapon,
 	type WeaponShot,
 	type WeaponShotGroup,
 } from '$lib/api';
 import type { SessionDetail } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
-import { reviewGroups } from './weaponReview';
+import { describeBulkDone, reviewGroups } from './weaponReview';
 
 /** Shots fetched per page. */
 export const SHOT_PAGE = 50;
@@ -31,6 +37,15 @@ export type WeaponsState =
 	| { status: 'loading' }
 	| { status: 'ready'; weapons: WeaponCorrectionWeapon[] }
 	| { status: 'error'; message: string };
+
+export type BulkOptionsState =
+	| { status: 'idle' }
+	| { status: 'loading' }
+	| { status: 'ready'; options: WeaponBulkOption[] }
+	| { status: 'error'; message: string };
+
+/** The busy key while a bulk assignment runs. */
+export const BULK_BUSY = 'bulk';
 
 export interface WeaponReviewOptions {
 	/** The session detail currently shown. */
@@ -49,6 +64,11 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 	let loadingShots = $state(false);
 	let shotsError = $state<string | null>(null);
 	let weapons = $state<Record<string, WeaponsState>>({});
+	let bulkOptions = $state<BulkOptionsState>({ status: 'idle' });
+	// The weapon chosen to take every shot it fits, awaiting confirmation.
+	let pendingBulk = $state<WeaponBulkOption | null>(null);
+	// What the last bulk assignment did, until the next correction.
+	let bulkNotice = $state<string | null>(null);
 	// Guards against a slow page landing after the group moved on.
 	let generation = 0;
 
@@ -93,9 +113,11 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 		if (busy !== null) return;
 		busy = id;
 		error = null;
+		bulkNotice = null;
 		try {
 			options.apply(await run());
 			weapons = {};
+			bulkOptions = { status: 'idle' };
 			await reloadShots();
 		} catch (e) {
 			error = describeError(e, 'The correction could not be saved.');
@@ -141,6 +163,15 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 		weaponsFor(shotId: string): WeaponsState | undefined {
 			return weapons[shotId];
 		},
+		get bulkOptions() {
+			return bulkOptions;
+		},
+		get pendingBulk() {
+			return pendingBulk;
+		},
+		get bulkNotice() {
+			return bulkNotice;
+		},
 		dismissError() {
 			error = null;
 		},
@@ -155,6 +186,47 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 		},
 		undo(correctionId: string) {
 			return act(correctionId, () => undoWeaponAssignment(correctionId));
+		},
+
+		/** Fetch the weapons the session's unpriced shots could all go to. */
+		async loadBulkOptions() {
+			if (bulkOptions.status === 'loading' || bulkOptions.status === 'ready') return;
+			bulkOptions = { status: 'loading' };
+			try {
+				const offered = await getWeaponBulkOptions(options.detail().sessionId);
+				bulkOptions = { status: 'ready', options: offered };
+			} catch (e) {
+				bulkOptions = { status: 'error', message: describeError(e, 'Could not load weapons.') };
+			}
+		},
+		/** Choose the weapon to take every shot it fits; nothing moves until confirmed. */
+		chooseBulk(option: WeaponBulkOption) {
+			pendingBulk = option;
+			bulkNotice = null;
+		},
+		cancelBulk() {
+			pendingBulk = null;
+		},
+		/** Assign every unpriced shot the chosen weapon fits to it, as one batch. */
+		async confirmBulk() {
+			const chosen = pendingBulk;
+			if (!chosen) return;
+			const outcome: { done?: WeaponBulkAssignment } = {};
+			await act(BULK_BUSY, async () => {
+				outcome.done = await assignFittingWeaponShots(
+					options.detail().sessionId,
+					chosen.equipmentId,
+				);
+				return outcome.done.detail;
+			});
+			if (outcome.done) {
+				pendingBulk = null;
+				bulkNotice = describeBulkDone(outcome.done, chosen.name);
+			}
+		},
+		/** Undo a bulk assignment's shots still assigned by it. */
+		undoBatch(batchId: string) {
+			return act(batchId, () => undoWeaponBatch(batchId));
 		},
 
 		async toggleReview() {
@@ -194,6 +266,7 @@ export function createWeaponReviewModel(options: WeaponReviewOptions) {
 		/** The detail changed under us (an assignment from elsewhere): follow it. */
 		refresh() {
 			weapons = {};
+			bulkOptions = { status: 'idle' };
 			return reloadShots();
 		},
 	};

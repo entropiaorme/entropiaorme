@@ -3722,6 +3722,10 @@ export interface TrackingSnapshot {
 	weaponGuardrail?: WeaponGuardrailAlert | null;
 	/** Shots this session recorded without a price because no single carried weapon explains them: the cost leaves them out. */
 	unpricedShots?: number | null;
+	/** The most those shots could have cost: each at the dearest carried weapon that fitted it. Absent while idle. */
+	unpricedCostBound?: number | null;
+	/** Of those shots, the ones no carried weapon fitted, which add nothing to the bound. Absent while idle. */
+	unpricedNoFitShots?: number | null;
 	/** Whether the active session has a weapon declared (pressed on the hotbar, or held from a press before the session). Without one, `current_tool` is only what the damage last pointed to, and hits several carried weapons explain go unpriced. Absent while idle. */
 	weaponDeclared?: boolean | null;
 	healing?: HealingStatus | null;
@@ -3857,6 +3861,54 @@ export interface WeaponAttributionSummary {
 	/** The effects the session paid for or saw tick, oldest first. */
 	effects: WeaponEffectRow[];
 	reviews: WeaponReviewRow[];
+	/** Unresolved shots that landed with no weapon declared, however they were corrected since. */
+	undeclaredShots: number;
+	/** Enough of them landed that the session ran with no weapon declared. */
+	ranUndeclared: boolean;
+	/** The live bulk assignments, oldest first. */
+	batches: WeaponCorrectionBatch[];
+	/** The most the unpriced shots could have cost: each at the dearest weapon that fitted it, priced as it is configured now. */
+	unpricedCostBound?: number;
+	/** Unpriced shots no weapon still in Equipment fitted, which add nothing to the bound. */
+	unpricedNoFitShots?: number;
+}
+
+/**
+ * What a bulk assignment did, with the session's refreshed detail.
+ */
+export interface WeaponBulkAssignment {
+	assigned: number;
+	/** Unpriced shots it left: the weapon did not fit them. */
+	skipped: number;
+	addedCostPed: number;
+	detail: SessionDetail;
+}
+
+/**
+ * A weapon a session's unpriced shots could all be assigned to at once.
+ */
+export interface WeaponBulkOption {
+	equipmentId: number;
+	name: string;
+	/** The unpriced shots its damage band fitted: the ones it would price. */
+	fittingShots: number;
+	/** The session's other unpriced shots, which it would leave. */
+	skippedShots: number;
+	/** What pricing the fitting shots would add, priced as the weapon is configured now. */
+	addedCostPed: number;
+}
+
+/**
+ * A bulk assignment still standing: every shot it priced, undoable as one.
+ */
+export interface WeaponCorrectionBatch {
+	id: string;
+	toolName: string;
+	/** Its corrections still live. */
+	shots: number;
+	/** What they add to the weapon cost. */
+	costPed: number;
+	correctedAt: number;
 }
 
 /**
@@ -4045,6 +4097,20 @@ export interface WeaponShotPage {
 }
 
 /**
+ * What a session's unpriced shots could have cost at most. The session's
+ * cost leaves them out.
+ */
+export interface WeaponUnpricedExposure {
+	sessionId: string;
+	/** Shots still without a price or correction. */
+	shots: number;
+	/** Of those, the ones no weapon still in Equipment fitted: they add nothing to the bound. */
+	noFitShots: number;
+	/** Each other shot at the dearest weapon that fitted it, priced as it is configured now. */
+	costBoundPed: number;
+}
+
+/**
  * A stretch of HP where one setup is the cheapest per kill; consecutive
  * segments meet where the cheapest setup changes.
  */
@@ -4193,8 +4259,20 @@ export async function weaponShots(sessionId: string, group: 'unresolved' | 'evid
 	return invokeCommand('weapon_shots', { session_id: sessionId, group, offset, limit });
 }
 
-export async function weaponUnpricedSessions(sessionIds: string[]): Promise<string[]> {
-	return invokeCommand('weapon_unpriced_sessions', { session_ids: sessionIds });
+export async function weaponUnpricedExposure(sessionIds: string[]): Promise<WeaponUnpricedExposure[]> {
+	return invokeCommand('weapon_unpriced_exposure', { session_ids: sessionIds });
+}
+
+export async function weaponBulkOptions(sessionId: string): Promise<WeaponBulkOption[]> {
+	return invokeCommand('weapon_bulk_options', { session_id: sessionId });
+}
+
+export async function weaponAssignFitting(sessionId: string, equipmentId: number): Promise<WeaponBulkAssignment> {
+	return invokeCommand('weapon_assign_fitting', { session_id: sessionId, equipment_id: equipmentId });
+}
+
+export async function weaponBatchUndo(batchId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_batch_undo', { batch_id: batchId });
 }
 
 export async function weaponCorrectionWeapons(evidenceId: string): Promise<WeaponCorrectionWeapon[]> {

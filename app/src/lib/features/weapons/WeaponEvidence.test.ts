@@ -13,6 +13,9 @@ vi.mock('$lib/api', () => ({
 	getWeaponShots: vi.fn(),
 	markWeaponShotEffectTick: vi.fn(),
 	undoWeaponAssignment: vi.fn(),
+	getWeaponBulkOptions: vi.fn(),
+	assignFittingWeaponShots: vi.fn(),
+	undoWeaponBatch: vi.fn(),
 }));
 
 import * as api from '$lib/api';
@@ -34,6 +37,11 @@ function detail(overrides: Partial<WeaponAttributionSummary> = {}): SessionDetai
 			effectTicks: 0,
 			pricedTicks: 0,
 			unclaimedTicks: 0,
+			undeclaredShots: 0,
+			ranUndeclared: false,
+			batches: [],
+			unpricedCostBound: 0.2,
+			unpricedNoFitShots: 0,
 			effects: [],
 			reviews: [
 				{
@@ -100,8 +108,9 @@ describe('weapon evidence', () => {
 			screen.getByText('40 matched the hotbar · 3 by damage range · 2 unresolved'),
 		).toBeTruthy();
 		expect(screen.getByTestId('weapon-unpriced').textContent).toContain(
-			'1 shot could not be priced to one weapon.',
+			'1 shot unpriced, up to +0.20 PED.',
 		);
+		expect(screen.queryByTestId('weapon-undeclared')).toBeNull();
 		const review = screen.getByTestId('weapon-review');
 		expect(
 			within(review).getByText('Switched to Cannon from Pistol; 2 shots repriced'),
@@ -293,5 +302,74 @@ describe('weapon evidence', () => {
 			await screen.findByRole('button', { name: 'Differed from the hotbar: 2' }),
 		);
 		expect(mocked.getWeaponShots).toHaveBeenLastCalledWith('s1', 'evidence', 0, 50);
+	});
+});
+
+describe("assigning a session's unpriced shots at once", () => {
+	it('states what it will do, then assigns every shot the weapon fits', async () => {
+		mocked.getWeaponBulkOptions.mockResolvedValue([
+			{ equipmentId: 2, name: 'Cannon', fittingShots: 3, skippedShots: 1, addedCostPed: 0.6 },
+		]);
+		mocked.assignFittingWeaponShots.mockResolvedValue({
+			assigned: 3,
+			skipped: 1,
+			addedCostPed: 0.6,
+			detail: detail({ unpriced: 1 }),
+		});
+		mount(detail({ unpriced: 4, unpricedCostBound: 0.8, unpricedNoFitShots: 1 }));
+		expect(screen.getByTestId('weapon-unpriced').textContent).toContain(
+			'4 shots unpriced, up to +0.80 PED. 1 fit no carried weapon.',
+		);
+
+		await fireEvent.click(screen.getByTestId('weapon-bulk-trigger'));
+		await fireEvent.click(await screen.findByLabelText('Cannon: fits 3, adds 0.60 PED'));
+		const confirm = screen.getByTestId('weapon-bulk-confirm');
+		expect(confirm.textContent).toContain(
+			'Assign 3 shots to Cannon, skip 1 shot it did not fit: +0.60 PED.',
+		);
+		expect(confirm.textContent).toContain('Priced as Cannon is configured now.');
+		expect(mocked.assignFittingWeaponShots).not.toHaveBeenCalled();
+
+		await fireEvent.click(within(confirm).getByText('Assign'));
+		expect(mocked.assignFittingWeaponShots).toHaveBeenCalledWith('s1', 2);
+		expect((await screen.findByTestId('weapon-bulk-notice')).textContent).toBe(
+			'Assigned 3 shots to Cannon; 1 shot left unpriced.',
+		);
+	});
+
+	it('changes nothing when cancelled', async () => {
+		mocked.getWeaponBulkOptions.mockResolvedValue([
+			{ equipmentId: 2, name: 'Cannon', fittingShots: 1, skippedShots: 0, addedCostPed: 0.2 },
+		]);
+		mount(detail());
+		await fireEvent.click(screen.getByTestId('weapon-bulk-trigger'));
+		await fireEvent.click(await screen.findByLabelText('Cannon: fits 1, adds 0.20 PED'));
+		await fireEvent.click(within(screen.getByTestId('weapon-bulk-confirm')).getByText('Cancel'));
+		expect(screen.queryByTestId('weapon-bulk-confirm')).toBeNull();
+		expect(mocked.assignFittingWeaponShots).not.toHaveBeenCalled();
+	});
+
+	it('records that the session ran undeclared and undoes a batch as one', async () => {
+		mocked.undoWeaponBatch.mockResolvedValue(detail({ batches: [] }));
+		mount(
+			detail({
+				ranUndeclared: true,
+				undeclaredShots: 30,
+				batches: [{ id: 'b1', toolName: 'Rifle', shots: 24, costPed: 1.2, correctedAt: 1000 }],
+			}),
+		);
+		expect(screen.getByTestId('weapon-undeclared').textContent).toContain(
+			'No weapon was declared for 30 of its shots.',
+		);
+		const batch = screen.getByTestId('weapon-batch');
+		expect(within(batch).getByText('24 shots assigned to Rifle')).toBeTruthy();
+		expect(within(batch).getByText('+1.20 PED')).toBeTruthy();
+		await fireEvent.click(screen.getByLabelText('Undo assigning 24 shots assigned to Rifle'));
+		expect(mocked.undoWeaponBatch).toHaveBeenCalledWith('b1');
+	});
+
+	it('offers no bulk assignment while the session runs', () => {
+		mount(detail({ correctable: false }));
+		expect(screen.queryByTestId('weapon-bulk-trigger')).toBeNull();
 	});
 });

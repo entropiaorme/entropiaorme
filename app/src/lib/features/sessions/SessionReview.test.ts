@@ -19,7 +19,7 @@ vi.mock('$lib/api', () => ({
 		throw new Error('no detail in this test');
 	}),
 	getUnrecordedArmourSessions: vi.fn(async () => []),
-	getUnpricedShotSessions: vi.fn(async () => []),
+	getUnpricedExposure: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
 	setSessionExclusion: vi.fn(),
@@ -178,5 +178,22 @@ describe('stats exclusion in the session review', () => {
 		expect(mocked.setSessionExclusion).toHaveBeenCalledWith('out', false, false, null);
 		expect(screen.queryByTestId('exclusion-line')).toBeNull();
 		expect(screen.queryByTestId('exclusion-mark')).toBeNull();
+	});
+});
+
+describe('unpriced shots in the session review', () => {
+	it('bounds what a row with unpriced shots leaves out of its net', async () => {
+		mocked.getUnpricedExposure.mockResolvedValue([
+			{ sessionId: 'out', shots: 3, noFitShots: 1, costBoundPed: 0.4 },
+		]);
+		await mount([session('kept', { primaryMobs: ['Atrox'] }), session('out')]);
+		await vi.waitFor(() => expect(screen.getByText(/3 shots unpriced/)).toBeTruthy());
+
+		const out = rowOf('Carabok');
+		const mark = within(out).getByText('†');
+		expect(mark.getAttribute('title')).toBe(
+			'3 shots unpriced, up to +0.40 PED; 1 fit no carried weapon: this net leaves them out',
+		);
+		expect(within(rowOf('Atrox')).queryByText('†')).toBeNull();
 	});
 });

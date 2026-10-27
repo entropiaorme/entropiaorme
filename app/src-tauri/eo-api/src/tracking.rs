@@ -57,7 +57,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 51] = [
+const SNAPSHOT_FIELDS: [&str; 53] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -106,6 +106,8 @@ const SNAPSHOT_FIELDS: [&str; 51] = [
     "harvestGuardrail",
     "weaponGuardrail",
     "unpricedShots",
+    "unpricedCostBound",
+    "unpricedNoFitShots",
     "weaponDeclared",
     "healing",
     "warnings",
@@ -458,6 +460,34 @@ pub struct WeaponAttributionSummary {
     /// The effects the session paid for or saw tick, oldest first.
     pub effects: Vec<WeaponEffectRow>,
     pub reviews: Vec<WeaponReviewRow>,
+    /// Unresolved shots that landed with no weapon declared, however they
+    /// were corrected since.
+    pub undeclared_shots: i64,
+    /// Enough of them landed that the session ran with no weapon declared.
+    pub ran_undeclared: bool,
+    /// The live bulk assignments, oldest first.
+    pub batches: Vec<WeaponCorrectionBatch>,
+    /// The most the unpriced shots could have cost: each at the dearest
+    /// weapon that fitted it, priced as it is configured now.
+    #[serde(default)]
+    pub unpriced_cost_bound: f64,
+    /// Unpriced shots no weapon still in Equipment fitted, which add
+    /// nothing to the bound.
+    #[serde(default)]
+    pub unpriced_no_fit_shots: i64,
+}
+
+/// A bulk assignment still standing: every shot it priced, undoable as one.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponCorrectionBatch {
+    pub id: String,
+    pub tool_name: String,
+    /// Its corrections still live.
+    pub shots: i64,
+    /// What they add to the weapon cost.
+    pub cost_ped: f64,
+    pub corrected_at: f64,
 }
 
 /// The full session detail.
@@ -733,6 +763,14 @@ pub struct TrackingSnapshot {
     /// carried weapon explains them: the cost leaves them out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unpriced_shots: Option<i64>,
+    /// The most those shots could have cost: each at the dearest carried
+    /// weapon that fitted it. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_cost_bound: Option<f64>,
+    /// Of those shots, the ones no carried weapon fitted, which add nothing
+    /// to the bound. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_no_fit_shots: Option<i64>,
     /// Whether the active session has a weapon declared (pressed on the
     /// hotbar, or held from a press before the session). Without one,
     /// `current_tool` is only what the damage last pointed to, and hits
@@ -963,8 +1001,24 @@ impl Api {
             .await
             .map_err(ApiError::internal("tracking session detail"))?
         {
-            Some(value) => serde_json::from_value(value)
-                .map_err(ApiError::internal("tracking session detail shaping")),
+            Some(value) => {
+                let mut detail: SessionDetail = serde_json::from_value(value)
+                    .map_err(ApiError::internal("tracking session detail shaping"))?;
+                // The bound prices weapons through the review's pricing, which
+                // the detail read does not carry.
+                if detail.weapon_attribution.unpriced > 0 {
+                    let exposure = self
+                        .weapon_review
+                        .unpriced_exposure(vec![session_id])
+                        .await
+                        .map_err(ApiError::internal("tracking session unpriced exposure"))?;
+                    if let Some(exposure) = exposure.first() {
+                        detail.weapon_attribution.unpriced_cost_bound = exposure.cost_bound_ped;
+                        detail.weapon_attribution.unpriced_no_fit_shots = exposure.no_fit_shots;
+                    }
+                }
+                Ok(detail)
+            }
             None => Err(ApiError::not_found("Session not found")),
         }
     }
@@ -1768,6 +1822,8 @@ pub(crate) async fn build_snapshot_value(
                 "harvestLoot": active.harvest_loot,
                 "harvestCost": active.harvest_cost,
                 "unpricedShots": active.unpriced_shots,
+                "unpricedCostBound": active.unpriced_cost_bound,
+                "unpricedNoFitShots": active.unpriced_no_fit,
                 "weaponDeclared": active.weapon_declared,
                 "healing": {
                     "toolName": active.healing.tool_name.clone(),

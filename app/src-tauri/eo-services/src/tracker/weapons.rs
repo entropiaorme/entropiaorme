@@ -39,6 +39,8 @@ pub(super) struct WeaponRuntime {
     pub(super) profile_cache: BTreeMap<String, Option<(String, Arc<Value>)>>,
     /// Memoised static per-shot costs for tools without enhancer state.
     pub(super) static_cost_cache: BTreeMap<String, Ped>,
+    /// Memoised carried-weapon prices for bounding unpriced shots.
+    bound_price_cache: BTreeMap<String, Option<Ped>>,
 }
 
 impl WeaponRuntime {
@@ -53,6 +55,7 @@ impl WeaponRuntime {
         self.observed_name = None;
         self.profile_cache.clear();
         self.static_cost_cache.clear();
+        self.bound_price_cache.clear();
         let mut weapons = Vec::with_capacity(carried.len());
         for profile in carried {
             if !profile.props.is_empty() {
@@ -93,6 +96,7 @@ impl WeaponRuntime {
         self.attribution.set_carried(weapons);
         self.profile_cache.clear();
         self.static_cost_cache.clear();
+        self.bound_price_cache.clear();
         for (name, state) in &mut self.enhancer_states {
             let props = self
                 .carried_profiles
@@ -180,6 +184,27 @@ impl DamageEnhancerState {
             self.cached_cost = Some(Ped(total / 100.0));
         }
         self.cached_cost.expect("just cached")
+    }
+}
+
+impl WeaponRuntime {
+    /// The per-shot price a carried weapon's props give with its configured
+    /// enhancers, as review prices an assignment: what an unpriced shot of
+    /// it would cost. Leaves the live enhancer state alone. None for a
+    /// weapon carried without props.
+    pub(super) fn bound_price(&mut self, name: &str) -> Option<Ped> {
+        if let Some(known) = self.bound_price_cache.get(name) {
+            return *known;
+        }
+        let price = self.carried_profiles.get(name).map(|props| {
+            let total = cost_per_shot_from_props(props, None)
+                .get("totalCostPerUse")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            Ped(total / 100.0)
+        });
+        self.bound_price_cache.insert(name.to_string(), price);
+        price
     }
 }
 

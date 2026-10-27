@@ -16,6 +16,7 @@
 	} from './exclusion';
 	import { PAGE_SIZE } from './instancesModel.svelte';
 	import ReviewDefinitionPicker from './ReviewDefinitionPicker.svelte';
+	import { describeNoFit, describeUnpriced } from '$lib/features/weapons/weaponReview';
 	import type { ReviewModel } from './reviewModel.svelte';
 	import type { TrackingSession } from '$lib/types/tracking';
 
@@ -62,6 +63,15 @@
 	/** Some row on this page nets without an armour cost still to be recorded. */
 	const armourPendingOnPage = $derived(table.pageRows.some((session) => instances.armourPending(session.id)));
 	const unpricedOnPage = $derived(table.pageRows.some((session) => instances.unpriced(session.id)));
+
+	/** A row's unpriced shots as a bound on what its net leaves out; null
+	 * when it leaves nothing out. */
+	function unpricedMark(id: string): string | null {
+		const unpriced = instances.unpriced(id);
+		if (!unpriced) return null;
+		const noFit = unpriced.noFitShots > 0 ? `; ${describeNoFit(unpriced.noFitShots)}` : '';
+		return `${describeUnpriced(unpriced.shots, unpriced.costBoundPed)}${noFit}`;
+	}
 
 	/** Commit an edited exclusion note, only when it actually changed. */
 	function commitNote(session: TrackingSession, value: string) {
@@ -233,11 +243,11 @@
 												class="ml-0.5 align-super text-[10px] font-normal text-warning"
 												title="Armour cost not recorded yet: this net leaves it out"
 												aria-hidden="true">*</span
-											><span class="sr-only">, armour cost not recorded yet</span>{/if}{#if instances.unpriced(session.id)}<span
+											><span class="sr-only">, armour cost not recorded yet</span>{/if}{#if unpricedMark(session.id)}<span
 												class="ml-0.5 align-super text-[10px] font-normal text-warning"
-												title="Some shots could not be priced: this net leaves them out"
+												title={`${unpricedMark(session.id)}: this net leaves them out`}
 												aria-hidden="true">&dagger;</span
-											><span class="sr-only">, some shots could not be priced</span>{/if}
+											><span class="sr-only">, {unpricedMark(session.id)}</span>{/if}
 									</td>
 									<td class="border-b border-border/50 px-4 py-3">
 										<div class="flex items-center justify-end gap-1">
@@ -527,7 +537,7 @@
 				{/if}
 				{#if unpricedOnPage}
 					<p class="px-2 text-xs text-text-tertiary">
-						<span class="text-warning">&dagger;</span> Some shots could not be priced to one weapon. Open the session to assign them.
+						<span class="text-warning">&dagger;</span> Some shots could not be priced to one weapon; hover the mark for the most they could add. Open the session to assign them.
 					</p>
 				{/if}
 

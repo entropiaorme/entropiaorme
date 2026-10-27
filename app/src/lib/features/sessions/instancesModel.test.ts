@@ -10,7 +10,7 @@ vi.mock('$lib/api', () => ({
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
 	getUnrecordedArmourSessions: vi.fn(async () => []),
-	getUnpricedShotSessions: vi.fn(async () => []),
+	getUnpricedExposure: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
 	setSessionExclusion: vi.fn(),
@@ -478,38 +478,45 @@ describe('reassign', () => {
 // Armour is recorded when the player repairs, so a row can net without an
 // armour cost that is still to come; the list marks those rows.
 describe('unpriced shots', () => {
+	const exposure = (sessionId: string) => ({
+		sessionId,
+		shots: 3,
+		noFitShots: 1,
+		costBoundPed: 0.4,
+	});
+
 	it('marks the loaded sessions still holding them, apart from armour', async () => {
 		mocked.getTrackingSessions.mockResolvedValue(
 			page([session({ id: 's1' }), session({ id: 's2' })]),
 		);
-		mocked.getUnpricedShotSessions.mockResolvedValue(['s1']);
+		mocked.getUnpricedExposure.mockResolvedValue([exposure('s1')]);
 		const model = createInstancesModel();
 		await model.loadSessions();
-		expect(mocked.getUnpricedShotSessions).toHaveBeenCalledWith(['s1', 's2']);
-		expect(model.unpriced('s1')).toBe(true);
-		expect(model.unpriced('s2')).toBe(false);
+		expect(mocked.getUnpricedExposure).toHaveBeenCalledWith(['s1', 's2']);
+		expect(model.unpriced('s1')).toEqual(exposure('s1'));
+		expect(model.unpriced('s2')).toBeNull();
 		expect(model.armourPending('s1')).toBe(false);
 	});
 
 	it('re-reads the marks after an assignment in any window', async () => {
 		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1' })]));
-		mocked.getUnpricedShotSessions.mockResolvedValue(['s1']);
+		mocked.getUnpricedExposure.mockResolvedValue([exposure('s1')]);
 		const model = createInstancesModel();
 		await model.loadSessions();
-		mocked.getUnpricedShotSessions.mockResolvedValue([]);
+		mocked.getUnpricedExposure.mockResolvedValue([]);
 		await model.subscribeCostChanges();
 		emit('weapons:updated');
-		await vi.waitFor(() => expect(model.unpriced('s1')).toBe(false));
+		await vi.waitFor(() => expect(model.unpriced('s1')).toBeNull());
 	});
 
 	it('keeps one mark when only the other read fails', async () => {
 		mocked.getTrackingSessions.mockResolvedValue(page([session({ id: 's1' })]));
-		mocked.getUnpricedShotSessions.mockRejectedValueOnce(new Error('offline'));
+		mocked.getUnpricedExposure.mockRejectedValueOnce(new Error('offline'));
 		mocked.getUnrecordedArmourSessions.mockResolvedValueOnce(['s1']);
 		const model = createInstancesModel();
 		await model.loadSessions();
 		expect(model.armourPending('s1')).toBe(true);
-		expect(model.unpriced('s1')).toBe(false);
+		expect(model.unpriced('s1')).toBeNull();
 	});
 });
 

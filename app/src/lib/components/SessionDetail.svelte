@@ -29,7 +29,7 @@
 	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
 	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
-	import { hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
+	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
 	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
 
 	let {
@@ -440,7 +440,7 @@
 				Weapon: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.weaponCost)}</span>{#if unpricedShots > 0}<span
 						class="text-warning"
 						title="These shots could not be priced to one weapon; assign them in Weapon attribution below"
-					>, without {unpricedShots} unpriced {unpricedShots === 1 ? 'shot' : 'shots'}</span
+					>; {describeUnpriced(unpricedShots, detail.weaponAttribution?.unpricedCostBound)}</span
 					>{/if}
 			</span>
 			{#if detail.summary.costBreakdown.healCost > 0}

@@ -5,7 +5,11 @@
 	import type { WeaponShotGroup } from '$lib/api/weapons';
 	import {
 		attributionTally,
+		describeBatch,
+		describeBulkAssign,
 		describeEffect,
+		describeNoFit,
+		describeUnpriced,
 		describeReview,
 		describeShot,
 		effectTickLine,
@@ -13,7 +17,7 @@
 		shotStanding,
 		weaponOption,
 	} from './weaponReview';
-	import type { WeaponReviewModel } from './weaponReviewModel.svelte';
+	import { BULK_BUSY, type WeaponReviewModel } from './weaponReviewModel.svelte';
 
 	let { model }: { model: WeaponReviewModel } = $props();
 
@@ -37,12 +41,126 @@
 
 	<ErrorNotice message={model.error} onDismiss={model.dismissError} class="mb-3" />
 
-	{#if summary.unpriced > 0}
+	{#if summary.unpriced > 0 || summary.ranUndeclared || model.bulkNotice}
 		{@const one = summary.unpriced === 1}
-		<p class="mb-3 text-xs text-text-secondary" data-testid="weapon-unpriced">
-			<span class="text-warning">{`${summary.unpriced} ${one ? 'shot' : 'shots'} could not be priced to one weapon.`}</span>
-			{`The weapon cost leaves ${one ? 'it' : 'them'} out${summary.correctable ? ' until assigned below' : ''}.`}
-		</p>
+		<div class="mb-3 flex flex-col gap-1 text-xs text-text-secondary">
+			{#if summary.unpriced > 0}
+				<p data-testid="weapon-unpriced">
+					<span class="text-warning">{describeUnpriced(summary.unpriced, summary.unpricedCostBound)}.</span>
+					{#if (summary.unpricedNoFitShots ?? 0) > 0}{describeNoFit(summary.unpricedNoFitShots ?? 0)}.{/if}
+					{`The weapon cost leaves ${one ? 'it' : 'them'} out${summary.correctable ? ' until assigned' : ''}.`}
+				</p>
+			{/if}
+			{#if summary.ranUndeclared}
+				<!-- The durable record of the live warning: the session ran with
+					 no weapon declared, so every hit two carried weapons could
+					 have dealt went unpriced. -->
+				<p data-testid="weapon-undeclared">
+					{`No weapon was declared for ${summary.undeclaredShots} of its shots.`}{#if summary.unpriced > 0 && summary.correctable}
+						Assign the ones a weapon fits all at once:{/if}
+				</p>
+			{/if}
+			{#if summary.unpriced > 0 && summary.correctable}
+				{#if model.pendingBulk}
+					{@const chosen = model.pendingBulk}
+					<div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="weapon-bulk-confirm">
+						<span class="text-text">{describeBulkAssign(chosen)}</span>
+						<span class="text-text-tertiary">Priced as {chosen.name} is configured now.</span>
+						<span class="flex gap-1">
+							<Button
+								size="sm"
+								loading={model.busy === BULK_BUSY}
+								disabled={model.busy !== null}
+								onclick={() => void model.confirmBulk()}
+							>
+								{#snippet children()}Assign{/snippet}
+							</Button>
+							<Button variant="ghost" size="sm" disabled={model.busy !== null} onclick={() => model.cancelBulk()}>
+								{#snippet children()}Cancel{/snippet}
+							</Button>
+						</span>
+					</div>
+				{:else}
+					<Menu overlay panelClass="w-72 p-1">
+						{#snippet trigger({ open, toggle, keydown })}
+							<button
+								type="button"
+								class="linklet self-start text-xs disabled:opacity-40"
+								aria-haspopup="menu"
+								aria-expanded={open}
+								disabled={model.busy !== null}
+								data-testid="weapon-bulk-trigger"
+								onclick={() => {
+									if (!open) void model.loadBulkOptions();
+									toggle();
+								}}
+								onkeydown={keydown}
+							>
+								Assign all to a weapon…
+							</button>
+						{/snippet}
+						{#snippet children({ close })}
+							{@const offered = model.bulkOptions}
+							{#if offered.status === 'idle' || offered.status === 'loading'}
+								<div class="px-2 py-1.5 text-xs text-text-tertiary">Loading weapons…</div>
+							{:else if offered.status === 'error'}
+								<div class="px-2 py-1.5 text-xs text-negative">{offered.message}</div>
+							{:else if offered.options.length === 0}
+								<div class="px-2 py-1.5 text-xs text-text-tertiary">
+									No weapon still in Equipment fits these shots
+								</div>
+							{:else}
+								{#each offered.options as option (option.equipmentId)}
+									<button
+										type="button"
+										role="menuitem"
+										class="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm
+											transition-colors duration-[var(--duration-fast)] hover:bg-surface-hover focus:bg-surface-hover focus:outline-none"
+										aria-label={`${option.name}: fits ${option.fittingShots}, adds ${formatPed(option.addedCostPed)} PED`}
+										onclick={() => {
+											close();
+											model.chooseBulk(option);
+										}}
+									>
+										<span class="truncate text-text">{option.name}</span>
+										<span class="shrink-0 text-xs tabular-nums text-text-tertiary">
+											fits {option.fittingShots} · +{formatPed(option.addedCostPed)} PED
+										</span>
+									</button>
+								{/each}
+							{/if}
+						{/snippet}
+					</Menu>
+				{/if}
+			{/if}
+			{#if model.bulkNotice}
+				<p class="text-text" data-testid="weapon-bulk-notice">{model.bulkNotice}</p>
+			{/if}
+		</div>
+	{/if}
+
+	{#if summary.batches.length > 0}
+		<div class="mb-3 divide-y divide-border/40" data-testid="weapon-batches">
+			{#each summary.batches as batch (batch.id)}
+				<div class="flex items-center gap-4 py-2 text-sm" data-testid="weapon-batch">
+					<span class="w-20 shrink-0 text-xs tabular-nums text-text-tertiary">{formatClock(batch.correctedAt)}</span>
+					<span class="min-w-0 flex-1 truncate text-text">{describeBatch(batch)}</span>
+					<span class="shrink-0 tabular-nums text-text-secondary">+{formatPed(batch.costPed)} PED</span>
+					<span class="flex w-28 shrink-0 justify-end">
+						<Button
+							variant="ghost"
+							size="sm"
+							loading={model.busy === batch.id}
+							disabled={model.busy !== null}
+							aria-label={`Undo assigning ${describeBatch(batch)}`}
+							onclick={() => model.undoBatch(batch.id)}
+						>
+							{#snippet children()}Undo all{/snippet}
+						</Button>
+					</span>
+				</div>
+			{/each}
+		</div>
 	{/if}
 
 	{#if summary.reviews.length > 0}

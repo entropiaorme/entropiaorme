@@ -7,6 +7,9 @@
 
 import type {
 	WeaponAttributionSummary,
+	WeaponBulkAssignment,
+	WeaponBulkOption,
+	WeaponCorrectionBatch,
 	WeaponCorrectionWeapon,
 	WeaponEffectCandidate,
 	WeaponEffectRow,
@@ -15,6 +18,7 @@ import type {
 	WeaponShotGroup,
 } from '$lib/api/weapons';
 import { formatClock } from '$lib/features/healing/healingReview';
+import { formatPed } from '$lib/utils/format';
 
 export interface ReviewGroup {
 	id: WeaponShotGroup;
@@ -178,4 +182,44 @@ export function weaponOption(
 	formatCost: (value: number) => string,
 ): string {
 	return `${weapon.name}${weapon.fits ? ', fits' : ''} · ${formatCost(weapon.costPerShotPed)} PED`;
+}
+
+/** The unpriced shots behind a cost, stated as a bound: their cost is left
+ * out, and at most the dearest weapon that fitted each would add it back.
+ * Without a bound (none fitted a weapon, or it is not known) the count
+ * stands alone. */
+export function describeUnpriced(shots: number, costBound?: number | null): string {
+	const counted = `${plural(shots, 'shot', 'shots')} unpriced`;
+	return costBound != null && costBound > 0
+		? `${counted}, up to +${formatPed(costBound)} PED`
+		: counted;
+}
+
+/** Unpriced shots that add nothing to the bound. */
+export function describeNoFit(shots: number): string {
+	return `${shots} fit no carried weapon`;
+}
+
+/** The confirmation line for assigning a session's unpriced shots to one
+ * weapon at once. */
+export function describeBulkAssign(option: WeaponBulkOption): string {
+	const skipped =
+		option.skippedShots > 0
+			? `, skip ${plural(option.skippedShots, 'shot', 'shots')} it did not fit`
+			: '';
+	return `Assign ${plural(option.fittingShots, 'shot', 'shots')} to ${option.name}${skipped}: +${formatPed(option.addedCostPed)} PED.`;
+}
+
+/** What a bulk assignment did. */
+export function describeBulkDone(
+	done: Pick<WeaponBulkAssignment, 'assigned' | 'skipped'>,
+	weapon: string,
+): string {
+	const left = done.skipped > 0 ? `; ${plural(done.skipped, 'shot', 'shots')} left unpriced` : '';
+	return `Assigned ${plural(done.assigned, 'shot', 'shots')} to ${weapon}${left}.`;
+}
+
+/** A standing bulk assignment, for its undo row. */
+export function describeBatch(batch: WeaponCorrectionBatch): string {
+	return `${plural(batch.shots, 'shot', 'shots')} assigned to ${batch.toolName}`;
 }

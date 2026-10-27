@@ -8,6 +8,7 @@ use crate::bus_events::{BusEvent, CombatPayload, HotbarItemKind};
 use crate::expected_hunting::OffensiveLoadoutEvidence;
 use crate::ped::Ped;
 use crate::tracking_models::ToolStats;
+use crate::weapon_review::UNDECLARED_WARNING_SHOTS;
 
 use super::actor::TrackerActor;
 use super::attribution::{Attribution, Observation, ShotLocation, ShotRecord};
@@ -110,6 +111,9 @@ impl TrackerActor {
             .attribution
             .classify(observation, observed_at);
         let seq = active.weapons.attribution.apply(&resolved, observed_at);
+        if matches!(resolved.attribution, Attribution::Unresolved) {
+            Self::note_unpriced(providers, active, observation, &resolved.fits);
+        }
         let (amount, critical) = match observation {
             Observation::Hit { amount, critical } => (amount, critical),
             Observation::Countered => (0.0, false),
@@ -177,6 +181,47 @@ impl TrackerActor {
                 .map(|activation| activation.window.id.clone()),
         });
         activation
+    }
+
+    /// Account for an unpriced shot: bound what it could have cost at the
+    /// dearest carried weapon that fitted it (a countered shot fits none),
+    /// and once enough land with no weapon declared, warn that the session
+    /// is running undeclared.
+    fn note_unpriced(
+        providers: &Providers,
+        active: &mut ActiveSession,
+        observation: Observation,
+        fits: &[String],
+    ) {
+        let fits: &[String] = match observation {
+            Observation::Hit { .. } => fits,
+            Observation::Countered => &[],
+        };
+        let dearest = fits
+            .iter()
+            .filter_map(|name| active.weapons.bound_price(name))
+            .max_by(|a, b| a.value().total_cmp(&b.value()));
+        match dearest {
+            Some(price) => active.unpriced_cost_bound += price,
+            None => active.unpriced_no_fit += 1,
+        }
+        if active.weapons.attribution.declared().is_some() {
+            return;
+        }
+        active.undeclared_unpriced += 1;
+        if active.undeclared_unpriced >= UNDECLARED_WARNING_SHOTS
+            && !active.undeclared_warning_emitted
+        {
+            active.undeclared_warning_emitted = true;
+            let fix = if providers.config.hotbar_hooks_enabled() {
+                "Press your weapon's hotbar slot, then assign the rest after the session."
+            } else {
+                "Assign them after the session."
+            };
+            active.warnings.push(format!(
+                "No weapon declared: {UNDECLARED_WARNING_SHOTS} shots are unpriced so far. {fix}"
+            ));
+        }
     }
 
     /// Count one shot into the accumulator's phase for its weapon, and

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use super::*;
 use crate::attack_rate::WeaponPricing;
 use crate::clock::MockClock;
+use rusqlite::OptionalExtension;
 
 /// A pistol costing 0.05 PED a shot (5 PEC decay), band 5-10.
 const PISTOL: i64 = 1;
@@ -564,33 +565,29 @@ async fn review_lists_shots_by_group_with_what_the_tracker_knew() {
     ));
 }
 
+/// The sessions an exposure read answers for, in its order.
+async fn exposed(h: &Harness, asked: &[&str]) -> Vec<String> {
+    h.service
+        .unpriced_exposure(asked.iter().map(|id| id.to_string()).collect())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|exposure| exposure.session_id)
+        .collect()
+}
+
 #[tokio::test]
-async fn unpriced_sessions_answer_in_the_callers_order() {
+async fn unpriced_exposure_answers_in_the_callers_order() {
     let h = harness().await;
     seed_session(&h.db, "s", false).await;
     seed_session(&h.db, "t", false).await;
-    let asked = vec!["none".to_string(), "t".to_string(), "s".to_string()];
-    assert_eq!(
-        h.service.unpriced_sessions(asked).await.unwrap(),
-        vec!["t".to_string(), "s".to_string()]
-    );
+    assert_eq!(exposed(&h, &["none", "t", "s"]).await, vec!["t", "s"]);
     // Once every unpriced shot of a session is assigned, it drops out.
     for shot in ["t-u1", "t-u2", "t-u3"] {
         h.service.assign(shot, PISTOL).await.unwrap();
     }
-    assert_eq!(
-        h.service
-            .unpriced_sessions(vec!["s".to_string(), "t".to_string()])
-            .await
-            .unwrap(),
-        vec!["s".to_string()]
-    );
-    assert!(h
-        .service
-        .unpriced_sessions(Vec::new())
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(exposed(&h, &["s", "t"]).await, vec!["s"]);
+    assert!(exposed(&h, &[]).await.is_empty());
 }
 
 #[tokio::test]
@@ -663,6 +660,9 @@ async fn the_detail_block_reads_tallies_shots_and_decisions() {
             "effectTicks": 0,
             "pricedTicks": 0,
             "unclaimedTicks": 0,
+            "undeclaredShots": 0,
+            "ranUndeclared": false,
+            "batches": [],
             "effects": [],
             "reviews": [{
                 "id": "s-r",
@@ -810,12 +810,7 @@ async fn an_unresolved_hit_marked_as_an_effects_tick_stops_counting_as_a_shot() 
     for shot in ["s-u1", "s-u2", "s-u3"] {
         h.service.assign(shot, PISTOL).await.unwrap();
     }
-    assert!(h
-        .service
-        .unpriced_sessions(vec!["s".to_string()])
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(exposed(&h, &["s"]).await.is_empty());
     for shot in ["s-u1", "s-u2", "s-u3"] {
         let correction =
             h.db.with_reader(move |conn| {
@@ -1058,4 +1053,321 @@ mod conservation {
             })?;
         }
     }
+}
+
+/// A session played with nothing declared, its unpriced shots as
+/// (id, in the kill, amount, the candidates' fits for pistol and cannon):
+/// 24 hits both bands explain (20 in the kill, 4 after it), 2 only the
+/// cannon's band explains, a hit past every reach, and a countered shot.
+/// The kill counts the 24 of them it holds in its unpriced phase, beside
+/// two priced pistol shots.
+fn overlap_shots() -> Vec<(String, bool, Option<f64>, bool, bool)> {
+    let mut shots = Vec::new();
+    for index in 0..24 {
+        shots.push((format!("o{index}"), index < 20, Some(9.0), true, true));
+    }
+    shots.push(("c0".into(), true, Some(35.0), false, true));
+    shots.push(("c1".into(), true, Some(35.0), false, true));
+    shots.push(("n0".into(), true, Some(90.0), false, false));
+    shots.push(("x0".into(), true, None, false, false));
+    shots
+}
+
+async fn seed_overlap(db: &Db, session_id: &'static str) {
+    db.with_writer(move |conn| {
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO tracking_sessions \
+             (id, started_at, ended_at, is_active, dangling_cost) VALUES (?1, 1000, 2000, 0, 0)",
+            [session_id],
+        )?;
+        let id = |name: &str| format!("{session_id}-{name}");
+        let shots = overlap_shots();
+        let in_kill: Vec<_> = shots.iter().filter(|shot| shot.1).collect();
+        let damage: f64 = in_kill.iter().filter_map(|shot| shot.2).sum();
+        // Two priced pistol shots besides, so the session has a cost to
+        // summarise.
+        tx.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, cost_ped) \
+             VALUES (?1, ?2, 'Atrox', 1500, ?3, 0.1)",
+            rusqlite::params![id("k"), session_id, in_kill.len() as i64 + 2],
+        )?;
+        tx.execute(
+            "INSERT INTO kill_tool_stats \
+             (kill_id, tool_name, shots_fired, damage_dealt, critical_hits, cost_per_shot, \
+              expected_economics_json, evidence_fingerprint) \
+             VALUES (?1, 'Unknown', ?2, ?3, 0, 0, NULL, ''), \
+                    (?1, 'Pistol', 2, 14, 0, 0.05, NULL, '')",
+            rusqlite::params![id("k"), in_kill.len() as i64, damage],
+        )?;
+        for (index, (name, kill, amount, pistol, cannon)) in shots.into_iter().enumerate() {
+            let candidates = serde_json::json!([
+                {"equipmentId": PISTOL, "name": "Pistol", "fits": pistol},
+                {"equipmentId": CANNON, "name": "Cannon", "fits": cannon},
+            ])
+            .to_string();
+            tx.execute(
+                "INSERT INTO weapon_shot_evidence \
+                 (id, session_id, kill_id, observed_at, amount, critical, attribution, \
+                  hotbar_tool, tool_name, cost_per_shot, candidates_json, reason) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'unresolved', NULL, NULL, 0, ?6, 'seeded')",
+                rusqlite::params![
+                    id(&name),
+                    session_id,
+                    kill.then(|| id("k")),
+                    1100.0 + index as f64,
+                    amount,
+                    candidates,
+                ],
+            )?;
+        }
+        // The rollups are current through the session's day, so a
+        // correction refreshes that day's row.
+        tx.execute(
+            "INSERT INTO daily_rollup_meta (id, rolled_through) VALUES (1, '1970-01-01')",
+            [],
+        )?;
+        correct::repair(&tx, session_id)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// The session's weapon cost as its summary and its day's rollup hold it,
+/// and the kill's unpriced phase as (shots, damage).
+async fn overlap_costs(db: &Db) -> (f64, f64, (i64, f64)) {
+    let summary = scalar_f64(
+        db,
+        "SELECT weapon_cost + dangling_cost FROM session_summaries WHERE session_id = 'b'",
+    )
+    .await;
+    let day = scalar_f64(
+        db,
+        "SELECT weapon_cost + dangling_cost FROM daily_rollups WHERE day = '1970-01-01'",
+    )
+    .await;
+    let unknown = db
+        .with_reader(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT shots_fired, damage_dealt FROM kill_tool_stats \
+                     WHERE kill_id = 'b-k' AND tool_name = 'Unknown'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((0, 0.0)))
+        })
+        .await
+        .unwrap();
+    (summary, day, unknown)
+}
+
+#[tokio::test]
+async fn bulk_options_offer_each_fitting_weapon_with_what_assigning_it_would_do() {
+    let h = harness().await;
+    seed_overlap(&h.db, "b").await;
+    let options = h.service.bulk_assign_options("b").await.unwrap();
+    let options: Vec<(i64, i64, i64, f64)> = options
+        .into_iter()
+        .map(|option| {
+            (
+                option.equipment_id,
+                option.fitting_shots,
+                option.skipped_shots,
+                option.added_cost_ped,
+            )
+        })
+        .collect();
+    // The cannon explains the most shots, so it comes first; the shot past
+    // every reach and the countered one fit neither.
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].0, CANNON);
+    assert_eq!((options[0].1, options[0].2), (26, 2));
+    assert!(close(options[0].3, 26.0 * 0.2));
+    assert_eq!(options[1].0, PISTOL);
+    assert_eq!((options[1].1, options[1].2), (24, 4));
+    assert!(close(options[1].3, 24.0 * 0.05));
+}
+
+#[tokio::test]
+async fn a_bulk_assignment_prices_every_fitting_shot_and_its_undo_restores_the_session() {
+    let h = harness().await;
+    seed_overlap(&h.db, "b").await;
+    let before = overlap_costs(&h.db).await;
+    assert_eq!(before.2, (24, 20.0 * 9.0 + 2.0 * 35.0 + 90.0));
+
+    let done = h.service.assign_fitting("b", PISTOL).await.unwrap();
+    assert_eq!((done.assigned, done.skipped), (24, 4));
+    assert!(close(done.added_cost_ped, 24.0 * 0.05));
+    let batch = done.batch_id.clone().expect("a batch");
+    assert_eq!(h.announced.load(Ordering::SeqCst), 1);
+
+    // No unpriced shot the pistol fits is left.
+    assert_eq!(
+        scalar_i64(
+            &h.db,
+            "SELECT COUNT(*) FROM weapon_shot_evidence \
+             WHERE id LIKE 'b-o%' AND correction_id IS NULL"
+        )
+        .await,
+        0
+    );
+    // Every shot keeps its own correction, tied to the batch.
+    assert_eq!(
+        scalar_i64(
+            &h.db,
+            "SELECT COUNT(*) FROM weapon_attribution_corrections \
+             WHERE batch_id IS NOT NULL AND undone_at IS NULL"
+        )
+        .await,
+        24
+    );
+    // The weapon cost rises by exactly the assigned shots' prices, in the
+    // summary and in the day's rollup; the kill's unpriced phase keeps the
+    // four shots the pistol did not fit.
+    let after = overlap_costs(&h.db).await;
+    assert!(close(after.0 - before.0, 1.2), "{after:?} vs {before:?}");
+    assert!(close(after.1 - before.1, 1.2), "{after:?} vs {before:?}");
+    assert_eq!(after.2, (4, 2.0 * 35.0 + 90.0));
+
+    // Running it again assigns nothing new.
+    let again = h.service.assign_fitting("b", PISTOL).await.unwrap();
+    assert_eq!(
+        (again.assigned, again.skipped, again.batch_id),
+        (0, 4, None)
+    );
+    assert_eq!(h.announced.load(Ordering::SeqCst), 1);
+
+    // The detail lists the batch.
+    let block =
+        h.db.with_reader(|conn| session_detail_block(conn, "b"))
+            .await
+            .unwrap();
+    assert_eq!(block["batches"][0]["id"], batch.as_str());
+    assert_eq!(block["batches"][0]["shots"], 24);
+    assert_eq!(block["batches"][0]["toolName"], "Pistol");
+
+    // One correction undone singly stays undone; the batch undo takes the
+    // rest back, and the session is exactly as it was.
+    let single: String =
+        h.db.with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT correction_id FROM weapon_shot_evidence WHERE id = 'b-o0'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    h.service.undo(&single).await.unwrap();
+    let undone = h.service.undo_batch(&batch).await.unwrap();
+    assert_eq!((undone.session_id.as_str(), undone.undone), ("b", 23));
+    assert_eq!(overlap_costs(&h.db).await, before);
+    // Undoing it again changes nothing.
+    assert_eq!(h.service.undo_batch(&batch).await.unwrap().undone, 0);
+    assert!(matches!(
+        h.service.undo_batch("never").await,
+        Err(WeaponReviewError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn bulk_assignment_is_refused_where_a_single_one_would_be() {
+    let h = harness().await;
+    seed_session(&h.db, "live", true).await;
+    seed_overlap(&h.db, "b").await;
+    assert!(matches!(
+        h.service.assign_fitting("live", CANNON).await,
+        Err(WeaponReviewError::Conflict(_))
+    ));
+    assert!(matches!(
+        h.service.assign_fitting("none", CANNON).await,
+        Err(WeaponReviewError::NotFound(_))
+    ));
+    assert!(matches!(
+        h.service.assign_fitting("b", SOLD_RIFLE).await,
+        Err(WeaponReviewError::NotFound(_))
+    ));
+    // A weapon in Equipment that fitted none of them assigns nothing.
+    let none = h.service.assign_fitting("b", RIFLE).await.unwrap();
+    assert_eq!((none.assigned, none.skipped, none.batch_id), (0, 28, None));
+}
+
+/// Session b's exposure as (shots, no-fit shots, bound); None once it has
+/// nothing unpriced.
+async fn exposure_of(h: &Harness) -> Option<(i64, i64, f64)> {
+    let exposures = h.service.unpriced_exposure(vec!["b".into()]).await.unwrap();
+    exposures.first().map(|exposure| {
+        (
+            exposure.shots,
+            exposure.no_fit_shots,
+            exposure.cost_bound_ped,
+        )
+    })
+}
+
+#[tokio::test]
+async fn the_exposure_bounds_unpriced_shots_at_their_dearest_fitting_weapon() {
+    let h = harness().await;
+    seed_overlap(&h.db, "b").await;
+    // 24 shots both explain at the cannon's 0.2, 2 only the cannon explains,
+    // and two no weapon fits.
+    let (shots, no_fit, bound) = exposure_of(&h).await.unwrap();
+    assert_eq!((shots, no_fit), (28, 2));
+    assert!(close(bound, 24.0 * 0.2 + 2.0 * 0.2));
+
+    // Assigned singly, a shot leaves the bound; undone, it comes back.
+    let correction = h.service.assign("b-c0", CANNON).await.unwrap();
+    let (shots, _, bound) = exposure_of(&h).await.unwrap();
+    assert_eq!(shots, 27);
+    assert!(close(bound, 25.0 * 0.2));
+    h.service.undo(&correction.id).await.unwrap();
+    assert!(close(exposure_of(&h).await.unwrap().2, 26.0 * 0.2));
+
+    // After the bulk assignment to the pistol, only the cannon-only shots
+    // still bound the cost.
+    let done = h.service.assign_fitting("b", PISTOL).await.unwrap();
+    let (shots, no_fit, bound) = exposure_of(&h).await.unwrap();
+    assert_eq!((shots, no_fit), (4, 2));
+    assert!(close(bound, 2.0 * 0.2));
+    h.service
+        .undo_batch(done.batch_id.as_deref().unwrap())
+        .await
+        .unwrap();
+    assert!(close(exposure_of(&h).await.unwrap().2, 26.0 * 0.2));
+
+    // Assigning everything left drops the session out.
+    h.service.assign_fitting("b", CANNON).await.unwrap();
+    for shot in ["b-n0", "b-x0"] {
+        h.service.assign(shot, PISTOL).await.unwrap();
+    }
+    assert_eq!(exposure_of(&h).await, None);
+}
+
+#[tokio::test]
+async fn the_detail_records_a_session_that_ran_with_no_weapon_declared() {
+    let h = harness().await;
+    seed_overlap(&h.db, "b").await;
+    seed_session(&h.db, "s", false).await;
+    let block = |id: &'static str| {
+        let db = h.db.clone();
+        async move {
+            db.with_reader(move |conn| session_detail_block(conn, id))
+                .await
+                .unwrap()
+        }
+    };
+    let undeclared = block("b").await;
+    assert_eq!(undeclared["undeclaredShots"], 28);
+    assert_eq!(undeclared["ranUndeclared"], true);
+    // A declared session's unresolved shots are not a sign of it.
+    let declared = block("s").await;
+    assert_eq!(declared["undeclaredShots"], 0);
+    assert_eq!(declared["ranUndeclared"], false);
+    // The record outlives the repair.
+    h.service.assign_fitting("b", CANNON).await.unwrap();
+    assert_eq!(block("b").await["ranUndeclared"], true);
 }

@@ -11,8 +11,9 @@
 
 use eo_services::tracker::{MismatchDecision, WeaponDecisionError};
 use eo_services::weapon_review::{
-    CorrectionWeapon as ServiceCorrectionWeapon, EffectCandidate as ServiceEffectCandidate,
-    ReviewShot, ReviewShotPage, ShotCandidate as ServiceCandidate, ShotGroup,
+    BulkAssignOption as ServiceBulkOption, CorrectionWeapon as ServiceCorrectionWeapon,
+    EffectCandidate as ServiceEffectCandidate, ReviewShot, ReviewShotPage,
+    ShotCandidate as ServiceCandidate, ShotGroup, UnpricedExposure as ServiceExposure,
     WeaponCorrectionKind as ServiceCorrectionKind, WeaponReviewError,
 };
 use schemars::JsonSchema;
@@ -266,6 +267,71 @@ impl From<ServiceCorrectionWeapon> for WeaponCorrectionWeapon {
     }
 }
 
+/// What a session's unpriced shots could have cost at most. The session's
+/// cost leaves them out.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponUnpricedExposure {
+    pub session_id: String,
+    /// Shots still without a price or correction.
+    pub shots: i64,
+    /// Of those, the ones no weapon still in Equipment fitted: they add
+    /// nothing to the bound.
+    pub no_fit_shots: i64,
+    /// Each other shot at the dearest weapon that fitted it, priced as it
+    /// is configured now.
+    pub cost_bound_ped: f64,
+}
+
+impl From<ServiceExposure> for WeaponUnpricedExposure {
+    fn from(value: ServiceExposure) -> Self {
+        Self {
+            session_id: value.session_id,
+            shots: value.shots,
+            no_fit_shots: value.no_fit_shots,
+            cost_bound_ped: value.cost_bound_ped,
+        }
+    }
+}
+
+/// A weapon a session's unpriced shots could all be assigned to at once.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponBulkOption {
+    pub equipment_id: i64,
+    pub name: String,
+    /// The unpriced shots its damage band fitted: the ones it would price.
+    pub fitting_shots: i64,
+    /// The session's other unpriced shots, which it would leave.
+    pub skipped_shots: i64,
+    /// What pricing the fitting shots would add, priced as the weapon is
+    /// configured now.
+    pub added_cost_ped: f64,
+}
+
+impl From<ServiceBulkOption> for WeaponBulkOption {
+    fn from(value: ServiceBulkOption) -> Self {
+        Self {
+            equipment_id: value.equipment_id,
+            name: value.name,
+            fitting_shots: value.fitting_shots,
+            skipped_shots: value.skipped_shots,
+            added_cost_ped: value.added_cost_ped,
+        }
+    }
+}
+
+/// What a bulk assignment did, with the session's refreshed detail.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponBulkAssignment {
+    pub assigned: i64,
+    /// Unpriced shots it left: the weapon did not fit them.
+    pub skipped: i64,
+    pub added_cost_ped: f64,
+    pub detail: SessionDetail,
+}
+
 fn review_error(error: WeaponReviewError) -> ApiError {
     match error {
         WeaponReviewError::Invalid(message) => ApiError::bad_request(message),
@@ -307,16 +373,61 @@ impl Api {
             .try_into()
     }
 
-    /// Which of these sessions still hold an unpriced shot, in the
-    /// caller's order.
-    pub async fn weapon_unpriced_sessions(
+    /// The sessions among these still holding an unpriced shot, in the
+    /// caller's order, each with the most those shots could have cost.
+    pub async fn weapon_unpriced_exposure(
         &self,
         session_ids: Vec<String>,
-    ) -> Result<Vec<String>, ApiError> {
+    ) -> Result<Vec<WeaponUnpricedExposure>, ApiError> {
         self.weapon_review
-            .unpriced_sessions(session_ids)
+            .unpriced_exposure(session_ids)
             .await
+            .map(|exposures| exposures.into_iter().map(Into::into).collect())
             .map_err(review_error)
+    }
+
+    /// The weapons a session's unpriced shots could all be assigned to at
+    /// once, the one fitting the most first.
+    pub async fn weapon_bulk_options(
+        &self,
+        session_id: String,
+    ) -> Result<Vec<WeaponBulkOption>, ApiError> {
+        self.weapon_review
+            .bulk_assign_options(&session_id)
+            .await
+            .map(|options| options.into_iter().map(Into::into).collect())
+            .map_err(review_error)
+    }
+
+    /// Assign every unpriced shot of an ended session the weapon fitted to
+    /// it, as one batch; answers with what it did and the refreshed detail.
+    pub async fn weapon_assign_fitting(
+        &self,
+        session_id: String,
+        equipment_id: i64,
+    ) -> Result<WeaponBulkAssignment, ApiError> {
+        let done = self
+            .weapon_review
+            .assign_fitting(&session_id, equipment_id)
+            .await
+            .map_err(review_error)?;
+        Ok(WeaponBulkAssignment {
+            assigned: done.assigned,
+            skipped: done.skipped,
+            added_cost_ped: done.added_cost_ped,
+            detail: self.tracking_session_detail(done.session_id).await?,
+        })
+    }
+
+    /// Undo a bulk assignment's corrections still live; answers with the
+    /// session's refreshed detail.
+    pub async fn weapon_batch_undo(&self, batch_id: String) -> Result<SessionDetail, ApiError> {
+        let done = self
+            .weapon_review
+            .undo_batch(&batch_id)
+            .await
+            .map_err(review_error)?;
+        self.tracking_session_detail(done.session_id).await
     }
 
     /// The weapons an unpriced shot could be assigned to, fitting ones

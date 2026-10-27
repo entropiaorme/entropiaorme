@@ -1,4 +1,5 @@
 import type { LifetimeStats, TrackingStatus } from './api';
+import { describeUnpriced } from './features/weapons/weaponReview';
 import { formatMultiplier, formatPed, formatPercent } from './utils/format';
 
 export type StatId =
@@ -85,18 +86,18 @@ function overSpan(
 	return lifetime.instanceCount > 0 ? render(lifetime) : EMPTY;
 }
 
-/** What an incomplete cost leaves out, in the player's terms. */
-export function unpricedNote(shots: number): string {
-	return `Leaves out ${shots} ${shots === 1 ? 'shot' : 'shots'} that could not be priced`;
-}
-
 /**
- * Mark a cost-derived figure incomplete while shots sit unpriced. Only a
- * figure actually drawn is marked: an empty reading claims nothing.
+ * Mark a cost-derived figure incomplete while shots sit unpriced, with the
+ * most they could add when it is known. Only a figure actually drawn is
+ * marked: an empty reading claims nothing.
  */
-function costBased(shots: number | null | undefined, render: StatRender): StatRender {
+function costBased(
+	shots: number | null | undefined,
+	render: StatRender,
+	costBound?: number | null,
+): StatRender {
 	return shots && shots > 0 && render.value !== EMPTY.value
-		? { ...render, incomplete: unpricedNote(shots) }
+		? { ...render, incomplete: describeUnpriced(shots, costBound) }
 		: render;
 }
 
@@ -104,7 +105,10 @@ function costBased(shots: number | null | undefined, render: StatRender): StatRe
 function liveCost(
 	render: (status: TrackingStatus) => StatRender,
 ): (status: TrackingStatus | null) => StatRender {
-	return (status) => (isActive(status) ? costBased(status.unpricedShots, render(status)) : EMPTY);
+	return (status) =>
+		isActive(status)
+			? costBased(status.unpricedShots, render(status), status.unpricedCostBound)
+			: EMPTY;
 }
 
 /** A lifetime figure built on the family's cycled total. */

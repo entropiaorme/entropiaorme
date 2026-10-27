@@ -76,7 +76,8 @@ use eo_api::tracking::{
     StartResult, StopResult, TrackingSnapshot,
 };
 use eo_api::weapons::{
-    WeaponCorrectionWeapon, WeaponMismatchDecision, WeaponShotGroup, WeaponShotPage,
+    WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
+    WeaponShotGroup, WeaponShotPage, WeaponUnpricedExposure,
 };
 use eo_api::ApiError;
 use eo_api::Nullable;
@@ -296,11 +297,38 @@ pub async fn weapon_shots(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn weapon_unpriced_sessions(
+pub async fn weapon_unpriced_exposure(
     app: tauri::AppHandle,
     session_ids: Vec<String>,
-) -> Result<Vec<String>, ApiError> {
-    facade(&app)?.weapon_unpriced_sessions(session_ids).await
+) -> Result<Vec<WeaponUnpricedExposure>, ApiError> {
+    facade(&app)?.weapon_unpriced_exposure(session_ids).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_bulk_options(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<WeaponBulkOption>, ApiError> {
+    facade(&app)?.weapon_bulk_options(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assign_fitting(
+    app: tauri::AppHandle,
+    session_id: String,
+    equipment_id: i64,
+) -> Result<WeaponBulkAssignment, ApiError> {
+    facade(&app)?
+        .weapon_assign_fitting(session_id, equipment_id)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_batch_undo(
+    app: tauri::AppHandle,
+    batch_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_batch_undo(batch_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

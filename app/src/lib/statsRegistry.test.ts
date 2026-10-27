@@ -400,14 +400,16 @@ describe('figures built on a cost with unpriced shots in it', () => {
 		weaponDamageDealt: 500,
 		damageDealtTotal: 500,
 		unpricedShots: 3,
+		unpricedCostBound: 0.6,
 	});
 
-	it('are marked incomplete, saying what they leave out', () => {
+	it('are marked incomplete, bounding what they leave out', () => {
 		for (const id of COST_BUILT) {
-			expect(render(id, status).incomplete, id).toBe('Leaves out 3 shots that could not be priced');
+			expect(render(id, status).incomplete, id).toBe('3 shots unpriced, up to +0.60 PED');
 		}
+		// No weapon fitted the shot: the count stands alone.
 		expect(render('cycled', active({ cost: 1, unpricedShots: 1 })).incomplete).toBe(
-			'Leaves out 1 shot that could not be priced',
+			'1 shot unpriced',
 		);
 	});
 
@@ -436,9 +438,7 @@ describe('figures built on a cost with unpriced shots in it', () => {
 			unpricedShots: 4,
 		};
 		for (const id of ['cycled', 'net', 'rate', 'pes_per_100'] as StatId[]) {
-			expect(STAT_DEFS[id].renderLifetime?.(lifetime).incomplete, id).toBe(
-				'Leaves out 4 shots that could not be priced',
-			);
+			expect(STAT_DEFS[id].renderLifetime?.(lifetime).incomplete, id).toBe('4 shots unpriced');
 		}
 		expect(STAT_DEFS.loot_tt.renderLifetime?.(lifetime).incomplete).toBeUndefined();
 		expect(STAT_DEFS.cycled.renderLifetime?.({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);

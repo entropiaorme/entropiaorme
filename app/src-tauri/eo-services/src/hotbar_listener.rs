@@ -40,6 +40,19 @@ pub struct ResolvedHotbarItem {
 /// empty or unreadable slot. It runs on the listener-owned worker.
 pub type HotbarResolver = Arc<dyn Fn(&str) -> Option<ResolvedHotbarItem> + Send + Sync>;
 
+/// The item resolver: an equipment-library id to its current snapshot, the
+/// way a press resolves its slot's item. Overlay declarations use it.
+pub type ItemResolver = Arc<dyn Fn(i64) -> Option<ResolvedHotbarItem> + Send + Sync>;
+
+/// Why an overlay declaration was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DeclareError {
+    #[error("no tracking session is running")]
+    NoSession,
+    #[error("that item is not in the equipment library")]
+    UnknownItem,
+}
+
 /// The focus seam: where keyboard focus sits relative to the game client
 /// at the moment it is asked. Production wires `eu_window::game_focus`.
 pub type GameFocusProbe = Arc<dyn Fn() -> GameFocus + Send + Sync>;
@@ -74,6 +87,7 @@ pub struct HotbarListener {
     focus: Option<GameFocusProbe>,
     gate: Arc<Gate>,
     key_tap: Arc<Mutex<Option<KeyTap>>>,
+    item_resolver: Mutex<Option<ItemResolver>>,
     resolve_queue: Mutex<Option<Sender<HotbarResolveRequest>>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     session_subscriptions: Mutex<Option<(Registration, Registration)>>,
@@ -125,6 +139,7 @@ impl HotbarListener {
             focus,
             gate: gate.clone(),
             key_tap: key_tap.clone(),
+            item_resolver: Mutex::new(None),
             resolve_queue: Mutex::new(queue),
             worker: Mutex::new(worker),
             session_subscriptions: Mutex::new(None),
@@ -187,6 +202,53 @@ impl HotbarListener {
     /// Remove the keystroke observer.
     pub fn clear_key_tap(&self) {
         *self.key_tap.lock().expect("key tap") = None;
+    }
+
+    /// Wire the item resolver overlay declarations resolve through.
+    pub fn set_item_resolver(&self, resolver: ItemResolver) {
+        *self.item_resolver.lock().expect("item resolver") = Some(resolver);
+    }
+
+    /// Declare an equipment item as in hand, as its hotbar press would: the
+    /// overlay's path, and the only one on a machine that cannot read keys.
+    /// Independent of the keyboard: it needs a running session, not the
+    /// capability toggle. Resolves synchronously (a database read), so call
+    /// it off the async runtime.
+    pub fn declare(
+        &self,
+        equipment_id: i64,
+        occurred_at: f64,
+    ) -> Result<ResolvedHotbarItem, DeclareError> {
+        let session_id = self
+            .gate
+            .active_session_id
+            .lock()
+            .expect("active session")
+            .clone()
+            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
+            .ok_or(DeclareError::NoSession)?;
+        let resolver = self
+            .item_resolver
+            .lock()
+            .expect("item resolver")
+            .clone()
+            .ok_or(DeclareError::UnknownItem)?;
+        let item =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
+                .unwrap_or(None)
+                .ok_or(DeclareError::UnknownItem)?;
+        if !session_matches(&self.gate, &session_id) {
+            return Err(DeclareError::NoSession);
+        }
+        publish_intent(
+            &self.bus,
+            session_id,
+            String::new(),
+            crate::bus_events::IntentSource::Overlay,
+            occurred_at,
+            &item,
+        );
+        Ok(item)
     }
 
     /// Apply the hotbar capability toggle; the source still only runs
@@ -347,11 +409,29 @@ fn resolve_hotbar_slot(
     if !session_matches(gate, &request.session_id) {
         return;
     }
-    let slot = request.slot;
+    publish_intent(
+        bus,
+        request.session_id,
+        request.slot,
+        crate::bus_events::IntentSource::Key,
+        request.occurred_at.timestamp_micros() as f64 / 1_000_000.0,
+        &item,
+    );
+}
+
+fn publish_intent(
+    bus: &EventBus,
+    session_id: String,
+    slot: String,
+    source: crate::bus_events::IntentSource,
+    occurred_at: f64,
+    item: &ResolvedHotbarItem,
+) {
     bus.publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
-        session_id: Some(request.session_id),
+        session_id: Some(session_id),
         slot,
-        occurred_at: request.occurred_at.timestamp_micros() as f64 / 1_000_000.0,
+        source,
+        occurred_at,
         equipment_id: item.equipment_id,
         item_name: item.name.clone(),
         item_kind: item.kind,
@@ -453,6 +533,50 @@ mod tests {
             }),
             _ => None,
         })
+    }
+
+    #[test]
+    fn an_overlay_declaration_publishes_the_item_without_any_keyboard() {
+        let rig = rig(None);
+        rig.listener
+            .set_item_resolver(Arc::new(|id: i64| standard_resolver()(&id.to_string())));
+        // The capability toggle stays off and the source never starts: a
+        // declaration needs only a running session.
+        assert_eq!(rig.listener.declare(2, 100.0), Err(DeclareError::NoSession));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(
+            rig.listener.declare(9, 100.0),
+            Err(DeclareError::UnknownItem)
+        );
+        let item = rig.listener.declare(2, 100.5).expect("declared");
+        assert_eq!(item.name, "Healer");
+        // The keyboard stayed detached: a key now is never observed.
+        rig.source
+            .inject("1", chrono::Utc::now(), KeystrokeKind::Press);
+
+        let intents: Vec<Value> = rig
+            .stream
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| payload.clone())
+            .collect();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0]["source"], "overlay");
+        assert_eq!(intents[0]["slot"], "");
+        assert_eq!(intents[0]["session_id"], "s1");
+        assert_eq!(intents[0]["equipment_id"], 2);
+        assert_eq!(intents[0]["occurred_at"], 100.5);
+
+        rig.bus
+            .publish(&BusEvent::SessionStopped(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(rig.listener.declare(2, 101.0), Err(DeclareError::NoSession));
     }
 
     fn wait_for_intents(rig: &Rig, expected: usize) {

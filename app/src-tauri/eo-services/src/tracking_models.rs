@@ -217,6 +217,9 @@ pub struct ActiveSessionView {
     /// carried weapons explain goes unpriced, and the weapon shown is only
     /// what the damage last pointed to.
     pub weapon_declared: bool,
+    /// The session runs keyless: equipment is declared in the overlay and
+    /// healing uses are inferred from the chat log.
+    pub keyless: bool,
     pub healing: HealingRuntimeView,
     /// Raw rows (event_type, mob_or_item, value_ped, timestamp): the
     /// presentation mapping lives in the HTTP layer.

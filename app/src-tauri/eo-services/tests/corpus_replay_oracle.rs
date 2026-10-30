@@ -387,6 +387,7 @@ fn press(process: &Process, clock: &MockClock, press: &ScriptedPress) {
         .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: press.slot.clone(),
+            source: eo_services::bus_events::IntentSource::Key,
             occurred_at: naive_to_epoch(clock.now()),
             equipment_id: press.equipment_id,
             item_name: press.item_name.clone(),

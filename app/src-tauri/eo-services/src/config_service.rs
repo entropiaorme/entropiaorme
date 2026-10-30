@@ -54,6 +54,12 @@ pub struct AppConfig {
     pub chatlog_path: String,
     pub player_name: String,
     pub hotbar_hooks_enabled: bool,
+    /// Keyless tracking, held as the identity of the machine it was turned
+    /// on for rather than a flag: this machine cannot read keys, so nothing
+    /// opens the keyboard and attribution infers from the chat log instead.
+    /// Keyed to the machine so a `settings.json` carried to another one
+    /// leaves keyless tracking off there (see [`AppConfig::keyless_input_on`]).
+    pub keyless_input_host: Option<String>,
     pub repair_ocr_enabled: bool,
     pub developer_mode_enabled: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
@@ -112,6 +118,7 @@ impl Default for AppConfig {
             chatlog_path: String::new(),
             player_name: String::new(),
             hotbar_hooks_enabled: false,
+            keyless_input_host: None,
             repair_ocr_enabled: false,
             developer_mode_enabled: false,
             manual_mob_species: String::new(),
@@ -135,6 +142,19 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Whether keyless tracking is on for the machine identified by
+    /// `machine_id`: only when it was turned on there. An unidentifiable
+    /// machine never runs keyless.
+    pub fn keyless_input_on(&self, machine_id: Option<&str>) -> bool {
+        machine_id.is_some_and(|id| self.keyless_input_host.as_deref() == Some(id))
+    }
+
+    /// Whether hotbar presses are observed: the capability toggle, and never
+    /// on a machine running keyless.
+    pub fn hotbar_keys_observed(&self, machine_id: Option<&str>) -> bool {
+        self.hotbar_hooks_enabled && !self.keyless_input_on(machine_id)
+    }
+
     /// The default chat-log location under the user's home directory.
     pub fn default_chatlog_path() -> String {
         let home = std::env::var_os("HOME")
@@ -428,6 +448,12 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         chatlog_path: string_or("chatlog_path", &AppConfig::default_chatlog_path()),
         player_name: string_or("player_name", ""),
         hotbar_hooks_enabled: toggle("hotbar_hooks_enabled"),
+        keyless_input_host: data
+            .get("keyless_input_host")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_string),
         repair_ocr_enabled: toggle("repair_ocr_enabled"),
         developer_mode_enabled: toggle("developer_mode_enabled"),
         manual_mob_species: string_or("manual_mob_species", ""),
@@ -510,10 +536,11 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // hotbar and every carried weapon's damage band. They stay unknown and
 // carry through untouched, and a store written before `carried_weapon_ids`
 // seeds it once from them (see `carried_weapons_from_stored`).
-const KNOWN_KEYS: [&str; 20] = [
+const KNOWN_KEYS: [&str; 21] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
+    "keyless_input_host",
     "repair_ocr_enabled",
     "developer_mode_enabled",
     "manual_mob_species",
@@ -713,6 +740,15 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
             "chatlog_path" => assign_string(&mut config.chatlog_path, value),
             "player_name" => assign_string(&mut config.player_name, value),
             "hotbar_hooks_enabled" => assign_bool(&mut config.hotbar_hooks_enabled, value),
+            // An explicit null turns keyless tracking off; a host id turns
+            // it on for that machine.
+            "keyless_input_host" => {
+                config.keyless_input_host = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|host| !host.is_empty())
+                    .map(str::to_string);
+            }
             "repair_ocr_enabled" => assign_bool(&mut config.repair_ocr_enabled, value),
             "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
@@ -1280,6 +1316,48 @@ mod tests {
             svc.get().harvest_guardrail,
             HarvestGuardrailConfig::default()
         );
+    }
+
+    #[test]
+    fn keyless_tracking_holds_only_on_the_machine_it_was_turned_on_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        let mut config = svc.get().clone();
+        config.hotbar_hooks_enabled = true;
+        assert!(!config.keyless_input_on(Some("machine-a")));
+        assert!(config.hotbar_keys_observed(Some("machine-a")));
+
+        let mut updates = Map::new();
+        updates.insert(
+            "keyless_input_host".into(),
+            serde_json::json!(" machine-a "),
+        );
+        updates.insert("hotbar_hooks_enabled".into(), serde_json::json!(true));
+        svc.update(&updates).unwrap();
+        let config = svc.get().clone();
+        assert_eq!(config.keyless_input_host.as_deref(), Some("machine-a"));
+        assert!(config.keyless_input_on(Some("machine-a")));
+        // Keyless overrides the hotbar toggle on that machine only.
+        assert!(!config.hotbar_keys_observed(Some("machine-a")));
+        // The same settings carried to another machine, or read where the
+        // machine cannot be identified, leave keyless off.
+        assert!(!config.keyless_input_on(Some("machine-b")));
+        assert!(config.hotbar_keys_observed(Some("machine-b")));
+        assert!(!config.keyless_input_on(None));
+
+        // It survives a reload, and an explicit null (or blank) turns it off.
+        assert_eq!(
+            service(dir.path()).get().keyless_input_host.as_deref(),
+            Some("machine-a")
+        );
+        let mut updates = Map::new();
+        updates.insert("keyless_input_host".into(), Value::Null);
+        svc.update(&updates).unwrap();
+        assert_eq!(svc.get().keyless_input_host, None);
+        let mut updates = Map::new();
+        updates.insert("keyless_input_host".into(), serde_json::json!("  "));
+        svc.update(&updates).unwrap();
+        assert_eq!(svc.get().keyless_input_host, None);
     }
 
     #[test]

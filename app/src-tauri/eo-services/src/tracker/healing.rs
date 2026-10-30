@@ -1,10 +1,19 @@
 //! Intent-led healing attribution.
 //!
-//! A resolved healer hotbar press opens an activation candidate. Chat-log
-//! healing is output evidence: it can confirm one paid activation, belong to
-//! an already-open effect window, or remain passive/unattributed at zero
-//! cost. Cross-producer ordering is handled by retaining a short unresolved
-//! output tail and reconciling it when the earlier OS key occurrence arrives.
+//! A resolved healer hotbar press (or an overlay declaration of the healer)
+//! opens an activation candidate. Chat-log healing is output evidence: it can
+//! confirm one paid activation, belong to an already-open effect window, or
+//! remain passive/unattributed at zero cost. Cross-producer ordering is
+//! handled by retaining a short unresolved output tail and reconciling it
+//! when the earlier OS key occurrence arrives.
+//!
+//! A keyless session (a machine that cannot read keys) has no press to open
+//! a candidate, so the healer last declared in the overlay stays in hand and
+//! a heal it explains is inferred as a paid use: it must fit the healer's
+//! band, respect its reload, fall in no open effect window, and not be the
+//! held weapon's lifesteal. A capped heal (below the band because health
+//! topped out) cannot be told from other healing without a press, so it
+//! stays zero-cost evidence. Inferred uses are stored as such.
 //!
 //! Persisted absolute expiry is the truth for effect windows: a session starts
 //! from every live window whose expiry is still ahead, whichever session paid
@@ -18,7 +27,7 @@ use std::collections::HashMap;
 
 use crate::bus_events::{
     ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, BusEvent, HotbarIntentPayload,
-    HotbarItemKind,
+    HotbarItemKind, IntentSource,
 };
 use crate::db::DbError;
 use crate::healing_profile::HealingProfile;
@@ -49,6 +58,7 @@ pub(super) struct HealingIntent {
     pub(super) profile: HealingProfile,
     pub(super) occurred_at: f64,
     pub(super) closed_at: Option<f64>,
+    pub(super) source: IntentSource,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +92,12 @@ pub(super) struct HealingRuntime {
     pending_outputs: Vec<PendingOutput>,
     last_damage: Option<(f64, f64)>,
     pub(super) weapon_lifesteal_percent: Option<f64>,
+    /// The session runs keyless (snapshotted at start): heals the declared
+    /// healer explains are inferred as paid uses.
+    pub(super) keyless: bool,
+    /// The healer last declared, kept in hand across weapon declarations; only
+    /// a keyless session infers from it.
+    pub(super) declared_healer: Option<HealingIntent>,
     pub(super) activation_count: i64,
     pub(super) direct_output_count: i64,
     pub(super) effect_output_count: i64,
@@ -101,6 +117,8 @@ struct ActivationWrite {
     context_id: Option<i64>,
     provenance: &'static str,
     retrospective: bool,
+    /// Inferred in a keyless session rather than confirmed by an intent.
+    inferred: bool,
 }
 
 /// The healing state persisted beyond any one session: every live effect
@@ -272,6 +290,31 @@ impl HealingRuntime {
         }
     }
 
+    /// Whether the held weapon's lifesteal explains this heal: a hit landed
+    /// just before it, and the heal is that hit's lifesteal share. Unlike
+    /// [`Self::damage_correlated`], a weapon with no lifesteal explains
+    /// nothing, so a keyless heal in the middle of a fight still counts.
+    fn lifesteal_explains(&self, observed_at: f64, amount: f64) -> bool {
+        self.weapon_lifesteal_percent.is_some() && self.damage_correlated(observed_at, amount)
+    }
+
+    /// The declared healer as an inferred use's intent, when this keyless
+    /// session's heal fits it.
+    fn inferred_candidate(&self, observed_at: f64, amount: f64) -> Option<HealingIntent> {
+        if !self.keyless {
+            return None;
+        }
+        let healer = self.declared_healer.as_ref()?;
+        (healer.profile.confirms_activation(amount)
+            && self.cooldown_ready(healer, observed_at)
+            && !self.lifesteal_explains(observed_at, amount))
+        .then(|| HealingIntent {
+            occurred_at: observed_at,
+            closed_at: None,
+            ..healer.clone()
+        })
+    }
+
     fn cooldown_ready(&self, intent: &HealingIntent, observed_at: f64) -> bool {
         self.last_activation
             .get(&intent.equipment_id)
@@ -308,7 +351,9 @@ impl TrackerActor {
             match payload.item_kind {
                 HotbarItemKind::Healing => {
                     if let Some(profile) = payload.healing_profile.clone() {
-                        active.healing.intent = Some(intent_from_payload(payload, profile));
+                        let intent = intent_from_payload(payload, profile);
+                        active.healing.declared_healer = Some(intent.clone());
+                        active.healing.intent = Some(intent);
                         true
                     } else {
                         close_healing_intent(&mut active.healing, payload.occurred_at);
@@ -335,7 +380,16 @@ impl TrackerActor {
         // session-scoped event. Publishing a second, unscoped event from
         // the listener would leave a session transition between validation
         // and dispatch where stale equipment could reach the next session.
-        let source = Some(format!("hotbar:{}", payload.slot));
+        let source = Some(match payload.source {
+            IntentSource::Key => format!("hotbar:{}", payload.slot),
+            IntentSource::Overlay => "overlay".to_string(),
+        });
+        if let (HotbarItemKind::Healing, Some(profile)) =
+            (payload.item_kind, payload.healing_profile.clone())
+        {
+            // The hand outlives the session, as the held weapon does.
+            self.declared_healer = Some(intent_from_payload(payload, profile));
+        }
         match payload.item_kind {
             HotbarItemKind::Weapon => {
                 self.on_weapon_press(&payload.item_name, payload.occurred_at);
@@ -523,6 +577,22 @@ impl TrackerActor {
                         false,
                     )),
                 }
+            } else if let Some(intent) = active.healing.inferred_candidate(observed_at, amount) {
+                HealingDecision::Activation {
+                    session_id,
+                    write: Box::new(
+                        activation_write(
+                            intent,
+                            observed_at,
+                            chat_timestamp,
+                            amount,
+                            context_id,
+                            "direct",
+                            false,
+                        )
+                        .inferred(),
+                    ),
+                }
             } else {
                 let passive = active.healing.damage_correlated(observed_at, amount);
                 HealingDecision::Uncosted {
@@ -631,8 +701,8 @@ impl TrackerActor {
                             "INSERT INTO healing_activations \
                              (id, session_id, equipment_id, tool_name, intent_at, observed_at, \
                               chat_timestamp, context_id, cost_ped, profile_json, provenance, \
-                              confirming_output_id, reload_speed_percent) \
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              confirming_output_id, reload_speed_percent, intent_source) \
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rusqlite::params![
                                 db_write.activation_id,
                                 sid,
@@ -647,6 +717,7 @@ impl TrackerActor {
                                 db_write.provenance,
                                 db_write.output_id,
                                 db_write.intent.profile.reload_speed_percent,
+                                db_write.intent_source(),
                             ],
                         )?;
                         if let Some(window) = &db_write.effect {
@@ -914,6 +985,7 @@ fn intent_from_payload(payload: &HotbarIntentPayload, profile: HealingProfile) -
         profile,
         occurred_at: payload.occurred_at,
         closed_at: None,
+        source: payload.source,
     }
 }
 
@@ -957,6 +1029,7 @@ fn activation_write(
         context_id,
         provenance,
         retrospective,
+        inferred: false,
     }
 }
 
@@ -964,5 +1037,19 @@ impl ActivationWrite {
     fn with_output_id(mut self, output_id: String) -> Self {
         self.output_id = output_id;
         self
+    }
+
+    fn inferred(mut self) -> Self {
+        self.inferred = true;
+        self
+    }
+
+    /// The stored evidence behind the use (`healing_activations.intent_source`).
+    fn intent_source(&self) -> &'static str {
+        if self.inferred {
+            "inferred"
+        } else {
+            self.intent.source.as_str()
+        }
     }
 }

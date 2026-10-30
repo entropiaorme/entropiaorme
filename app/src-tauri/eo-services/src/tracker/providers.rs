@@ -129,6 +129,13 @@ pub trait TrackingConfig: Send + Sync {
     fn hotbar_hooks_enabled(&self) -> bool {
         false
     }
+
+    /// Whether this machine runs keyless tracking: it cannot read keys, so a
+    /// session starting now infers healing uses from the chat log against the
+    /// healer declared in the overlay.
+    fn keyless_input(&self) -> bool {
+        false
+    }
 }
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks

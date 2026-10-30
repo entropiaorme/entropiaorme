@@ -80,6 +80,7 @@ async fn the_settings_assembly_shapes_the_default_config() {
         [
             "gameConnection",
             "hotbarHooksEnabled",
+            "keyboard",
             "repairOcrEnabled",
             "developerModeEnabled",
             "sessionName",
@@ -95,6 +96,16 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "dbPath",
             "appVersion",
         ]
+    );
+    // A facade with no input access attached cannot identify its machine,
+    // so keyless tracking is unavailable and no observer is reported.
+    assert_eq!(
+        body["keyboard"],
+        serde_json::json!({
+            "observer": "unavailable",
+            "keyless": false,
+            "keylessAvailable": false,
+        })
     );
     assert_eq!(
         body["reloadSpeed"],
@@ -134,6 +145,95 @@ async fn the_settings_assembly_shapes_the_default_config() {
         .as_str()
         .unwrap()
         .ends_with("entropia_orme.db"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keyless_tracking_is_held_to_this_machine_and_suppresses_the_keyboard() {
+    use eo_services::keystroke_source::{KeystrokeCallback, KeystrokeSource};
+    use std::sync::Mutex;
+
+    /// Records each suppression the facade applies.
+    #[derive(Default)]
+    struct Keyboard(Mutex<Vec<bool>>);
+    impl KeystrokeSource for Keyboard {
+        fn subscribe(&self, _callback: KeystrokeCallback) {}
+        fn start(&self) -> bool {
+            false
+        }
+        fn stop(&self) {}
+        fn set_suppressed(&self, suppressed: bool) {
+            self.0.lock().unwrap().push(suppressed);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    // Without a machine identity the switch is refused and nothing is written.
+    let unidentified = settings_api(dir.path()).await;
+    let refused = unidentified
+        .settings_update(SettingsPatch {
+            keyless_input: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, ApiError::BadRequest { .. }),
+        "{refused:?}"
+    );
+
+    let keyboard = Arc::new(Keyboard::default());
+    let api = settings_api(dir.path())
+        .await
+        .with_input_access(eo_api::settings::InputAccess::new(
+            Some("machine-a".into()),
+            keyboard.clone(),
+        ));
+    let on = api
+        .settings_update(SettingsPatch {
+            keyless_input: Some(true),
+            hotbar_hooks_enabled: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    let body = serde_json::to_value(&on).unwrap();
+    // Keyless never probes the keyboard, so no observer is reported.
+    assert_eq!(
+        body["keyboard"],
+        serde_json::json!({ "observer": null, "keyless": true, "keylessAvailable": true })
+    );
+    // The stored toggle is kept for when keyless is turned off again.
+    assert_eq!(body["hotbarHooksEnabled"], true);
+    let stored = read_settings(&dir.path().join("data"));
+    assert_eq!(stored["keyless_input_host"], "machine-a");
+    let snapshot = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
+    assert_eq!(snapshot["keylessInput"], true);
+    assert_eq!(snapshot["hotbarKeysEnabled"], false);
+
+    // The same settings on another machine leave keyless off there.
+    let elsewhere =
+        settings_api(dir.path())
+            .await
+            .with_input_access(eo_api::settings::InputAccess::new(
+                Some("machine-b".into()),
+                Arc::new(Keyboard::default()),
+            ));
+    let body = serde_json::to_value(elsewhere.settings().await.unwrap()).unwrap();
+    assert_eq!(body["keyboard"]["keyless"], false);
+
+    let off = api
+        .settings_update(SettingsPatch {
+            keyless_input: Some(false),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(!off.keyboard.keyless);
+    assert_eq!(
+        read_settings(&dir.path().join("data"))["keyless_input_host"],
+        Value::Null
+    );
+    assert_eq!(*keyboard.0.lock().unwrap(), vec![true, false]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

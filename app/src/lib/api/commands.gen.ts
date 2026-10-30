@@ -261,6 +261,7 @@ export interface AnalyticsOverview {
 export interface AppSettings {
 	gameConnection: GameConnection;
 	hotbarHooksEnabled: boolean;
+	keyboard: KeyboardAccess;
 	repairOcrEnabled: boolean;
 	developerModeEnabled: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
@@ -892,6 +893,14 @@ export interface CycledBreakdown {
 	harvest: number;
 	/** Consumed doses of cost-tracked items. */
 	consumables: number;
+}
+
+/**
+ * What an overlay declaration put in hand.
+ */
+export interface DeclaredEquipment {
+	name: string;
+	kind: HeldItemKind;
 }
 
 /**
@@ -1565,6 +1574,24 @@ export interface InventorySellResult {
 	ledgerEntry: LedgerItem | null;
 	soldItem: InventoryItem;
 }
+
+/**
+ * How this machine reads the player's keys, and whether it runs keyless.
+ */
+export interface KeyboardAccess {
+	/** The observer hotbar keys would be read through. Null while keyless: a keyless machine is never probed (nothing opens the keyboard). */
+	observer?: KeyboardObserverKind | null;
+	/** Keyless tracking is on for this machine. */
+	keyless: boolean;
+	/** Keyless tracking can be turned on: the machine can be identified, so the setting stays with it. */
+	keylessAvailable: boolean;
+}
+
+/**
+ * The global key observer this machine reads keys through, as the
+ * settings show it.
+ */
+export type KeyboardObserverKind = 'xinput' | 'evdev' | 'windows_hook' | 'unavailable';
 
 /**
  * What a setup costs to kill a mob at one HP.
@@ -3215,6 +3242,8 @@ export interface SettingsPatch {
 	chatlog_path?: string | null;
 	player_name?: string | null;
 	hotbar_hooks_enabled?: boolean | null;
+	/** Turn keyless tracking on or off for this machine. */
+	keyless_input?: boolean | null;
 	repair_ocr_enabled?: boolean | null;
 	developer_mode_enabled?: boolean | null;
 	session_name?: string | null;
@@ -3676,6 +3705,8 @@ export interface TrackingSnapshot {
 	hotbarListenerActive?: boolean | null;
 	/** Whether the player enabled the hotbar key listener: hotbar presses then declare the weapon in hand. Without it, costs follow the carried weapons' damage ranges alone. */
 	hotbarKeysEnabled?: boolean | null;
+	/** Keyless tracking: the active session's input mode while tracking, this machine's setting while idle. Equipment is then declared in the overlay and healing uses are inferred from the chat log. */
+	keylessInput?: boolean | null;
 	repairOcrEnabled?: boolean | null;
 	/** The session-name facet: the active session's when tracking, the configured next-session value when idle. */
 	sessionName?: string | null;
@@ -4774,6 +4805,10 @@ export async function trackingStop(): Promise<StopResult> {
 
 export async function trackingWeaponDecide(decision: 'confirm' | 'keep'): Promise<boolean> {
 	return invokeCommand('tracking_weapon_decide', { decision });
+}
+
+export async function trackingDeclareEquipment(equipmentId: number): Promise<DeclaredEquipment> {
+	return invokeCommand('tracking_declare_equipment', { equipment_id: equipmentId });
 }
 
 export async function trackingReleaseMob(): Promise<ReleaseResult> {

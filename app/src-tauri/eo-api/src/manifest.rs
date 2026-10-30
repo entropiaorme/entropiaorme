@@ -72,10 +72,10 @@ use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
-    ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
-    ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
-    StartResult, StopResult, TrackingSnapshot,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
+    SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
 };
 use crate::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -1439,6 +1439,14 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(WeaponMismatchDecision)),
             }],
             returns: Some(schema(schema_for!(bool))),
+        },
+        CommandSpec {
+            name: "tracking_declare_equipment",
+            args: vec![ArgSpec {
+                name: "equipment_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(DeclaredEquipment))),
         },
         CommandSpec {
             name: "tracking_release_mob",

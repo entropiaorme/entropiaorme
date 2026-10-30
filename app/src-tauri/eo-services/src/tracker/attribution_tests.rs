@@ -71,6 +71,7 @@ fn press(rig: &Rig, weapon: &str) {
         .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "1".into(),
+            source: crate::bus_events::IntentSource::Key,
             occurred_at: now(rig),
             equipment_id: 1,
             item_name: weapon.into(),

@@ -220,6 +220,32 @@ pub enum HotbarItemKind {
     Harvesting,
 }
 
+/// Where an equipment intent came from: a hotbar key press, or the player
+/// declaring the item in the overlay (the path a machine that cannot read
+/// keys relies on). Both declare the item in hand the same way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentSource {
+    #[default]
+    Key,
+    Overlay,
+}
+
+impl IntentSource {
+    /// Key presses are the original intent and serialise as before (the
+    /// field is omitted), so the event fingerprints of keyed play hold.
+    pub fn is_key(&self) -> bool {
+        *self == IntentSource::Key
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IntentSource::Key => "key",
+            IntentSource::Overlay => "overlay",
+        }
+    }
+}
+
 /// A hotbar press with its OS-observed occurrence instant and the equipment
 /// snapshot resolved for that slot. The tracker uses this as the intent
 /// boundary; the older tool-change events remain the weapon and harvesting
@@ -228,7 +254,10 @@ pub enum HotbarItemKind {
 pub struct HotbarIntentPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// The pressed slot; empty for an overlay declaration.
     pub slot: String,
+    #[serde(skip_serializing_if = "IntentSource::is_key")]
+    pub source: IntentSource,
     pub occurred_at: f64,
     pub equipment_id: i64,
     pub item_name: String,

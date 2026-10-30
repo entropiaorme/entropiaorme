@@ -86,7 +86,8 @@ use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
 use eo_services::hotbar_listener::{
-    GameFocusProbe, HotbarListener, HotbarResolver, ResolvedHotbarItem, HOTBAR_SLOT_KEYS,
+    GameFocusProbe, HotbarListener, HotbarResolver, ItemResolver, ResolvedHotbarItem,
+    HOTBAR_SLOT_KEYS,
 };
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
 use eo_services::ocr_engine::load_bgr_png;
@@ -351,6 +352,8 @@ pub struct ProducerState {
     // hook is single-instance, so two independent sources would have one
     // stand inert.
     keystroke_source: Arc<dyn KeystrokeSource>,
+    // This machine's identity, read once: keyless tracking is held to it.
+    machine_id: Option<String>,
     // The quest service: its owning task holds the permanent bus
     // subscriptions for the substrate's lifetime, and the typed-command
     // facade serves the quest families over this same instance.
@@ -462,6 +465,12 @@ impl ProducerState {
     /// (it is single-instance) while each gates independently.
     pub fn keystroke_source_handle(&self) -> Arc<dyn KeystrokeSource> {
         self.keystroke_source.clone()
+    }
+
+    /// This machine's input access for the facade: its identity and the
+    /// shared keyboard source keyless tracking suppresses.
+    pub fn input_access(&self) -> eo_api::settings::InputAccess {
+        eo_api::settings::InputAccess::new(self.machine_id.clone(), self.keystroke_source.clone())
     }
 }
 
@@ -918,6 +927,7 @@ async fn compose_with(
             Some(coord_capture.clone()),
             Some(navigation.0),
         )
+        .with_input_access(producers.input_access())
         .with_protection_changed({
             // Recording happens in the overlay's Cost popup while Equipment,
             // History, and the dashboard may be open elsewhere: each re-reads
@@ -1347,23 +1357,25 @@ fn compose_producers(
     // is inert, so both listeners never run.
     let keystroke_source: Arc<dyn KeystrokeSource> =
         Arc::new(SharedKeystrokeSource::new(keystroke_source));
+    // Keyless tracking is held to the machine it was turned on for. Apply it
+    // before any consumer can start the keyboard, so a keyless machine never
+    // opens it at all.
+    let machine_id = eo_services::machine_identity::current();
+    keystroke_source.set_suppressed(config.keyless_input_on(machine_id.as_deref()));
     // The running doses, published by the tracker and read by every other
     // surface that prices under the reload speed in effect.
     let doses = DoseBoard::new(clock.clone());
+    let items = build_item_resolver(db.clone(), data_dir, game_data.clone(), doses.clone());
     let hotbar = HotbarListener::new(
         bus.clone(),
         Some(keystroke_source.clone()),
-        Some(build_hotbar_resolver(
-            db.clone(),
-            data_dir,
-            game_data.clone(),
-            doses.clone(),
-        )),
+        Some(build_hotbar_resolver(data_dir, items.clone())),
         game_focus,
     );
+    hotbar.set_item_resolver(items);
     // Apply the stored toggle; the source still only attaches while a session
     // is active (the listener reconciles on the session bus events).
-    hotbar.set_hotbar_hooks_enabled(config.hotbar_hooks_enabled);
+    hotbar.set_hotbar_hooks_enabled(config.hotbar_keys_observed(machine_id.as_deref()));
 
     let config_reader = config_service
         .lock()
@@ -1379,6 +1391,7 @@ fn compose_producers(
             build_providers(
                 db,
                 config_reader,
+                machine_id.clone(),
                 &config,
                 runtime.clone(),
                 game_data,
@@ -1476,6 +1489,7 @@ fn compose_producers(
         bus,
         hotbar,
         keystroke_source,
+        machine_id,
         quests,
     })
 }
@@ -1488,16 +1502,29 @@ fn compose_producers(
 /// under the reload speed in effect at the press: the equipped sources and
 /// the running doses. An unbound slot, an absent row, or a read failure
 /// yields None (no tool change).
-fn build_hotbar_resolver(
-    db: Db,
-    data_dir: &std::path::Path,
-    game_data: Option<Arc<GameDataStore>>,
-    doses: DoseBoard,
-) -> HotbarResolver {
+/// Resolve a hotbar slot to the item bound there, through the item resolver
+/// an overlay declaration uses too, so a press and a declaration price alike.
+fn build_hotbar_resolver(data_dir: &std::path::Path, items: ItemResolver) -> HotbarResolver {
     let data_dir = data_dir.to_path_buf();
     Arc::new(move |slot: &str| {
         let config = load_config_readonly(&data_dir).ok()?;
         let equip_id = config.hotbar.get(slot).and_then(Value::as_i64)?;
+        items(equip_id)
+    })
+}
+
+/// Resolve an equipment-library item to its intent snapshot: kind, per-use
+/// cost and reload under the reload speed in effect, and its healing,
+/// lifesteal, or dose profile.
+fn build_item_resolver(
+    db: Db,
+    data_dir: &std::path::Path,
+    game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
+) -> ItemResolver {
+    let data_dir = data_dir.to_path_buf();
+    Arc::new(move |equip_id: i64| {
+        let config = load_config_readonly(&data_dir).ok()?;
         let db = db.clone();
         let game_data = game_data.clone();
         let reload_speed = doses.reload_speed_percent(&config.passive_effect_sources);
@@ -1836,6 +1863,7 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
 /// filesystem.
 struct LiveTrackingConfig {
     reader: ConfigReader,
+    machine_id: Option<String>,
 }
 
 impl TrackingConfig for LiveTrackingConfig {
@@ -1870,7 +1898,15 @@ impl TrackingConfig for LiveTrackingConfig {
     }
 
     fn hotbar_hooks_enabled(&self) -> bool {
-        self.reader.current().hotbar_hooks_enabled
+        self.reader
+            .current()
+            .hotbar_keys_observed(self.machine_id.as_deref())
+    }
+
+    fn keyless_input(&self) -> bool {
+        self.reader
+            .current()
+            .keyless_input_on(self.machine_id.as_deref())
     }
 }
 
@@ -1880,6 +1916,7 @@ impl TrackingConfig for LiveTrackingConfig {
 fn build_providers(
     db: Db,
     reader: ConfigReader,
+    machine_id: Option<String>,
     initial_config: &AppConfig,
     runtime: tokio::runtime::Handle,
     game_data: Option<Arc<GameDataStore>>,
@@ -1893,7 +1930,7 @@ fn build_providers(
             game_data,
             doses: doses.clone(),
         }),
-        config: Arc::new(LiveTrackingConfig { reader }),
+        config: Arc::new(LiveTrackingConfig { reader, machine_id }),
         player_name: initial_config.player_name.clone(),
         doses,
     }
@@ -2691,6 +2728,7 @@ mod tests {
         let providers = build_providers(
             db.clone(),
             config_service.reader(),
+            None,
             &config,
             tokio::runtime::Handle::current(),
             None,
@@ -2814,6 +2852,7 @@ mod tests {
         let providers = build_providers(
             db.clone(),
             config_service.reader(),
+            None,
             &config,
             tokio::runtime::Handle::current(),
             None,

@@ -563,6 +563,7 @@ fn consumable_press(start: DoseStart, occurred_at: f64) -> BusEvent {
     BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: None,
         slot: "5".into(),
+        source: crate::bus_events::IntentSource::Key,
         occurred_at,
         equipment_id: start.equipment_id,
         item_name: start.item_name,

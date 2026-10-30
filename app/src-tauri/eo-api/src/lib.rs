@@ -175,6 +175,7 @@ pub struct Api {
     /// Persisted route navigation and radar guidance, composed only when
     /// the native capture and producer seams are available.
     navigation: Option<Arc<eo_services::navigation::NavigationService>>,
+    input: settings::InputAccess,
 }
 
 /// Weapon pricing over the live config and the running doses: the reload
@@ -284,7 +285,16 @@ impl Api {
             planet_maps,
             coord_capture,
             navigation,
+            input: settings::InputAccess::inert(),
         }
+    }
+
+    /// Attach this machine's input access: its identity, which keyless
+    /// tracking is held to, and the shared keyboard source the setting
+    /// suppresses. Without it keyless tracking cannot be turned on.
+    pub fn with_input_access(mut self, input: settings::InputAccess) -> Self {
+        self.input = input;
+        self
     }
 
     /// Announce every committed protection write through `changed`, so

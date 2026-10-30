@@ -70,10 +70,10 @@ use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use eo_api::settings::{AppSettings, OverlayPosition, SettingsPatch};
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
-    ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
-    ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
-    StartResult, StopResult, TrackingSnapshot,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
+    SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
 };
 use eo_api::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -1310,6 +1310,14 @@ pub async fn tracking_weapon_decide(
     decision: WeaponMismatchDecision,
 ) -> Result<bool, ApiError> {
     facade(&app)?.tracking_weapon_decide(decision).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_declare_equipment(
+    app: tauri::AppHandle,
+    equipment_id: i64,
+) -> Result<DeclaredEquipment, ApiError> {
+    facade(&app)?.tracking_declare_equipment(equipment_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

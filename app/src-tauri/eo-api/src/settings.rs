@@ -19,8 +19,10 @@
 //! their families.
 
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
-use eo_services::config_service::{load_config_readonly, HOTBAR_PRESET_COUNT};
+use eo_services::config_service::{load_config_readonly, AppConfig, HOTBAR_PRESET_COUNT};
+use eo_services::keystroke_source::{KeyboardObserver, KeystrokeSource};
 use eo_services::paths::DB_FILE_NAME;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -93,6 +95,104 @@ pub struct PassiveEffectSourceInput {
     pub effects: Vec<PassiveEffectInput>,
 }
 
+/// The global key observer this machine reads keys through, as the
+/// settings show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyboardObserverKind {
+    /// The X server's XInput2 key events (Linux).
+    Xinput,
+    /// The kernel input devices (Linux without an X server).
+    Evdev,
+    /// The Windows keyboard hook.
+    WindowsHook,
+    /// Nothing on this machine can read keys.
+    Unavailable,
+}
+
+impl From<KeyboardObserver> for KeyboardObserverKind {
+    fn from(observer: KeyboardObserver) -> Self {
+        match observer {
+            KeyboardObserver::XInput => KeyboardObserverKind::Xinput,
+            KeyboardObserver::Evdev => KeyboardObserverKind::Evdev,
+            KeyboardObserver::WindowsHook => KeyboardObserverKind::WindowsHook,
+            KeyboardObserver::Unavailable => KeyboardObserverKind::Unavailable,
+        }
+    }
+}
+
+/// How this machine reads the player's keys, and whether it runs keyless.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardAccess {
+    /// The observer hotbar keys would be read through. Null while keyless:
+    /// a keyless machine is never probed (nothing opens the keyboard).
+    pub observer: Option<KeyboardObserverKind>,
+    /// Keyless tracking is on for this machine.
+    pub keyless: bool,
+    /// Keyless tracking can be turned on: the machine can be identified, so
+    /// the setting stays with it.
+    pub keyless_available: bool,
+}
+
+/// This machine's input access: its identity (keyless tracking is held to
+/// it) and the shared keyboard source the setting suppresses. The observer
+/// is probed once, on first ask, and never while keyless.
+pub struct InputAccess {
+    machine_id: Option<String>,
+    keyboard: Option<Arc<dyn KeystrokeSource>>,
+    observer: OnceLock<KeyboardObserver>,
+}
+
+impl InputAccess {
+    pub fn new(machine_id: Option<String>, keyboard: Arc<dyn KeystrokeSource>) -> Self {
+        Self {
+            machine_id,
+            keyboard: Some(keyboard),
+            observer: OnceLock::new(),
+        }
+    }
+
+    /// No identity and no keyboard: keyless cannot be turned on.
+    pub fn inert() -> Self {
+        Self {
+            machine_id: None,
+            keyboard: None,
+            observer: OnceLock::new(),
+        }
+    }
+
+    pub fn machine_id(&self) -> Option<&str> {
+        self.machine_id.as_deref()
+    }
+
+    /// Bring the keyboard in line with the stored setting: suppressed while
+    /// this machine runs keyless.
+    pub fn apply(&self, config: &AppConfig) {
+        if let Some(keyboard) = &self.keyboard {
+            keyboard.set_suppressed(config.keyless_input_on(self.machine_id()));
+        }
+    }
+
+    fn access(&self, config: &AppConfig) -> KeyboardAccess {
+        let keyless = config.keyless_input_on(self.machine_id());
+        let observer = (!keyless).then(|| {
+            *self.observer.get_or_init(|| {
+                self.keyboard
+                    .as_ref()
+                    .map_or(KeyboardObserver::Unavailable, |keyboard| {
+                        keyboard.observer()
+                    })
+            })
+        });
+        KeyboardAccess {
+            observer: observer.map(KeyboardObserverKind::from),
+            keyless,
+            keyless_available: self.machine_id.is_some(),
+        }
+    }
+}
+
 /// The full assembled settings response. Field order is the wire order
 /// the frontend contract expects (and the HTTP body carried).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -100,6 +200,7 @@ pub struct PassiveEffectSourceInput {
 pub struct AppSettings {
     pub game_connection: GameConnection,
     pub hotbar_hooks_enabled: bool,
+    pub keyboard: KeyboardAccess,
     pub repair_ocr_enabled: bool,
     pub developer_mode_enabled: bool,
     /// The session facets the next session snapshots: the designated
@@ -180,6 +281,9 @@ pub struct SettingsPatch {
     pub player_name: Option<String>,
     #[serde(default)]
     pub hotbar_hooks_enabled: Option<bool>,
+    /// Turn keyless tracking on or off for this machine.
+    #[serde(default)]
+    pub keyless_input: Option<bool>,
     #[serde(default)]
     pub repair_ocr_enabled: Option<bool>,
     #[serde(default)]
@@ -297,6 +401,7 @@ impl Api {
                 player_name: config.player_name.clone(),
             },
             hotbar_hooks_enabled: config.hotbar_hooks_enabled,
+            keyboard: self.input.access(&config),
             repair_ocr_enabled: config.repair_ocr_enabled,
             developer_mode_enabled: config.developer_mode_enabled,
             session_name: config.session_name.clone(),
@@ -408,14 +513,28 @@ impl Api {
                 "Hotbar preset must be 1 to {HOTBAR_PRESET_COUNT}"
             )));
         }
+        let keyless_input = patch.keyless_input;
         let mut updates = patch.into_updates();
+        if let Some(keyless) = keyless_input {
+            let host = if keyless {
+                let Some(machine_id) = self.input.machine_id() else {
+                    return Err(ApiError::bad_request(
+                        "Keyless tracking needs a machine identity, and this machine has none",
+                    ));
+                };
+                Value::String(machine_id.to_string())
+            } else {
+                Value::Null
+            };
+            updates.insert("keyless_input_host".into(), host);
+        }
         // An empty patch is the backend's 400 (nothing to update).
         if updates.is_empty() {
             return Err(ApiError::bad_request("No fields to update"));
         }
         // Lock, validate, and write inside a block so the (non-`Send`)
         // guard is gone before the `.await` below (the response assembly).
-        let (validated_chatlog, hooks_present, hooks_value) = {
+        let (validated_chatlog, input_changed, config_after) = {
             let mut guard = self
                 .config_service
                 .lock()
@@ -444,22 +563,24 @@ impl Api {
             {
                 return Err(ApiError::bad_request("Skill boost cannot be negative"));
             }
-            let hooks_present = updates.contains_key("hotbar_hooks_enabled");
+            let input_changed = updates.contains_key("hotbar_hooks_enabled")
+                || updates.contains_key("keyless_input_host");
             guard
                 .update(&updates)
                 .map_err(ApiError::internal("settings write"))?;
-            (
-                validated_chatlog,
-                hooks_present,
-                guard.get().hotbar_hooks_enabled,
-            )
+            (validated_chatlog, input_changed, guard.get().clone())
         };
 
         if let Some(path) = validated_chatlog {
             self.watcher.restart(path);
         }
-        if hooks_present {
-            self.hotbar.set_hotbar_hooks_enabled(hooks_value);
+        if input_changed {
+            // Keyless overrides the hotbar toggle, and suppresses every other
+            // key consumer through the shared source.
+            self.input.apply(&config_after);
+            self.hotbar.set_hotbar_hooks_enabled(
+                config_after.hotbar_keys_observed(self.input.machine_id()),
+            );
         }
         if disables_developer_mode {
             self.stop_auction_fee_research_for_shell();

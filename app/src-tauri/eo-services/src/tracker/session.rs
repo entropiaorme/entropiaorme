@@ -59,6 +59,31 @@ pub struct SessionFacets {
     /// The skill-boost configuration the session runs under, as the
     /// pill's labelled percentage.
     pub skill_boost_percent: Option<i64>,
+    /// How the session reads the player's equipment intent, fixed at start.
+    pub input_mode: InputMode,
+}
+
+/// How a session reads which equipment the player is using.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InputMode {
+    /// Hotbar presses, when observed, declare equipment; healing is billed
+    /// only from paid activations a press (or an overlay declaration) opens.
+    #[default]
+    Keys,
+    /// The machine cannot read keys: the overlay declares equipment, and a
+    /// heal fitting the declared healer's band and reload is inferred as a
+    /// paid use.
+    Keyless,
+}
+
+impl InputMode {
+    /// The stored vocabulary (`tracking_sessions.input_mode`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InputMode::Keys => "keys",
+            InputMode::Keyless => "keyless",
+        }
+    }
 }
 
 /// Everything that exists exactly while a session runs. Constructed at
@@ -228,6 +253,7 @@ pub(super) struct SessionAggregate {
     pub(super) unpriced_cost_bound: Ped,
     pub(super) unpriced_no_fit: i64,
     pub(super) weapon_declared: bool,
+    pub(super) keyless: bool,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
 }
@@ -489,6 +515,7 @@ impl TrackerActor {
             unpriced_cost_bound: active.unpriced_cost_bound,
             unpriced_no_fit: active.unpriced_no_fit,
             weapon_declared: active.weapons.attribution.declared().is_some(),
+            keyless: active.facets.input_mode == InputMode::Keyless,
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
                 tool_name,
@@ -809,6 +836,11 @@ impl TrackerActor {
             definition_id: resolved.as_ref().map(|(id, _, _)| *id),
             track_protection_costs,
             skill_boost_percent: declared_boost.filter(|percent| *percent > 0),
+            input_mode: if self.providers.config.keyless_input() {
+                InputMode::Keyless
+            } else {
+                InputMode::Keys
+            },
         };
         let session_id = uuid::Uuid::new_v4().to_string();
         let carried = self.providers.equipment.carried_weapons();
@@ -840,14 +872,16 @@ impl TrackerActor {
         let insert_definition = facets.definition_id;
         let insert_boost = facets.skill_boost_percent;
         let insert_track_protection_costs = facets.track_protection_costs;
+        let insert_input_mode = facets.input_mode.as_str();
         let opening_boost = declared_boost;
         self.db
             .with_writer(move |conn| {
                 conn.execute(
                     "INSERT INTO tracking_sessions \
                      (id, started_at, is_active, session_name, definition_id, \
-                      skill_boost_percent, track_protection_costs, track_protection_by_segment) \
-                     VALUES (?, ?, 1, ?, ?, ?, ?, 0)",
+                      skill_boost_percent, track_protection_costs, track_protection_by_segment, \
+                      input_mode) \
+                     VALUES (?, ?, 1, ?, ?, ?, ?, 0, ?)",
                     // The per-segment armour flag is retired: protection
                     // costs are spread by hits at recording time, so every
                     // new session records 0 for it.
@@ -858,6 +892,7 @@ impl TrackerActor {
                         insert_definition,
                         insert_boost,
                         insert_track_protection_costs as i64,
+                        insert_input_mode,
                     ],
                 )?;
                 Ok(())
@@ -867,7 +902,12 @@ impl TrackerActor {
         // The fresh ActiveSession IS the session reset: every
         // session-scoped field starts at its documented initial
         // state by construction.
+        let keyless = facets.input_mode == InputMode::Keyless;
         let mut active = ActiveSession::new(session.clone(), facets);
+        if keyless {
+            active.healing.keyless = true;
+            active.healing.declared_healer = self.declared_healer.clone();
+        }
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
         active.weapons.load_carried(carried);
         // The carried weapons were prepared under the reload speed in
@@ -1256,6 +1296,7 @@ impl HuntTracker {
             unpriced_cost_bound: aggregated.unpriced_cost_bound.value(),
             unpriced_no_fit: aggregated.unpriced_no_fit,
             weapon_declared: aggregated.weapon_declared,
+            keyless: aggregated.keyless,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,
             healing: aggregated.healing,

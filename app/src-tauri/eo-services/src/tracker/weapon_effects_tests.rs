@@ -126,6 +126,7 @@ fn press(rig: &Rig, process: &Process, weapon: &str) {
         .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "1".into(),
+            source: crate::bus_events::IntentSource::Key,
             occurred_at: naive_to_epoch(rig.clock.now()),
             equipment_id: 0,
             item_name: weapon.into(),

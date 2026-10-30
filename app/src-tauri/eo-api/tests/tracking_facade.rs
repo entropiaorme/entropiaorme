@@ -2169,6 +2169,11 @@ async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() 
         ),
         "conflict"
     );
+    // Nor is there a hand to declare equipment into.
+    assert_eq!(
+        kind(api.tracking_declare_equipment(1).await.unwrap_err()),
+        "conflict"
+    );
     // The decision crosses the wire as its lowercase literal.
     let decision: WeaponMismatchDecision =
         serde_json::from_value(serde_json::json!("keep")).unwrap();

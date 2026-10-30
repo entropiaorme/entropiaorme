@@ -51,6 +51,16 @@ pub trait KeystrokeSource: Send + Sync {
     fn subscribe(&self, callback: KeystrokeCallback);
     fn start(&self) -> bool;
     fn stop(&self);
+
+    /// Keyless tracking: while suppressed, nothing observes the keyboard.
+    /// Sources with no real observer (the test mock) ignore it.
+    fn set_suppressed(&self, _suppressed: bool) {}
+
+    /// The observer this source would attach on this host. Only the
+    /// production source probes; anything else reports none.
+    fn observer(&self) -> KeyboardObserver {
+        KeyboardObserver::Unavailable
+    }
 }
 
 /// Test-mode source: dispatches injected events to subscribers; events
@@ -112,6 +122,20 @@ use linux_input as platform_hook;
 #[cfg(windows)]
 use windows_hook as platform_hook;
 
+/// The global key observer a host offers: what the hotbar, Space, Enter, and
+/// F-key flows would read keys through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardObserver {
+    /// XInput2 raw key events from the X server (Linux, Xorg or XWayland).
+    XInput,
+    /// The kernel input devices (Linux with no X server; needs `input`).
+    Evdev,
+    /// The low-level keyboard hook (Windows).
+    WindowsHook,
+    /// Nothing can observe keys on this host.
+    Unavailable,
+}
+
 /// The production source: the platform's global key observer behind the
 /// same trait (the Windows low-level keyboard hook; on Linux the XInput2
 /// raw-key observer, or the passive evdev reader when no X server
@@ -124,6 +148,9 @@ pub struct HookKeystrokeSource {
     #[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
     allowlist: Option<BTreeSet<String>>,
     callbacks: Arc<Mutex<Vec<KeystrokeCallback>>>,
+    /// Keyless tracking: while set, `start` attaches nothing (no X
+    /// selection, no `/dev/input` open, no Windows hook) and reports inert.
+    suppressed: std::sync::atomic::AtomicBool,
     #[cfg(any(windows, target_os = "linux"))]
     state: Mutex<Option<platform_hook::Running>>,
 }
@@ -134,8 +161,34 @@ impl HookKeystrokeSource {
         Self {
             allowlist,
             callbacks: Arc::new(Mutex::new(Vec::new())),
+            suppressed: std::sync::atomic::AtomicBool::new(false),
             #[cfg(any(windows, target_os = "linux"))]
             state: Mutex::new(None),
+        }
+    }
+
+    /// Which observer this host would attach, asked without attaching one
+    /// (it opens and drops a probe connection or device handle). On Linux
+    /// the XInput2 observer wins whenever an X server answers, exactly as
+    /// `start` chooses.
+    pub fn probe() -> KeyboardObserver {
+        #[cfg(windows)]
+        {
+            KeyboardObserver::WindowsHook
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if linux_xinput::connect().is_some() {
+                KeyboardObserver::XInput
+            } else if linux_evdev::has_readable_keyboard() {
+                KeyboardObserver::Evdev
+            } else {
+                KeyboardObserver::Unavailable
+            }
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            KeyboardObserver::Unavailable
         }
     }
 
@@ -170,6 +223,9 @@ impl KeystrokeSource for HookKeystrokeSource {
 
     #[cfg(any(windows, target_os = "linux"))]
     fn start(&self) -> bool {
+        if self.suppressed.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
         let mut state = self.state.lock().expect("hook state");
         if state.is_some() {
             return true;
@@ -197,6 +253,20 @@ impl KeystrokeSource for HookKeystrokeSource {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     fn stop(&self) {}
+
+    /// Turning suppression on detaches a running observer at once; turning
+    /// it off lets the next `start` attach again.
+    fn set_suppressed(&self, suppressed: bool) {
+        self.suppressed
+            .store(suppressed, std::sync::atomic::Ordering::SeqCst);
+        if suppressed {
+            self.stop();
+        }
+    }
+
+    fn observer(&self) -> KeyboardObserver {
+        Self::probe()
+    }
 }
 
 /// A reference-counted wrapper over a single [`KeystrokeSource`], so several
@@ -256,6 +326,21 @@ impl KeystrokeSource for SharedKeystrokeSource {
         if *active == 0 {
             self.inner.stop();
         }
+    }
+
+    /// Suppression detaches the inner observer while the consumers keep their
+    /// count; lifting it re-attaches for the consumers still running, so a
+    /// flow that started while keys were off picks them up at once.
+    fn set_suppressed(&self, suppressed: bool) {
+        let active = self.lock_active();
+        self.inner.set_suppressed(suppressed);
+        if !suppressed && *active > 0 {
+            self.inner.start();
+        }
+    }
+
+    fn observer(&self) -> KeyboardObserver {
+        self.inner.observer()
     }
 }
 
@@ -890,6 +975,11 @@ mod linux_evdev {
         }
     }
 
+    /// Whether at least one keyboard-class device can be opened.
+    pub(super) fn has_readable_keyboard() -> bool {
+        evdev::enumerate().any(|(_, device)| is_candidate(&device))
+    }
+
     pub fn start(
         callbacks: Arc<Mutex<Vec<KeystrokeCallback>>>,
         allowlist: Option<BTreeSet<String>>,
@@ -1099,6 +1189,58 @@ mod tests {
         DateTime::parse_from_rfc3339("2026-05-19T10:00:00Z")
             .unwrap()
             .with_timezone(&Utc)
+    }
+
+    /// Records the shared wrapper's calls into it.
+    #[derive(Default)]
+    struct CountingSource {
+        starts: Mutex<u32>,
+        suppressed: Mutex<Vec<bool>>,
+    }
+
+    impl KeystrokeSource for CountingSource {
+        fn subscribe(&self, _callback: KeystrokeCallback) {}
+        fn start(&self) -> bool {
+            *self.starts.lock().unwrap() += 1;
+            true
+        }
+        fn stop(&self) {}
+        fn set_suppressed(&self, suppressed: bool) {
+            self.suppressed.lock().unwrap().push(suppressed);
+        }
+    }
+
+    #[test]
+    fn lifting_suppression_reattaches_only_for_running_consumers() {
+        let inner = Arc::new(CountingSource::default());
+        let shared = SharedKeystrokeSource::new(inner.clone());
+
+        // No consumer running: lifting suppression attaches nothing.
+        shared.set_suppressed(true);
+        shared.set_suppressed(false);
+        assert_eq!(*inner.starts.lock().unwrap(), 0);
+
+        // A consumer running across a suppression gets its keys back.
+        assert!(shared.start());
+        shared.set_suppressed(true);
+        shared.set_suppressed(false);
+        assert_eq!(*inner.starts.lock().unwrap(), 2);
+        assert_eq!(
+            *inner.suppressed.lock().unwrap(),
+            vec![true, false, true, false]
+        );
+        assert_eq!(shared.observer(), KeyboardObserver::Unavailable);
+    }
+
+    #[test]
+    fn a_suppressed_source_attaches_nothing() {
+        // Suppression short-circuits before any platform attach, so this
+        // never touches a display or an input device.
+        let source = HookKeystrokeSource::new(None);
+        source.set_suppressed(true);
+        assert!(!source.start());
+        source.stop();
+        assert!(!source.start());
     }
 
     #[test]

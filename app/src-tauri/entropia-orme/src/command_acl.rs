@@ -166,6 +166,7 @@ macro_rules! app_command_surface {
             tracking_start,
             tracking_stop,
             tracking_weapon_decide,
+            tracking_declare_equipment,
             tracking_release_mob,
             tracking_manual_mob_lock,
             tracking_session_config,

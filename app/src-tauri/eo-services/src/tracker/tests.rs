@@ -77,6 +77,7 @@ struct ScriptedConfig {
     manual_mob: Option<ManualMobScript>,
     blacklist: Vec<String>,
     hotbar_hooks_enabled: bool,
+    keyless_input: bool,
 }
 
 impl TrackingConfig for ScriptedConfig {
@@ -102,6 +103,10 @@ impl TrackingConfig for ScriptedConfig {
 
     fn hotbar_hooks_enabled(&self) -> bool {
         self.hotbar_hooks_enabled
+    }
+
+    fn keyless_input(&self) -> bool {
+        self.keyless_input
     }
 }
 
@@ -242,6 +247,7 @@ pub(super) fn healer_intent(
     BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: None,
         slot: "8".into(),
+        source: crate::bus_events::IntentSource::Key,
         occurred_at,
         equipment_id,
         item_name: name.into(),
@@ -258,6 +264,7 @@ pub(super) fn weapon_intent(occurred_at: f64, lifesteal_percent: Option<f64>) ->
     BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
         session_id: None,
         slot: "1".into(),
+        source: crate::bus_events::IntentSource::Key,
         occurred_at,
         equipment_id: 2,
         item_name: "Rifle".into(),
@@ -1776,6 +1783,7 @@ fn an_unprofiled_healer_press_invalidates_the_previous_activation_candidate() {
         .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
             session_id: None,
             slot: "9".into(),
+            source: crate::bus_events::IntentSource::Key,
             occurred_at: now + 0.1,
             equipment_id: 9,
             item_name: "Unprofiled healer".into(),
@@ -1830,6 +1838,7 @@ fn stale_session_hotbar_intents_cannot_mutate_equipment_state() {
             .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
                 session_id: Some(stale_session_id.clone()),
                 slot: slot.into(),
+                source: crate::bus_events::IntentSource::Key,
                 occurred_at: now,
                 equipment_id,
                 item_name: item_name.into(),
@@ -1901,6 +1910,207 @@ fn rapid_healer_activation_survives_the_switch_back_to_a_lifesteal_weapon() {
         ),
         1
     );
+}
+
+fn keyless_providers() -> Providers {
+    Providers {
+        config: Arc::new(ScriptedConfig {
+            keyless_input: true,
+            ..Default::default()
+        }),
+        ..Providers::default()
+    }
+}
+
+/// A healer declaration from the overlay rather than a key.
+fn overlay_healer(occurred_at: f64, direct: (f64, f64), reload: f64) -> BusEvent {
+    let BusEvent::HotbarIntent(mut payload) = healer_intent(
+        7,
+        "FAP",
+        0.03,
+        reload,
+        occurred_at,
+        HealingProfile {
+            direct_min: Some(direct.0),
+            direct_max: Some(direct.1),
+            ..HealingProfile::default()
+        },
+    ) else {
+        unreachable!()
+    };
+    payload.slot = String::new();
+    payload.source = crate::bus_events::IntentSource::Overlay;
+    BusEvent::HotbarIntent(payload)
+}
+
+fn self_heal(amount: f64) -> BusEvent {
+    BusEvent::Combat(CombatPayload::SelfHeal {
+        amount,
+        timestamp: "2026-01-01T00:00:00".into(),
+    })
+}
+
+#[test]
+fn a_keyless_session_infers_paid_uses_of_the_declared_healer() {
+    let rig = rig();
+    let tracker = rig.tracker(keyless_providers());
+    let session = rig.wait(tracker.start_session()).unwrap();
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT input_mode FROM tracking_sessions WHERE id = ?",
+            &[&session.id],
+        ),
+        "keyless"
+    );
+    let start = naive_to_epoch(naive("2026-01-01T00:00:00"));
+
+    // Declared in the overlay, then the weapon back in hand: no key will
+    // ever open a candidate for the heals that follow.
+    rig.bus.publish(&overlay_healer(start, (8.0, 12.0), 5.0));
+    rig.bus.publish(&weapon_intent(start, None));
+    rig.clock.advance(5.0).unwrap();
+    // A fight is on (a hit just landed) but the weapon has no lifesteal, so
+    // the heal is still the healer's.
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
+            amount: 40.0,
+            timestamp: "2026-01-01T00:00:05".into(),
+        }));
+    rig.bus.publish(&self_heal(10.0));
+    // Inside the reload (and clear of the hit): not a second paid use.
+    rig.clock.advance(1.5).unwrap();
+    rig.bus.publish(&self_heal(10.0));
+    // Out of band (a capped heal looks like this too): evidence only.
+    rig.clock.advance(4.0).unwrap();
+    rig.bus.publish(&self_heal(4.0));
+    // Past the reload again: the next use.
+    rig.bus.publish(&self_heal(11.0));
+
+    rig.probe(&tracker, |actor| {
+        let active = actor.session.active().unwrap();
+        assert_eq!(active.heal_cost, Ped(0.06));
+        assert_eq!(active.healing.activation_count, 2);
+        assert_eq!(active.healing.unattributed_output_count, 2);
+    });
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM healing_activations WHERE session_id = ? \
+             AND intent_source = 'inferred' AND provenance = 'direct'",
+            &[&session.id],
+        ),
+        2
+    );
+}
+
+#[test]
+fn a_keyless_overlay_declaration_confirms_like_a_press_and_is_stored_as_such() {
+    let rig = rig();
+    let tracker = rig.tracker(keyless_providers());
+    let session = rig.wait(tracker.start_session()).unwrap();
+    let start = naive_to_epoch(naive("2026-01-01T00:00:00"));
+    rig.bus.publish(&overlay_healer(start, (8.0, 12.0), 5.0));
+    rig.bus.publish(&self_heal(10.0));
+    rig.probe(&tracker, |actor| {
+        assert_eq!(actor.session.active().unwrap().healing.activation_count, 1);
+    });
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT intent_source FROM healing_activations WHERE session_id = ?",
+            &[&session.id],
+        ),
+        "overlay"
+    );
+}
+
+#[test]
+fn keyed_sessions_never_infer_and_store_key_intents() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers::default());
+    let session = rig.wait(tracker.start_session()).unwrap();
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT input_mode FROM tracking_sessions WHERE id = ?",
+            &[&session.id],
+        ),
+        "keys"
+    );
+    let start = naive_to_epoch(naive("2026-01-01T00:00:00"));
+    rig.bus.publish(&healer_intent(
+        7,
+        "FAP",
+        0.03,
+        5.0,
+        start,
+        HealingProfile {
+            direct_min: Some(8.0),
+            direct_max: Some(12.0),
+            ..HealingProfile::default()
+        },
+    ));
+    rig.bus.publish(&self_heal(10.0));
+    rig.bus.publish(&weapon_intent(start, None));
+    rig.clock.advance(10.0).unwrap();
+    // The healer is no longer in hand and nothing pressed it again.
+    rig.bus.publish(&self_heal(10.0));
+    rig.probe(&tracker, |actor| {
+        let active = actor.session.active().unwrap();
+        assert_eq!(active.healing.activation_count, 1);
+        assert_eq!(active.healing.unattributed_output_count, 1);
+    });
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT intent_source FROM healing_activations WHERE session_id = ?",
+            &[&session.id],
+        ),
+        "key"
+    );
+}
+
+#[test]
+fn a_keyless_session_starts_with_the_healer_declared_before_it() {
+    let rig = rig();
+    let tracker = rig.tracker(keyless_providers());
+    rig.wait(tracker.start_session()).unwrap();
+    let start = naive_to_epoch(naive("2026-01-01T00:00:00"));
+    rig.bus.publish(&overlay_healer(start, (8.0, 12.0), 5.0));
+    rig.wait(tracker.stop_session()).unwrap();
+
+    let session = rig.wait(tracker.start_session()).unwrap();
+    rig.clock.advance(10.0).unwrap();
+    rig.bus.publish(&self_heal(9.0));
+    rig.probe(&tracker, |actor| {
+        assert_eq!(actor.session.active().unwrap().healing.activation_count, 1);
+    });
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT intent_source FROM healing_activations WHERE session_id = ?",
+            &[&session.id],
+        ),
+        "inferred"
+    );
+}
+
+#[test]
+fn a_keyless_session_leaves_lifesteal_inside_the_healer_band_uncosted() {
+    let rig = rig();
+    let tracker = rig.tracker(keyless_providers());
+    rig.wait(tracker.start_session()).unwrap();
+    let start = naive_to_epoch(naive("2026-01-01T00:00:00"));
+    // A healer band low enough to hold the lifesteal amount too.
+    rig.bus.publish(&overlay_healer(start, (1.0, 12.0), 5.0));
+    rig.bus.publish(&weapon_intent(start, Some(2.0)));
+    rig.clock.advance(5.0).unwrap();
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
+            amount: 100.0,
+            timestamp: "2026-01-01T00:00:05".into(),
+        }));
+    rig.bus.publish(&self_heal(2.0));
+    rig.probe(&tracker, |actor| {
+        let active = actor.session.active().unwrap();
+        assert_eq!(active.heal_cost, Ped::ZERO);
+        assert_eq!(active.healing.passive_output_count, 1);
+    });
 }
 
 #[test]

@@ -57,10 +57,11 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 53] = [
+const SNAPSHOT_FIELDS: [&str; 54] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
+    "keylessInput",
     "repairOcrEnabled",
     "sessionName",
     "sessionDefinitionId",
@@ -644,6 +645,11 @@ pub struct TrackingSnapshot {
     /// carried weapons' damage ranges alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hotbar_keys_enabled: Option<bool>,
+    /// Keyless tracking: the active session's input mode while tracking,
+    /// this machine's setting while idle. Equipment is then declared in the
+    /// overlay and healing uses are inferred from the chat log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyless_input: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_ocr_enabled: Option<bool>,
     /// The session-name facet: the active session's when tracking, the
@@ -790,6 +796,26 @@ pub enum HeldItemKind {
     Healing,
     Consumable,
     Harvesting,
+}
+
+impl From<eo_services::bus_events::HotbarItemKind> for HeldItemKind {
+    fn from(kind: eo_services::bus_events::HotbarItemKind) -> Self {
+        use eo_services::bus_events::HotbarItemKind;
+        match kind {
+            HotbarItemKind::Weapon => HeldItemKind::Weapon,
+            HotbarItemKind::Healing => HeldItemKind::Healing,
+            HotbarItemKind::Consumable => HeldItemKind::Consumable,
+            HotbarItemKind::Harvesting => HeldItemKind::Harvesting,
+        }
+    }
+}
+
+/// What an overlay declaration put in hand.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredEquipment {
+    pub name: String,
+    pub kind: HeldItemKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1046,6 +1072,7 @@ impl Api {
             &self.tracker,
             &config,
             self.hotbar.is_running(),
+            config.keyless_input_on(self.input.machine_id()),
             Some(&self.session_definitions),
             naive_to_epoch(self.clock.now()),
         )
@@ -1208,6 +1235,30 @@ impl Api {
             // boundary reply is fixed); logged server-side.
             None => Err(ApiError::invalid_state("tracking stop returned no session")),
         }
+    }
+
+    /// Declare an equipment-library item as in hand, as its hotbar press
+    /// would: the overlay's equipment picker. A keyless machine relies on it;
+    /// with keys it corrects the hand without a press.
+    pub async fn tracking_declare_equipment(
+        &self,
+        equipment_id: i64,
+    ) -> Result<DeclaredEquipment, ApiError> {
+        use eo_services::hotbar_listener::DeclareError;
+        let hotbar = self.hotbar.clone();
+        let occurred_at =
+            eo_services::time::instant_to_epoch(eo_services::time::resolve_local(self.clock.now()));
+        let item = tokio::task::spawn_blocking(move || hotbar.declare(equipment_id, occurred_at))
+            .await
+            .map_err(ApiError::internal("equipment declaration"))?
+            .map_err(|error| match error {
+                DeclareError::NoSession => ApiError::conflict(error.to_string()),
+                DeclareError::UnknownItem => ApiError::not_found(error.to_string()),
+            })?;
+        Ok(DeclaredEquipment {
+            name: item.name,
+            kind: item.kind.into(),
+        })
     }
 
     /// Clear the declared mob, echoing what was released.
@@ -1644,6 +1695,7 @@ pub(crate) async fn build_snapshot_value(
     tracker: &HuntTracker,
     config: &AppConfig,
     hotbar_active: bool,
+    keyless: bool,
     definitions: Option<&SessionDefinitionService>,
     now: f64,
 ) -> Result<Value, ApiError> {
@@ -1739,7 +1791,8 @@ pub(crate) async fn build_snapshot_value(
             json!({
                 "status": "idle",
                 "hotbarListenerActive": hotbar_active,
-                "hotbarKeysEnabled": config.hotbar_hooks_enabled,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled && !keyless,
+                "keylessInput": keyless,
                 "repairOcrEnabled": config.repair_ocr_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,
@@ -1837,7 +1890,8 @@ pub(crate) async fn build_snapshot_value(
                     "unattributedOutputs": active.healing.unattributed_output_count,
                 },
                 "hotbarListenerActive": hotbar_active,
-                "hotbarKeysEnabled": config.hotbar_hooks_enabled,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled && !keyless,
+                "keylessInput": active.keyless,
                 "repairOcrEnabled": config.repair_ocr_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,

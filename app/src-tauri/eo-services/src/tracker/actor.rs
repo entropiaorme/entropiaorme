@@ -158,6 +158,9 @@ pub(super) struct TrackerActor {
     /// The one item currently held in the game. This is display truth only;
     /// each accounting domain retains its own attribution state.
     pub(super) held_item: Option<(String, crate::bus_events::HotbarItemKind)>,
+    /// The healer last declared (pressed or picked in the overlay), held for
+    /// the process like `held_item`: a keyless session starts with it in hand.
+    pub(super) declared_healer: Option<super::healing::HealingIntent>,
     /// The consumable doses still running (tracker state, not session
     /// state: a dose outlives the session it was taken in).
     pub(super) doses: DoseRuntime,
@@ -196,6 +199,7 @@ impl TrackerActor {
             harvest_tool: None,
             harvest_guardrail: None,
             held_item: None,
+            declared_healer: None,
             doses: DoseRuntime::default(),
             sender,
             subscriptions: Vec::new(),

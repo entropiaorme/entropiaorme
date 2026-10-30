@@ -42,6 +42,7 @@ pub mod keyset;
 pub mod keystroke_source;
 pub mod loadout_comparison;
 pub mod loot_filter;
+pub mod machine_identity;
 pub mod maintenance;
 pub mod map_pins;
 pub mod market_paste;

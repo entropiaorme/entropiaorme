@@ -332,6 +332,17 @@ jobs:
           tool: cargo-nextest
       - name: Run the backend-member tests (nextest)
         run: cargo nextest run -p eo-wire -p eo-services -p eo-api
+      # The X11 keystroke observer and screen capturer proved against a live
+      # (virtual) X server: the tests named `*_on_a_live_x_server` are ignored
+      # by default because they need a display, and run here under Xvfb with
+      # xdotool injecting keys. Neither tool is part of the Tauri stack, so the
+      # job's no-GUI-toolchain proof above is unaffected.
+      - name: Install the virtual X server
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool
+      - name: Run the live X server tests
+        run: >-
+          xvfb-run -a -s "-screen 0 1280x800x24"
+          cargo nextest run -p eo-services --run-ignored only -E 'test(/_on_a_live_x_server$/)'
       # Fails when the committed TypeScript bindings drift from the typed
       # command manifest (the typed-command twin of the frontend job's
       # OpenAPI drift gate).

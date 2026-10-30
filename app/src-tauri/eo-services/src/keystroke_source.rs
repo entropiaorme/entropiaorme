@@ -726,6 +726,51 @@ mod linux_xinput {
                 None
             );
         }
+
+        /// Observes keys injected through XTest on a live X server, the
+        /// delivery an Xorg session gives a client with no access to the
+        /// kernel input devices. Needs `xdotool` and a display:
+        /// `xvfb-run -a cargo test -p eo-services linux_xinput -- --ignored`.
+        #[test]
+        #[ignore = "needs an X display and xdotool (run under xvfb-run)"]
+        fn observes_injected_keys_on_a_live_x_server() {
+            use std::time::{Duration, Instant};
+
+            let conn = connect().expect("X server with XInput 2.1");
+            let seen = Arc::new(Mutex::new(Vec::<(String, KeystrokeKind)>::new()));
+            let sink = seen.clone();
+            let callbacks: Arc<Mutex<Vec<KeystrokeCallback>>> =
+                Arc::new(Mutex::new(vec![Arc::new(
+                    move |event: &super::super::KeystrokeEvent| {
+                        sink.lock().unwrap().push((event.key.clone(), event.kind));
+                    },
+                )]));
+            let allowlist = Some(BTreeSet::from(["1".to_string(), "space".to_string()]));
+            let running = start(conn, callbacks, allowlist).expect("observer starts");
+
+            let status = std::process::Command::new("xdotool")
+                .args(["key", "1", "a", "space"])
+                .status()
+                .expect("xdotool runs");
+            assert!(status.success());
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while seen.lock().unwrap().len() < 4 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            running.stop();
+            // The allowlist drops "a" at the boundary; both edges of the
+            // admitted keys arrive in order.
+            assert_eq!(
+                *seen.lock().unwrap(),
+                vec![
+                    ("1".to_string(), KeystrokeKind::Press),
+                    ("1".to_string(), KeystrokeKind::Release),
+                    ("space".to_string(), KeystrokeKind::Press),
+                    ("space".to_string(), KeystrokeKind::Release),
+                ]
+            );
+        }
     }
 }
 

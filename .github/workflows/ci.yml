@@ -345,7 +345,11 @@ jobs:
 
   linux-bundle:
     name: Linux build + bundle (deb)
-    runs-on: ubuntu-latest
+    # Pinned to the oldest supported Ubuntu LTS rather than ubuntu-latest: a
+    # binary links against the build host's glibc, so the package runs on
+    # 22.04 and everything newer only when it is built on 22.04. Release
+    # (release.yml's linux-deb) builds on the same image.
+    runs-on: ubuntu-22.04
     # Proves the Linux port builds the full Tauri shell and produces an
     # installable package, the platform counterpart of the Windows workspace
     # job: a Linux-only regression (a platform seam that stops compiling, a

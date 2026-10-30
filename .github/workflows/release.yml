@@ -28,8 +28,9 @@ jobs:
     # downloads this job's output into dist/ before the checksum, provenance,
     # and draft steps, so the .deb receives the same supply-chain treatment as
     # the Windows artefacts. Download-only: there is no Linux updater channel
-    # yet, so it contributes nothing to latest.json.
-    runs-on: ubuntu-latest
+    # yet, so it contributes nothing to latest.json. Built on 22.04 so the
+    # package's glibc floor is the oldest supported Ubuntu LTS.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

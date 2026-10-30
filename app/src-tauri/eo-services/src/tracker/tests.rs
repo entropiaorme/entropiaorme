@@ -5342,6 +5342,33 @@ fn guardrail_attributes_a_mismatched_swing_to_the_intended_tool() {
 }
 
 #[test]
+fn with_no_tool_in_hand_the_guardrail_prices_boardless_and_failed_swings() {
+    // A machine that cannot read keys, before any tool is declared: the
+    // board names the tree size, and the swings without a board follow it.
+    use crate::bus_events::{HarvestFailPayload, HarvestFailTag};
+    let rig = rig();
+    let tracker = rig.tracker(guardrail_providers());
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus.publish(&wood_group(
+        "2026-01-01T00:00:02",
+        Some("Short Moonleaf Board"),
+    ));
+    rig.bus.publish(&wood_group("2026-01-01T00:00:04", None));
+    rig.bus.publish(&BusEvent::HarvestFail(HarvestFailPayload {
+        kind: HarvestFailTag,
+        timestamp: "2026-01-01T00:00:06".into(),
+    }));
+    rig.probe(&tracker, |actor| {
+        let active = actor.session.active().expect("session is active");
+        assert_eq!(active.session.harvests.len(), 3);
+        for harvest in &active.session.harvests {
+            assert_eq!(harvest.tool_name.as_deref(), Some("Terratech PH-1 (L)"));
+            assert_eq!(harvest.cost_ped, Ped(0.02));
+        }
+    });
+}
+
+#[test]
 fn guardrail_agreement_and_hotbar_presses_clear_the_mismatch() {
     let rig = rig();
     let tracker = rig.tracker(guardrail_providers());

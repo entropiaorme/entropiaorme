@@ -1691,6 +1691,13 @@ pub async fn maps_calibration_start(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn maps_calibration_confirm(
+    app: tauri::AppHandle,
+) -> Result<CoordCalibrationStatus, ApiError> {
+    facade(&app)?.maps_calibration_confirm()
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn maps_calibration_cancel(
     app: tauri::AppHandle,
 ) -> Result<CoordCalibrationStatus, ApiError> {
@@ -1789,6 +1796,13 @@ pub async fn radar_calibration_start(
     app: tauri::AppHandle,
 ) -> Result<RadarCalibrationStatus, ApiError> {
     facade(&app)?.radar_calibration_start()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn radar_calibration_confirm(
+    app: tauri::AppHandle,
+) -> Result<RadarCalibrationStatus, ApiError> {
+    facade(&app)?.radar_calibration_confirm().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

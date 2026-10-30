@@ -50,6 +50,8 @@ export const deletePinConfig = commands.pinConfigDelete;
 export const reorderPinConfigs = commands.pinConfigReorder;
 export const startMapsCalibration = commands.mapsCalibrationStart;
 export const cancelMapsCalibration = commands.mapsCalibrationCancel;
+/** Take the current corner at the cursor, as an Enter press does. */
+export const confirmMapsCalibration = commands.mapsCalibrationConfirm;
 export const getMapsCalibrationStatus = commands.mapsCalibrationStatus;
 export const scanMapCoordinates = commands.mapsScanCoordinates;
 export const getNavigationSnapshot = commands.navigationSnapshot;
@@ -62,5 +64,7 @@ export const undoNavigationStop = commands.navigationUndo;
 export const endNavigation = commands.navigationEnd;
 export const startRadarCalibration = commands.radarCalibrationStart;
 export const cancelRadarCalibration = commands.radarCalibrationCancel;
+/** Take the current radar point at the cursor, as an Enter press does. */
+export const confirmRadarCalibration = commands.radarCalibrationConfirm;
 export const getRadarCalibrationStatus = commands.radarCalibrationStatus;
 export const getRadarGeometry = commands.radarGeometry;

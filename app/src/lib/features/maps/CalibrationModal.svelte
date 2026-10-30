@@ -14,9 +14,11 @@
 	import type { CoordCalibrationStatus } from '$lib/api';
 	import {
 		cancelMapsCalibration,
+		confirmMapsCalibration,
 		getMapsCalibrationStatus,
 		startMapsCalibration,
 	} from '$lib/api';
+	import CountdownCapture from './CountdownCapture.svelte';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { formatGamePoint } from './coords';
 
@@ -24,6 +26,16 @@
 
 	let status = $state<CoordCalibrationStatus | null>(null);
 	let failed = $state<string | null>(null);
+
+	// Without Enter (a machine that cannot read keys): the countdown takes
+	// the corner at the cursor when it reaches zero.
+	async function confirmAtCursor() {
+		try {
+			status = await confirmMapsCalibration();
+		} catch {
+			// The poll re-reads the flow on its next tick.
+		}
+	}
 
 	async function begin() {
 		failed = null;
@@ -90,10 +102,12 @@
 				(<strong>LON</strong> on the left, <strong>LAT</strong> on the right). Hover the
 				mouse over the <strong>top-left corner of LON</strong> (including the label is
 				fine) and press
-				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>.
+				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>, or start the
+				capture here and hover there before it ends.
 			</p>
 			<p>The app stays open; you do not need to switch back between steps.</p>
-			<div class="flex justify-end">
+			<div class="flex justify-end gap-2">
+				<CountdownCapture oncapture={confirmAtCursor} />
 				<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
 			</div>
 		{:else if phase === 'awaitBottomRight'}
@@ -101,10 +115,12 @@
 				Step 2 of 2: hover over the
 				<strong>bottom-right corner of the LAT digits</strong> (just past the last digit)
 				and press
-				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd>. Draw the
-				box around both numbers in one strip; the app finds the gap between them.
+				<kbd class="rounded border border-border bg-surface px-1">Enter</kbd> (or use the
+				capture). Draw the box around both numbers in one strip; the app finds the gap
+				between them.
 			</p>
-			<div class="flex justify-end">
+			<div class="flex justify-end gap-2">
+				<CountdownCapture oncapture={confirmAtCursor} />
 				<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>
 			</div>
 		{:else}

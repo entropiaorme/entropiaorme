@@ -430,8 +430,19 @@ async fn the_calibration_verbs_walk_the_flow_and_report_status() {
     let started = serde_json::to_value(api.maps_calibration_start().unwrap()).unwrap();
     assert_eq!(started["phase"], "awaitTopLeft");
 
+    // A confirm takes the corner at the cursor, as Enter does.
+    let first = serde_json::to_value(api.maps_calibration_confirm().unwrap()).unwrap();
+    assert_eq!(first["phase"], "awaitBottomRight");
+    // The scripted cursor never moves, so the second corner is degenerate
+    // and stays armed rather than saving an unreadable region.
+    let second = serde_json::to_value(api.maps_calibration_confirm().unwrap()).unwrap();
+    assert_eq!(second["phase"], "awaitBottomRight");
+
     let cancelled = serde_json::to_value(api.maps_calibration_cancel().unwrap()).unwrap();
     assert_eq!(cancelled["phase"], "idle");
+    // With no flow running a confirm captures nothing.
+    let idle = serde_json::to_value(api.maps_calibration_confirm().unwrap()).unwrap();
+    assert_eq!(idle["phase"], "idle");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

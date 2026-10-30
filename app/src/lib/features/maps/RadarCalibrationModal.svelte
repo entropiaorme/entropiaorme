@@ -3,17 +3,28 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import {
 		cancelRadarCalibration,
+		confirmRadarCalibration,
 		getRadarCalibrationStatus,
 		getRadarGeometry,
 		startRadarCalibration,
 		type RadarCalibrationStatus,
 	} from '$lib/api';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import CountdownCapture from './CountdownCapture.svelte';
 
 	let { open = $bindable(false), oncomplete }: { open?: boolean; oncomplete: () => void } = $props();
 	let phase = $state<RadarCalibrationStatus>('idle');
 	let completed = $state(false);
 	let error = $state<string | null>(null);
+
+	// Without Enter: the countdown takes the point at the cursor at zero.
+	async function confirmAtCursor() {
+		try {
+			phase = await confirmRadarCalibration();
+		} catch {
+			// The poll re-reads the flow on its next tick.
+		}
+	}
 
 	async function begin() {
 		completed = false;
@@ -59,7 +70,13 @@
 		{:else}
 			<p>Preparing calibration…</p>
 		{/if}
+		{#if !completed && (phase === 'awaitCentre' || phase === 'awaitNorthEdge')}
+			<p>Or start the capture and hover there before it ends.</p>
+		{/if}
 		<div class="flex justify-end gap-2">
+			{#if !completed && (phase === 'awaitCentre' || phase === 'awaitNorthEdge')}
+				<CountdownCapture oncapture={confirmAtCursor} />
+			{/if}
 			{#if completed}<Button onclick={() => (open = false)}>Done</Button>{:else}<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>{/if}
 		</div>
 	</div>

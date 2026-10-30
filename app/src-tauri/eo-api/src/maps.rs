@@ -290,6 +290,14 @@ impl Api {
         ))
     }
 
+    /// Take the current radar point at the cursor, exactly as an Enter
+    /// press does.
+    pub async fn radar_calibration_confirm(&self) -> Result<RadarCalibrationStatus, ApiError> {
+        let navigation = self.navigation()?;
+        navigation.radar_confirm().await;
+        Ok(radar_phase_to_dto(navigation.radar_calibration_phase()))
+    }
+
     pub fn radar_calibration_cancel(&self) -> Result<(), ApiError> {
         self.navigation()?.radar_calibration_cancel();
         Ok(())
@@ -1157,6 +1165,17 @@ impl Api {
     pub fn maps_calibration_start(&self) -> Result<CoordCalibrationStatus, ApiError> {
         let service = self.coord_capture()?;
         service.calibration_start();
+        Ok(self.coord_status(service))
+    }
+
+    /// Take the current corner at the cursor, exactly as an Enter press
+    /// does: the path for a machine that cannot read keys (the overlay
+    /// counts down, the player hovers the corner, the capture lands).
+    pub fn maps_calibration_confirm(&self) -> Result<CoordCalibrationStatus, ApiError> {
+        let service = self.coord_capture()?;
+        if service.calibration_active() {
+            service.on_confirm();
+        }
         Ok(self.coord_status(service))
     }
 

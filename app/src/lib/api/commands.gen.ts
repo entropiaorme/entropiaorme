@@ -4983,6 +4983,10 @@ export async function mapsCalibrationStart(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_start', {});
 }
 
+export async function mapsCalibrationConfirm(): Promise<CoordCalibrationStatus> {
+	return invokeCommand('maps_calibration_confirm', {});
+}
+
 export async function mapsCalibrationCancel(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_cancel', {});
 }
@@ -5029,6 +5033,10 @@ export async function navigationEnd(): Promise<void> {
 
 export async function radarCalibrationStart(): Promise<RadarCalibrationStatus> {
 	return invokeCommand('radar_calibration_start', {});
+}
+
+export async function radarCalibrationConfirm(): Promise<RadarCalibrationStatus> {
+	return invokeCommand('radar_calibration_confirm', {});
 }
 
 export async function radarCalibrationCancel(): Promise<void> {

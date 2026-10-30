@@ -1922,6 +1922,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(CoordCalibrationStatus))),
         },
         CommandSpec {
+            name: "maps_calibration_confirm",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(CoordCalibrationStatus))),
+        },
+        CommandSpec {
             name: "maps_calibration_cancel",
             args: Vec::new(),
             returns: Some(schema(schema_for!(CoordCalibrationStatus))),
@@ -2012,6 +2017,11 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "radar_calibration_start",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(RadarCalibrationStatus))),
+        },
+        CommandSpec {
+            name: "radar_calibration_confirm",
             args: Vec::new(),
             returns: Some(schema(schema_for!(RadarCalibrationStatus))),
         },

@@ -67,7 +67,7 @@ use eo_api::scan::{
     UndoResult,
 };
 use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
-use eo_api::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
@@ -476,6 +476,11 @@ pub async fn character_skilling_forecast(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn settings_get(app: tauri::AppHandle) -> Result<AppSettings, ApiError> {
     facade(&app)?.settings().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn input_status(app: tauri::AppHandle) -> Result<KeyboardAccess, ApiError> {
+    facade(&app)?.input_status()
 }
 
 #[tauri::command(rename_all = "snake_case")]

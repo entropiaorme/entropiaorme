@@ -454,6 +454,16 @@ impl Api {
         })
     }
 
+    /// How this machine reads keys, and whether it runs keyless: the
+    /// settings' `keyboard` block on its own, for windows that may not read
+    /// the rest of the settings (the route HUD offers its F-key mode only
+    /// where keys can be read).
+    pub fn input_status(&self) -> Result<KeyboardAccess, ApiError> {
+        let config = load_config_readonly(&self.data_dir)
+            .map_err(ApiError::internal("input status config read"))?;
+        Ok(self.input.access(&config))
+    }
+
     /// The persisted overlay window position.
     pub async fn settings_overlay_position(&self) -> Result<OverlayPosition, ApiError> {
         let config = load_config_readonly(&self.data_dir)

@@ -5,6 +5,7 @@ const mocked = vi.hoisted(() => ({
 	startNavigation: vi.fn(),
 	scanCoordinates: vi.fn(),
 	snapshot: vi.fn(),
+	inputStatus: vi.fn(),
 	emit: vi.fn(),
 }));
 
@@ -16,6 +17,7 @@ vi.mock('$lib/preferences', () => ({
 vi.mock('$lib/api', () => ({
 	beginNavigationAreaSelection: mocked.beginSelection,
 	endNavigation: vi.fn(),
+	getInputStatus: mocked.inputStatus,
 	getNavigationSnapshot: mocked.snapshot,
 	hideNavigationOverlays: vi.fn(),
 	markNavigationVisited: vi.fn(),
@@ -44,6 +46,40 @@ beforeEach(() => {
 	});
 	mocked.startNavigation.mockResolvedValue({ status: 'active', stops: [] });
 	mocked.snapshot.mockResolvedValue(null);
+	mocked.inputStatus.mockResolvedValue({
+		observer: 'xinput',
+		keyless: false,
+		keylessAvailable: true,
+	});
+});
+
+describe('the F-key visit mode on a machine that cannot read keys', () => {
+	async function startedRoute(keyless: boolean, preferred: boolean) {
+		const preferences = await import('$lib/preferences');
+		vi.mocked(preferences.getPreference).mockImplementation((key: string, fallback: unknown) =>
+			Promise.resolve(key === 'navVisitOnKey' ? preferred : fallback),
+		);
+		mocked.inputStatus.mockResolvedValue({ observer: null, keyless, keylessAvailable: true });
+		const controller = createNavigationHudController();
+		await controller.loadPrefs();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		await controller.captureStart();
+		await controller.beginRoute();
+		return controller;
+	}
+
+	it('is withheld while keyless, whatever was preferred', async () => {
+		const controller = await startedRoute(true, true);
+		expect(controller.keyless).toBe(true);
+		expect(controller.visitOnKey).toBe(false);
+		expect(mocked.startNavigation.mock.calls[0][5]).toBe(false);
+	});
+
+	it('follows the preference where keys can be read', async () => {
+		const controller = await startedRoute(false, true);
+		expect(controller.visitOnKey).toBe(true);
+		expect(mocked.startNavigation.mock.calls[0][5]).toBe(true);
+	});
 });
 
 describe('navigation HUD route-area scope', () => {

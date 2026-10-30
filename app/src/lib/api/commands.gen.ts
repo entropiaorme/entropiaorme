@@ -4367,6 +4367,10 @@ export async function settingsGet(): Promise<AppSettings> {
 	return invokeCommand('settings_get', {});
 }
 
+export async function inputStatus(): Promise<KeyboardAccess> {
+	return invokeCommand('input_status', {});
+}
+
 export async function settingsOverlayPosition(): Promise<OverlayPosition> {
 	return invokeCommand('settings_overlay_position', {});
 }

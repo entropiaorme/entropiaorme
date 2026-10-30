@@ -206,6 +206,11 @@ async fn keyless_tracking_is_held_to_this_machine_and_suppresses_the_keyboard() 
     assert_eq!(body["hotbarHooksEnabled"], true);
     let stored = read_settings(&dir.path().join("data"));
     assert_eq!(stored["keyless_input_host"], "machine-a");
+    // The narrow read the route HUD uses carries the same block.
+    assert_eq!(
+        serde_json::to_value(api.input_status().unwrap()).unwrap(),
+        body["keyboard"]
+    );
     let snapshot = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
     assert_eq!(snapshot["keylessInput"], true);
     assert_eq!(snapshot["hotbarKeysEnabled"], false);

@@ -8,6 +8,8 @@ import type { AppSettings } from './commands.gen';
 import * as commands from './commands.gen';
 
 export const getSettings = commands.settingsGet;
+/** How this machine reads keys, and whether it runs keyless. */
+export const getInputStatus = commands.inputStatus;
 export const updateSettings = commands.settingsUpdate;
 export const getOverlayPosition = commands.settingsOverlayPosition;
 export const saveOverlayPosition = commands.settingsSetOverlayPosition;

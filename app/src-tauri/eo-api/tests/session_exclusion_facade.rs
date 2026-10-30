@@ -931,6 +931,7 @@ const OTHER_COMMANDS: &[&str] = &[
     "equipment_detail",
     "loadout_compare",
     "settings_get",
+    "input_status",
     "settings_overlay_position",
     "settings_set_overlay_position",
     "settings_update",

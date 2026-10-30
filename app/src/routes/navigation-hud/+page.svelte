@@ -161,9 +161,9 @@
 				<div class="flex items-center justify-between gap-2">
 					<div class="min-w-0">
 						<p class="text-[11px] text-white/70">Visit on F press</p>
-						<p class="text-[10px] text-white/40">{c.visitOnKey ? 'Pressing F records the tree you are heading to' : 'Cuts are detected from your harvests'}</p>
+						<p class="text-[10px] text-white/40">{c.keyless ? 'Keys cannot be read here; cuts are detected from your harvests' : c.visitOnKey ? 'Pressing F records the tree you are heading to' : 'Cuts are detected from your harvests'}</p>
 					</div>
-					<Toggle checked={c.visitOnKey} onchange={c.setVisitOnKey} label="Visit on F press" />
+					<Toggle checked={c.visitOnKey} disabled={c.keyless} onchange={c.setVisitOnKey} label="Visit on F press" />
 				</div>
 				<label class="flex items-center gap-2">
 					<span class="text-[10px] text-white/55">Update position every</span>

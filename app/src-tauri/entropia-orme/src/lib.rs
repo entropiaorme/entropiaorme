@@ -1100,6 +1100,7 @@ mod tests {
                 "navigation_start",
                 "maps_scan_coordinates",
                 "navigation_snapshot",
+                "input_status",
                 "navigation_update_position",
                 "navigation_mark_visited",
                 "navigation_skip",

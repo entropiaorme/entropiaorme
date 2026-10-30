@@ -10,6 +10,7 @@
 import {
 	beginNavigationAreaSelection,
 	endNavigation,
+	getInputStatus,
 	getNavigationSnapshot,
 	hideNavigationOverlays,
 	markNavigationVisited,
@@ -75,6 +76,9 @@ export function createNavigationHudController() {
 	// remembered across routes.
 	let updateIntervalSec = $state(1);
 	let visitOnKey = $state(false);
+	// A machine that cannot read keys never sees F, so the mode is withheld
+	// there and cuts are detected from harvests alone.
+	let keyless = $state(false);
 	// Set when a manual Visited lands outside the arrival tolerance: the visit
 	// is held until the user confirms a forced record.
 	let pendingVisit = $state<{ name: string; distance: number } | null>(null);
@@ -147,6 +151,11 @@ export function createNavigationHudController() {
 	async function loadPrefs() {
 		updateIntervalSec = await getPreference('navUpdateIntervalSec', 1);
 		visitOnKey = await getPreference('navVisitOnKey', false);
+		try {
+			keyless = (await getInputStatus()).keyless;
+		} catch {
+			keyless = false;
+		}
 	}
 
 	function applyContext(payload: unknown) {
@@ -263,7 +272,7 @@ export function createNavigationHudController() {
 				start.lon,
 				start.lat,
 				selectedPinIds,
-				visitOnKey,
+				visitOnKey && !keyless,
 			);
 			start = null;
 			selectedPinIds = null;
@@ -407,7 +416,10 @@ export function createNavigationHudController() {
 			return outOfOrder;
 		},
 		get visitOnKey() {
-			return visitOnKey;
+			return visitOnKey && !keyless;
+		},
+		get keyless() {
+			return keyless;
 		},
 		get updateIntervalSec() {
 			return updateIntervalSec;

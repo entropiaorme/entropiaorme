@@ -69,7 +69,7 @@ use crate::scan::{
     UndoResult,
 };
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
-use crate::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
@@ -534,6 +534,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "settings_get",
             args: Vec::new(),
             returns: Some(schema(schema_for!(AppSettings))),
+        },
+        CommandSpec {
+            name: "input_status",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(KeyboardAccess))),
         },
         CommandSpec {
             name: "settings_overlay_position",

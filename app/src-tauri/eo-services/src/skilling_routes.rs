@@ -82,6 +82,54 @@ impl SkillBoost {
     }
 }
 
+/// The markup a planned route expects its loot to sell at, as a percent of
+/// TT (104 for 104%): the player's own planning assumption, never a
+/// measurement and never realised. TT is always on offer, so it starts at
+/// 100%.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LootMarkup(f64);
+
+impl LootMarkup {
+    pub const MIN_PERCENT: f64 = 100.0;
+    pub const MAX_PERCENT: f64 = 1000.0;
+
+    /// A markup of `percent`; None outside 100% to 1000%.
+    pub fn from_percent(percent: f64) -> Option<Self> {
+        (percent.is_finite() && (Self::MIN_PERCENT..=Self::MAX_PERCENT).contains(&percent))
+            .then_some(Self(percent))
+    }
+
+    pub fn percent(self) -> f64 {
+        self.0
+    }
+
+    /// The markup over TT as a fraction of the loot TT (0.04 at 104%).
+    pub fn lift(self) -> f64 {
+        self.0 / 100.0 - 1.0
+    }
+}
+
+/// The share of the clock a route spends hunting, as a percent: a timed
+/// instance hunted 10 minutes in every 13 runs at about 77%. Recorded pace
+/// leaves breaks out, so downtime a route always carries is stated here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HuntingShare(f64);
+
+impl HuntingShare {
+    pub const FULL: Self = Self(100.0);
+    pub const MIN_PERCENT: f64 = 1.0;
+
+    /// A share of `percent`; None outside 1% to 100%.
+    pub fn from_percent(percent: f64) -> Option<Self> {
+        (percent.is_finite() && (Self::MIN_PERCENT..=100.0).contains(&percent))
+            .then_some(Self(percent))
+    }
+
+    pub fn percent(self) -> f64 {
+        self.0
+    }
+}
+
 /// A mob maturity's HP and level, as the catalogue records them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MobMaturity {
@@ -196,8 +244,15 @@ impl RouteKill {
 
     /// The route as per-PED rates the forecast solver projects: each
     /// skill's PES per PED cycled (the weapon professions' part of the
-    /// kill's skill), and the loss and time per PED.
-    pub fn rates(&self, shares: &[(String, f64)]) -> PlannedRates {
+    /// kill's skill), the loss per PED, and the time per PED stretched to
+    /// the clock by the `hunting` share. An expected `markup` carries
+    /// through as its lift over the loot TT.
+    pub fn rates(
+        &self,
+        shares: &[(String, f64)],
+        hunting: HuntingShare,
+        markup: Option<LootMarkup>,
+    ) -> PlannedRates {
         let pes_per_ped = self.skill_pec * WEAPON_PROFESSION_SHARE / self.cycled_pec;
         PlannedRates {
             skills: shares
@@ -205,10 +260,11 @@ impl RouteKill {
                 .map(|(name, share)| (name.clone(), share * pes_per_ped))
                 .collect(),
             loss_per_ped: self.loss_pec / self.cycled_pec,
-            hours_per_ped: self
-                .seconds
-                .map(|seconds| seconds * 100.0 / self.cycled_pec / 3600.0),
+            hours_per_ped: self.seconds.map(|seconds| {
+                seconds * 100.0 / self.cycled_pec / 3600.0 * 100.0 / hunting.percent()
+            }),
             kills_per_ped: 100.0 / self.cycled_pec,
+            markup_lift: markup.map(LootMarkup::lift),
         }
     }
 }
@@ -377,10 +433,11 @@ mod tests {
             seconds: Some(2.0),
             overkill_share: 0.5,
         };
-        let rates = kill.rates(&[
+        let shares = [
             ("Longblades".to_string(), 0.75),
             ("Anatomy".to_string(), 0.25),
-        ]);
+        ];
+        let rates = kill.rates(&shares, HuntingShare::FULL, None);
         // 0.5 PEC of skill per 2 PEC cycled: 0.25 PES per PED, of which the
         // weapon professions' share is split.
         let expected = [("Longblades", 0.75), ("Anatomy", 0.25)];
@@ -393,5 +450,41 @@ mod tests {
         assert!((rates.kills_per_ped - 50.0).abs() < 1e-12);
         // 50 kills of 2 seconds per PED.
         assert!((rates.hours_per_ped.unwrap() - 100.0 / 3600.0).abs() < 1e-12);
+        assert_eq!(rates.markup_lift, None);
+
+        // Hunting half the clock doubles the time per PED and nothing else;
+        // a markup carries through as its lift.
+        let planned = kill.rates(
+            &shares,
+            HuntingShare::from_percent(50.0).unwrap(),
+            LootMarkup::from_percent(104.0),
+        );
+        assert!((planned.hours_per_ped.unwrap() - 200.0 / 3600.0).abs() < 1e-12);
+        assert_eq!(planned.loss_per_ped, rates.loss_per_ped);
+        assert_eq!(planned.skills, rates.skills);
+        assert!((planned.markup_lift.unwrap() - 0.04).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_markup_starts_at_tt_and_a_hunting_share_is_a_part_of_the_clock() {
+        assert_eq!(
+            LootMarkup::from_percent(100.0).map(LootMarkup::lift),
+            Some(0.0)
+        );
+        assert_eq!(
+            LootMarkup::from_percent(1000.0).map(LootMarkup::percent),
+            Some(1000.0)
+        );
+        for wild in [99.9, 1000.1, f64::NAN, f64::INFINITY] {
+            assert_eq!(LootMarkup::from_percent(wild), None, "{wild}");
+        }
+        assert_eq!(HuntingShare::from_percent(100.0), Some(HuntingShare::FULL));
+        assert_eq!(
+            HuntingShare::from_percent(1.0).map(HuntingShare::percent),
+            Some(1.0)
+        );
+        for wild in [0.0, 0.5, 100.5, f64::NAN] {
+            assert_eq!(HuntingShare::from_percent(wild), None, "{wild}");
+        }
     }
 }

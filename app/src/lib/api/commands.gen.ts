@@ -3468,6 +3468,11 @@ export interface SkillingRouteForecast {
 	cycledPed: number;
 	/** Expected TT lost on the way: cycled less expected loot TT. */
 	pedLost: number;
+	/** The expected markup on that loot TT at the route's loot markup; null when the route sets none. */
+	markup: number | null;
+	/** TT lost less the expected markup (below zero when the markup outweighs the loss); null with the markup. */
+	netCost: number | null;
+	/** The time to the goal on the clock, the route's hunting share included; null when the attack rate is unknown. */
 	hours: number | null;
 	/** The player's recorded pace between kills on the mob; null when they have too few recorded kills of it and a fixed allowance stands in. */
 	pace: SkillingRoutePace | null;
@@ -3491,6 +3496,10 @@ export interface SkillingRoutePick {
 	setup: SetupPick;
 	species: string;
 	maturity: string;
+	/** The markup the player expects the route's loot to sell at, percent of TT (100 to 1000); absent prices the route at TT alone. */
+	lootMarkupPercent?: number | null;
+	/** The share of the clock the route spends hunting, percent (1 to 100): a timed instance's downtime between runs. Absent reads as all of it. */
+	huntingSharePercent?: number | null;
 }
 
 /**

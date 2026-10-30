@@ -340,6 +340,8 @@ fn forecast_query() -> SkillingForecastQuery {
             },
             species: "Carabok".to_string(),
             maturity: "Puny".to_string(),
+            loot_markup_percent: None,
+            hunting_share_percent: None,
         }],
         skill_boost_percent: Some(50),
         looter_level: None,

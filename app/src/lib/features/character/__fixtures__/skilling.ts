@@ -37,6 +37,8 @@ export function routeForecast(
 		kills: 1000,
 		cycledPed: 45.6,
 		pedLost: 3.6,
+		markup: null,
+		netCost: null,
 		hours: 0.86,
 		pace: null,
 		skills: [],

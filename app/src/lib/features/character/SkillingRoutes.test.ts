@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SkillingForecastResult, SkillingRouteForecast } from '$lib/api/commands.gen';
 import type { ProfessionLevel } from '$lib/types/analytics';
 import { forecastResult, routeForecast } from './__fixtures__/skilling';
+import type { StoredRoute } from './routesView';
 import SkillingRoutes from './SkillingRoutes.svelte';
 import { createSkillingModel } from './skillingModel.svelte';
 
@@ -38,14 +39,19 @@ const PROFESSIONS: ProfessionLevel[] = [
 	},
 ];
 
-const ROBBER = {
+const ROBBER: StoredRoute = {
 	weaponId: 'sword',
 	weaponName: 'Laconian Sword',
 	species: 'Bank Robber',
 	maturity: 'Default',
 	display: 'Default Bank Robber',
 };
-const CARABOK = { ...ROBBER, species: 'Carabok', maturity: 'Puny', display: 'Puny Carabok' };
+const CARABOK: StoredRoute = {
+	...ROBBER,
+	species: 'Carabok',
+	maturity: 'Puny',
+	display: 'Puny Carabok',
+};
 
 const robber = (overrides: Partial<SkillingRouteForecast> = {}) =>
 	routeForecast({
@@ -182,6 +188,74 @@ describe('SkillingRoutes', () => {
 		expect(screen.getByText(/only as a byproduct of a weapon's own professions/)).toBeTruthy();
 		expect(screen.queryByLabelText('Skill boost percent')).toBeNull();
 		expect(screen.queryByText('Laconian Sword')).toBeNull();
+	});
+
+	it('compares on the loss after markup once a route expects one, and reads a net gain', async () => {
+		await renderWith(
+			[
+				robber(),
+				routeForecast({ index: 1, cycledPed: 900, pedLost: 41.38, markup: 50.41, netCost: -9.03 }),
+			],
+			[ROBBER, { ...CARABOK, lootMarkupPercent: 106, huntingSharePercent: 77 }],
+		);
+		expect(screen.getByText('After markup')).toBeTruthy();
+		expect(screen.getByText('9.03 gained')).toBeTruthy();
+		expect(screen.getByText('at 106%')).toBeTruthy();
+		expect(screen.getByText('77% hunting')).toBeTruthy();
+		// The route without a markup stands at TT, and is now the dearer one.
+		expect(screen.getByTitle('No markup set: at TT').textContent?.trim()).toBe('20.39');
+		expect(screen.getByText('+29.42')).toBeTruthy();
+	});
+
+	it('leaves the markup column out until a route sets one', async () => {
+		await renderWith([robber()]);
+		expect(screen.queryByText('After markup')).toBeNull();
+	});
+
+	it('names the markup at which a dearer route would match the cheapest', async () => {
+		const hub = await renderWith(
+			[robber({ pedLost: 20 }), routeForecast({ index: 1, cycledPed: 900, pedLost: 38 })],
+			[ROBBER, CARABOK],
+		);
+		hub.selectRow('route:1');
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// 18 PED more on 862 PED of loot: about 102.1%.
+		expect(
+			screen.getByText(
+				/With loot selling at 102\.1% of TT, this route would cost as much as Laconian Sword on Default Bank Robber/,
+			),
+		).toBeTruthy();
+	});
+
+	it("stores a route's expected markup and hunting share, and re-prices", async () => {
+		const hub = await renderWith([robber()]);
+		const markup = screen.getByLabelText('Expected loot markup percent') as HTMLInputElement;
+		await fireEvent.input(markup, { target: { value: '104' } });
+		await fireEvent.blur(markup);
+		expect(hub.routes[0].lootMarkupPercent).toBe(104);
+		expect(prefs.setPreference).toHaveBeenLastCalledWith('skilling_routes', [
+			{ ...ROBBER, lootMarkupPercent: 104 },
+		]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const request = mocked.getSkillingForecast.mock.lastCall?.[0];
+		expect(request?.routes?.[0]).toMatchObject({ lootMarkupPercent: 104 });
+
+		const share = screen.getByLabelText('Hunting share percent') as HTMLInputElement;
+		await fireEvent.input(share, { target: { value: '77' } });
+		await fireEvent.keyDown(share, { key: 'Enter' });
+		expect(hub.routes[0].huntingSharePercent).toBe(77);
+
+		// Blank clears the markup; all of the clock clears the share.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const cleared = screen.getByLabelText('Expected loot markup percent') as HTMLInputElement;
+		await fireEvent.input(cleared, { target: { value: '' } });
+		await fireEvent.blur(cleared);
+		expect(hub.routes[0].lootMarkupPercent).toBeNull();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const full = screen.getByLabelText('Hunting share percent') as HTMLInputElement;
+		await fireEvent.input(full, { target: { value: '100' } });
+		await fireEvent.blur(full);
+		expect(hub.routes[0].huntingSharePercent).toBeNull();
 	});
 
 	it('names why a route cannot be priced, and removes it', async () => {

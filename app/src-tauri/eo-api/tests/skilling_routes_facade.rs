@@ -2,7 +2,8 @@
 //! weapon on a mob maturity priced toward a profession goal from the
 //! skill-per-kill law and the loadout comparison engine, beside (never
 //! instead of) the recorded sessions; the skill boost and the looter level;
-//! the player's own pace on a mob; which targets hunting prices; routes the
+//! the player's own pace on a mob; a route's expected loot markup and
+//! hunting share; which targets hunting prices; routes the
 //! catalogue cannot resolve; and named sessions narrowed to one weapon.
 
 use std::path::{Path, PathBuf};
@@ -184,6 +185,8 @@ fn route(weapon: &str, species: &str, maturity: &str) -> SkillingRoutePick {
         },
         species: species.to_string(),
         maturity: maturity.to_string(),
+        loot_markup_percent: None,
+        hunting_share_percent: None,
     }
 }
 
@@ -416,6 +419,111 @@ async fn a_forecast_refuses_too_many_routes_or_a_wild_looter_level() {
         ..swordsman_query(20.0, Vec::new())
     };
     assert!(api.character_skilling_forecast(&wild).await.is_err());
+}
+
+/// A route's expected loot markup lifts the loot it expects (cycled less
+/// TT lost) and nets off the loss; the cycling, the loss, and the time are
+/// the TT route's. A route without one carries no markup and no net cost,
+/// never a zero. A hunting share stretches only the time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_route_prices_its_expected_markup_and_its_hunting_share() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+
+    let plain = route("sword", "Carabok", "Puny");
+    let marked = SkillingRoutePick {
+        loot_markup_percent: Some(110.0),
+        ..plain.clone()
+    };
+    let part_time = SkillingRoutePick {
+        hunting_share_percent: Some(50.0),
+        ..plain.clone()
+    };
+    let result = forecast(&api, &swordsman_query(20.0, vec![plain, marked, part_time])).await;
+    let [tt, marked, part_time] = [&result.routes[0], &result.routes[1], &result.routes[2]];
+    for route in [tt, marked, part_time] {
+        assert_eq!(route.status, SkillingRouteStatus::Ready);
+    }
+
+    assert_eq!(tt.markup, None::<f64>);
+    assert_eq!(tt.net_cost, None::<f64>);
+    assert_eq!(
+        (marked.cycled_ped, marked.ped_lost),
+        (tt.cycled_ped, tt.ped_lost)
+    );
+    assert_eq!(marked.hours, tt.hours);
+    let markup = marked.markup.expect("a markup was set");
+    assert!((markup - (tt.cycled_ped - tt.ped_lost) * 0.10).abs() < 0.02);
+    let net = marked.net_cost.expect("a net cost beside the markup");
+    assert!((net - (tt.ped_lost - markup)).abs() < 0.011);
+    // The sword returns about 93% on Carabok: 10% over TT on its loot
+    // outweighs the 7% loss, so the net cost reads below zero.
+    assert!(net < 0.0, "net {net}");
+
+    // Twice the clock, to the hundredth of an hour the hours are given in.
+    let (part, whole) = (part_time.hours.unwrap(), tt.hours.unwrap());
+    assert!(
+        (part - 2.0 * whole).abs() <= 0.011,
+        "{part} against {whole}"
+    );
+    assert_eq!(part_time.seconds_per_kill, tt.seconds_per_kill);
+    assert_eq!(
+        (part_time.cycled_ped, part_time.ped_lost),
+        (tt.cycled_ped, tt.ped_lost)
+    );
+    assert_eq!(part_time.markup, None::<f64>);
+
+    let wire = serde_json::to_value(&result).unwrap();
+    assert!(wire["routes"][0]["markup"].is_null());
+    assert!(wire["routes"][1]["netCost"].is_number());
+}
+
+/// A markup below TT (which is always on offer) or past 1000%, and a
+/// hunting share outside 1% to 100%, refuse the forecast.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forecast_refuses_a_wild_markup_or_hunting_share() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+
+    let base = route("sword", "Carabok", "Puny");
+    let wild = [
+        SkillingRoutePick {
+            loot_markup_percent: Some(99.0),
+            ..base.clone()
+        },
+        SkillingRoutePick {
+            loot_markup_percent: Some(1001.0),
+            ..base.clone()
+        },
+        SkillingRoutePick {
+            hunting_share_percent: Some(0.0),
+            ..base.clone()
+        },
+        SkillingRoutePick {
+            hunting_share_percent: Some(101.0),
+            ..base.clone()
+        },
+    ];
+    for pick in wild {
+        let query = swordsman_query(20.0, vec![base.clone(), pick]);
+        assert!(api.character_skilling_forecast(&query).await.is_err());
+    }
+    let edges = vec![
+        SkillingRoutePick {
+            loot_markup_percent: Some(100.0),
+            ..base.clone()
+        },
+        SkillingRoutePick {
+            loot_markup_percent: Some(1000.0),
+            hunting_share_percent: Some(1.0),
+            ..base
+        },
+    ];
+    let result = forecast(&api, &swordsman_query(20.0, edges)).await;
+    // At TT the markup is a priced zero, not an absent one.
+    assert_eq!(result.routes[0].markup, Some(0.0));
 }
 
 /// Only HP and professions some weapon trains are priced by hunting; any

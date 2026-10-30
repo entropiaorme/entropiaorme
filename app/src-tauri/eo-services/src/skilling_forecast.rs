@@ -366,6 +366,9 @@ pub struct PlannedRates {
     /// Hours per PED cycled; None when the attack rate is unknown.
     pub hours_per_ped: Option<f64>,
     pub kills_per_ped: f64,
+    /// The expected loot markup as a lift over the loot TT; None prices
+    /// the route at TT alone.
+    pub markup_lift: Option<f64>,
 }
 
 /// A planned route's forecast. The projected figures are zero unless the
@@ -376,6 +379,10 @@ pub struct PlannedForecast {
     pub cycled_ped: f64,
     /// Expected loss on the cycling: cycled less expected loot TT.
     pub ped_lost: f64,
+    /// The expected markup on the expected loot TT; None without a markup.
+    pub markup: Option<f64>,
+    /// The loss less the expected markup; None with the markup.
+    pub net_cost: Option<f64>,
     pub hours: Option<f64>,
     pub kills: f64,
     pub skills: Vec<ForecastSkill>,
@@ -392,6 +399,8 @@ pub fn forecast_planned(
         status,
         cycled_ped: 0.0,
         ped_lost: 0.0,
+        markup: None,
+        net_cost: None,
         hours: None,
         kills: 0.0,
         skills: Vec::new(),
@@ -409,16 +418,22 @@ pub fn forecast_planned(
             .collect(),
     };
     match reach(skill_levels, target, &rates, 1.0, needed) {
-        Ok((cycled, skills)) => PlannedForecast {
-            status: ForecastStatus::Ready,
-            cycled_ped: round_half_even(cycled, 2),
-            ped_lost: round_half_even(cycled * planned.loss_per_ped, 2),
-            hours: planned
-                .hours_per_ped
-                .map(|hours| round_half_even(cycled * hours, 2)),
-            kills: (cycled * planned.kills_per_ped).round(),
-            skills,
-        },
+        Ok((cycled, skills)) => {
+            let ped_lost = cycled * planned.loss_per_ped;
+            let markup = planned.markup_lift.map(|lift| (cycled - ped_lost) * lift);
+            PlannedForecast {
+                status: ForecastStatus::Ready,
+                cycled_ped: round_half_even(cycled, 2),
+                ped_lost: round_half_even(ped_lost, 2),
+                markup: markup.map(|value| round_half_even(value, 2)),
+                net_cost: markup.map(|value| round_half_even(ped_lost - value, 2)),
+                hours: planned
+                    .hours_per_ped
+                    .map(|hours| round_half_even(cycled * hours, 2)),
+                kills: (cycled * planned.kills_per_ped).round(),
+                skills,
+            }
+        }
         Err(status) => unanswered(status),
     }
 }
@@ -985,6 +1000,7 @@ mod tests {
                 loss_per_ped: 0.08,
                 hours_per_ped: Some(0.01),
                 kills_per_ped: 40.0,
+                markup_lift: None,
             },
         );
         assert_eq!(planned.status, ForecastStatus::Ready);
@@ -993,12 +1009,15 @@ mod tests {
         assert!((planned.hours.unwrap() - planned.cycled_ped * 0.01).abs() < 0.01);
         assert_eq!(planned.kills, (planned.cycled_ped * 40.0).round());
         assert_eq!(planned.skills, recorded.skills);
+        // At TT alone there is no markup and no net cost; never a zero.
+        assert_eq!((planned.markup, planned.net_cost), (None, None));
 
         let unknown_time = PlannedRates {
             skills: vec![("Rifle".into(), 0.02)],
             loss_per_ped: 0.08,
             hours_per_ped: None,
             kills_per_ped: 40.0,
+            markup_lift: None,
         };
         assert_eq!(
             forecast_planned(&skill_levels, &target, 5.5, &unknown_time).hours,
@@ -1014,6 +1033,38 @@ mod tests {
             forecast_planned(&skill_levels, &target, 5.5, &elsewhere).status,
             ForecastStatus::DoesNotTrain
         );
+    }
+
+    /// An expected markup lifts the expected loot TT (cycled less the
+    /// loss), so it can outweigh the loss: the net cost then reads as a
+    /// gain. The cycling, loss, and skills are the TT route's.
+    #[test]
+    fn expected_markup_on_a_planned_route_lowers_its_net_cost() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        let rates = |markup_lift: Option<f64>| PlannedRates {
+            skills: vec![("Rifle".into(), 0.02)],
+            loss_per_ped: 0.05,
+            hours_per_ped: Some(0.01),
+            kills_per_ped: 40.0,
+            markup_lift,
+        };
+        let tt = forecast_planned(&skill_levels, &target, 5.5, &rates(None));
+        let marked = forecast_planned(&skill_levels, &target, 5.5, &rates(Some(0.04)));
+        assert_eq!(marked.cycled_ped, tt.cycled_ped);
+        assert_eq!(marked.ped_lost, tt.ped_lost);
+        assert_eq!(marked.skills, tt.skills);
+        let loot = marked.cycled_ped - marked.ped_lost;
+        let markup = marked.markup.unwrap();
+        assert!((markup - loot * 0.04).abs() < 0.011);
+        assert!((marked.net_cost.unwrap() - (marked.ped_lost - markup)).abs() < 0.011);
+        // 95% back on TT, 4% over it on the loot: 98.8% of the cycling,
+        // so a 1.2% loss remains.
+        assert!((marked.net_cost.unwrap() / marked.cycled_ped - 0.012).abs() < 1e-3);
+
+        // Past break-even the markup outweighs the loss.
+        let rich = forecast_planned(&skill_levels, &target, 5.5, &rates(Some(0.08)));
+        assert!(rich.net_cost.unwrap() < 0.0);
     }
 
     #[test]

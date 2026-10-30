@@ -48,6 +48,13 @@ export function formatRoutePed(value: number): string {
 	return Math.abs(value) >= 100 ? Math.round(value).toLocaleString('en-GB') : value.toFixed(2);
 }
 
+/** A route percentage the player set (a markup, a hunting share): whole
+ * where it is whole, else one place ("104%", "102.5%"). */
+export function formatRoutePercent(percent: number): string {
+	const rounded = Math.round(percent * 10) / 10;
+	return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+}
+
 /** An overkill share: whole percent from 10%, one place below, so a small
  * share never reads as none. */
 export function formatOverkill(share: number): string {

@@ -17,14 +17,24 @@
 	import SkillingPanel from './SkillingPanel.svelte';
 	import SkillingPremium from './SkillingPremium.svelte';
 	import SkillingRouteDetail from './SkillingRouteDetail.svelte';
-	import { formatHours, formatKills, formatOverkill, formatRoutePed } from './skillingFormat';
+	import {
+		formatHours,
+		formatKills,
+		formatOverkill,
+		formatRoutePed,
+		formatRoutePercent,
+	} from './skillingFormat';
 	import { MAX_SKILL_BOOST, type SkillingModel } from './skillingModel.svelte';
 
 	// Skilling methods compared: each row a weapon on a mob you set up in
 	// place, priced to the goal before any of it is played. The premium over
-	// the cheapest is what a more comfortable method costs.
+	// the cheapest is what a more comfortable method costs. Once any route
+	// expects its loot to sell above TT, routes compare on the loss after
+	// that markup.
 	let { hub, professions }: { hub: SkillingModel; professions: ProfessionLevel[] } = $props();
 	const looterLevels = $derived(looterLevelsFrom(professions));
+	const showMarkup = $derived(hub.routes.some((route) => route.lootMarkupPercent != null));
+	const figureColumns = $derived(showMarkup ? 7 : 6);
 
 
 	const weaponPicker = () =>
@@ -187,6 +197,24 @@
 						<th class="px-3 py-2 text-left eyebrow">Mob</th>
 						<th class="px-3 py-2 text-right eyebrow">Cycled</th>
 						<th class="px-3 py-2 text-right eyebrow">TT lost</th>
+						{#if showMarkup}
+							<th class="px-3 py-2 text-right eyebrow">
+								<span class="inline-flex items-center justify-end gap-1.5">
+									After markup
+									<InfoTip label="About the expected markup" width="w-80">
+										<p class="text-xs leading-relaxed text-text-secondary">
+											TT lost less the markup you expect the route's loot to sell at, which you set in a
+											route's detail. Routes without one stand at TT. Below zero, the markup outweighs the
+											loss.
+										</p>
+										<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
+											It is your planning assumption, not a measurement: markup is only realised when the
+											loot sells, after auction fees, and heavy selling can push it down.
+										</p>
+									</InfoTip>
+								</span>
+							</th>
+						{/if}
 						<th class="px-3 py-2 text-right eyebrow">Time</th>
 						<th class="px-3 py-2 text-right eyebrow">Kills</th>
 						<th class="px-3 py-2 text-right eyebrow">
@@ -195,8 +223,8 @@
 								<InfoTip label="About overkill" width="w-80">
 									<p class="text-xs leading-relaxed text-text-secondary">
 										The share of the damage fired that lands past the kill, and so of the TT lost and the
-										firing time. Beneath it, what that comes to over the route: the most a weapon that fits
-										the mob better could save.
+										firing time. Beneath it, what that comes to over the route, after any expected markup:
+										the most a weapon that fits the mob better could save.
 									</p>
 									<p class="mt-2 text-xs leading-relaxed text-text-tertiary">
 										It is a ceiling, not a promise: a lighter weapon often deals less damage per PEC or
@@ -275,26 +303,53 @@
 								{/if}
 							</td>
 							{#if route === null}
-								<td colspan="6" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan={figureColumns} class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{hub.forecastLoading ? 'Pricing…' : NO_DATA}
 								</td>
 							{:else if route.status !== 'ready'}
-								<td colspan="6" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan={figureColumns} class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{routeStatusLabel(route.status)}
 								</td>
 							{:else}
 								<td class="{COL_FIGURE} text-text-secondary">{formatRoutePed(route.cycledPed)}</td>
-								<td class="{COL_FIGURE} font-medium text-text">{formatRoutePed(route.pedLost)}</td>
-								<td class="{COL_FIGURE} text-text-secondary">
+								<td class="{COL_FIGURE} {showMarkup ? 'text-text-secondary' : 'font-medium text-text'}">
+									{formatRoutePed(route.pedLost)}
+								</td>
+								{#if showMarkup}
+									<td class="{COL_FIGURE} whitespace-nowrap">
+										{#if route.netCost === null}
+											<span class="text-text-tertiary" title="No markup set: at TT">
+												{formatRoutePed(route.pedLost)}
+											</span>
+										{:else if route.netCost < 0}
+											<span class="font-medium text-success">{formatRoutePed(-route.netCost)} gained</span>
+										{:else}
+											<span class="font-medium text-text">{formatRoutePed(route.netCost)}</span>
+										{/if}
+										{#if row.stored.lootMarkupPercent != null}
+											<span class="block text-xs text-text-tertiary">
+												at {formatRoutePercent(row.stored.lootMarkupPercent)}
+											</span>
+										{/if}
+									</td>
+								{/if}
+								<td class="{COL_FIGURE} whitespace-nowrap text-text-secondary">
 									{route.hours !== null ? formatHours(route.hours) : NO_DATA}
+									{#if row.stored.huntingSharePercent != null && row.stored.huntingSharePercent < 100}
+										<span class="block text-xs text-text-tertiary">
+											{formatRoutePercent(row.stored.huntingSharePercent)} hunting
+										</span>
+									{/if}
 								</td>
 								<td class="{COL_FIGURE} text-text-secondary">{formatKills(route.kills)}</td>
 								<td class="{COL_FIGURE} whitespace-nowrap text-text-secondary">
 									{#if row.overkill}
 										{formatOverkill(row.overkill.share)}
-										<span class="block text-xs text-text-tertiary">
-											up to {formatRoutePed(row.overkill.ped)} PED
-										</span>
+										{#if row.overkill.kind !== 'no_cost'}
+											<span class="block text-xs text-text-tertiary">
+												up to {formatRoutePed(row.overkill.ped)} PED
+											</span>
+										{/if}
 									{:else}
 										{NO_DATA}
 									{/if}
@@ -342,7 +397,7 @@
 								class="min-w-44"
 							/>
 						</td>
-						<td colspan="7"></td>
+						<td colspan={figureColumns + 1}></td>
 					</tr>
 				</tbody>
 			</table>

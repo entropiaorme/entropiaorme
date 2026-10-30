@@ -3,7 +3,9 @@
 //! definition's recorded play, with its own realised markup applied; and,
 //! beside them, planned routes (a weapon on a mob maturity), priced by the
 //! skill-per-kill law and the loadout comparison engine before any of it
-//! is played. A named session's TT cost is given twice: at its recorded
+//! is played. A route may carry the player's expected loot markup (a
+//! planning assumption, never realised) and the share of the clock it
+//! spends hunting. A named session's TT cost is given twice: at its recorded
 //! loot return, and at the return Community Model v1 expects from the
 //! weapons it fired, priced by the same engine as the routes. Read-only; the projections live in
 //! `eo_services::skilling_forecast` and `eo_services::skilling_routes`.
@@ -17,8 +19,8 @@ use eo_services::skilling_forecast::{
     ForecastStatus, ForecastTarget, PlannedForecast, SampleWarning, SourceForecast,
 };
 use eo_services::skilling_routes::{
-    between_kill_seconds, mob_pace, skill_shares, weapon_professions, RouteKill, SkillBoost,
-    RETARGET_SECONDS_PER_KILL,
+    between_kill_seconds, mob_pace, skill_shares, weapon_professions, HuntingShare, LootMarkup,
+    RouteKill, SkillBoost, RETARGET_SECONDS_PER_KILL,
 };
 
 use eo_wire::normalizer::round_half_even;
@@ -75,6 +77,41 @@ pub struct SkillingRoutePick {
     pub setup: SetupPick,
     pub species: String,
     pub maturity: String,
+    /// The markup the player expects the route's loot to sell at, percent
+    /// of TT (100 to 1000); absent prices the route at TT alone.
+    #[serde(default)]
+    pub loot_markup_percent: Option<f64>,
+    /// The share of the clock the route spends hunting, percent (1 to 100):
+    /// a timed instance's downtime between runs. Absent reads as all of it.
+    #[serde(default)]
+    pub hunting_share_percent: Option<f64>,
+}
+
+impl SkillingRoutePick {
+    /// The pick's markup and hunting share, typed; an error names the one
+    /// out of range.
+    fn planning(&self) -> Result<(Option<LootMarkup>, HuntingShare), ApiError> {
+        let markup = match self.loot_markup_percent {
+            None => None,
+            Some(percent) => Some(LootMarkup::from_percent(percent).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "a route's loot markup is between {}% and {}%",
+                    LootMarkup::MIN_PERCENT,
+                    LootMarkup::MAX_PERCENT
+                ))
+            })?),
+        };
+        let hunting = match self.hunting_share_percent {
+            None => HuntingShare::FULL,
+            Some(percent) => HuntingShare::from_percent(percent).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "a route's hunting share is between {}% and 100%",
+                    HuntingShare::MIN_PERCENT
+                ))
+            })?,
+        };
+        Ok((markup, hunting))
+    }
 }
 
 /// Whether a definition answers, and if not, why.
@@ -262,6 +299,14 @@ pub struct SkillingRouteForecast {
     pub cycled_ped: f64,
     /// Expected TT lost on the way: cycled less expected loot TT.
     pub ped_lost: f64,
+    /// The expected markup on that loot TT at the route's loot markup;
+    /// null when the route sets none.
+    pub markup: Nullable<f64>,
+    /// TT lost less the expected markup (below zero when the markup
+    /// outweighs the loss); null with the markup.
+    pub net_cost: Nullable<f64>,
+    /// The time to the goal on the clock, the route's hunting share
+    /// included; null when the attack rate is unknown.
     pub hours: Nullable<f64>,
     /// The player's recorded pace between kills on the mob; null when
     /// they have too few recorded kills of it and a fixed allowance stands in.
@@ -382,6 +427,11 @@ impl Api {
                 "a forecast prices at most {MAX_ROUTES} planned routes"
             )));
         }
+        let planning = query
+            .routes
+            .iter()
+            .map(SkillingRoutePick::planning)
+            .collect::<Result<Vec<_>, _>>()?;
         let skill_levels = self
             .skill_calibrations(None)
             .await
@@ -465,13 +515,15 @@ impl Api {
         } else {
             &[]
         };
-        for (index, pick) in picks.iter().enumerate() {
+        for (index, (pick, &(markup, hunting))) in picks.iter().zip(&planning).enumerate() {
             let context = RouteContext {
                 skill_levels: &skill_levels,
                 target: &target,
                 goal: query.goal,
                 boost,
                 looters,
+                markup,
+                hunting,
             };
             routes.push(self.forecast_route(index, pick, &context).await?);
         }
@@ -505,6 +557,8 @@ impl Api {
             goal,
             boost,
             looters,
+            markup,
+            hunting,
         } = *context;
         let mob =
             MobLookupService::new(&self.game_data).maturity_stats(&pick.species, &pick.maturity);
@@ -527,6 +581,8 @@ impl Api {
             kills: 0.0,
             cycled_ped: 0.0,
             ped_lost: 0.0,
+            markup: None.into(),
+            net_cost: None.into(),
             hours: None.into(),
             pace: None.into(),
             skills: Vec::new(),
@@ -581,14 +637,23 @@ impl Api {
             status,
             cycled_ped,
             ped_lost,
+            markup,
+            net_cost,
             hours,
             kills,
             skills,
-        } = forecast_planned(skill_levels, target, goal, &kill.rates(&shares));
+        } = forecast_planned(
+            skill_levels,
+            target,
+            goal,
+            &kill.rates(&shares, hunting, markup),
+        );
         route.status = status.into();
         route.kills = kills;
         route.cycled_ped = cycled_ped;
         route.ped_lost = ped_lost;
+        route.markup = markup.into();
+        route.net_cost = net_cost.into();
         route.hours = hours.into();
         route.skills = skills.into_iter().map(skill_dto).collect();
         Ok(route)
@@ -749,4 +814,7 @@ struct RouteContext<'a> {
     goal: f64,
     boost: SkillBoost,
     looters: eo_services::expected_hunting::HuntingLooterLevels,
+    /// The route's own expected loot markup and hunting share.
+    markup: Option<LootMarkup>,
+    hunting: HuntingShare,
 }

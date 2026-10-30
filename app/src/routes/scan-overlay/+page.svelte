@@ -10,6 +10,7 @@
 		undoManualSkillCapture,
 		getManualSkillScanStatus,
 		setSpacebarCapture,
+		getInputStatus,
 		hideScanOverlay,
 		type ScanManualStatus
 	} from '$lib/api';
@@ -57,6 +58,9 @@
 	}
 
 	let spacebarCapture = $state<boolean>(readStoredSpacebarCapture());
+	// A machine that cannot read keys never sees Space, so the toggle is
+	// withheld there; the Capture button takes each page instead.
+	let keyless = $state(false);
 
 	$effect(() => {
 		if (typeof localStorage === 'undefined') return;
@@ -89,6 +93,11 @@
 		// spacebar-capture toggle so the backend listener state matches the UI on
 		// every overlay (re)mount.
 		await syncSpacebarCapture(spacebarCapture);
+		try {
+			keyless = (await getInputStatus()).keyless;
+		} catch {
+			keyless = false;
+		}
 	});
 
 	// Event-driven status, replacing the retired 500ms poll: re-read on each
@@ -306,14 +315,16 @@
 					<span class="text-[10px] text-white/40">in your skills panel</span>
 				</div>
 
-				<label class="spacebar-toggle">
-					<input
-						type="checkbox"
-						checked={spacebarCapture}
-						onchange={toggleSpacebarCapture}
-					/>
-					<span class="spacebar-toggle-label">Capture with <kbd class="kbd">Spacebar</kbd></span>
-				</label>
+				{#if !keyless}
+					<label class="spacebar-toggle">
+						<input
+							type="checkbox"
+							checked={spacebarCapture}
+							onchange={toggleSpacebarCapture}
+						/>
+						<span class="spacebar-toggle-label">Capture with <kbd class="kbd">Spacebar</kbd></span>
+					</label>
+				{/if}
 
 				<Button
 					variant="primary"
@@ -357,14 +368,16 @@
 						<Button variant="secondary" size="sm" onclick={handleUndo} disabled={busy || !canUndo}>Undo</Button>
 						<Button variant="secondary" size="sm" onclick={handleCancel} disabled={busy}>Cancel</Button>
 					</div>
-					<label class="spacebar-toggle">
-						<input
-							type="checkbox"
-							checked={spacebarCapture}
-							onchange={toggleSpacebarCapture}
-						/>
-						<span class="spacebar-toggle-label">Capture with <kbd class="kbd">Spacebar</kbd></span>
-					</label>
+					{#if !keyless}
+						<label class="spacebar-toggle">
+							<input
+								type="checkbox"
+								checked={spacebarCapture}
+								onchange={toggleSpacebarCapture}
+							/>
+							<span class="spacebar-toggle-label">Capture with <kbd class="kbd">Spacebar</kbd></span>
+						</label>
+					{/if}
 				{/if}
 			{:else if phase === 'processing'}
 				<div class="flex items-center gap-2">

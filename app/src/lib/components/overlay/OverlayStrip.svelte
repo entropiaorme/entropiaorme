@@ -27,6 +27,8 @@
 		definitionMenuOpen = false,
 		doses = null,
 		dosesMenuOpen = false,
+		equipmentMenuOpen = false,
+		declaringEquipment = false,
 		mobQuery = $bindable(''),
 		mobInput = $bindable(null),
 		boostDraft = $bindable(''),
@@ -41,7 +43,8 @@
 		onActivitiesTrigger = noop,
 		onWeaponDecision = noop,
 		onArmourCostToggle = noop,
-		onDosesTrigger = noop
+		onDosesTrigger = noop,
+		onEquipmentTrigger = noop
 	}: {
 		data: TrackingLive;
 		status?: TrackingStatus | null;
@@ -59,6 +62,9 @@
 		/** The live dose readout, when this window shows one. */
 		doses?: DosesModel | null;
 		dosesMenuOpen?: boolean;
+		/** The equipment picker is open (declare what is in hand). */
+		equipmentMenuOpen?: boolean;
+		declaringEquipment?: boolean;
 		mobQuery?: string;
 		mobInput?: HTMLInputElement | null;
 		boostDraft?: string;
@@ -74,6 +80,7 @@
 		onWeaponDecision?: (decision: WeaponMismatchDecision) => void | Promise<void>;
 		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
 		onDosesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
+		onEquipmentTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 	} = $props();
 
 	// The Activities menu's anchor: the section, which survives the chip
@@ -119,9 +126,12 @@
 	// several carried weapons explain goes unpriced until a slot press
 	// declares one. Quiet until something is fired, so a session that has
 	// not engaged yet is not nagged.
+	// A keyless session has no press to wait for: the weapon is picked from
+	// the equipment glyph instead.
+	const keyless = $derived(data.keylessInput === true);
 	const weaponUndeclared = $derived(
 		data.weaponDeclared === false &&
-			data.hotbarListenerActive === true &&
+			(data.hotbarListenerActive === true || keyless) &&
 			data.currentToolKind !== 'harvesting' &&
 			(Boolean(data.currentTool) || (data.unpricedShots ?? 0) > 0),
 	);
@@ -363,13 +373,34 @@
 	>
 		<!-- The held tool's own glyph. A harvesting tool shows the weapon's
 			 until it has one of its own; a consumable is never held. -->
-		<span class="text-white/40 shrink-0" data-testid="equipment-icon" data-icon={equipmentIcon} aria-hidden="true">
+		<!-- While a session runs the glyph opens the equipment picker:
+			 declare the weapon, healer, or tool in hand without its key. -->
+		{#snippet equipmentGlyph()}
 			{#if equipmentIcon === 'healing'}
 				<IconHealing class="h-9 w-9" />
 			{:else}
 				<IconWeapons class="h-9 w-12" />
 			{/if}
-		</span>
+		{/snippet}
+		{#if isActive}
+			<button
+				type="button"
+				class="equipment-trigger shrink-0 {equipmentMenuOpen ? 'equipment-trigger-open' : ''}"
+				data-testid="equipment-icon"
+				data-icon={equipmentIcon}
+				aria-label="Declare equipment in hand"
+				aria-expanded={equipmentMenuOpen}
+				title="Declare what is in hand: weapon, healer, or harvesting tool"
+				disabled={declaringEquipment}
+				onclick={(event) => onEquipmentTrigger(event.currentTarget)}
+			>
+				{@render equipmentGlyph()}
+			</button>
+		{:else}
+			<span class="text-white/40 shrink-0" data-testid="equipment-icon" data-icon={equipmentIcon} aria-hidden="true">
+				{@render equipmentGlyph()}
+			</span>
+		{/if}
 		{#if data.currentToolKind === 'healing'}
 			<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
 				{data.currentTool || NO_DATA}
@@ -455,10 +486,12 @@
 						 overlapping hits cost nothing. -->
 					<div
 						class="text-[9px] leading-tight uppercase tracking-wider text-amber-300/90 whitespace-nowrap"
-						title="No weapon declared: hits that fit several carried weapons go unpriced until you press your weapon's hotbar slot"
+						title={keyless
+							? 'No weapon declared: hits that fit several carried weapons go unpriced until you pick your weapon from the glyph'
+							: "No weapon declared: hits that fit several carried weapons go unpriced until you press your weapon's hotbar slot"}
 						data-testid="weapon-undeclared-cue"
 					>
-						Press weapon slot
+						{keyless ? 'Pick weapon' : 'Press weapon slot'}
 					</div>
 				{:else if activityLabel}
 					<!-- Derived, never declared: the held tool implies which
@@ -601,6 +634,30 @@
 	}
 	.facet-chip:disabled {
 		opacity: 0.35;
+		cursor: default;
+	}
+
+	/* The equipment glyph as a control: borderless, so it reads as the
+	   glyph it was, brightening on hover and while its picker is open. */
+	.equipment-trigger {
+		display: flex;
+		align-items: center;
+		padding: 0;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		color: rgba(255, 255, 255, 0.4);
+		cursor: pointer;
+		transition: color 150ms ease-out;
+	}
+	.equipment-trigger:hover:not(:disabled),
+	.equipment-trigger:focus-visible,
+	.equipment-trigger-open {
+		color: rgba(255, 255, 255, 0.85);
+		outline: none;
+	}
+	.equipment-trigger:disabled {
+		opacity: 0.5;
 		cursor: default;
 	}
 

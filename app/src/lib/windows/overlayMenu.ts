@@ -6,6 +6,7 @@ import type {
 	QuestHandInState,
 	SessionDefinition,
 } from '$lib/api';
+import type { DeclarableOption } from '$lib/features/equipment/declareOptions';
 
 export const OVERLAY_MENU_WINDOW_LABEL = 'overlay-menu';
 export const OVERLAY_MENU_READY_EVENT = 'overlay-menu:ready';
@@ -15,14 +16,34 @@ export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
 export const OVERLAY_MENU_CLOSED_EVENT = 'overlay-menu:closed';
 export const OVERLAY_MENU_INTERACT_EVENT = 'overlay-menu:interact';
 
-export type OverlayMenuKind = 'definition' | 'mob' | 'activities' | 'questHandIn' | 'consumables';
+export type OverlayMenuKind =
+	| 'definition'
+	| 'mob'
+	| 'activities'
+	| 'questHandIn'
+	| 'consumables'
+	| 'equipment';
 
 export type OverlayMenuState =
 	| OverlayDefinitionMenuState
 	| OverlayMobMenuState
 	| OverlayActivitiesMenuState
 	| OverlayQuestHandInMenuState
-	| OverlayConsumablesMenuState;
+	| OverlayConsumablesMenuState
+	| OverlayEquipmentMenuState;
+
+/** The equipment picker: declare a weapon, healer, or harvesting tool in
+ * hand without its hotbar press. The tool in hand and the healer held are
+ * marked; a bound item names the key that declares it in game. */
+export interface OverlayEquipmentMenuState {
+	kind: 'equipment';
+	width: number;
+	options: DeclarableOption[];
+	/** The tool the session shows in hand. */
+	inHand: string | null;
+	/** The healer last declared, when it is not the tool in hand. */
+	healer: string | null;
+}
 
 /** The configured consumables a dose can be started from. A tap starts one
  * (a running dose of the same item ends where it starts); a bound item
@@ -94,7 +115,8 @@ export type OverlayMenuSelection =
 	| { kind: 'activities'; action: 'declare'; label: string }
 	| { kind: 'activities'; action: 'handIn'; key: string }
 	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' }
-	| { kind: 'consumables'; equipmentId: number; untimed: boolean };
+	| { kind: 'consumables'; equipmentId: number; untimed: boolean }
+	| { kind: 'equipment'; equipmentId: number };
 
 /** The widest label's rendered width in the overlay menus' font, for
  * sizing a satellite menu to its content. Falls back to a character
@@ -148,6 +170,7 @@ export function menuRowCount(state: OverlayMenuState): number {
 		return Math.max(1, state.options.length + entry);
 	}
 	if (state.kind === 'consumables') return Math.max(1, state.options.length);
+	if (state.kind === 'equipment') return Math.max(1, state.options.length);
 	if (state.kind === 'questHandIn') {
 		// The waiting view can become a multi-item candidate without a new
 		// parent-window show event. Reserve the satellite's existing maximum
@@ -229,5 +252,23 @@ export function buildConsumablesMenuState(
 		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No consumables'], padding),
 		options,
 		runningIds,
+	};
+}
+
+/** The equipment picker's state over the declarable items. The padding
+ * leaves room for a row's kind and hotbar key beside its name. */
+export function buildEquipmentMenuState(
+	anchorWidth: number,
+	options: DeclarableOption[],
+	inHand: string | null,
+	healer: string | null,
+): OverlayEquipmentMenuState {
+	const labels = options.map((option) => option.name);
+	return {
+		kind: 'equipment',
+		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No equipment'], 130),
+		options,
+		inHand,
+		healer: healer === inHand ? null : healer,
 	};
 }

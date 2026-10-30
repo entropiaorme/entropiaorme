@@ -73,6 +73,8 @@ export function createLibraryModel() {
 	// later one.
 	let hotbarWrite = 0;
 	let hotbarHooksEnabled = $state(true);
+	// This machine cannot read keys: the overlay declares the weapon instead.
+	let keyless = $state(false);
 	let carriedWeaponIds = $state<number[]>([]);
 	let harvestGuardrail = $state<HarvestGuardrailSettings>({
 		enabled: false,
@@ -247,6 +249,7 @@ export function createLibraryModel() {
 			splitByKind(library);
 			applyHotbar(settings);
 			hotbarHooksEnabled = settings.hotbarHooksEnabled;
+			keyless = settings.keyboard.keyless;
 			carriedWeaponIds = [...settings.carriedWeaponIds];
 			harvestGuardrail = settings.harvestGuardrail;
 			passiveEffectSources = cloneSources(settings.passiveEffectSources ?? []);
@@ -721,6 +724,9 @@ export function createLibraryModel() {
 		},
 		switchHotbarPreset,
 		assignHotbarSlot,
+		get keyless() {
+			return keyless;
+		},
 		get hotbarHooksEnabled() {
 			return hotbarHooksEnabled;
 		},

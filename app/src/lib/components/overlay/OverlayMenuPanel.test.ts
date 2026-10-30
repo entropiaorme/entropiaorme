@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import type { ConsumableOption } from '$lib/api';
-import { buildConsumablesMenuState } from '$lib/windows/overlayMenu';
+import { buildConsumablesMenuState, buildEquipmentMenuState } from '$lib/windows/overlayMenu';
 import OverlayMenuPanel from './OverlayMenuPanel.svelte';
 
 function option(overrides: Partial<ConsumableOption> = {}): ConsumableOption {
@@ -54,5 +54,47 @@ describe('the consumables menu', () => {
 			[42],
 		);
 		expect(screen.getAllByRole('button', { name: /is already in effect/ })).toHaveLength(1);
+	});
+});
+
+describe('the equipment picker', () => {
+	const rifle = { equipmentId: 1, name: 'Opalo', kind: 'weapon' as const, hotbarSlot: '1' };
+	const fap = { equipmentId: 4, name: 'FAP', kind: 'healing' as const, hotbarSlot: null };
+	const axe = { equipmentId: 7, name: 'Ziplex', kind: 'tool' as const, hotbarSlot: null };
+
+	function renderPicker(inHand: string | null, healer: string | null) {
+		const onSelect = vi.fn();
+		render(OverlayMenuPanel, {
+			props: {
+				menuState: buildEquipmentMenuState(120, [rifle, fap, axe], inHand, healer),
+				onSelect,
+				onActivitySelect: vi.fn(),
+			},
+		});
+		return onSelect;
+	}
+
+	it('declares the picked item', async () => {
+		const onSelect = renderPicker('Opalo', null);
+		await fireEvent.click(screen.getByText('Ziplex'));
+		expect(onSelect).toHaveBeenCalledWith({ kind: 'equipment', equipmentId: 7 });
+	});
+
+	it('marks the tool in hand and the healer held, and names the rest by kind and key', () => {
+		renderPicker('Opalo', 'FAP');
+		expect(screen.getByText('In hand')).toBeTruthy();
+		expect(screen.getByText('Healer held')).toBeTruthy();
+		expect(screen.getByText('Tool')).toBeTruthy();
+	});
+
+	it('says so when nothing can be declared', () => {
+		render(OverlayMenuPanel, {
+			props: {
+				menuState: buildEquipmentMenuState(120, [], null, null),
+				onSelect: vi.fn(),
+				onActivitySelect: vi.fn(),
+			},
+		});
+		expect(screen.getByText('No weapons, healers, or tools in Equipment')).toBeTruthy();
 	});
 });

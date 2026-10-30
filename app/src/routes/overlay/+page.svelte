@@ -67,6 +67,7 @@
 	} from '$lib/windows/overlayArmourCost';
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
+	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 
@@ -374,6 +375,26 @@
 		await showOverlayMenu('consumables', anchor, buildConsumablesMenuState(width, doses.options, running), { focusPopup: true });
 	}
 
+	// The equipment picker: declare what is in hand without a hotbar press.
+	const equipment = createEquipmentDeclare({
+		onDeclared: () => snapshot.hydrate(),
+		onError: (message) => notices.push(message)
+	});
+
+	async function toggleEquipmentMenu(anchor: HTMLElement) {
+		if (overlayMenuKind === 'equipment') {
+			await hideOverlayMenu();
+			return;
+		}
+		try {
+			const width = anchor.getBoundingClientRect().width;
+			const state = await equipment.menuState(width, data.currentTool ?? null, status?.healing?.toolName ?? null);
+			await showOverlayMenu('equipment', anchor, state, { focusPopup: true });
+		} catch (error) {
+			notices.push(describeOverlayMenuError(error));
+		}
+	}
+
 	async function openQuestHandIn(key: string) {
 		const anchor = activitiesAnchor;
 		const option = activities.find(key);
@@ -589,6 +610,12 @@
 					return;
 				}
 
+				if (event.payload.kind === 'equipment') {
+					overlayMenuKind = null;
+					await equipment.declare(event.payload.equipmentId);
+					return;
+				}
+
 				if (event.payload.kind === 'activities') {
 					const payload = event.payload;
 					if (payload.action === 'handIn') {
@@ -699,6 +726,7 @@
 			weaponGuardrail: snap.weaponGuardrail,
 			unpricedShots: snap.unpricedShots,
 			weaponDeclared: snap.weaponDeclared,
+			keylessInput: snap.keylessInput,
 			warnings: snap.warnings,
 		};
 		const startedMs = snap.started_at ? new Date(snap.started_at).getTime() : NaN;
@@ -918,6 +946,9 @@
 		{doses}
 		dosesMenuOpen={overlayMenuKind === 'consumables'}
 		onDosesTrigger={toggleDosesMenu}
+		equipmentMenuOpen={overlayMenuKind === 'equipment'}
+		declaringEquipment={equipment.declaring}
+		onEquipmentTrigger={toggleEquipmentMenu}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

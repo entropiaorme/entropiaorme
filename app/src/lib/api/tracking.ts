@@ -71,6 +71,9 @@ export interface TrackingLive {
 	 * is only what the damage last pointed to, and hits several carried
 	 * weapons explain go unpriced. */
 	weaponDeclared?: boolean | null;
+	/** The session runs keyless (this machine's setting while idle): the
+	 * overlay declares equipment and healing uses are inferred. */
+	keylessInput?: boolean | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 	recentEvents?: {
@@ -87,6 +90,8 @@ export type { HarvestGuardrailAlert, RecentEvent, TrackingSnapshot };
 export const startTracking = commands.trackingStart;
 export const stopTracking = commands.trackingStop;
 export const releaseMob = commands.trackingReleaseMob;
+/** Declare an equipment item in hand, as its hotbar press would. */
+export const declareEquipment = commands.trackingDeclareEquipment;
 export const deleteSession = commands.trackingSessionDelete;
 /** Keep an ended session on record while leaving its PED side, its skill
  * gains, or both out of the app-wide statistics. Full-state apply: both

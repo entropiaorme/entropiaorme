@@ -4,6 +4,7 @@
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
 	import { newsOptIn, setNewsOptIn } from '$lib/news.svelte';
 	import AuctionFeeResearchSettings from '$lib/features/settings/AuctionFeeResearchSettings.svelte';
+	import { keyboardNote } from '$lib/features/settings/keyboardAccess';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
 	import {
@@ -23,6 +24,7 @@
 
 	// Capability toggles
 	let savingField = $state<string | null>(null);
+	const keyNote = $derived(settings ? keyboardNote(settings.keyboard) : null);
 	let capabilityError: string | null = $state(null);
 
 	// Developer-only tooling renders only in dev builds (vite build strips it in production).
@@ -129,6 +131,20 @@
 			flashSaved('hotbarHooks');
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : 'Failed to update hotbar key listener';
+		} finally {
+			savingField = null;
+		}
+	}
+
+	async function handleKeyless(checked: boolean) {
+		if (!settings) return;
+		savingField = 'keyless';
+		capabilityError = null;
+		try {
+			settings = await updateSettings({ keyless_input: checked });
+			flashSaved('keyless');
+		} catch (e) {
+			capabilityError = e instanceof Error ? e.message : 'Failed to update keyless tracking';
 		} finally {
 			savingField = null;
 		}
@@ -278,15 +294,46 @@
 						</p>
 					</div>
 					<Toggle
-						checked={settings.hotbarHooksEnabled}
-						disabled={savingField !== null}
+						checked={settings.hotbarHooksEnabled && !settings.keyboard.keyless}
+						disabled={savingField !== null || settings.keyboard.keyless}
 						onchange={handleHotbarHooks}
 						label="Enable hotbar key listener"
 					/>
 				</div>
+				{#if keyNote}
+					<p class="text-xs {keyNote.attention ? 'text-warning' : 'text-text-tertiary'}">{keyNote.text}</p>
+				{/if}
 				{#if savedIndicator === 'hotbarHooks'}
 					<p class="text-xs text-success">Saved</p>
 				{/if}
+			</div>
+
+			<Divider />
+
+			<!-- Keyless tracking: this machine cannot read keys -->
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Keyless tracking</p>
+					<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+						For a machine that cannot read keys. Pick the weapon, healer, or harvesting tool in
+						hand from the overlay's equipment glyph; a heal that fits the healer you picked
+						counts as a paid use. Applies to this machine only.
+					</p>
+					{#if !settings.keyboard.keylessAvailable}
+						<p class="text-xs text-text-tertiary mt-1">
+							Unavailable: this machine cannot be identified.
+						</p>
+					{/if}
+					{#if savedIndicator === 'keyless'}
+						<p class="text-xs text-success mt-1">Saved</p>
+					{/if}
+				</div>
+				<Toggle
+					checked={settings.keyboard.keyless}
+					disabled={savingField !== null || !settings.keyboard.keylessAvailable}
+					onchange={handleKeyless}
+					label="Enable keyless tracking"
+				/>
 			</div>
 
 			<Divider />

@@ -78,6 +78,7 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 	return {
 		hotbarHooksEnabled: false,
+		keyboard: { observer: 'xinput', keyless: false, keylessAvailable: true },
 		hotbar: { '1': null },
 		activeHotbarPreset: 1,
 		hotbarPresets: [{ '1': null }, { '1': 31 }, {}],

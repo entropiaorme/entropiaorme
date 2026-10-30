@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StatId } from '$lib/statsRegistry';
 import { getStatDef } from '$lib/statsRegistry';
@@ -299,6 +299,35 @@ describe('the undeclared weapon cue', () => {
 			props: { data: liveData({ ...undeclared, hotbarListenerActive: false }) },
 		});
 		expect(screen.queryByTestId('weapon-undeclared-cue')).toBeNull();
+	});
+
+	it('asks for a pick instead of a press on a keyless session', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({ ...undeclared, hotbarListenerActive: false, keylessInput: true }),
+			},
+		});
+		expect(screen.getByTestId('weapon-undeclared-cue').textContent?.trim()).toBe('Pick weapon');
+	});
+});
+
+describe('the equipment picker trigger', () => {
+	it('opens the picker from the glyph while a session runs', async () => {
+		const onEquipmentTrigger = vi.fn();
+		render(OverlayStrip, {
+			props: {
+				data: liveData({ status: 'active', currentTool: 'Opalo', currentToolKind: 'weapon' }),
+				onEquipmentTrigger,
+			},
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Declare equipment in hand' }));
+		expect(onEquipmentTrigger).toHaveBeenCalledOnce();
+	});
+
+	it('is only a glyph while idle, when there is no hand to declare into', () => {
+		render(OverlayStrip, { props: { data: liveData({ status: 'idle' }) } });
+		expect(screen.queryByRole('button', { name: 'Declare equipment in hand' })).toBeNull();
+		expect(screen.getByTestId('equipment-icon')).toBeTruthy();
 	});
 });
 

@@ -18,6 +18,7 @@
 		activeHotbarPreset,
 		carriedWeaponIds,
 		hotbarHooksEnabled,
+		keyless = false,
 		onassign,
 		oncarriedchange
 	}: {
@@ -29,6 +30,8 @@
 		carriedWeaponIds: number[];
 		/** The hotbar key listener setting: presses declare the weapon in hand. */
 		hotbarHooksEnabled: boolean;
+		/** This machine runs keyless: the overlay declares the weapon. */
+		keyless?: boolean;
 		onassign: (slot: string, equipmentId: number | null) => void;
 		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
@@ -74,7 +77,10 @@
 
 <div class="space-y-4">
 	<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
-		{#if hotbarHooksEnabled}
+		{#if keyless}
+			Keyless tracking is on for this machine: pick the weapon in hand from the overlay's
+			equipment glyph, and each weapon's damage range checks it.
+		{:else if hotbarHooksEnabled}
 			The hotbar key listener is on: a press tells the app which weapon is in hand, and each
 			weapon's damage range checks it.
 		{:else}

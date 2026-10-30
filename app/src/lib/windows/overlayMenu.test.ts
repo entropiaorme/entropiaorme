@@ -5,6 +5,7 @@ import type { ActivityOption, ActivityOptionsResult } from '$lib/api';
 import {
 	buildActivitiesMenuState,
 	buildConsumablesMenuState,
+	buildEquipmentMenuState,
 	buildQuestHandInMenuState,
 	computeMenuHeight,
 	menuRowCount,
@@ -114,5 +115,25 @@ describe('the consumables menu', () => {
 		const instant = buildConsumablesMenuState(0, [{ ...pill, durationSeconds: 0 }], []);
 		expect(offering.width).toBeGreaterThan(running.width);
 		expect(instant.width).toBe(running.width);
+	});
+});
+
+describe('buildEquipmentMenuState', () => {
+	const rifle = { equipmentId: 1, name: 'Opalo', kind: 'weapon' as const, hotbarSlot: '1' };
+	const fap = { equipmentId: 4, name: 'FAP', kind: 'healing' as const, hotbarSlot: null };
+
+	it('marks the healer held apart from the tool in hand, and sizes one row per item', () => {
+		const state = buildEquipmentMenuState(0, [rifle, fap], 'Opalo', 'FAP');
+		expect(state.inHand).toBe('Opalo');
+		expect(state.healer).toBe('FAP');
+		expect(menuRowCount(state)).toBe(2);
+	});
+
+	it('does not mark the healer twice when it is the tool in hand', () => {
+		expect(buildEquipmentMenuState(0, [fap], 'FAP', 'FAP').healer).toBeNull();
+	});
+
+	it('keeps one row for the empty state', () => {
+		expect(menuRowCount(buildEquipmentMenuState(0, [], null, null))).toBe(1);
 	});
 });

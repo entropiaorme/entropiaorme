@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { formatDuration } from '$lib/features/consumables/doses';
+	import { declarableKindLabel, type DeclarableOption } from '$lib/features/equipment/declareOptions';
 	import { formatTimeUntil } from '$lib/features/quests/cooldown';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { ActivityOption } from '$lib/api';
@@ -49,6 +50,15 @@
 		const left = option.availableFrom === null ? null : formatTimeUntil(option.availableFrom, now);
 		if (!option.unavailableReason) return left;
 		return left ? `${option.unavailableReason} · ${left}` : option.unavailableReason;
+	}
+
+	/** What an equipment row says about itself: held now, or its kind and
+	 * the key that declares it in game. */
+	function equipmentBadge(option: DeclarableOption, inHand: string | null, healer: string | null): string {
+		if (option.name === inHand) return 'In hand';
+		if (option.name === healer) return 'Healer held';
+		const kind = declarableKindLabel(option.kind);
+		return option.hotbarSlot ? `${kind} · key ${option.hotbarSlot}` : kind;
 	}
 
 	function rowTitle(option: ActivityOption, idle: boolean): string {
@@ -206,6 +216,25 @@
 						>Already on</button>
 					{/if}
 				</div>
+			{/each}
+		{/if}
+	{:else if menuState.kind === 'equipment'}
+		{#if menuState.options.length === 0}
+			<div class="menu-empty">No weapons, healers, or tools in Equipment</div>
+		{:else}
+			{#each menuState.options as option (option.equipmentId)}
+				{@const held = option.name === menuState.inHand || option.name === menuState.healer}
+				<button
+					type="button"
+					class="menu-option {held ? 'menu-option-active' : ''}"
+					title={`${option.name} is in hand from now, as its hotbar press would declare it`}
+					onclick={() => onSelect({ kind: 'equipment', equipmentId: option.equipmentId })}
+				>
+					<span class="menu-option-name">{option.name}</span>
+					<span class="menu-option-badge {held ? '' : 'menu-option-badge-muted'}">
+						{equipmentBadge(option, menuState.inHand, menuState.healer)}
+					</span>
+				</button>
 			{/each}
 		{/if}
 	{:else if menuState.loading}

@@ -21,7 +21,7 @@
 <InfoTip label="What Expected Return includes" width="w-96">
 	<p class="text-xs font-semibold leading-relaxed text-text">Offensive spend only</p>
 	<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-		Models weapon and amplifier spend with known Efficiency. Healing, armour, harvesting, and
+		Models weapon, amplifier, and scope spend with known Efficiency. Healing, armour, harvesting, and
 		other unmodelled costs are excluded because their return mechanics are not yet known. This is
 		not a whole-activity forecast.
 	</p>

@@ -191,7 +191,7 @@ pub struct ActiveSessionView {
     /// `cost` split by what it was spent on, one line per item.
     pub cycled_breakdown: Vec<CycledLine>,
     /// Community-model offensive-only expected TT return over captured
-    /// weapon and amplifier evidence. Null until a modelled shot exists.
+    /// weapon, amplifier, and scope evidence. Null until a modelled shot exists.
     pub expected_tt_rate: Option<f64>,
     pub expected_return_coverage: Option<f64>,
     pub expected_return_model: Option<String>,

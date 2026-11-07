@@ -33,7 +33,7 @@
 	{#if scope === 'activity'}
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			The Efficiency an otherwise identical unlimited offensive setup would need to match this
-			scope’s combined premium-adjusted expected return. Weapon and amplifier streams are
+			scope’s combined premium-adjusted expected return. Weapon, amplifier, and scope streams are
 			weighted by raw TT; consumed limited markup remains in economic cost.
 		</p>
 	{:else}

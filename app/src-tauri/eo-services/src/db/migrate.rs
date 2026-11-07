@@ -378,6 +378,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "keyless input",
         sql: include_str!("../../migrations/0068_keyless_input.sql"),
     },
+    Migration {
+        version: 69,
+        description: "unrecorded opening balances",
+        sql: include_str!("../../migrations/0069_unrecorded_opening_balances.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -454,6 +459,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "4D2E40992705446482AB32A9BD5DE00EAE8316978079E6F2FF38D8ABFEA332B4AFCFD76DC240BFA2F48DE041DD4EB492",
     "790D34E91C6FF8B1C2DB749896C624FBC237BF4D10A723ABE2063E112C9598363B43D46398DC4174690401CC8390C2CB",
     "487FAAD39B242AB6459D6184CA2AB173B17393A3225DE8505FA0352E77788810DD5B855ED10A00760710F4721D0E6844",
+    "DB8BD8BD307FDA4FCB7384EDB998244C99AC43C48C9CA7ACB216A1111F878E4079004D561D7929711AE426D4DC18770E",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -1408,5 +1414,89 @@ mod tests {
                 [],
             )
             .is_err());
+    }
+
+    /// An item whose recorded outflows exceed every unit the app tracked gets
+    /// the opening balance its last outflow should have revealed, priced at the
+    /// loot's own unit TT and owned by that outflow so its undo takes it along.
+    /// Items still at or above zero are left exactly as they were.
+    #[test]
+    fn unrecorded_opening_balance_upgrade_lifts_negative_positions_to_zero() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..68] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                  timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                 VALUES ('k', 's', 'Robot', '', '', 10, 1.0, 0.0, 2.0); \
+                 INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, \
+                  is_enhancer_shrapnel) VALUES \
+                 ('k', 'Shrapnel', 10000, 1.0, 0), ('k', 'Robot Filter', 10, 1.0, 0); \
+                 INSERT INTO stock_movements (item_name, movement_kind, ref_id, source_kind, \
+                  quantity, tt_value, occurred_at, created_at) VALUES \
+                 ('Shrapnel', 'removal', 'early', 'hunt', -8000, -0.8, '2026-01-01', 100), \
+                 ('Shrapnel', 'conversion_out', 'late', 'hunt', -5000, -0.5, '2026-01-02', 200), \
+                 ('Robot Filter', 'conversion_out', 'cube', 'hunt', -10, -1.0, '2026-01-02', 300);",
+            )
+            .expect("v68 stock");
+
+        run(&mut connection).expect("v69 upgrade");
+
+        let balances: Vec<(String, String, f64, f64, String, f64)> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT item_name, ref_id, quantity, tt_value, occurred_at, created_at \
+                     FROM stock_movements WHERE movement_kind = 'opening_balance' \
+                       AND source_kind = 'unattributed'",
+                )
+                .expect("balance read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .expect("balance rows")
+            .collect::<Result<_, _>>()
+            .expect("balance rows")
+        };
+        assert_eq!(balances.len(), 1, "{balances:?}");
+        let (item, ref_id, quantity, tt_value, occurred_at, created_at) = &balances[0];
+        assert_eq!(item, "Shrapnel");
+        assert_eq!(ref_id, "late");
+        assert!((quantity - 3000.0).abs() < 1e-9, "{quantity}");
+        assert!((tt_value - 0.3).abs() < 1e-9, "{tt_value}");
+        assert_eq!(occurred_at, "2026-01-02");
+        assert_eq!(*created_at, 200.0);
+        let net: f64 = connection
+            .query_row(
+                "SELECT 10000 + SUM(quantity) FROM stock_movements WHERE item_name = 'Shrapnel'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("net read");
+        assert!(net.abs() < 1e-9, "{net}");
     }
 }

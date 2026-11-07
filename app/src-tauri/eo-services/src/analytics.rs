@@ -4385,28 +4385,6 @@ fn movement_activity_kind(source_kind: &str, tier: Option<&str>, species: Option
 /// species total stays exact while no historical definition claim is invented
 /// for the realised sale itself.
 fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<PositionKey, f64>) {
-    fn absorb(
-        by_source: &mut std::collections::BTreeMap<PositionKey, f64>,
-        broad_key: &PositionKey,
-        candidates: Vec<PositionKey>,
-    ) {
-        let broad = by_source.get(broad_key).copied().unwrap_or(0.0);
-        if broad >= -STOCK_EPSILON {
-            return;
-        }
-        let available: f64 = candidates.iter().filter_map(|key| by_source.get(key)).sum();
-        if available <= STOCK_EPSILON {
-            return;
-        }
-        let remaining = (available + broad).max(0.0);
-        for key in candidates {
-            if let Some(quantity) = by_source.get_mut(&key) {
-                *quantity *= remaining / available;
-            }
-        }
-        by_source.insert(broad_key.clone(), 0.0);
-    }
-
     // Rows written before exact activity provenance can already carry a
     // session definition. Consume any residual at that broader grain across
     // the context-specific stock in the same definition.
@@ -4422,7 +4400,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
         .map(|(key, _)| key.clone())
         .collect();
     for broad_key in definition_keys {
-        let candidates = by_source
+        let candidates: Vec<PositionKey> = by_source
             .iter()
             .filter(|(key, quantity)| {
                 key.source_kind == "hunt"
@@ -4433,7 +4411,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
             })
             .map(|(key, _)| key.clone())
             .collect();
-        absorb(by_source, &broad_key, candidates);
+        absorb_outflow(by_source, &broad_key, &candidates);
     }
 
     // Older rows may have neither definition nor context. Spread only their
@@ -4451,7 +4429,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
         .map(|(key, _)| key.clone())
         .collect();
     for broad_key in unattributed_keys {
-        let candidates = by_source
+        let candidates: Vec<PositionKey> = by_source
             .iter()
             .filter(|(key, quantity)| {
                 key.source_kind == "hunt"
@@ -4461,7 +4439,82 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
             })
             .map(|(key, _)| key.clone())
             .collect();
-        absorb(by_source, &broad_key, candidates);
+        absorb_outflow(by_source, &broad_key, &candidates);
+    }
+}
+
+/// Consume a negative bucket from `candidates`, proportionally to what each
+/// still holds. Only what the candidates can cover is consumed; any shortfall
+/// stays on the broad key, so a later, wider pass can still net it and the
+/// item's total is never silently inflated by a dropped outflow.
+fn absorb_outflow(
+    by_source: &mut std::collections::BTreeMap<PositionKey, f64>,
+    broad_key: &PositionKey,
+    candidates: &[PositionKey],
+) {
+    let broad = by_source.get(broad_key).copied().unwrap_or(0.0);
+    if broad >= -STOCK_EPSILON {
+        return;
+    }
+    let available: f64 = candidates
+        .iter()
+        .filter_map(|key| by_source.get(key))
+        .filter(|quantity| **quantity > STOCK_EPSILON)
+        .sum();
+    if available <= STOCK_EPSILON {
+        return;
+    }
+    let consumed = available.min(-broad);
+    let scale = (available - consumed) / available;
+    for key in candidates {
+        if let Some(quantity) = by_source.get_mut(key) {
+            if *quantity > STOCK_EPSILON {
+                *quantity *= scale;
+            }
+        }
+    }
+    by_source.insert(broad_key.clone(), broad + consumed);
+}
+
+/// Net every outflow still below zero against the item's open stock, so the
+/// open buckets always sum to the item's true position.
+///
+/// An outflow's bucket is fixed when its movement is written, but the loot it
+/// drew on can later move bucket: a session reassigned to another definition
+/// or context carries its loot with it and leaves the outflow behind. The
+/// outflow then sits negative under its old key while the units it physically
+/// consumed stay positive under the new one. Keeping only the positive buckets
+/// reports stock the player no longer holds, and an outflow sized from that
+/// figure (converting "all" of it) leaves a phantom remainder behind.
+///
+/// The position is whole-inventory arithmetic, so the residual is consumed
+/// from the same activity and definition first, which keeps attribution as
+/// local as the evidence allows, and then from the whole item.
+fn net_stranded_outflows(by_source: &mut std::collections::BTreeMap<PositionKey, f64>) {
+    let stranded: Vec<PositionKey> = by_source
+        .iter()
+        .filter(|(_, quantity)| **quantity < -STOCK_EPSILON)
+        .map(|(key, _)| key.clone())
+        .collect();
+    for broad_key in &stranded {
+        let local: Vec<PositionKey> = by_source
+            .iter()
+            .filter(|(key, quantity)| {
+                **quantity > STOCK_EPSILON
+                    && key.source_kind == broad_key.source_kind
+                    && key.definition_id == broad_key.definition_id
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        absorb_outflow(by_source, broad_key, &local);
+    }
+    for broad_key in &stranded {
+        let open: Vec<PositionKey> = by_source
+            .iter()
+            .filter(|(_, quantity)| **quantity > STOCK_EPSILON)
+            .map(|(key, _)| key.clone())
+            .collect();
+        absorb_outflow(by_source, broad_key, &open);
     }
 }
 
@@ -4704,6 +4757,7 @@ fn item_positions(
     };
 
     absorb_legacy_hunt_outflows(&mut by_source);
+    net_stranded_outflows(&mut by_source);
     let positions = by_source
         .into_iter()
         .filter(|(_, quantity)| *quantity > STOCK_EPSILON)
@@ -4926,6 +4980,7 @@ fn all_item_positions(
             };
             let mut by_source = acc.by_source;
             absorb_legacy_hunt_outflows(&mut by_source);
+            net_stranded_outflows(&mut by_source);
             let positions: Vec<(PositionKey, f64)> = by_source
                 .into_iter()
                 .filter(|(_, quantity)| *quantity > STOCK_EPSILON)
@@ -9586,6 +9641,93 @@ mod tests {
         );
     }
 
+    /// An outflow keeps the definition it was recorded under, while its
+    /// session can later be reassigned and carry its loot elsewhere. The
+    /// inventory still shows the true net, and converting all of it leaves
+    /// nothing behind rather than a phantom remainder.
+    #[tokio::test]
+    async fn converting_all_after_a_session_moves_definition_leaves_nothing_held() {
+        let (_dir, service) = write_service().await;
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO session_definitions(id, name, ad_hoc_segments, is_active) \
+                         VALUES(901, 'Robots', 0, 1), (902, 'Robots, renamed', 0, 1); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                         definition_id) VALUES('hunt-r', 1780300000.0, 1780303600.0, 0, 901); \
+                     INSERT INTO kills(id, session_id, mob_name, mob_species, mob_maturity, \
+                         timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                         VALUES('kr', 'hunt-r', 'Old Tag', '', '', 1780300100.0, 5.0, 0.0, 3.6); \
+                     INSERT INTO kill_loot_items(kill_id, item_name, quantity, value_ped, \
+                         is_enhancer_shrapnel) VALUES('kr', 'Robot Filter', 100, 3.6, 0);",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        service
+            .remove_stock(Profession::Inventory, "Robot Filter", 40.0, None)
+            .await
+            .unwrap();
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute(
+                    "UPDATE tracking_sessions SET definition_id = 902 WHERE id = 'hunt-r'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let rows = service
+            .stock_positions(Profession::Inventory)
+            .await
+            .unwrap();
+        let held = position(&rows, "Robot Filter").expect("the line stays");
+        assert!(
+            (held.quantity - 60.0).abs() < 1e-9,
+            "the removal still nets: {}",
+            held.quantity
+        );
+
+        service
+            .convert_stock(
+                Profession::Inventory,
+                "Robot Filter",
+                "Nanocube",
+                held.quantity,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rows = service
+            .stock_positions(Profession::Inventory)
+            .await
+            .unwrap();
+        let held = position(&rows, "Robot Filter").expect("the line stays");
+        assert!(held.quantity.abs() < 1e-9, "{}", held.quantity);
+        assert!(held.tt_value.abs() < 1e-9, "{}", held.tt_value);
+        let opening: f64 = service
+            .db
+            .with_reader(|conn| {
+                conn.query_row(
+                    "SELECT COALESCE(SUM(quantity), 0) FROM stock_movements \
+                     WHERE movement_kind = 'opening_balance'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(opening, 0.0, "every converted unit was tracked stock");
+    }
+
     /// Create with the optional fields absent: notes is null and acquired_at
     /// defaults to the (frozen) clock's UTC date.
     #[tokio::test]
@@ -10955,6 +11097,65 @@ mod tests {
         assert_eq!(positions[&legacy], 0.0);
         assert!((positions[&context_a] - 20.0).abs() < 1e-9);
         assert!((positions[&context_b] - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stranded_outflows_net_locally_first_then_across_the_item() {
+        let key = |source_kind: &str, definition_id, activity_context_id| PositionKey {
+            source_kind: source_kind.to_string(),
+            tier: String::new(),
+            species: String::new(),
+            definition_id,
+            activity_context_id,
+            tool: String::new(),
+            quest: None,
+        };
+        // An outflow recorded under definition 2 before its session moved to
+        // definition 3, plus some context-specific definition 2 stock left.
+        let stranded = key("hunt", Some(2), None);
+        let same_definition = key("hunt", Some(2), Some(20));
+        let moved = key("hunt", Some(3), Some(30));
+        let harvested = key("harvest", None, None);
+        let mut positions = std::collections::BTreeMap::from([
+            (stranded.clone(), -70.0),
+            (same_definition.clone(), 20.0),
+            (moved.clone(), 60.0),
+            (harvested.clone(), 40.0),
+        ]);
+
+        net_stranded_outflows(&mut positions);
+
+        // Definition 2's own stock goes first; the shortfall of 50 is spread
+        // across the rest of the pile in proportion to what each holds.
+        assert!(positions[&stranded].abs() < 1e-9);
+        assert!(positions[&same_definition].abs() < 1e-9);
+        assert!((positions[&moved] - 60.0 * 50.0 / 100.0).abs() < 1e-9);
+        assert!((positions[&harvested] - 40.0 * 50.0 / 100.0).abs() < 1e-9);
+        let open: f64 = positions.values().filter(|q| **q > STOCK_EPSILON).sum();
+        assert!(
+            (open - 50.0).abs() < 1e-9,
+            "open stock equals the net: {open}"
+        );
+    }
+
+    #[test]
+    fn stranded_outflows_beyond_the_pile_leave_nothing_open() {
+        let key = |definition_id| PositionKey {
+            source_kind: "hunt".to_string(),
+            tier: String::new(),
+            species: String::new(),
+            definition_id,
+            activity_context_id: None,
+            tool: String::new(),
+            quest: None,
+        };
+        let mut positions =
+            std::collections::BTreeMap::from([(key(Some(1)), -90.0), (key(Some(2)), 60.0)]);
+
+        net_stranded_outflows(&mut positions);
+
+        assert!(positions.values().all(|q| *q <= STOCK_EPSILON));
+        assert!((positions.values().sum::<f64>() + 30.0).abs() < 1e-9);
     }
 
     #[tokio::test]

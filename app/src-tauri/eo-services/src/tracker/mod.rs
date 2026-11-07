@@ -26,6 +26,7 @@ mod attribution;
 #[cfg(test)]
 mod attribution_tests;
 mod combat;
+mod cycled;
 mod doses;
 #[cfg(test)]
 mod doses_tests;
@@ -52,6 +53,9 @@ pub use attribution::{
     damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, CRITICAL_REACH,
     DISPLAY_TOLERANCE,
 };
+// The protection tests read back what the live readout would.
+#[cfg(test)]
+pub(crate) use cycled::read_session_armour;
 pub use doses::{DoseError, DoseStart};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
@@ -307,6 +311,14 @@ impl HuntTracker {
             reply,
         })
         .await
+    }
+
+    /// A session's armour cost was set directly: the running session
+    /// re-reads its share so the live Cycled carries it at once (protection
+    /// recordings reach the tracker on the bus instead). True when the
+    /// readout changed.
+    pub async fn refresh_armour(&self) -> Result<bool, DbError> {
+        self.call(TrackerMsg::RefreshArmour).await
     }
 
     /// Clear the declared mob, returning the released name.

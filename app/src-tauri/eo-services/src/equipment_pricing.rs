@@ -73,6 +73,21 @@ pub fn heal_cost_from_props(properties_json: &str) -> (f64, f64) {
     )
 }
 
+/// The TT a healing (or harvesting) tool consumes per use, in PED: the
+/// [`heal_cost_from_props`] recipe with every markup at TT, so the gap to
+/// the priced cost is exactly the markup paid over TT.
+pub fn heal_tt_from_props(properties_json: &str) -> f64 {
+    let props: Value = serde_json::from_str(properties_json).unwrap_or(Value::Null);
+    let tool = props
+        .get("tool_entity")
+        .filter(|value| !value.is_null() && value.as_object().is_none_or(|map| !map.is_empty()));
+    let Some(tool) = tool else {
+        return 0.0;
+    };
+    let implant = props.get("implant_entity").filter(|value| !value.is_null());
+    heal_cost_per_use_with_implant(tool, 1.0, implant, 1.0) / 100.0
+}
+
 /// The activation/output profile stored with a healing setup. Existing rows
 /// predate explicit effect configuration, so their catalogue direct interval
 /// is the lossless default.
@@ -249,6 +264,18 @@ mod tests {
         // Current behaviour: a properties payload with no weapon_entity reaches
         // the cost engine's fail-fast. Pinned as-is (see the inbox note).
         let _ = cost_per_shot_ped(&json!({}));
+    }
+
+    #[test]
+    fn heal_tt_from_props_prices_the_same_use_at_tt() {
+        // (decay 0.0512 + ammo 0.3) at TT = 0.3512 pec, over 100 for PED;
+        // the priced cost at 110% is 0.003863, so 0.000351 is markup.
+        let props = json!({
+            "tool_entity": {"economy": {"decay": 0.0512, "ammo_burn": 30}, "uses_per_minute": 30},
+            "markup": 110,
+        });
+        assert_eq!(heal_tt_from_props(&props.to_string()), 0.003512);
+        assert_eq!(heal_tt_from_props("{}"), 0.0);
     }
 
     #[test]

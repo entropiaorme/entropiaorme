@@ -785,6 +785,12 @@ impl TrackerActor {
                 if let Some(active) = self.session.active_mut() {
                     if active.session.id == session_id {
                         active.heal_cost += write.intent.cost_per_use;
+                        let spend = active
+                            .heal_spend
+                            .entry(write.intent.tool_name.clone())
+                            .or_default();
+                        spend.cost += write.intent.cost_per_use;
+                        spend.tt += write.intent.tt_per_use();
                         active
                             .healing
                             .last_activation
@@ -974,6 +980,18 @@ enum HealingDecision {
         output: PendingOutput,
         reason: &'static str,
     },
+}
+
+impl HealingIntent {
+    /// The TT one paid use consumes: the cost per use less the markup paid
+    /// over TT for a limited tool. A profile resolved without its TT basis
+    /// counts the whole cost as TT.
+    pub(super) fn tt_per_use(&self) -> Ped {
+        match self.profile.tt_per_use_ped {
+            Some(tt) if tt.is_finite() && tt >= 0.0 => Ped(tt.min(self.cost_per_use.value())),
+            _ => self.cost_per_use,
+        }
+    }
 }
 
 fn intent_from_payload(payload: &HotbarIntentPayload, profile: HealingProfile) -> HealingIntent {

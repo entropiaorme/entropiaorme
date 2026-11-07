@@ -357,6 +357,12 @@ impl TrackerActor {
         dose.interval_id = self.write_dose_change(now, &close, open, writes).await?;
         if let Some(active) = self.session.active_mut() {
             active.consumable_cost += Ped(cost_ped);
+            if cost_ped != 0.0 {
+                *active
+                    .consumable_spend
+                    .entry(dose.item_name.clone())
+                    .or_insert(Ped::ZERO) += Ped(cost_ped);
+            }
             active.dirty = true;
         }
         if let Some(prior) = prior {
@@ -618,6 +624,10 @@ impl TrackerActor {
         if let Some(active) = self.session.active_mut() {
             if dose.session_id.as_deref() == Some(active.session.id.as_str()) {
                 active.consumable_cost += Ped(delta);
+                *active
+                    .consumable_spend
+                    .entry(dose.item_name.clone())
+                    .or_insert(Ped::ZERO) += Ped(delta);
                 active.dirty = true;
             }
         }

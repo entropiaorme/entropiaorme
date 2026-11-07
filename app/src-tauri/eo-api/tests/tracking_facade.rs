@@ -9,8 +9,10 @@ use std::sync::Arc;
 use eo_api::activities::ActivityTargetKind;
 use eo_api::tracking::TrackingState;
 use eo_api::{Api, ApiError};
+use eo_services::bus_events::BusEvent;
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
+use eo_services::event_bus::EventBus;
 use eo_services::game_data_store::GameDataStore;
 
 mod common;
@@ -60,8 +62,25 @@ async fn make_api_db(dir: &Path, seed: bool, settings: Option<&str>) -> (Api, Db
         None,
         None,
         None,
-    );
+    )
+    .with_protection_changed(protection_changed(handles.bus.clone()));
     (api, verify)
+}
+
+/// The protection change signal as the app composes it: every committed
+/// protection write announces itself on the producer bus.
+fn protection_changed(bus: Arc<EventBus>) -> eo_services::protection::ChangedSink {
+    Arc::new(move || {
+        use eo_wire::domain_events::{
+            ProtectionUpdated, ProtectionUpdatedPayload, ProtectionUpdatedTag,
+        };
+        bus.publish(&BusEvent::ProtectionUpdated(ProtectionUpdated {
+            topic: ProtectionUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-01-01T00:00:00+00:00".to_string(),
+            payload: ProtectionUpdatedPayload {},
+        }));
+    })
 }
 
 /// One ended session (`ended`) with two `Atrox` kills carrying loot.
@@ -618,6 +637,68 @@ async fn the_active_snapshot_carries_the_declared_boost() {
     api.tracking_session_config(None, None).await.unwrap();
     let value = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
     assert!(value.get("skillBoostPercent").is_none());
+}
+
+/// Armour cost recorded against the running session joins its live Cycled
+/// the moment it is recorded, with a breakdown line of its own, and an undo
+/// takes it back out: the dashboard never waits for the session to end to
+/// count what protection cost.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recording_against_the_running_session_moves_its_live_cycled() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(
+        dir.path(),
+        false,
+        Some("{\"hotbar_hooks_enabled\": true, \"hotbar\": {\"1\": 1}}"),
+    )
+    .await;
+    let started = api.tracking_start().await.unwrap();
+    let session_id = started.session_id.clone();
+    let value = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
+    assert_eq!(value["cost"], 0.0);
+    assert_eq!(value["armourCost"], 0.0);
+    assert_eq!(value["cycledBreakdown"], serde_json::json!([]));
+
+    // Hits taken so far are what a repair is spread over.
+    let hit_session = session_id.clone();
+    db.with_writer(move |conn| {
+        for _ in 0..4 {
+            conn.execute(
+                "INSERT INTO protection_defence_events (session_id, damage, deflected) \
+                 VALUES (?1, 25.0, 0)",
+                [&hit_session],
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let outcome = api
+        .protection_repair_confirm(&eo_api::protection::ProtectionRepairInput {
+            client_token: "repair-1".to_string(),
+            cost_ped: 2.0,
+            session_ids: vec![session_id.clone()],
+        })
+        .await
+        .unwrap();
+    let value = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
+    assert_eq!(value["cost"], 2.0);
+    assert_eq!(value["net"], -2.0);
+    assert_eq!(value["armourCost"], 2.0);
+    assert_eq!(
+        value["cycledBreakdown"],
+        serde_json::json!([{"bucket": "armour", "label": "Armour repairs", "costPed": 2.0}])
+    );
+
+    let window_id: i64 = outcome.cost_window.id.parse().unwrap();
+    api.protection_undo(eo_api::protection::ProtectionUndoTarget::Recording { window_id })
+        .await
+        .unwrap();
+    let value = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
+    assert_eq!(value["cost"], 0.0);
+    assert_eq!(value["armourCost"], 0.0);
+    assert_eq!(value["cycledBreakdown"], serde_json::json!([]));
 }
 
 /// The thin interval read over a live lifecycle: the boost declaration

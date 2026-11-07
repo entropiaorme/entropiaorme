@@ -145,6 +145,28 @@ pub struct TrackingSession {
     pub dangling_cost: Ped,
 }
 
+/// The Cycled bucket a live breakdown line belongs to: the session's
+/// operating spend, split the way every Cycled breakdown splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CycledBucket {
+    Weapon,
+    Enhancer,
+    Healing,
+    Armour,
+    Consumable,
+    Harvesting,
+}
+
+/// One line of the live Cycled breakdown: a weapon, a healing tool, an
+/// armour stream, a consumable, or a harvesting tool, with what it cost
+/// this session. A session's lines always sum to its Cycled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CycledLine {
+    pub bucket: CycledBucket,
+    pub label: String,
+    pub cost_ped: f64,
+}
+
 /// Immutable view of the active-session readout: computed under the
 /// tracker's ownership and returned detached, so a caller on the web
 /// thread never sees the live kill list mid-mutation.
@@ -162,6 +184,12 @@ pub struct ActiveSessionView {
     pub damage_dealt_total: f64,
     pub weapon_damage_dealt: f64,
     pub weapon_cost: f64,
+    /// Armour and plate cost recorded against this session so far: it
+    /// arrives when the player records a repair or a Trade Terminal
+    /// reading, not per hit, and is part of `cost`.
+    pub armour_cost: f64,
+    /// `cost` split by what it was spent on, one line per item.
+    pub cycled_breakdown: Vec<CycledLine>,
     /// Community-model offensive-only expected TT return over captured
     /// weapon and amplifier evidence. Null until a modelled shot exists.
     pub expected_tt_rate: Option<f64>,

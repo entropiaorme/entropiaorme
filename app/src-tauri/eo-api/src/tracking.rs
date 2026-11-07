@@ -57,7 +57,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 54] = [
+const SNAPSHOT_FIELDS: [&str; 56] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -86,6 +86,8 @@ const SNAPSHOT_FIELDS: [&str; 54] = [
     "damageDealtTotal",
     "weaponDamageDealt",
     "weaponCost",
+    "armourCost",
+    "cycledBreakdown",
     "expectedTtRate",
     "expectedReturnCoverage",
     "expectedReturnModel",
@@ -720,6 +722,16 @@ pub struct TrackingSnapshot {
     pub weapon_damage_dealt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weapon_cost: Option<f64>,
+    /// Armour and plate cost recorded against the session so far; part
+    /// of `cost`. It arrives when a repair or Trade Terminal reading is
+    /// recorded, not per hit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub armour_cost: Option<f64>,
+    /// `cost` split by what it was spent on, one line per weapon, healing
+    /// tool, armour stream, consumable, or harvesting tool; the lines sum
+    /// to `cost`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycled_breakdown: Option<Vec<CycledLine>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_tt_rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -787,6 +799,51 @@ pub struct TrackingSnapshot {
     pub healing: Option<HealingStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<Warning>>,
+}
+
+/// The Cycled bucket a live breakdown line belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CycledBucket {
+    Weapon,
+    Enhancer,
+    Healing,
+    Armour,
+    Consumable,
+    Harvesting,
+}
+
+impl From<eo_services::tracking_models::CycledBucket> for CycledBucket {
+    fn from(bucket: eo_services::tracking_models::CycledBucket) -> Self {
+        use eo_services::tracking_models::CycledBucket as Source;
+        match bucket {
+            Source::Weapon => Self::Weapon,
+            Source::Enhancer => Self::Enhancer,
+            Source::Healing => Self::Healing,
+            Source::Armour => Self::Armour,
+            Source::Consumable => Self::Consumable,
+            Source::Harvesting => Self::Harvesting,
+        }
+    }
+}
+
+/// One line of the live Cycled breakdown: what one item cost the session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CycledLine {
+    pub bucket: CycledBucket,
+    pub label: String,
+    pub cost_ped: f64,
+}
+
+impl From<&eo_services::tracking_models::CycledLine> for CycledLine {
+    fn from(line: &eo_services::tracking_models::CycledLine) -> Self {
+        Self {
+            bucket: line.bucket.into(),
+            label: line.label.clone(),
+            cost_ped: round_half_even(line.cost_ped, 4) + 0.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -1542,6 +1599,10 @@ impl Api {
         let value = set_armour_cost_impl(&self.db, &session_id, cost)
             .await
             .map_err(edit_error("tracking armour cost"))?;
+        // The running session's live Cycled carries its armour cost too.
+        if let Err(error) = self.tracker.refresh_armour().await {
+            tracing::warn!(target: "eo::api", %error, "live armour cost refresh failed");
+        }
         serde_json::from_value(value).map_err(ApiError::internal("tracking armour cost shaping"))
     }
 
@@ -1856,6 +1917,12 @@ pub(crate) async fn build_snapshot_value(
                 "damageDealtTotal": active.damage_dealt_total,
                 "weaponDamageDealt": active.weapon_damage_dealt,
                 "weaponCost": active.weapon_cost,
+                "armourCost": active.armour_cost,
+                "cycledBreakdown": active
+                    .cycled_breakdown
+                    .iter()
+                    .map(CycledLine::from)
+                    .collect::<Vec<_>>(),
                 "expectedTtRate": active.expected_tt_rate,
                 "expectedReturnCoverage": active.expected_return_coverage,
                 "expectedReturnModel": active.expected_return_model.clone(),

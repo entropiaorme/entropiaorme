@@ -103,6 +103,13 @@ pub(super) struct ActiveSession {
     /// cost-tracked item taken while it ran, less any removed since. The
     /// session row holds the same figure, moved in the dose's own write.
     pub(super) consumable_cost: Ped,
+    /// `heal_cost` per healing tool, with the TT each tool consumed.
+    pub(super) heal_spend: std::collections::BTreeMap<String, super::cycled::HealSpend>,
+    /// `consumable_cost` per consumable item.
+    pub(super) consumable_spend: std::collections::BTreeMap<String, Ped>,
+    /// The armour and plate cost recorded against this session so far,
+    /// re-read whenever a protection recording or undo reaches it.
+    pub(super) armour: super::cycled::SessionArmour,
     /// The reload speed in effect that shots and heals are priced under
     /// now: equipped sources and running doses, under the game's limits.
     /// Every stored shot and paid heal keeps the value it was charged at.
@@ -155,6 +162,9 @@ impl ActiveSession {
             dirty: false,
             heal_cost: Ped::ZERO,
             consumable_cost: Ped::ZERO,
+            heal_spend: Default::default(),
+            consumable_spend: Default::default(),
+            armour: Default::default(),
             reload_speed_percent: 0.0,
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
@@ -226,6 +236,8 @@ pub(super) struct SessionAggregate {
     pub(super) max_damage: f64,
     pub(super) live_weapon_damage: f64,
     pub(super) weapon_cost: Ped,
+    pub(super) armour_cost: Ped,
+    pub(super) cycled_breakdown: Vec<crate::tracking_models::CycledLine>,
     pub(super) expected_tt_rate: Option<f64>,
     pub(super) expected_return_coverage: Option<f64>,
     pub(super) expected_return_model: Option<String>,
@@ -299,6 +311,7 @@ impl TrackerActor {
         enhancer_cost += active.accumulator.enhancer_cost;
         let heal_cost = active.heal_cost;
         let consumable_cost = active.consumable_cost;
+        let armour_cost = active.armour.total;
 
         // Flatten every immutable tool phase at the TT it actually cycled.
         // Equipment changes create distinct phases, while the three hunting
@@ -345,7 +358,13 @@ impl TrackerActor {
         let harvest_cost: Ped = harvests.iter().map(|harvest| harvest.cost_ped).sum();
         let harvest_loot: Ped = harvests.iter().map(|harvest| harvest.loot_total_ped).sum();
 
-        let cost = weapon_cost + heal_cost + consumable_cost + enhancer_cost + harvest_cost;
+        let cost =
+            weapon_cost + heal_cost + consumable_cost + enhancer_cost + harvest_cost + armour_cost;
+        let cycled_breakdown = super::cycled::cycled_breakdown(
+            active,
+            super::cycled::weapon_lines(active),
+            enhancer_cost,
+        );
         let returns: Ped = kills.iter().map(|kill| kill.loot_total_ped).sum::<Ped>() + harvest_loot;
 
         let damage_total: f64 = kills.iter().map(|kill| kill.damage_dealt).sum();
@@ -383,12 +402,12 @@ impl TrackerActor {
 
         // Cumulative-net history (per kill and per harvesting swing,
         // merged in timestamp order), distributing the session-level
-        // heal and dose costs pro-rata across kills by their weapon-cost
+        // heal, dose, and armour costs pro-rata across kills by their weapon-cost
         // share so the curve's final point reconciles with the displayed
         // Net stat (returns - cost). Harvest swings carry their own
         // exact per-event net (wood TT minus swing decay), so they
         // take no share.
-        let shared_cost = heal_cost + consumable_cost;
+        let shared_cost = heal_cost + consumable_cost + armour_cost;
         let per_kill_weapon: Vec<Ped> = kills
             .iter()
             .map(|kill| {
@@ -477,6 +496,8 @@ impl TrackerActor {
                 .fold(0.0, f64::max),
             live_weapon_damage,
             weapon_cost,
+            armour_cost,
+            cycled_breakdown,
             expected_tt_rate: expected_result
                 .as_ref()
                 .and_then(|result| result.expected_tt_rate),
@@ -1247,6 +1268,8 @@ impl HuntTracker {
             damage_dealt_total: round_half_even(aggregated.damage_total, 1),
             weapon_damage_dealt: round_half_even(aggregated.live_weapon_damage, 1),
             weapon_cost: aggregated.weapon_cost.round_half_even(6).value(),
+            armour_cost: aggregated.armour_cost.round_half_even(4).value() + 0.0,
+            cycled_breakdown: aggregated.cycled_breakdown,
             expected_tt_rate: aggregated.expected_tt_rate,
             expected_return_coverage: aggregated.expected_return_coverage,
             expected_return_model: aggregated.expected_return_model,

@@ -32,6 +32,8 @@ export type {
 	AuctionExpireInput,
 	AuctionListing,
 	AuctionListingInput,
+	CycledBucket,
+	CycledLine,
 	EquipmentListingInput,
 	EquipmentTradeInput,
 	ExpectedHuntingEconomics,

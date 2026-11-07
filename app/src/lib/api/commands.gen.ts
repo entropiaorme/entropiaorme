@@ -896,6 +896,20 @@ export interface CycledBreakdown {
 }
 
 /**
+ * The Cycled bucket a live breakdown line belongs to.
+ */
+export type CycledBucket = 'weapon' | 'enhancer' | 'healing' | 'armour' | 'consumable' | 'harvesting';
+
+/**
+ * One line of the live Cycled breakdown: what one item cost the session.
+ */
+export interface CycledLine {
+	bucket: CycledBucket;
+	label: string;
+	costPed: number;
+}
+
+/**
  * What an overlay declaration put in hand.
  */
 export interface DeclaredEquipment {
@@ -3737,6 +3751,10 @@ export interface TrackingSnapshot {
 	damageDealtTotal?: number | null;
 	weaponDamageDealt?: number | null;
 	weaponCost?: number | null;
+	/** Armour and plate cost recorded against the session so far; part of `cost`. It arrives when a repair or Trade Terminal reading is recorded, not per hit. */
+	armourCost?: number | null;
+	/** `cost` split by what it was spent on, one line per weapon, healing tool, armour stream, consumable, or harvesting tool; the lines sum to `cost`. */
+	cycledBreakdown?: CycledLine[] | null;
 	expectedTtRate?: number | null;
 	expectedReturnCoverage?: number | null;
 	expectedReturnModel?: string | null;

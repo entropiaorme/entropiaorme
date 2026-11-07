@@ -55,6 +55,13 @@ pub struct HealingProfile {
     /// seconds), opened as a dose; absent for most tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_use: Option<crate::consumables::OnUseEffect>,
+    /// The TT one paid use consumes (decay plus ammunition, before any
+    /// markup), resolved with the tool's price by the live hotbar
+    /// resolver. A limited tool's cost per use exceeds it by the markup
+    /// paid over TT, which the expected-return model counts as consumed
+    /// premium rather than loot-bearing spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tt_per_use_ped: Option<f64>,
 }
 
 impl HealingProfile {
@@ -124,6 +131,7 @@ mod tests {
             reload_speed_percent: None,
             effective_reload_seconds: None,
             on_use: None,
+            tt_per_use_ped: None,
         };
         assert!(profile.direct_matches(80.0));
         assert!(!profile.direct_matches(10.0));

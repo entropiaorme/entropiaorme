@@ -94,6 +94,10 @@ pub(super) enum TrackerMsg {
         reply: oneshot::Sender<Result<bool, DbError>>,
     },
     ReleaseMob(oneshot::Sender<Option<String>>),
+    /// A session's armour cost was set directly (outside a protection
+    /// recording, which announces itself on the bus): re-read the running
+    /// session's share. The reply says whether the live readout changed.
+    RefreshArmour(oneshot::Sender<Result<bool, DbError>>),
     /// Start a dose of a consumable by hand.
     StartDose(DoseStart, oneshot::Sender<Result<DoseRecord, DoseError>>),
     /// End an untimed dose's effect now.
@@ -279,6 +283,9 @@ impl TrackerActor {
             TrackerMsg::ReleaseMob(reply) => {
                 let _ = reply.send(self.release_declared_mob());
             }
+            TrackerMsg::RefreshArmour(reply) => {
+                let _ = reply.send(self.refresh_armour().await);
+            }
             TrackerMsg::StartDose(start, reply) => {
                 let _ = reply.send(self.start_dose(start, DoseSource::Manual, None).await);
             }
@@ -315,6 +322,7 @@ impl TrackerActor {
             BusEvent::EnhancerBreak(_) => self.on_enhancer_break(event),
             BusEvent::TickFlushed(_) => self.on_tick_flushed(event),
             BusEvent::HealingUpdated(_) => self.on_healing_updated().await,
+            BusEvent::ProtectionUpdated(_) => self.on_protection_updated().await,
             _ => {}
         }
     }
@@ -349,6 +357,7 @@ impl TrackerActor {
             Topic::EnhancerBreak,
             Topic::TickFlushed,
             Topic::HealingUpdated,
+            Topic::ProtectionUpdated,
         ] {
             let sender = self.sender.clone();
             let registration = self.bus.subscribe(topic, move |event| {

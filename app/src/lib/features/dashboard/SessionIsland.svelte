@@ -12,6 +12,7 @@
 	import { getStatDef } from '$lib/statsRegistry';
 	import { setStatsScope } from '$lib/statsScope.svelte';
 	import { describeError } from '$lib/view/errorState';
+	import StatTip from './StatTip.svelte';
 	import type { StatsGridModel } from './statsGridModel.svelte';
 
 	let {
@@ -305,6 +306,9 @@
 			>
 				<span class="flex min-w-0 items-center gap-1 eyebrow">
 					<span class="truncate">{def?.shortLabel ?? def?.label ?? pref.id}</span>
+					{#if def && !pending && !showingLifetime}
+						<StatTip id={def.id} {status} render={r} />
+					{/if}
 				</span>
 				{#if pending}
 					<Skeleton class="h-[17px] w-14" />

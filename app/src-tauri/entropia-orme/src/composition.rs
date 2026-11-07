@@ -1547,6 +1547,9 @@ fn build_item_resolver(
                     healing_profile.base_reload_seconds = Some(base_reload_seconds);
                     healing_profile.reload_speed_percent = Some(reload_speed);
                     healing_profile.effective_reload_seconds = Some(reload_seconds);
+                    healing_profile.tt_per_use_ped = Some(
+                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json),
+                    );
                     healing_profile.on_use = serde_json::from_str::<Value>(&properties_json)
                         .ok()
                         .and_then(|props| on_use_effect_from_props(&props, game_data.as_deref()));

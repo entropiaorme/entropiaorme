@@ -31,6 +31,10 @@ use eo_services::tracker::{HuntTracker, Providers};
 /// default providers report no engine and no game window, so the scan
 /// answers its resting status the way the app does before any scan).
 pub struct ProducerHandles {
+    /// The bus the producers share: a facade test that wires a service's
+    /// change signal publishes on it, as the app's composition does.
+    #[allow(dead_code)]
+    pub bus: Arc<EventBus>,
     pub config_service: Arc<Mutex<ConfigService>>,
     pub tracker: Arc<HuntTracker>,
     pub hotbar: Arc<HotbarListener>,
@@ -114,6 +118,7 @@ pub async fn producer_handles_with_tracker(
     let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders::default()));
     let quests = QuestService::start(&bus, db.clone(), Arc::new(RealClock::new()), handle);
     ProducerHandles {
+        bus,
         config_service,
         tracker,
         hotbar,

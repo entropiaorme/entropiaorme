@@ -182,6 +182,97 @@ async fn one_session_repair_spreads_over_its_segments_by_hits() {
     assert!(close(costs[2], 2.0));
 }
 
+/// What the live readout reads back for a running session: one line per
+/// stream (a limited set by name, unlimited repairs pooled), the TT each
+/// represents (a limited reading books its TT loss at the set's markup, so
+/// the rest is consumed premium), and a residual line for armour cost on
+/// the row that no standing recording explains. An undone recording leaves
+/// both the total and the lines.
+#[tokio::test]
+async fn the_live_armour_read_splits_streams_and_their_tt() {
+    let (_dir, db, clock, service) = harness().await;
+    let set = limited(&service, "Hyperion", 200.0).await;
+    service
+        .confirm_observation(
+            set.id,
+            "base",
+            50.0,
+            ObservationSource::Manual,
+            None,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+    play(&db, Played::new("live", 10.0, &[(None, 10)])).await;
+    clock.advance(60.0).unwrap();
+    // 8 PED of TT lost at 200%: 16 PED booked, 8 of it TT.
+    service
+        .confirm_observation(
+            set.id,
+            "close",
+            42.0,
+            ObservationSource::Manual,
+            None,
+            None,
+            vec!["live".into()],
+        )
+        .await
+        .unwrap();
+    let repair = service
+        .confirm_repair_cost("r1", 3.0, vec!["live".into()])
+        .await
+        .unwrap();
+
+    let read = |db: &Db| {
+        let db = db.clone();
+        async move {
+            db.with_reader(|conn| crate::tracker::read_session_armour(conn, "live"))
+                .await
+                .unwrap()
+        }
+    };
+    let armour = read(&db).await;
+    assert!(close(armour.total.value(), 19.0));
+    assert!(close(armour.tt.value(), 11.0));
+    let lines: Vec<(&str, f64)> = armour
+        .lines
+        .iter()
+        .map(|(label, cost)| (label.as_str(), cost.value()))
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].0, "Hyperion");
+    assert!(close(lines[0].1, 16.0));
+    assert_eq!(lines[1].0, "Armour repairs");
+    assert!(close(lines[1].1, 3.0));
+
+    // An undone repair leaves the total and the lines alike.
+    let window_id: i64 = repair.cost_window.id;
+    service
+        .undo(UndoTarget::Recording { window_id })
+        .await
+        .unwrap();
+    let armour = read(&db).await;
+    assert!(close(armour.total.value(), 16.0));
+    assert_eq!(armour.lines.len(), 1);
+
+    // Armour cost set on the row outside any recording still sums.
+    db.with_writer(|conn| {
+        conn.execute(
+            "UPDATE tracking_sessions SET armour_cost = armour_cost + 1.5 WHERE id = 'live'",
+            [],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let armour = read(&db).await;
+    assert!(close(armour.total.value(), 17.5));
+    assert!(close(armour.tt.value(), 9.5));
+    assert_eq!(armour.lines.last().unwrap().0, "Other armour");
+    assert!(close(armour.lines.last().unwrap().1.value(), 1.5));
+}
+
 #[tokio::test]
 async fn streams_covering_one_session_add_up() {
     let (_dir, db, clock, service) = harness().await;

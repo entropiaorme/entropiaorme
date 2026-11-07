@@ -1,5 +1,7 @@
 //! The market family: the manual markup-observation feed (paste
-//! preview and commit) and its reads (overview, per-item history).
+//! preview and commit), the player's own markup entries and live Nanocube
+//! marks, and their reads (overview, per-item history, activity and
+//! by-name markups).
 //!
 //! Everything on this surface is the INFORMATIONAL market layer:
 //! estimated markup is a distinct data class that never joins the
@@ -188,6 +190,83 @@ pub struct MarketHarvestHorizon {
     pub sales_ped: f64,
 }
 
+/// How a manual markup was entered: a percentage of TT, or PED above TT per
+/// unit (how the auction quotes items that do not stack).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketManualMarkupKind {
+    Percent,
+    PedPerUnit,
+}
+
+impl From<market_service::ManualMarkupKind> for MarketManualMarkupKind {
+    fn from(kind: market_service::ManualMarkupKind) -> Self {
+        match kind {
+            market_service::ManualMarkupKind::Percent => Self::Percent,
+            market_service::ManualMarkupKind::PedPerUnit => Self::PedPerUnit,
+        }
+    }
+}
+
+/// A markup the player entered for one item. Trusted as given, but a
+/// stand-in: a newer market import replaces it.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketManualMarkup {
+    pub kind: MarketManualMarkupKind,
+    pub value: f64,
+    /// The item's TT per unit where the entry was made: what a PED-per-unit
+    /// entry is a markup over.
+    pub unit_tt_ped: Nullable<f64>,
+    /// The entry as a percentage of TT; null for a PED amount on an item
+    /// with no TT.
+    pub markup_pct: Nullable<f64>,
+    /// Epoch seconds.
+    pub recorded_at: f64,
+}
+
+impl From<market_service::ManualMarkup> for MarketManualMarkup {
+    fn from(entry: market_service::ManualMarkup) -> Self {
+        Self {
+            kind: entry.kind.into(),
+            value: entry.value,
+            unit_tt_ped: entry.unit_tt_ped.into(),
+            markup_pct: entry.markup_pct().into(),
+            recorded_at: entry.recorded_at,
+        }
+    }
+}
+
+/// Which reading an item's valuation uses: whichever was recorded more
+/// recently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketMarkupSource {
+    Market,
+    Manual,
+}
+
+impl From<market_service::MarkupSource> for MarketMarkupSource {
+    fn from(source: market_service::MarkupSource) -> Self {
+        match source {
+            market_service::MarkupSource::Market => Self::Market,
+            market_service::MarkupSource::Manual => Self::Manual,
+        }
+    }
+}
+
+/// A manual markup as the player enters it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarketManualMarkupInput {
+    pub item_name: String,
+    pub kind: MarketManualMarkupKind,
+    pub value: f64,
+    /// The item's TT per unit, for a PED-per-unit entry.
+    #[serde(default)]
+    pub unit_tt_ped: Option<f64>,
+}
+
 /// One harvest-looted item's resolved market signals plus the per-horizon
 /// breakdown. The resolved markup/horizon/sales are the display default
 /// and market-opportunity input (week preferred, then month, then year;
@@ -197,7 +276,18 @@ pub struct MarketHarvestHorizon {
 #[serde(rename_all = "camelCase")]
 pub struct MarketHarvestItem {
     pub item_name: String,
+    /// The market's resolved markup, whichever source `preferred` names.
     pub markup_pct: Nullable<f64>,
+    /// Epoch seconds of the import the market markup came from.
+    pub market_observed_at: Nullable<f64>,
+    /// The player's standing manual entry.
+    pub manual: Nullable<MarketManualMarkup>,
+    /// Which of the market reading and the manual entry the item's
+    /// valuation uses: the more recent. Null when neither exists.
+    pub preferred: Nullable<MarketMarkupSource>,
+    /// Marked to be valued at the Nanocube markup in the live session
+    /// figures; every other valuation ignores the mark.
+    pub nanocube_marked: bool,
     /// Absolute informational quote per item unit. This is intended for
     /// zero-TT and unit-priced items, and remains estimated market value.
     pub unit_price_ped: Nullable<f64>,
@@ -385,6 +475,65 @@ impl Api {
         Ok(market_items_dto(data))
     }
 
+    /// The estimated market signals for exactly the named items (the live
+    /// session's loot, an inventory's holdings) plus the nanocube floor.
+    pub async fn market_item_markups(
+        &self,
+        names: Vec<String>,
+    ) -> Result<MarketHarvestData, ApiError> {
+        let data = self
+            .market
+            .item_markups(names)
+            .await
+            .map_err(market_write_error("market item markups"))?;
+        Ok(market_items_dto(data))
+    }
+
+    /// Record a markup the player entered for one item. It stands wherever
+    /// it is more recent than the item's market import, and lifts a live
+    /// Nanocube mark on the item.
+    pub async fn market_manual_markup_set(
+        &self,
+        input: MarketManualMarkupInput,
+    ) -> Result<MarketManualMarkup, ApiError> {
+        let entry = match input.kind {
+            MarketManualMarkupKind::Percent => {
+                market_service::ManualMarkupInput::Percent(input.value)
+            }
+            MarketManualMarkupKind::PedPerUnit => market_service::ManualMarkupInput::PedPerUnit {
+                ped: input.value,
+                unit_tt_ped: input.unit_tt_ped,
+            },
+        };
+        self.market
+            .set_manual_markup(&input.item_name, entry)
+            .await
+            .map(MarketManualMarkup::from)
+            .map_err(market_write_error("market manual markup set"))
+    }
+
+    /// Withdraw the player's manual markup for one item; it falls back to
+    /// its market import. False when none was standing.
+    pub async fn market_manual_markup_clear(&self, item_name: String) -> Result<bool, ApiError> {
+        self.market
+            .clear_manual_markup(&item_name)
+            .await
+            .map_err(market_write_error("market manual markup clear"))
+    }
+
+    /// Mark one item to be valued at the Nanocube markup in the live session
+    /// figures, or lift the mark. Returns whether it is marked.
+    pub async fn market_nanocube_mark_set(
+        &self,
+        item_name: String,
+        marked: bool,
+    ) -> Result<bool, ApiError> {
+        self.market
+            .set_live_nanocube_mark(&item_name, marked)
+            .await
+            .map_err(market_write_error("market nanocube mark set"))
+    }
+
     /// The estimated market signals for every active hunting-looted item
     /// plus the nanocube recycling floor: the Hunting sibling of
     /// [`Self::market_harvest_markups`], over the kill loot composition
@@ -399,6 +548,15 @@ impl Api {
     }
 }
 
+fn market_write_error(context: &'static str) -> impl Fn(MarketError) -> ApiError {
+    move |err| match err {
+        MarketError::EmptyPaste | MarketError::InvalidInput(_) => {
+            ApiError::bad_request(err.to_string())
+        }
+        MarketError::Db(source) => ApiError::internal(context)(source),
+    }
+}
+
 /// Shape one activity's per-item market signals onto the wire DTO.
 fn market_items_dto(data: eo_services::market_service::HarvestMarketData) -> MarketHarvestData {
     MarketHarvestData {
@@ -409,6 +567,10 @@ fn market_items_dto(data: eo_services::market_service::HarvestMarketData) -> Mar
             .map(|item| MarketHarvestItem {
                 item_name: item.item_name,
                 markup_pct: item.markup_pct.into(),
+                market_observed_at: item.market_observed_at.into(),
+                manual: item.manual.map(MarketManualMarkup::from).into(),
+                preferred: item.preferred.map(MarketMarkupSource::from).into(),
+                nanocube_marked: item.nanocube_marked,
                 unit_price_ped: item.unit_price_ped.into(),
                 horizon: item.horizon.into(),
                 sales_ped: item.sales_ped.into(),

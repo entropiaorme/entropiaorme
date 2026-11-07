@@ -47,6 +47,7 @@ pub enum Topic {
     HealingUpdated,
     WeaponsUpdated,
     ConsumablesUpdated,
+    MarketUpdated,
 }
 
 impl Topic {
@@ -75,6 +76,7 @@ impl Topic {
             Topic::HealingUpdated => eo_wire::domain_events::TOPIC_HEALING_UPDATED,
             Topic::WeaponsUpdated => eo_wire::domain_events::TOPIC_WEAPONS_UPDATED,
             Topic::ConsumablesUpdated => eo_wire::domain_events::TOPIC_CONSUMABLES_UPDATED,
+            Topic::MarketUpdated => eo_wire::domain_events::TOPIC_MARKET_UPDATED,
         }
     }
 }
@@ -304,6 +306,7 @@ mod tests {
             (Topic::TickFlushed, "tick_flushed"),
             (Topic::TrackingSessionUpdated, "tracking.session.updated"),
             (Topic::ScanStatusChanged, "scan.status.changed"),
+            (Topic::MarketUpdated, "market.updated"),
         ];
         for (topic, wire) in expected {
             assert_eq!(topic.as_str(), wire);

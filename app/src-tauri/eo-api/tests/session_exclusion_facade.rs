@@ -865,6 +865,10 @@ const OTHER_COMMANDS: &[&str] = &[
     "market_auction_packet_threshold",
     "market_harvest_markups",
     "market_hunt_markups",
+    "market_item_markups",
+    "market_manual_markup_set",
+    "market_manual_markup_clear",
+    "market_nanocube_mark_set",
     "market_item_history",
     // Quests and codex: confirmed hand-ins and claims, outside both scopes.
     "quests_list",

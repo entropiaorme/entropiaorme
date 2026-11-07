@@ -965,6 +965,24 @@ async fn compose_with(
                 }));
             })
         })
+        .with_market_changed({
+            // A paste, a quote, a manual markup, or a Nanocube mark moves the
+            // markup loot is valued at while the dashboard, the overlay, and
+            // Inventory may all be open: each re-reads on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    MarketUpdated, MarketUpdatedPayload, MarketUpdatedTag,
+                };
+                bus.publish(&BusEvent::MarketUpdated(MarketUpdated {
+                    topic: MarketUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: MarketUpdatedPayload {},
+                }));
+            })
+        })
         .with_weapons_changed({
             // Assigning an unpriced shot in History moves an ended session's
             // weapon cost while its detail and the session list may be open:
@@ -1646,6 +1664,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::HealingUpdated,
         Topic::WeaponsUpdated,
         Topic::ConsumablesUpdated,
+        Topic::MarketUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1672,6 +1691,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             }
             BusEvent::ConsumablesUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::ConsumablesUpdated(envelope.clone()));
+            }
+            BusEvent::MarketUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::MarketUpdated(envelope.clone()));
             }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.

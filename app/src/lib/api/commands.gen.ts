@@ -1923,7 +1923,16 @@ export interface MarketHarvestHorizon {
  */
 export interface MarketHarvestItem {
 	itemName: string;
+	/** The market's resolved markup, whichever source `preferred` names. */
 	markupPct: number | null;
+	/** Epoch seconds of the import the market markup came from. */
+	marketObservedAt: number | null;
+	/** The player's standing manual entry. */
+	manual: MarketManualMarkup | null;
+	/** Which of the market reading and the manual entry the item's valuation uses: the more recent. Null when neither exists. */
+	preferred: MarketMarkupSource | null;
+	/** Marked to be valued at the Nanocube markup in the live session figures; every other valuation ignores the mark. */
+	nanocubeMarked: boolean;
 	/** Absolute informational quote per item unit. This is intended for zero-TT and unit-priced items, and remains estimated market value. */
 	unitPricePed: number | null;
 	horizon: string | null;
@@ -1948,6 +1957,44 @@ export interface MarketHistoryPoint {
  * One of the export's five aggregation horizons.
  */
 export type MarketHorizon = 'day' | 'week' | 'month' | 'year' | 'decade';
+
+/**
+ * A markup the player entered for one item. Trusted as given, but a
+ * stand-in: a newer market import replaces it.
+ */
+export interface MarketManualMarkup {
+	kind: MarketManualMarkupKind;
+	value: number;
+	/** The item's TT per unit where the entry was made: what a PED-per-unit entry is a markup over. */
+	unitTtPed: number | null;
+	/** The entry as a percentage of TT; null for a PED amount on an item with no TT. */
+	markupPct: number | null;
+	/** Epoch seconds. */
+	recordedAt: number;
+}
+
+/**
+ * A manual markup as the player enters it.
+ */
+export interface MarketManualMarkupInput {
+	itemName: string;
+	kind: MarketManualMarkupKind;
+	value: number;
+	/** The item's TT per unit, for a PED-per-unit entry. */
+	unitTtPed?: number | null;
+}
+
+/**
+ * How a manual markup was entered: a percentage of TT, or PED above TT per
+ * unit (how the auction quotes items that do not stack).
+ */
+export type MarketManualMarkupKind = 'percent' | 'ped_per_unit';
+
+/**
+ * Which reading an item's valuation uses: whichever was recorded more
+ * recently.
+ */
+export type MarketMarkupSource = 'market' | 'manual';
 
 /**
  * One overview row: an item's latest readings (from the most recent
@@ -4751,6 +4798,22 @@ export async function marketHarvestMarkups(): Promise<MarketHarvestData> {
 
 export async function marketHuntMarkups(): Promise<MarketHarvestData> {
 	return invokeCommand('market_hunt_markups', {});
+}
+
+export async function marketItemMarkups(names: string[]): Promise<MarketHarvestData> {
+	return invokeCommand('market_item_markups', { names });
+}
+
+export async function marketManualMarkupSet(input: MarketManualMarkupInput): Promise<MarketManualMarkup> {
+	return invokeCommand('market_manual_markup_set', { input });
+}
+
+export async function marketManualMarkupClear(itemName: string): Promise<boolean> {
+	return invokeCommand('market_manual_markup_clear', { item_name: itemName });
+}
+
+export async function marketNanocubeMarkSet(itemName: string, marked: boolean): Promise<boolean> {
+	return invokeCommand('market_nanocube_mark_set', { item_name: itemName, marked });
 }
 
 export async function marketItemHistory(itemName: string, horizon: MarketHorizon): Promise<MarketHistoryPoint[]> {

@@ -323,6 +323,7 @@ pub enum BusEvent {
     HealingUpdated(eo_wire::domain_events::HealingUpdated),
     WeaponsUpdated(eo_wire::domain_events::WeaponsUpdated),
     ConsumablesUpdated(eo_wire::domain_events::ConsumablesUpdated),
+    MarketUpdated(eo_wire::domain_events::MarketUpdated),
 }
 
 impl BusEvent {
@@ -351,6 +352,7 @@ impl BusEvent {
             BusEvent::HealingUpdated(_) => Topic::HealingUpdated,
             BusEvent::WeaponsUpdated(_) => Topic::WeaponsUpdated,
             BusEvent::ConsumablesUpdated(_) => Topic::ConsumablesUpdated,
+            BusEvent::MarketUpdated(_) => Topic::MarketUpdated,
         }
     }
 

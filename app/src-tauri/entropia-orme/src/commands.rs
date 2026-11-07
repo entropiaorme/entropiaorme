@@ -50,7 +50,8 @@ use eo_api::maps::{
 };
 use eo_api::market::{
     MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
-    MarketHorizon, MarketOverviewRow, MarketPastePreview, MarketUnitPriceResult,
+    MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
+    MarketPastePreview, MarketUnitPriceResult,
 };
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1187,6 +1188,41 @@ pub async fn market_harvest_markups(app: tauri::AppHandle) -> Result<MarketHarve
 #[tauri::command(rename_all = "snake_case")]
 pub async fn market_hunt_markups(app: tauri::AppHandle) -> Result<MarketHarvestData, ApiError> {
     facade(&app)?.market_hunt_markups().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_item_markups(
+    app: tauri::AppHandle,
+    names: Vec<String>,
+) -> Result<MarketHarvestData, ApiError> {
+    facade(&app)?.market_item_markups(names).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_manual_markup_set(
+    app: tauri::AppHandle,
+    input: MarketManualMarkupInput,
+) -> Result<MarketManualMarkup, ApiError> {
+    facade(&app)?.market_manual_markup_set(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_manual_markup_clear(
+    app: tauri::AppHandle,
+    item_name: String,
+) -> Result<bool, ApiError> {
+    facade(&app)?.market_manual_markup_clear(item_name).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_nanocube_mark_set(
+    app: tauri::AppHandle,
+    item_name: String,
+    marked: bool,
+) -> Result<bool, ApiError> {
+    facade(&app)?
+        .market_nanocube_mark_set(item_name, marked)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

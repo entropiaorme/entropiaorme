@@ -318,6 +318,16 @@ impl Api {
         self
     }
 
+    /// Announce every committed market write through `changed`, so surfaces
+    /// valuing loot at market markup can re-read.
+    pub fn with_market_changed(
+        mut self,
+        changed: eo_services::market_service::ChangedSink,
+    ) -> Self {
+        self.market = self.market.with_changed(changed);
+        self
+    }
+
     /// Announce every committed weapon assignment through `changed`, so
     /// surfaces showing weapon costs re-read them.
     pub fn with_weapons_changed(

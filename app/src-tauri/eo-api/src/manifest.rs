@@ -52,7 +52,8 @@ use crate::maps::{
 };
 use crate::market::{
     MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
-    MarketHorizon, MarketOverviewRow, MarketPastePreview, MarketUnitPriceResult,
+    MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
+    MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1312,6 +1313,44 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "market_hunt_markups",
             args: vec![],
             returns: Some(schema(schema_for!(MarketHarvestData))),
+        },
+        CommandSpec {
+            name: "market_item_markups",
+            args: vec![ArgSpec {
+                name: "names",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(MarketHarvestData))),
+        },
+        CommandSpec {
+            name: "market_manual_markup_set",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(MarketManualMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(MarketManualMarkup))),
+        },
+        CommandSpec {
+            name: "market_manual_markup_clear",
+            args: vec![ArgSpec {
+                name: "item_name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(bool))),
+        },
+        CommandSpec {
+            name: "market_nanocube_mark_set",
+            args: vec![
+                ArgSpec {
+                    name: "item_name",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "marked",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
+            returns: Some(schema(schema_for!(bool))),
         },
         CommandSpec {
             name: "market_item_history",

@@ -41,6 +41,9 @@ const MARKET_MARKERS: &[&str] = &[
     "eo_api::market",
     "market_observations",
     "market_submissions",
+    "market_unit_price_observations",
+    "market_manual_markups",
+    "market_live_nanocube_marks",
 ];
 
 /// A single lint violation: file, 1-based line number, detail.

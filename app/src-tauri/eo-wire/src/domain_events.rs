@@ -19,6 +19,7 @@ pub const TOPIC_PROTECTION_UPDATED: &str = "protection.updated";
 pub const TOPIC_HEALING_UPDATED: &str = "healing.updated";
 pub const TOPIC_WEAPONS_UPDATED: &str = "weapons.updated";
 pub const TOPIC_CONSUMABLES_UPDATED: &str = "consumables.updated";
+pub const TOPIC_MARKET_UPDATED: &str = "market.updated";
 
 /// A field that serialises to exactly one topic literal and refuses any
 /// other input: the discriminator the union routes on, kept closed so a
@@ -55,6 +56,7 @@ topic_tag!(ProtectionUpdatedTag, "protection.updated");
 topic_tag!(HealingUpdatedTag, "healing.updated");
 topic_tag!(WeaponsUpdatedTag, "weapons.updated");
 topic_tag!(ConsumablesUpdatedTag, "consumables.updated");
+topic_tag!(MarketUpdatedTag, "market.updated");
 
 fn default_event_version() -> i64 {
     1
@@ -236,6 +238,25 @@ pub struct ConsumablesUpdated {
     pub payload: ConsumablesUpdatedPayload,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketUpdatedPayload {}
+
+/// Market data changed: a market-ledger paste, a unit-price quote, a manual
+/// markup, or a live Nanocube mark committed, so any valuation of loot at
+/// market markup may have moved. Content-free; consumers re-read what they
+/// show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketUpdated {
+    #[serde(rename = "type")]
+    pub topic: MarketUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: MarketUpdatedPayload,
+}
+
 /// The discriminated union of every frontend-facing domain event. The
 /// untagged dispatch is made exact by the closed topic-tag fields: a
 /// frame routes to the one variant whose `type` literal it carries, and
@@ -252,6 +273,7 @@ pub enum DomainEvent {
     HealingUpdated(HealingUpdated),
     WeaponsUpdated(WeaponsUpdated),
     ConsumablesUpdated(ConsumablesUpdated),
+    MarketUpdated(MarketUpdated),
 }
 
 impl DomainEvent {
@@ -266,6 +288,7 @@ impl DomainEvent {
             DomainEvent::HealingUpdated(_) => TOPIC_HEALING_UPDATED,
             DomainEvent::WeaponsUpdated(_) => TOPIC_WEAPONS_UPDATED,
             DomainEvent::ConsumablesUpdated(_) => TOPIC_CONSUMABLES_UPDATED,
+            DomainEvent::MarketUpdated(_) => TOPIC_MARKET_UPDATED,
         }
     }
 
@@ -391,6 +414,22 @@ mod tests {
         let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
         assert_eq!(restored.topic(), TOPIC_WEAPONS_UPDATED);
         let foreign = wire.replace("{}", "{\"sessionId\":\"s\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
+    }
+
+    #[test]
+    fn market_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::MarketUpdated(MarketUpdated {
+            topic: MarketUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-11-07T20:00:00+00:00".into(),
+            payload: MarketUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"market.updated\",\"event_version\":1,\"occurred_at\":\"2026-11-07T20:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_MARKET_UPDATED);
+        let foreign = wire.replace("{}", "{\"itemName\":\"x\"}");
         assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
     }
 

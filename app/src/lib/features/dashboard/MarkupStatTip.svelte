@@ -51,6 +51,13 @@
 			against {formatPed(cycledPed)} PED cycled.
 		{/if}
 	</span>
+	{#if valuation.coverage.noTtValuePed > 0}
+		<span class="mt-1.5 flex items-baseline gap-3 text-xs" data-testid="no-tt-value">
+			<span class="min-w-0 flex-1 text-text-secondary">Items with no TT, at your value</span>
+			<span class="tabular-nums text-text">+{formatPed(valuation.coverage.noTtValuePed)}</span>
+			<span class="w-10"></span>
+		</span>
+	{/if}
 	{#if lines.length > 0}
 		<span class="mt-2 flex flex-col gap-1" data-testid="markup-coverage">
 			<span class="eyebrow">Loot TT valued</span>

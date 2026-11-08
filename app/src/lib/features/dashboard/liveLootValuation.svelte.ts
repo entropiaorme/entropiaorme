@@ -61,6 +61,9 @@ export interface ValuationCoverage {
 	markedTt: number;
 	/** Shrapnel at its fixed conversion. */
 	shrapnelTt: number;
+	/** The market value of items with no TT (valued only by the player's
+	 * per-unit entry): it adds to the loot's value with no TT beneath it. */
+	noTtValuePed: number;
 }
 
 /** The live valuation's figures, for the stats and the widget. */
@@ -84,8 +87,10 @@ function coverageOf(items: readonly TreeCuttingItem[]): ValuationCoverage {
 		flooredTt: 0,
 		markedTt: 0,
 		shrapnelTt: 0,
+		noTtValuePed: 0,
 	};
 	for (const item of items) {
+		if (item.ttValue <= 0) coverage.noTtValuePed += item.marketValuePed;
 		switch (item.markupBasis) {
 			case 'market':
 				coverage.marketTt += item.ttValue;

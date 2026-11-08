@@ -70,7 +70,39 @@ describe('valueLiveLoot', () => {
 			flooredTt: 1,
 			markedTt: 0,
 			shrapnelTt: 1,
+			noTtValuePed: 0,
 		});
+	});
+
+	it("adds a no-TT item's value at the player's per-unit entry, with no TT beneath it", () => {
+		const loot: LootEntry[] = [
+			{ name: 'Animal Oil Residue', quantity: 100, ttValue: 10 },
+			{ name: 'Strongbox', quantity: 12, ttValue: 0 },
+		];
+		const feed: MarketHarvestData = {
+			...FEED,
+			items: [
+				...FEED.items,
+				{
+					...FEED.items[0],
+					itemName: 'Strongbox',
+					markupPct: null,
+					marketObservedAt: null,
+					preferred: 'manual',
+					manual: {
+						kind: 'ped_per_unit',
+						value: 0.7,
+						unitTtPed: 0,
+						markupPct: null,
+						recordedAt: 1_700_000_100,
+					},
+				},
+			],
+		};
+		const view = valueLiveLoot('s1', loot, feed, 'all');
+		expect(view?.coverage.noTtValuePed).toBeCloseTo(8.4, 9);
+		expect(view?.marketValuePed).toBeCloseTo(10.4 + 8.4, 9);
+		expect(view?.lootMuFactor).toBeCloseTo((10.4 + 8.4) / 10, 9);
 	});
 
 	it('gives no figure without the market signals', () => {

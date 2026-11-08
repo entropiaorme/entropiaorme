@@ -8,7 +8,22 @@
 import type { MarketManualMarkup } from '$lib/api';
 import { formatAge } from '$lib/features/market/overviewModel.svelte';
 import { formatPed, formatPercent } from '$lib/utils/format';
-import type { TreeCuttingItem } from './treeCuttingModel.svelte';
+import type { MarkupBasis, TreeCuttingItem } from './treeCuttingModel.svelte';
+
+/**
+ * How a row's applied markup reads. When the player's own value is the one
+ * in use, it reads in the form they entered it: a per-unit entry as `+0.70
+ * ea` (whatever the item's TT, and the only reading an item with no TT has),
+ * a percentage as a percentage. Everything else reads as a percentage of TT.
+ */
+export function appliedMarkupText(
+	markupPct: number,
+	basis: MarkupBasis | null,
+	entry: MarketManualMarkup | null | undefined,
+): string {
+	if (basis === 'manual' && entry?.kind === 'ped_per_unit') return `+${formatPed(entry.value)} ea`;
+	return formatPercent(markupPct / 100);
+}
 
 /** A manual entry as the player wrote it: `130.0%` or `+2.50 PED per unit`. */
 export function manualEntryText(entry: MarketManualMarkup): string {
@@ -20,6 +35,22 @@ export function manualEntryText(entry: MarketManualMarkup): string {
 /** When the entry was made, against now (epoch seconds). */
 export function manualEntryAge(entry: MarketManualMarkup, nowEpoch = Date.now() / 1000): string {
 	return formatAge(entry.recordedAt, nowEpoch);
+}
+
+/** The label for a row valued at the player's own markup: the entry as
+ * written, with its percentage of TT beside a per-unit entry where the item
+ * has TT. */
+export function manualMarkupLabel(
+	entry: MarketManualMarkup | null | undefined,
+	effectiveMarkupPct: number,
+	ttValue: number,
+): string {
+	if (entry?.kind !== 'ped_per_unit')
+		return `Your markup ${formatPercent(effectiveMarkupPct / 100)}`;
+	const each = `Your value +${formatPed(entry.value)} PED each`;
+	return ttValue > 0
+		? `${each} (${formatPercent(effectiveMarkupPct / 100)} of TT)`
+		: `${each}; the item has no TT`;
 }
 
 /** The player's own markup: trusted as given, but a stand-in that a newer
@@ -96,9 +127,8 @@ export const markupLabel = (item: TreeCuttingItem) => {
 	if (item.markupBasis === 'shrapnel_conversion') {
 		return shrapnelMarkupLabel(item.ownMarkupPct, item.effectiveMarkupPct);
 	}
-	if (item.markupBasis === 'manual') {
-		return `Your markup ${formatPercent(item.effectiveMarkupPct / 100)}`;
-	}
+	if (item.markupBasis === 'manual')
+		return manualMarkupLabel(item.manual, item.effectiveMarkupPct, item.ttValue);
 	if (item.markupBasis === 'nanocube_mark') {
 		return `Marked as Nanocube: live figures use ${formatPercent(item.effectiveMarkupPct / 100)} Nanocube markup`;
 	}

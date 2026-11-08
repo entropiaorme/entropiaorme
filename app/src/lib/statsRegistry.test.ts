@@ -452,7 +452,14 @@ describe('the live markup stats', () => {
 		lootTt: 40,
 		marketValuePed: 42,
 		lootMuFactor: 42 / 40,
-		coverage: { marketTt: 40, manualTt: 0, flooredTt: 0, markedTt: 0, shrapnelTt: 0 },
+		coverage: {
+			marketTt: 40,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
 		confidence: 'liquidMiddling' as const,
 	};
 	const session = (fields: Partial<Record<keyof TrackingStatus, unknown>> = {}) =>
@@ -488,7 +495,14 @@ describe('the expected MU rate', () => {
 		lootTt: 100,
 		marketValuePed: 108,
 		lootMuFactor: 1.08,
-		coverage: { marketTt: 100, manualTt: 0, flooredTt: 0, markedTt: 0, shrapnelTt: 0 },
+		coverage: {
+			marketTt: 100,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
 		confidence: 'liquidMiddling' as const,
 	};
 	const basis = (level: number, loot: number, low: number, high: number) => ({

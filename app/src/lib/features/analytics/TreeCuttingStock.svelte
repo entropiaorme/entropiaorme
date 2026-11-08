@@ -7,6 +7,8 @@
 	import { tick } from 'svelte';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
 	import {
+		appliedMarkupText,
+		manualMarkupLabel,
 		manualMarkupTip,
 		shrapnelConversionTip,
 		shrapnelMarkupLabel,
@@ -121,7 +123,7 @@
 			return shrapnelMarkupLabel(item.markupPct, item.effectiveMarkupPct);
 		}
 		if (item.markupBasis === 'manual') {
-			return `Your markup ${formatPercent(item.effectiveMarkupPct / 100)}`;
+			return manualMarkupLabel(item.marketItem?.manual, item.effectiveMarkupPct, item.heldTt);
 		}
 		if (item.floored && item.markupPct !== null) {
 			return `Observed markup ${formatPercent(item.markupPct / 100)}; projections use ${formatPercent(item.effectiveMarkupPct / 100)} Nanocube markup`;
@@ -375,11 +377,11 @@
 												? 'text-accent'
 												: 'text-text-secondary'}"
 										>
-											{formatPercent(appliedMarkup / 100)}
+											{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 										</span>
 									{:else}
 										<span class="text-sm leading-5 text-text-secondary">
-											{formatPercent(appliedMarkup / 100)}
+											{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 										</span>
 									{/if}
 								</span>
@@ -394,7 +396,7 @@
 								: 'text-text-secondary'}"
 							aria-label={markupLabel(item)}
 						>
-							{formatPercent(appliedMarkup / 100)}
+							{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 						</span>
 					{:else}
 						<span class="text-sm text-text-tertiary">{NO_DATA}</span>

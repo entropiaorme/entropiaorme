@@ -3,7 +3,12 @@
 	import { filterByQuery } from '$lib/view/search';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
-	import { confidenceTip, confidenceTitle, markupLabel } from './marketConfidence';
+	import {
+		appliedMarkupText,
+		confidenceTip,
+		confidenceTitle,
+		markupLabel,
+	} from './marketConfidence';
 	import type { TreeCuttingItem } from './treeCuttingModel.svelte';
 
 	let {
@@ -117,7 +122,7 @@
 											? 'text-accent'
 											: 'text-text-secondary'}"
 									>
-										{formatPercent(item.effectiveMarkupPct / 100)}
+										{appliedMarkupText(item.effectiveMarkupPct, item.markupBasis, item.manual)}
 									</span>
 								{:else}
 									<span
@@ -125,7 +130,7 @@
 											? 'text-accent'
 											: 'text-text-secondary'}"
 									>
-										{formatPercent(item.effectiveMarkupPct / 100)}
+										{appliedMarkupText(item.effectiveMarkupPct, item.markupBasis, item.manual)}
 									</span>
 								{/if}
 							</span>

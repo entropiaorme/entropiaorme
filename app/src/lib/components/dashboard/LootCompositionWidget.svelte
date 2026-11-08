@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MarkupConfidenceControl from '$lib/features/analytics/MarkupConfidenceControl.svelte';
-	import { markupLabel } from '$lib/features/analytics/marketConfidence';
+	import { appliedMarkupText, markupLabel } from '$lib/features/analytics/marketConfidence';
 	import {
 		type ConfidenceMode,
 		isShrapnel,
@@ -223,7 +223,11 @@
 									{#if row.valued.markupBasis === 'nanocube_mark'}
 										<span class="line-through decoration-text-tertiary/70">NC</span>
 									{/if}
-									{formatPercent(row.valued.effectiveMarkupPct / 100)}{#if row.valued.markupBasis === 'manual'}<span
+									{appliedMarkupText(
+										row.valued.effectiveMarkupPct,
+										row.valued.markupBasis,
+										row.valued.manual,
+									)}{#if row.valued.markupBasis === 'manual'}<span
 											class="ml-0.5 align-super text-[9px]"
 											aria-hidden="true">✎</span
 										>{/if}

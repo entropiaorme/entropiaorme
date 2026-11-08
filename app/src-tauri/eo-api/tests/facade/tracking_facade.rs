@@ -1665,9 +1665,9 @@ async fn the_lifetime_block_sums_the_family_and_folds_the_live_instance() {
     // Two ended instances of the seeded protected default (id 1), of
     // very different sizes: 100 cycled returning 60, and 2 cycled
     // returning 10.
-    for (id, started, ended, cost, loot) in [
-        ("past-1", 1000.0, 11_800.0, 100.0, 60.0),
-        ("past-2", 20_000.0, 20_240.0, 2.0, 10.0),
+    for (id, started, ended, cost, loot, damage, shots, crits, weapon, global) in [
+        ("past-1", 1000.0, 11_800.0, 100.0, 60.0, 40.0, 4, 1, 20.0, 1),
+        ("past-2", 20_000.0, 20_240.0, 2.0, 10.0, 60.0, 6, 0, 5.0, 0),
     ] {
         db.with_writer(move |conn| {
             conn.execute(
@@ -1677,9 +1677,20 @@ async fn the_lifetime_block_sums_the_family_and_folds_the_live_instance() {
                 rusqlite::params![id, started, ended, cost],
             )?;
             conn.execute(
-                "INSERT INTO kills (id, session_id, mob_name, timestamp, loot_total_ped) \
-                 VALUES (?1, ?2, 'Atrox', ?3, ?4)",
-                rusqlite::params![format!("{id}-k"), id, started + 1.0, loot],
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, loot_total_ped, \
+                     damage_dealt, shots_fired, critical_hits, cost_ped, is_global) \
+                 VALUES (?1, ?2, 'Atrox', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    format!("{id}-k"),
+                    id,
+                    started + 1.0,
+                    loot,
+                    damage,
+                    shots,
+                    crits,
+                    weapon,
+                    global
+                ],
             )?;
             Ok(())
         })
@@ -1690,6 +1701,18 @@ async fn the_lifetime_block_sums_the_family_and_folds_the_live_instance() {
     let value = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
     let lifetime = &value["lifetime"];
     assert_eq!(lifetime["instanceCount"], 2);
+    assert_eq!(lifetime["kills"], 2);
+    assert_eq!(lifetime["damageTotal"], 100.0);
+    assert_eq!(lifetime["maxDamage"], 60.0);
+    assert_eq!(lifetime["shotsFired"], 10);
+    assert_eq!(lifetime["criticalHits"], 1);
+    assert_eq!(lifetime["globals"], 1);
+    assert_eq!(lifetime["hofs"], 0);
+    // 60/20 and 10/5 averaged per kill; the latest kill is the second run's.
+    assert_eq!(lifetime["multiplierAvg"], 2.5);
+    assert_eq!(lifetime["multiplierMax"], 3.0);
+    assert_eq!(lifetime["multiplierLast"], 2.0);
+    assert_eq!(lifetime["latestKillLoot"], 10.0);
     assert_eq!(lifetime["cycled"], 102.0);
     assert_eq!(lifetime["lootTt"], 70.0);
     assert_eq!(lifetime["net"], -32.0);

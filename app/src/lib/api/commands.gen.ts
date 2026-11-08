@@ -1826,6 +1826,26 @@ export interface LifetimeStats {
 	durationSeconds: number;
 	/** Shots across these instances recorded without a price: the cycled figure (and everything derived from it) leaves them out. */
 	unpricedShots: number;
+	/** PES per 100 PED cycled over only the instances both the progression and economy statistics count, so the two halves describe the same sessions. Null with no spend behind it. */
+	pesPer100: number | null;
+	kills: number;
+	damageTotal: number;
+	/** The damage `weapon_cost` bought, for damage per PEC. */
+	weaponDamage: number;
+	weaponCost: number;
+	/** The most damage dealt on any one kill. */
+	maxDamage: number;
+	shotsFired: number;
+	criticalHits: number;
+	globals: number;
+	hofs: number;
+	harvestSwings: number;
+	/** The mean over every kill with a recorded weapon cost, never the mean of each instance's mean. */
+	multiplierAvg: number | null;
+	multiplierMax: number | null;
+	/** The family's most recent kill: the running instance's once it has one. Null also when that kill has no recorded weapon cost. */
+	multiplierLast: number | null;
+	latestKillLoot: number | null;
 }
 
 /**

@@ -1354,6 +1354,53 @@ fn snapshot_aggregates_and_rounds_the_readout() {
     assert_eq!(active.multiplier_avg, Some(16.9667));
     assert_eq!(active.multiplier_max, Some(33.3333));
     assert_eq!(active.multiplier_history, vec![33.3333, 0.6]);
+
+    // The family's lifetime figures take the running instance on top of
+    // what its ended instances recorded.
+    let stored = crate::session_definitions::DefinitionLifetimeStats {
+        instance_count: 1,
+        kills: 5,
+        damage_total: 100.0,
+        weapon_damage: 100.0,
+        damage_max: 90.0,
+        shots: 7,
+        crits: 2,
+        globals: 1,
+        multiplier_sum: 2.0,
+        multiplier_count: 4,
+        multiplier_max: Some(50.0),
+        last_kill_loot: Some(9.0),
+        last_kill_multiplier: Some(7.0),
+        ..Default::default()
+    };
+    let mut family = stored.clone();
+    family.fold_live(&active);
+    assert_eq!(family.instance_count, 2);
+    assert_eq!(family.kills, 7);
+    assert_eq!(family.damage_total, 160.0);
+    // Shots still waiting for their kill count towards damage per PEC,
+    // as they do towards the weapon cost beside it.
+    assert_eq!(family.weapon_damage, 167.5);
+    assert_eq!(family.damage_max, 90.0);
+    assert_eq!(family.shots, 11);
+    assert_eq!(family.crits, 3);
+    assert_eq!(family.globals, 2);
+    assert_eq!(family.multiplier_count, 6);
+    assert!((family.multiplier_sum - (2.0 + 33.9333)).abs() < 1e-3);
+    assert_eq!(family.multiplier_max, Some(50.0));
+    assert_eq!(family.last_kill_loot, Some(0.03));
+    assert_eq!(family.last_kill_multiplier, Some(0.6));
+
+    // Before its first kill the running instance leaves the last figures
+    // to the family's own most recent kill.
+    let mut unkilled = active.clone();
+    unkilled.kill_count = 0;
+    unkilled.latest_kill_loot = None;
+    unkilled.multiplier_last = None;
+    let mut family = stored;
+    family.fold_live(&unkilled);
+    assert_eq!(family.last_kill_loot, Some(9.0));
+    assert_eq!(family.last_kill_multiplier, Some(7.0));
     assert_eq!(active.cumulative_net_history, vec![4.82, 4.79]);
     assert_eq!(active.current_mob, None);
     // Undeclared: the session is an instance of the protected default

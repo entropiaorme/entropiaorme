@@ -1,6 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ALL_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
+import type { LifetimeStats } from './api';
+import { ALL_STAT_IDS, LIFETIME_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
 import { NO_DATA } from './utils/format';
+
+/** A family nobody has run: every figure at its empty reading. */
+const NO_LIFETIME: LifetimeStats = {
+	instanceCount: 0,
+	cycled: 0,
+	lootTt: 0,
+	net: 0,
+	returnRate: 0,
+	pes: 0,
+	durationSeconds: 0,
+	unpricedShots: 0,
+	pesPer100: null,
+	kills: 0,
+	damageTotal: 0,
+	weaponDamage: 0,
+	weaponCost: 0,
+	maxDamage: 0,
+	shotsFired: 0,
+	criticalHits: 0,
+	globals: 0,
+	hofs: 0,
+	harvestSwings: 0,
+	multiplierAvg: null,
+	multiplierMax: null,
+	multiplierLast: null,
+	latestKillLoot: null,
+};
 
 // Mock the two side-effecting seams. These vi.fn()s are hoisted alongside the
 // vi.mock factory; we read/reset them per test. Because the module under test
@@ -347,13 +375,13 @@ describe('scopedStats', () => {
 
 	it('draws the whole selection under the instance scope', async () => {
 		const { scopedStats } = await loadModule();
-		const selection = prefs(['cycled', 'multiplier_last', 'net']);
-		expect(ids(scopedStats(selection, 'instance'))).toEqual(['cycled', 'net', 'multiplier_last']);
+		const selection = prefs(['cycled', 'loot_mu', 'net']);
+		expect(ids(scopedStats(selection, 'instance'))).toEqual(['cycled', 'net', 'loot_mu']);
 	});
 
 	it('narrows to the lifetime-capable stats without touching the selection', async () => {
 		const { scopedStats } = await loadModule();
-		const selection = prefs(['cycled', 'multiplier_last', 'net', 'crit_rate']);
+		const selection = prefs(['cycled', 'loot_mu', 'net', 'mu_rate']);
 		const before = structuredClone(selection);
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'net']);
 		// The flip is a view, never a deselection: the stored prefs are
@@ -366,7 +394,7 @@ describe('scopedStats', () => {
 		const { scopedStats } = await loadModule();
 		// A selection made entirely of instance-only stats: without the
 		// fallback the lifetime flip would render nothing and read broken.
-		const selection = prefs(['multiplier_last', 'crit_rate', 'latest_kill_loot']);
+		const selection = prefs(['loot_mu', 'mu_rate', 'expected_mu_rate']);
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'loot_tt', 'net', 'rate']);
 	});
 
@@ -377,7 +405,7 @@ describe('scopedStats', () => {
 			{ id: 'rate' as StatId, enabled: false },
 			{ id: 'cycled' as StatId, enabled: false },
 			{ id: 'loot_tt' as StatId, enabled: false },
-			{ id: 'crit_rate' as StatId, enabled: true },
+			{ id: 'mu_rate' as StatId, enabled: true },
 		];
 		expect(ids(scopedStats(reordered, 'lifetime'))).toEqual(['net', 'rate', 'cycled', 'loot_tt']);
 	});
@@ -386,7 +414,7 @@ describe('scopedStats', () => {
 describe('isOwnSelection', () => {
 	it('is false only when the lifetime flip is showing the fallback', async () => {
 		const { isOwnSelection } = await loadModule();
-		const onlyInstanceStats = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'crit_rate' }));
+		const onlyInstanceStats = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'mu_rate' }));
 		const withALifetimeStat = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'net' }));
 		expect(isOwnSelection(onlyInstanceStats, 'instance')).toBe(true);
 		expect(isOwnSelection(onlyInstanceStats, 'lifetime')).toBe(false);
@@ -397,7 +425,9 @@ describe('isOwnSelection', () => {
 describe('the lifetime-capable set', () => {
 	it('is exactly the stats that declare a lifetime render', async () => {
 		const { LIFETIME_STAT_IDS } = await import('./statsRegistry');
-		expect(LIFETIME_STAT_IDS).toEqual(['cycled', 'loot_tt', 'net', 'rate', 'pes', 'pes_per_100']);
+		expect(LIFETIME_STAT_IDS).toEqual(
+			ALL_STAT_IDS.filter((id) => !['loot_mu', 'mu_rate', 'expected_mu_rate'].includes(id)),
+		);
 		// The declaration IS the capability, so the two cannot drift.
 		for (const id of ALL_STAT_IDS) {
 			expect(LIFETIME_STAT_IDS.includes(id)).toBe(STAT_DEFS[id].renderLifetime !== undefined);
@@ -408,6 +438,7 @@ describe('the lifetime-capable set', () => {
 		// The backend computes the ratio; the registry must not re-derive
 		// it from anything else or average anything.
 		const lifetime = {
+			...NO_LIFETIME,
 			instanceCount: 2,
 			cycled: 102,
 			lootTt: 70,
@@ -415,7 +446,6 @@ describe('the lifetime-capable set', () => {
 			returnRate: 0.6863,
 			pes: 5.5,
 			durationSeconds: 11_040,
-			unpricedShots: 0,
 		};
 		// One decimal, exactly as the instance figure renders it.
 		expect(STAT_DEFS.rate.renderLifetime?.(lifetime).value).toBe('68.6%');
@@ -430,7 +460,7 @@ describe('the lifetime scope on a surface that tolerates an empty set', () => {
 		// The overlay renders no pill group at all for an empty
 		// selection, so switching every pill off is a resting state
 		// there; a scope flip must not override that choice.
-		const selection = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'crit_rate' }));
+		const selection = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'mu_rate' }));
 		expect(scopedStats(selection, 'lifetime', { fallback: false })).toEqual([]);
 		// The dashboard keeps the fallback: an empty grid reads as broken.
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'loot_tt', 'net', 'rate']);
@@ -438,21 +468,12 @@ describe('the lifetime scope on a surface that tolerates an empty set', () => {
 });
 
 describe('a family with no instances behind it', () => {
-	const empty = {
-		instanceCount: 0,
-		cycled: 0,
-		lootTt: 0,
-		net: 0,
-		returnRate: 0,
-		pes: 0,
-		durationSeconds: 0,
-		unpricedShots: 0,
-	};
+	const empty = NO_LIFETIME;
 
 	it('reads empty rather than as a measured zero', () => {
 		// Every axis aggregates to zero for a family nobody has run, and
 		// a rendered 0.00 would claim a measurement never taken.
-		for (const id of ['cycled', 'loot_tt', 'net', 'rate', 'pes', 'pes_per_100'] as StatId[]) {
+		for (const id of LIFETIME_STAT_IDS) {
 			expect(STAT_DEFS[id].renderLifetime?.(empty).value).toBe(NO_DATA);
 		}
 	});

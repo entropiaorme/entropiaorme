@@ -403,6 +403,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "ledger session attribution",
         sql: include_str!("../../migrations/0073_ledger_session_attribution.sql"),
     },
+    Migration {
+        version: 74,
+        description: "session summary kill totals",
+        sql: include_str!("../../migrations/0074_session_summary_kill_totals.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -484,6 +489,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "C99E917138945DB23B9046469310649ECE0971804AF8CC4F55D6B875A5F675C7D4A628F490F5E41545093F0025455303",
     "8A8B0CA6D32008B91B576AC9771FB38E748C352C60F8946266BDBFF873444CA484489F7A97CAD6489B12F8CC7279E478",
     "9974AC892A37B44AF7A21761415EB2FE708D40AC31F9B8AC2D540E0680BC6E7D3A1825A2FC85E9D86C76A85E582A6778",
+    "E471B342FB13687AF089AB2BE05D9C4824F09CE7D28569E7999126EB7DFCE16A75051AB51A9A8D1728DC448CDD8CEE71",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -1262,6 +1268,114 @@ mod tests {
                 ("mixed".into(), "ledger".into(), "fixed_liquid".into()),
             ]
         );
+    }
+
+    /// The migration fills existing summaries in SQL; every later session
+    /// fills through the summary writer. The two have to agree, or a
+    /// family's lifetime figures would change meaning at the migration.
+    #[test]
+    fn kill_totals_backfill_agrees_with_the_summary_writer() {
+        const COLUMNS: &str = "kill_damage_total, kill_damage_max, kill_shots, kill_crits, \
+             kill_globals, kill_hofs, multiplier_sum, multiplier_count, multiplier_max, \
+             last_kill_at, last_kill_loot, last_kill_multiplier";
+        type Row = (
+            f64,
+            f64,
+            i64,
+            i64,
+            i64,
+            i64,
+            f64,
+            i64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        );
+        fn read(connection: &Connection, session: &str) -> Row {
+            connection
+                .query_row(
+                    &format!("SELECT {COLUMNS} FROM session_summaries WHERE session_id = ?"),
+                    [session],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                        ))
+                    },
+                )
+                .expect("summary row")
+        }
+
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        let apply = |connection: &mut Connection, migration: &Migration| {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        };
+        for migration in MIGRATIONS.iter().filter(|m| m.version < 74) {
+            apply(&mut connection, migration);
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, armour_cost) \
+                 VALUES ('hunted', 1000.0, 2000.0, 0, 1.0), ('quiet', 3000.0, 4000.0, 0, 1.0);
+                 INSERT INTO kills (id, session_id, timestamp, shots_fired, damage_dealt, \
+                     critical_hits, cost_ped, loot_total_ped, is_global, is_hof) VALUES
+                   ('a', 'hunted', 1100.0, 4, 60.0, 1, 2.0, 1.0, 0, 0),
+                   ('b', 'hunted', 1300.0, 2, 120.0, 0, 1.0, 4.0, 1, 1),
+                   ('c', 'hunted', 1200.0, 3, 30.0, 2, 0.0, 9.0, 1, 0),
+                   ('d', 'hunted', 1300.0, 1, 10.0, 0, 3.0, 1.5, 0, 0);
+                 INSERT INTO session_summaries (session_id, summary_version, started_at, ended_at, \
+                     duration_hours, kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, \
+                     heal_cost, dangling_cost, cycled_ped, regular_skill_ped_json, \
+                     attribute_levels_json, regular_skill_tt, attribute_levels_total) VALUES
+                   ('hunted', 6, 1000.0, 2000.0, 0.25, 4, 15.5, 0, 0, 1, 0, 0, 1, '{}', '{}', 0, 0),
+                   ('quiet', 6, 3000.0, 4000.0, 0.25, 0, 0, 0, 0, 1, 0, 0, 1, '{}', '{}', 0, 0);",
+            )
+            .expect("seed");
+
+        apply(
+            &mut connection,
+            MIGRATIONS
+                .iter()
+                .find(|m| m.version == 74)
+                .expect("kill totals migration"),
+        );
+        let hunted = read(&connection, "hunted");
+        let quiet = read(&connection, "quiet");
+        // The tie at 1300 goes to the kill recorded last.
+        assert_eq!(hunted.10, Some(1.5));
+        assert_eq!(quiet.2, 0);
+        assert_eq!(quiet.9, None);
+
+        for session in ["hunted", "quiet"] {
+            crate::session_summary::write_session_summary(&connection, session).expect("write");
+        }
+        assert_eq!(read(&connection, "hunted"), hunted);
+        assert_eq!(read(&connection, "quiet"), quiet);
     }
 
     #[test]

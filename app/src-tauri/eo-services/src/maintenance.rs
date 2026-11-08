@@ -40,7 +40,10 @@ const PROJECTIONS: [Projection; 12] = [
              dominant_mob, dominant_tag, dominant_weapon, dominant_mob_kills, \
              dominant_tag_kills, activity_skill_tt, primary_mobs_json, \
              primary_weapons_json, globals, hofs, harvest_swings, \
-             harvest_successes, harvest_loot_tt, harvest_cost, consumable_cost \
+             harvest_successes, harvest_loot_tt, harvest_cost, consumable_cost, \
+             kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
+             kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
+             last_kill_loot, last_kill_multiplier \
              FROM session_summaries ORDER BY session_id",
     },
     Projection {

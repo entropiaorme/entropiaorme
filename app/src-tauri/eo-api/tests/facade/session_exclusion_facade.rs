@@ -539,6 +539,25 @@ async fn each_scope_is_excluded_on_its_own() {
         lifetime["instanceCount"],
         never["tracking_snapshot"]["instanceCount"]
     );
+    // Kills, damage, and multipliers are economy evidence; the PES rate
+    // pairs only the sessions both halves still count.
+    for field in [
+        "kills",
+        "damageTotal",
+        "maxDamage",
+        "shotsFired",
+        "criticalHits",
+        "multiplierAvg",
+        "multiplierMax",
+        "multiplierLast",
+        "latestKillLoot",
+        "pesPer100",
+    ] {
+        assert_eq!(
+            lifetime[field], never["tracking_snapshot"][field],
+            "lifetime {field} still counts the economy-excluded sessions"
+        );
+    }
     // A forecast session spans both scopes, so it leaves whole.
     assert_eq!(
         economy["character_skilling_forecast"],
@@ -581,6 +600,15 @@ async fn each_scope_is_excluded_on_its_own() {
     let lifetime = &progression["tracking_snapshot"];
     assert_eq!(lifetime["pes"], never["tracking_snapshot"]["pes"]);
     assert_eq!(lifetime["cycled"], included["tracking_snapshot"]["cycled"]);
+    assert_eq!(lifetime["kills"], included["tracking_snapshot"]["kills"]);
+    assert_eq!(
+        lifetime["pesPer100"],
+        never["tracking_snapshot"]["pesPer100"]
+    );
+    assert_ne!(
+        lifetime["pesPer100"],
+        included["tracking_snapshot"]["pesPer100"]
+    );
     // The recorded sources span both scopes and leave; a planned route's
     // pace and the session weapons are economy evidence and stay.
     let forecast =

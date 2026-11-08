@@ -36,6 +36,89 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 pub const SUMMARY_VERSION: i64 = 6;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 
+/// What a session's kills add up to: the sums and per-kill extremes a
+/// definition's lifetime figures fold across sessions, read in the pass
+/// the summary already makes over the session's kills.
+///
+/// The multiplier stays a sum and a count so the lifetime figure is the
+/// mean over every kill, never the mean of each session's mean. A kill
+/// with no recorded weapon cost has no multiplier, as in the live readout.
+struct KillTotals {
+    kills: i64,
+    loot_tt: f64,
+    enhancer_cost: f64,
+    damage_total: f64,
+    damage_max: f64,
+    shots: i64,
+    crits: i64,
+    globals: i64,
+    hofs: i64,
+    multiplier_sum: f64,
+    multiplier_count: i64,
+    multiplier_max: Option<f64>,
+}
+
+impl KillTotals {
+    fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Self> {
+        conn.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), \
+               COALESCE(SUM(enhancer_cost), 0), COALESCE(SUM(damage_dealt), 0), \
+               COALESCE(MAX(damage_dealt), 0), COALESCE(SUM(shots_fired), 0), \
+               COALESCE(SUM(critical_hits), 0), COALESCE(SUM(is_global), 0), \
+               COALESCE(SUM(is_hof), 0), \
+               COALESCE(SUM(CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END), 0), \
+               COUNT(CASE WHEN cost_ped > 0 THEN 1 END), \
+               MAX(CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END) \
+             FROM kills WHERE session_id = ?",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(Self {
+                    kills: row.get(0)?,
+                    loot_tt: row.get(1)?,
+                    enhancer_cost: row.get(2)?,
+                    damage_total: row.get(3)?,
+                    damage_max: row.get(4)?,
+                    shots: row.get(5)?,
+                    crits: row.get(6)?,
+                    globals: row.get(7)?,
+                    hofs: row.get(8)?,
+                    multiplier_sum: row.get(9)?,
+                    multiplier_count: row.get(10)?,
+                    multiplier_max: row.get(11)?,
+                })
+            },
+        )
+    }
+}
+
+/// A session's most recent kill, for the "last" figures. `multiplier` is
+/// `None` when that kill has no recorded weapon cost.
+struct LastKill {
+    at: f64,
+    loot: f64,
+    multiplier: Option<f64>,
+}
+
+impl LastKill {
+    fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Option<Self>> {
+        conn.query_row(
+            "SELECT timestamp, loot_total_ped, \
+               CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END \
+             FROM kills WHERE session_id = ? \
+             ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(Self {
+                    at: row.get(0)?,
+                    loot: row.get(1)?,
+                    multiplier: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+    }
+}
+
 /// The computed summary for one completed session, or None when the
 /// session is active or fails the economic filters (zero cycled value,
 /// zero duration). A session that gained no skill still summarises.
@@ -102,18 +185,13 @@ pub fn compute_session_summary(
         Err(error) => return Err(error.into()),
     }
 
-    let (kills, kill_loot_tt, enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
-         FROM kills WHERE session_id = ?",
-        rusqlite::params![session_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, f64>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
-        },
-    )?;
+    let kill_totals = KillTotals::read(conn, session_id)?;
+    let (kills, kill_loot_tt, enhancer_cost) = (
+        kill_totals.kills,
+        kill_totals.loot_tt,
+        kill_totals.enhancer_cost,
+    );
+    let last_kill = LastKill::read(conn, session_id)?;
 
     // Harvesting (tree cutting) swings: wood TT is liquid loot and
     // swing decay is cycled spend, so both join the session economy
@@ -380,6 +458,40 @@ pub fn compute_session_summary(
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
+    // Kill totals the definition's lifetime figures fold across sessions.
+    summary.insert(
+        "killDamageTotal".into(),
+        Value::from(kill_totals.damage_total),
+    );
+    summary.insert("killDamageMax".into(), Value::from(kill_totals.damage_max));
+    summary.insert("killShots".into(), Value::from(kill_totals.shots));
+    summary.insert("killCrits".into(), Value::from(kill_totals.crits));
+    summary.insert("killGlobals".into(), Value::from(kill_totals.globals));
+    summary.insert("killHofs".into(), Value::from(kill_totals.hofs));
+    summary.insert(
+        "multiplierSum".into(),
+        Value::from(kill_totals.multiplier_sum),
+    );
+    summary.insert(
+        "multiplierCount".into(),
+        Value::from(kill_totals.multiplier_count),
+    );
+    summary.insert(
+        "multiplierMax".into(),
+        Value::from(kill_totals.multiplier_max),
+    );
+    summary.insert(
+        "lastKillAt".into(),
+        Value::from(last_kill.as_ref().map(|kill| kill.at)),
+    );
+    summary.insert(
+        "lastKillLoot".into(),
+        Value::from(last_kill.as_ref().map(|kill| kill.loot)),
+    );
+    summary.insert(
+        "lastKillMultiplier".into(),
+        Value::from(last_kill.as_ref().and_then(|kill| kill.multiplier)),
+    );
     Ok(Some(summary))
 }
 
@@ -411,9 +523,13 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
          dominant_weapon, dominant_mob_kills, dominant_tag_kills, activity_skill_tt, \
          primary_mobs_json, primary_weapons_json, globals, hofs, \
          harvest_swings, harvest_successes, harvest_loot_tt, harvest_cost, \
-         session_name, skill_boost_percent, consumable_cost, computed_at) \
+         session_name, skill_boost_percent, consumable_cost, \
+         kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
+         kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
+         last_kill_loot, last_kill_multiplier, computed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             summary["id"].as_str(),
             SUMMARY_VERSION,
@@ -449,6 +565,18 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
             summary["sessionName"].as_str(),
             summary["skillBoostPercent"].as_i64(),
             summary["consumableCost"].as_f64(),
+            summary["killDamageTotal"].as_f64(),
+            summary["killDamageMax"].as_f64(),
+            summary["killShots"].as_i64(),
+            summary["killCrits"].as_i64(),
+            summary["killGlobals"].as_i64(),
+            summary["killHofs"].as_i64(),
+            summary["multiplierSum"].as_f64(),
+            summary["multiplierCount"].as_i64(),
+            summary["multiplierMax"].as_f64(),
+            summary["lastKillAt"].as_f64(),
+            summary["lastKillLoot"].as_f64(),
+            summary["lastKillMultiplier"].as_f64(),
         ],
     )?;
     Ok(())
@@ -670,6 +798,58 @@ mod tests {
         // No notable events seeded.
         assert_eq!(summary["globals"], Value::from(0_i64));
         assert_eq!(summary["hofs"], Value::from(0_i64));
+    }
+
+    #[tokio::test]
+    async fn kill_totals_carry_what_the_lifetime_figures_fold() {
+        let (_dir, db) = env().await;
+        run(
+            &db,
+            "INSERT INTO tracking_sessions \
+             (id, started_at, ended_at, is_active, armour_cost, mob_tracking_mode) \
+             VALUES ('s1', 1000.0, 8200.0, 0, 1.0, 'mob')",
+        )
+        .await;
+        for (kill, at, shots, damage, crits, cost, loot, global, hof) in [
+            ("k1", 1500.0, 4, 60.0, 1, 2.0, 1.0, 0, 0),
+            ("k2", 1700.0, 2, 120.0, 0, 1.0, 4.0, 1, 0),
+            // No recorded weapon cost: it counts everywhere but the multiplier.
+            ("k3", 1600.0, 3, 30.0, 2, 0.0, 9.0, 1, 1),
+        ] {
+            run(
+                &db,
+                &format!(
+                    "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, \
+                     damage_dealt, critical_hits, cost_ped, loot_total_ped, is_global, is_hof) \
+                     VALUES ('{kill}', 's1', 'Atrox', {at}, {shots}, {damage}, {crits}, \
+                     {cost}, {loot}, {global}, {hof})"
+                ),
+            )
+            .await;
+        }
+
+        let summary = compute(&db, "s1").await.unwrap();
+        assert_eq!(summary["killDamageTotal"], Value::from(210.0));
+        assert_eq!(summary["killDamageMax"], Value::from(120.0));
+        assert_eq!(summary["killShots"], Value::from(9_i64));
+        assert_eq!(summary["killCrits"], Value::from(3_i64));
+        assert_eq!(summary["killGlobals"], Value::from(2_i64));
+        assert_eq!(summary["killHofs"], Value::from(1_i64));
+        // 1/2 and 4/1; the costless kill has no multiplier to add.
+        assert_eq!(summary["multiplierSum"], Value::from(4.5));
+        assert_eq!(summary["multiplierCount"], Value::from(2_i64));
+        assert_eq!(summary["multiplierMax"], Value::from(4.0));
+        // Latest by time, not by the order the rows arrived in.
+        assert_eq!(summary["lastKillAt"], Value::from(1700.0));
+        assert_eq!(summary["lastKillLoot"], Value::from(4.0));
+        assert_eq!(summary["lastKillMultiplier"], Value::from(4.0));
+
+        // The latest kill can have no multiplier without losing its loot.
+        run(&db, "UPDATE kills SET cost_ped = 0 WHERE id = 'k2'").await;
+        let summary = compute(&db, "s1").await.unwrap();
+        assert_eq!(summary["lastKillLoot"], Value::from(4.0));
+        assert_eq!(summary["lastKillMultiplier"], Value::Null);
+        assert_eq!(summary["multiplierMax"], Value::from(0.5));
     }
 
     #[tokio::test]

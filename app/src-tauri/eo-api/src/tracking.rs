@@ -658,6 +658,30 @@ pub struct LifetimeStats {
     /// Shots across these instances recorded without a price: the cycled
     /// figure (and everything derived from it) leaves them out.
     pub unpriced_shots: i64,
+    /// PES per 100 PED cycled over only the instances both the progression
+    /// and economy statistics count, so the two halves describe the same
+    /// sessions. Null with no spend behind it.
+    pub pes_per_100: Nullable<f64>,
+    pub kills: i64,
+    pub damage_total: f64,
+    /// The damage `weapon_cost` bought, for damage per PEC.
+    pub weapon_damage: f64,
+    pub weapon_cost: f64,
+    /// The most damage dealt on any one kill.
+    pub max_damage: f64,
+    pub shots_fired: i64,
+    pub critical_hits: i64,
+    pub globals: i64,
+    pub hofs: i64,
+    pub harvest_swings: i64,
+    /// The mean over every kill with a recorded weapon cost, never the
+    /// mean of each instance's mean.
+    pub multiplier_avg: Nullable<f64>,
+    pub multiplier_max: Nullable<f64>,
+    /// The family's most recent kill: the running instance's once it has
+    /// one. Null also when that kill has no recorded weapon cost.
+    pub multiplier_last: Nullable<f64>,
+    pub latest_kill_loot: Nullable<f64>,
 }
 
 /// The consolidated dashboard hydration snapshot: the polymorphic idle /
@@ -1801,16 +1825,11 @@ async fn lifetime_stats(
     let (Some(service), Some(definition_id)) = (definitions, definition_id) else {
         return Ok(None);
     };
-    let stored = service
+    let mut family = service
         .lifetime_stats(definition_id)
         .await
         .map_err(ApiError::internal("snapshot lifetime stats"))?;
 
-    let mut instance_count = stored.instance_count;
-    let mut cycled = stored.cycled;
-    let mut loot_tt = stored.loot_tt;
-    let mut pes = stored.pes;
-    let mut duration_seconds = stored.duration_seconds;
     // The ended instances' unpriced shots are stored; the running one's are
     // counted live (most are still waiting for their kill to be written).
     let mut unpriced_shots = db
@@ -1833,30 +1852,49 @@ async fn lifetime_stats(
     // selection changed while idle reads the newly-picked family's
     // history, not the running instance's figures.
     if let Some(active) = active.filter(|active| active.definition_id == Some(definition_id)) {
-        instance_count += 1;
-        cycled += active.cost;
-        loot_tt += active.returns;
-        pes += active.pes;
-        duration_seconds += active.elapsed as f64;
+        family.fold_live(active);
         unpriced_shots += active.unpriced_shots;
     }
 
+    let round_opt = |value: Option<f64>, places| -> Nullable<f64> {
+        value.map(|inner| round_half_even(inner, places)).into()
+    };
+    let multiplier_avg = (family.multiplier_count > 0)
+        .then(|| family.multiplier_sum / family.multiplier_count as f64);
+    let pes_per_100 =
+        (family.ratio_cycled > 0.0).then(|| family.ratio_pes / family.ratio_cycled * 100.0);
+
     Ok(Some(LifetimeStats {
-        instance_count,
-        cycled: round_half_even(cycled, 2),
-        loot_tt: round_half_even(loot_tt, 2),
-        net: round_half_even(loot_tt - cycled, 2),
+        instance_count: family.instance_count,
+        cycled: round_half_even(family.cycled, 2),
+        loot_tt: round_half_even(family.loot_tt, 2),
+        net: round_half_even(family.loot_tt - family.cycled, 2),
         // The ratio of the summed parts, never the mean of the
         // per-instance rates. Zero spend reads as zero, matching the
         // instance figure's own rule.
-        return_rate: if cycled > 0.0 {
-            round_half_even(loot_tt / cycled, 4)
+        return_rate: if family.cycled > 0.0 {
+            round_half_even(family.loot_tt / family.cycled, 4)
         } else {
             0.0
         },
-        pes: round_half_even(pes, 2),
-        duration_seconds: round_half_even(duration_seconds, 0),
+        pes: round_half_even(family.pes, 2),
+        duration_seconds: round_half_even(family.duration_seconds, 0),
         unpriced_shots,
+        pes_per_100: round_opt(pes_per_100, 2),
+        kills: family.kills,
+        damage_total: round_half_even(family.damage_total, 1),
+        weapon_damage: round_half_even(family.weapon_damage, 1),
+        weapon_cost: round_half_even(family.weapon_cost, 6),
+        max_damage: round_half_even(family.damage_max, 1),
+        shots_fired: family.shots,
+        critical_hits: family.crits,
+        globals: family.globals,
+        hofs: family.hofs,
+        harvest_swings: family.harvest_swings,
+        multiplier_avg: round_opt(multiplier_avg, 4),
+        multiplier_max: round_opt(family.multiplier_max, 4),
+        multiplier_last: round_opt(family.last_kill_multiplier, 4),
+        latest_kill_loot: round_opt(family.last_kill_loot, 2),
     }))
 }
 

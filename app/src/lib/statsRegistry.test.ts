@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TrackingStatus } from '$lib/api';
+import type { LifetimeStats, TrackingStatus } from '$lib/api';
 import { ALL_STAT_IDS, getStatDef, STAT_DEFS, type StatId } from '$lib/statsRegistry';
 
 // Pure render functions over a TrackingStatus. Each stat only ever reads the
@@ -24,6 +24,33 @@ function active(fields: Partial<Record<keyof TrackingStatus, unknown>> = {}): Tr
 function render(id: StatId, status: TrackingStatus | null) {
 	return STAT_DEFS[id].render(status);
 }
+
+// Two recorded sessions: 500 kills over an hour, firing 1,000 shots.
+const FAMILY: LifetimeStats = {
+	instanceCount: 2,
+	cycled: 250,
+	lootTt: 225,
+	net: -25,
+	returnRate: 0.9,
+	pes: 40,
+	durationSeconds: 3600,
+	unpricedShots: 0,
+	pesPer100: 16,
+	kills: 500,
+	damageTotal: 36_000,
+	weaponDamage: 40_000,
+	weaponCost: 200,
+	maxDamage: 151.5,
+	shotsFired: 1000,
+	criticalHits: 25,
+	globals: 3,
+	hofs: 1,
+	harvestSwings: 12,
+	multiplierAvg: 0.9123,
+	multiplierMax: 45.5,
+	multiplierLast: 1.25,
+	latestKillLoot: 2.5,
+};
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -427,16 +454,7 @@ describe('figures built on a cost with unpriced shots in it', () => {
 	});
 
 	it('mark the lifetime figures a family with unpriced shots adds up', () => {
-		const lifetime = {
-			instanceCount: 2,
-			cycled: 100,
-			lootTt: 90,
-			net: -10,
-			returnRate: 0.9,
-			pes: 2,
-			durationSeconds: 60,
-			unpricedShots: 4,
-		};
+		const lifetime = { ...FAMILY, unpricedShots: 4 };
 		for (const id of ['cycled', 'net', 'rate', 'pes_per_100'] as StatId[]) {
 			expect(STAT_DEFS[id].renderLifetime?.(lifetime).incomplete, id).toBe('4 shots unpriced');
 		}
@@ -549,5 +567,69 @@ describe('the expected MU rate', () => {
 			STAT_DEFS.expected_mu_rate.render(active({ session_id: 's1', cost: 5 }), { valuation }),
 		).toEqual(EMPTY);
 		expect(STAT_DEFS.expected_mu_rate.render(session, {})).toEqual(EMPTY);
+	});
+});
+
+describe('lifetime forms', () => {
+	const value = (id: StatId, lifetime: LifetimeStats = FAMILY) =>
+		STAT_DEFS[id].renderLifetime?.(lifetime).value;
+
+	it('derives each ratio from the summed parts', () => {
+		expect(value('avg_cost_per_kill')).toBe('0.50');
+		expect(value('avg_damage')).toBe('72.00');
+		// 40,000 damage over 20,000 PEC.
+		expect(value('dpp')).toBe('2.00');
+		expect(value('avg_dps')).toBe('10.00');
+		expect(value('crit_rate')).toBe('2.5%');
+	});
+
+	it('reads the counts, extremes, and most recent kill as handed over', () => {
+		expect(value('kills_count')).toBe('500');
+		expect(value('globals_count')).toBe('3');
+		expect(value('hofs_count')).toBe('1');
+		expect(value('uses_tree')).toBe('12');
+		expect(value('max_damage')).toBe('151.50');
+		expect(value('latest_kill_loot')).toBe('2.50');
+		expect(value('multiplier_avg')).toBe('0.91x');
+		expect(value('multiplier_max')).toBe('45.5x');
+		expect(value('multiplier_last')).toBe('1.25x');
+		expect(value('pes_per_100')).toBe('16.00');
+	});
+
+	it('reads empty where the family has nothing to divide by', () => {
+		const idle = { ...FAMILY, kills: 0, weaponCost: 0, durationSeconds: 0, shotsFired: 0 };
+		for (const id of [
+			'avg_cost_per_kill',
+			'avg_damage',
+			'dpp',
+			'avg_dps',
+			'crit_rate',
+			'max_damage',
+		] as StatId[]) {
+			expect(value(id, idle)).toBe(EMPTY.value);
+		}
+	});
+
+	it('reads the multiplier stats empty when no kill has one', () => {
+		const costless = {
+			...FAMILY,
+			multiplierAvg: null,
+			multiplierMax: null,
+			multiplierLast: null,
+		};
+		for (const id of ['multiplier_avg', 'multiplier_max', 'multiplier_last'] as StatId[]) {
+			expect(value(id, costless)).toBe(EMPTY.value);
+		}
+	});
+
+	it('marks the cost-derived forms while shots sit unpriced', () => {
+		const unpriced = { ...FAMILY, unpricedShots: 3 };
+		for (const id of ['avg_cost_per_kill', 'dpp', 'multiplier_avg', 'pes_per_100'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime?.(unpriced).incomplete).toBeTruthy();
+		}
+		// Damage and kill counts cost nothing, so they stay unmarked.
+		for (const id of ['avg_damage', 'kills_count', 'crit_rate'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime?.(unpriced).incomplete).toBeUndefined();
+		}
 	});
 });

@@ -20,6 +20,8 @@
 
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension as _;
+
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::session_scope::{self, StatsScope};
@@ -175,7 +177,73 @@ pub struct DefinitionLifetimeStats {
     /// live readout's own PES figure rather than the summary's
     /// positive-only per-skill total.
     pub pes: f64,
+    /// The PES and the cycled spend over only the instances both scopes
+    /// still count: the two halves of the PES rate have to describe the
+    /// same sessions, which `pes` and `cycled` alone do not once a session
+    /// is excluded from just one scope.
+    pub ratio_pes: f64,
+    pub ratio_cycled: f64,
     pub duration_seconds: f64,
+    pub kills: i64,
+    pub weapon_cost: f64,
+    pub damage_total: f64,
+    /// The damage the weapon cost above bought. Equal to `damage_total`
+    /// for ended instances; a running one adds the shots still waiting for
+    /// their kill, as its own weapon cost does.
+    pub weapon_damage: f64,
+    /// The most damage dealt on any one kill.
+    pub damage_max: f64,
+    pub shots: i64,
+    pub crits: i64,
+    pub globals: i64,
+    pub hofs: i64,
+    pub harvest_swings: i64,
+    /// The per-kill multipliers summed and counted, so the average is the
+    /// mean over every kill rather than the mean of each session's mean.
+    pub multiplier_sum: f64,
+    pub multiplier_count: i64,
+    pub multiplier_max: Option<f64>,
+    /// The family's most recent kill: `None` before there is one.
+    pub last_kill_loot: Option<f64>,
+    /// `None` also when that kill has no recorded weapon cost.
+    pub last_kill_multiplier: Option<f64>,
+}
+
+impl DefinitionLifetimeStats {
+    /// Fold the running instance into the family, for the caller that has
+    /// established it belongs to this definition. The summaries cover
+    /// ended sessions only, so nothing counts twice.
+    pub fn fold_live(&mut self, live: &crate::tracking_models::ActiveSessionView) {
+        self.instance_count += 1;
+        self.cycled += live.cost;
+        self.loot_tt += live.returns;
+        self.pes += live.pes;
+        self.ratio_pes += live.pes;
+        self.ratio_cycled += live.cost;
+        self.duration_seconds += live.elapsed as f64;
+        self.kills += live.kill_count;
+        self.weapon_cost += live.weapon_cost;
+        self.damage_total += live.damage_dealt_total;
+        self.weapon_damage += live.weapon_damage_dealt;
+        self.damage_max = self.damage_max.max(live.max_damage);
+        self.shots += live.shots_fired_total;
+        self.crits += live.critical_hits_total;
+        self.globals += live.globals_count;
+        self.hofs += live.hofs_count;
+        self.harvest_swings += live.harvest_swings;
+        self.multiplier_sum += live.multiplier_sum;
+        self.multiplier_count += live.multiplier_count;
+        self.multiplier_max = match (self.multiplier_max, live.multiplier_max) {
+            (Some(stored), Some(running)) => Some(stored.max(running)),
+            (stored, running) => stored.or(running),
+        };
+        // The running instance's kill is the newest there is, even when
+        // it has no multiplier of its own to show.
+        if live.kill_count > 0 {
+            self.last_kill_loot = live.latest_kill_loot;
+            self.last_kill_multiplier = live.multiplier_last;
+        }
+    }
 }
 
 /// A definition create/update payload. The roster always binds in
@@ -348,29 +416,87 @@ impl SessionDefinitionService {
                 // sums only the instances its scope still counts.
                 let economy = session_scope::counts_on(StatsScope::Economy, "s");
                 let progression = session_scope::counts_on(StatsScope::Progression, "s");
-                Ok(conn.query_row(
+                let both = format!("{economy} AND {progression}");
+                let sum = |scope: &str, column: &str| {
+                    format!("COALESCE(SUM(CASE WHEN {scope} THEN ss.{column} END), 0)")
+                };
+                let mut stats = conn.query_row(
                     &format!(
-                        "SELECT COUNT(CASE WHEN {economy} THEN 1 END), \
-                                COALESCE(SUM(CASE WHEN {economy} THEN ss.cycled_ped END), 0), \
-                                COALESCE(SUM(CASE WHEN {economy} THEN ss.loot_tt END), 0), \
-                                COALESCE(SUM(CASE WHEN {progression} \
-                                                  THEN ss.activity_skill_tt END), 0), \
-                                COALESCE(SUM(CASE WHEN {economy} THEN ss.duration_hours END), 0) \
+                        "SELECT COUNT(CASE WHEN {economy} THEN 1 END), {cycled}, {loot}, {pes}, \
+                                {ratio_pes}, {ratio_cycled}, {hours}, {kills}, {weapon_cost}, \
+                                {damage}, \
+                                COALESCE(MAX(CASE WHEN {economy} THEN ss.kill_damage_max END), 0), \
+                                {shots}, {crits}, {globals}, {hofs}, \
+                                {swings}, {multiplier_sum}, {multiplier_count}, \
+                                MAX(CASE WHEN {economy} THEN ss.multiplier_max END) \
                          FROM session_summaries ss \
                          JOIN tracking_sessions s ON s.id = ss.session_id \
-                         WHERE s.definition_id = ?"
+                         WHERE s.definition_id = ?",
+                        cycled = sum(&economy, "cycled_ped"),
+                        loot = sum(&economy, "loot_tt"),
+                        pes = sum(&progression, "activity_skill_tt"),
+                        ratio_pes = sum(&both, "activity_skill_tt"),
+                        ratio_cycled = sum(&both, "cycled_ped"),
+                        hours = sum(&economy, "duration_hours"),
+                        kills = sum(&economy, "kills"),
+                        weapon_cost = sum(&economy, "weapon_cost"),
+                        damage = sum(&economy, "kill_damage_total"),
+                        shots = sum(&economy, "kill_shots"),
+                        crits = sum(&economy, "kill_crits"),
+                        globals = sum(&economy, "kill_globals"),
+                        hofs = sum(&economy, "kill_hofs"),
+                        swings = sum(&economy, "harvest_swings"),
+                        multiplier_sum = sum(&economy, "multiplier_sum"),
+                        multiplier_count = sum(&economy, "multiplier_count"),
                     ),
                     rusqlite::params![definition_id],
                     |row| {
+                        let damage_total: f64 = row.get(9)?;
                         Ok(DefinitionLifetimeStats {
                             instance_count: row.get(0)?,
                             cycled: row.get(1)?,
                             loot_tt: row.get(2)?,
                             pes: row.get(3)?,
-                            duration_seconds: row.get::<_, f64>(4)? * 3600.0,
+                            ratio_pes: row.get(4)?,
+                            ratio_cycled: row.get(5)?,
+                            duration_seconds: row.get::<_, f64>(6)? * 3600.0,
+                            kills: row.get(7)?,
+                            weapon_cost: row.get(8)?,
+                            damage_total,
+                            weapon_damage: damage_total,
+                            damage_max: row.get(10)?,
+                            shots: row.get(11)?,
+                            crits: row.get(12)?,
+                            globals: row.get(13)?,
+                            hofs: row.get(14)?,
+                            harvest_swings: row.get(15)?,
+                            multiplier_sum: row.get(16)?,
+                            multiplier_count: row.get(17)?,
+                            multiplier_max: row.get(18)?,
+                            last_kill_loot: None,
+                            last_kill_multiplier: None,
                         })
                     },
-                )?)
+                )?;
+                let last_kill = conn
+                    .query_row(
+                        &format!(
+                            "SELECT ss.last_kill_loot, ss.last_kill_multiplier \
+                             FROM session_summaries ss \
+                             JOIN tracking_sessions s ON s.id = ss.session_id \
+                             WHERE s.definition_id = ? AND ss.last_kill_at IS NOT NULL \
+                               AND {economy} \
+                             ORDER BY ss.last_kill_at DESC LIMIT 1"
+                        ),
+                        rusqlite::params![definition_id],
+                        |row| Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, Option<f64>>(1)?)),
+                    )
+                    .optional()?;
+                if let Some((loot, multiplier)) = last_kill {
+                    stats.last_kill_loot = loot;
+                    stats.last_kill_multiplier = multiplier;
+                }
+                Ok(stats)
             })
             .await?)
     }

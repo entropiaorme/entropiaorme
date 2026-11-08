@@ -83,13 +83,12 @@ export type StatDef = {
 	 *
 	 * The presence of this function IS the declaration that the stat
 	 * has a lifetime form, which is why there is no separate list of
-	 * lifetime-capable ids to drift out of step with the registry. A
-	 * stat earns one only if it is a sum of per-instance totals or a
-	 * ratio of two such sums: that is what makes a lifetime figure mean
-	 * what it says. A "last" value (last loot, last multiplier) has no
-	 * lifetime form at all, and an average over per-event data we do
-	 * not aggregate per instance (crit rate, DPS, average multiplier)
-	 * cannot be rebuilt from the summed parts.
+	 * lifetime-capable ids to drift out of step with the registry. Each
+	 * form is built from what folds across instances, which is what
+	 * makes a lifetime figure mean what it says: a sum, a ratio of two
+	 * sums, an extreme, or the family's most recent event. An average
+	 * over kills is the mean over every kill the family recorded, never
+	 * the mean of each instance's mean.
 	 */
 	renderLifetime?: (lifetime: LifetimeStats) => StatRender;
 };
@@ -225,7 +224,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		// leaving it on the instance beside a lifetime PES and a
 		// lifetime Cycled would be the arbitrary choice.
 		renderLifetime: lifetimeCost((l) =>
-			l.cycled > 0 ? { value: ((l.pes / l.cycled) * 100).toFixed(2), color: PLAIN } : EMPTY,
+			l.pesPer100 != null ? { value: l.pesPer100.toFixed(2), color: PLAIN } : EMPTY,
 		),
 	},
 	latest_kill_loot: {
@@ -236,6 +235,12 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			isActive(status) && status.latestKillLoot != null
 				? { value: formatPed(status.latestKillLoot), color: PLAIN }
 				: EMPTY,
+		// The family's most recent kill: the running instance's own once
+		// it has one, so the two scopes agree from then on.
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) =>
+				l.latestKillLoot != null ? { value: formatPed(l.latestKillLoot), color: PLAIN } : EMPTY,
+			),
 	},
 	avg_cost_per_kill: {
 		id: 'avg_cost_per_kill',
@@ -246,6 +251,9 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			if (kills <= 0) return EMPTY;
 			return { value: formatPed((status.cost ?? 0) / kills), color: PLAIN };
 		}),
+		renderLifetime: lifetimeCost((l) =>
+			l.kills > 0 ? { value: formatPed(l.cycled / l.kills), color: PLAIN } : EMPTY,
+		),
 	},
 	avg_damage: {
 		id: 'avg_damage',
@@ -260,6 +268,10 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				color: PLAIN,
 			};
 		},
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) =>
+				l.kills > 0 ? { value: formatPed(l.damageTotal / l.kills), color: PLAIN } : EMPTY,
+			),
 	},
 	multiplier_last: {
 		id: 'multiplier_last',
@@ -271,6 +283,11 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		render: liveCost((status) =>
 			status.multiplierLast != null
 				? { value: formatMultiplier(status.multiplierLast), color: PLAIN }
+				: EMPTY,
+		),
+		renderLifetime: lifetimeCost((l) =>
+			l.multiplierLast != null
+				? { value: formatMultiplier(l.multiplierLast), color: PLAIN }
 				: EMPTY,
 		),
 	},
@@ -285,6 +302,9 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				? { value: formatMultiplier(status.multiplierAvg), color: PLAIN }
 				: EMPTY,
 		),
+		renderLifetime: lifetimeCost((l) =>
+			l.multiplierAvg != null ? { value: formatMultiplier(l.multiplierAvg), color: PLAIN } : EMPTY,
+		),
 	},
 	multiplier_max: {
 		id: 'multiplier_max',
@@ -297,6 +317,9 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				? { value: formatMultiplier(status.multiplierMax), color: PLAIN }
 				: EMPTY,
 		),
+		renderLifetime: lifetimeCost((l) =>
+			l.multiplierMax != null ? { value: formatMultiplier(l.multiplierMax), color: PLAIN } : EMPTY,
+		),
 	},
 	max_damage: {
 		id: 'max_damage',
@@ -306,6 +329,10 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			isActive(status) && status.maxDamage != null
 				? { value: formatPed(status.maxDamage), color: PLAIN }
 				: EMPTY,
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) =>
+				l.kills > 0 ? { value: formatPed(l.maxDamage), color: PLAIN } : EMPTY,
+			),
 	},
 	dpp: {
 		id: 'dpp',
@@ -319,6 +346,11 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			const dpp = weaponDamage / (weaponCostPed * 100);
 			return { value: dpp.toFixed(2), color: PLAIN };
 		}),
+		renderLifetime: lifetimeCost((l) =>
+			l.weaponCost > 0
+				? { value: (l.weaponDamage / (l.weaponCost * 100)).toFixed(2), color: PLAIN }
+				: EMPTY,
+		),
 	},
 	avg_dps: {
 		id: 'avg_dps',
@@ -333,6 +365,12 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				color: PLAIN,
 			};
 		},
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) =>
+				l.durationSeconds > 0
+					? { value: formatPed(l.damageTotal / l.durationSeconds), color: PLAIN }
+					: EMPTY,
+			),
 	},
 	crit_rate: {
 		id: 'crit_rate',
@@ -347,6 +385,12 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				color: PLAIN,
 			};
 		},
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) =>
+				l.shotsFired > 0
+					? { value: formatPercent(l.criticalHits / l.shotsFired), color: PLAIN }
+					: EMPTY,
+			),
 	},
 	kills_count: {
 		id: 'kills_count',
@@ -354,6 +398,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		defaultEnabled: false,
 		render: (status) =>
 			isActive(status) ? { value: String(status.kill_count ?? 0), color: PLAIN } : EMPTY,
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) => ({ value: String(l.kills), color: PLAIN })),
 	},
 	globals_count: {
 		id: 'globals_count',
@@ -361,6 +407,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		defaultEnabled: false,
 		render: (status) =>
 			isActive(status) ? { value: String(status.globalsCount ?? 0), color: PLAIN } : EMPTY,
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) => ({ value: String(l.globals), color: PLAIN })),
 	},
 	hofs_count: {
 		id: 'hofs_count',
@@ -368,6 +416,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		defaultEnabled: false,
 		render: (status) =>
 			isActive(status) ? { value: String(status.hofsCount ?? 0), color: PLAIN } : EMPTY,
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) => ({ value: String(l.hofs), color: PLAIN })),
 	},
 	uses_tree: {
 		id: 'uses_tree',
@@ -376,6 +426,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		defaultEnabled: false,
 		render: (status) =>
 			isActive(status) ? { value: String(status.harvestSwings ?? 0), color: PLAIN } : EMPTY,
+		renderLifetime: (lifetime) =>
+			overSpan(lifetime, (l) => ({ value: String(l.harvestSwings), color: PLAIN })),
 	},
 	// The markup stats are estimates over the informational market layer:
 	// what the loot would be worth at market, never realised P&L. They have

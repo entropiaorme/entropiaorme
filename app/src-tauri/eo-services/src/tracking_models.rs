@@ -221,6 +221,10 @@ pub struct ActiveSessionView {
     pub multiplier_last: Option<f64>,
     pub multiplier_avg: Option<f64>,
     pub multiplier_max: Option<f64>,
+    /// What `multiplier_avg` divides, unrounded: the lifetime figures add
+    /// these to the family's own so their mean spans every kill.
+    pub multiplier_sum: f64,
+    pub multiplier_count: i64,
     pub multiplier_history: Vec<f64>,
     pub cumulative_net_history: Vec<f64>,
     pub current_mob: Option<String>,

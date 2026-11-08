@@ -248,6 +248,8 @@ pub(super) struct SessionAggregate {
     pub(super) multiplier_last: Option<f64>,
     pub(super) multiplier_avg: Option<f64>,
     pub(super) multiplier_max: Option<f64>,
+    pub(super) multiplier_sum: f64,
+    pub(super) multiplier_count: i64,
     pub(super) multiplier_history: Vec<f64>,
     pub(super) cumulative_net: Vec<f64>,
     pub(super) mob_name: Option<String>,
@@ -386,11 +388,10 @@ impl TrackerActor {
             .filter(|kill| kill.cost_ped.is_positive())
             .map(|kill| kill.loot_total_ped / kill.cost_ped)
             .collect();
-        let multiplier_avg = if mult_per_kill.is_empty() {
-            None
-        } else {
-            Some(mult_per_kill.iter().sum::<f64>() / mult_per_kill.len() as f64)
-        };
+        let multiplier_sum = mult_per_kill.iter().sum::<f64>();
+        let multiplier_count = mult_per_kill.len() as i64;
+        let multiplier_avg =
+            (multiplier_count > 0).then(|| multiplier_sum / multiplier_count as f64);
         let multiplier_max = mult_per_kill
             .iter()
             .copied()
@@ -519,6 +520,8 @@ impl TrackerActor {
             multiplier_last,
             multiplier_avg,
             multiplier_max,
+            multiplier_sum,
+            multiplier_count,
             multiplier_history,
             cumulative_net,
             mob_name: active.stamped_mob_name().map(str::to_string),
@@ -1296,6 +1299,8 @@ impl HuntTracker {
             multiplier_last: round_opt(aggregated.multiplier_last, 4),
             multiplier_avg: round_opt(aggregated.multiplier_avg, 4),
             multiplier_max: round_opt(aggregated.multiplier_max, 4),
+            multiplier_sum: aggregated.multiplier_sum,
+            multiplier_count: aggregated.multiplier_count,
             multiplier_history: aggregated.multiplier_history,
             cumulative_net_history: aggregated.cumulative_net,
             current_mob: aggregated.mob_name.clone(),

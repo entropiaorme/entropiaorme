@@ -987,10 +987,7 @@ impl HealingIntent {
     /// over TT for a limited tool. A profile resolved without its TT basis
     /// counts the whole cost as TT.
     pub(super) fn tt_per_use(&self) -> Ped {
-        match self.profile.tt_per_use_ped {
-            Some(tt) if tt.is_finite() && tt >= 0.0 => Ped(tt.min(self.cost_per_use.value())),
-            _ => self.cost_per_use,
-        }
+        Ped(self.profile.tt_of_use(self.cost_per_use.value()))
     }
 }
 

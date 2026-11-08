@@ -43,6 +43,7 @@ const FAMILY: LifetimeStats = {
 	durationSeconds: 3600,
 	unpricedShots: 0,
 	pesPer100: 16,
+	expectedCycle: null,
 	kills: 500,
 	damageTotal: 36_000,
 	weaponDamage: 40_000,
@@ -463,10 +464,10 @@ describe('figures built on a cost with unpriced shots in it', () => {
 	it('mark the lifetime figures a family with unpriced shots adds up', () => {
 		const lifetime = { ...FAMILY, unpricedShots: 4 };
 		for (const id of ['cycled', 'net', 'rate', 'pes_per_100'] as StatId[]) {
-			expect(STAT_DEFS[id].renderLifetime?.(lifetime).incomplete, id).toBe('4 shots unpriced');
+			expect(STAT_DEFS[id].renderLifetime(lifetime).incomplete, id).toBe('4 shots unpriced');
 		}
-		expect(STAT_DEFS.loot_tt.renderLifetime?.(lifetime).incomplete).toBeUndefined();
-		expect(STAT_DEFS.cycled.renderLifetime?.({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);
+		expect(STAT_DEFS.loot_tt.renderLifetime(lifetime).incomplete).toBeUndefined();
+		expect(STAT_DEFS.cycled.renderLifetime({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);
 	});
 });
 
@@ -506,7 +507,6 @@ describe('the live markup stats', () => {
 		const render = STAT_DEFS.mu_rate.render(session({ unpricedShots: 3 }), { valuation });
 		expect(render.incomplete).toBeTruthy();
 	});
-
 });
 
 describe('the expected MU rate', () => {
@@ -575,7 +575,7 @@ describe('the expected MU rate', () => {
 
 describe('lifetime forms', () => {
 	const value = (id: StatId, lifetime: LifetimeStats = FAMILY) =>
-		STAT_DEFS[id].renderLifetime?.(lifetime).value;
+		STAT_DEFS[id].renderLifetime(lifetime).value;
 
 	it('derives each ratio from the summed parts', () => {
 		expect(value('avg_cost_per_kill')).toBe('0.50');
@@ -643,7 +643,7 @@ describe('lifetime forms', () => {
 			confidence: 'all',
 		} as NonNullable<StatContext['lifetimeValuation']>;
 		const read = (id: StatId, context?: StatContext) =>
-			STAT_DEFS[id].renderLifetime?.(FAMILY, context).value;
+			STAT_DEFS[id].renderLifetime(FAMILY, context).value;
 		expect(read('loot_mu', { lifetimeValuation })).toBe('104.0%');
 		// 234 market value over 250 cycled, whatever the instance reads.
 		expect(read('mu_rate', { lifetimeValuation })).toBe('93.6%');
@@ -652,14 +652,71 @@ describe('lifetime forms', () => {
 		expect(read('mu_rate', { lifetimeValuation: null })).toBe(EMPTY.value);
 	});
 
+	describe('the expected MU rate', () => {
+		const span = (expected: number, low: number, high: number) => ({
+			expectedLootTtPed: expected,
+			lowPed: low,
+			highPed: high,
+		});
+		const expectedCycle = {
+			sessions: 2,
+			cycledPed: 100,
+			bases: {
+				threeLooterMean: span(95, 91, 99),
+				animal: span(96, 93, 99),
+				mutant: span(94, 91, 97),
+				robot: span(93, 90, 96),
+			},
+		};
+		const lifetimeValuation = { lootMuFactor: 1.05 } as NonNullable<
+			StatContext['lifetimeValuation']
+		>;
+		const read = (lifetime: LifetimeStats, context: StatContext = { lifetimeValuation }) =>
+			STAT_DEFS.expected_mu_rate.renderLifetime(lifetime, context);
+
+		it('reads the expected loot at market against the Cycled it covers', () => {
+			// 95 expected at 105%, over the 100 those sessions cycled, not the
+			// 250 the whole family did.
+			expect(read({ ...FAMILY, expectedCycle }).value).toBe('99.8%');
+			expect(read({ ...FAMILY, expectedCycle }).detail).toBe('±4.2');
+		});
+
+		it('reads at the looter basis the tile declares', () => {
+			const rendered = read(
+				{ ...FAMILY, expectedCycle },
+				{ lifetimeValuation, looterBasis: 'animal' },
+			);
+			expect(rendered.value).toBe('100.8%');
+			expect(rendered.qualifier).toBe('A');
+		});
+
+		it('says how much of the family it covers, only when that is not all of it', () => {
+			expect(read({ ...FAMILY, expectedCycle, instanceCount: 5 }).incomplete).toBe(
+				'Covers 2 of 5 sessions: earlier ones recorded no weapon evidence',
+			);
+			expect(read({ ...FAMILY, expectedCycle }).incomplete).toBeUndefined();
+		});
+
+		it('keeps both disclosures when shots also sit unpriced', () => {
+			const rendered = read({ ...FAMILY, expectedCycle, instanceCount: 5, unpricedShots: 4 });
+			expect(rendered.incomplete).toContain('4 shots unpriced');
+			expect(rendered.incomplete).toContain('Covers 2 of 5');
+		});
+
+		it('reads empty with no evidence, or before the loot is valued', () => {
+			expect(read(FAMILY).value).toBe(EMPTY.value);
+			expect(read({ ...FAMILY, expectedCycle }, {}).value).toBe(EMPTY.value);
+		});
+	});
+
 	it('marks the cost-derived forms while shots sit unpriced', () => {
 		const unpriced = { ...FAMILY, unpricedShots: 3 };
 		for (const id of ['avg_cost_per_kill', 'dpp', 'multiplier_avg', 'pes_per_100'] as StatId[]) {
-			expect(STAT_DEFS[id].renderLifetime?.(unpriced).incomplete).toBeTruthy();
+			expect(STAT_DEFS[id].renderLifetime(unpriced).incomplete).toBeTruthy();
 		}
 		// Damage and kill counts cost nothing, so they stay unmarked.
 		for (const id of ['avg_damage', 'kills_count', 'crit_rate'] as StatId[]) {
-			expect(STAT_DEFS[id].renderLifetime?.(unpriced).incomplete).toBeUndefined();
+			expect(STAT_DEFS[id].renderLifetime(unpriced).incomplete).toBeUndefined();
 		}
 	});
 });
@@ -668,6 +725,7 @@ describe('drawsLifetimeValuation', () => {
 	it('is true only while a markup stat is selected', () => {
 		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: true }])).toBe(true);
 		expect(drawsLifetimeValuation([{ id: 'mu_rate', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'expected_mu_rate', enabled: true }])).toBe(true);
 		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: false }])).toBe(false);
 		expect(drawsLifetimeValuation([{ id: 'net', enabled: true }])).toBe(false);
 	});

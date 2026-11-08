@@ -43,7 +43,11 @@ const PROJECTIONS: [Projection; 12] = [
              harvest_successes, harvest_loot_tt, harvest_cost, consumable_cost, \
              kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
              kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
-             last_kill_loot, last_kill_multiplier \
+             last_kill_loot, last_kill_multiplier, expected_tt_mean, expected_tt_mean_low, \
+             expected_tt_mean_high, expected_tt_animal, expected_tt_animal_low, \
+             expected_tt_animal_high, expected_tt_mutant, expected_tt_mutant_low, \
+             expected_tt_mutant_high, expected_tt_robot, expected_tt_robot_low, \
+             expected_tt_robot_high \
              FROM session_summaries ORDER BY session_id",
     },
     Projection {
@@ -199,6 +203,9 @@ pub async fn rebuild_and_verify(db: &Db, now: f64) -> Result<RebuildReport, DbEr
         // against an up-to-date maintained state rather than a mid-heal one.
         daily_rollup::heal_rollups(conn, now)?;
         session_summary::heal_summaries(conn)?;
+        for session_id in session_summary::sessions_missing_expectation(conn)? {
+            session_summary::write_session_expectation(conn, &session_id)?;
+        }
         session_rollup::heal(conn)?;
 
         let mut incremental = Vec::with_capacity(PROJECTIONS.len());

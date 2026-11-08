@@ -7,9 +7,8 @@
 
 import {
 	dashboardStats,
-	isOwnSelection,
+	enabledStats,
 	type StatPref,
-	scopedStats,
 	setDashboardStats,
 } from '$lib/statsCustomisation.svelte';
 import { type StatsScope, statsScope } from '$lib/statsScope.svelte';
@@ -19,9 +18,9 @@ const DRAG_THRESHOLD_PX = 4;
 
 /**
  * Map a position in the DRAWN list back to its slot in the full stored
- * list, by identity rather than by counting enabled entries: under the
- * lifetime scope the drawn list is a non-contiguous subset of the
- * stored one, so counting would land on the wrong stat.
+ * list, by identity rather than by counting enabled entries: the drawn
+ * list is a non-contiguous subset of the stored one, so counting would
+ * land on the wrong stat.
  */
 function fullIndexOfVisible(prefs: StatPref[], visible: StatPref[], filteredIndex: number): number {
 	const id = visible[filteredIndex]?.id;
@@ -56,21 +55,13 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 	// ping-pong the layout while the flip animation is still settling.
 	let lastReorderAt = 0;
 
-	/** The drawn list for the current scope: the grid's render list. */
+	/** The drawn list: the grid's render list, the same in either scope. */
 	function visible(): StatPref[] {
-		return scopedStats(dashboardStats.current, scope());
-	}
-
-	/** Reordering persists a global order, so it is offered only while
-	 * the drawn set is the user's own selection: dragging the headline
-	 * fallback would save an order over stats they never picked. */
-	function reorderable(): boolean {
-		return isOwnSelection(dashboardStats.current, scope());
+		return enabledStats(dashboardStats.current);
 	}
 
 	function handlePointerDown(e: PointerEvent, filteredIndex: number) {
 		if (e.button !== 0) return;
-		if (!reorderable()) return;
 		const target = e.currentTarget as HTMLElement;
 		target.setPointerCapture(e.pointerId);
 		dragFilteredIndex = filteredIndex;
@@ -146,11 +137,7 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 	}
 
 	return {
-		/**
-		 * The grid's render list, in stored order: the enabled prefs
-		 * under the instance scope, narrowed to the lifetime-capable
-		 * ones (or the headline fallback) under the lifetime scope.
-		 */
+		/** The grid's render list: the enabled prefs, in stored order. */
 		get enabledStats() {
 			return visible();
 		},
@@ -158,10 +145,6 @@ export function createStatsGridModel(lifetimeAvailable: () => boolean = () => fa
 		 * the grid read this rather than resolving it again. */
 		get scope() {
 			return scope();
-		},
-		/** Whether the drawn set may be drag-reordered. */
-		get reorderable() {
-			return reorderable();
 		},
 		get dragFilteredIndex() {
 			return dragFilteredIndex;

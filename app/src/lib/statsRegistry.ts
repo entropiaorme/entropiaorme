@@ -84,16 +84,15 @@ export type StatDef = {
 	 * Render the stat over a session family's lifetime aggregate rather
 	 * than the instance in play.
 	 *
-	 * The presence of this function IS the declaration that the stat
-	 * has a lifetime form, which is why there is no separate list of
-	 * lifetime-capable ids to drift out of step with the registry. Each
-	 * form is built from what folds across instances, which is what
-	 * makes a lifetime figure mean what it says: a sum, a ratio of two
-	 * sums, an extreme, or the family's most recent event. An average
-	 * over kills is the mean over every kill the family recorded, never
-	 * the mean of each instance's mean.
+	 * Required, so a new stat has to say what its family figure is and
+	 * the flip keeps the same tiles in view. Each form is built from what
+	 * folds across instances, which is what makes a lifetime figure mean
+	 * what it says: a sum, a ratio of two sums, an extreme, or the
+	 * family's most recent event. An average over kills is the mean over
+	 * every kill the family recorded, never the mean of each instance's
+	 * mean.
 	 */
-	renderLifetime?: (lifetime: LifetimeStats, context?: StatContext) => StatRender;
+	renderLifetime: (lifetime: LifetimeStats, context?: StatContext) => StatRender;
 };
 
 const isActive = (s: TrackingStatus | null): s is TrackingStatus => s?.status === 'active';
@@ -126,7 +125,12 @@ function costBased(
 	costBound?: number | null,
 ): StatRender {
 	return shots && shots > 0 && render.value !== EMPTY.value
-		? { ...render, incomplete: describeUnpriced(shots, costBound) }
+		? {
+				...render,
+				incomplete: [describeUnpriced(shots, costBound), render.incomplete]
+					.filter(Boolean)
+					.join('; '),
+			}
 		: render;
 }
 
@@ -496,6 +500,28 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				qualifier: looterBasisInitial(basis),
 			};
 		}),
+		// Over the instances that recorded weapon evidence, each at its own
+		// session-start looter levels, against those instances' own Cycled.
+		// The rest are in neither side of the ratio, and the figure says so.
+		renderLifetime: lifetimeCost((l, context) => {
+			const cycle = l.expectedCycle;
+			const factor = context.lifetimeValuation?.lootMuFactor ?? null;
+			if (!cycle || factor === null || cycle.cycledPed <= 0) return EMPTY;
+			const basis = context.looterBasis ?? DEFAULT_LOOTER_BASIS;
+			const at = atLooterBasis(cycle.bases, basis);
+			const rate = (at.expectedLootTtPed * factor) / cycle.cycledPed;
+			const margin = ((at.highPed - at.lowPed) * factor) / cycle.cycledPed / 2;
+			return {
+				value: formatPercent(rate),
+				color: PLAIN,
+				detail: margin >= 0.0005 ? `±${(margin * 100).toFixed(1)}` : undefined,
+				qualifier: looterBasisInitial(basis),
+				incomplete:
+					cycle.sessions < l.instanceCount
+						? `Covers ${cycle.sessions} of ${l.instanceCount} sessions: earlier ones recorded no weapon evidence`
+						: undefined,
+			};
+		}),
 	},
 };
 
@@ -525,31 +551,8 @@ export const ALL_STAT_IDS: StatId[] = [
 	'expected_mu_rate',
 ];
 
-/**
- * The stats that have a lifetime form, derived from the registry itself
- * so it cannot drift: a stat is lifetime-capable exactly when its
- * definition declares a `renderLifetime`.
- *
- * Render paths ask `isLifetimeCapable` per stat rather than reading this
- * list. It exists as the enumerable form of the same fact, which is what
- * lets a test assert the capable set as a whole and catch a stat that
- * gained or lost a lifetime render without anyone meaning it to.
- */
-export const LIFETIME_STAT_IDS: StatId[] = ALL_STAT_IDS.filter(
-	(id) => STAT_DEFS[id].renderLifetime !== undefined,
-);
-
-/**
- * What lifetime mode falls back to when a user's customised selection
- * contains nothing with a lifetime form. Rendering an empty grid would
- * read as broken, so the flip shows the four headline figures instead.
- * Preferences are untouched either way: this is what gets DRAWN, never
- * what gets stored.
- */
-export const HEADLINE_LIFETIME_STAT_IDS: StatId[] = ['cycled', 'loot_tt', 'net', 'rate'];
-
 /** The stats whose lifetime form values the family's loot at market. */
-const LIFETIME_VALUED_STAT_IDS: readonly string[] = ['loot_mu', 'mu_rate'];
+const LIFETIME_VALUED_STAT_IDS: readonly string[] = ['loot_mu', 'mu_rate', 'expected_mu_rate'];
 
 /**
  * Whether a surface's selection draws a stat that needs the family's loot
@@ -560,10 +563,6 @@ export function drawsLifetimeValuation(
 	prefs: readonly { id: string; enabled: boolean }[],
 ): boolean {
 	return prefs.some((pref) => pref.enabled && LIFETIME_VALUED_STAT_IDS.includes(pref.id));
-}
-
-export function isLifetimeCapable(id: string): boolean {
-	return getStatDef(id)?.renderLifetime !== undefined;
 }
 
 export function getStatDef(id: string): StatDef | null {

@@ -14,8 +14,9 @@ use crate::bus_events::{BusEvent, HotbarItemKind, SessionLifecyclePayload};
 use crate::db::DbError;
 use crate::expected_hunting::{
     evaluate as evaluate_expected_hunting, HuntingLooterLevels, LooterSource,
-    OffensiveComponentEvidence, OffensiveComponentKind, OffensiveLoadoutEvidence,
+    OffensiveLoadoutEvidence,
 };
+use crate::loaded_expectation::FlattenedPhases;
 use crate::mob_lookup_service::python_whitespace;
 use crate::ped::Ped;
 use crate::tracking_models::{
@@ -320,43 +321,26 @@ impl TrackerActor {
         // Flatten every immutable tool phase at the TT it actually cycled.
         // Equipment changes create distinct phases, while the three hunting
         // looters remain the session-start snapshot.
-        let mut expected_evidence = OffensiveLoadoutEvidence {
-            components: Vec::new(),
-            looters: active.hunting_looters,
-            looter_source: LooterSource::ThreeLooterMean,
-            transferred_tt_per_use: 0.0,
-        };
-        // The decay implants and absorbers took over, summed over phases at
-        // the TT each cycled: outside the model, inside the loot pool.
-        let mut transferred_tt = 0.0;
+        let mut phases = FlattenedPhases::default();
         for stats in kills
             .iter()
             .flat_map(|kill| kill.tool_stats.iter().map(|(_, stats)| stats))
             .chain(active.accumulator.tool_stats.iter().map(|(_, stats)| stats))
         {
-            let Some(evidence) = stats.expected_economics.as_ref() else {
-                if stats.shots_fired > 0 && stats.cost_per_shot.is_positive() {
-                    expected_evidence
-                        .components
-                        .push(OffensiveComponentEvidence {
-                            kind: OffensiveComponentKind::Weapon,
-                            catalog_id: None,
-                            name: stats.tool_name.clone(),
-                            efficiency_pct: None,
-                            raw_tt_per_use: stats.cost_per_shot.value() * stats.shots_fired as f64,
-                            consumed_premium_per_use: 0.0,
-                        });
-                }
-                continue;
-            };
-            transferred_tt += evidence.transferred_tt_per_use * stats.shots_fired.max(0) as f64;
-            for component in &evidence.components {
-                let mut component = component.clone();
-                component.raw_tt_per_use *= stats.shots_fired.max(0) as f64;
-                component.consumed_premium_per_use *= stats.shots_fired.max(0) as f64;
-                expected_evidence.components.push(component);
-            }
+            phases.add(
+                stats.expected_economics.as_ref(),
+                &stats.tool_name,
+                stats.cost_per_shot.value(),
+                stats.shots_fired,
+            );
         }
+        let transferred_tt = phases.transferred_tt;
+        let expected_evidence = OffensiveLoadoutEvidence {
+            components: phases.components,
+            looters: active.hunting_looters,
+            looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
+        };
         let expected_result = (!expected_evidence.components.is_empty())
             .then(|| evaluate_expected_hunting(&expected_evidence).ok())
             .flatten();

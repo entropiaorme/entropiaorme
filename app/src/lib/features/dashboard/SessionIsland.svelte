@@ -292,7 +292,7 @@
 		{#each statsGrid.enabledStats as pref, i (pref.id)}
 			{@const def = getStatDef(pref.id)}
 			{@const r = def
-				? showingLifetime && def.renderLifetime && lifetime
+				? showingLifetime && lifetime
 					? def.renderLifetime(lifetime, {
 							lifetimeValuation: lifetimeValuation?.view ?? null,
 							looterBasis: liveMarkupSettings.looterBasis,
@@ -309,8 +309,7 @@
 				role="group"
 				aria-label={def?.label ?? pref.id}
 				class="relative rounded-md border border-border/60 bg-base/40 px-3 py-2.5 flex flex-col gap-1
-					min-w-0 select-none touch-none
-					{statsGrid.reorderable ? 'cursor-grab' : ''}
+					min-w-0 select-none touch-none cursor-grab
 					transition-[opacity,box-shadow,border-color] duration-[var(--duration-base)] ease-[var(--ease-out)]
 					before:pointer-events-none before:absolute before:inset-0 before:rounded-[inherit]
 					before:[box-shadow:inset_0_1px_0_0_rgba(255,255,255,0.03)]

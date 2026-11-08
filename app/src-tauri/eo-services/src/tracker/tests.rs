@@ -1393,6 +1393,12 @@ fn snapshot_aggregates_and_rounds_the_readout() {
 
     // Before its first kill the running instance leaves the last figures
     // to the family's own most recent kill.
+    let mut fresh = active.clone();
+    fresh.expected_cycle = None;
+    let mut untouched = stored.clone();
+    untouched.fold_live(&fresh);
+    assert_eq!(untouched.expected, None);
+
     let mut unkilled = active.clone();
     unkilled.kill_count = 0;
     unkilled.latest_kill_loot = None;
@@ -4500,6 +4506,115 @@ fn an_unresolved_offensive_phase_narrows_live_expected_return_coverage() {
         mean.expected_loot_tt_high,
         0.02 * 0.951 + 0.02 * 0.965
     ));
+}
+
+/// A recorded session's expected loot is the figure its live readout showed:
+/// the summary rebuilds the same streams from what the session wrote down.
+#[test]
+fn a_stopped_sessions_expected_loot_matches_its_live_figure() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            cost: Some(Arc::new(|_| 0.02)),
+            profile: Some(Arc::new(|name| {
+                (name == "KnownGun").then(|| {
+                    json!({
+                        "weapon_catalog_id": "known",
+                        "weapon_entity": {
+                            "name": "KnownGun",
+                            "economy": {
+                                "decay": 1.0,
+                                "ammo_burn": 100.0,
+                                "efficiency": 80.0
+                            }
+                        },
+                        "amp_entity": null
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                })
+            })),
+            looters: Some(crate::expected_hunting::HuntingLooterLevels {
+                animal: 40.0,
+                mutant: 50.0,
+                robot: 60.0,
+            }),
+            ..Default::default()
+        }),
+        ..Providers::default()
+    });
+    let session = rig.wait(tracker.start_session()).unwrap();
+    for (second, tool) in [(1, "KnownGun"), (2, "UnresolvedGun")] {
+        rig.bus
+            .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+                tool_name: tool.into(),
+                source: None,
+            }));
+        rig.bus
+            .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
+                amount: 9.0,
+                timestamp: format!("2026-01-01T00:00:0{second}"),
+            }));
+    }
+    rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
+        kind: LootTag,
+        source_id: None,
+        timestamp: Some("2026-01-01T00:00:03".into()),
+        items: vec![LootItem {
+            item_name: "Animal Hide".into(),
+            quantity: 1,
+            value_ped: 4.5,
+            is_enhancer_shrapnel: false,
+        }],
+        total_ped: 4.5,
+    }));
+
+    let live = rig
+        .wait(tracker.snapshot())
+        .unwrap()
+        .active
+        .unwrap()
+        .expected_cycle
+        .expect("a modelled shot gives a figure");
+    // A session of no duration does not summarise.
+    rig.clock.advance(60.0).unwrap();
+    rig.wait(tracker.stop_session()).unwrap().unwrap();
+
+    let id = session.id.clone();
+    let recorded: (f64, f64, f64, f64, f64) = rig
+        .wait(rig.db.with_reader(move |conn| {
+            Ok(conn.query_row(
+                "SELECT expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high, \
+                        expected_tt_animal, expected_tt_robot \
+                 FROM session_summaries WHERE session_id = ?",
+                [id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?)
+        }))
+        .unwrap();
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    assert!(close(recorded.0, live.three_looter_mean.expected_loot_tt));
+    assert!(close(
+        recorded.1,
+        live.three_looter_mean.expected_loot_tt_low
+    ));
+    assert!(close(
+        recorded.2,
+        live.three_looter_mean.expected_loot_tt_high
+    ));
+    // Each basis read at the looter level the session started with.
+    assert!(close(recorded.3, live.animal.expected_loot_tt));
+    assert!(close(recorded.4, live.robot.expected_loot_tt));
+    assert!(recorded.3 < recorded.4);
 }
 
 #[test]

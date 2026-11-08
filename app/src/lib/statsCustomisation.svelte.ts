@@ -1,13 +1,6 @@
 import { emit } from '@tauri-apps/api/event';
 import { getPreference, setPreference } from './preferences';
-import {
-	ALL_STAT_IDS,
-	HEADLINE_LIFETIME_STAT_IDS,
-	isLifetimeCapable,
-	STAT_DEFS,
-	type StatId,
-} from './statsRegistry';
-import type { StatsScope } from './statsScope.svelte';
+import { ALL_STAT_IDS, STAT_DEFS, type StatId } from './statsRegistry';
 
 export type StatPref = { id: StatId; enabled: boolean };
 
@@ -90,54 +83,9 @@ function reorderToMatch(target: StatPref[], referenceOrder: StatId[]): StatPref[
 	}));
 }
 
-/**
- * What a surface DRAWS for a given scope, out of what the user has
- * selected. Never a mutation: the stored selection is the superset and
- * survives the flip untouched, so flipping to lifetime and back is a
- * no-op on preferences.
- *
- * Lifetime mode draws the selection narrowed to the stats that have a
- * lifetime form, because a grid mixing family totals with this
- * instance's figures would not be readable as either. From the user's
- * side it looks like the instance-only stats deselected themselves;
- * underneath, nothing was deselected.
- *
- * When the selection contains nothing with a lifetime form, the flip
- * falls back to the headline figures rather than drawing an empty grid,
- * which would read as broken. The fallback keeps the user's own stat
- * ordering.
- *
- * `fallback` exists because that reasoning is the dashboard's, not the
- * overlay's. The overlay renders no pill group at all for an empty
- * selection, so switching every pill off is a supported resting state
- * there; conjuring four back on a scope flip would override a choice
- * the user made deliberately.
- */
-export function scopedStats(
-	prefs: StatPref[],
-	scope: StatsScope,
-	{ fallback = true }: { fallback?: boolean } = {},
-): StatPref[] {
-	const enabled = prefs.filter((pref) => pref.enabled);
-	if (scope === 'instance') return enabled;
-	const capable = enabled.filter((pref) => isLifetimeCapable(pref.id));
-	if (capable.length > 0 || !fallback) return capable;
-	const headline = prefs
-		.filter((pref) => HEADLINE_LIFETIME_STAT_IDS.includes(pref.id))
-		.map((pref) => ({ ...pref, enabled: true }));
-	return headline.length > 0
-		? headline
-		: HEADLINE_LIFETIME_STAT_IDS.map((id) => ({ id, enabled: true }));
-}
-
-/**
- * Whether the drawn set is the user's own selection rather than the
- * headline fallback. A fallback view is showing stats the user did not
- * pick, so reordering it would persist an order they never asked for.
- */
-export function isOwnSelection(prefs: StatPref[], scope: StatsScope): boolean {
-	if (scope === 'instance') return true;
-	return prefs.some((pref) => pref.enabled && isLifetimeCapable(pref.id));
+/** The stats a surface draws: its enabled selection, in stored order. */
+export function enabledStats(prefs: StatPref[]): StatPref[] {
+	return prefs.filter((pref) => pref.enabled);
 }
 
 export async function initStatsCustomisation(): Promise<void> {

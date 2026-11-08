@@ -408,6 +408,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session summary kill totals",
         sql: include_str!("../../migrations/0074_session_summary_kill_totals.sql"),
     },
+    Migration {
+        version: 75,
+        description: "session summary expected loot",
+        sql: include_str!("../../migrations/0075_session_summary_expected_loot.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -490,6 +495,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "8A8B0CA6D32008B91B576AC9771FB38E748C352C60F8946266BDBFF873444CA484489F7A97CAD6489B12F8CC7279E478",
     "9974AC892A37B44AF7A21761415EB2FE708D40AC31F9B8AC2D540E0680BC6E7D3A1825A2FC85E9D86C76A85E582A6778",
     "E471B342FB13687AF089AB2BE05D9C4824F09CE7D28569E7999126EB7DFCE16A75051AB51A9A8D1728DC448CDD8CEE71",
+    "FB6D2BC7321B45C377E491EB1C4FF3F32909AF5AFB24ACC6FC000C83843EFCBA530281532C624B857E9BF9E913349147",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -1371,6 +1377,10 @@ mod tests {
         assert_eq!(quiet.2, 0);
         assert_eq!(quiet.9, None);
 
+        // The writer targets the current schema.
+        for migration in MIGRATIONS.iter().filter(|m| m.version > 74) {
+            apply(&mut connection, migration);
+        }
         for session in ["hunted", "quiet"] {
             crate::session_summary::write_session_summary(&connection, session).expect("write");
         }

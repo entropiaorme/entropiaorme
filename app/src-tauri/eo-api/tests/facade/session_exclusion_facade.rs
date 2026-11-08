@@ -557,6 +557,7 @@ async fn each_scope_is_excluded_on_its_own() {
         "multiplierLast",
         "latestKillLoot",
         "pesPer100",
+        "expectedCycle",
     ] {
         assert_eq!(
             lifetime[field], never["tracking_snapshot"][field],

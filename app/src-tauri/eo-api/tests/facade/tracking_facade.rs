@@ -1731,6 +1731,62 @@ async fn the_lifetime_block_sums_the_family_and_folds_the_live_instance() {
     assert_eq!(value["lifetime"]["cycled"], 102.0);
 }
 
+/// The expected figure spans the instances that recorded weapon evidence,
+/// answers to their Cycled alone, and fills in for sessions summarised
+/// before the columns existed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_lifetime_expected_figure_spans_the_instances_with_weapon_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            "INSERT INTO tracking_sessions
+                 (id, started_at, ended_at, is_active, armour_cost, definition_id) VALUES
+               ('evidenced', 1000.0, 2000.0, 0, 0.0, 1),
+               ('older', 3000.0, 4000.0, 0, 40.0, 1);
+             INSERT INTO kills (id, session_id, mob_name, timestamp, loot_total_ped) VALUES
+               ('e1', 'evidenced', 'Atrox', 1001.0, 4.0),
+               ('o1', 'older', 'Atrox', 3001.0, 9.0);
+             INSERT INTO kill_tool_stats
+                 (kill_id, tool_name, shots_fired, cost_per_shot, expected_economics_json)
+                 VALUES
+               ('e1', 'Rifle', 100, 0.05,
+                '{\"components\":[{\"kind\":\"weapon\",\"name\":\"Rifle\",\"efficiencyPct\":80.0,
+                  \"rawTtPerUse\":0.05,\"consumedPremiumPerUse\":0.0}],
+                  \"looters\":{\"animal\":40.0,\"mutant\":50.0,\"robot\":60.0},
+                  \"looterSource\":\"three_looter_mean\"}'),
+               ('o1', 'Rifle', 100, 0.05, NULL);",
+        )?;
+        for session in ["evidenced", "older"] {
+            eo_services::session_summary::write_session_summary(conn, session)?;
+        }
+        // As a database summarised before these columns existed.
+        conn.execute_batch("UPDATE session_summaries SET expected_tt_mean = NULL")?;
+        eo_services::session_rollup::heal(conn)
+    })
+    .await
+    .unwrap();
+
+    let snapshot = api.tracking_snapshot().await.unwrap();
+    let lifetime = snapshot
+        .lifetime
+        .expect("the protected default is in force");
+    assert_eq!(lifetime.instance_count, 2);
+    let cycle = lifetime
+        .expected_cycle
+        .0
+        .expect("one instance carries evidence");
+    assert_eq!(cycle.sessions, 1);
+    // Its own Cycled, not the family's 50.
+    assert_eq!(cycle.cycled_ped, 5.0);
+    let mean = cycle.bases.three_looter_mean;
+    assert!(mean.expected_loot_tt_ped > 0.0);
+    // Everything it cycled has a known Efficiency, so there is no span.
+    assert_eq!(mean.low_ped, mean.expected_loot_tt_ped);
+    assert_eq!(mean.high_ped, mean.expected_loot_tt_ped);
+    assert!(cycle.bases.animal.expected_loot_tt_ped < cycle.bases.robot.expected_loot_tt_ped);
+}
+
 /// The family's loot composition: kill and harvest loot merged by item,
 /// over the instances the lifetime totals sum, each read as its own loot
 /// list reads it.

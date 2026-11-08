@@ -1800,6 +1800,39 @@ export interface LedgerSummary {
 }
 
 /**
+ * One looter basis of a family's expected loot.
+ */
+export interface LifetimeExpectedAtBasis {
+	expectedLootTtPed: number;
+	/** The same with the unknown-efficiency TT at the model's 0% and 100% Efficiency returns: the range the point lies in. */
+	lowPed: number;
+	highPed: number;
+}
+
+/**
+ * A family's expected loot at every looter basis.
+ */
+export interface LifetimeExpectedBases {
+	threeLooterMean: LifetimeExpectedAtBasis;
+	animal: LifetimeExpectedAtBasis;
+	mutant: LifetimeExpectedAtBasis;
+	robot: LifetimeExpectedAtBasis;
+}
+
+/**
+ * Expected loot summed over the instances of a family that recorded weapon
+ * evidence, each at its own session-start looter levels. A planning
+ * estimate, never observed or realised.
+ */
+export interface LifetimeExpectedCycle {
+	/** How many instances this spans: the rest recorded no evidence and are in neither side of the ratio. */
+	sessions: number;
+	/** Those instances' Cycled. */
+	cycledPed: number;
+	bases: LifetimeExpectedBases;
+}
+
+/**
  * One definition's lifetime figures: the aggregate over every ended
  * instance recorded under it, plus the in-flight instance when one is
  * running under that same definition. The counterpart to the headline
@@ -1846,6 +1879,8 @@ export interface LifetimeStats {
 	/** The family's most recent kill: the running instance's once it has one. Null also when that kill has no recorded weapon cost. */
 	multiplierLast: number | null;
 	latestKillLoot: number | null;
+	/** Expected loot over the instances that recorded weapon evidence. Null when none of them did. */
+	expectedCycle: LifetimeExpectedCycle | null;
 }
 
 /**

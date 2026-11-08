@@ -514,6 +514,11 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
         serde_json::to_string(&summary["primaryMobs"]).expect("primaryMobs serialises");
     let primary_weapons_json =
         serde_json::to_string(&summary["primaryWeapons"]).expect("primaryWeapons serialises");
+    let expected = expected_columns(crate::session_expectation::compute(
+        conn,
+        session_id,
+        summary["cycledPed"].as_f64().unwrap_or(0.0),
+    )?);
     conn.execute(
         "INSERT OR REPLACE INTO session_summaries (\
          session_id, summary_version, started_at, ended_at, duration_hours, \
@@ -526,9 +531,14 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
          session_name, skill_boost_percent, consumable_cost, \
          kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
          kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
-         last_kill_loot, last_kill_multiplier, computed_at) \
+         last_kill_loot, last_kill_multiplier, \
+         expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high, \
+         expected_tt_animal, expected_tt_animal_low, expected_tt_animal_high, \
+         expected_tt_mutant, expected_tt_mutant_low, expected_tt_mutant_high, \
+         expected_tt_robot, expected_tt_robot_low, expected_tt_robot_high, computed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             summary["id"].as_str(),
@@ -577,6 +587,101 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
             summary["lastKillAt"].as_f64(),
             summary["lastKillLoot"].as_f64(),
             summary["lastKillMultiplier"].as_f64(),
+            expected[0],
+            expected[1],
+            expected[2],
+            expected[3],
+            expected[4],
+            expected[5],
+            expected[6],
+            expected[7],
+            expected[8],
+            expected[9],
+            expected[10],
+            expected[11],
+        ],
+    )?;
+    Ok(())
+}
+
+/// The session's expected loot as its twelve summary columns, in column
+/// order; every column NULL for a session with no weapon evidence.
+fn expected_columns(
+    expectation: Option<crate::session_expectation::SessionExpectation>,
+) -> [Option<f64>; 12] {
+    let Some(expectation) = expectation else {
+        return [None; 12];
+    };
+    let mut columns = [None; 12];
+    for (slot, span) in [
+        expectation.three_looter_mean,
+        expectation.animal,
+        expectation.mutant,
+        expectation.robot,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        columns[slot * 3] = Some(span.expected);
+        columns[slot * 3 + 1] = Some(span.low);
+        columns[slot * 3 + 2] = Some(span.high);
+    }
+    columns
+}
+
+/// The summaries of sessions with weapon evidence but no expected loot yet:
+/// what existed before those columns did. The evidence is read from the
+/// settled cells, so a session with none is not looked at again.
+pub fn sessions_missing_expectation(conn: &rusqlite::Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT ss.session_id FROM session_summaries ss \
+         JOIN session_offensive_evidence_rollups e ON e.session_id = ss.session_id \
+         WHERE ss.expected_tt_mean IS NULL AND e.expected_economics_json IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Fill one summary's expected loot in place, without recomputing the rest
+/// of the row. Absent or disqualified summaries are left alone.
+pub fn write_session_expectation(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<(), DbError> {
+    let cycled: Option<f64> = conn
+        .query_row(
+            "SELECT cycled_ped FROM session_summaries WHERE session_id = ?",
+            rusqlite::params![session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(cycled) = cycled else {
+        return Ok(());
+    };
+    let expected = expected_columns(crate::session_expectation::compute(
+        conn, session_id, cycled,
+    )?);
+    conn.execute(
+        "UPDATE session_summaries SET \
+         expected_tt_mean = ?, expected_tt_mean_low = ?, expected_tt_mean_high = ?, \
+         expected_tt_animal = ?, expected_tt_animal_low = ?, expected_tt_animal_high = ?, \
+         expected_tt_mutant = ?, expected_tt_mutant_low = ?, expected_tt_mutant_high = ?, \
+         expected_tt_robot = ?, expected_tt_robot_low = ?, expected_tt_robot_high = ? \
+         WHERE session_id = ?",
+        rusqlite::params![
+            expected[0],
+            expected[1],
+            expected[2],
+            expected[3],
+            expected[4],
+            expected[5],
+            expected[6],
+            expected[7],
+            expected[8],
+            expected[9],
+            expected[10],
+            expected[11],
+            session_id,
         ],
     )?;
     Ok(())
@@ -850,6 +955,122 @@ mod tests {
         assert_eq!(summary["lastKillLoot"], Value::from(4.0));
         assert_eq!(summary["lastKillMultiplier"], Value::Null);
         assert_eq!(summary["multiplierMax"], Value::from(0.5));
+    }
+
+    /// A hunted session with evidence on its first phase.
+    async fn seed_with_evidence(db: &Db) {
+        run(
+            db,
+            "INSERT INTO tracking_sessions \
+             (id, started_at, ended_at, is_active, mob_tracking_mode) \
+             VALUES ('s1', 1000.0, 8200.0, 0, 'mob'); \
+             INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, loot_total_ped) \
+             VALUES ('k1', 's1', 'Atrox', 1500.0, 5.0, 4.0); \
+             INSERT INTO kill_tool_stats \
+                 (kill_id, tool_name, shots_fired, cost_per_shot, expected_economics_json) \
+             VALUES ('k1', 'Rifle', 100, 0.05, \
+                 '{\"components\":[{\"kind\":\"weapon\",\"name\":\"Rifle\",\
+\"efficiencyPct\":80.0,\"rawTtPerUse\":0.05,\"consumedPremiumPerUse\":0.0}],\
+\"looters\":{\"animal\":40.0,\"mutant\":50.0,\"robot\":60.0},\
+\"looterSource\":\"three_looter_mean\"}');",
+        )
+        .await;
+    }
+
+    async fn expected_mean(db: &Db) -> (Option<f64>, Option<f64>, Option<f64>) {
+        db.with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high \
+                 FROM session_summaries WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_session_with_no_weapon_evidence_has_no_expected_loot() {
+        let (_dir, db) = env().await;
+        seed_standard(&db).await;
+        write_summary(&db, "s1").await;
+        assert_eq!(expected_mean(&db).await, (None, None, None));
+    }
+
+    #[tokio::test]
+    async fn unreadable_weapon_evidence_never_stops_a_summary_from_writing() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        run(
+            &db,
+            "UPDATE kill_tool_stats SET expected_economics_json = '{\"not\":\"evidence\"}'",
+        )
+        .await;
+        write_summary(&db, "s1").await;
+        assert_eq!(expected_mean(&db).await, (None, None, None));
+    }
+
+    #[tokio::test]
+    async fn a_repair_recorded_after_the_session_moves_its_expected_loot() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        write_summary(&db, "s1").await;
+        let (expected, low, high) = expected_mean(&db).await;
+        let expected = expected.unwrap();
+        // Nothing unknown yet: the three readings are one.
+        assert_eq!(low, Some(expected));
+        assert_eq!(high, Some(expected));
+
+        // Armour TT joins the loot pool at an unknown Efficiency.
+        run(
+            &db,
+            "UPDATE tracking_sessions SET armour_cost = 2.0 WHERE id = 's1'",
+        )
+        .await;
+        write_summary(&db, "s1").await;
+        let (moved, low, high) = expected_mean(&db).await;
+        assert!(moved.unwrap() > expected);
+        assert!(low.unwrap() < moved.unwrap());
+        assert!(high.unwrap() > moved.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_existing_summary_gains_its_expected_loot_without_a_recompute() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        write_summary(&db, "s1").await;
+        let expected = expected_mean(&db).await.0;
+        run(
+            &db,
+            "UPDATE session_summaries SET expected_tt_mean = NULL, kills = 99",
+        )
+        .await;
+        db.with_writer(crate::session_rollup::heal).await.unwrap();
+
+        let missing = db
+            .with_reader(|conn| sessions_missing_expectation(conn))
+            .await
+            .unwrap();
+        assert_eq!(missing, vec!["s1".to_string()]);
+        db.with_writer(|conn| write_session_expectation(conn, "s1"))
+            .await
+            .unwrap();
+
+        assert_eq!(expected_mean(&db).await.0, expected);
+        // The rest of the row was left as it stood.
+        let kills: i64 = db
+            .with_reader(|conn| {
+                Ok(conn.query_row("SELECT kills FROM session_summaries", [], |row| row.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(kills, 99);
+        assert!(db
+            .with_reader(|conn| sessions_missing_expectation(conn))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

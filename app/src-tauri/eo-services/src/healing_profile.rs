@@ -65,6 +65,15 @@ pub struct HealingProfile {
 }
 
 impl HealingProfile {
+    /// The TT of one use that cost `cost_ped`. A profile resolved without
+    /// its TT basis counts the whole cost as TT.
+    pub fn tt_of_use(&self, cost_ped: f64) -> f64 {
+        match self.tt_per_use_ped {
+            Some(tt) if tt.is_finite() && tt >= 0.0 => tt.min(cost_ped),
+            _ => cost_ped,
+        }
+    }
+
     pub fn direct_matches(&self, amount: f64) -> bool {
         if !self.mode.has_direct() {
             return false;

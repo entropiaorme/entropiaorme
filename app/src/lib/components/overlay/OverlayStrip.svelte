@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { TrackingLive, TrackingStatus, WeaponMismatchDecision } from '$lib/api';
-	import { overlayStats, scopedStats } from '$lib/statsCustomisation.svelte';
+	import { enabledStats, overlayStats } from '$lib/statsCustomisation.svelte';
 	import { getStatDef, type StatContext } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
 	import { ICON_ARMOUR } from './icons';
@@ -111,7 +111,6 @@
 	// drawing figures it has no family to fill.
 	const lifetime = $derived(status?.lifetime ?? null);
 	const showingLifetime = $derived(statsScope.current === 'lifetime' && lifetime !== null);
-	const overlayScope = $derived(showingLifetime ? 'lifetime' : 'instance');
 	const activities = $derived(data.activities ?? null);
 	const standing = $derived(activities?.active ?? []);
 	const readyCount = $derived(activities?.readyCount ?? 0);
@@ -139,9 +138,7 @@
 			data.currentToolKind !== 'harvesting' &&
 			(Boolean(data.currentTool) || (data.unpricedShots ?? 0) > 0),
 	);
-	const enabledPills = $derived(
-		scopedStats(overlayStats.current, overlayScope, { fallback: false }),
-	);
+	const enabledPills = $derived(enabledStats(overlayStats.current));
 
 	function formatElapsed(seconds: number): string {
 		const h = Math.floor(seconds / 3600);
@@ -581,7 +578,7 @@
 			{#each enabledPills as pref (pref.id)}
 				{@const def = getStatDef(pref.id)}
 				{#if def}
-					{@const r = showingLifetime && def.renderLifetime && lifetime
+					{@const r = showingLifetime && lifetime
 						? def.renderLifetime(lifetime, statContext)
 						: def.render(status, statContext)}
 					{@const valueColor = r.value === NO_DATA

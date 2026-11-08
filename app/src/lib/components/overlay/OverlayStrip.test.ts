@@ -21,7 +21,7 @@ const { overlayStats, statsScope, setStatsScope } = vi.hoisted(() => {
 	};
 });
 
-// Only the state seam is stubbed; `scopedStats` stays real so the pill
+// Only the state seam is stubbed; `enabledStats` stays real so the pill
 // assertions exercise the actual instance/lifetime filter.
 vi.mock('$lib/statsCustomisation.svelte', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/statsCustomisation.svelte')>()),

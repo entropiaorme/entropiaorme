@@ -53,8 +53,7 @@ pub use attribution::{
     damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, HitMargin, BOOSTED_REACH,
     CRITICAL_REACH, DISPLAY_TOLERANCE, REDUCED_REACH,
 };
-// The protection tests read back what the live readout would.
-#[cfg(test)]
+// The recorded session's expected loot reads its armour as the live readout does.
 pub(crate) use cycled::read_session_armour;
 pub use doses::{DoseError, DoseStart};
 pub use intervals::{

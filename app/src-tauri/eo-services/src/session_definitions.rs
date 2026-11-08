@@ -24,6 +24,7 @@ use rusqlite::OptionalExtension as _;
 
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
+use crate::session_expectation::{ExpectedSpan, SessionExpectation};
 use crate::session_scope::{self, StatsScope};
 
 /// The service's error surface: `Invalid` is a caller error carrying
@@ -207,6 +208,21 @@ pub struct DefinitionLifetimeStats {
     pub last_kill_loot: Option<f64>,
     /// `None` also when that kill has no recorded weapon cost.
     pub last_kill_multiplier: Option<f64>,
+    /// Expected loot over the instances that recorded weapon evidence;
+    /// `None` when none of them did.
+    pub expected: Option<FamilyExpectation>,
+}
+
+/// A family's expected loot, summed over the instances that have one. Each
+/// instance is read at its own session-start looter levels.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FamilyExpectation {
+    /// How many instances these figures span.
+    pub sessions: i64,
+    /// Those instances' Cycled: the denominator the expected loot answers
+    /// to, which is narrower than the family's whole Cycled.
+    pub cycled: f64,
+    pub spans: SessionExpectation,
 }
 
 impl DefinitionLifetimeStats {
@@ -242,6 +258,18 @@ impl DefinitionLifetimeStats {
         if live.kill_count > 0 {
             self.last_kill_loot = live.latest_kill_loot;
             self.last_kill_multiplier = live.multiplier_last;
+        }
+        if let Some(cycle) = &live.expected_cycle {
+            let expected = self.expected.get_or_insert_with(Default::default);
+            expected.sessions += 1;
+            expected.cycled += cycle.split.cycled;
+            expected
+                .spans
+                .three_looter_mean
+                .add((&cycle.three_looter_mean).into());
+            expected.spans.animal.add((&cycle.animal).into());
+            expected.spans.mutant.add((&cycle.mutant).into());
+            expected.spans.robot.add((&cycle.robot).into());
         }
     }
 }
@@ -406,6 +434,18 @@ impl SessionDefinitionService {
             self.db
                 .with_writer(|conn| crate::session_summary::heal_summaries(conn))
                 .await?;
+            // One writer turn each, so tracking keeps its turn between them.
+            let missing = self
+                .db
+                .with_reader(|conn| crate::session_summary::sessions_missing_expectation(conn))
+                .await?;
+            for session_id in missing {
+                self.db
+                    .with_writer(move |conn| {
+                        crate::session_summary::write_session_expectation(conn, &session_id)
+                    })
+                    .await?;
+            }
             self.summaries_healed.store(true, Ordering::SeqCst);
         }
         Ok(self
@@ -417,6 +457,7 @@ impl SessionDefinitionService {
                 let economy = session_scope::counts_on(StatsScope::Economy, "s");
                 let progression = session_scope::counts_on(StatsScope::Progression, "s");
                 let both = format!("{economy} AND {progression}");
+                let covered = format!("{economy} AND ss.expected_tt_mean IS NOT NULL");
                 let sum = |scope: &str, column: &str| {
                     format!("COALESCE(SUM(CASE WHEN {scope} THEN ss.{column} END), 0)")
                 };
@@ -428,7 +469,12 @@ impl SessionDefinitionService {
                                 COALESCE(MAX(CASE WHEN {economy} THEN ss.kill_damage_max END), 0), \
                                 {shots}, {crits}, {globals}, {hofs}, \
                                 {swings}, {multiplier_sum}, {multiplier_count}, \
-                                MAX(CASE WHEN {economy} THEN ss.multiplier_max END) \
+                                MAX(CASE WHEN {economy} THEN ss.multiplier_max END), \
+                                COUNT(CASE WHEN {covered} THEN 1 END), {covered_cycled}, \
+                                {mean}, {mean_low}, {mean_high}, \
+                                {animal}, {animal_low}, {animal_high}, \
+                                {mutant}, {mutant_low}, {mutant_high}, \
+                                {robot}, {robot_low}, {robot_high} \
                          FROM session_summaries ss \
                          JOIN tracking_sessions s ON s.id = ss.session_id \
                          WHERE s.definition_id = ?",
@@ -448,10 +494,45 @@ impl SessionDefinitionService {
                         swings = sum(&economy, "harvest_swings"),
                         multiplier_sum = sum(&economy, "multiplier_sum"),
                         multiplier_count = sum(&economy, "multiplier_count"),
+                        covered_cycled = sum(&covered, "cycled_ped"),
+                        mean = sum(&economy, "expected_tt_mean"),
+                        mean_low = sum(&economy, "expected_tt_mean_low"),
+                        mean_high = sum(&economy, "expected_tt_mean_high"),
+                        animal = sum(&economy, "expected_tt_animal"),
+                        animal_low = sum(&economy, "expected_tt_animal_low"),
+                        animal_high = sum(&economy, "expected_tt_animal_high"),
+                        mutant = sum(&economy, "expected_tt_mutant"),
+                        mutant_low = sum(&economy, "expected_tt_mutant_low"),
+                        mutant_high = sum(&economy, "expected_tt_mutant_high"),
+                        robot = sum(&economy, "expected_tt_robot"),
+                        robot_low = sum(&economy, "expected_tt_robot_low"),
+                        robot_high = sum(&economy, "expected_tt_robot_high"),
                     ),
                     rusqlite::params![definition_id],
                     |row| {
                         let damage_total: f64 = row.get(9)?;
+                        let span = |from: usize| -> rusqlite::Result<ExpectedSpan> {
+                            Ok(ExpectedSpan {
+                                expected: row.get(from)?,
+                                low: row.get(from + 1)?,
+                                high: row.get(from + 2)?,
+                            })
+                        };
+                        let expected_sessions: i64 = row.get(19)?;
+                        let expected = (expected_sessions > 0)
+                            .then(|| -> rusqlite::Result<FamilyExpectation> {
+                                Ok(FamilyExpectation {
+                                    sessions: expected_sessions,
+                                    cycled: row.get(20)?,
+                                    spans: SessionExpectation {
+                                        three_looter_mean: span(21)?,
+                                        animal: span(24)?,
+                                        mutant: span(27)?,
+                                        robot: span(30)?,
+                                    },
+                                })
+                            })
+                            .transpose()?;
                         Ok(DefinitionLifetimeStats {
                             instance_count: row.get(0)?,
                             cycled: row.get(1)?,
@@ -475,6 +556,7 @@ impl SessionDefinitionService {
                             multiplier_max: row.get(18)?,
                             last_kill_loot: None,
                             last_kill_multiplier: None,
+                            expected,
                         })
                     },
                 )?;

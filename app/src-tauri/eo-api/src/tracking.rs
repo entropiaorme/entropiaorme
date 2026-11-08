@@ -682,6 +682,44 @@ pub struct LifetimeStats {
     /// one. Null also when that kill has no recorded weapon cost.
     pub multiplier_last: Nullable<f64>,
     pub latest_kill_loot: Nullable<f64>,
+    /// Expected loot over the instances that recorded weapon evidence.
+    /// Null when none of them did.
+    pub expected_cycle: Nullable<LifetimeExpectedCycle>,
+}
+
+/// One looter basis of a family's expected loot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedAtBasis {
+    pub expected_loot_tt_ped: f64,
+    /// The same with the unknown-efficiency TT at the model's 0% and 100%
+    /// Efficiency returns: the range the point lies in.
+    pub low_ped: f64,
+    pub high_ped: f64,
+}
+
+/// A family's expected loot at every looter basis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedBases {
+    pub three_looter_mean: LifetimeExpectedAtBasis,
+    pub animal: LifetimeExpectedAtBasis,
+    pub mutant: LifetimeExpectedAtBasis,
+    pub robot: LifetimeExpectedAtBasis,
+}
+
+/// Expected loot summed over the instances of a family that recorded weapon
+/// evidence, each at its own session-start looter levels. A planning
+/// estimate, never observed or realised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedCycle {
+    /// How many instances this spans: the rest recorded no evidence and
+    /// are in neither side of the ratio.
+    pub sessions: i64,
+    /// Those instances' Cycled.
+    pub cycled_ped: f64,
+    pub bases: LifetimeExpectedBases,
 }
 
 /// The consolidated dashboard hydration snapshot: the polymorphic idle /
@@ -1918,6 +1956,29 @@ async fn lifetime_stats(
         multiplier_max: round_opt(family.multiplier_max, 4),
         multiplier_last: round_opt(family.last_kill_multiplier, 4),
         latest_kill_loot: round_opt(family.last_kill_loot, 2),
+        expected_cycle: family
+            .expected
+            .map(|expected| {
+                let round = |value: f64| round_half_even(value, 6) + 0.0;
+                let at = |span: eo_services::session_expectation::ExpectedSpan| {
+                    LifetimeExpectedAtBasis {
+                        expected_loot_tt_ped: round(span.expected),
+                        low_ped: round(span.low),
+                        high_ped: round(span.high),
+                    }
+                };
+                LifetimeExpectedCycle {
+                    sessions: expected.sessions,
+                    cycled_ped: round(expected.cycled),
+                    bases: LifetimeExpectedBases {
+                        three_looter_mean: at(expected.spans.three_looter_mean),
+                        animal: at(expected.spans.animal),
+                        mutant: at(expected.spans.mutant),
+                        robot: at(expected.spans.robot),
+                    },
+                }
+            })
+            .into(),
     }))
 }
 

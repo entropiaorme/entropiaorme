@@ -169,8 +169,8 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
 	WebviewWindow: seams.FakeWebviewWindow,
 }));
 
-// Only the state seam is stubbed; the pure `scopedStats` filter stays
-// real so the strip narrows its pills the way it does in the app.
+// Only the state seam is stubbed; the pure `enabledStats` filter stays
+// real so the strip draws its pills the way it does in the app.
 vi.mock('$lib/statsCustomisation.svelte', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/statsCustomisation.svelte')>()),
 	overlayStats: seams.overlayStats,

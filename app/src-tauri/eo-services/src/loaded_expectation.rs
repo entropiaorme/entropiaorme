@@ -21,8 +21,54 @@
 //! realised accounting.
 
 use crate::expected_hunting::{
-    community_model_v1, evaluate, ExpectedHuntingError, LooterSource, OffensiveLoadoutEvidence,
+    community_model_v1, evaluate, ExpectedHuntingError, LooterSource, OffensiveComponentEvidence,
+    OffensiveComponentKind, OffensiveLoadoutEvidence,
 };
+
+/// A session's offensive phases flattened for the expectation: each phase's
+/// components at the TT it actually cycled. The live readout and the recorded
+/// summary both build through this, so the two cannot read a phase differently.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FlattenedPhases {
+    pub components: Vec<OffensiveComponentEvidence>,
+    /// The decay implants and absorbers took over, summed over the phases:
+    /// outside the model, inside the loot pool.
+    pub transferred_tt: f64,
+}
+
+impl FlattenedPhases {
+    /// Add one phase. Without evidence, a phase that cost something counts
+    /// as a weapon of unknown Efficiency at its raw TT.
+    pub fn add(
+        &mut self,
+        evidence: Option<&OffensiveLoadoutEvidence>,
+        tool_name: &str,
+        cost_per_shot: f64,
+        shots_fired: i64,
+    ) {
+        let Some(evidence) = evidence else {
+            if shots_fired > 0 && cost_per_shot > 0.0 {
+                self.components.push(OffensiveComponentEvidence {
+                    kind: OffensiveComponentKind::Weapon,
+                    catalog_id: None,
+                    name: tool_name.to_string(),
+                    efficiency_pct: None,
+                    raw_tt_per_use: cost_per_shot * shots_fired as f64,
+                    consumed_premium_per_use: 0.0,
+                });
+            }
+            return;
+        };
+        let shots = shots_fired.max(0) as f64;
+        self.transferred_tt += evidence.transferred_tt_per_use * shots;
+        for component in &evidence.components {
+            let mut component = component.clone();
+            component.raw_tt_per_use *= shots;
+            component.consumed_premium_per_use *= shots;
+            self.components.push(component);
+        }
+    }
+}
 
 /// What the session cycled, as the loaded expectation reads it.
 #[derive(Debug, Clone, PartialEq)]
@@ -144,6 +190,36 @@ mod tests {
             raw_tt_per_use: raw,
             consumed_premium_per_use: premium,
         }
+    }
+
+    #[test]
+    fn a_flattened_phase_scales_to_the_shots_it_fired() {
+        let evidence = OffensiveLoadoutEvidence {
+            components: vec![weapon(Some(80.0), 0.05, 0.01)],
+            looters: HuntingLooterLevels {
+                animal: 37.0,
+                mutant: 37.0,
+                robot: 37.0,
+            },
+            looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.002,
+        };
+        let mut phases = FlattenedPhases::default();
+        phases.add(Some(&evidence), "Rifle", 0.05, 10);
+        assert_eq!(phases.components[0].raw_tt_per_use, 0.5);
+        assert_eq!(phases.components[0].consumed_premium_per_use, 0.1);
+        assert_eq!(phases.transferred_tt, 0.02);
+
+        // No evidence: the phase counts at its raw TT, of unknown Efficiency.
+        phases.add(None, "Pistol", 0.1, 3);
+        assert_eq!(phases.components[1].efficiency_pct, None);
+        assert_eq!(phases.components[1].name, "Pistol");
+        assert!((phases.components[1].raw_tt_per_use - 0.3).abs() < 1e-12);
+
+        // A phase that cost nothing adds nothing.
+        phases.add(None, "Fist", 0.0, 9);
+        phases.add(None, "Unfired", 0.1, 0);
+        assert_eq!(phases.components.len(), 2);
     }
 
     fn streams(

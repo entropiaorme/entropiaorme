@@ -29,6 +29,9 @@ function detail(overrides: Partial<WeaponAttributionSummary> = {}): SessionDetai
 			markedTicks: 0,
 			effectTicks: 0,
 			pricedTicks: 0,
+			boostedShots: 0,
+			reducedShots: 0,
+			hitMargins: [],
 			unclaimedTicks: 0,
 			undeclaredShots: 0,
 			ranUndeclared: false,
@@ -146,7 +149,7 @@ describe('the weapon review model', () => {
 		await model.loadWeapons('a');
 		expect(model.weaponsFor('a')).toEqual({ status: 'error', message: 'nope' });
 		mocked.getWeaponCorrectionWeapons.mockResolvedValue([
-			{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: true },
+			{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: true, margin: null },
 		]);
 		await model.loadWeapons('a');
 		await model.loadWeapons('a');

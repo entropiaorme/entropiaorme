@@ -12,21 +12,31 @@ use super::{
 use crate::attack_rate::WeaponPricing;
 use crate::cost_engine::cost_per_shot_from_props;
 use crate::db::DbError;
+use crate::tracker::{damage_band_from_props, DamageBand, HitMargin};
 
 /// How a weapon's stored props are prepared for pricing, when configured.
 pub(super) type Pricing<'a> = Option<&'a WeaponPricing>;
 
-/// A weapon's name and its per-shot cost in PED as it is configured now,
-/// its props prepared by `pricing` under the reload speed the shot was
-/// charged at (`reload_speed_percent`; a shot stored before that was kept
-/// takes the reload speed in effect now), or None when the item is gone or
-/// is not a weapon.
+/// A weapon as an assignment would book it now.
+#[derive(Debug, Clone)]
+pub(super) struct PricedWeapon {
+    pub(super) name: String,
+    /// Its per-shot cost in PED.
+    pub(super) cost: f64,
+    /// The damage band a hit is checked against, under the same preparation.
+    pub(super) band: Option<DamageBand>,
+}
+
+/// A weapon as it is configured now, its props prepared by `pricing` under
+/// the reload speed the shot was charged at (`reload_speed_percent`; a shot
+/// stored before that was kept takes the reload speed in effect now), or
+/// None when the item is gone or is not a weapon.
 pub(super) fn weapon_price(
     conn: &rusqlite::Connection,
     equipment_id: i64,
     pricing: Pricing<'_>,
     reload_speed_percent: Option<f64>,
-) -> Result<Option<(String, f64)>, WeaponReviewError> {
+) -> Result<Option<PricedWeapon>, WeaponReviewError> {
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT name, properties_json FROM equipment_library \
@@ -52,7 +62,29 @@ pub(super) fn weapon_price(
         .and_then(Value::as_f64)
         .unwrap_or(0.0)
         / 100.0;
-    Ok(Some((name, cost)))
+    let band = damage_band_from_props(&props);
+    Ok(Some(PricedWeapon { name, cost, band }))
+}
+
+/// Whether a stored classification is a hit priced to the held weapon from
+/// outside its band.
+pub(super) fn is_margin(attribution: &str) -> bool {
+    matches!(attribution, "boosted" | "reduced")
+}
+
+/// The margin holding a stored shot its candidate weapon did not fit when
+/// it landed, judged against the weapon as it is configured now. A weapon
+/// that fitted the shot keeps that verdict.
+pub(super) fn stored_margin(
+    candidate: &ShotCandidate,
+    amount: Option<f64>,
+    critical: bool,
+    band: Option<DamageBand>,
+) -> Option<HitMargin> {
+    if candidate.fits {
+        return None;
+    }
+    band?.margin(amount?, critical)
 }
 
 pub(super) fn parse_candidates(raw: &str) -> Result<Vec<ShotCandidate>, WeaponReviewError> {
@@ -97,8 +129,9 @@ pub(super) fn session_shots(
         .optional()?
         .unwrap_or(false);
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM weapon_shot_evidence WHERE session_id = ?1 AND attribution = ?2",
-        rusqlite::params![session_id, group.attribution()],
+        "SELECT COUNT(*) FROM weapon_shot_evidence \
+         WHERE session_id = ?1 AND attribution = ?2 AND (NOT ?3 OR review_id IS NULL)",
+        rusqlite::params![session_id, group.attribution(), group.drops_decided()],
         |row| row.get(0),
     )?;
     let mut stmt = conn.prepare(
@@ -109,12 +142,18 @@ pub(super) fn session_shots(
          LEFT JOIN weapon_attribution_corrections c \
                 ON c.id = e.correction_id AND c.undone_at IS NULL \
          LEFT JOIN weapon_attribution_reviews r ON r.id = e.review_id \
-         WHERE e.session_id = ?1 AND e.attribution = ?2 \
+         WHERE e.session_id = ?1 AND e.attribution = ?2 AND (NOT ?5 OR e.review_id IS NULL) \
          ORDER BY e.observed_at, e.id \
          LIMIT ?3 OFFSET ?4",
     )?;
     let rows = stmt.query_map(
-        rusqlite::params![session_id, group.attribution(), limit, offset],
+        rusqlite::params![
+            session_id,
+            group.attribution(),
+            limit,
+            offset,
+            group.drops_decided()
+        ],
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -167,9 +206,12 @@ pub(super) fn session_shots(
         }
         shots.push(ReviewShot {
             correctable: ended
-                && group != ShotGroup::Evidence
-                && tool_name.is_none()
-                && correction_id.is_none(),
+                && correction_id.is_none()
+                && match group {
+                    ShotGroup::Evidence => false,
+                    ShotGroup::Boosted | ShotGroup::Reduced => true,
+                    ShotGroup::Unresolved | ShotGroup::EffectTick => tool_name.is_none(),
+                },
             group,
             effect_candidates,
             effect_window_id,
@@ -196,40 +238,74 @@ pub(super) fn correction_weapons(
     evidence_id: &str,
     pricing: Pricing<'_>,
 ) -> Result<Vec<CorrectionWeapon>, WeaponReviewError> {
-    let stored: Option<(String, Option<f64>)> = conn
+    type StoredOffer = (
+        String,
+        Option<f64>,
+        Option<f64>,
+        bool,
+        Option<String>,
+        String,
+    );
+    let stored: Option<StoredOffer> = conn
         .query_row(
-            "SELECT candidates_json, reload_speed_percent FROM weapon_shot_evidence WHERE id = ?1",
+            "SELECT candidates_json, reload_speed_percent, amount, critical, tool_name, \
+                    attribution \
+             FROM weapon_shot_evidence WHERE id = ?1",
             [evidence_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((candidates, reload_speed_percent)) = stored else {
+    let Some((candidates, reload_speed_percent, amount, critical, priced_to, attribution)) = stored
+    else {
         return Err(WeaponReviewError::NotFound("Shot not found"));
     };
     let mut weapons = Vec::new();
     for candidate in parse_candidates(&candidates)? {
-        if let Some((name, cost)) =
+        // A margin hit is already priced to its held weapon: moving it there
+        // would change nothing.
+        if is_margin(&attribution) && priced_to.as_deref() == Some(candidate.name.as_str()) {
+            continue;
+        }
+        if let Some(weapon) =
             weapon_price(conn, candidate.equipment_id, pricing, reload_speed_percent)?
         {
+            let margin = stored_margin(&candidate, amount, critical, weapon.band);
             weapons.push(CorrectionWeapon {
                 equipment_id: candidate.equipment_id,
-                name,
-                cost_per_shot_ped: cost,
+                name: weapon.name,
+                cost_per_shot_ped: weapon.cost,
                 fits: candidate.fits,
+                margin,
             });
         }
     }
-    // Stable: fitting weapons first, then the carried order.
-    weapons.sort_by_key(|weapon| !weapon.fits);
+    // Stable: fitting weapons first, then those holding the shot in their
+    // margin, then the carried order.
+    weapons.sort_by_key(|weapon| match (weapon.fits, weapon.margin) {
+        (true, _) => 0,
+        (false, Some(_)) => 1,
+        (false, None) => 2,
+    });
     Ok(weapons)
 }
 
 /// Shots of one session left without a price that share everything pricing
-/// them needs: the carried weapons they remember, and the reload speed they
-/// were charged under.
+/// them needs: the carried weapons they remember, the reload speed they were
+/// charged under, and the magnitude the weapons' margins are judged on.
 pub(super) struct UnpricedGroup {
     pub(super) session_id: String,
     pub(super) candidates: Vec<ShotCandidate>,
+    pub(super) amount: Option<f64>,
+    pub(super) critical: bool,
     pub(super) reload_speed_percent: Option<f64>,
     pub(super) shots: i64,
 }
@@ -246,11 +322,12 @@ pub(super) fn unpriced_groups(
     for chunk in session_ids.chunks(500) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
-            "SELECT session_id, candidates_json, reload_speed_percent, COUNT(*) \
+            "SELECT session_id, candidates_json, reload_speed_percent, amount, critical, \
+                    COUNT(*) \
              FROM weapon_shot_evidence \
              WHERE attribution = 'unresolved' AND tool_name IS NULL \
                AND correction_id IS NULL AND session_id IN ({placeholders}) \
-             GROUP BY session_id, candidates_json, reload_speed_percent"
+             GROUP BY session_id, candidates_json, reload_speed_percent, amount, critical"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
@@ -258,14 +335,18 @@ pub(super) fn unpriced_groups(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, Option<f64>>(2)?,
-                row.get::<_, i64>(3)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, bool>(4)?,
+                row.get::<_, i64>(5)?,
             ))
         })?;
         for row in rows {
-            let (session_id, candidates, reload_speed_percent, shots) = row?;
+            let (session_id, candidates, reload_speed_percent, amount, critical, shots) = row?;
             groups.push(UnpricedGroup {
                 session_id,
                 candidates: parse_candidates(&candidates)?,
+                amount,
+                critical,
                 reload_speed_percent,
                 shots,
             });
@@ -281,7 +362,7 @@ type PriceKey = (i64, Option<u64>);
 pub(super) struct PriceBook<'a> {
     conn: &'a rusqlite::Connection,
     pricing: Pricing<'a>,
-    prices: std::collections::HashMap<PriceKey, Option<(String, f64)>>,
+    prices: std::collections::HashMap<PriceKey, Option<PricedWeapon>>,
 }
 
 impl<'a> PriceBook<'a> {
@@ -293,13 +374,13 @@ impl<'a> PriceBook<'a> {
         }
     }
 
-    /// The weapon's name and per-shot price at this reload speed; None when
-    /// it has left Equipment.
+    /// The weapon as priced at this reload speed; None when it has left
+    /// Equipment.
     pub(super) fn price(
         &mut self,
         equipment_id: i64,
         reload_speed_percent: Option<f64>,
-    ) -> Result<Option<(String, f64)>, WeaponReviewError> {
+    ) -> Result<Option<PricedWeapon>, WeaponReviewError> {
         let key = (equipment_id, reload_speed_percent.map(f64::to_bits));
         if let Some(known) = self.prices.get(&key) {
             return Ok(known.clone());
@@ -308,6 +389,37 @@ impl<'a> PriceBook<'a> {
         self.prices.insert(key, price.clone());
         Ok(price)
     }
+}
+
+/// One carried weapon that explains a group of unpriced shots.
+struct Explaining {
+    equipment_id: i64,
+    weapon: PricedWeapon,
+    /// None when its band fitted them.
+    margin: Option<HitMargin>,
+}
+
+/// The weapons still in Equipment that explain a group's shots: those whose
+/// band fitted them, and those holding them in their margin.
+fn explaining(
+    book: &mut PriceBook<'_>,
+    group: &UnpricedGroup,
+) -> Result<Vec<Explaining>, WeaponReviewError> {
+    let mut found = Vec::new();
+    for candidate in &group.candidates {
+        let Some(weapon) = book.price(candidate.equipment_id, group.reload_speed_percent)? else {
+            continue;
+        };
+        let margin = stored_margin(candidate, group.amount, group.critical, weapon.band);
+        if candidate.fits || margin.is_some() {
+            found.push(Explaining {
+                equipment_id: candidate.equipment_id,
+                weapon,
+                margin,
+            });
+        }
+    }
+    Ok(found)
 }
 
 /// What each requested session's unpriced shots could cost at most, for the
@@ -321,15 +433,12 @@ pub(super) fn unpriced_exposure(
     let mut exposures: std::collections::BTreeMap<String, UnpricedExposure> =
         std::collections::BTreeMap::new();
     for group in unpriced_groups(conn, session_ids)? {
-        // The dearest weapon that fitted: the most the shot can have cost.
-        let mut dearest: Option<f64> = None;
-        for candidate in group.candidates.iter().filter(|candidate| candidate.fits) {
-            if let Some((_, price)) =
-                book.price(candidate.equipment_id, group.reload_speed_percent)?
-            {
-                dearest = Some(dearest.map_or(price, |known| known.max(price)));
-            }
-        }
+        // The dearest weapon that explains it: the most the shot can have
+        // cost.
+        let dearest = explaining(&mut book, &group)?
+            .iter()
+            .map(|found| found.weapon.cost)
+            .max_by(f64::total_cmp);
         let exposure = exposures
             .entry(group.session_id.clone())
             .or_insert_with(|| UnpricedExposure {
@@ -348,8 +457,9 @@ pub(super) fn unpriced_exposure(
 }
 
 /// The weapons a session's unpriced shots could all be assigned to at once:
-/// each still in Equipment that fitted at least one of them, with how many
-/// it fitted, how many it would leave, and the cost assigning it would add.
+/// each still in Equipment that explains at least one of them, with how many
+/// it fitted, how many it would price as boosted or reduced, how many it
+/// would leave, and the cost assigning it would add.
 pub(super) fn bulk_assign_options(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -361,37 +471,42 @@ pub(super) fn bulk_assign_options(
     let mut options: std::collections::BTreeMap<i64, BulkAssignOption> =
         std::collections::BTreeMap::new();
     for group in &groups {
-        for candidate in group.candidates.iter().filter(|candidate| candidate.fits) {
-            let Some((name, price)) =
-                book.price(candidate.equipment_id, group.reload_speed_percent)?
-            else {
-                continue;
-            };
-            let option =
-                options
-                    .entry(candidate.equipment_id)
-                    .or_insert_with(|| BulkAssignOption {
-                        equipment_id: candidate.equipment_id,
-                        name,
-                        fitting_shots: 0,
-                        skipped_shots: 0,
-                        added_cost_ped: 0.0,
-                    });
-            option.fitting_shots += group.shots;
-            option.added_cost_ped += price * group.shots as f64;
+        for found in explaining(&mut book, group)? {
+            let option = options
+                .entry(found.equipment_id)
+                .or_insert_with(|| BulkAssignOption {
+                    equipment_id: found.equipment_id,
+                    name: found.weapon.name.clone(),
+                    fitting_shots: 0,
+                    boosted_shots: 0,
+                    reduced_shots: 0,
+                    skipped_shots: 0,
+                    added_cost_ped: 0.0,
+                });
+            match found.margin {
+                None => option.fitting_shots += group.shots,
+                Some(HitMargin::Boosted) => option.boosted_shots += group.shots,
+                Some(HitMargin::Reduced) => option.reduced_shots += group.shots,
+            }
+            option.added_cost_ped += found.weapon.cost * group.shots as f64;
         }
     }
+    let explained = |option: &BulkAssignOption| {
+        option.fitting_shots + option.boosted_shots + option.reduced_shots
+    };
     let mut options: Vec<BulkAssignOption> = options
         .into_values()
         .map(|option| BulkAssignOption {
-            skipped_shots: total - option.fitting_shots,
+            skipped_shots: total - explained(&option),
             ..option
         })
         .collect();
-    // The weapon that explains the most shots first.
+    // The weapon that explains the most shots first, its band before its
+    // margin.
     options.sort_by(|a, b| {
-        b.fitting_shots
-            .cmp(&a.fitting_shots)
+        explained(b)
+            .cmp(&explained(a))
+            .then_with(|| b.fitting_shots.cmp(&a.fitting_shots))
             .then_with(|| a.name.cmp(&b.name))
     });
     Ok(options)
@@ -454,6 +569,35 @@ pub fn session_detail_block(
         [session_id],
         |row| row.get(0),
     )?;
+    // Hits priced from outside the held weapon's band: every one as it
+    // landed, unless a live decision moved it off that weapon.
+    let (boosted, reduced): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(attribution = 'boosted'), 0), \
+                COALESCE(SUM(attribution = 'reduced'), 0) \
+         FROM weapon_shot_evidence WHERE session_id = ?1 AND review_id IS NULL",
+        [session_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    // The ones still standing, per weapon: what the player weighs against
+    // what they remember of the session.
+    let hit_margins: Vec<Value> = {
+        let mut stmt = conn.prepare(
+            "SELECT tool_name, SUM(attribution = 'boosted'), SUM(attribution = 'reduced') \
+             FROM weapon_shot_evidence \
+             WHERE session_id = ?1 AND attribution IN ('boosted', 'reduced') \
+               AND review_id IS NULL AND correction_id IS NULL AND tool_name IS NOT NULL \
+             GROUP BY tool_name \
+             ORDER BY SUM(attribution = 'boosted') DESC, tool_name",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(json!({
+                "toolName": row.get::<_, String>(0)?,
+                "boosted": row.get::<_, i64>(1)?,
+                "reduced": row.get::<_, i64>(2)?,
+            }))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
     let batches: Vec<Value> = {
         // Live bulk assignments, oldest first.
         let mut stmt = conn.prepare(
@@ -506,6 +650,9 @@ pub fn session_detail_block(
         "markedTicks": marked_ticks,
         "effectTicks": effect_ticks,
         "pricedTicks": priced_ticks,
+        "boostedShots": boosted,
+        "reducedShots": reduced,
+        "hitMargins": hit_margins,
         "unclaimedTicks": unclaimed_ticks(conn, session_id)?,
         "undeclaredShots": undeclared,
         "ranUndeclared": undeclared >= UNDECLARED_WARNING_SHOTS,

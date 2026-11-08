@@ -705,6 +705,11 @@ fn weapon_attribution_mismatch_matches_the_goldens() {
 }
 
 #[test]
+fn weapon_hit_margins_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_hit_margins", "");
+}
+
+#[test]
 fn dot_weapon_rotation_matches_the_goldens() {
     replay_against_goldens("scripted", "dot_weapon_rotation", "");
 }

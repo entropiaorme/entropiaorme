@@ -252,6 +252,44 @@ describe('derived activity feedback', () => {
 	});
 });
 
+describe('the held weapon damage cue', () => {
+	const held = {
+		status: 'active' as const,
+		currentTool: 'Sollomate Opalo',
+		currentToolKind: 'weapon' as const,
+		currentActivity: 'hunting' as const,
+		weaponDeclared: true,
+		hotbarListenerActive: true,
+	};
+
+	it('says when recent hits land above the listed range', () => {
+		render(OverlayStrip, { props: { data: liveData({ ...held, weaponHitCue: 'boosted' }) } });
+		const cue = screen.getByTestId('weapon-hit-cue');
+		expect(cue.textContent?.trim()).toBe('Boosted');
+		expect(cue.getAttribute('title')).toContain('press the slot of the weapon you are firing');
+		expect(screen.queryByTestId('activity-feedback')).toBeNull();
+	});
+
+	it('says when recent hits land below the listed range', () => {
+		render(OverlayStrip, { props: { data: liveData({ ...held, weaponHitCue: 'reduced' }) } });
+		expect(screen.getByTestId('weapon-hit-cue').textContent?.trim()).toBe('Reduced');
+	});
+
+	it('leaves the activity line alone while hits land inside the range', () => {
+		render(OverlayStrip, { props: { data: liveData({ ...held, weaponHitCue: null }) } });
+		expect(screen.queryByTestId('weapon-hit-cue')).toBeNull();
+		expect(screen.getByTestId('activity-feedback').textContent?.trim()).toBe('Hunting');
+	});
+
+	it('gives way to the prompt to declare a weapon', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ ...held, weaponDeclared: false, weaponHitCue: 'boosted' }) },
+		});
+		expect(screen.queryByTestId('weapon-hit-cue')).toBeNull();
+		expect(screen.getByTestId('weapon-undeclared-cue')).toBeTruthy();
+	});
+});
+
 describe('the undeclared weapon cue', () => {
 	const undeclared = {
 		status: 'active' as const,

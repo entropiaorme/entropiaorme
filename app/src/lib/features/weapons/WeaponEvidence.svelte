@@ -7,13 +7,16 @@
 		attributionTally,
 		describeBatch,
 		describeBulkAssign,
+		describeBulkFit,
 		describeEffect,
+		describeHitMargins,
 		describeNoFit,
 		describeUnpriced,
 		describeReview,
 		describeShot,
 		effectTickLine,
 		formatDamage,
+		marginLabel,
 		shotStanding,
 		weaponOption,
 	} from './weaponReview';
@@ -22,7 +25,13 @@
 	let { model }: { model: WeaponReviewModel } = $props();
 
 	const summary = $derived(model.summary);
-	const reviewable = $derived(summary.unresolved + summary.evidenceShots + summary.effectTicks);
+	const reviewable = $derived(
+		summary.unresolved +
+			summary.evidenceShots +
+			summary.effectTicks +
+			summary.boostedShots +
+			summary.reducedShots,
+	);
 	const groupOptions = $derived(
 		model.groups.map((group) => ({
 			id: group.id,
@@ -40,6 +49,17 @@
 	</div>
 
 	<ErrorNotice message={model.error} onDismiss={model.dismissError} class="mb-3" />
+
+	{#if summary.hitMargins.length > 0}
+		<!-- Expected and already priced: stated so the player can weigh it
+			 against what they remember being buffed or hitting. -->
+		<div class="mb-3 flex flex-col gap-1 text-xs text-text-secondary" data-testid="weapon-hit-margins">
+			{#each summary.hitMargins as row (row.toolName)}
+				<p class="text-text">{describeHitMargins(row)}</p>
+			{/each}
+			<p class="text-text-tertiary">Priced to the weapon in hand from outside its listed range. Reassign any it did not fire under Review shots.</p>
+		</div>
+	{/if}
 
 	{#if summary.unpriced > 0 || summary.ranUndeclared || model.bulkNotice}
 		{@const one = summary.unpriced === 1}
@@ -107,7 +127,7 @@
 								<div class="px-2 py-1.5 text-xs text-negative">{offered.message}</div>
 							{:else if offered.options.length === 0}
 								<div class="px-2 py-1.5 text-xs text-text-tertiary">
-									No weapon still in Equipment fits these shots
+									No weapon still in Equipment explains these shots
 								</div>
 							{:else}
 								{#each offered.options as option (option.equipmentId)}
@@ -116,7 +136,7 @@
 										role="menuitem"
 										class="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm
 											transition-colors duration-[var(--duration-fast)] hover:bg-surface-hover focus:bg-surface-hover focus:outline-none"
-										aria-label={`${option.name}: fits ${option.fittingShots}, adds ${formatPed(option.addedCostPed)} PED`}
+										aria-label={`${option.name}: ${describeBulkFit(option)}, adds ${formatPed(option.addedCostPed)} PED`}
 										onclick={() => {
 											close();
 											model.chooseBulk(option);
@@ -124,7 +144,7 @@
 									>
 										<span class="truncate text-text">{option.name}</span>
 										<span class="shrink-0 text-xs tabular-nums text-text-tertiary">
-											fits {option.fittingShots} · +{formatPed(option.addedCostPed)} PED
+											{describeBulkFit(option)} · +{formatPed(option.addedCostPed)} PED
 										</span>
 									</button>
 								{/each}
@@ -287,6 +307,7 @@
 											</Button>
 										{:else if shot.correctable}
 											{@const isTick = shot.group === 'effect_tick'}
+											{@const isMargin = shot.group === 'boosted' || shot.group === 'reduced'}
 											{@const casts = isTick ? [] : shot.effectCandidates.filter((cast) => cast.standing)}
 											<Menu overlay panelClass="w-72 p-1">
 												{#snippet trigger({ open, toggle, keydown })}
@@ -305,7 +326,7 @@
 														}}
 														onkeydown={keydown}
 													>
-														{model.busy === shot.id ? 'Saving…' : isTick ? 'Price as a shot…' : 'Assign…'}
+														{model.busy === shot.id ? 'Saving…' : isTick ? 'Price as a shot…' : isMargin ? 'Reassign…' : 'Assign…'}
 													</button>
 												{/snippet}
 												{#snippet children({ close })}
@@ -335,7 +356,7 @@
 														<div class="px-2 py-1.5 text-xs text-negative">{offered.message}</div>
 													{:else if offered.weapons.length === 0}
 														<div class="px-2 py-1.5 text-xs text-text-tertiary">
-															None of the weapons carried then is still in Equipment
+															{isMargin ? 'No other weapon carried then is still in Equipment' : 'None of the weapons carried then is still in Equipment'}
 														</div>
 													{:else}
 														{#each offered.weapons as weapon (weapon.equipmentId)}
@@ -350,9 +371,9 @@
 																	void model.assign(shot.id, weapon.equipmentId);
 																}}
 															>
-																<span class="truncate {weapon.fits ? 'text-text' : 'text-text-secondary'}">{weapon.name}</span>
+																<span class="truncate {weapon.fits || weapon.margin ? 'text-text' : 'text-text-secondary'}">{weapon.name}</span>
 																<span class="shrink-0 text-xs tabular-nums text-text-tertiary">
-																	{#if weapon.fits}<span class="mr-1.5 text-positive">Fits</span>{/if}{formatPed(weapon.costPerShotPed)} PED
+																	{#if weapon.fits}<span class="mr-1.5 text-positive">Fits</span>{:else if weapon.margin}<span class="mr-1.5 text-accent">If {marginLabel(weapon.margin).toLowerCase()}</span>{/if}{formatPed(weapon.costPerShotPed)} PED
 																</span>
 															</button>
 														{/each}

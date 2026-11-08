@@ -184,20 +184,24 @@ impl TrackerActor {
     }
 
     /// Account for an unpriced shot: bound what it could have cost at the
-    /// dearest carried weapon that fitted it (a countered shot fits none),
-    /// and once enough land with no weapon declared, warn that the session
-    /// is running undeclared.
+    /// dearest carried weapon that fitted it or holds it in its margin (a
+    /// countered shot has neither), and once enough land with no weapon
+    /// declared, warn that the session is running undeclared.
     fn note_unpriced(
         providers: &Providers,
         active: &mut ActiveSession,
         observation: Observation,
         fits: &[String],
     ) {
-        let fits: &[String] = match observation {
-            Observation::Hit { .. } => fits,
-            Observation::Countered => &[],
+        let explaining: Vec<String> = match observation {
+            Observation::Hit { amount, critical } => {
+                let mut names = fits.to_vec();
+                names.extend(active.weapons.attribution.in_margin(amount, critical));
+                names
+            }
+            Observation::Countered => Vec::new(),
         };
-        let dearest = fits
+        let dearest = explaining
             .iter()
             .filter_map(|name| active.weapons.bound_price(name))
             .max_by(|a, b| a.value().total_cmp(&b.value()));

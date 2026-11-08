@@ -3,7 +3,8 @@
 //! Most shots agree with the declared weapon and live only in the kill's
 //! per-weapon phases. The shots worth keeping individually are the ones a
 //! player may want to see or correct: evidence that overrode a declared
-//! weapon, shots left unpriced, and effect ticks. Their rows are buffered
+//! weapon, hits outside the held weapon's band, shots left unpriced, and
+//! effect ticks. Their rows are buffered
 //! with the kill accumulator and written in the same transaction as the kill
 //! they settle into (or with the session's stop, for shots after its last
 //! kill), so a row exists exactly when its shot's cost does.
@@ -105,14 +106,15 @@ pub(super) struct ShotEvidence {
 }
 
 impl ShotEvidence {
-    /// Whether a shot's state keeps a stored row. Agreement is the silent
-    /// default, and evidence with nothing declared is simply how shots are
-    /// attributed without the hotbar listener: neither is worth a row per
-    /// shot. Evidence that overrode a declared weapon, an unpriced shot, and
-    /// an effect tick are.
+    /// Whether a shot's state keeps a stored row. Agreement inside the band
+    /// is the silent default, and evidence with nothing declared is simply
+    /// how shots are attributed without the hotbar listener: neither is
+    /// worth a row per shot. Evidence that overrode a declared weapon, a hit
+    /// outside the held weapon's band, an unpriced shot, and an effect tick
+    /// are.
     pub(super) fn keeps_row(attribution: &Attribution, runtime: &AttributionRuntime) -> bool {
         match attribution {
-            Attribution::Agrees { .. } => false,
+            Attribution::Agrees { reason, .. } => reason.margin().is_some(),
             Attribution::Evidence { .. } => runtime.declared().is_some(),
             Attribution::Unresolved | Attribution::EffectTick { .. } => true,
         }

@@ -6,7 +6,9 @@
 //!   an effect tick the player says was a paid shot after all) is priced
 //!   from a carried weapon. An unresolved shot already counts as a shot in
 //!   its kill's unpriced phase and moves out of it; a tick counted no shot,
-//!   so pricing it adds one.
+//!   so pricing it adds one. A boosted or reduced hit is already priced to
+//!   the weapon that was held, and moves from that phase to the chosen
+//!   weapon's, the correction recording the cost it replaced.
 //! - **Effect tick**: an unresolved hit an open effect could equally have
 //!   ticked is marked as that effect's tick: it stops counting as a shot.
 //!
@@ -21,7 +23,10 @@
 
 use rusqlite::OptionalExtension;
 
-use super::read::{parse_candidates, parse_effect_candidates, weapon_price, Pricing};
+use super::read::{
+    is_margin, parse_candidates, parse_effect_candidates, stored_margin, weapon_price, PriceBook,
+    Pricing,
+};
 use super::{WeaponCorrection, WeaponCorrectionKind, WeaponReviewError};
 use crate::db::DbError;
 
@@ -36,9 +41,14 @@ struct StoredShot {
     kill_id: Option<String>,
     attribution: String,
     tool_name: Option<String>,
+    /// The weapon the hotbar declared: what a margin hit was priced to.
+    hotbar_tool: Option<String>,
+    cost_per_shot: f64,
     amount: Option<f64>,
     critical: bool,
     correction_id: Option<String>,
+    /// The live decision that repriced it.
+    review_id: Option<String>,
     candidates: String,
     effect_candidates: String,
     /// The reload speed in effect when the shot was charged; None for a
@@ -50,6 +60,11 @@ impl StoredShot {
     fn damage(&self) -> f64 {
         self.amount.unwrap_or(0.0)
     }
+
+    /// A hit priced to the held weapon from outside its band.
+    fn in_margin(&self) -> bool {
+        is_margin(&self.attribution)
+    }
 }
 
 fn stored_shot(
@@ -59,7 +74,8 @@ fn stored_shot(
     Ok(tx
         .query_row(
             "SELECT session_id, kill_id, attribution, tool_name, amount, critical, correction_id, \
-                    candidates_json, effect_candidates_json, reload_speed_percent \
+                    candidates_json, effect_candidates_json, reload_speed_percent, hotbar_tool, \
+                    cost_per_shot, review_id \
              FROM weapon_shot_evidence WHERE id = ?1",
             [evidence_id],
             |row| {
@@ -74,6 +90,9 @@ fn stored_shot(
                     candidates: row.get(7)?,
                     effect_candidates: row.get(8)?,
                     reload_speed_percent: row.get(9)?,
+                    hotbar_tool: row.get(10)?,
+                    cost_per_shot: row.get(11)?,
+                    review_id: row.get(12)?,
                 })
             },
         )
@@ -135,7 +154,8 @@ fn take_shot(
 /// Count one shot into a kill's phase for `tool` at `cost`, creating the
 /// phase when the kill has none at that cost. A corrected phase carries no
 /// expected-return evidence: the correction prices the shot, it does not
-/// claim the loadout it was fired with.
+/// claim the loadout it was fired with. `restoring` undoes such a move, so
+/// the shot rejoins the phase it left, whatever evidence that carries.
 fn put_shot(
     tx: &rusqlite::Transaction<'_>,
     kill_id: &str,
@@ -143,15 +163,16 @@ fn put_shot(
     cost: f64,
     amount: f64,
     critical: bool,
+    restoring: bool,
 ) -> Result<(), DbError> {
     // id-order: insertion (the first-written phase at this cost and tool)
     let existing: Option<i64> = tx
         .query_row(
             "SELECT id FROM kill_tool_stats \
              WHERE kill_id = ?1 AND tool_name = ?2 AND abs(cost_per_shot - ?3) < 1e-9 \
-               AND expected_economics_json IS NULL \
+               AND (?4 OR expected_economics_json IS NULL) \
              ORDER BY id LIMIT 1",
-            rusqlite::params![kill_id, tool, cost],
+            rusqlite::params![kill_id, tool, cost, restoring],
             |row| row.get(0),
         )
         .optional()?;
@@ -228,12 +249,14 @@ pub(super) fn repair(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result
 
 /// Book a shot's move between shot and no-shot, or between phases: take it
 /// out of `from` (a phase, or None: it counted no shot) and put it into `to`
-/// likewise. False when the shot is missing from its phase.
+/// likewise (`restoring` as [`put_shot`] takes it). False when the shot is
+/// missing from its phase.
 fn book(
     tx: &rusqlite::Transaction<'_>,
     shot: &StoredShot,
     from: Option<(&str, f64)>,
     to: Option<(&str, f64)>,
+    restoring: bool,
 ) -> Result<bool, DbError> {
     let amount = shot.damage();
     let from_cost = from.map_or(0.0, |(_, cost)| cost);
@@ -246,7 +269,7 @@ fn book(
             }
         }
         if let Some((tool, cost)) = to {
-            put_shot(tx, kill_id, tool, cost, amount, shot.critical)?;
+            put_shot(tx, kill_id, tool, cost, amount, shot.critical, restoring)?;
         }
     }
     adjust_totals(
@@ -260,21 +283,35 @@ fn book(
     Ok(true)
 }
 
-/// Refuse a correction to a shot already corrected or priced, or to a
-/// session still running.
+/// Refuse a correction to a shot already corrected, to one already priced
+/// (a margin hit stands priced to its held weapon, and that is what the
+/// correction moves), or to a session still running.
 fn uncorrected_refusal(
     tx: &rusqlite::Transaction<'_>,
     shot: &StoredShot,
 ) -> Result<Option<WeaponReviewError>, DbError> {
-    if shot.tool_name.is_some() {
-        return Ok(Some(WeaponReviewError::Conflict(
-            "This shot is already priced",
-        )));
-    }
-    if shot.correction_id.is_some() {
-        return Ok(Some(WeaponReviewError::Conflict(
-            "This shot is already marked as an effect's tick",
-        )));
+    if shot.in_margin() {
+        if shot.correction_id.is_some() {
+            return Ok(Some(WeaponReviewError::Conflict(
+                "This shot is already reassigned",
+            )));
+        }
+        if shot.review_id.is_some() {
+            return Ok(Some(WeaponReviewError::Conflict(
+                "A decision during the session already moved this shot",
+            )));
+        }
+    } else {
+        if shot.tool_name.is_some() {
+            return Ok(Some(WeaponReviewError::Conflict(
+                "This shot is already priced",
+            )));
+        }
+        if shot.correction_id.is_some() {
+            return Ok(Some(WeaponReviewError::Conflict(
+                "This shot is already marked as an effect's tick",
+            )));
+        }
     }
     session_refusal(tx, &shot.session_id)
 }
@@ -283,12 +320,13 @@ fn insert_correction(
     tx: &rusqlite::Transaction<'_>,
     correction: &WeaponCorrection,
     batch_id: Option<&str>,
+    replaced_cost: Option<f64>,
 ) -> Result<(), DbError> {
     tx.execute(
         "INSERT INTO weapon_attribution_corrections \
          (id, session_id, evidence_id, equipment_id, tool_name, cost_per_shot, corrected_at, \
-          kind, effect_window_id, batch_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          kind, effect_window_id, batch_id, replaced_cost_per_shot) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         rusqlite::params![
             correction.id,
             correction.session_id,
@@ -300,6 +338,7 @@ fn insert_correction(
             correction.kind.as_str(),
             correction.effect_window_id,
             batch_id,
+            replaced_cost,
         ],
     )?;
     Ok(())
@@ -328,8 +367,8 @@ pub(super) fn assign(
     repaired(tx, outcome, |correction| &correction.session_id)
 }
 
-/// Price one shot from a weapon, as one of `batch_id`'s when given, without
-/// repairing its session.
+/// Price one shot from a weapon, or move a margin hit to it, as one of
+/// `batch_id`'s when given, without repairing its session.
 pub(super) fn assign_shot(
     tx: &rusqlite::Transaction<'_>,
     evidence_id: &str,
@@ -346,6 +385,14 @@ pub(super) fn assign_shot(
     let from = match shot.attribution.as_str() {
         "unresolved" => Some((UNPRICED_TOOL, 0.0)),
         "effect_tick" => None,
+        "boosted" | "reduced" => match shot.tool_name.as_deref() {
+            Some(tool) => Some((tool, shot.cost_per_shot)),
+            None => {
+                return Ok(Err(WeaponReviewError::Stored(
+                    "a margin hit lost its weapon",
+                )));
+            }
+        },
         _ => {
             return Ok(Err(WeaponReviewError::Invalid(
                 "Only a shot no weapon explained can be assigned",
@@ -366,23 +413,28 @@ pub(super) fn assign_shot(
         }
         Err(refusal) => return Ok(Err(refusal)),
     }
-    let Some((name, cost)) =
-        (match weapon_price(tx, equipment_id, pricing, shot.reload_speed_percent) {
-            Ok(price) => price,
-            Err(WeaponReviewError::Db(error)) => return Err(error),
-            Err(refusal) => return Ok(Err(refusal)),
-        })
-    else {
+    let Some(weapon) = (match weapon_price(tx, equipment_id, pricing, shot.reload_speed_percent) {
+        Ok(price) => price,
+        Err(WeaponReviewError::Db(error)) => return Err(error),
+        Err(refusal) => return Ok(Err(refusal)),
+    }) else {
         return Ok(Err(WeaponReviewError::NotFound(
             "That weapon is no longer in Equipment",
         )));
     };
+    let (name, cost) = (weapon.name, weapon.cost);
+    if shot.in_margin() && shot.tool_name.as_deref() == Some(name.as_str()) {
+        return Ok(Err(WeaponReviewError::Invalid(
+            "This shot is already priced to that weapon",
+        )));
+    }
 
-    if !book(tx, &shot, from, Some((&name, cost)))? {
+    if !book(tx, &shot, from, Some((&name, cost)), false)? {
         return Ok(Err(WeaponReviewError::Stored(
             "the shot is missing from its kill",
         )));
     }
+    let replaced_cost = shot.in_margin().then_some(shot.cost_per_shot);
     let correction = WeaponCorrection {
         id: uuid::Uuid::new_v4().to_string(),
         session_id: shot.session_id,
@@ -394,7 +446,7 @@ pub(super) fn assign_shot(
         effect_window_id: None,
         corrected_at: now,
     };
-    insert_correction(tx, &correction, batch_id)?;
+    insert_correction(tx, &correction, batch_id, replaced_cost)?;
     tx.execute(
         "UPDATE weapon_shot_evidence SET tool_name = ?1, cost_per_shot = ?2, correction_id = ?3 \
          WHERE id = ?4",
@@ -463,7 +515,7 @@ fn mark_effect_tick_shot(
         )));
     }
 
-    if !book(tx, &shot, Some((UNPRICED_TOOL, 0.0)), None)? {
+    if !book(tx, &shot, Some((UNPRICED_TOOL, 0.0)), None, false)? {
         return Ok(Err(WeaponReviewError::Stored(
             "the shot is missing from its kill",
         )));
@@ -479,7 +531,7 @@ fn mark_effect_tick_shot(
         effect_window_id: Some(window_id.to_string()),
         corrected_at: now,
     };
-    insert_correction(tx, &correction, None)?;
+    insert_correction(tx, &correction, None, None)?;
     tx.execute(
         "UPDATE weapon_shot_evidence SET correction_id = ?1 WHERE id = ?2",
         rusqlite::params![correction.id, evidence_id],
@@ -503,9 +555,19 @@ pub(super) fn undo_shot(
     correction_id: &str,
     now: f64,
 ) -> Outcome<String> {
-    let row: Option<(String, String, String, f64, Option<f64>, String)> = tx
+    type StoredCorrection = (
+        String,
+        String,
+        String,
+        f64,
+        Option<f64>,
+        String,
+        Option<f64>,
+    );
+    let row: Option<StoredCorrection> = tx
         .query_row(
-            "SELECT session_id, evidence_id, tool_name, cost_per_shot, undone_at, kind \
+            "SELECT session_id, evidence_id, tool_name, cost_per_shot, undone_at, kind, \
+                    replaced_cost_per_shot \
              FROM weapon_attribution_corrections WHERE id = ?1",
             [correction_id],
             |row| {
@@ -516,11 +578,13 @@ pub(super) fn undo_shot(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
         .optional()?;
-    let Some((session_id, evidence_id, tool_name, cost, undone_at, kind)) = row else {
+    let Some((session_id, evidence_id, tool_name, cost, undone_at, kind, replaced_cost)) = row
+    else {
         return Ok(Err(WeaponReviewError::NotFound("Correction not found")));
     };
     if undone_at.is_some() {
@@ -543,10 +607,28 @@ pub(super) fn undo_shot(
         return Ok(Err(WeaponReviewError::Stored("unknown correction kind")));
     };
     // Put the shot back where it stood before the correction.
+    // A margin hit goes back to the phase it left, at the price it stood at.
+    let held = if shot.in_margin() {
+        match (shot.hotbar_tool.clone(), replaced_cost) {
+            (Some(tool), Some(replaced)) => Some((tool, replaced)),
+            _ => {
+                return Ok(Err(WeaponReviewError::Stored(
+                    "the correction does not record what it replaced",
+                )));
+            }
+        }
+    } else {
+        None
+    };
     let (from, to) = match (kind, shot.attribution.as_str()) {
         (WeaponCorrectionKind::Priced, "unresolved") => {
             (Some((tool_name.as_str(), cost)), Some((UNPRICED_TOOL, 0.0)))
         }
+        (WeaponCorrectionKind::Priced, "boosted" | "reduced") => (
+            Some((tool_name.as_str(), cost)),
+            held.as_ref()
+                .map(|(tool, replaced)| (tool.as_str(), *replaced)),
+        ),
         (WeaponCorrectionKind::Priced, "effect_tick") => (Some((tool_name.as_str(), cost)), None),
         (WeaponCorrectionKind::EffectTick, "unresolved") => (None, Some((UNPRICED_TOOL, 0.0))),
         _ => {
@@ -555,15 +637,19 @@ pub(super) fn undo_shot(
             )));
         }
     };
-    if !book(tx, &shot, from, to)? {
+    if !book(tx, &shot, from, to, held.is_some())? {
         return Ok(Err(WeaponReviewError::Stored(
             "the corrected shot is missing from its kill",
         )));
     }
+    let (restored_tool, restored_cost) = match &held {
+        Some((tool, replaced)) => (Some(tool.as_str()), *replaced),
+        None => (None, 0.0),
+    };
     tx.execute(
-        "UPDATE weapon_shot_evidence SET tool_name = NULL, cost_per_shot = 0, \
-             correction_id = NULL WHERE id = ?1",
-        [&evidence_id],
+        "UPDATE weapon_shot_evidence SET tool_name = ?1, cost_per_shot = ?2, \
+             correction_id = NULL WHERE id = ?3",
+        rusqlite::params![restored_tool, restored_cost, evidence_id],
     )?;
     tx.execute(
         "UPDATE weapon_attribution_corrections SET undone_at = ?1 WHERE id = ?2",
@@ -573,9 +659,9 @@ pub(super) fn undo_shot(
 }
 
 /// The session's unpriced shots (unresolved, without a price or a
-/// correction) the weapon's band fitted, oldest first, and how many others
-/// it would leave. Refuses a missing or running session, and a weapon no
-/// longer in Equipment.
+/// correction) the weapon explains, inside its band or in the margin around
+/// it, oldest first, and how many others it would leave. Refuses a missing
+/// or running session, and a weapon no longer in Equipment.
 pub(super) fn fitting_shots(
     tx: &rusqlite::Transaction<'_>,
     session_id: &str,
@@ -596,26 +682,40 @@ pub(super) fn fitting_shots(
         Err(refusal) => return Ok(Err(refusal)),
     }
     let mut stmt = tx.prepare(
-        "SELECT id, candidates_json FROM weapon_shot_evidence \
+        "SELECT id, candidates_json, amount, critical, reload_speed_percent \
+         FROM weapon_shot_evidence \
          WHERE session_id = ?1 AND attribution = 'unresolved' AND tool_name IS NULL \
            AND correction_id IS NULL \
          ORDER BY observed_at, id",
     )?;
     let rows = stmt.query_map([session_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<f64>>(2)?,
+            row.get::<_, bool>(3)?,
+            row.get::<_, Option<f64>>(4)?,
+        ))
     })?;
+    let mut book = PriceBook::new(tx, pricing);
     let mut fitting = Vec::new();
     let mut unfit = 0;
     for row in rows {
-        let (id, candidates) = row?;
+        let (id, candidates, amount, critical, reload_speed_percent) = row?;
         let candidates = match parse_candidates(&candidates) {
             Ok(candidates) => candidates,
             Err(refusal) => return Ok(Err(refusal)),
         };
-        if candidates
-            .iter()
-            .any(|candidate| candidate.equipment_id == equipment_id && candidate.fits)
-        {
+        let band = match book.price(equipment_id, reload_speed_percent) {
+            Ok(weapon) => weapon.and_then(|weapon| weapon.band),
+            Err(WeaponReviewError::Db(error)) => return Err(error),
+            Err(refusal) => return Ok(Err(refusal)),
+        };
+        let explained = candidates.iter().any(|candidate| {
+            candidate.equipment_id == equipment_id
+                && (candidate.fits || stored_margin(candidate, amount, critical, band).is_some())
+        });
+        if explained {
             fitting.push(id);
         } else {
             unfit += 1;

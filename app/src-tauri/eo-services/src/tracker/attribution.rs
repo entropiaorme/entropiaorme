@@ -6,9 +6,9 @@
 //! it. Every observation resolves to one of four states:
 //!
 //! - **Agrees**: the declared weapon explains it (its band fits, it has no
-//!   band to contradict, the hit undershoots its band, or the previous
-//!   weapon's shot is still landing just after a switch). Priced to that
-//!   weapon.
+//!   band to contradict, the hit lands in the margin around its band, or
+//!   the previous weapon's shot is still landing just after a switch).
+//!   Priced to that weapon.
 //! - **Effect tick**: an open effect window an earlier paid activation owns
 //!   explains the magnitude. No shot and no cost.
 //! - **Evidence**: the magnitude fits exactly one carried weapon, and it is
@@ -27,11 +27,14 @@
 //! declared weapon (the evidence shots are repriced back to it, and that
 //! weapon's evidence stops overriding it for the rest of the regime).
 //!
-//! Hits only ever land below a weapon's band, never above it except as a
-//! critical: mob armour and sub-maximal skill lower a hit, and nothing
-//! raises one. So a hit below the declared weapon's band that no other
-//! carried weapon explains still agrees with the declared weapon, while a
-//! hit above every band is out of profile and stays unresolved.
+//! A band is what a weapon lists, not everything it can print. Mob armour
+//! and sub-maximal skill lower a hit, and a temporary damage buff raises
+//! one, up to [`BOOSTED_REACH`] of the band's ceiling. So a hit outside the
+//! declared weapon's band that no other carried weapon explains still
+//! agrees with the declared weapon: expected, priced as usual, and marked
+//! boosted or reduced so the player can catch a run of them they cannot
+//! account for. A hit past the boosted reach is out of profile and stays
+//! unresolved.
 //!
 //! A weapon with a declared damage-over-time effect opens an effect window
 //! with every paid hit: for the effect's duration, its ticks are outcomes of
@@ -50,7 +53,7 @@
 //! The engine is pure state over observations; pricing, persistence, and
 //! the kill accumulator belong to the tracker actor that drives it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use serde_json::Value;
 
@@ -64,9 +67,36 @@ pub const CRITICAL_REACH: f64 = 3.0;
 /// to half a step outside the band it was rolled from.
 pub const DISPLAY_TOLERANCE: f64 = 0.05;
 
+/// How far a temporary damage buff can carry a hit past its weapon's
+/// ceiling, as a multiple of that ceiling.
+pub const BOOSTED_REACH: f64 = 1.5;
+
+/// How far below a weapon's floor post-play review still offers it for an
+/// unpriced hit, as a multiple of that floor. The held weapon has no such
+/// limit: armour can push its hits arbitrarily low.
+pub const REDUCED_REACH: f64 = 0.5;
+
 /// After a hotbar switch, a shot the previous weapon already fired can
 /// still arrive for this long (the same delivery tail healing allows).
 pub(super) const SWITCH_TAIL_SECONDS: f64 = 1.25;
+
+/// The latest hits of the held weapon the overlay's damage cue reads.
+const CUE_HITS: usize = 20;
+
+/// A reduced cue needs most of the last few hits below the band: one low
+/// hit is ordinary armour, while a run says something is different.
+const REDUCED_CUE_SPAN: usize = 5;
+const REDUCED_CUE_HITS: usize = 3;
+
+/// Which side of a weapon's listed range a hit landed on, inside the margin
+/// the weapon can still explain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HitMargin {
+    /// Above the listed range: a temporary damage buff.
+    Boosted,
+    /// Below the listed range: armour, or sub-maximal skill.
+    Reduced,
+}
 
 /// The damage one regular hit of a weapon can deal at full skill.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,17 +110,37 @@ impl DamageBand {
     /// hit lands inside the band; a critical anywhere from the band's floor
     /// (armour can absorb a critical's bonus) to its critical reach.
     pub fn fits(&self, amount: f64, critical: bool) -> bool {
-        let ceiling = if critical {
+        amount >= self.min - DISPLAY_TOLERANCE
+            && amount <= self.ceiling(critical) + DISPLAY_TOLERANCE
+    }
+
+    /// The most a hit can print without a buff.
+    fn ceiling(&self, critical: bool) -> f64 {
+        if critical {
             self.max * CRITICAL_REACH
         } else {
             self.max
-        };
-        amount >= self.min - DISPLAY_TOLERANCE && amount <= ceiling + DISPLAY_TOLERANCE
+        }
     }
 
     /// Whether the hit falls short of the band's floor.
     pub fn undershoots(&self, amount: f64) -> bool {
         amount < self.min - DISPLAY_TOLERANCE
+    }
+
+    /// The margin a hit outside the band sits in. None inside the band, and
+    /// past either reach.
+    pub fn margin(&self, amount: f64, critical: bool) -> Option<HitMargin> {
+        let ceiling = self.ceiling(critical);
+        if amount > ceiling + DISPLAY_TOLERANCE {
+            return (amount <= ceiling * BOOSTED_REACH + DISPLAY_TOLERANCE)
+                .then_some(HitMargin::Boosted);
+        }
+        if self.undershoots(amount) {
+            return (amount >= self.min * REDUCED_REACH - DISPLAY_TOLERANCE)
+                .then_some(HitMargin::Reduced);
+        }
+        None
     }
 }
 
@@ -163,12 +213,26 @@ pub(super) enum AgreeReason {
     Unvalidated,
     /// The hit falls short of its band and no other weapon explains it.
     BelowBand,
+    /// The hit lands above its band, within the boosted reach, and no other
+    /// weapon explains it.
+    AboveBand,
     /// The previous weapon's shot, landing just after the switch.
     InFlight,
     /// A countered shot inherits the declared weapon.
     Countered,
     /// The player kept the declared weapon over this evidence.
     Kept,
+}
+
+impl AgreeReason {
+    /// The margin of a hit agreed to from outside its weapon's band.
+    pub(super) fn margin(self) -> Option<HitMargin> {
+        match self {
+            AgreeReason::AboveBand => Some(HitMargin::Boosted),
+            AgreeReason::BelowBand => Some(HitMargin::Reduced),
+            _ => None,
+        }
+    }
 }
 
 /// How one observation resolved: the four product states.
@@ -203,11 +267,15 @@ impl Attribution {
     }
 
     /// The persisted evidence classification, for the states that keep a
-    /// row: evidence that overrode a declared weapon, unresolved shots, and
-    /// effect ticks.
+    /// row: evidence that overrode a declared weapon, hits outside the held
+    /// weapon's band, unresolved shots, and effect ticks.
     pub(super) fn kind(&self) -> AttributionKind {
         match self {
-            Attribution::Agrees { .. } => AttributionKind::Agrees,
+            Attribution::Agrees { reason, .. } => match reason.margin() {
+                Some(HitMargin::Boosted) => AttributionKind::Boosted,
+                Some(HitMargin::Reduced) => AttributionKind::Reduced,
+                None => AttributionKind::Agrees,
+            },
             Attribution::EffectTick { .. } => AttributionKind::EffectTick,
             Attribution::Evidence { .. } => AttributionKind::Evidence,
             Attribution::Unresolved => AttributionKind::Unresolved,
@@ -222,6 +290,8 @@ pub enum AttributionKind {
     EffectTick,
     Evidence,
     Unresolved,
+    Boosted,
+    Reduced,
 }
 
 impl AttributionKind {
@@ -231,6 +301,8 @@ impl AttributionKind {
             AttributionKind::EffectTick => "effect_tick",
             AttributionKind::Evidence => "evidence",
             AttributionKind::Unresolved => "unresolved",
+            AttributionKind::Boosted => "boosted",
+            AttributionKind::Reduced => "reduced",
         }
     }
 
@@ -240,6 +312,8 @@ impl AttributionKind {
             "effect_tick" => Some(AttributionKind::EffectTick),
             "evidence" => Some(AttributionKind::Evidence),
             "unresolved" => Some(AttributionKind::Unresolved),
+            "boosted" => Some(AttributionKind::Boosted),
+            "reduced" => Some(AttributionKind::Reduced),
             _ => None,
         }
     }
@@ -347,7 +421,10 @@ pub(super) struct Decision {
 /// Session tallies of how shots resolved, as they stand after decisions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AttributionCounts {
+    /// Hits inside the declared weapon's band, and the shots that inherit it.
     pub agreed: i64,
+    /// Hits priced to the declared weapon from outside its band.
+    pub in_margin: i64,
     pub evidenced: i64,
     pub unresolved: i64,
     pub effect_ticks: i64,
@@ -373,6 +450,9 @@ pub(super) struct AttributionRuntime {
     log: Vec<ShotRecord>,
     next_seq: u64,
     counts: AttributionCounts,
+    /// The declared weapon's latest hits, oldest first, each with the
+    /// margin it landed in. Cleared with the regime.
+    recent_hits: VecDeque<Option<HitMargin>>,
 }
 
 impl AttributionRuntime {
@@ -408,6 +488,40 @@ impl AttributionRuntime {
 
     pub(super) fn counts(&self) -> AttributionCounts {
         self.counts
+    }
+
+    /// What the held weapon's latest hits say about its damage: boosted as
+    /// soon as any of them landed above its band, reduced once most of the
+    /// last few landed below it. Nothing while a mismatch stands, which
+    /// already questions the weapon, or with no weapon declared.
+    pub(super) fn hit_cue(&self) -> Option<HitMargin> {
+        if self.declared.is_none() || self.mismatch.is_some() {
+            return None;
+        }
+        if self.recent_hits.contains(&Some(HitMargin::Boosted)) {
+            return Some(HitMargin::Boosted);
+        }
+        let reduced = self
+            .recent_hits
+            .iter()
+            .rev()
+            .take(REDUCED_CUE_SPAN)
+            .filter(|margin| **margin == Some(HitMargin::Reduced))
+            .count();
+        (reduced >= REDUCED_CUE_HITS).then_some(HitMargin::Reduced)
+    }
+
+    /// The carried weapons whose margin holds a hit.
+    pub(super) fn in_margin(&self, amount: f64, critical: bool) -> Vec<String> {
+        self.carried
+            .iter()
+            .filter(|weapon| {
+                weapon
+                    .band
+                    .is_some_and(|band| band.margin(amount, critical).is_some())
+            })
+            .map(|weapon| weapon.name.clone())
+            .collect()
     }
 
     #[cfg(test)]
@@ -448,6 +562,7 @@ impl AttributionRuntime {
         self.mismatch = None;
         self.kept.clear();
         self.log.clear();
+        self.recent_hits.clear();
     }
 
     /// A weapon press: the pressed weapon is declared from here, a new
@@ -664,11 +779,20 @@ impl AttributionRuntime {
                         tool: declared,
                         reason: AgreeReason::BelowBand,
                     },
-                    reason: String::new(),
+                    reason: "below the held weapon's range".to_string(),
                     fits,
                     windows: Vec::new(),
                 }
             }
+            [] if band.margin(amount, critical) == Some(HitMargin::Boosted) => Resolved {
+                attribution: Attribution::Agrees {
+                    tool: declared,
+                    reason: AgreeReason::AboveBand,
+                },
+                reason: "above the held weapon's range".to_string(),
+                fits,
+                windows: Vec::new(),
+            },
             [] => Resolved {
                 attribution: Attribution::Unresolved,
                 reason: "exceeds every carried weapon's reach".to_string(),
@@ -809,7 +933,19 @@ impl AttributionRuntime {
             .retain(|window| window.expires_at + SWITCH_TAIL_SECONDS >= at);
         match &resolved.attribution {
             Attribution::Agrees { reason, .. } => {
-                self.counts.agreed += 1;
+                match reason.margin() {
+                    Some(_) => self.counts.in_margin += 1,
+                    None => self.counts.agreed += 1,
+                }
+                if matches!(
+                    reason,
+                    AgreeReason::Fits | AgreeReason::AboveBand | AgreeReason::BelowBand
+                ) {
+                    self.recent_hits.push_back(reason.margin());
+                    if self.recent_hits.len() > CUE_HITS {
+                        self.recent_hits.pop_front();
+                    }
+                }
                 // A hit only the declared weapon's band explains (and not
                 // the standing evidence weapon's) proves the declared weapon
                 // is in hand: the mismatch is over.
@@ -882,9 +1018,9 @@ impl AttributionRuntime {
     /// weapon but not the evidence one proves the switch came later, and a
     /// shot the player already vouched for (kept) or a previous weapon's
     /// in-flight shot bounds the walk the same way. Before those, a
-    /// countered shot, a hit either weapon explains, a hit short of every
-    /// band, and an unresolved hit the evidence weapon fits (unless an open
-    /// effect could equally have ticked it) all move.
+    /// countered shot, a hit either weapon explains, a hit in the margin
+    /// around the declared band, and an unresolved hit the evidence weapon
+    /// fits (unless an open effect could equally have ticked it) all move.
     pub(super) fn confirm(&mut self, at: f64) -> Option<Decision> {
         let mismatch = self.mismatch.take()?;
         let evidence = mismatch.evidence.clone();
@@ -899,9 +1035,10 @@ impl AttributionRuntime {
                         true
                     }
                     AgreeReason::InFlight | AgreeReason::Kept => break,
-                    AgreeReason::BelowBand | AgreeReason::Countered | AgreeReason::Unvalidated => {
-                        true
-                    }
+                    AgreeReason::BelowBand
+                    | AgreeReason::AboveBand
+                    | AgreeReason::Countered
+                    | AgreeReason::Unvalidated => true,
                 },
                 // A hit an open effect could equally have ticked stays as
                 // recorded: the decision is about weapons, not effects.
@@ -914,7 +1051,10 @@ impl AttributionRuntime {
             if !movable {
                 continue;
             }
-            match record.attribution {
+            match &record.attribution {
+                Attribution::Agrees { reason, .. } if reason.margin().is_some() => {
+                    self.counts.in_margin -= 1;
+                }
                 Attribution::Agrees { .. } => self.counts.agreed -= 1,
                 Attribution::Unresolved => self.counts.unresolved -= 1,
                 _ => {}
@@ -941,6 +1081,7 @@ impl AttributionRuntime {
         self.recording = None;
         self.kept.clear();
         self.log.clear();
+        self.recent_hits.clear();
         Some(Decision {
             mismatch,
             moves,
@@ -1147,6 +1288,157 @@ mod tests {
     }
 
     #[test]
+    fn a_margin_runs_from_half_the_floor_to_half_again_the_ceiling() {
+        let band = DamageBand {
+            min: 10.0,
+            max: 20.0,
+        };
+        assert_eq!(band.margin(15.0, false), None, "inside the band");
+        assert_eq!(
+            band.margin(20.05, false),
+            None,
+            "print rounding, not a buff"
+        );
+        assert_eq!(band.margin(20.1, false), Some(HitMargin::Boosted));
+        assert_eq!(band.margin(30.05, false), Some(HitMargin::Boosted));
+        assert_eq!(band.margin(30.1, false), None, "past the boosted reach");
+        assert_eq!(band.margin(9.9, false), Some(HitMargin::Reduced));
+        assert_eq!(band.margin(4.95, false), Some(HitMargin::Reduced));
+        assert_eq!(band.margin(4.9, false), None, "past the reduced reach");
+        // A critical's reach stands in for the ceiling, buffed the same way.
+        assert_eq!(band.margin(60.0, true), None, "inside a critical's reach");
+        assert_eq!(band.margin(60.1, true), Some(HitMargin::Boosted));
+        assert_eq!(band.margin(90.1, true), None);
+    }
+
+    #[test]
+    fn a_hit_above_the_held_weapons_band_is_priced_to_it_as_boosted() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 10.0),
+            weapon(2, "Cannon", 20.0, 40.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        assert_eq!(
+            observe(&mut runtime, hit(12.0), 1.0),
+            agrees("Pistol", AgreeReason::AboveBand)
+        );
+        assert_eq!(
+            observe(&mut runtime, hit(15.0), 2.0),
+            agrees("Pistol", AgreeReason::AboveBand),
+            "the top of the boosted reach"
+        );
+        assert_eq!(
+            observe(&mut runtime, hit(15.1), 3.0),
+            Attribution::Unresolved,
+            "past it, the hit is out of profile"
+        );
+        assert_eq!(
+            observe(&mut runtime, hit(25.0), 4.0),
+            Attribution::Evidence {
+                tool: "Cannon".to_string(),
+                confirmed: false,
+            },
+            "another weapon's band still says a switch was missed"
+        );
+        let counts = runtime.counts();
+        assert_eq!((counts.agreed, counts.in_margin), (0, 2));
+        assert_eq!(counts.unresolved, 1);
+    }
+
+    #[test]
+    fn with_nothing_declared_no_margin_names_a_weapon() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![weapon(1, "Pistol", 5.0, 10.0)]);
+        assert_eq!(
+            observe(&mut runtime, hit(12.0), 1.0),
+            Attribution::Unresolved
+        );
+    }
+
+    #[test]
+    fn margin_hits_keep_their_classification_on_their_stored_row() {
+        let kind = |reason| {
+            Attribution::Agrees {
+                tool: "Pistol".to_string(),
+                reason,
+            }
+            .kind()
+        };
+        assert_eq!(kind(AgreeReason::AboveBand), AttributionKind::Boosted);
+        assert_eq!(kind(AgreeReason::BelowBand), AttributionKind::Reduced);
+        assert_eq!(kind(AgreeReason::Fits), AttributionKind::Agrees);
+        for variant in [AttributionKind::Boosted, AttributionKind::Reduced] {
+            assert_eq!(AttributionKind::parse(variant.as_str()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn confirming_a_switch_moves_the_margin_hits_since_the_last_proof() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 10.0),
+            weapon(2, "Cannon", 20.0, 40.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(12.0), 1.0);
+        observe(&mut runtime, hit(3.0), 2.0);
+        observe(&mut runtime, hit(25.0), 3.0);
+        assert_eq!(runtime.counts().in_margin, 2);
+        let decision = runtime.confirm(4.0).expect("a mismatch stands");
+        assert_eq!(
+            decision.moves.len(),
+            2,
+            "both margin hits were the cannon's"
+        );
+        let counts = runtime.counts();
+        assert_eq!((counts.in_margin, counts.evidenced), (0, 3));
+    }
+
+    #[test]
+    fn the_cue_reads_boosted_from_any_recent_hit_and_reduced_from_a_run() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![weapon(1, "Pistol", 5.0, 10.0)]);
+        assert_eq!(runtime.hit_cue(), None, "nothing declared");
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(7.0), 1.0);
+        assert_eq!(runtime.hit_cue(), None, "inside the band");
+
+        observe(&mut runtime, hit(12.0), 2.0);
+        assert_eq!(runtime.hit_cue(), Some(HitMargin::Boosted));
+        for at in 0..CUE_HITS {
+            assert_eq!(runtime.hit_cue(), Some(HitMargin::Boosted));
+            observe(&mut runtime, hit(7.0), 3.0 + at as f64);
+        }
+        assert_eq!(runtime.hit_cue(), None, "the buff has run out");
+
+        // One low hit is ordinary armour; a run of them is not.
+        observe(&mut runtime, hit(3.0), 40.0);
+        observe(&mut runtime, hit(3.0), 41.0);
+        assert_eq!(runtime.hit_cue(), None);
+        observe(&mut runtime, hit(3.0), 42.0);
+        assert_eq!(runtime.hit_cue(), Some(HitMargin::Reduced));
+
+        runtime.declare("Pistol", 43.0);
+        assert_eq!(runtime.hit_cue(), None, "a press starts over");
+    }
+
+    #[test]
+    fn a_standing_mismatch_takes_over_from_the_cue() {
+        let mut runtime = AttributionRuntime::default();
+        runtime.set_carried(vec![
+            weapon(1, "Pistol", 5.0, 10.0),
+            weapon(2, "Cannon", 20.0, 40.0),
+        ]);
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(12.0), 1.0);
+        assert_eq!(runtime.hit_cue(), Some(HitMargin::Boosted));
+        observe(&mut runtime, hit(25.0), 2.0);
+        assert!(runtime.mismatch().is_some());
+        assert_eq!(runtime.hit_cue(), None);
+    }
+
+    #[test]
     fn with_nothing_declared_one_fitting_weapon_is_evidence() {
         let mut runtime = runtime();
         assert_eq!(observe(&mut runtime, hit(30.0), 1.0), evidence("Cannon"));
@@ -1179,6 +1471,7 @@ mod tests {
             runtime.counts(),
             AttributionCounts {
                 agreed: 0,
+                in_margin: 0,
                 evidenced: 2,
                 unresolved: 3,
                 effect_ticks: 0,
@@ -1235,8 +1528,9 @@ mod tests {
             "short of every band: still the weapon in hand"
         );
         assert_eq!(
-            observe(&mut runtime, hit(45.0), 3.0),
-            Attribution::Unresolved
+            observe(&mut runtime, hit(61.0), 3.0),
+            Attribution::Unresolved,
+            "past the boosted reach of every band"
         );
     }
 
@@ -1432,7 +1726,8 @@ mod tests {
         assert_eq!(
             runtime.counts(),
             AttributionCounts {
-                agreed: 5,
+                agreed: 3,
+                in_margin: 2,
                 evidenced: 0,
                 unresolved: 0,
                 effect_ticks: 4,
@@ -1731,6 +2026,7 @@ mod tests {
             runtime.counts(),
             AttributionCounts {
                 agreed: 4,
+                in_margin: 0,
                 evidenced: 3,
                 unresolved: 0,
                 effect_ticks: 0,
@@ -2054,10 +2350,19 @@ mod tests {
                     }
                     let counts = runtime.counts();
                     prop_assert_eq!(
-                        counts.agreed + counts.evidenced + counts.unresolved + counts.effect_ticks,
+                        counts.agreed
+                            + counts.in_margin
+                            + counts.evidenced
+                            + counts.unresolved
+                            + counts.effect_ticks,
                         observed
                     );
-                    prop_assert!(counts.agreed >= 0 && counts.evidenced >= 0 && counts.unresolved >= 0);
+                    prop_assert!(
+                        counts.agreed >= 0
+                            && counts.in_margin >= 0
+                            && counts.evidenced >= 0
+                            && counts.unresolved >= 0
+                    );
                     if let Some(mismatch) = runtime.mismatch() {
                         prop_assert_eq!(Some(mismatch.declared.as_str()), runtime.declared());
                         prop_assert_ne!(&mismatch.evidence, &mismatch.declared);

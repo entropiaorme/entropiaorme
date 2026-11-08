@@ -262,6 +262,9 @@ pub struct ActiveSessionView {
     /// carried weapons explain goes unpriced, and the weapon shown is only
     /// what the damage last pointed to.
     pub weapon_declared: bool,
+    /// What the held weapon's latest hits say about its damage, when they
+    /// land outside its listed range.
+    pub weapon_hit_cue: Option<crate::tracker::HitMargin>,
     /// The session runs keyless: equipment is declared in the overlay and
     /// healing uses are inferred from the chat log.
     pub keyless: bool,

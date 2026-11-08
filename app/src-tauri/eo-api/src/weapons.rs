@@ -9,7 +9,7 @@
 //! frontend contract and answers a correction with the corrected session's
 //! refreshed detail.
 
-use eo_services::tracker::{MismatchDecision, WeaponDecisionError};
+use eo_services::tracker::{HitMargin, MismatchDecision, WeaponDecisionError};
 use eo_services::weapon_review::{
     BulkAssignOption as ServiceBulkOption, CorrectionWeapon as ServiceCorrectionWeapon,
     EffectCandidate as ServiceEffectCandidate, ReviewShot, ReviewShotPage,
@@ -19,7 +19,7 @@ use eo_services::weapon_review::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::tracking::SessionDetail;
+use crate::tracking::{SessionDetail, WeaponHitMargin};
 use crate::{Api, ApiError, Nullable};
 
 /// What the player decided about a standing weapon mismatch.
@@ -52,6 +52,10 @@ pub enum WeaponShotGroup {
     Evidence,
     /// Ticks of a damage-over-time effect an earlier paid hit started.
     EffectTick,
+    /// Hits above the held weapon's listed range, priced to it.
+    Boosted,
+    /// Hits below the held weapon's listed range, priced to it.
+    Reduced,
 }
 
 impl From<ShotGroup> for WeaponShotGroup {
@@ -60,6 +64,8 @@ impl From<ShotGroup> for WeaponShotGroup {
             ShotGroup::Unresolved => Self::Unresolved,
             ShotGroup::Evidence => Self::Evidence,
             ShotGroup::EffectTick => Self::EffectTick,
+            ShotGroup::Boosted => Self::Boosted,
+            ShotGroup::Reduced => Self::Reduced,
         }
     }
 }
@@ -70,6 +76,17 @@ impl From<WeaponShotGroup> for ShotGroup {
             WeaponShotGroup::Unresolved => Self::Unresolved,
             WeaponShotGroup::Evidence => Self::Evidence,
             WeaponShotGroup::EffectTick => Self::EffectTick,
+            WeaponShotGroup::Boosted => Self::Boosted,
+            WeaponShotGroup::Reduced => Self::Reduced,
+        }
+    }
+}
+
+impl From<HitMargin> for WeaponHitMargin {
+    fn from(value: HitMargin) -> Self {
+        match value {
+            HitMargin::Boosted => Self::Boosted,
+            HitMargin::Reduced => Self::Reduced,
         }
     }
 }
@@ -177,8 +194,8 @@ pub struct WeaponShot {
     pub correction_window_id: Nullable<String>,
     /// The decision on a mismatch that repriced it while the session ran.
     pub review_decision: Nullable<WeaponReviewDecision>,
-    /// It can be corrected: without a price or a correction, in an ended
-    /// session.
+    /// It can be corrected, in an ended session: left without a price, or
+    /// priced from outside its weapon's range, and not corrected yet.
     pub correctable: bool,
 }
 
@@ -254,6 +271,9 @@ pub struct WeaponCorrectionWeapon {
     pub cost_per_shot_ped: f64,
     /// Its damage band fitted the shot when it landed.
     pub fits: bool,
+    /// When it did not: how the shot would have to have landed for this
+    /// weapon to have fired it. Null when no margin holds it.
+    pub margin: Nullable<WeaponHitMargin>,
 }
 
 impl From<ServiceCorrectionWeapon> for WeaponCorrectionWeapon {
@@ -263,6 +283,7 @@ impl From<ServiceCorrectionWeapon> for WeaponCorrectionWeapon {
             name: value.name,
             cost_per_shot_ped: value.cost_per_shot_ped,
             fits: value.fits,
+            margin: value.margin.map(Into::into).into(),
         }
     }
 }
@@ -275,10 +296,10 @@ pub struct WeaponUnpricedExposure {
     pub session_id: String,
     /// Shots still without a price or correction.
     pub shots: i64,
-    /// Of those, the ones no weapon still in Equipment fitted: they add
+    /// Of those, the ones no weapon still in Equipment explains: they add
     /// nothing to the bound.
     pub no_fit_shots: i64,
-    /// Each other shot at the dearest weapon that fitted it, priced as it
+    /// Each other shot at the dearest weapon that explains it, priced as it
     /// is configured now.
     pub cost_bound_ped: f64,
 }
@@ -300,12 +321,16 @@ impl From<ServiceExposure> for WeaponUnpricedExposure {
 pub struct WeaponBulkOption {
     pub equipment_id: i64,
     pub name: String,
-    /// The unpriced shots its damage band fitted: the ones it would price.
+    /// The unpriced shots its damage band fitted.
     pub fitting_shots: i64,
+    /// The unpriced shots it would price as boosted.
+    pub boosted_shots: i64,
+    /// The unpriced shots it would price as reduced.
+    pub reduced_shots: i64,
     /// The session's other unpriced shots, which it would leave.
     pub skipped_shots: i64,
-    /// What pricing the fitting shots would add, priced as the weapon is
-    /// configured now.
+    /// What pricing the shots it explains would add, priced as the weapon
+    /// is configured now.
     pub added_cost_ped: f64,
 }
 
@@ -315,6 +340,8 @@ impl From<ServiceBulkOption> for WeaponBulkOption {
             equipment_id: value.equipment_id,
             name: value.name,
             fitting_shots: value.fitting_shots,
+            boosted_shots: value.boosted_shots,
+            reduced_shots: value.reduced_shots,
             skipped_shots: value.skipped_shots,
             added_cost_ped: value.added_cost_ped,
         }
@@ -326,7 +353,7 @@ impl From<ServiceBulkOption> for WeaponBulkOption {
 #[serde(rename_all = "camelCase")]
 pub struct WeaponBulkAssignment {
     pub assigned: i64,
-    /// Unpriced shots it left: the weapon did not fit them.
+    /// Unpriced shots it left: the weapon did not explain them.
     pub skipped: i64,
     pub added_cost_ped: f64,
     pub detail: SessionDetail,

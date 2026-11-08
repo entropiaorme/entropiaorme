@@ -50,8 +50,8 @@ mod weapon_evidence;
 mod weapons;
 
 pub use attribution::{
-    damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, CRITICAL_REACH,
-    DISPLAY_TOLERANCE,
+    damage_band_from_props, AttributionKind, CarriedWeapon, DamageBand, HitMargin, BOOSTED_REACH,
+    CRITICAL_REACH, DISPLAY_TOLERANCE, REDUCED_REACH,
 };
 // The protection tests read back what the live readout would.
 #[cfg(test)]

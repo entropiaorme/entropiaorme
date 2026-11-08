@@ -5,15 +5,22 @@
 //! attribute every shot; a shot no single carried weapon explains is
 //! recorded without a price, and the session's cost leaves it out, and the
 //! ticks of a damage-over-time effect are recorded as its outcomes, at no
-//! cost. After the session ends, each such stored shot can be reviewed with
-//! what the tracker knew about it (its amount, when it landed, the weapon
-//! the hotbar declared, the carried weapons whose band fitted it, and the
-//! effects open then) and corrected:
+//! cost. A hit outside the held weapon's listed range is priced to it and
+//! kept as boosted or reduced. After the session ends, each such stored
+//! shot can be reviewed with what the tracker knew about it (its amount,
+//! when it landed, the weapon the hotbar declared, the carried weapons whose
+//! band fitted it, and the effects open then) and corrected:
 //!
 //! - an unresolved shot, or a tick the player says was a paid shot after
 //!   all, is assigned to one carried weapon;
+//! - a boosted or reduced hit the player says another weapon fired is
+//!   reassigned to it;
 //! - an unresolved hit an open effect could equally have ticked is marked
 //!   as that effect's tick, and stops counting as a shot.
+//!
+//! A carried weapon whose band missed a hit may still hold it in the margin
+//! around that band: review offers it, saying so, because whether the hit
+//! could have been boosted or reduced is something only the player knows.
 //!
 //! An assignment prices the shot from the chosen weapon as it is configured
 //! now (the correction's pricing snapshot), prepared by the same `pricing`
@@ -30,11 +37,12 @@
 //! re-read what they show.
 //!
 //! A session's unpriced shots can also be assigned all at once to one
-//! weapon: every one that weapon fitted, through the same per-shot
-//! correction, each keeping its own undoable row, tied together as a batch
-//! that can be undone as a whole. Until they are assigned, unpriced shots
-//! cost nothing in the session's cost, and the exposure read bounds what
-//! they could have cost: each at the dearest weapon that fitted it.
+//! weapon: every one that weapon explains, inside its band or in the margin
+//! around it, through the same per-shot correction, each keeping its own
+//! undoable row, tied together as a batch that can be undone as a whole.
+//! Until they are assigned, unpriced shots cost nothing in the session's
+//! cost, and the exposure read bounds what they could have cost: each at
+//! the dearest weapon that explains it.
 
 mod correct;
 mod read;
@@ -47,6 +55,7 @@ use crate::attack_rate::WeaponPricing;
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::time::{instant_to_epoch, resolve_local};
+use crate::tracker::HitMargin;
 
 pub use read::session_detail_block;
 
@@ -59,6 +68,10 @@ pub enum ShotGroup {
     Evidence,
     /// Ticks of a damage-over-time effect an earlier paid hit started.
     EffectTick,
+    /// Hits above the held weapon's listed range, priced to it.
+    Boosted,
+    /// Hits below the held weapon's listed range, priced to it.
+    Reduced,
 }
 
 impl ShotGroup {
@@ -67,7 +80,15 @@ impl ShotGroup {
             ShotGroup::Unresolved => "unresolved",
             ShotGroup::Evidence => "evidence",
             ShotGroup::EffectTick => "effect_tick",
+            ShotGroup::Boosted => "boosted",
+            ShotGroup::Reduced => "reduced",
         }
+    }
+
+    /// A margin hit a live decision moved off the held weapon no longer
+    /// says anything about that weapon's damage, so it leaves the group.
+    fn drops_decided(self) -> bool {
+        matches!(self, ShotGroup::Boosted | ShotGroup::Reduced)
     }
 }
 
@@ -150,8 +171,8 @@ pub struct ReviewShot {
     pub correction_window_id: Option<String>,
     /// The live decision that repriced it while the session ran.
     pub review_decision: Option<String>,
-    /// It can be corrected: without a price or correction, in an ended
-    /// session.
+    /// It can be corrected, in an ended session: left without a price, or
+    /// priced from outside its weapon's band, and not corrected yet.
     pub correctable: bool,
 }
 
@@ -171,6 +192,8 @@ pub struct CorrectionWeapon {
     pub cost_per_shot_ped: f64,
     /// Its damage band fitted the shot when it landed.
     pub fits: bool,
+    /// When it did not: the margin around its band that holds the shot.
+    pub margin: Option<HitMargin>,
 }
 
 /// What a session's unpriced shots could have cost at most. The session's
@@ -180,10 +203,11 @@ pub struct UnpricedExposure {
     pub session_id: String,
     /// Shots still without a price or correction.
     pub shots: i64,
-    /// Of those, the ones no carried weapon can price: none fitted them (a
-    /// countered shot fits none), or the ones that did have left Equipment.
+    /// Of those, the ones no carried weapon can price: none explains them
+    /// (a countered shot has no magnitude to explain), or the ones that do
+    /// have left Equipment.
     pub no_fit_shots: i64,
-    /// Each other shot priced at the dearest weapon that fitted it, as an
+    /// Each other shot priced at the dearest weapon that explains it, as an
     /// assignment would price it now.
     pub cost_bound_ped: f64,
 }
@@ -193,12 +217,18 @@ pub struct UnpricedExposure {
 pub struct BulkAssignOption {
     pub equipment_id: i64,
     pub name: String,
-    /// The unpriced shots its damage band fitted: the ones it would price.
+    /// The unpriced shots its damage band fitted.
     pub fitting_shots: i64,
+    /// The unpriced shots it would price as boosted: above its band, within
+    /// the boosted reach.
+    pub boosted_shots: i64,
+    /// The unpriced shots it would price as reduced: below its band, within
+    /// the reduced reach.
+    pub reduced_shots: i64,
     /// The session's other unpriced shots, which it would leave.
     pub skipped_shots: i64,
-    /// What pricing the fitting shots would add to the weapon cost, priced
-    /// as the weapon is configured now.
+    /// What pricing the shots it explains would add to the weapon cost,
+    /// priced as the weapon is configured now.
     pub added_cost_ped: f64,
 }
 
@@ -209,7 +239,7 @@ pub struct BulkAssignment {
     /// The batch its corrections share; None when it priced nothing.
     pub batch_id: Option<String>,
     pub assigned: i64,
-    /// Unpriced shots it left: the weapon did not fit them, or one was
+    /// Unpriced shots it left: the weapon did not explain them, or one was
     /// corrected meanwhile.
     pub skipped: i64,
     pub added_cost_ped: f64,
@@ -454,10 +484,11 @@ impl WeaponReviewService {
             .await?
     }
 
-    /// Assign every unpriced shot of an ended session that the weapon's band
-    /// fitted to the weapon, each through the single-shot correction, as one
-    /// batch. Shots it did not fit are left and counted as skipped; running
-    /// it again assigns nothing new.
+    /// Assign every unpriced shot of an ended session that the weapon
+    /// explains (inside its band, or in the margin around it) to the
+    /// weapon, each through the single-shot correction, as one batch. Shots
+    /// it does not explain are left and counted as skipped; running it again
+    /// assigns nothing new.
     ///
     /// The shots are corrected a chunk per transaction: a failure part-way
     /// leaves every shot either fully corrected (an earlier chunk, undoable
@@ -596,9 +627,9 @@ impl WeaponReviewService {
         Ok(done)
     }
 
-    /// The weapons an unpriced shot could be assigned to: the ones carried
-    /// when it landed that are still in Equipment, those whose band fitted
-    /// it first.
+    /// The weapons a shot could be assigned to: the ones carried when it
+    /// landed that are still in Equipment, those whose band fitted it first,
+    /// then those holding it in their margin.
     pub async fn correction_weapons(
         &self,
         evidence_id: &str,

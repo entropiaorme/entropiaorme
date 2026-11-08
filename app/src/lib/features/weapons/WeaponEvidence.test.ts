@@ -36,6 +36,9 @@ function detail(overrides: Partial<WeaponAttributionSummary> = {}): SessionDetai
 			markedTicks: 0,
 			effectTicks: 0,
 			pricedTicks: 0,
+			boostedShots: 0,
+			reducedShots: 0,
+			hitMargins: [],
 			unclaimedTicks: 0,
 			undeclaredShots: 0,
 			ranUndeclared: false,
@@ -121,8 +124,8 @@ describe('weapon evidence', () => {
 	it('assigns an unpriced shot to a chosen weapon, fitting weapons first', async () => {
 		mocked.getWeaponShots.mockResolvedValue({ shots: [shot()], total: 2 });
 		mocked.getWeaponCorrectionWeapons.mockResolvedValue([
-			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true },
-			{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false },
+			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true, margin: null },
+			{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false, margin: null },
 		]);
 		mocked.assignWeaponShot.mockResolvedValue(detail({ unpriced: 0 }));
 		mount(detail());
@@ -239,7 +242,7 @@ describe('weapon evidence', () => {
 			total: 2,
 		});
 		mocked.getWeaponCorrectionWeapons.mockResolvedValue([
-			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true },
+			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true, margin: null },
 		]);
 		mocked.markWeaponShotEffectTick.mockResolvedValue(detail({ unpriced: 0, markedTicks: 1 }));
 		mount(detail());
@@ -276,7 +279,7 @@ describe('weapon evidence', () => {
 			total: 2,
 		});
 		mocked.getWeaponCorrectionWeapons.mockResolvedValue([
-			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: false },
+			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: false, margin: null },
 		]);
 		mocked.undoWeaponAssignment.mockResolvedValue(detail());
 		mount(detail({ effectTicks: 3 }));
@@ -305,10 +308,65 @@ describe('weapon evidence', () => {
 	});
 });
 
+describe('hits outside the listed range', () => {
+	const margins = {
+		boostedShots: 27,
+		reducedShots: 3,
+		hitMargins: [{ toolName: 'Chip', boosted: 27, reduced: 3 }],
+	};
+
+	it('counts them per weapon, for the player to weigh against the session', () => {
+		mount(detail(margins));
+		const block = screen.getByTestId('weapon-hit-margins');
+		expect(block.textContent).toContain('Chip: 27 boosted, 3 reduced');
+		expect(block.textContent).toContain('Priced to the weapon in hand');
+	});
+
+	it('stays out of the way when every hit landed inside the range', () => {
+		mount(detail());
+		expect(screen.queryByTestId('weapon-hit-margins')).toBeNull();
+	});
+
+	it('lists them for review, offering to move one to another weapon', async () => {
+		mocked.getWeaponShots.mockResolvedValue({
+			total: 1,
+			shots: [
+				shot({
+					group: 'boosted',
+					amount: 201.6,
+					critical: false,
+					hotbarTool: 'Chip',
+					toolName: 'Chip',
+					costPerShot: 0.37,
+				}),
+			],
+		});
+		mocked.getWeaponCorrectionWeapons.mockResolvedValue([
+			{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: false, margin: 'reduced' },
+		]);
+		mount(detail({ ...margins, unresolved: 0, unpriced: 0, evidenceShots: 0, assigned: 0 }));
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Review shots (30)' }));
+		const row = await screen.findByTestId('weapon-shot');
+		expect(row.textContent).toContain('Above the listed range of Chip');
+		await fireEvent.click(within(row).getByText('Reassign…'));
+		const offer = await screen.findByLabelText('Cannon, if reduced · 0.20 PED');
+		expect(offer.textContent).toContain('If reduced');
+	});
+});
+
 describe("assigning a session's unpriced shots at once", () => {
 	it('states what it will do, then assigns every shot the weapon fits', async () => {
 		mocked.getWeaponBulkOptions.mockResolvedValue([
-			{ equipmentId: 2, name: 'Cannon', fittingShots: 3, skippedShots: 1, addedCostPed: 0.6 },
+			{
+				equipmentId: 2,
+				name: 'Cannon',
+				fittingShots: 3,
+				boostedShots: 0,
+				reducedShots: 0,
+				skippedShots: 1,
+				addedCostPed: 0.6,
+			},
 		]);
 		mocked.assignFittingWeaponShots.mockResolvedValue({
 			assigned: 3,
@@ -325,7 +383,7 @@ describe("assigning a session's unpriced shots at once", () => {
 		await fireEvent.click(await screen.findByLabelText('Cannon: fits 3, adds 0.60 PED'));
 		const confirm = screen.getByTestId('weapon-bulk-confirm');
 		expect(confirm.textContent).toContain(
-			'Assign 3 shots to Cannon, skip 1 shot it did not fit: +0.60 PED.',
+			'Assign 3 shots to Cannon, skip 1 shot it does not explain: +0.60 PED.',
 		);
 		expect(confirm.textContent).toContain('Priced as Cannon is configured now.');
 		expect(mocked.assignFittingWeaponShots).not.toHaveBeenCalled();
@@ -337,9 +395,38 @@ describe("assigning a session's unpriced shots at once", () => {
 		);
 	});
 
+	it('offers a weapon that only explains the shots if they were boosted, saying so', async () => {
+		mocked.getWeaponBulkOptions.mockResolvedValue([
+			{
+				equipmentId: 1,
+				name: 'Chip',
+				fittingShots: 0,
+				boostedShots: 27,
+				reducedShots: 0,
+				skippedShots: 0,
+				addedCostPed: 9.9,
+			},
+		]);
+		mount(detail({ unpriced: 27 }));
+
+		await fireEvent.click(screen.getByTestId('weapon-bulk-trigger'));
+		await fireEvent.click(await screen.findByLabelText('Chip: 27 if boosted, adds 9.90 PED'));
+		expect(screen.getByTestId('weapon-bulk-confirm').textContent).toContain(
+			'Assign 27 shots to Chip (27 as boosted): +9.90 PED.',
+		);
+	});
+
 	it('changes nothing when cancelled', async () => {
 		mocked.getWeaponBulkOptions.mockResolvedValue([
-			{ equipmentId: 2, name: 'Cannon', fittingShots: 1, skippedShots: 0, addedCostPed: 0.2 },
+			{
+				equipmentId: 2,
+				name: 'Cannon',
+				fittingShots: 1,
+				boostedShots: 0,
+				reducedShots: 0,
+				skippedShots: 0,
+				addedCostPed: 0.2,
+			},
 		]);
 		mount(detail());
 		await fireEvent.click(screen.getByTestId('weapon-bulk-trigger'));

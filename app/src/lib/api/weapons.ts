@@ -12,6 +12,8 @@ export type {
 	WeaponEffectCandidate,
 	WeaponEffectRow,
 	WeaponGuardrailAlert,
+	WeaponHitMargin,
+	WeaponHitMarginRow,
 	WeaponMismatchDecision,
 	WeaponReviewDecision,
 	WeaponReviewRow,
@@ -35,15 +37,15 @@ export const decideWeaponMismatch = commands.trackingWeaponDecide;
 export const getWeaponShots = commands.weaponShots;
 /** The sessions among these still holding an unpriced shot, in the given order, each with the most those shots could have cost. */
 export const getUnpricedExposure = commands.weaponUnpricedExposure;
-/** The weapons an ended session's unpriced shots could all be assigned to at once, the one fitting the most first. */
+/** The weapons an ended session's unpriced shots could all be assigned to at once, the one explaining the most first. */
 export const getWeaponBulkOptions = commands.weaponBulkOptions;
-/** Assign every unpriced shot of an ended session the weapon fitted to it, as one batch; answers with what it did and the refreshed detail. */
+/** Assign every unpriced shot of an ended session the weapon explains to it, as one batch; answers with what it did and the refreshed detail. */
 export const assignFittingWeaponShots = commands.weaponAssignFitting;
 /** Undo a bulk assignment's corrections still live; answers with the session's refreshed detail. */
 export const undoWeaponBatch = commands.weaponBatchUndo;
-/** The weapons an unpriced shot could be assigned to, fitting ones first. */
+/** The weapons a shot could be assigned to, fitting ones first, then those holding it in their margin. */
 export const getWeaponCorrectionWeapons = commands.weaponCorrectionWeapons;
-/** Assign an ended session's shot left without a price (an unresolved shot, or an effect tick) to a weapon; answers with its refreshed detail. */
+/** Assign an ended session's shot to a weapon: one left without a price, or a boosted or reduced hit another weapon fired; answers with its refreshed detail. */
 export const assignWeaponShot = commands.weaponAssign;
 /** Mark an ended session's unresolved hit as a tick of an effect open when it landed; answers with its refreshed detail. */
 export const markWeaponShotEffectTick = commands.weaponMarkEffectTick;

@@ -2190,7 +2190,10 @@ async fn weapon_assignments_answer_with_the_refreshed_detail_and_undo_exactly() 
     let weapons = api.weapon_correction_weapons("u1".into()).await.unwrap();
     assert_eq!(
         serde_json::to_value(&weapons).unwrap(),
-        serde_json::json!([{ "equipmentId": 2, "name": "Cannon", "costPerShotPed": 0.2, "fits": false }])
+        serde_json::json!([{
+            "equipmentId": 2, "name": "Cannon", "costPerShotPed": 0.2, "fits": false,
+            "margin": null,
+        }])
     );
 
     // A shot after the last kill is the session's dangling cost.

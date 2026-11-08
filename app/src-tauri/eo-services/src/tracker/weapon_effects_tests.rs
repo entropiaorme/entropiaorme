@@ -336,11 +336,21 @@ fn the_captured_rotation_bills_the_opener_once_and_the_primary_normally() {
     assert_eq!(ticks, 21);
     assert_eq!(
         rig.scalar_i64(
-            "SELECT COUNT(*) FROM weapon_shot_evidence WHERE attribution <> 'effect_tick'",
+            "SELECT COUNT(*) FROM weapon_shot_evidence \
+             WHERE attribution NOT IN ('effect_tick', 'reduced')",
             &[],
         ),
         0,
         "nothing unresolved, nothing overriding the hotbar"
+    );
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM weapon_shot_evidence \
+             WHERE attribution = 'reduced' AND tool_name = hotbar_tool AND cost_per_shot > 0",
+            &[],
+        ),
+        5,
+        "the primary's hits under its floor stay priced to it, and are kept as reduced"
     );
     let window: (String, f64, f64, f64, f64) = rig
         .wait(rig.db.with_reader(|conn| {

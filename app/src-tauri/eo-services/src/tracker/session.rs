@@ -24,7 +24,7 @@ use crate::tracking_models::{
 };
 
 use super::actor::TrackerActor;
-use super::attribution::WeaponMismatch;
+use super::attribution::{HitMargin, WeaponMismatch};
 use super::combat::Accumulator;
 use super::harvest::GuardrailMismatch;
 use super::healing::HealingRuntime;
@@ -266,6 +266,7 @@ pub(super) struct SessionAggregate {
     pub(super) unpriced_cost_bound: Ped,
     pub(super) unpriced_no_fit: i64,
     pub(super) weapon_declared: bool,
+    pub(super) weapon_hit_cue: Option<HitMargin>,
     pub(super) keyless: bool,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
@@ -545,6 +546,7 @@ impl TrackerActor {
             unpriced_cost_bound: active.unpriced_cost_bound,
             unpriced_no_fit: active.unpriced_no_fit,
             weapon_declared: active.weapons.attribution.declared().is_some(),
+            weapon_hit_cue: active.weapons.attribution.hit_cue(),
             keyless: active.facets.input_mode == InputMode::Keyless,
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
@@ -1329,6 +1331,7 @@ impl HuntTracker {
             unpriced_cost_bound: aggregated.unpriced_cost_bound.value(),
             unpriced_no_fit: aggregated.unpriced_no_fit,
             weapon_declared: aggregated.weapon_declared,
+            weapon_hit_cue: aggregated.weapon_hit_cue,
             keyless: aggregated.keyless,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,

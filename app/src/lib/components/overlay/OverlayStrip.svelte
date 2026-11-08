@@ -497,6 +497,20 @@
 					>
 						{keyless ? 'Pick weapon' : 'Press weapon slot'}
 					</div>
+				{:else if data.weaponHitCue}
+					<!-- The held weapon's recent hits land outside its listed
+						 range. Expected and already priced, so this is a quiet
+						 note, not an alert: it is there for the player to catch
+						 a state they cannot account for. -->
+					<div
+						class="text-[9px] leading-tight uppercase tracking-wider whitespace-nowrap {data.weaponHitCue === 'boosted' ? 'text-sky-300/90' : 'text-white/55'}"
+						title={data.weaponHitCue === 'boosted'
+							? "Recent hits are above this weapon's listed damage, so they are priced as boosted. If you have no damage buff running, press the slot of the weapon you are firing."
+							: "Recent hits are below this weapon's listed damage, so they are priced as reduced. If that looks wrong, press the slot of the weapon you are firing."}
+						data-testid="weapon-hit-cue"
+					>
+						{data.weaponHitCue === 'boosted' ? 'Boosted' : 'Reduced'}
+					</div>
 				{:else if activityLabel}
 					<!-- Derived, never declared: the held tool implies which
 						 activity the next action records as. What actually gets

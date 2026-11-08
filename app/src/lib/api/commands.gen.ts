@@ -3996,6 +3996,8 @@ export interface TrackingSnapshot {
 	unpricedNoFitShots?: number | null;
 	/** Whether the active session has a weapon declared (pressed on the hotbar, or held from a press before the session). Without one, `current_tool` is only what the damage last pointed to, and hits several carried weapons explain go unpriced. Absent while idle. */
 	weaponDeclared?: boolean | null;
+	/** What the held weapon's latest hits say about its damage, when they land outside its listed range. Absent otherwise. */
+	weaponHitCue?: WeaponHitMargin | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 }
@@ -4124,6 +4126,12 @@ export interface WeaponAttributionSummary {
 	effectTicks: number;
 	/** Of those, the ones priced as a paid shot after play. */
 	pricedTicks: number;
+	/** Hits above the held weapon's listed range, priced to it, as they landed. */
+	boostedShots: number;
+	/** Hits below the held weapon's listed range, priced to it, as they landed. */
+	reducedShots: number;
+	/** Those still standing, per weapon, the most boosted first. */
+	hitMargins: WeaponHitMarginRow[];
 	/** Ticks standing as ticks that no one effect claims: several overlapping effects explained them, or their effect's paying session was deleted. */
 	unclaimedTicks: number;
 	/** The effects the session paid for or saw tick, oldest first. */
@@ -4146,7 +4154,7 @@ export interface WeaponAttributionSummary {
  */
 export interface WeaponBulkAssignment {
 	assigned: number;
-	/** Unpriced shots it left: the weapon did not fit them. */
+	/** Unpriced shots it left: the weapon did not explain them. */
 	skipped: number;
 	addedCostPed: number;
 	detail: SessionDetail;
@@ -4158,11 +4166,15 @@ export interface WeaponBulkAssignment {
 export interface WeaponBulkOption {
 	equipmentId: number;
 	name: string;
-	/** The unpriced shots its damage band fitted: the ones it would price. */
+	/** The unpriced shots its damage band fitted. */
 	fittingShots: number;
+	/** The unpriced shots it would price as boosted. */
+	boostedShots: number;
+	/** The unpriced shots it would price as reduced. */
+	reducedShots: number;
 	/** The session's other unpriced shots, which it would leave. */
 	skippedShots: number;
-	/** What pricing the fitting shots would add, priced as the weapon is configured now. */
+	/** What pricing the shots it explains would add, priced as the weapon is configured now. */
 	addedCostPed: number;
 }
 
@@ -4194,6 +4206,8 @@ export interface WeaponCorrectionWeapon {
 	costPerShotPed: number;
 	/** Its damage band fitted the shot when it landed. */
 	fits: boolean;
+	/** When it did not: how the shot would have to have landed for this weapon to have fired it. Null when no margin holds it. */
+	margin: WeaponHitMargin | null;
 }
 
 /**
@@ -4282,6 +4296,20 @@ export interface WeaponGuardrailAlert {
 }
 
 /**
+ * Which side of a weapon's listed range a hit landed on.
+ */
+export type WeaponHitMargin = 'boosted' | 'reduced';
+
+/**
+ * How many of one weapon's shots landed outside its listed range.
+ */
+export interface WeaponHitMarginRow {
+	toolName: string;
+	boosted: number;
+	reduced: number;
+}
+
+/**
  * What the player decided about a standing weapon mismatch.
  */
 export type WeaponMismatchDecision = 'confirm' | 'keep';
@@ -4339,7 +4367,7 @@ export interface WeaponShot {
 	correctionWindowId: string | null;
 	/** The decision on a mismatch that repriced it while the session ran. */
 	reviewDecision: WeaponReviewDecision | null;
-	/** It can be corrected: without a price or a correction, in an ended session. */
+	/** It can be corrected, in an ended session: left without a price, or priced from outside its weapon's range, and not corrected yet. */
 	correctable: boolean;
 }
 
@@ -4356,7 +4384,7 @@ export interface WeaponShotCandidate {
 /**
  * Which stored shots a review page lists.
  */
-export type WeaponShotGroup = 'unresolved' | 'evidence' | 'effect_tick';
+export type WeaponShotGroup = 'unresolved' | 'evidence' | 'effect_tick' | 'boosted' | 'reduced';
 
 export interface WeaponShotPage {
 	shots: WeaponShot[];
@@ -4372,9 +4400,9 @@ export interface WeaponUnpricedExposure {
 	sessionId: string;
 	/** Shots still without a price or correction. */
 	shots: number;
-	/** Of those, the ones no weapon still in Equipment fitted: they add nothing to the bound. */
+	/** Of those, the ones no weapon still in Equipment explains: they add nothing to the bound. */
 	noFitShots: number;
-	/** Each other shot at the dearest weapon that fitted it, priced as it is configured now. */
+	/** Each other shot at the dearest weapon that explains it, priced as it is configured now. */
 	costBoundPed: number;
 }
 
@@ -4523,7 +4551,7 @@ export async function consumableSessionDoses(sessionId: string): Promise<Consuma
 	return invokeCommand('consumable_session_doses', { session_id: sessionId });
 }
 
-export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence' | 'effect_tick', offset: number, limit: number): Promise<WeaponShotPage> {
+export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence' | 'effect_tick' | 'boosted' | 'reduced', offset: number, limit: number): Promise<WeaponShotPage> {
 	return invokeCommand('weapon_shots', { session_id: sessionId, group, offset, limit });
 }
 

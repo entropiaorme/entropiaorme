@@ -57,7 +57,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 57] = [
+const SNAPSHOT_FIELDS: [&str; 58] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -113,6 +113,7 @@ const SNAPSHOT_FIELDS: [&str; 57] = [
     "unpricedCostBound",
     "unpricedNoFitShots",
     "weaponDeclared",
+    "weaponHitCue",
     "healing",
     "warnings",
 ];
@@ -457,6 +458,14 @@ pub struct WeaponAttributionSummary {
     pub effect_ticks: i64,
     /// Of those, the ones priced as a paid shot after play.
     pub priced_ticks: i64,
+    /// Hits above the held weapon's listed range, priced to it, as they
+    /// landed.
+    pub boosted_shots: i64,
+    /// Hits below the held weapon's listed range, priced to it, as they
+    /// landed.
+    pub reduced_shots: i64,
+    /// Those still standing, per weapon, the most boosted first.
+    pub hit_margins: Vec<WeaponHitMarginRow>,
     /// Ticks standing as ticks that no one effect claims: several
     /// overlapping effects explained them, or their effect's paying session
     /// was deleted.
@@ -479,6 +488,25 @@ pub struct WeaponAttributionSummary {
     /// nothing to the bound.
     #[serde(default)]
     pub unpriced_no_fit_shots: i64,
+}
+
+/// How many of one weapon's shots landed outside its listed range.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponHitMarginRow {
+    pub tool_name: String,
+    pub boosted: i64,
+    pub reduced: i64,
+}
+
+/// Which side of a weapon's listed range a hit landed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WeaponHitMargin {
+    /// Above it: a temporary damage buff.
+    Boosted,
+    /// Below it: armour, or sub-maximal skill.
+    Reduced,
 }
 
 /// A bulk assignment still standing: every shot it priced, undoable as one.
@@ -800,6 +828,10 @@ pub struct TrackingSnapshot {
     /// several carried weapons explain go unpriced. Absent while idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weapon_declared: Option<bool>,
+    /// What the held weapon's latest hits say about its damage, when they
+    /// land outside its listed range. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_hit_cue: Option<WeaponHitMargin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing: Option<HealingStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2025,6 +2057,7 @@ pub(crate) async fn build_snapshot_value(
                 "unpricedCostBound": active.unpriced_cost_bound,
                 "unpricedNoFitShots": active.unpriced_no_fit,
                 "weaponDeclared": active.weapon_declared,
+                "weaponHitCue": active.weapon_hit_cue.map(WeaponHitMargin::from),
                 "healing": {
                     "toolName": active.healing.tool_name.clone(),
                     "state": active.healing.state.clone(),

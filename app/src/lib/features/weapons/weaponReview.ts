@@ -13,6 +13,8 @@ import type {
 	WeaponCorrectionWeapon,
 	WeaponEffectCandidate,
 	WeaponEffectRow,
+	WeaponHitMargin,
+	WeaponHitMarginRow,
 	WeaponReviewRow,
 	WeaponShot,
 	WeaponShotGroup,
@@ -37,6 +39,8 @@ export function hasWeaponEvidence(summary: WeaponAttributionSummary): boolean {
 		summary.unresolved > 0 ||
 		summary.evidenceShots > 0 ||
 		summary.effectTicks > 0 ||
+		summary.boostedShots > 0 ||
+		summary.reducedShots > 0 ||
 		summary.effects.length > 0 ||
 		summary.reviews.length > 0
 	);
@@ -50,6 +54,8 @@ export function attributionTally(summary: WeaponAttributionSummary): string {
 	if (summary.agreed != null && summary.agreed > 0) {
 		parts.push(`${summary.agreed} matched the hotbar`);
 	}
+	if (summary.boostedShots > 0) parts.push(`${summary.boostedShots} boosted`);
+	if (summary.reducedShots > 0) parts.push(`${summary.reducedShots} reduced`);
 	if (summary.evidenced != null && summary.evidenced > 0) {
 		parts.push(`${summary.evidenced} by damage range`);
 	}
@@ -70,9 +76,25 @@ export function reviewGroups(summary: WeaponAttributionSummary): ReviewGroup[] {
 		// whether the player then confirmed that weapon or kept the hotbar's;
 		// each row says which, and the tally line counts where they are priced.
 		{ id: 'evidence', label: 'Differed from the hotbar', count: summary.evidenceShots },
+		{ id: 'boosted', label: 'Boosted', count: summary.boostedShots },
+		{ id: 'reduced', label: 'Reduced', count: summary.reducedShots },
 		{ id: 'effect_tick', label: 'Effect ticks', count: summary.effectTicks },
 	];
 	return groups.filter((group) => group.count > 0);
+}
+
+/** How a hit outside a weapon's listed range reads. */
+export function marginLabel(margin: WeaponHitMargin): string {
+	return margin === 'boosted' ? 'Boosted' : 'Reduced';
+}
+
+/** One weapon's hits outside its listed range, as a line to weigh against
+ * what the player remembers of the session. */
+export function describeHitMargins(row: WeaponHitMarginRow): string {
+	const parts: string[] = [];
+	if (row.boosted > 0) parts.push(`${row.boosted} boosted`);
+	if (row.reduced > 0) parts.push(`${row.reduced} reduced`);
+	return `${row.toolName}: ${parts.join(', ')}`;
 }
 
 /** A damage figure as the game prints it. */
@@ -114,6 +136,10 @@ export function describeShot(shot: WeaponShot): string {
 			return `A tick shared by ${effects.length} overlapping casts of ${tools.join(' and ')}`;
 		}
 		return 'A tick of a cast whose session was deleted';
+	}
+	if (shot.group === 'boosted' || shot.group === 'reduced') {
+		const side = shot.group === 'boosted' ? 'Above' : 'Below';
+		return `${side} the listed range of ${shot.hotbarTool ?? 'the held weapon'}`;
 	}
 	if (effects.length > 0) {
 		const lead = fitting.length > 0 ? `Fits ${fitting.join(' and ')}, or` : 'Could be';
@@ -181,12 +207,17 @@ export function weaponOption(
 	weapon: WeaponCorrectionWeapon,
 	formatCost: (value: number) => string,
 ): string {
-	return `${weapon.name}${weapon.fits ? ', fits' : ''} · ${formatCost(weapon.costPerShotPed)} PED`;
+	const standing = weapon.fits
+		? ', fits'
+		: weapon.margin
+			? `, if ${marginLabel(weapon.margin).toLowerCase()}`
+			: '';
+	return `${weapon.name}${standing} · ${formatCost(weapon.costPerShotPed)} PED`;
 }
 
 /** The unpriced shots behind a cost, stated as a bound: their cost is left
- * out, and at most the dearest weapon that fitted each would add it back.
- * Without a bound (none fitted a weapon, or it is not known) the count
+ * out, and at most the dearest weapon that explains each would add it back.
+ * Without a bound (no weapon explains them, or it is not known) the count
  * stands alone. */
 export function describeUnpriced(shots: number, costBound?: number | null): string {
 	const counted = `${plural(shots, 'shot', 'shots')} unpriced`;
@@ -200,14 +231,29 @@ export function describeNoFit(shots: number): string {
 	return `${shots} fit no carried weapon`;
 }
 
+/** How a weapon would explain a session's unpriced shots: how many its
+ * range fits, and how many it would take as boosted or reduced. */
+export function describeBulkFit(option: WeaponBulkOption): string {
+	const parts: string[] = [];
+	if (option.fittingShots > 0) parts.push(`fits ${option.fittingShots}`);
+	if (option.boostedShots > 0) parts.push(`${option.boostedShots} if boosted`);
+	if (option.reducedShots > 0) parts.push(`${option.reducedShots} if reduced`);
+	return parts.join(' · ');
+}
+
 /** The confirmation line for assigning a session's unpriced shots to one
- * weapon at once. */
+ * weapon at once, saying how many only fit it as boosted or reduced. */
 export function describeBulkAssign(option: WeaponBulkOption): string {
+	const explained = option.fittingShots + option.boostedShots + option.reducedShots;
+	const margins: string[] = [];
+	if (option.boostedShots > 0) margins.push(`${option.boostedShots} as boosted`);
+	if (option.reducedShots > 0) margins.push(`${option.reducedShots} as reduced`);
+	const asMargin = margins.length > 0 ? ` (${margins.join(', ')})` : '';
 	const skipped =
 		option.skippedShots > 0
-			? `, skip ${plural(option.skippedShots, 'shot', 'shots')} it did not fit`
+			? `, skip ${plural(option.skippedShots, 'shot', 'shots')} it does not explain`
 			: '';
-	return `Assign ${plural(option.fittingShots, 'shot', 'shots')} to ${option.name}${skipped}: +${formatPed(option.addedCostPed)} PED.`;
+	return `Assign ${plural(explained, 'shot', 'shots')} to ${option.name}${asMargin}${skipped}: +${formatPed(option.addedCostPed)} PED.`;
 }
 
 /** What a bulk assignment did. */

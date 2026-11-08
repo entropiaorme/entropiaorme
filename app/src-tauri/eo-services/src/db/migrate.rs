@@ -393,6 +393,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "item conversions",
         sql: include_str!("../../migrations/0071_item_conversions.sql"),
     },
+    Migration {
+        version: 72,
+        description: "weapon hit margins",
+        sql: include_str!("../../migrations/0072_weapon_hit_margins.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -472,6 +477,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "DB8BD8BD307FDA4FCB7384EDB998244C99AC43C48C9CA7ACB216A1111F878E4079004D561D7929711AE426D4DC18770E",
     "DF2137255B909635A0FCD0E577550C4B95091B2197EE11DC2CA0A99C161702E8DF199A30FB56915EE9E84E374CF488E3",
     "C99E917138945DB23B9046469310649ECE0971804AF8CC4F55D6B875A5F675C7D4A628F490F5E41545093F0025455303",
+    "8A8B0CA6D32008B91B576AC9771FB38E748C352C60F8946266BDBFF873444CA484489F7A97CAD6489B12F8CC7279E478",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -654,6 +660,104 @@ mod tests {
                 migration.version
             );
         }
+    }
+
+    /// Widening the kept shots' classifications keeps every stored shot and
+    /// its correction, and the vocabulary stays closed.
+    #[test]
+    fn hit_margins_upgrade_keeps_every_shot_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        // As the app's connections run: a shot and its correction name each
+        // other, so neither could be inserted first with enforcement on.
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..71] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1); \
+                 INSERT INTO weapon_shot_evidence \
+                 (id, session_id, observed_at, amount, attribution, reason, correction_id, \
+                  candidates_json, effect_candidates_json, reload_speed_percent) \
+                 VALUES ('e', 's', 2, 191.5, 'unresolved', 'r', 'c', '[1]', '[2]', 14.0); \
+                 INSERT INTO weapon_attribution_corrections \
+                 (id, session_id, evidence_id, tool_name, cost_per_shot, corrected_at) \
+                 VALUES ('c', 's', 'e', 'Chip', 0.37, 3);",
+            )
+            .expect("historic rows");
+
+        let migration = &MIGRATIONS[71];
+        assert_eq!(migration.version, 72);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let kept: (f64, String, String, String, f64, Option<f64>) = connection
+            .query_row(
+                "SELECT e.amount, e.attribution, e.candidates_json, e.effect_candidates_json, \
+                        e.reload_speed_percent, c.replaced_cost_per_shot \
+                 FROM weapon_shot_evidence e \
+                 JOIN weapon_attribution_corrections c ON c.id = e.correction_id",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("the shot and its correction survive");
+        assert_eq!(
+            kept,
+            (
+                191.5,
+                "unresolved".to_string(),
+                "[1]".to_string(),
+                "[2]".to_string(),
+                14.0,
+                None
+            )
+        );
+
+        for attribution in ["boosted", "reduced"] {
+            connection
+                .execute(
+                    "INSERT INTO weapon_shot_evidence \
+                     (id, session_id, observed_at, attribution, reason) \
+                     VALUES (?1, 's', 4, ?1, 'r')",
+                    [attribution],
+                )
+                .expect("the new classifications are allowed");
+        }
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO weapon_shot_evidence \
+                     (id, session_id, observed_at, attribution, reason) \
+                     VALUES ('x', 's', 5, 'agrees', 'r')",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        let indexes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \
+                 AND name IN ('idx_weapon_shot_evidence_session', 'idx_weapon_shot_evidence_kill')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("indexes");
+        assert_eq!(indexes, 2, "the rebuild restores both indexes");
     }
 
     /// Widening the asset states must not depend on which historical columns a

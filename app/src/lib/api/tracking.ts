@@ -17,6 +17,7 @@ import type {
 	TrackingState,
 	Warning,
 	WeaponGuardrailAlert,
+	WeaponHitMargin,
 } from './commands.gen';
 import * as commands from './commands.gen';
 
@@ -71,6 +72,9 @@ export interface TrackingLive {
 	 * is only what the damage last pointed to, and hits several carried
 	 * weapons explain go unpriced. */
 	weaponDeclared?: boolean | null;
+	/** What the held weapon's latest hits say about its damage: above or
+	 * below its listed range. Absent while they land inside it. */
+	weaponHitCue?: WeaponHitMargin | null;
 	/** The session runs keyless (this machine's setting while idle): the
 	 * overlay declares equipment and healing uses are inferred. */
 	keylessInput?: boolean | null;

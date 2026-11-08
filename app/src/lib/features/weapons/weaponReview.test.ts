@@ -6,7 +6,9 @@ import {
 	describeBatch,
 	describeBulkAssign,
 	describeBulkDone,
+	describeBulkFit,
 	describeEffect,
+	describeHitMargins,
 	describeNoFit,
 	describeReview,
 	describeShot,
@@ -14,6 +16,7 @@ import {
 	effectTickLine,
 	formatDamage,
 	hasWeaponEvidence,
+	marginLabel,
 	reviewGroups,
 	shotStanding,
 	weaponOption,
@@ -31,6 +34,9 @@ function summary(overrides: Partial<WeaponAttributionSummary> = {}): WeaponAttri
 		markedTicks: 0,
 		effectTicks: 0,
 		pricedTicks: 0,
+		boostedShots: 0,
+		reducedShots: 0,
+		hitMargins: [],
 		unclaimedTicks: 0,
 		undeclaredShots: 0,
 		ranUndeclared: false,
@@ -80,6 +86,31 @@ describe('the attribution summary', () => {
 		);
 	});
 
+	it('counts hits outside the listed range apart from those that matched', () => {
+		expect(attributionTally(summary({ boostedShots: 27, reducedShots: 3 }))).toBe(
+			'398 matched the hotbar · 27 boosted · 3 reduced · 10 by damage range · 4 unresolved',
+		);
+	});
+
+	it('has something to show when only margin hits were kept', () => {
+		const quiet = { agreed: 0, evidenced: 0, evidenceShots: 0, unresolved: 0 };
+		expect(hasWeaponEvidence(summary(quiet))).toBe(false);
+		expect(hasWeaponEvidence(summary({ ...quiet, boostedShots: 1 }))).toBe(true);
+		expect(hasWeaponEvidence(summary({ ...quiet, reducedShots: 1 }))).toBe(true);
+	});
+
+	it("states one weapon's hits outside its range, leaving out an empty side", () => {
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 27, reduced: 3 })).toBe(
+			'Chip: 27 boosted, 3 reduced',
+		);
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 27, reduced: 0 })).toBe(
+			'Chip: 27 boosted',
+		);
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 0, reduced: 3 })).toBe(
+			'Chip: 3 reduced',
+		);
+	});
+
 	it('knows when there is nothing to show', () => {
 		expect(hasWeaponEvidence(summary())).toBe(true);
 		expect(
@@ -107,6 +138,9 @@ describe('the attribution summary', () => {
 			['evidence', 6],
 			['effect_tick', 21],
 		]);
+		expect(
+			reviewGroups(summary({ boostedShots: 2, reducedShots: 1, effectTicks: 1 })).map((g) => g.id),
+		).toEqual(['unresolved', 'evidence', 'boosted', 'reduced', 'effect_tick']);
 	});
 
 	it('has something to show when only an effect paid here ticked elsewhere', () => {
@@ -263,10 +297,33 @@ describe('a decision and an offered weapon', () => {
 			'Kept Pistol over Cannon; 3 shots repriced',
 		);
 		expect(
-			weaponOption({ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true }, (v) =>
-				v.toFixed(2),
+			weaponOption(
+				{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true, margin: null },
+				(v) => v.toFixed(2),
 			),
 		).toBe('Cannon, fits · 0.20 PED');
+		expect(
+			weaponOption(
+				{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false, margin: 'boosted' },
+				(v) => v.toFixed(2),
+			),
+		).toBe('Pistol, if boosted · 0.05 PED');
+		expect(
+			weaponOption(
+				{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false, margin: null },
+				(v) => v.toFixed(2),
+			),
+		).toBe('Pistol · 0.05 PED');
+		expect(marginLabel('reduced')).toBe('Reduced');
+	});
+
+	it('says which side of the range a kept hit landed on', () => {
+		expect(describeShot(shot({ group: 'boosted', toolName: 'Pistol', costPerShot: 0.05 }))).toBe(
+			'Above the listed range of Pistol',
+		);
+		expect(describeShot(shot({ group: 'reduced', toolName: 'Pistol', costPerShot: 0.05 }))).toBe(
+			'Below the listed range of Pistol',
+		);
 	});
 });
 
@@ -283,6 +340,8 @@ describe('unpriced exposure copy', () => {
 			equipmentId: 2,
 			name: 'Cannon',
 			fittingShots: 1,
+			boostedShots: 0,
+			reducedShots: 0,
 			skippedShots: 0,
 			addedCostPed: 0.2,
 		};
@@ -293,5 +352,26 @@ describe('unpriced exposure copy', () => {
 		expect(
 			describeBatch({ id: 'b', toolName: 'Rifle', shots: 24, costPed: 1.2, correctedAt: 0 }),
 		).toBe('24 shots assigned to Rifle');
+	});
+
+	it('says which shots a weapon only explains if they were boosted or reduced', () => {
+		const option = {
+			equipmentId: 1,
+			name: 'Chip',
+			fittingShots: 0,
+			boostedShots: 27,
+			reducedShots: 0,
+			skippedShots: 2,
+			addedCostPed: 9.9,
+		};
+		expect(describeBulkFit(option)).toBe('27 if boosted');
+		expect(describeBulkAssign(option)).toBe(
+			'Assign 27 shots to Chip (27 as boosted), skip 2 shots it does not explain: +9.90 PED.',
+		);
+		const mixed = { ...option, fittingShots: 3, reducedShots: 1, skippedShots: 0 };
+		expect(describeBulkFit(mixed)).toBe('fits 3 · 27 if boosted · 1 if reduced');
+		expect(describeBulkAssign(mixed)).toBe(
+			'Assign 31 shots to Chip (27 as boosted, 1 as reduced): +9.90 PED.',
+		);
 	});
 });

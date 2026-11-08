@@ -1,0 +1,31 @@
+name: weapon_hit_margins
+flavour: scripted
+description: >
+  Hits outside the held weapon's listed range. A pistol is pressed; a hit
+  in its band agrees silently, hits above it up to half again its maximum
+  and a hit below it are priced to the pistol and kept as boosted and
+  reduced, and a hit past the boosted reach stays unpriced. A critical
+  inside its own reach is an ordinary hit.
+surfaces:
+  - tracking-weapon-attribution-agreement
+  - tracking-weapon-attribution-margins
+  - tracking-weapon-attribution-unresolved
+  - tracking-kill-creation
+events: 8
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. carried.json names the two carried weapons (pistol 5-10,
+  cannon 20-40 regular bands); steps.jsonl presses the pistol before the
+  first hit.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

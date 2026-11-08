@@ -100,8 +100,8 @@
 	<InfoTip label="What realised figures are">
 		<p class="text-xs font-semibold leading-relaxed text-text">Loot TT plus realised markup</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-			Only markup from a recorded sale or conversion. It reads the same as TT Net until a stock
-			outcome realises a gain or loss.
+			Only markup from a recorded sale or conversion, plus ledger entries pegged to a session. It
+			reads the same as TT Net until one of those realises a gain or loss.
 		</p>
 		{#if realisedDerived.length > 0}
 			<ul class="mt-2 space-y-1 border-t border-border/50 pt-2" data-testid="realised-derived">

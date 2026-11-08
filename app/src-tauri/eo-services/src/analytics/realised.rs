@@ -3,9 +3,10 @@
 //! One read answers it for every surface: each confirmed stock outcome is split
 //! across the sources that funded it, and the reports below only group those
 //! parts. A confirmed sale reads its split from its movement rows; a conversion
-//! that recognised value on the day wrote its split down when it happened.
+//! that recognised value on the day wrote its split down when it happened. A
+//! ledger entry the player pegged to a session is shared across that session.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{hash_map::Entry, BTreeMap, HashMap};
 
 use crate::harvest_yield::HarvestYieldTier;
 use crate::session_scope::{self, StatsScope};
@@ -215,6 +216,158 @@ pub(super) fn realised_contributions(
     })?;
     for row in rows {
         parts.push(row?);
+    }
+    parts.extend(session_ledger_contributions(conn)?);
+    Ok(parts)
+}
+
+/// One part of a session a pegged ledger entry can land on.
+struct SessionShare {
+    source_kind: &'static str,
+    yield_tier: Option<String>,
+    activity_context_id: Option<i64>,
+    cycled: f64,
+}
+
+/// What a session recorded, part by part, with what each part cycled. Excluded
+/// recordings read as never recorded, so they take no share of the spread.
+fn session_shares(
+    conn: &rusqlite::Connection,
+    definition_id: i64,
+) -> rusqlite::Result<Vec<SessionShare>> {
+    let economy = session_scope::counts_on(StatsScope::Economy, "s");
+    let mut hunted: BTreeMap<Option<i64>, f64> = BTreeMap::new();
+    // Settled recordings read their projection; only the rest touch raw kills.
+    for sql in [
+        format!(
+            "SELECT r.context_id, COALESCE(SUM(r.cycled_ped), 0) \
+             FROM session_kill_rollups r \
+             JOIN session_rollup_meta m ON m.session_id = r.session_id \
+                  AND m.rollup_version >= ?2 \
+             JOIN tracking_sessions s ON s.id = r.session_id \
+             WHERE s.definition_id = ?1 AND {economy} \
+             GROUP BY r.context_id"
+        ),
+        format!(
+            "SELECT k.context_id, COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0) \
+             FROM tracking_sessions s \
+             JOIN kills k ON k.session_id = s.id \
+             LEFT JOIN session_rollup_meta m ON m.session_id = s.id \
+                  AND m.rollup_version >= ?2 \
+             WHERE s.definition_id = ?1 AND {economy} AND m.session_id IS NULL \
+             GROUP BY k.context_id"
+        ),
+    ] {
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params![definition_id, crate::session_rollup::ROLLUP_VERSION],
+            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, f64>(1)?)),
+        )?;
+        for row in rows {
+            let (context, cycled) = row?;
+            *hunted.entry(context).or_default() += cycled;
+        }
+    }
+    let mut shares: Vec<SessionShare> = hunted
+        .into_iter()
+        .map(|(context, cycled)| SessionShare {
+            source_kind: "hunt",
+            yield_tier: None,
+            activity_context_id: context,
+            cycled,
+        })
+        .collect();
+
+    let mut swung = conn.prepare(&format!(
+        "SELECT h.context_id, h.yield_tier, COALESCE(SUM(h.cost_ped), 0) \
+         FROM tracking_sessions s \
+         JOIN harvest_events h ON h.session_id = s.id \
+         WHERE s.definition_id = ?1 AND {economy} \
+         GROUP BY h.context_id, h.yield_tier"
+    ))?;
+    let rows = swung.query_map(rusqlite::params![definition_id], |row| {
+        Ok(SessionShare {
+            source_kind: "harvest",
+            yield_tier: row.get(1)?,
+            activity_context_id: row.get(0)?,
+            cycled: row.get(2)?,
+        })
+    })?;
+    for row in rows {
+        shares.push(row?);
+    }
+    shares.retain(|share| share.cycled > STOCK_EPSILON);
+    Ok(shares)
+}
+
+/// The ledger entries the player pegged to a session, each shared across what
+/// that session recorded by what each part cycled. Every part's realised rate
+/// therefore moves by the same points, so a session-wide cost cannot reorder
+/// the session's own activities. The shares are worked out here rather than
+/// stored, so they follow a recording that is later re-filed or excluded.
+fn session_ledger_contributions(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<Vec<RealisedContribution>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_definition_id, type, amount FROM ledger_entries \
+         WHERE session_definition_id IS NOT NULL",
+    )?;
+    let entries = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut shares_by_definition: HashMap<i64, Vec<SessionShare>> = HashMap::new();
+    let mut parts = Vec::new();
+    for (definition_id, kind, amount) in entries {
+        let signed = if kind == "markup" { amount } else { -amount };
+        let shares = match shares_by_definition.entry(definition_id) {
+            Entry::Occupied(known) => known.into_mut(),
+            Entry::Vacant(slot) => slot.insert(session_shares(conn, definition_id)?),
+        };
+        let part = |source_kind: &str,
+                    yield_tier: Option<String>,
+                    activity_context_id: Option<i64>,
+                    amount: f64| RealisedContribution {
+            source_kind: source_kind.to_string(),
+            yield_tier,
+            mob_species: None,
+            // As with stock, the session axis is Hunting's: swung output is
+            // read by its yield tier instead.
+            session_definition_id: (source_kind == "hunt").then_some(definition_id),
+            activity_context_id,
+            quest_id: None,
+            excluded: false,
+            origin_item: None,
+            origin_quantity: 0.0,
+            amount,
+        };
+        if shares.is_empty() {
+            // Nothing recorded to share it across: it stays on the session.
+            parts.push(part("hunt", None, None, signed));
+            continue;
+        }
+        let lines: Vec<CreditLine> = shares
+            .iter()
+            .map(|share| CreditLine {
+                weight: share.cycled,
+                worth: None,
+            })
+            .collect();
+        let split = stock_allocation::split_realised(signed, &lines);
+        for (share, amount) in shares.iter().zip(split) {
+            parts.push(part(
+                share.source_kind,
+                share.yield_tier.clone(),
+                share.activity_context_id,
+                amount,
+            ));
+        }
     }
     Ok(parts)
 }

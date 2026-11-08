@@ -66,6 +66,8 @@ pub struct LedgerRow {
     pub description: String,
     pub amount: f64,
     pub tag: String,
+    /// The session this entry is pegged to as a whole, by name.
+    pub session_name: Option<String>,
 }
 
 /// One ledger preset, in wire shape.
@@ -3863,6 +3865,7 @@ fn ledger_item(row: &rusqlite::Row) -> LedgerRow {
         description: row.get_unwrap::<_, String>(3),
         amount: row.get_unwrap::<_, f64>(4),
         tag: row.get_unwrap::<_, String>(5),
+        session_name: row.get_unwrap::<_, Option<String>>(6),
     }
 }
 
@@ -5142,8 +5145,12 @@ impl AnalyticsService {
         // The seek predicate reproduces the (date DESC, id DESC) order past
         // the cursor row; one extra row is fetched to detect a further page.
         // id-order: tiebreak (the seek is by date; id splits equal dates).
-        let mut sql =
-            String::from("SELECT id, date, type, description, amount, tag FROM ledger_entries");
+        let mut sql = String::from(
+            "SELECT id, date, type, description, amount, tag, \
+             (SELECT d.name FROM session_definitions d \
+              WHERE d.id = ledger_entries.session_definition_id) \
+             FROM ledger_entries",
+        );
         if seek.is_some() {
             sql.push_str(" WHERE date < ? OR (date = ? AND id < ?)");
         }
@@ -5200,6 +5207,10 @@ impl AnalyticsService {
     /// Create a ledger entry, relanding its (possibly backdated) day's
     /// rollup in the same transaction. Returns the created entry's wire
     /// shape (the input echoed with its generated id).
+    ///
+    /// `session_definition_id` pegs the entry to a session as a whole: it
+    /// stays a global ledger row and also counts in that session's realised
+    /// figures (`realised::realised_contributions`).
     pub async fn create_ledger_entry(
         &self,
         date: &str,
@@ -5207,7 +5218,29 @@ impl AnalyticsService {
         description: &str,
         amount: f64,
         tag: &str,
+        session_definition_id: Option<i64>,
     ) -> Result<LedgerRow, AnalyticsError> {
+        let session_name = match session_definition_id {
+            None => None,
+            Some(definition_id) => {
+                let name: Option<String> = self
+                    .db
+                    .with_reader(move |conn| {
+                        use rusqlite::OptionalExtension as _;
+                        Ok(conn
+                            .query_row(
+                                "SELECT name FROM session_definitions WHERE id = ?",
+                                rusqlite::params![definition_id],
+                                |row| row.get(0),
+                            )
+                            .optional()?)
+                    })
+                    .await?;
+                Some(name.ok_or(AnalyticsError::InvalidInput(
+                    "That session no longer exists",
+                ))?)
+            }
+        };
         let id = Uuid::new_v4().to_string();
         // One transaction over the insert and the rollup refresh: a
         // backdated entry relands its day's rollup with the write.
@@ -5222,9 +5255,18 @@ impl AnalyticsService {
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
                 tx.execute(
-                    "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![id_c, date_c, kind_c, desc_c, amount, tag_c],
+                    "INSERT INTO ledger_entries \
+                     (id, date, type, description, amount, tag, session_definition_id) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        id_c,
+                        date_c,
+                        kind_c,
+                        desc_c,
+                        amount,
+                        tag_c,
+                        session_definition_id
+                    ],
                 )?;
                 daily_rollup::refresh_days(&tx, [date_c.as_str()])?;
                 tx.commit()?;
@@ -5238,6 +5280,7 @@ impl AnalyticsService {
             description: description.to_string(),
             amount,
             tag: tag.to_string(),
+            session_name,
         })
     }
 
@@ -7218,6 +7261,7 @@ impl AnalyticsService {
                 description,
                 amount,
                 tag: INVENTORY_SALE_TAG.to_string(),
+                session_name: None,
             },
         );
         Ok(Some(InventorySale {
@@ -7309,7 +7353,14 @@ mod tests {
         // A backdated create lands its day's rollup with the insert.
         let body = to_json(
             service
-                .create_ledger_entry("2026-06-02", "expense", "ammo restock", 12.5, "manual")
+                .create_ledger_entry(
+                    "2026-06-02",
+                    "expense",
+                    "ammo restock",
+                    12.5,
+                    "manual",
+                    None,
+                )
                 .await
                 .unwrap(),
         );
@@ -8045,7 +8096,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let body = to_json(
             service
-                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo", None)
                 .await
                 .unwrap(),
         );
@@ -8075,6 +8126,7 @@ mod tests {
                     &format!("e{day}"),
                     1.0,
                     "t",
+                    None,
                 )
                 .await
                 .unwrap();
@@ -9700,7 +9752,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo", None)
                 .await
                 .unwrap(),
         );
@@ -9952,7 +10004,7 @@ mod tests {
     async fn ledger_page_exactly_at_the_limit_has_no_next_cursor() {
         let (_dir, service) = write_service().await;
         service
-            .create_ledger_entry("2026-05-01", "expense", "only", 1.0, "t")
+            .create_ledger_entry("2026-05-01", "expense", "only", 1.0, "t", None)
             .await
             .unwrap();
         let page = service.list_ledger(None, Some(1)).await.unwrap();
@@ -11073,6 +11125,96 @@ mod tests {
     /// base keyed by species, a hunting listing consumes it in proportion,
     /// a confirmed sale realises markup back onto the species, and every
     /// read stays scoped to its own activity.
+    /// A ledger entry pegged to a session reaches every realised read, shared
+    /// by what each part of the session cycled, and stays a global ledger row.
+    #[tokio::test]
+    async fn a_ledger_entry_pegged_to_a_session_is_shared_by_cycled() {
+        let (_dir, service) = write_service().await;
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO session_definitions(id, name, ad_hoc_segments, is_active) \
+                       VALUES(7, 'Mayhem', 0, 1); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                       definition_id) VALUES('run', 1780300000.0, 1780303600.0, 0, 7); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                       definition_id, economy_excluded_at) \
+                       VALUES('left-out', 1780200000.0, 1780203600.0, 0, 7, 1780400000.0); \
+                     INSERT INTO session_contexts(id, session_id, created_at) \
+                       VALUES(31, 'run', 1780300000.0), (32, 'run', 1780301800.0), \
+                             (33, 'left-out', 1780200000.0); \
+                     INSERT INTO kills(id, session_id, context_id, timestamp, cost_ped, \
+                       enhancer_cost, loot_total_ped) \
+                       VALUES('k1', 'run', 31, 1780300100.0, 30.0, 0.0, 0.0), \
+                             ('k2', 'run', 32, 1780301900.0, 50.0, 0.0, 0.0), \
+                             ('k3', 'left-out', 33, 1780200100.0, 900.0, 0.0, 0.0); \
+                     INSERT INTO harvest_events(id, session_id, context_id, timestamp, success, \
+                       tool_name, cost_ped, loot_total_ped, yield_tier) \
+                       VALUES('h1', 'run', 32, 1780302000.0, 1, 'Axe', 20.0, 0.0, 'long');",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let entry = service
+            .create_ledger_entry("2026-06-01", "expense", "Fuel", 10.0, "Operating", Some(7))
+            .await
+            .unwrap();
+        assert_eq!(entry.session_name.as_deref(), Some("Mayhem"));
+        service
+            .create_ledger_entry("2026-06-01", "markup", "Refund", 5.0, "Operating", Some(7))
+            .await
+            .unwrap();
+        assert!(matches!(
+            service
+                .create_ledger_entry("2026-06-01", "expense", "Fuel", 1.0, "t", Some(99))
+                .await,
+            Err(AnalyticsError::InvalidInput(_))
+        ));
+
+        // Net -5.00 over 100 PED cycled by the counted run: the excluded run
+        // reads as never recorded, so it takes no share of the spread.
+        let credit = service
+            .db
+            .with_reader(|conn| Ok(realised::realised_contributions(conn)?))
+            .await
+            .unwrap();
+        let share = |context: i64, kind: &str| -> f64 {
+            credit
+                .iter()
+                .filter(|c| c.activity_context_id == Some(context) && c.source_kind == kind)
+                .map(|c| c.amount)
+                .sum()
+        };
+        assert!((share(31, "hunt") + 1.5).abs() < 1e-9);
+        assert!((share(32, "hunt") + 2.5).abs() < 1e-9);
+        assert!((share(32, "harvest") + 1.0).abs() < 1e-9);
+        assert_eq!(share(33, "hunt"), 0.0);
+
+        // The hunted share reaches the session; the swung share its yield tier.
+        let definitions = service.realised_markup_by_definition().await.unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!((definitions[0].net_markup + 4.0).abs() < 1e-9);
+        let species: f64 = service
+            .realised_markup_by_species()
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.net_markup)
+            .sum();
+        assert!((species + 4.0).abs() < 1e-9);
+        let tiers = service.realised_markup_by_tier().await.unwrap();
+        assert_eq!(tiers.len(), 1);
+        assert!((tiers[0].net_markup + 1.0).abs() < 1e-9);
+
+        // Still ordinary ledger rows, named for the table.
+        let page = service.list_ledger(None, None).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries[0].session_name.as_deref(), Some("Mayhem"));
+    }
+
     #[tokio::test]
     async fn hunting_listing_attributes_realised_markup_to_species() {
         let (_dir, service) = write_service().await;

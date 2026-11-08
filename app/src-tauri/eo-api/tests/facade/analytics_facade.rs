@@ -225,6 +225,7 @@ async fn a_ledger_create_reads_back_the_wire_shape() {
             description: "Ammo".to_string(),
             amount: 12.5,
             tag: "ammo".to_string(),
+            session_definition_id: None,
         })
         .await
         .unwrap();
@@ -264,6 +265,7 @@ async fn the_ledger_page_carries_the_next_cursor_when_more_remain() {
             description: format!("e{day}"),
             amount: 1.0,
             tag: "t".to_string(),
+            session_definition_id: None,
         })
         .await
         .unwrap();
@@ -313,6 +315,7 @@ async fn the_ledger_summary_counts_every_entry_beyond_the_page_window() {
             description: format!("{tag} {date}"),
             amount,
             tag: tag.to_string(),
+            session_definition_id: None,
         })
         .await
         .unwrap();

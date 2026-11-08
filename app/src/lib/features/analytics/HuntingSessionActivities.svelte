@@ -86,7 +86,8 @@
 		<p class="text-xs font-semibold leading-relaxed text-text">Loot TT plus confirmed economic outcomes</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			Confirmed reward TT is added exactly once. Later realised markup from ordinary loot and stock
-			rewards returns through its immutable activity provenance.
+			rewards returns through its immutable activity provenance. A ledger entry pegged to the session
+			is shared across its activities by what each cycled.
 		</p>
 	</InfoTip>
 {/snippet}

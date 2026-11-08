@@ -8,6 +8,7 @@ vi.mock('$lib/api', () => ({
 	addLedgerEntry: vi.fn(),
 	deleteLedgerEntry: vi.fn(),
 	getLedgerPresets: vi.fn(),
+	getAllSessionDefinitions: vi.fn(),
 	addLedgerPreset: vi.fn(),
 	deleteLedgerPreset: vi.fn(),
 }));
@@ -24,6 +25,7 @@ function entry(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
 		description: 'L weapon purchase',
 		amount: 45,
 		tag: 'equipment',
+		sessionName: null,
 		...overrides,
 	};
 }
@@ -47,6 +49,7 @@ function seedLoad(
 ) {
 	mocked.getLedgerEntries.mockResolvedValue({ items: entries, nextCursor, total });
 	mocked.getLedgerPresets.mockResolvedValue([preset()]);
+	mocked.getAllSessionDefinitions.mockResolvedValue([]);
 }
 
 beforeEach(() => {
@@ -186,6 +189,24 @@ describe('addEntry', () => {
 		model.entryAmount = 3;
 		await model.addEntry();
 		expect(mocked.addLedgerEntry).not.toHaveBeenCalled();
+	});
+
+	it('pegs the entry to the chosen session, then clears the choice', async () => {
+		seedLoad();
+		mocked.addLedgerEntry.mockResolvedValue(entry({ id: 'new', sessionName: 'Mayhem' }));
+		const model = createLedgerModel();
+		await model.loadAll();
+
+		model.entryDescription = 'Fuel';
+		model.entryTag = 'Operating';
+		model.entryAmount = 8;
+		model.entrySessionId = '17';
+		await model.addEntry();
+
+		expect(mocked.addLedgerEntry).toHaveBeenCalledWith(
+			expect.objectContaining({ sessionDefinitionId: 17 }),
+		);
+		expect(model.entrySessionId).toBe('');
 	});
 
 	it('clears the form and closes the modal on success', async () => {

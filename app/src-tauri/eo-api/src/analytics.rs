@@ -454,6 +454,9 @@ pub struct LedgerItem {
     pub description: String,
     pub amount: f64,
     pub tag: String,
+    /// The session the entry is pegged to as a whole, by name.
+    #[serde(rename = "sessionName")]
+    pub session_name: Nullable<String>,
 }
 
 /// The whole-ledger summary for a period: the per-tag markup (gain) and
@@ -885,6 +888,11 @@ pub struct LedgerEntryInput {
     pub description: String,
     pub amount: f64,
     pub tag: String,
+    /// The session this entry belongs to as a whole, when it has one. The
+    /// entry stays in the global ledger and also counts in that session's
+    /// realised figures, shared across its activities.
+    #[serde(default, rename = "sessionDefinitionId")]
+    pub session_definition_id: Option<i64>,
 }
 
 /// A ledger-preset create payload.
@@ -1465,6 +1473,7 @@ impl Api {
                 &entry.description,
                 entry.amount,
                 &entry.tag,
+                entry.session_definition_id,
             )
             .await
             .map_err(analytics_error("ledger create"))?;
@@ -2011,6 +2020,7 @@ pub(crate) fn ledger_item_dto(row: eo_services::analytics::LedgerRow) -> LedgerI
         description: row.description,
         amount: row.amount,
         tag: row.tag,
+        session_name: row.session_name.into(),
     }
 }
 

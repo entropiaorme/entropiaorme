@@ -14,10 +14,12 @@ import {
 	addLedgerPreset,
 	deleteLedgerEntry,
 	deleteLedgerPreset,
+	getAllSessionDefinitions,
 	getLedgerEntries,
 	getLedgerPresets,
 	getLedgerSummary,
 } from '$lib/api';
+import type { SessionDefinition } from '$lib/api/commands.gen';
 import type { LedgerEntry, LedgerEntryType, LedgerPreset } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { filterByQuery, isSearchQuery } from '$lib/view/search';
@@ -63,6 +65,7 @@ export function createLedgerModel() {
 	// true bounds rather than the loaded window's size.
 	let total = $state(0);
 	let presets = $state<LedgerPreset[]>([]);
+	let sessionDefinitions = $state<SessionDefinition[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	// Keyset pagination: the cursor for the next server page (null once the
@@ -75,6 +78,8 @@ export function createLedgerModel() {
 	let entryAmount = $state(0);
 	let entryDescription = $state('');
 	let entryTag = $state('');
+	// The session an entry is pegged to as a whole; '' for none.
+	let entrySessionId = $state('');
 	let tagInputFocused = $state(false);
 
 	// Preset form state
@@ -116,6 +121,21 @@ export function createLedgerModel() {
 		presetTagInputFocused ? buildTagSuggestions(presetTag, presetType) : [],
 	);
 
+	// Sessions still in use first; archived ones remain peggable because
+	// their recorded play is still real.
+	const sessionOptions = $derived(
+		[...sessionDefinitions]
+			.sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.name.localeCompare(b.name))
+			.map((definition) => ({
+				id: definition.id,
+				label: definition.isActive ? definition.name : `${definition.name} (archived)`,
+			})),
+	);
+
+	function peggedSessionId(): number | null {
+		return entrySessionId === '' ? null : Number(entrySessionId);
+	}
+
 	// Client-side pager over the loaded entry window; server order preserved.
 	const table = createTableModel<LedgerEntry>({
 		rows: () => entries,
@@ -126,15 +146,17 @@ export function createLedgerModel() {
 		loading = true;
 		error = null;
 		try {
-			const [entryPage, presetRows] = await Promise.all([
+			const [entryPage, presetRows, definitions] = await Promise.all([
 				getLedgerEntries(),
 				getLedgerPresets(),
+				getAllSessionDefinitions(),
 				loadSummary(),
 			]);
 			entries = entryPage.items;
 			nextCursor = entryPage.nextCursor;
 			total = entryPage.total;
 			presets = presetRows;
+			sessionDefinitions = definitions;
 		} catch (e) {
 			error = describeError(e, 'Failed to load ledger');
 		} finally {
@@ -188,12 +210,14 @@ export function createLedgerModel() {
 				description,
 				amount: entryAmount,
 				tag,
+				sessionDefinitionId: peggedSessionId(),
 			});
 			entries = [newEntry, ...entries];
 			total += 1;
 			entryDescription = '';
 			entryAmount = 0;
 			entryTag = '';
+			entrySessionId = '';
 			table.page = 0;
 			showAddModal = false;
 			void loadSummary();
@@ -268,9 +292,11 @@ export function createLedgerModel() {
 				description: preset.description,
 				amount: preset.amount,
 				tag: preset.tag,
+				sessionDefinitionId: peggedSessionId(),
 			});
 			entries = [newEntry, ...entries];
 			total += 1;
+			entrySessionId = '';
 			table.page = 0;
 			showAddModal = false;
 			void loadSummary();
@@ -354,6 +380,15 @@ export function createLedgerModel() {
 		},
 		set entryTag(value: string) {
 			entryTag = value;
+		},
+		get entrySessionId() {
+			return entrySessionId;
+		},
+		set entrySessionId(value: string) {
+			entrySessionId = value;
+		},
+		get sessionOptions() {
+			return sessionOptions;
 		},
 		get tagInputFocused() {
 			return tagInputFocused;

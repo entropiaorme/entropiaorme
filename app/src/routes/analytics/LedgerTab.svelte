@@ -7,6 +7,7 @@
 	import Input from '$lib/components/Input.svelte';
 	import Modal from '$lib/components/Modal.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
+	import Select from '$lib/components/Select.svelte';
 	import {
 		createLedgerModel,
 		type NetRange,
@@ -162,7 +163,12 @@
 								<td class="py-2.5 px-3 text-text-secondary tabular-nums">
 									{formatLedgerDate(entry.date)}
 								</td>
-								<td class="py-2.5 px-3 text-text">{entry.description}</td>
+								<td class="py-2.5 px-3 text-text">
+									{entry.description}
+									{#if entry.sessionName}
+										<span class="block text-xs text-text-tertiary">{entry.sessionName}</span>
+									{/if}
+								</td>
 								<td
 									class="py-2.5 px-3 text-right tabular-nums font-medium {entry.type === 'markup'
 										? 'text-positive'
@@ -240,7 +246,7 @@
 				size="md"
 				options={[
 					{ id: 'expense', label: 'Expense' },
-					{ id: 'markup', label: 'Markup' }
+					{ id: 'markup', label: 'Gain' }
 				]}
 				active={model.entryType}
 				onchange={(id) => (model.entryType = id as LedgerEntryType)}
@@ -308,6 +314,19 @@
 					{/each}
 				</div>
 			{/if}
+		</div>
+
+		<!-- The session the entry belongs to as a whole -->
+		<div>
+			<label class="block eyebrow mb-1.5" for="ledger-session">
+				Session
+			</label>
+			<Select id="ledger-session" bind:value={model.entrySessionId}>
+				<option value="">None</option>
+				{#each model.sessionOptions as option (option.id)}
+					<option value={option.id}>{option.label}</option>
+				{/each}
+			</Select>
 		</div>
 
 		<!-- Quick Entries sub-section -->
@@ -390,7 +409,7 @@
 								size="md"
 								options={[
 									{ id: 'expense', label: 'Expense' },
-									{ id: 'markup', label: 'Markup' }
+									{ id: 'markup', label: 'Gain' }
 								]}
 								active={model.presetType}
 								onchange={(id) => (model.presetType = id as LedgerEntryType)}

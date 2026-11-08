@@ -1727,6 +1727,8 @@ export interface LedgerEntryInput {
 	description: string;
 	amount: number;
 	tag: string;
+	/** The session this entry belongs to as a whole, when it has one. The entry stays in the global ledger and also counts in that session's realised figures, shared across its activities. */
+	sessionDefinitionId?: number | null;
 }
 
 /**
@@ -1739,6 +1741,8 @@ export interface LedgerItem {
 	description: string;
 	amount: number;
 	tag: string;
+	/** The session the entry is pegged to as a whole, by name. */
+	sessionName: string | null;
 }
 
 /**

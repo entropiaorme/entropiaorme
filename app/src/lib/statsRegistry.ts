@@ -59,6 +59,9 @@ export type StatRender = {
  */
 export type StatContext = {
 	valuation?: LiveValuationView | null;
+	/** The session family's loot valued at market markup, for the lifetime
+	 * forms of the markup stats. Absent or null while it cannot be given. */
+	lifetimeValuation?: LiveValuationView | null;
 	/** The looter basis the live expected figure is read at. */
 	looterBasis?: LooterBasis;
 };
@@ -90,7 +93,7 @@ export type StatDef = {
 	 * over kills is the mean over every kill the family recorded, never
 	 * the mean of each instance's mean.
 	 */
-	renderLifetime?: (lifetime: LifetimeStats) => StatRender;
+	renderLifetime?: (lifetime: LifetimeStats, context?: StatContext) => StatRender;
 };
 
 const isActive = (s: TrackingStatus | null): s is TrackingStatus => s?.status === 'active';
@@ -146,9 +149,13 @@ function liveValuation(status: TrackingStatus, context: StatContext): LiveValuat
 
 /** A lifetime figure built on the family's cycled total. */
 function lifetimeCost(
-	render: (lifetime: LifetimeStats) => StatRender,
-): (lifetime: LifetimeStats) => StatRender {
-	return (lifetime) => costBased(lifetime.unpricedShots, overSpan(lifetime, render));
+	render: (lifetime: LifetimeStats, context: StatContext) => StatRender,
+): (lifetime: LifetimeStats, context?: StatContext) => StatRender {
+	return (lifetime, context = {}) =>
+		costBased(
+			lifetime.unpricedShots,
+			overSpan(lifetime, (l) => render(l, context)),
+		);
 }
 
 /** A net figure reads the same either side of the flip: signed, and
@@ -430,8 +437,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			overSpan(lifetime, (l) => ({ value: String(l.harvestSwings), color: PLAIN })),
 	},
 	// The markup stats are estimates over the informational market layer:
-	// what the loot would be worth at market, never realised P&L. They have
-	// no lifetime form yet (the family's past loot is not valued live).
+	// what the loot would be worth at market, never realised P&L. The
+	// lifetime forms value the family's past loot at today's market.
 	loot_mu: {
 		id: 'loot_mu',
 		label: 'Loot MU',
@@ -441,6 +448,11 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			const factor = liveValuation(status, context)?.lootMuFactor ?? null;
 			return factor === null ? EMPTY : { value: formatPercent(factor), color: PLAIN };
 		},
+		renderLifetime: (lifetime, context = {}) =>
+			overSpan(lifetime, () => {
+				const factor = context.lifetimeValuation?.lootMuFactor ?? null;
+				return factor === null ? EMPTY : { value: formatPercent(factor), color: PLAIN };
+			}),
 	},
 	mu_rate: {
 		id: 'mu_rate',
@@ -451,6 +463,11 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			const cost = status.cost ?? 0;
 			if (!valuation || valuation.lootTt <= 0 || cost <= 0) return EMPTY;
 			return { value: formatPercent(valuation.marketValuePed / cost), color: PLAIN };
+		}),
+		renderLifetime: lifetimeCost((l, context) => {
+			const valuation = context.lifetimeValuation ?? null;
+			if (!valuation || valuation.lootTt <= 0 || l.cycled <= 0) return EMPTY;
+			return { value: formatPercent(valuation.marketValuePed / l.cycled), color: PLAIN };
 		}),
 	},
 	expected_mu_rate: {
@@ -530,6 +547,20 @@ export const LIFETIME_STAT_IDS: StatId[] = ALL_STAT_IDS.filter(
  * what gets stored.
  */
 export const HEADLINE_LIFETIME_STAT_IDS: StatId[] = ['cycled', 'loot_tt', 'net', 'rate'];
+
+/** The stats whose lifetime form values the family's loot at market. */
+const LIFETIME_VALUED_STAT_IDS: readonly string[] = ['loot_mu', 'mu_rate'];
+
+/**
+ * Whether a surface's selection draws a stat that needs the family's loot
+ * valued. The valuation is only read while one is on show, so a surface
+ * that never asks for a markup figure never pays for it.
+ */
+export function drawsLifetimeValuation(
+	prefs: readonly { id: string; enabled: boolean }[],
+): boolean {
+	return prefs.some((pref) => pref.enabled && LIFETIME_VALUED_STAT_IDS.includes(pref.id));
+}
 
 export function isLifetimeCapable(id: string): boolean {
 	return getStatDef(id)?.renderLifetime !== undefined;

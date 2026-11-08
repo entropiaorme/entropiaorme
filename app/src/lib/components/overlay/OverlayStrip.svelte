@@ -582,7 +582,7 @@
 				{@const def = getStatDef(pref.id)}
 				{#if def}
 					{@const r = showingLifetime && def.renderLifetime && lifetime
-						? def.renderLifetime(lifetime)
+						? def.renderLifetime(lifetime, statContext)
 						: def.render(status, statContext)}
 					{@const valueColor = r.value === NO_DATA
 						? 'text-white/25'

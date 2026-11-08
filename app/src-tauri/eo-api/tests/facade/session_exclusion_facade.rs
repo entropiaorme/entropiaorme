@@ -310,6 +310,10 @@ async fn aggregates(api: &Api) -> BTreeMap<&'static str, Value> {
     read!("hunting_realised_markup", api.hunting_realised_markup());
     read!("harvest_realised_markup", api.harvest_realised_markup());
     read!(
+        "tracking_definition_loot",
+        api.tracking_definition_loot(DEFINITION)
+    );
+    read!(
         "character_skilling_forecast",
         api.character_skilling_forecast(&forecast_query())
     );
@@ -525,6 +529,7 @@ async fn each_scope_is_excluded_on_its_own() {
         "analytics_harvest",
         "analytics_hunting_activity",
         "ledger_summary",
+        "tracking_definition_loot",
     ] {
         assert_eq!(
             economy[name], never[name],
@@ -783,6 +788,7 @@ const STATS_COMMANDS: &[&str] = &[
     "harvest_realised_markup",
     "character_skilling_forecast",
     "tracking_snapshot",
+    "tracking_definition_loot",
 ];
 
 /// Every other command, by why it is not a cross-session statistic.

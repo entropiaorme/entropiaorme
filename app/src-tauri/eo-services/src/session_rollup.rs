@@ -277,6 +277,86 @@ pub(crate) fn effective_hunting_loot_cells(
     Ok(cells)
 }
 
+/// What one definition's ended instances looted, item by item: the
+/// composition its lifetime markup figures value. It spans exactly the
+/// instances the definition's lifetime totals sum, and reads each one's
+/// loot the way that session's own loot list does: kill and harvest loot
+/// merged, enhancer shrapnel and deactivated lines left out.
+///
+/// The cost follows the family's item cells and its harvest rows, never
+/// its kills, so a family hundreds of thousands of kills deep answers from
+/// a few thousand cells. Sorted by item name.
+pub(crate) fn definition_loot(
+    conn: &rusqlite::Connection,
+    definition_id: i64,
+) -> Result<Vec<(String, i64, f64)>, DbError> {
+    use rusqlite::OptionalExtension as _;
+
+    use crate::session_scope::{counts_on, StatsScope};
+    use crate::tracking_reads::{loot_agg, merge_loot_aggs};
+
+    let economy = counts_on(StatsScope::Economy, "s");
+    let aggregate = |sql: &str, params: &[&dyn rusqlite::ToSql]| {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1).unwrap_or(0),
+                row.get::<_, f64>(2).unwrap_or(0.0),
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    };
+
+    let mut merged = aggregate(
+        &format!(
+            "SELECT r.item_name, SUM(r.quantity), COALESCE(SUM(r.value_ped), 0) \
+             FROM tracking_sessions s \
+             JOIN session_summaries ss ON ss.session_id = s.id \
+             JOIN session_rollup_meta m ON m.session_id = s.id AND m.rollup_version >= ?2 \
+             JOIN session_loot_rollups r ON r.session_id = s.id \
+             WHERE s.definition_id = ?1 AND r.is_enhancer_shrapnel = 0 AND {economy} \
+             GROUP BY r.item_name"
+        ),
+        rusqlite::params![definition_id, ROLLUP_VERSION],
+    )?;
+
+    // A session not yet settled still counts, read from its own raw rows.
+    let mut in_family = conn.prepare(&format!(
+        "SELECT 1 FROM tracking_sessions s \
+         JOIN session_summaries ss ON ss.session_id = s.id \
+         WHERE s.id = ?1 AND s.definition_id = ?2 AND {economy}"
+    ))?;
+    for session_id in unsettled_sessions(conn)? {
+        let counts = in_family
+            .query_row(rusqlite::params![session_id, definition_id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if counts {
+            merged = merge_loot_aggs(
+                merged,
+                loot_agg(conn, &session_id, "l.deactivated_at IS NULL")?,
+            );
+        }
+    }
+
+    let harvested = aggregate(
+        &format!(
+            "SELECT l.item_name, SUM(l.quantity), COALESCE(SUM(l.value_ped), 0) \
+             FROM tracking_sessions s \
+             JOIN session_summaries ss ON ss.session_id = s.id \
+             JOIN harvest_events h ON h.session_id = s.id \
+             JOIN harvest_loot_items l ON l.harvest_id = h.id \
+             WHERE s.definition_id = ?1 AND l.deactivated_at IS NULL AND {economy} \
+             GROUP BY l.item_name"
+        ),
+        rusqlite::params![definition_id],
+    )?;
+    let mut merged = merge_loot_aggs(merged, harvested);
+    merged.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(merged)
+}
+
 /// One model-neutral offensive-evidence cell. Settled sessions come from the
 /// maintained projection; only explicitly unsettled sessions consult raw tool
 /// phases, scoped through their session id. Keeping the original evidence JSON

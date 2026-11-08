@@ -73,7 +73,7 @@ use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
-    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
     SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
     SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
@@ -1455,6 +1455,14 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "tracking_definition_loot",
+            args: vec![ArgSpec {
+                name: "definition_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Vec<LootEntry>))),
         },
         CommandSpec {
             name: "tracking_session_intervals",

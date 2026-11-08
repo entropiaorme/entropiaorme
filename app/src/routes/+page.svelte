@@ -2,6 +2,10 @@
 	import { onMount } from 'svelte';
 	import DashboardWidgets from '$lib/components/dashboard/DashboardWidgets.svelte';
 	import SessionIsland from '$lib/features/dashboard/SessionIsland.svelte';
+	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
+	import { dashboardStats } from '$lib/statsCustomisation.svelte';
+	import { drawsLifetimeValuation } from '$lib/statsRegistry';
+	import { statsScope } from '$lib/statsScope.svelte';
 	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
 	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import { createStatsGridModel } from '$lib/features/dashboard/statsGridModel.svelte';
@@ -42,6 +46,12 @@
 	// The session's loot at market markup, shared by the stat tiles and the
 	// Loot Composition widget so the two never disagree.
 	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
+	const lifetimeValuation = attachLifetimeLootValuation(
+		() => status,
+		() => liveMarkupSettings.confidence,
+		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(dashboardStats.current),
+		() => liveValuation.loot,
+	);
 
 	// The sessions surface: the island renders the picker and the review
 	// entry; the stage hosts the two full-screen surfaces (authoring and
@@ -155,6 +165,7 @@
 		{status}
 		{statsGrid}
 		valuation={liveValuation}
+		{lifetimeValuation}
 		{definitions}
 		onReview={(definitionId) => void review.openReview(definitionId)}
 	/>

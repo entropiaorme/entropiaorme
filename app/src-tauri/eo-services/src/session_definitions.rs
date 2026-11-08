@@ -501,6 +501,19 @@ impl SessionDefinitionService {
             .await?)
     }
 
+    /// What the definition's ended instances looted, by item name, over
+    /// the same instances [`Self::lifetime_stats`] sums. The running
+    /// instance is the caller's to add: it already follows that loot live.
+    pub async fn lifetime_loot(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<(String, i64, f64)>, SessionDefinitionError> {
+        Ok(self
+            .db
+            .with_reader(move |conn| crate::session_rollup::definition_loot(conn, definition_id))
+            .await?)
+    }
+
     /// Create a definition with its roster.
     pub async fn create(
         &self,

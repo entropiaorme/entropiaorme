@@ -70,6 +70,10 @@
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
+	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
+	import { overlayStats } from '$lib/statsCustomisation.svelte';
+	import { drawsLifetimeValuation } from '$lib/statsRegistry';
+	import { statsScope } from '$lib/statsScope.svelte';
 	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
 	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 
@@ -91,6 +95,12 @@
 	let status = $state<TrackingStatus | null>(null);
 	// The session's loot at market markup, for the markup pills.
 	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
+	const lifetimeValuation = attachLifetimeLootValuation(
+		() => status,
+		() => liveMarkupSettings.confidence,
+		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(overlayStats.current),
+		() => liveValuation.loot,
+	);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
 	// for the client-side elapsed tick. null when no active session is timed.
 	let sessionStartedAtMs = $state<number | null>(null);
@@ -922,7 +932,11 @@
 	<OverlayStrip
 		{data}
 		{status}
-		statContext={{ valuation: liveValuation.view, looterBasis: liveMarkupSettings.looterBasis }}
+		statContext={{
+			valuation: liveValuation.view,
+			lifetimeValuation: lifetimeValuation.view,
+			looterBasis: liveMarkupSettings.looterBasis,
+		}}
 		{toggling}
 		{releasing}
 		{selectingMob}

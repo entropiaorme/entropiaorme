@@ -375,13 +375,13 @@ describe('scopedStats', () => {
 
 	it('draws the whole selection under the instance scope', async () => {
 		const { scopedStats } = await loadModule();
-		const selection = prefs(['cycled', 'loot_mu', 'net']);
-		expect(ids(scopedStats(selection, 'instance'))).toEqual(['cycled', 'net', 'loot_mu']);
+		const selection = prefs(['cycled', 'expected_mu_rate', 'net']);
+		expect(ids(scopedStats(selection, 'instance'))).toEqual(['cycled', 'net', 'expected_mu_rate']);
 	});
 
 	it('narrows to the lifetime-capable stats without touching the selection', async () => {
 		const { scopedStats } = await loadModule();
-		const selection = prefs(['cycled', 'loot_mu', 'net', 'mu_rate']);
+		const selection = prefs(['cycled', 'expected_mu_rate', 'net']);
 		const before = structuredClone(selection);
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'net']);
 		// The flip is a view, never a deselection: the stored prefs are
@@ -394,7 +394,7 @@ describe('scopedStats', () => {
 		const { scopedStats } = await loadModule();
 		// A selection made entirely of instance-only stats: without the
 		// fallback the lifetime flip would render nothing and read broken.
-		const selection = prefs(['loot_mu', 'mu_rate', 'expected_mu_rate']);
+		const selection = prefs(['expected_mu_rate']);
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'loot_tt', 'net', 'rate']);
 	});
 
@@ -405,7 +405,7 @@ describe('scopedStats', () => {
 			{ id: 'rate' as StatId, enabled: false },
 			{ id: 'cycled' as StatId, enabled: false },
 			{ id: 'loot_tt' as StatId, enabled: false },
-			{ id: 'mu_rate' as StatId, enabled: true },
+			{ id: 'expected_mu_rate' as StatId, enabled: true },
 		];
 		expect(ids(scopedStats(reordered, 'lifetime'))).toEqual(['net', 'rate', 'cycled', 'loot_tt']);
 	});
@@ -414,7 +414,10 @@ describe('scopedStats', () => {
 describe('isOwnSelection', () => {
 	it('is false only when the lifetime flip is showing the fallback', async () => {
 		const { isOwnSelection } = await loadModule();
-		const onlyInstanceStats = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'mu_rate' }));
+		const onlyInstanceStats = ALL_STAT_IDS.map((id) => ({
+			id,
+			enabled: id === 'expected_mu_rate',
+		}));
 		const withALifetimeStat = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'net' }));
 		expect(isOwnSelection(onlyInstanceStats, 'instance')).toBe(true);
 		expect(isOwnSelection(onlyInstanceStats, 'lifetime')).toBe(false);
@@ -425,9 +428,7 @@ describe('isOwnSelection', () => {
 describe('the lifetime-capable set', () => {
 	it('is exactly the stats that declare a lifetime render', async () => {
 		const { LIFETIME_STAT_IDS } = await import('./statsRegistry');
-		expect(LIFETIME_STAT_IDS).toEqual(
-			ALL_STAT_IDS.filter((id) => !['loot_mu', 'mu_rate', 'expected_mu_rate'].includes(id)),
-		);
+		expect(LIFETIME_STAT_IDS).toEqual(ALL_STAT_IDS.filter((id) => id !== 'expected_mu_rate'));
 		// The declaration IS the capability, so the two cannot drift.
 		for (const id of ALL_STAT_IDS) {
 			expect(LIFETIME_STAT_IDS.includes(id)).toBe(STAT_DEFS[id].renderLifetime !== undefined);
@@ -460,7 +461,7 @@ describe('the lifetime scope on a surface that tolerates an empty set', () => {
 		// The overlay renders no pill group at all for an empty
 		// selection, so switching every pill off is a resting state
 		// there; a scope flip must not override that choice.
-		const selection = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'mu_rate' }));
+		const selection = ALL_STAT_IDS.map((id) => ({ id, enabled: id === 'expected_mu_rate' }));
 		expect(scopedStats(selection, 'lifetime', { fallback: false })).toEqual([]);
 		// The dashboard keeps the fallback: an empty grid reads as broken.
 		expect(ids(scopedStats(selection, 'lifetime'))).toEqual(['cycled', 'loot_tt', 'net', 'rate']);

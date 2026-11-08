@@ -5087,6 +5087,10 @@ export async function trackingSessionDetail(sessionId: string): Promise<SessionD
 	return invokeCommand('tracking_session_detail', { session_id: sessionId });
 }
 
+export async function trackingDefinitionLoot(definitionId: number): Promise<LootEntry[]> {
+	return invokeCommand('tracking_definition_loot', { definition_id: definitionId });
+}
+
 export async function trackingSessionIntervals(sessionId: string): Promise<SessionIntervals> {
 	return invokeCommand('tracking_session_intervals', { session_id: sessionId });
 }

@@ -71,7 +71,7 @@ use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
-    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootItemEditResult,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
     SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
     SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
@@ -1321,6 +1321,14 @@ pub async fn tracking_session_detail(
     session_id: String,
 ) -> Result<SessionDetail, ApiError> {
     facade(&app)?.tracking_session_detail(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_definition_loot(
+    app: tauri::AppHandle,
+    definition_id: i64,
+) -> Result<Vec<LootEntry>, ApiError> {
+    facade(&app)?.tracking_definition_loot(definition_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

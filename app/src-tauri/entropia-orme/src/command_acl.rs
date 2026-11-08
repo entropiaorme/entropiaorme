@@ -166,6 +166,7 @@ macro_rules! app_command_surface {
             scan_spacebar_capture,
             tracking_sessions,
             tracking_session_detail,
+            tracking_definition_loot,
             tracking_session_intervals,
             tracking_mob_catalogue,
             tracking_snapshot,

@@ -164,6 +164,12 @@ describe('tracking reads dispatch typed commands', () => {
 			{ session_id: 's1' },
 		],
 		['getTrackingSnapshot', () => api.getTrackingSnapshot(), 'tracking_snapshot', {}],
+		[
+			'getDefinitionLoot',
+			() => api.getDefinitionLoot(7),
+			'tracking_definition_loot',
+			{ definition_id: 7 },
+		],
 	];
 
 	it.each(rows)('%s invokes its command', async (_name, call, command, args) => {

@@ -12,6 +12,7 @@
 	import { getStatDef } from '$lib/statsRegistry';
 	import { setStatsScope } from '$lib/statsScope.svelte';
 	import { describeError } from '$lib/view/errorState';
+	import type { LifetimeLootValuation } from './lifetimeLootValuation.svelte';
 	import type { LiveLootValuation } from './liveLootValuation.svelte';
 	import StatTip from './StatTip.svelte';
 	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
@@ -22,12 +23,16 @@
 		statsGrid,
 		definitions,
 		valuation = null,
+		lifetimeValuation = null,
 		onReview
 	}: {
 		status: TrackingSnapshot | null;
 		statsGrid: StatsGridModel;
 		/** The session's loot at market markup, for the markup stats. */
 		valuation?: LiveLootValuation | null;
+		/** The session family's loot at market markup, for the lifetime
+		 * markup stats. */
+		lifetimeValuation?: LifetimeLootValuation | null;
 		/** The sessions model; the route hosts it (and the authoring
 		 * environment) so the surface can replace the whole dashboard. */
 		definitions: DefinitionsModel;
@@ -288,7 +293,10 @@
 			{@const def = getStatDef(pref.id)}
 			{@const r = def
 				? showingLifetime && def.renderLifetime && lifetime
-					? def.renderLifetime(lifetime)
+					? def.renderLifetime(lifetime, {
+							lifetimeValuation: lifetimeValuation?.view ?? null,
+							looterBasis: liveMarkupSettings.looterBasis,
+						})
 					: def.render(status, {
 							valuation: valuation?.view ?? null,
 							looterBasis: liveMarkupSettings.looterBasis,

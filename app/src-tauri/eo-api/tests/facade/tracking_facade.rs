@@ -1731,6 +1731,83 @@ async fn the_lifetime_block_sums_the_family_and_folds_the_live_instance() {
     assert_eq!(value["lifetime"]["cycled"], 102.0);
 }
 
+/// The family's loot composition: kill and harvest loot merged by item,
+/// over the instances the lifetime totals sum, each read as its own loot
+/// list reads it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_definition_loot_merges_the_family_over_what_the_lifetime_sums() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            "INSERT INTO session_definitions (id, name) VALUES (40, 'Other');
+             INSERT INTO tracking_sessions
+                 (id, started_at, ended_at, is_active, armour_cost, definition_id) VALUES
+               ('a', 1000.0, 2000.0, 0, 1.0, 1),
+               ('b', 3000.0, 4000.0, 0, 1.0, 1),
+               ('other', 5000.0, 6000.0, 0, 1.0, 40),
+               ('free', 7000.0, 8000.0, 0, 0.0, 1);
+             INSERT INTO kills (id, session_id, mob_name, timestamp, loot_total_ped) VALUES
+               ('a1', 'a', 'Atrox', 1001.0, 11.0),
+               ('b1', 'b', 'Atrox', 3001.0, 5.0),
+               ('o1', 'other', 'Atrox', 5001.0, 99.0),
+               ('f1', 'free', 'Atrox', 7001.0, 7.0);
+             INSERT INTO kill_loot_items
+                 (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel, deactivated_at)
+                 VALUES
+               ('a1', 'Oil', 2, 8.0, 0, NULL),
+               ('a1', 'Shrapnel', 100, 1.0, 1, NULL),
+               ('a1', 'Hide', 1, 2.0, 0, 1500.0),
+               ('b1', 'Oil', 1, 4.0, 0, NULL),
+               ('b1', 'Hide', 3, 1.0, 0, NULL),
+               ('o1', 'Oil', 9, 99.0, 0, NULL),
+               ('f1', 'Oil', 7, 7.0, 0, NULL);
+             INSERT INTO harvest_events (id, session_id, timestamp, cost_ped, loot_total_ped)
+                 VALUES ('h1', 'b', 3100.0, 0.5, 2.5);
+             INSERT INTO harvest_loot_items (harvest_id, item_name, quantity, value_ped) VALUES
+               ('h1', 'Wood', 5, 2.0),
+               ('h1', 'Oil', 1, 0.5);",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    for session in ["a", "b", "other", "free"] {
+        let session = session.to_string();
+        db.with_writer(move |conn| {
+            eo_services::session_summary::write_session_summary(conn, &session)
+        })
+        .await
+        .unwrap();
+    }
+
+    let read = |items: Vec<eo_api::tracking::LootEntry>| {
+        items
+            .into_iter()
+            .map(|item| (item.name, item.quantity, item.tt_value))
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![
+        ("Hide".to_string(), 3, 1.0),
+        ("Oil".to_string(), 4, 12.5),
+        ("Wood".to_string(), 5, 2.0),
+    ];
+    // Served raw before the sessions settle, from the cells after.
+    assert_eq!(
+        read(api.tracking_definition_loot(1).await.unwrap()),
+        expected
+    );
+    db.with_writer(eo_services::session_rollup::heal)
+        .await
+        .unwrap();
+    assert_eq!(
+        read(api.tracking_definition_loot(1).await.unwrap()),
+        expected
+    );
+    // A definition nobody has run has no loot to value.
+    assert!(api.tracking_definition_loot(999).await.unwrap().is_empty());
+}
+
 // ── The review surface: definition-scoped reads and re-filing ───────
 
 /// Seed `count` ended sessions under `definition_id` (or unattached when

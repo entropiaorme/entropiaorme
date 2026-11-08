@@ -1272,6 +1272,29 @@ impl Api {
         serde_json::from_value(value).map_err(ApiError::internal("tracking snapshot shaping"))
     }
 
+    /// What a session definition's ended instances looted, item by item:
+    /// the composition its lifetime markup figures value. It costs a read
+    /// of the family's item cells, so the surfaces make it only while those
+    /// figures are on show, and add the running instance's loot themselves.
+    pub async fn tracking_definition_loot(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<LootEntry>, ApiError> {
+        let items = self
+            .session_definitions
+            .lifetime_loot(definition_id)
+            .await
+            .map_err(ApiError::internal("definition loot"))?;
+        Ok(items
+            .into_iter()
+            .map(|(name, quantity, tt_value)| LootEntry {
+                name,
+                quantity,
+                tt_value: round_half_even(tt_value, 2),
+            })
+            .collect())
+    }
+
     /// A session's recorded intervals with bounds and attributed event
     /// counts: the thin read over the segment contract. Membership
     /// comes from the contexts stamped on each event row at insert,

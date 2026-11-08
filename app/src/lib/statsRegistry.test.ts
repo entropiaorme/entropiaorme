@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LifetimeStats, TrackingStatus } from '$lib/api';
-import { ALL_STAT_IDS, getStatDef, STAT_DEFS, type StatId } from '$lib/statsRegistry';
+import {
+	ALL_STAT_IDS,
+	drawsLifetimeValuation,
+	getStatDef,
+	STAT_DEFS,
+	type StatContext,
+	type StatId,
+} from '$lib/statsRegistry';
 
 // Pure render functions over a TrackingStatus. Each stat only ever reads the
 // handful of fields it needs, so fixtures are deliberately minimal: status
@@ -500,10 +507,6 @@ describe('the live markup stats', () => {
 		expect(render.incomplete).toBeTruthy();
 	});
 
-	it('has no lifetime form', () => {
-		expect(STAT_DEFS.loot_mu.renderLifetime).toBeUndefined();
-		expect(STAT_DEFS.mu_rate.renderLifetime).toBeUndefined();
-	});
 });
 
 describe('the expected MU rate', () => {
@@ -622,6 +625,33 @@ describe('lifetime forms', () => {
 		}
 	});
 
+	it('values the markup stats over the family, from the valuation it is handed', () => {
+		const lifetimeValuation = {
+			sessionId: '7',
+			items: [],
+			lootTt: 225,
+			marketValuePed: 234,
+			lootMuFactor: 1.04,
+			coverage: {
+				marketTt: 225,
+				manualTt: 0,
+				flooredTt: 0,
+				markedTt: 0,
+				shrapnelTt: 0,
+				noTtValuePed: 0,
+			},
+			confidence: 'all',
+		} as NonNullable<StatContext['lifetimeValuation']>;
+		const read = (id: StatId, context?: StatContext) =>
+			STAT_DEFS[id].renderLifetime?.(FAMILY, context).value;
+		expect(read('loot_mu', { lifetimeValuation })).toBe('104.0%');
+		// 234 market value over 250 cycled, whatever the instance reads.
+		expect(read('mu_rate', { lifetimeValuation })).toBe('93.6%');
+		// Absent until the family's loot has been valued.
+		expect(read('loot_mu')).toBe(EMPTY.value);
+		expect(read('mu_rate', { lifetimeValuation: null })).toBe(EMPTY.value);
+	});
+
 	it('marks the cost-derived forms while shots sit unpriced', () => {
 		const unpriced = { ...FAMILY, unpricedShots: 3 };
 		for (const id of ['avg_cost_per_kill', 'dpp', 'multiplier_avg', 'pes_per_100'] as StatId[]) {
@@ -631,5 +661,14 @@ describe('lifetime forms', () => {
 		for (const id of ['avg_damage', 'kills_count', 'crit_rate'] as StatId[]) {
 			expect(STAT_DEFS[id].renderLifetime?.(unpriced).incomplete).toBeUndefined();
 		}
+	});
+});
+
+describe('drawsLifetimeValuation', () => {
+	it('is true only while a markup stat is selected', () => {
+		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'mu_rate', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: false }])).toBe(false);
+		expect(drawsLifetimeValuation([{ id: 'net', enabled: true }])).toBe(false);
 	});
 });

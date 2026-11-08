@@ -123,6 +123,7 @@ export function valueLiveLoot(
 	loot: readonly LootEntry[],
 	market: MarketHarvestData | null,
 	confidence: ConfidenceMode,
+	options: { live: boolean } = { live: true },
 ): LiveValuationView | null {
 	if (!market) return null;
 	const marketByItem = new Map<string, MarketHarvestItem>(
@@ -133,7 +134,7 @@ export function valueLiveLoot(
 		quantity: entry.quantity,
 		valuePed: entry.ttValue,
 	}));
-	const projection = projectLoot(lootItems, 0, market, marketByItem, confidence, { live: true });
+	const projection = projectLoot(lootItems, 0, market, marketByItem, confidence, options);
 	const lootTt = lootItems.reduce((sum, item) => sum + item.valuePed, 0);
 	const marketValuePed = projection.muProjectedReturns ?? 0;
 	return {

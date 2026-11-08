@@ -1,6 +1,12 @@
 import type { LifetimeStats, TrackingStatus } from './api';
 import type { LiveValuationView } from './features/dashboard/liveLootValuation.svelte';
 import { describeUnpriced } from './features/weapons/weaponReview';
+import {
+	atLooterBasis,
+	DEFAULT_LOOTER_BASIS,
+	type LooterBasis,
+	looterBasisInitial,
+} from './looterBasis.svelte';
 import { formatMultiplier, formatPed, formatPercent } from './utils/format';
 
 export type StatId =
@@ -25,7 +31,8 @@ export type StatId =
 	| 'hofs_count'
 	| 'uses_tree'
 	| 'loot_mu'
-	| 'mu_rate';
+	| 'mu_rate'
+	| 'expected_mu_rate';
 
 export type StatRender = {
 	value: string;
@@ -37,6 +44,12 @@ export type StatRender = {
 	 * as a precise total.
 	 */
 	incomplete?: string;
+	/** A quiet second reading beside the value (an expected figure's
+	 * margin, `±0.4`). */
+	detail?: string;
+	/** What the figure is read at, for a surface with no control to show
+	 * it (the overlay names an expected figure's looter basis this way). */
+	qualifier?: string;
 };
 
 /**
@@ -46,6 +59,8 @@ export type StatRender = {
  */
 export type StatContext = {
 	valuation?: LiveValuationView | null;
+	/** The looter basis the live expected figure is read at. */
+	looterBasis?: LooterBasis;
 };
 
 export type StatDef = {
@@ -386,6 +401,33 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			return { value: formatPercent(valuation.marketValuePed / cost), color: PLAIN };
 		}),
 	},
+	expected_mu_rate: {
+		id: 'expected_mu_rate',
+		label: 'Expected MU Rate',
+		shortLabel: 'Exp MU',
+		defaultEnabled: false,
+		// Modelled loot over the whole Cycled (the model's Efficiency span
+		// for spend of unknown efficiency), valued at the loot's own markup:
+		// what this play would return at that markup with the variance taken
+		// out. The margin is the unknown-efficiency span.
+		render: liveCost((status, context) => {
+			const valuation = liveValuation(status, context);
+			const cycle = status.expectedCycle ?? null;
+			const cost = status.cost ?? 0;
+			const factor = valuation?.lootMuFactor ?? null;
+			if (!cycle || factor === null || cost <= 0) return EMPTY;
+			const basis = context.looterBasis ?? DEFAULT_LOOTER_BASIS;
+			const at = atLooterBasis(cycle.bases, basis);
+			const rate = (at.expectedLootTtPed * factor) / cost;
+			const margin = ((at.highPed - at.lowPed) * factor) / cost / 2;
+			return {
+				value: formatPercent(rate),
+				color: PLAIN,
+				detail: margin >= 0.0005 ? `±${(margin * 100).toFixed(1)}` : undefined,
+				qualifier: looterBasisInitial(basis),
+			};
+		}),
+	},
 };
 
 export const ALL_STAT_IDS: StatId[] = [
@@ -411,6 +453,7 @@ export const ALL_STAT_IDS: StatId[] = [
 	'uses_tree',
 	'loot_mu',
 	'mu_rate',
+	'expected_mu_rate',
 ];
 
 /**

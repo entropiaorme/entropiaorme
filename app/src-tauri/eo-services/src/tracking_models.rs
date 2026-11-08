@@ -167,6 +167,21 @@ pub struct CycledLine {
     pub cost_ped: f64,
 }
 
+/// Expected loot over the live session's whole Cycled at every looter basis
+/// (Community Model v1 for the modelled offensive streams, the model's
+/// Efficiency span for unknown-efficiency TT, nothing for lost spend). The
+/// split of Cycled is the same at every basis; the frontend reads the basis
+/// the player declares.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveExpectation {
+    pub model_version: &'static str,
+    pub split: crate::loaded_expectation::CycledSplit,
+    pub three_looter_mean: crate::loaded_expectation::LoadedExpectation,
+    pub animal: crate::loaded_expectation::LoadedExpectation,
+    pub mutant: crate::loaded_expectation::LoadedExpectation,
+    pub robot: crate::loaded_expectation::LoadedExpectation,
+}
+
 /// Immutable view of the active-session readout: computed under the
 /// tracker's ownership and returned detached, so a caller on the web
 /// thread never sees the live kill list mid-mutation.
@@ -190,6 +205,8 @@ pub struct ActiveSessionView {
     pub armour_cost: f64,
     /// `cost` split by what it was spent on, one line per item.
     pub cycled_breakdown: Vec<CycledLine>,
+    /// Expected loot over the whole `cost`; None until a modelled shot.
+    pub expected_cycle: Option<LiveExpectation>,
     /// Community-model offensive-only expected TT return over captured
     /// weapon, amplifier, and scope evidence. Null until a modelled shot exists.
     pub expected_tt_rate: Option<f64>,

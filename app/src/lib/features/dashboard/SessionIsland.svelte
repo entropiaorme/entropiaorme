@@ -14,6 +14,7 @@
 	import { describeError } from '$lib/view/errorState';
 	import type { LiveLootValuation } from './liveLootValuation.svelte';
 	import StatTip from './StatTip.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import type { StatsGridModel } from './statsGridModel.svelte';
 
 	let {
@@ -288,7 +289,10 @@
 			{@const r = def
 				? showingLifetime && def.renderLifetime && lifetime
 					? def.renderLifetime(lifetime)
-					: def.render(status, { valuation: valuation?.view ?? null })
+					: def.render(status, {
+							valuation: valuation?.view ?? null,
+							looterBasis: liveMarkupSettings.looterBasis,
+						})
 				: { value: '\u2014', color: 'text-text-tertiary' }}
 			{@const isDragged = statsGrid.dragFilteredIndex === i}
 			<div
@@ -324,7 +328,9 @@
 						{r.value}{#if 'incomplete' in r && r.incomplete}<span
 								class="ml-0.5 align-super text-[10px] font-normal text-warning"
 								aria-hidden="true">*</span
-							><span class="sr-only">, {r.incomplete}</span>{/if}
+							><span class="sr-only">, {r.incomplete}</span>{/if}{#if 'detail' in r && r.detail}<span
+								class="ml-1 text-[11px] font-normal text-text-tertiary">{r.detail}</span
+							>{/if}
 					</span>
 				{/if}
 			</div>

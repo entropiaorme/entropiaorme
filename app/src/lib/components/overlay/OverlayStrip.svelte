@@ -576,7 +576,7 @@
 							? 'text-white/85'
 							: r.color}
 					<div class="flex flex-col items-center justify-center gap-0.5 shrink-0">
-						<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">{def.shortLabel ?? def.label}</span>
+						<span class="text-[10px] font-bold text-white/40 tracking-wider uppercase leading-none">{def.shortLabel ?? def.label}{#if r.qualifier}<span class="normal-case font-semibold"> · {r.qualifier}</span>{/if}</span>
 						<span
 							class="text-sm font-semibold tabular-nums leading-none {valueColor}"
 							title={r.incomplete}

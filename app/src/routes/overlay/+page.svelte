@@ -922,7 +922,7 @@
 	<OverlayStrip
 		{data}
 		{status}
-		statContext={{ valuation: liveValuation.view }}
+		statContext={{ valuation: liveValuation.view, looterBasis: liveMarkupSettings.looterBasis }}
 		{toggling}
 		{releasing}
 		{selectingMob}

@@ -10930,6 +10930,7 @@ mod tests {
                 robot: 90.0,
             },
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let encoded = serde_json::to_string(&evidence).unwrap();
         service
@@ -11024,6 +11025,7 @@ mod tests {
                     robot: 50.0,
                 },
                 looter_source: LooterSource::ThreeLooterMean,
+                transferred_tt_per_use: 0.0,
             };
         let mut aggregate = ExpectedHuntingAccumulator::default();
         aggregate.add(&evidence("High-efficiency rifle", 90.0, 0.03, 0.0), 10);
@@ -11063,6 +11065,7 @@ mod tests {
                 robot: 50.0,
             },
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let mut aggregate = ExpectedHuntingAccumulator::default();
         aggregate.add(&evidence, 5);

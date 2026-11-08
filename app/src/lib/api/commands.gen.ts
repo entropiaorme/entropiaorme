@@ -1725,6 +1725,47 @@ export interface LifetimeStats {
 }
 
 /**
+ * Expected loot over the live session's whole Cycled at one looter basis.
+ */
+export interface LiveExpectedAtBasis {
+	looterLevel: number;
+	/** Modelled offensive loot plus the unknown-efficiency TT at the session's own offensive recovery. */
+	expectedLootTtPed: number;
+	/** The same with the unknown-efficiency TT at the model's 0% and 100% Efficiency returns: the range the point lies in. */
+	lowPed: number;
+	highPed: number;
+	/** The modelled offensive streams alone. */
+	modelledExpectedLootTtPed: number;
+}
+
+/**
+ * The live expectation at every looter basis, keyed as the wire keys every
+ * per-basis figure.
+ */
+export interface LiveExpectedBases {
+	threeLooterMean: LiveExpectedAtBasis;
+	animal: LiveExpectedAtBasis;
+	mutant: LiveExpectedAtBasis;
+	robot: LiveExpectedAtBasis;
+}
+
+/**
+ * Expected loot over the live session's whole Cycled: Community Model v1
+ * for the weapon, amplifier, and scope phases fired; the model's whole
+ * Efficiency span for loot-bearing spend of unknown efficiency; nothing for
+ * lost spend (limited markup over TT, doses, enhancer breakage). A planning
+ * estimate, never observed or realised.
+ */
+export interface LiveExpectedCycle {
+	modelVersion: string;
+	cycledPed: number;
+	modelledCostPed: number;
+	unknownEfficiencyTtPed: number;
+	lostPed: number;
+	bases: LiveExpectedBases;
+}
+
+/**
  * The comparison.
  */
 export interface LoadoutComparison {
@@ -3802,6 +3843,8 @@ export interface TrackingSnapshot {
 	armourCost?: number | null;
 	/** `cost` split by what it was spent on, one line per weapon, healing tool, armour stream, consumable, or harvesting tool; the lines sum to `cost`. */
 	cycledBreakdown?: CycledLine[] | null;
+	/** Expected loot over the whole `cost` at every looter basis; absent until a modelled shot. */
+	expectedCycle?: LiveExpectedCycle | null;
 	expectedTtRate?: number | null;
 	expectedReturnCoverage?: number | null;
 	expectedReturnModel?: string | null;

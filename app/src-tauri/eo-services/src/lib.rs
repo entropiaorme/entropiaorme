@@ -40,6 +40,7 @@ pub mod healing_review;
 pub mod hotbar_listener;
 pub mod keyset;
 pub mod keystroke_source;
+pub mod loaded_expectation;
 pub mod loadout_comparison;
 pub mod loot_filter;
 pub mod machine_identity;

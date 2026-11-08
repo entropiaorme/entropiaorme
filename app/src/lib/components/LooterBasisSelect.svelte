@@ -4,6 +4,7 @@
 		LOOTER_BASES,
 		looterBasis,
 		looterBasisLevel,
+		looterBasisInitial,
 		looterBasisName,
 		setLooterBasis,
 		type LooterBasis,
@@ -18,11 +19,15 @@
 		levels,
 		basis: ownBasis,
 		onchange = (next: LooterBasis) => void setLooterBasis(next),
+		compact = false,
 		class: className = '',
 	}: {
 		levels: LooterLevels;
 		basis?: LooterBasis;
 		onchange?: (basis: LooterBasis) => void;
+		/** Name the basis by its initial alone ("A", "mean"), for a tile
+		 * label with no room for the caption; the menu is unchanged. */
+		compact?: boolean;
 		class?: string;
 	} = $props();
 
@@ -45,7 +50,7 @@
 			onclick={toggle}
 			onkeydown={keydown}
 		>
-			{current}
+			{compact ? looterBasisInitial(basis) : current}
 			<svg
 				class="h-2.5 w-2.5 self-center transition-transform {open ? 'rotate-180' : ''}"
 				viewBox="0 0 20 20"

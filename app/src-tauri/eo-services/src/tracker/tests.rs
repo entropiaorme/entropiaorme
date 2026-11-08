@@ -4430,6 +4430,29 @@ fn an_unresolved_offensive_phase_narrows_live_expected_return_coverage() {
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
     assert_eq!(active.expected_tt_rate, Some(0.951));
     assert_eq!(active.expected_return_coverage, Some(0.5));
+
+    // Over the whole Cycled, the unresolved phase is unknown-efficiency TT:
+    // it returns across the model's span at the looter level, its point at
+    // the session's own modelled recovery, never zero.
+    let cycle = active
+        .expected_cycle
+        .expect("a modelled shot gives a figure");
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+    assert!(close(cycle.split.cycled, 0.04));
+    assert!(close(cycle.split.modelled_cost, 0.02));
+    assert!(close(cycle.split.unknown_efficiency_tt, 0.02));
+    assert!(close(cycle.split.lost, 0.0));
+    let mean = cycle.three_looter_mean;
+    assert!(close(mean.modelled_expected_loot_tt, 0.02 * 0.951));
+    assert!(close(mean.expected_loot_tt, 0.04 * 0.951));
+    assert!(close(
+        mean.expected_loot_tt_low,
+        0.02 * 0.951 + 0.02 * 0.895
+    ));
+    assert!(close(
+        mean.expected_loot_tt_high,
+        0.02 * 0.951 + 0.02 * 0.965
+    ));
 }
 
 #[test]

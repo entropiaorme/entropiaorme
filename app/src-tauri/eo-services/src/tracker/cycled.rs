@@ -221,6 +221,49 @@ pub(super) fn weapon_lines(active: &ActiveSession) -> Vec<(String, Ped)> {
         .collect()
 }
 
+/// Expected loot over the session's whole Cycled, at every looter basis.
+///
+/// The offensive phases carry their own evidence; the unknown-efficiency TT
+/// is what else the session cycled into the loot pool: the decay implants
+/// and absorbers took over, the TT each healing tool consumed, the armour
+/// and plate TT recorded against the session, and harvesting decay. The
+/// rest of Cycled (limited markup over TT, doses, enhancer breakage) is lost.
+pub(super) fn live_expectation(
+    active: &ActiveSession,
+    offensive: &crate::expected_hunting::OffensiveLoadoutEvidence,
+    transferred_tt: f64,
+    cost: Ped,
+) -> Option<crate::tracking_models::LiveExpectation> {
+    use crate::expected_hunting::LooterSource;
+    use crate::loaded_expectation::{cycled_split, loaded_expectation, CycledStreams};
+    let heal_tt: f64 = active
+        .heal_spend
+        .values()
+        .map(|spend| spend.tt.value())
+        .sum();
+    let harvest_tt: f64 = active
+        .session
+        .harvests
+        .iter()
+        .map(|harvest| harvest.cost_ped.value())
+        .sum();
+    let streams = CycledStreams {
+        offensive: offensive.clone(),
+        unknown_efficiency_tt: transferred_tt + heal_tt + active.armour.tt.value() + harvest_tt,
+        cycled: cost.value(),
+    };
+    let split = cycled_split(&streams).ok().flatten()?;
+    let at = |source| loaded_expectation(&streams, source).ok().flatten();
+    Some(crate::tracking_models::LiveExpectation {
+        model_version: crate::expected_hunting::COMMUNITY_MODEL_V1,
+        split,
+        three_looter_mean: at(LooterSource::ThreeLooterMean)?,
+        animal: at(LooterSource::Animal)?,
+        mutant: at(LooterSource::Mutant)?,
+        robot: at(LooterSource::Robot)?,
+    })
+}
+
 impl super::actor::TrackerActor {
     /// A protection write committed (a recording, a reading, or an undo):
     /// it may have moved the running session's armour share.

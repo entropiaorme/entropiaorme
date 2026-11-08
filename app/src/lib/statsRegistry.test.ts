@@ -359,8 +359,8 @@ describe('drift guard', () => {
 		expect(ALL_STAT_IDS).toEqual(Object.keys(STAT_DEFS));
 	});
 
-	it('ALL_STAT_IDS has length 22', () => {
-		expect(ALL_STAT_IDS).toHaveLength(22);
+	it('ALL_STAT_IDS has length 23', () => {
+		expect(ALL_STAT_IDS).toHaveLength(23);
 	});
 });
 
@@ -478,5 +478,62 @@ describe('the live markup stats', () => {
 	it('has no lifetime form', () => {
 		expect(STAT_DEFS.loot_mu.renderLifetime).toBeUndefined();
 		expect(STAT_DEFS.mu_rate.renderLifetime).toBeUndefined();
+	});
+});
+
+describe('the expected MU rate', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 100,
+		marketValuePed: 108,
+		lootMuFactor: 1.08,
+		coverage: { marketTt: 100, manualTt: 0, flooredTt: 0, markedTt: 0, shrapnelTt: 0 },
+		confidence: 'liquidMiddling' as const,
+	};
+	const basis = (level: number, loot: number, low: number, high: number) => ({
+		looterLevel: level,
+		expectedLootTtPed: loot,
+		lowPed: low,
+		highPed: high,
+		modelledExpectedLootTtPed: loot - 9,
+	});
+	const cycle = {
+		modelVersion: 'community_v1',
+		cycledPed: 112,
+		modelledCostPed: 100,
+		unknownEfficiencyTtPed: 10,
+		lostPed: 2,
+		bases: {
+			threeLooterMean: basis(37, 99.835, 99.45, 100.15),
+			animal: basis(80, 103, 102.6, 103.3),
+			mutant: basis(10, 97, 96.6, 97.3),
+			robot: basis(20, 98, 97.6, 98.3),
+		},
+	};
+	const session = active({ session_id: 's1', cost: 112, expectedCycle: cycle });
+
+	it('values the expected loot at the loot markup, over Cycled, with its margin', () => {
+		const render = STAT_DEFS.expected_mu_rate.render(session, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		// 99.835 x 1.08 / 112 = 96.27%; the range halves to 0.34 points.
+		expect(render.value).toBe('96.3%');
+		expect(render.detail).toBe('±0.3');
+		expect(render.qualifier).toBe('mean');
+	});
+
+	it('reads the declared looter basis', () => {
+		const render = STAT_DEFS.expected_mu_rate.render(session, { valuation, looterBasis: 'animal' });
+		expect(render.value).toBe('99.3%');
+		expect(render.qualifier).toBe('A');
+	});
+
+	it('reads empty before a modelled shot or without a markup', () => {
+		expect(
+			STAT_DEFS.expected_mu_rate.render(active({ session_id: 's1', cost: 5 }), { valuation }),
+		).toEqual(EMPTY);
+		expect(STAT_DEFS.expected_mu_rate.render(session, {})).toEqual(EMPTY);
 	});
 });

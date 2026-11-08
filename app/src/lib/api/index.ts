@@ -42,6 +42,7 @@ export type {
 	InventoryItem,
 	InventorySaleDraft,
 	LifetimeStats,
+	LiveExpectedCycle,
 	LootEntry,
 	ManualMobSuggestion,
 	MarketCommitResult,

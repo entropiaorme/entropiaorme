@@ -70,6 +70,17 @@ pub struct OffensiveLoadoutEvidence {
     pub components: Vec<OffensiveComponentEvidence>,
     pub looters: HuntingLooterLevels,
     pub looter_source: LooterSource,
+    /// Loot-bearing TT per activation that an implant or absorber takes over
+    /// from the weapon's decay, in PED. Outside this model (no Efficiency is
+    /// grounded for it), but still cycled into the loot pool: the whole-Cycled
+    /// expectation counts it as unknown-efficiency TT. Evidence recorded
+    /// before it was kept reads as zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub transferred_tt_per_use: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl OffensiveLoadoutEvidence {
@@ -401,6 +412,7 @@ pub fn evidence_from_equipment_props(
             .and_then(Value::as_i64)
             .unwrap_or(0)
     });
+    let transferred_tt_per_use = transferred_tt_per_use(props, configured);
     let mut components = Vec::new();
     if let Some(weapon) = component_from_props(
         props,
@@ -440,7 +452,28 @@ pub fn evidence_from_equipment_props(
         components,
         looters,
         looter_source: LooterSource::ThreeLooterMean,
+        transferred_tt_per_use,
     }
+}
+
+/// The weapon decay an implant and an absorber take over per activation, as
+/// TT in PED: the cost engine's split of the same decay, before any markup.
+fn transferred_tt_per_use(props: &Value, damage_enhancers: i64) -> f64 {
+    let Some(weapon) = props.get("weapon_entity").filter(|value| !value.is_null()) else {
+        return 0.0;
+    };
+    let multiplier =
+        (1.0 + 0.1 * damage_enhancers.max(0) as f64) * crate::attack_rate::factor_from_props(props);
+    let decay_pec = economy_number(weapon, "decay") * multiplier;
+    let share = |key: &str| {
+        props
+            .get(key)
+            .filter(|value| !value.is_null())
+            .map(|device| economy_number(device, "absorption").clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    };
+    let retained = decay_pec * (1.0 - share("implant_entity")) * (1.0 - share("absorber_entity"));
+    round_half_even((decay_pec - retained).max(0.0) / 100.0, 8)
 }
 
 #[cfg(test)]
@@ -526,6 +559,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.weighted_efficiency_pct, Some(82.5));
@@ -599,6 +633,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.coverage, 0.75);
@@ -630,6 +665,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.coverage, 1.0);
@@ -680,6 +716,7 @@ mod tests {
                 components,
                 looters: looters(50.0),
                 looter_source: LooterSource::ThreeLooterMean,
+                transferred_tt_per_use: 0.0,
             })
             .unwrap()
         };
@@ -712,6 +749,7 @@ mod tests {
                 components: vec![],
                 looters: levels,
                 looter_source: source,
+                transferred_tt_per_use: 0.0,
             };
             assert_eq!(evidence.selected_looter_level(), expected);
         }

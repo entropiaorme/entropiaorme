@@ -57,7 +57,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 56] = [
+const SNAPSHOT_FIELDS: [&str; 57] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -88,6 +88,7 @@ const SNAPSHOT_FIELDS: [&str; 56] = [
     "weaponCost",
     "armourCost",
     "cycledBreakdown",
+    "expectedCycle",
     "expectedTtRate",
     "expectedReturnCoverage",
     "expectedReturnModel",
@@ -732,6 +733,10 @@ pub struct TrackingSnapshot {
     /// to `cost`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cycled_breakdown: Option<Vec<CycledLine>>,
+    /// Expected loot over the whole `cost` at every looter basis; absent
+    /// until a modelled shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_cycle: Option<LiveExpectedCycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_tt_rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -842,6 +847,80 @@ impl From<&eo_services::tracking_models::CycledLine> for CycledLine {
             bucket: line.bucket.into(),
             label: line.label.clone(),
             cost_ped: round_half_even(line.cost_ped, 4) + 0.0,
+        }
+    }
+}
+
+/// Expected loot over the live session's whole Cycled at one looter basis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedAtBasis {
+    pub looter_level: f64,
+    /// Modelled offensive loot plus the unknown-efficiency TT at the
+    /// session's own offensive recovery.
+    pub expected_loot_tt_ped: f64,
+    /// The same with the unknown-efficiency TT at the model's 0% and 100%
+    /// Efficiency returns: the range the point lies in.
+    pub low_ped: f64,
+    pub high_ped: f64,
+    /// The modelled offensive streams alone.
+    pub modelled_expected_loot_tt_ped: f64,
+}
+
+impl From<&eo_services::loaded_expectation::LoadedExpectation> for LiveExpectedAtBasis {
+    fn from(at: &eo_services::loaded_expectation::LoadedExpectation) -> Self {
+        Self {
+            looter_level: round_half_even(at.looter_level, 2),
+            expected_loot_tt_ped: round_half_even(at.expected_loot_tt, 6),
+            low_ped: round_half_even(at.expected_loot_tt_low, 6),
+            high_ped: round_half_even(at.expected_loot_tt_high, 6),
+            modelled_expected_loot_tt_ped: round_half_even(at.modelled_expected_loot_tt, 6),
+        }
+    }
+}
+
+/// The live expectation at every looter basis, keyed as the wire keys every
+/// per-basis figure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedBases {
+    pub three_looter_mean: LiveExpectedAtBasis,
+    pub animal: LiveExpectedAtBasis,
+    pub mutant: LiveExpectedAtBasis,
+    pub robot: LiveExpectedAtBasis,
+}
+
+/// Expected loot over the live session's whole Cycled: Community Model v1
+/// for the weapon, amplifier, and scope phases fired; the model's whole
+/// Efficiency span for loot-bearing spend of unknown efficiency; nothing for
+/// lost spend (limited markup over TT, doses, enhancer breakage). A planning
+/// estimate, never observed or realised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedCycle {
+    pub model_version: String,
+    pub cycled_ped: f64,
+    pub modelled_cost_ped: f64,
+    pub unknown_efficiency_tt_ped: f64,
+    pub lost_ped: f64,
+    pub bases: LiveExpectedBases,
+}
+
+impl From<&eo_services::tracking_models::LiveExpectation> for LiveExpectedCycle {
+    fn from(live: &eo_services::tracking_models::LiveExpectation) -> Self {
+        let round = |value: f64| round_half_even(value, 6) + 0.0;
+        Self {
+            model_version: live.model_version.to_string(),
+            cycled_ped: round(live.split.cycled),
+            modelled_cost_ped: round(live.split.modelled_cost),
+            unknown_efficiency_tt_ped: round(live.split.unknown_efficiency_tt),
+            lost_ped: round(live.split.lost),
+            bases: LiveExpectedBases {
+                three_looter_mean: (&live.three_looter_mean).into(),
+                animal: (&live.animal).into(),
+                mutant: (&live.mutant).into(),
+                robot: (&live.robot).into(),
+            },
         }
     }
 }
@@ -1923,6 +2002,7 @@ pub(crate) async fn build_snapshot_value(
                     .iter()
                     .map(CycledLine::from)
                     .collect::<Vec<_>>(),
+                "expectedCycle": active.expected_cycle.as_ref().map(LiveExpectedCycle::from),
                 "expectedTtRate": active.expected_tt_rate,
                 "expectedReturnCoverage": active.expected_return_coverage,
                 "expectedReturnModel": active.expected_return_model.clone(),

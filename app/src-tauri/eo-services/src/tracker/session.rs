@@ -238,6 +238,7 @@ pub(super) struct SessionAggregate {
     pub(super) weapon_cost: Ped,
     pub(super) armour_cost: Ped,
     pub(super) cycled_breakdown: Vec<crate::tracking_models::CycledLine>,
+    pub(super) expected_cycle: Option<crate::tracking_models::LiveExpectation>,
     pub(super) expected_tt_rate: Option<f64>,
     pub(super) expected_return_coverage: Option<f64>,
     pub(super) expected_return_model: Option<String>,
@@ -320,7 +321,11 @@ impl TrackerActor {
             components: Vec::new(),
             looters: active.hunting_looters,
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
+        // The decay implants and absorbers took over, summed over phases at
+        // the TT each cycled: outside the model, inside the loot pool.
+        let mut transferred_tt = 0.0;
         for stats in kills
             .iter()
             .flat_map(|kill| kill.tool_stats.iter().map(|(_, stats)| stats))
@@ -341,6 +346,7 @@ impl TrackerActor {
                 }
                 continue;
             };
+            transferred_tt += evidence.transferred_tt_per_use * stats.shots_fired.max(0) as f64;
             for component in &evidence.components {
                 let mut component = component.clone();
                 component.raw_tt_per_use *= stats.shots_fired.max(0) as f64;
@@ -365,6 +371,8 @@ impl TrackerActor {
             super::cycled::weapon_lines(active),
             enhancer_cost,
         );
+        let expected_cycle =
+            super::cycled::live_expectation(active, &expected_evidence, transferred_tt, cost);
         let returns: Ped = kills.iter().map(|kill| kill.loot_total_ped).sum::<Ped>() + harvest_loot;
 
         let damage_total: f64 = kills.iter().map(|kill| kill.damage_dealt).sum();
@@ -498,6 +506,7 @@ impl TrackerActor {
             weapon_cost,
             armour_cost,
             cycled_breakdown,
+            expected_cycle,
             expected_tt_rate: expected_result
                 .as_ref()
                 .and_then(|result| result.expected_tt_rate),
@@ -1270,6 +1279,7 @@ impl HuntTracker {
             weapon_cost: aggregated.weapon_cost.round_half_even(6).value(),
             armour_cost: aggregated.armour_cost.round_half_even(4).value() + 0.0,
             cycled_breakdown: aggregated.cycled_breakdown,
+            expected_cycle: aggregated.expected_cycle,
             expected_tt_rate: aggregated.expected_tt_rate,
             expected_return_coverage: aggregated.expected_return_coverage,
             expected_return_model: aggregated.expected_return_model,

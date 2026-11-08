@@ -127,7 +127,10 @@ async fn the_live_nanocube_mark_is_a_toggle_that_shrapnel_refuses() {
         .market_nanocube_mark_set("Shrapnel".to_string(), true)
         .await
         .unwrap_err();
-    assert_eq!(serde_json::to_value(&refused).unwrap()["kind"], "badRequest");
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap()["kind"],
+        "badRequest"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

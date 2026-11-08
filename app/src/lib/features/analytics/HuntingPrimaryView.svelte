@@ -56,6 +56,7 @@
 				expectedEconomics={line.expected}
 				realisedReturns={line.realisedReturns}
 				realisedRate={line.realisedRate}
+				realisedDerived={line.realisedDerived}
 				reward={line.reward}
 				rewardScope={selected ? 'session' : 'overall'}
 				rewardMuRate={line.rewardMuRate}

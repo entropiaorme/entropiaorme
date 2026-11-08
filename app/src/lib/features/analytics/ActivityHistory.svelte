@@ -28,6 +28,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { ActivityHistoryEntry } from '$lib/types/analytics';
+	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
 	import { formatLedgerDate, formatPed } from '$lib/utils/format';
 
 	let {
@@ -69,12 +70,33 @@
 	 * right, so this says what was done to how much. */
 	function summary(entry: ActivityHistoryEntry): string {
 		const tt = `${formatPed(entry.ttValue)} PED TT`;
-		if (entry.kind === 'conversion') return `${tt} into ${entry.targetItem ?? 'another item'}`;
+		if (entry.kind === 'conversion') {
+			if (entry.itemised) {
+				const used = entry.conversionLines
+					.filter((line) => line.side === 'input')
+					.map((line) => `${line.quantity} ${line.itemName}`)
+					.join(', ');
+				return `From ${used}`;
+			}
+			return `${tt} into ${entry.targetItem ?? 'another item'}`;
+		}
+		const origin = derivedFromLabel(entry.derivedFrom);
+		const suffix = origin ? `, ${origin.charAt(0).toLowerCase()}${origin.slice(1)}` : '';
 		if (entry.kind === 'removal') return `${entry.quantity} removed, ${tt}`;
-		if (entry.kind === 'trade') return `${entry.quantity} sold by trade, ${tt}`;
-		if (entry.status === 'sold') return `${entry.quantity} sold, ${tt}`;
+		if (entry.kind === 'trade') return `${entry.quantity} sold by trade, ${tt}${suffix}`;
+		if (entry.status === 'sold') return `${entry.quantity} sold, ${tt}${suffix}`;
 		if (entry.status === 'expired') return `${entry.quantity} returned, ${tt}`;
 		return `${entry.quantity} on auction, ${tt}`;
+	}
+
+	/** An itemised conversion leads with what it produced. */
+	function title(entry: ActivityHistoryEntry): string {
+		if (entry.kind !== 'conversion' || !entry.itemised) return entry.itemName;
+		const made = entry.conversionLines
+			.filter((line) => line.side === 'output')
+			.map((line) => line.itemName);
+		if (made.length === 0) return `${formatPed(entry.pedAmount ?? 0)} PED`;
+		return made.length === 1 ? made[0] : `${made[0]} and ${made.length - 1} more`;
 	}
 
 	function startConfirm(entry: ActivityHistoryEntry) {
@@ -128,7 +150,7 @@
 
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm font-medium tracking-tight text-text">
-								{entry.itemName}
+								{title(entry)}
 							</p>
 							<p class="mt-0.5 truncate text-xs text-text-tertiary">{summary(entry)}</p>
 						</div>

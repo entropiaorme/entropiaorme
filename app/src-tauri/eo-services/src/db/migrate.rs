@@ -388,6 +388,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "market manual markups",
         sql: include_str!("../../migrations/0070_market_manual_markups.sql"),
     },
+    Migration {
+        version: 71,
+        description: "item conversions",
+        sql: include_str!("../../migrations/0071_item_conversions.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -466,6 +471,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "487FAAD39B242AB6459D6184CA2AB173B17393A3225DE8505FA0352E77788810DD5B855ED10A00760710F4721D0E6844",
     "DB8BD8BD307FDA4FCB7384EDB998244C99AC43C48C9CA7ACB216A1111F878E4079004D561D7929711AE426D4DC18770E",
     "DF2137255B909635A0FCD0E577550C4B95091B2197EE11DC2CA0A99C161702E8DF199A30FB56915EE9E84E374CF488E3",
+    "C99E917138945DB23B9046469310649ECE0971804AF8CC4F55D6B875A5F675C7D4A628F490F5E41545093F0025455303",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -648,6 +654,75 @@ mod tests {
                 migration.version
             );
         }
+    }
+
+    /// Widening the asset states must not depend on which historical columns a
+    /// database's assets table happens to carry, and must keep every row.
+    #[test]
+    fn item_conversions_upgrade_keeps_assets_and_any_extra_columns() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..70] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "ALTER TABLE inventory_items ADD COLUMN origin_device TEXT; \
+                 INSERT INTO inventory_items \
+                 (id, name, tt_value, markup_paid, acquired_at, state, origin_device) \
+                 VALUES ('a', 'Ring', 10, 5, '2026-01-01', 'listed', 'desk');",
+            )
+            .expect("historic row");
+
+        let migration = &MIGRATIONS[70];
+        assert_eq!(migration.version, 71);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let (state, origin_device): (String, String) = connection
+            .query_row(
+                "SELECT state, origin_device FROM inventory_items WHERE id = 'a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the row survives");
+        assert_eq!(state, "listed");
+        assert_eq!(origin_device, "desk");
+
+        connection
+            .execute(
+                "UPDATE inventory_items SET state = 'converted' WHERE id = 'a'",
+                [],
+            )
+            .expect("the new state is allowed");
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET state = 'lost' WHERE id = 'a'",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        connection
+            .execute(
+                "INSERT INTO inventory_items (id, name, tt_value, markup_paid, acquired_at) \
+                 VALUES ('b', 'Blade', 1, 0, '2026-01-02')",
+                [],
+            )
+            .expect("new rows default");
+        let (state, updated_at): (String, Option<f64>) = connection
+            .query_row(
+                "SELECT state, updated_at FROM inventory_items WHERE id = 'b'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the new row");
+        assert_eq!(state, "held");
+        assert!(updated_at.is_some(), "the table's trigger still fires");
     }
 
     #[test]

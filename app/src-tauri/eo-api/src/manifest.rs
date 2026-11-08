@@ -19,10 +19,10 @@ use crate::analytics::{
     AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
     AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
     HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, LedgerEntryInput,
-    LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput,
-    Profession, RealisedTierMarkup, SaleWindowCapture, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult,
+    ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput,
+    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, SaleWindowCapture,
+    ShrapnelConversionInput, StockConversionInput, StockPosition, StockRemovalInput,
 };
 use crate::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -1044,6 +1044,14 @@ pub fn manifest() -> Vec<CommandSpec> {
             args: vec![ArgSpec {
                 name: "input",
                 schema: schema(schema_for!(StockConversionInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "stock_convert_items",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ItemConversionInput)),
             }],
             returns: None,
         },

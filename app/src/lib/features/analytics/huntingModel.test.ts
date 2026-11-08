@@ -139,6 +139,7 @@ beforeEach(() => {
 	mocked.getHuntingRealisedMarkup.mockResolvedValue({
 		species: [{ mobSpecies: 'Atrox', netMarkup: 12 }],
 		definitions: [{ definitionId: 1, netMarkup: 18 }],
+		derived: [],
 	});
 });
 

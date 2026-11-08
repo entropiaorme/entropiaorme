@@ -9,6 +9,7 @@
 	import AuctionListings from '$lib/features/analytics/AuctionListings.svelte';
 	import ConvertStockModal from '$lib/features/analytics/ConvertStockModal.svelte';
 	import SellStockModal from '$lib/features/analytics/SellStockModal.svelte';
+	import ConvertItemsModal from '$lib/features/inventory/ConvertItemsModal.svelte';
 	import CreateListingModal from '$lib/features/inventory/CreateListingModal.svelte';
 	import EquipmentSaleModal from '$lib/features/inventory/EquipmentSaleModal.svelte';
 	import InventoryHoldings from '$lib/features/inventory/InventoryHoldings.svelte';
@@ -32,6 +33,8 @@
 	let lootToConvert = $state<TreeCuttingStock | null>(null);
 	let lootToRemove = $state<TreeCuttingStock | null>(null);
 	let shrapnelToConvert = $state<TreeCuttingStock | null>(null);
+	let convertOpen = $state(false);
+	let convertStart = $state<{ name: string; assetId: string | null } | null>(null);
 
 	const kindOptions = [
 		{ id: 'loot', label: 'Loot' },
@@ -62,6 +65,15 @@
 	function selectView(id: string) {
 		model.view = id as InventoryView;
 		if (id === 'history' && !model.historyLoaded && !model.historyLoading) {
+			void model.loadHistory().catch(() => undefined);
+		}
+	}
+
+	function startConversion(start: { name: string; assetId: string | null } | null) {
+		convertStart = start;
+		convertOpen = true;
+		// "Same as last time" reads the history, which loads on first need.
+		if (!model.historyLoaded && !model.historyLoading) {
 			void model.loadHistory().catch(() => undefined);
 		}
 	}
@@ -114,6 +126,7 @@
 			onconvert={(item) => (lootToConvert = item)}
 			onremove={(item) => (lootToRemove = item)}
 			onshrapnel={(item) => (shrapnelToConvert = item)}
+			onconvertitems={startConversion}
 			onaddequipment={addEquipment}
 			oncreatelisting={() => (createListingOpen = true)}
 			oneditequipment={editEquipment}
@@ -169,6 +182,13 @@
 	ontrade={model.sellLootByTrade}
 	oncancel={() => (lootToSell = null)}
 	activityAttributionNoun="its source activities"
+/>
+<ConvertItemsModal
+	bind:open={convertOpen}
+	items={model.convertibleItems}
+	start={convertStart}
+	history={model.allHistory}
+	onsubmit={model.convert}
 />
 <ConvertStockModal
 	item={lootToConvert}

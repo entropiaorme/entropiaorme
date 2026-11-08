@@ -20,6 +20,7 @@ import {
 	type MarketHarvestData,
 	type MarketHarvestItem,
 } from '$lib/api';
+import type { RealisedDerivedMarkup } from '$lib/api/commands.gen';
 import type {
 	HuntingActivityComparison,
 	HuntingDefinitionComparison,
@@ -86,6 +87,7 @@ export type HuntingSessionSection = Omit<HuntingDefinitionComparison, 'activitie
 	rewardMuRate: number | null;
 	expectedTotalRate: number | null;
 	realisedMarkup: number;
+	realisedDerived: RealisedDerivedMarkup[];
 	muProjectedReturns: number | null;
 	muRate: number | null;
 	lootMarkupFactor: number | null;
@@ -103,6 +105,25 @@ export type HuntingSessionSortKey = 'name' | 'cycled' | 'realisedRate' | 'muRate
 
 /** The stable label retained for diagnostics and contract-level proofs. */
 export const UNCLASSIFIED_LABEL = 'Unclassified';
+
+/** The same root item across definitions reads as one line on Overall. */
+function mergeDerived(rows: RealisedDerivedMarkup[]): RealisedDerivedMarkup[] {
+	const merged = new Map<string, RealisedDerivedMarkup>();
+	for (const row of rows) {
+		const existing = merged.get(row.originItem);
+		merged.set(
+			row.originItem,
+			existing
+				? {
+						...existing,
+						quantity: existing.quantity + row.quantity,
+						netMarkup: existing.netMarkup + row.netMarkup,
+					}
+				: { ...row },
+		);
+	}
+	return [...merged.values()];
+}
 
 /** One species row with the merged market layer. Kept internally so Overall
  * remains reconcilable while the species comparison UI is dormant. */
@@ -136,6 +157,7 @@ export type HuntingOverallLine = {
 	expectedMarketRate: number | null;
 	expected: HuntingActivityData['overall']['expected'];
 	realisedMarkup: number;
+	realisedDerived: RealisedDerivedMarkup[];
 	realisedReturns: number;
 	realisedRate: number;
 	/** Confirmed markup whose species has no economic row in the selected period:
@@ -148,6 +170,7 @@ export function createHuntingModel() {
 	let market = $state<MarketHarvestData | null>(null);
 	let realisedBySpecies = $state<Map<string, number>>(new Map());
 	let realisedByDefinition = $state<Map<number, number>>(new Map());
+	let realisedDerived = $state<RealisedDerivedMarkup[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let confidenceMode = $state<ConfidenceMode>('liquidMiddling');
@@ -185,13 +208,14 @@ export function createHuntingModel() {
 			const [activity, markets, realised] = await Promise.all([
 				getAnalyticsHuntingActivity(period),
 				getMarketHuntMarkups().catch(() => null),
-				getHuntingRealisedMarkup().catch(() => ({ species: [], definitions: [] })),
+				getHuntingRealisedMarkup().catch(() => ({ species: [], definitions: [], derived: [] })),
 			]);
 			if (epoch !== loadEpoch) return;
 			backendCompleted = performance.now();
 			data = activity;
 			market = markets;
 			realisedBySpecies = new Map(realised.species.map((row) => [row.mobSpecies, row.netMarkup]));
+			realisedDerived = realised.derived;
 			realisedByDefinition = new Map(
 				realised.definitions.map((row) => [row.definitionId, row.netMarkup]),
 			);
@@ -269,6 +293,9 @@ export function createHuntingModel() {
 			);
 			const realisedMarkup =
 				row.definitionId === null ? 0 : (realisedByDefinition.get(row.definitionId) ?? 0);
+			const derivedRows = realisedDerived.filter(
+				(entry) => entry.definitionId === row.definitionId,
+			);
 			// Top-level activities partition the definition. Family variants are
 			// explanatory children whose reward is already present in their parent.
 			const key = row.definitionId === null ? 'unassigned' : `definition:${row.definitionId}`;
@@ -291,6 +318,7 @@ export function createHuntingModel() {
 				reward,
 				...rewardRates(reward, row.cycled, projected.expectedMarketRate),
 				realisedMarkup,
+				realisedDerived: derivedRows,
 				muProjectedReturns: projection.muProjectedReturns,
 				muRate: projection.muRate,
 				...projected,
@@ -405,6 +433,7 @@ export function createHuntingModel() {
 			...projected,
 			expected: data.overall.expected,
 			realisedMarkup,
+			realisedDerived: mergeDerived(realisedDerived),
 			realisedReturns,
 			realisedRate: cycled > 0 ? realisedReturns / cycled : 0,
 		};

@@ -53,6 +53,8 @@ export const tradeLoot = (input: Omit<commands.PrivateSaleInput, 'profession'>) 
 	commands.stockPrivateSale({ profession: 'inventory', ...input });
 export const convertLoot = (input: Omit<commands.StockConversionInput, 'profession'>) =>
 	commands.stockConvert({ profession: 'inventory', ...input });
+export const convertItems = (input: commands.ItemConversionInput) =>
+	commands.stockConvertItems(input);
 export const removeLoot = (input: Omit<commands.StockRemovalInput, 'profession'>) =>
 	commands.stockRemove({ profession: 'inventory', ...input });
 export const convertLootShrapnel = (input: Omit<commands.ShrapnelConversionInput, 'profession'>) =>

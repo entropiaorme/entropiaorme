@@ -832,6 +832,7 @@ const OTHER_COMMANDS: &[&str] = &[
     "auction_listing_confirm",
     "auction_listing_expire",
     "stock_convert",
+    "stock_convert_items",
     "stock_private_sale",
     "stock_remove",
     "stock_shrapnel_convert",

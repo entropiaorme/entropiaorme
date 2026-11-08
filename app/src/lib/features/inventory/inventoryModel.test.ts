@@ -6,6 +6,7 @@ vi.mock('$lib/api/inventory', () => ({
 	takeSaleWindowCapture: vi.fn(),
 	confirmInventoryListing: vi.fn(),
 	commitInventorySaleDraft: vi.fn(),
+	convertItems: vi.fn(),
 	convertLoot: vi.fn(),
 	convertLootShrapnel: vi.fn(),
 	deleteEquipmentHolding: vi.fn(),
@@ -37,7 +38,16 @@ const mockedMarket = vi.mocked(marketApi);
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocked.getLootInventory.mockResolvedValue([
-		{ itemName: 'Animal Oil Residue', quantity: 10, ttValue: 1, listedQuantity: 0 },
+		{
+			itemName: 'Animal Oil Residue',
+			quantity: 10,
+			ttValue: 1,
+			listedQuantity: 0,
+			unitTt: 0,
+			paidMarkup: 0,
+			origins: [],
+			derivedFrom: [],
+		},
 	]);
 	mocked.getEquipmentInventory.mockResolvedValue([
 		{
@@ -47,6 +57,8 @@ beforeEach(() => {
 			markupPaid: 75,
 			notes: null,
 			acquiredAt: '2026-08-01',
+			origins: [],
+			derivedFrom: [],
 		},
 	]);
 	mocked.getInventoryListings.mockResolvedValue([]);
@@ -254,7 +266,16 @@ describe('central inventory model', () => {
 
 	it('uses fixed 101% Shrapnel conversion value while retaining the market observation', async () => {
 		mocked.getLootInventory.mockResolvedValue([
-			{ itemName: 'Shrapnel', quantity: 10_000, ttValue: 10, listedQuantity: 0 },
+			{
+				itemName: 'Shrapnel',
+				quantity: 10_000,
+				ttValue: 10,
+				listedQuantity: 0,
+				unitTt: 0,
+				paidMarkup: 0,
+				origins: [],
+				derivedFrom: [],
+			},
 		]);
 		mockedMarket.getMarketItemMarkups.mockResolvedValue({
 			nanocubeMarkupPct: 100.6,

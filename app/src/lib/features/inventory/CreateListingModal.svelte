@@ -167,7 +167,14 @@
 	const issues = $derived(draftIssues(fields, channel));
 	const blocking = $derived(issues.filter((issue) => issue.severity === 'blocking'));
 	const advisories = $derived(issues.filter((issue) => issue.severity === 'advisory'));
-	const netPreview = $derived(previewNetMarkup(fields, channel));
+	const netPreview = $derived.by(() => {
+		const net = previewNetMarkup(fields, channel);
+		if (net === null) return null;
+		// Converted stock can carry markup paid to produce it. An asset's own
+		// basis is handled where it is sold.
+		const held = holdings.find((row) => row.holdingId === chosen?.holdingId);
+		return net - (held?.paidPerUnit ?? 0) * (fields.quantity ?? 0);
+	});
 	const impliedSb = $derived(impliedMarkupPct(fields.startingBid, fields.ttValue));
 	const impliedBo = $derived(impliedMarkupPct(fields.buyout, fields.ttValue));
 	const named = $derived(fields.itemName.trim() !== '');

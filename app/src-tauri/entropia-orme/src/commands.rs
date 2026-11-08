@@ -17,10 +17,10 @@ use eo_api::analytics::{
     AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
     AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
     HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, LedgerEntryInput,
-    LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput,
-    Profession, RealisedTierMarkup, SaleWindowCapture, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult,
+    ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput,
+    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, SaleWindowCapture,
+    ShrapnelConversionInput, StockConversionInput, StockPosition, StockRemovalInput,
 };
 use eo_api::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -925,6 +925,14 @@ pub async fn stock_convert(
     input: StockConversionInput,
 ) -> Result<(), ApiError> {
     facade(&app)?.stock_convert(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stock_convert_items(
+    app: tauri::AppHandle,
+    input: ItemConversionInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.stock_convert_items(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

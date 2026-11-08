@@ -1843,10 +1843,11 @@ mod tests {
         // + the codex meta calibration table + session stats exclusion's
         // derived-ledger source index + weapon correction batches' index
         // + the market manual markups' 2 tables and 1 index
+        // + item conversions' 2 tables and 3 indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 230);
+        assert_eq!(master.len(), 235);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

@@ -375,6 +375,20 @@ pub struct RealisedDefinitionMarkup {
 pub struct HuntingRealisedMarkup {
     pub species: Vec<RealisedSpeciesMarkup>,
     pub definitions: Vec<RealisedDefinitionMarkup>,
+    /// The part of each definition's markup that came through a conversion.
+    pub derived: Vec<RealisedDerivedMarkup>,
+}
+
+/// Realised markup a session definition earned through a conversion, named by
+/// the item it descends from.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RealisedDerivedMarkup {
+    pub definition_id: i64,
+    pub origin_item: String,
+    /// How many of `origin_item` have been realised so far.
+    pub quantity: f64,
+    pub net_markup: f64,
 }
 
 /// One item in an activity's harvest loot composition: realised TT only.
@@ -488,6 +502,27 @@ pub struct InventoryItem {
     pub markup_paid: f64,
     pub notes: Nullable<String>,
     pub acquired_at: String,
+    /// The activities a sale of this asset would credit. Empty for an asset
+    /// that did not come out of a conversion.
+    pub origins: Vec<HoldingOrigin>,
+    /// What a conversion made this asset from.
+    pub derived_from: Vec<DerivedSource>,
+}
+
+/// One activity a held item traces back to.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingOrigin {
+    pub label: String,
+    pub quantity: f64,
+}
+
+/// One root item a converted holding, or a sale of it, descends from.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedSource {
+    pub item_name: String,
+    pub quantity: f64,
 }
 
 /// The result of selling an inventory item: the emitted ledger entry
@@ -513,6 +548,14 @@ pub struct StockPosition {
     /// `quantity`, since listed stock has left the player's inventory in
     /// game, but reported so it does not read as simply gone.
     pub listed_quantity: f64,
+    /// TT per unit, known even when none is currently held.
+    pub unit_tt: f64,
+    /// Markup paid for bought inputs that this stock still has to recover.
+    pub paid_markup: f64,
+    /// The activities a sale of this stock would credit.
+    pub origins: Vec<HoldingOrigin>,
+    /// What conversions made this stock from.
+    pub derived_from: Vec<DerivedSource>,
 }
 
 /// One auction listing across its lifecycle. Realised figures are `null`
@@ -593,6 +636,146 @@ pub struct ActivityHistoryEntry {
     /// Already undone. Every effect it had is reversed and the entry is kept
     /// as the read-only record of a correction.
     pub undone: bool,
+    /// A conversion's lines as the player recorded them. Empty for other
+    /// outcomes and for conversions older than itemised recording.
+    pub conversion_lines: Vec<ConversionLine>,
+    /// A conversion that came out as PED: the amount.
+    pub ped_amount: Nullable<f64>,
+    /// An itemised conversion, as opposed to recycling.
+    pub itemised: bool,
+    /// What the sold stock descends from, when a conversion produced it.
+    pub derived_from: Vec<DerivedSource>,
+}
+
+/// Which side of Inventory a conversion's result joins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionHolding {
+    Loot,
+    Asset,
+}
+
+impl From<ConversionHolding> for eo_services::analytics::ConversionHolding {
+    fn from(value: ConversionHolding) -> Self {
+        match value {
+            ConversionHolding::Loot => Self::Loot,
+            ConversionHolding::Asset => Self::Asset,
+        }
+    }
+}
+
+impl From<eo_services::analytics::ConversionHolding> for ConversionHolding {
+    fn from(value: eo_services::analytics::ConversionHolding) -> Self {
+        use eo_services::analytics::ConversionHolding as Service;
+        match value {
+            Service::Loot => Self::Loot,
+            Service::Asset => Self::Asset,
+        }
+    }
+}
+
+/// Which side of a conversion a recorded line sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionLineSide {
+    Input,
+    Output,
+}
+
+/// How an input line was acquired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionAcquisition {
+    Held,
+    Bought,
+    Asset,
+}
+
+/// One recorded line of a conversion.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionLine {
+    pub side: ConversionLineSide,
+    pub item_name: String,
+    pub quantity: f64,
+    pub tt_value: f64,
+    pub acquisition: Nullable<ConversionAcquisition>,
+    pub markup: Nullable<f64>,
+    pub holding: Nullable<ConversionHolding>,
+}
+
+/// One thing that went into an item conversion.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConversionInputLine {
+    /// Drawn from tracked stock.
+    #[serde(rename_all = "camelCase")]
+    Held {
+        item_name: String,
+        quantity: f64,
+        /// What this line is worth above TT, if the player wants to say.
+        worth: Option<f64>,
+    },
+    /// Acquired for this conversion rather than drawn from stock.
+    #[serde(rename_all = "camelCase")]
+    Bought {
+        item_name: String,
+        quantity: f64,
+        tt_value: f64,
+        markup_paid: Option<f64>,
+    },
+    /// A whole held asset.
+    #[serde(rename_all = "camelCase")]
+    Asset { item_id: String, worth: Option<f64> },
+}
+
+impl From<ConversionInputLine> for eo_services::analytics::ConversionInput {
+    fn from(value: ConversionInputLine) -> Self {
+        match value {
+            ConversionInputLine::Held {
+                item_name,
+                quantity,
+                worth,
+            } => Self::Held {
+                item_name,
+                quantity,
+                worth,
+            },
+            ConversionInputLine::Bought {
+                item_name,
+                quantity,
+                tt_value,
+                markup_paid,
+            } => Self::Bought {
+                item_name,
+                quantity,
+                tt_value,
+                markup_paid: markup_paid.unwrap_or(0.0),
+            },
+            ConversionInputLine::Asset { item_id, worth } => Self::Asset { item_id, worth },
+        }
+    }
+}
+
+/// One thing an item conversion produced.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversionOutputLine {
+    pub item_name: String,
+    pub quantity: f64,
+    pub tt_value: f64,
+    pub holding: ConversionHolding,
+}
+
+/// An item conversion: what went in and what came out.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemConversionInput {
+    pub inputs: Vec<ConversionInputLine>,
+    pub outputs: Vec<ConversionOutputLine>,
+    /// PED received outright, for an outcome already cashed.
+    pub ped_amount: Option<f64>,
+    pub converted_at: Option<String>,
 }
 
 /// An undo payload: the history entry to take back.
@@ -908,6 +1091,14 @@ impl Api {
                 quantity: row.quantity,
                 tt_value: row.tt_value,
                 listed_quantity: row.listed_quantity,
+                unit_tt: row.unit_tt,
+                paid_markup: row.paid_markup,
+                origins: row.origins.into_iter().map(holding_origin_dto).collect(),
+                derived_from: row
+                    .derived_from
+                    .into_iter()
+                    .map(derived_source_dto)
+                    .collect(),
             })
             .collect())
     }
@@ -998,6 +1189,32 @@ impl Api {
         Ok(())
     }
 
+    /// Record an item conversion: several things in, something else out,
+    /// with the origin of what went in riding forward onto what came out.
+    pub async fn stock_convert_items(&self, input: ItemConversionInput) -> Result<(), ApiError> {
+        self.analytics
+            .convert_items(
+                eo_services::analytics::Profession::Inventory,
+                eo_services::analytics::ItemConversion {
+                    inputs: input.inputs.into_iter().map(Into::into).collect(),
+                    outputs: input
+                        .outputs
+                        .into_iter()
+                        .map(|line| eo_services::analytics::ConversionOutput {
+                            item_name: line.item_name,
+                            quantity: line.quantity,
+                            tt_value: line.tt_value,
+                            holding: line.holding.into(),
+                        })
+                        .collect(),
+                    ped_amount: input.ped_amount,
+                    converted_at: input.converted_at,
+                },
+            )
+            .await
+            .map_err(analytics_error("item conversion"))
+    }
+
     pub async fn stock_private_sale(&self, input: PrivateSaleInput) -> Result<(), ApiError> {
         self.analytics
             .create_private_sale(
@@ -1067,6 +1284,18 @@ impl Api {
                 can_delete: row.can_delete,
                 undo_blocked_reason: row.undo_blocked_reason.into(),
                 undone: row.undone,
+                conversion_lines: row
+                    .conversion_lines
+                    .into_iter()
+                    .map(conversion_line_dto)
+                    .collect(),
+                ped_amount: row.ped_amount.into(),
+                itemised: row.itemised,
+                derived_from: row
+                    .derived_from
+                    .into_iter()
+                    .map(derived_source_dto)
+                    .collect(),
             })
             .collect())
     }
@@ -1160,9 +1389,10 @@ impl Api {
 
     /// Net realised Hunting markup through both honest comparison axes.
     pub async fn hunting_realised_markup(&self) -> Result<HuntingRealisedMarkup, ApiError> {
-        let (species, definitions) = tokio::try_join!(
+        let (species, definitions, derived) = tokio::try_join!(
             self.analytics.realised_markup_by_species(),
             self.analytics.realised_markup_by_definition(),
+            self.analytics.realised_derived_by_definition(),
         )
         .map_err(analytics_error("hunting realised markup"))?;
         Ok(HuntingRealisedMarkup {
@@ -1177,6 +1407,15 @@ impl Api {
                 .into_iter()
                 .map(|row| RealisedDefinitionMarkup {
                     definition_id: row.definition_id,
+                    net_markup: row.net_markup,
+                })
+                .collect(),
+            derived: derived
+                .into_iter()
+                .map(|row| RealisedDerivedMarkup {
+                    definition_id: row.definition_id,
+                    origin_item: row.origin_item,
+                    quantity: row.quantity,
                     net_markup: row.net_markup,
                 })
                 .collect(),
@@ -1786,6 +2025,45 @@ pub(crate) fn ledger_preset_dto(row: eo_services::analytics::PresetRow) -> Ledge
     }
 }
 
+fn holding_origin_dto(row: eo_services::analytics::HoldingOriginRow) -> HoldingOrigin {
+    HoldingOrigin {
+        label: row.label,
+        quantity: row.quantity,
+    }
+}
+
+fn derived_source_dto(row: eo_services::analytics::DerivedSourceRow) -> DerivedSource {
+    DerivedSource {
+        item_name: row.item_name,
+        quantity: row.quantity,
+    }
+}
+
+fn conversion_line_dto(row: eo_services::analytics::ConversionLineRow) -> ConversionLine {
+    use eo_services::analytics::{
+        ConversionAcquisition as Acquisition, ConversionLineSide as Side,
+    };
+    ConversionLine {
+        side: match row.side {
+            Side::Input => ConversionLineSide::Input,
+            Side::Output => ConversionLineSide::Output,
+        },
+        item_name: row.item_name,
+        quantity: row.quantity,
+        tt_value: row.tt_value,
+        acquisition: row
+            .acquisition
+            .map(|value| match value {
+                Acquisition::Held => ConversionAcquisition::Held,
+                Acquisition::Bought => ConversionAcquisition::Bought,
+                Acquisition::Asset => ConversionAcquisition::Asset,
+            })
+            .into(),
+        markup: row.markup.into(),
+        holding: row.holding.map(ConversionHolding::from).into(),
+    }
+}
+
 pub(crate) fn inventory_item_dto(row: eo_services::analytics::InventoryRow) -> InventoryItem {
     InventoryItem {
         id: row.id,
@@ -1794,6 +2072,12 @@ pub(crate) fn inventory_item_dto(row: eo_services::analytics::InventoryRow) -> I
         markup_paid: row.markup_paid,
         notes: row.notes.into(),
         acquired_at: row.acquired_at,
+        origins: row.origins.into_iter().map(holding_origin_dto).collect(),
+        derived_from: row
+            .derived_from
+            .into_iter()
+            .map(derived_source_dto)
+            .collect(),
     }
 }
 

@@ -13,6 +13,7 @@
 		TreeCuttingStock,
 	} from '$lib/features/analytics/treeCuttingModel.svelte';
 	import { formatLedgerDate, formatPed } from '$lib/utils/format';
+	import { derivedFromLabel } from './conversionDraft';
 	import type { InventoryKind } from './inventoryModel.svelte';
 	import PacketFeeInfo from './PacketFeeInfo.svelte';
 	import PacketFeeSelector from './PacketFeeSelector.svelte';
@@ -30,6 +31,7 @@
 		onconvert,
 		onremove,
 		onshrapnel,
+		onconvertitems,
 		onaddequipment,
 		oncreatelisting,
 		oneditequipment,
@@ -48,6 +50,8 @@
 		onconvert: (item: TreeCuttingStock) => void;
 		onremove: (item: TreeCuttingStock) => void;
 		onshrapnel: (item: TreeCuttingStock) => void;
+		/** Start a conversion, from one holding or from nothing in particular. */
+		onconvertitems: (start: { name: string; assetId: string | null } | null) => void;
 		onaddequipment: () => void;
 		oncreatelisting: () => void;
 		oneditequipment: (item: InventoryItem) => void;
@@ -74,6 +78,7 @@
 			onconvert={onconvert}
 			onremove={onremove}
 			onshrapnelconvert={onshrapnel}
+			onconvertitems={(item) => onconvertitems({ name: item.itemName, assetId: null })}
 			actionLayout="inventory"
 			alwaysSearch
 			fillAvailable
@@ -101,6 +106,7 @@
 				</div>
 			{/snippet}
 			{#snippet actions()}
+				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>
 			{/snippet}
 		</TreeCuttingStockView>
@@ -124,6 +130,7 @@
 				/>
 			</div>
 			<div class="flex h-full items-end justify-end gap-2">
+				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" variant="secondary" onclick={onaddequipment}>Add asset</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>
 			</div>
@@ -143,7 +150,7 @@
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">MU paid</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">Total cost</span>
 				<span class="eyebrow w-28 shrink-0 text-right" role="columnheader">Acquired</span>
-				<span class="eyebrow w-[5.25rem] shrink-0 text-right" role="columnheader">Actions</span>
+				<span class="eyebrow w-[7rem] shrink-0 text-right" role="columnheader">Actions</span>
 			</div>
 
 		<ul
@@ -155,6 +162,11 @@
 				<li class="flex items-center gap-3 rounded-md px-2.5 py-2" role="row">
 					<div class="min-w-0 flex-1" role="cell">
 						<p class="truncate text-sm font-medium tracking-tight text-text">{item.name}</p>
+						{#if derivedFromLabel(item.derivedFrom)}
+							<p class="mt-0.5 truncate text-xs text-text-tertiary">
+								{derivedFromLabel(item.derivedFrom)}
+							</p>
+						{/if}
 						{#if item.notes}
 							<p class="mt-0.5 truncate text-xs text-text-tertiary">{item.notes}</p>
 						{/if}
@@ -171,7 +183,12 @@
 					<span class="w-28 shrink-0 text-right text-xs tabular-nums text-text-tertiary" role="cell">
 						{formatLedgerDate(item.acquiredAt)}
 					</span>
-					<div class="flex min-w-[5.25rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+					<div class="flex min-w-[7rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+						<ExpandingActionButton
+							letter="C"
+							label="Convert"
+							onclick={() => onconvertitems({ name: item.name, assetId: item.id })}
+						/>
 						<ExpandingActionButton
 							letter="E"
 							label="Edit"

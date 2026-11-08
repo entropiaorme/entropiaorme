@@ -101,6 +101,14 @@ export interface ActivityHistoryEntry {
 	undoBlockedReason: string | null;
 	/** Already undone. Every effect it had is reversed and the entry is kept as the read-only record of a correction. */
 	undone: boolean;
+	/** A conversion's lines as the player recorded them. Empty for other outcomes and for conversions older than itemised recording. */
+	conversionLines: ConversionLine[];
+	/** A conversion that came out as PED: the amount. */
+	pedAmount: number | null;
+	/** An itemised conversion, as opposed to recycling. */
+	itemised: boolean;
+	/** What the sold stock descends from, when a conversion produced it. */
+	derivedFrom: DerivedSource[];
 }
 
 /**
@@ -801,6 +809,65 @@ export interface ConsumableSettings {
 }
 
 /**
+ * How an input line was acquired.
+ */
+export type ConversionAcquisition = 'held' | 'bought' | 'asset';
+
+/**
+ * Which side of Inventory a conversion's result joins.
+ */
+export type ConversionHolding = 'loot' | 'asset';
+
+/**
+ * One thing that went into an item conversion.
+ */
+export type ConversionInputLine = {
+		itemName: string;
+		quantity: number;
+		/** What this line is worth above TT, if the player wants to say. */
+		worth?: number | null;
+		kind: 'held';
+	} | {
+		itemName: string;
+		quantity: number;
+		ttValue: number;
+		markupPaid?: number | null;
+		kind: 'bought';
+	} | {
+		itemId: string;
+		worth?: number | null;
+		kind: 'asset';
+	};
+
+/**
+ * One recorded line of a conversion.
+ */
+export interface ConversionLine {
+	side: ConversionLineSide;
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	acquisition: ConversionAcquisition | null;
+	markup: number | null;
+	holding: ConversionHolding | null;
+}
+
+/**
+ * Which side of a conversion a recorded line sits on.
+ */
+export type ConversionLineSide = 'input' | 'output';
+
+/**
+ * One thing an item conversion produced.
+ */
+export interface ConversionOutputLine {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	holding: ConversionHolding;
+}
+
+/**
  * The calibration flow's phase, as the closed wire vocabulary.
  */
 export type CoordCalibrationPhase = 'idle' | 'awaitTopLeft' | 'awaitBottomRight';
@@ -924,6 +991,14 @@ export interface DeclaredEquipment {
 export interface DefinitionSelectResult {
 	sessionDefinitionId: string | null;
 	sessionName: string | null;
+}
+
+/**
+ * One root item a converted holding, or a sale of it, descends from.
+ */
+export interface DerivedSource {
+	itemName: string;
+	quantity: number;
 }
 
 /**
@@ -1378,6 +1453,14 @@ export interface HistogramSnapshot {
 }
 
 /**
+ * One activity a held item traces back to.
+ */
+export interface HoldingOrigin {
+	label: string;
+	quantity: number;
+}
+
+/**
  * One allocation of the HP optimizer: a skill's share of the cheapest
  * climb to the target HP.
  */
@@ -1482,6 +1565,8 @@ export interface HuntingDefinitionComparison {
 export interface HuntingRealisedMarkup {
 	species: RealisedSpeciesMarkup[];
 	definitions: RealisedDefinitionMarkup[];
+	/** The part of each definition's markup that came through a conversion. */
+	derived: RealisedDerivedMarkup[];
 }
 
 export type HuntingRewardStatus = 'none' | 'included_in_loot' | 'fixed_liquid' | 'item' | 'skill' | 'mixed' | 'unverified';
@@ -1523,6 +1608,10 @@ export interface InventoryItem {
 	markupPaid: number;
 	notes: string | null;
 	acquiredAt: string;
+	/** The activities a sale of this asset would credit. Empty for an asset that did not come out of a conversion. */
+	origins: HoldingOrigin[];
+	/** What a conversion made this asset from. */
+	derivedFrom: DerivedSource[];
 }
 
 /**
@@ -1587,6 +1676,17 @@ export interface InventorySellInput {
 export interface InventorySellResult {
 	ledgerEntry: LedgerItem | null;
 	soldItem: InventoryItem;
+}
+
+/**
+ * An item conversion: what went in and what came out.
+ */
+export interface ItemConversionInput {
+	inputs: ConversionInputLine[];
+	outputs: ConversionOutputLine[];
+	/** PED received outright, for an outcome already cashed. */
+	pedAmount?: number | null;
+	convertedAt?: string | null;
 }
 
 /**
@@ -2933,6 +3033,18 @@ export interface RealisedDefinitionMarkup {
 }
 
 /**
+ * Realised markup a session definition earned through a conversion, named by
+ * the item it descends from.
+ */
+export interface RealisedDerivedMarkup {
+	definitionId: number;
+	originItem: string;
+	/** How many of `origin_item` have been realised so far. */
+	quantity: number;
+	netMarkup: number;
+}
+
+/**
  * One mob species' net realised markup from confirmed stock outcomes: the Hunting
  * sibling of [`RealisedTierMarkup`].
  */
@@ -3709,6 +3821,14 @@ export interface StockPosition {
 	ttValue: number;
 	/** Quantity sitting in an unresolved auction listing. Already out of `quantity`, since listed stock has left the player's inventory in game, but reported so it does not read as simply gone. */
 	listedQuantity: number;
+	/** TT per unit, known even when none is currently held. */
+	unitTt: number;
+	/** Markup paid for bought inputs that this stock still has to recover. */
+	paidMarkup: number;
+	/** The activities a sale of this stock would credit. */
+	origins: HoldingOrigin[];
+	/** What conversions made this stock from. */
+	derivedFrom: DerivedSource[];
 }
 
 /**
@@ -4709,6 +4829,10 @@ export async function auctionListingExpire(input: AuctionExpireInput): Promise<A
 
 export async function stockConvert(input: StockConversionInput): Promise<void> {
 	return invokeCommand('stock_convert', { input });
+}
+
+export async function stockConvertItems(input: ItemConversionInput): Promise<void> {
+	return invokeCommand('stock_convert_items', { input });
 }
 
 export async function stockPrivateSale(input: PrivateSaleInput): Promise<void> {

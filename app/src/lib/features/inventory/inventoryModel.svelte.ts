@@ -7,6 +7,7 @@ import type {
 	InventoryHoldingCandidate,
 	InventoryItem,
 	InventorySaleDraft,
+	ItemConversionInput,
 	MarketHarvestData,
 	StockPosition,
 } from '$lib/api/commands.gen';
@@ -14,6 +15,7 @@ import {
 	captureSaleWindow,
 	commitInventorySaleDraft,
 	confirmInventoryListing,
+	convertItems,
 	convertLoot,
 	convertLootShrapnel,
 	deleteEquipmentHolding,
@@ -50,6 +52,7 @@ import {
 	opportunityTier,
 } from '$lib/features/analytics/treeCuttingModel.svelte';
 import { describeError } from '$lib/view/errorState';
+import type { ConvertibleItem } from './conversionDraft';
 import type { ListingDraftFields } from './listingIntake';
 
 export type InventoryKind = 'loot' | 'equipment';
@@ -85,6 +88,10 @@ function stockRow(
 			? Math.ceil((packetGrossMarkupPed / premium) * 100 - 1e-9) / 100
 			: null;
 	return {
+		unitTt: row.unitTt,
+		paidMarkup: row.paidMarkup,
+		origins: row.origins,
+		derivedFrom: row.derivedFrom,
 		itemName: row.itemName,
 		heldQty: row.quantity,
 		heldTt: row.ttValue,
@@ -393,6 +400,12 @@ export function createInventoryModel() {
 		);
 	}
 
+	/** Record a hand-in, an opened box, or anything else that turned some
+	 * things into others. */
+	async function convert(request: ItemConversionInput) {
+		await withRefresh(() => convertItems(request), 'Failed to record the conversion');
+	}
+
 	async function remove(itemName: string, quantity: number) {
 		await withRefresh(
 			() => removeLoot({ itemName, quantity, removedAt: null }),
@@ -416,7 +429,36 @@ export function createInventoryModel() {
 			kind === 'equipment' ? row.subjectKind === 'equipment' : row.subjectKind === 'loot',
 		),
 	);
-	const visibleHistory = $derived(history.filter((row) => row.subjectKind === kind));
+	// A conversion can span both sides of Inventory, so it shows on either
+	// side it touched.
+	const visibleHistory = $derived(
+		history.filter(
+			(row) =>
+				row.subjectKind === kind ||
+				(kind === 'equipment' &&
+					row.conversionLines.some(
+						(line) => line.holding === 'asset' || line.acquisition === 'asset',
+					)),
+		),
+	);
+	const convertibleItems = $derived<ConvertibleItem[]>([
+		...positions.map((row) => ({
+			name: row.itemName,
+			assetId: null,
+			heldQty: row.quantity,
+			unitTt: row.unitTt,
+			paidPerUnit: row.quantity > 0 ? row.paidMarkup / row.quantity : 0,
+			origins: row.origins,
+		})),
+		...equipment.map((row) => ({
+			name: row.name,
+			assetId: row.id,
+			heldQty: 1,
+			unitTt: row.ttValue,
+			paidPerUnit: row.markupPaid,
+			origins: row.origins,
+		})),
+	]);
 	const loot = $derived.by(() =>
 		positions
 			.map((position) => stockRow(position, market, confidenceMode, packetGrossMarkupPed))
@@ -431,6 +473,7 @@ export function createInventoryModel() {
 			name: row.itemName,
 			score: 100,
 			heldQty: row.heldQty,
+			paidPerUnit: row.heldQty > 0 ? (row.paidMarkup ?? 0) / row.heldQty : 0,
 		})),
 		...equipment.map((row) => ({
 			kind: 'equipment',
@@ -497,6 +540,12 @@ export function createInventoryModel() {
 		get holdingOptions() {
 			return holdingOptions;
 		},
+		get convertibleItems() {
+			return convertibleItems;
+		},
+		get allHistory() {
+			return history;
+		},
 		get lootTt() {
 			return loot.reduce((sum, row) => sum + row.heldTt, 0);
 		},
@@ -523,6 +572,7 @@ export function createInventoryModel() {
 		resolveListing,
 		undo,
 		recycle,
+		convert,
 		remove,
 		shrapnel,
 		deleteEquipment,

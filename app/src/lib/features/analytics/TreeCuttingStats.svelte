@@ -4,7 +4,8 @@
 	import ExpectedReturnInfoTip from '$lib/components/ExpectedReturnInfoTip.svelte';
 	import RewardMuInfoTip from '$lib/components/RewardMuInfoTip.svelte';
 	import type { ExpectedHuntingEconomics } from '$lib/api';
-	import { NO_DATA } from '$lib/utils/format';
+	import type { RealisedDerivedMarkup } from '$lib/api/commands.gen';
+	import { formatPed, NO_DATA } from '$lib/utils/format';
 	import CompletionRewardContext from './CompletionRewardContext.svelte';
 	import EconomicOutcomeHorizon from './EconomicOutcomeHorizon.svelte';
 	import ExpectedEconomicsEquation from './ExpectedEconomicsEquation.svelte';
@@ -22,6 +23,7 @@
 		expectedEconomics,
 		realisedReturns,
 		realisedRate,
+		realisedDerived = [],
 		reward = null,
 		rewardScope = 'session',
 		rewardMuRate = null,
@@ -38,6 +40,8 @@
 		expectedEconomics?: ExpectedHuntingEconomics | null;
 		realisedReturns: number;
 		realisedRate: number;
+		/** The part of the realised figure that came through conversions. */
+		realisedDerived?: RealisedDerivedMarkup[];
 		/** Completion rewards aggregated over the scope's activities. Absent
 		 * for activities that do not have them at all, Tree Cutting included. */
 		reward?: RewardContext | null;
@@ -96,9 +100,21 @@
 	<InfoTip label="What realised figures are">
 		<p class="text-xs font-semibold leading-relaxed text-text">Loot TT plus realised markup</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-			Only markup from a recorded sale or deliberate Shrapnel conversion. It reads the same as
-			TT Net until a stock outcome realises a gain or loss.
+			Only markup from a recorded sale or conversion. It reads the same as TT Net until a stock
+			outcome realises a gain or loss.
 		</p>
+		{#if realisedDerived.length > 0}
+			<ul class="mt-2 space-y-1 border-t border-border/50 pt-2" data-testid="realised-derived">
+				{#each realisedDerived as row (row.originItem)}
+					<li class="flex items-baseline justify-between gap-3 text-xs text-text-secondary">
+						<span class="min-w-0">
+							{row.originItem} (derived){row.quantity >= 0.5 ? ` ×${Math.round(row.quantity)}` : ''}
+						</span>
+						<span class="shrink-0 tabular-nums text-text">{row.netMarkup >= 0 ? '+' : ''}{formatPed(row.netMarkup)} PED</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 	</InfoTip>
 {/snippet}
 

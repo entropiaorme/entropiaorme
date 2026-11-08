@@ -32,6 +32,7 @@ import type {
 	HarvestTierComparison,
 	HarvestYieldTier,
 } from '$lib/types/analytics';
+import type { DerivedSource, HoldingOrigin } from '$lib/api/commands.gen';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
@@ -382,6 +383,14 @@ export type StockHorizonReading = {
  * expiry. Holdings are operational context only. The opportunity is the
  * same holding-independent profile used by every source activity. */
 export type TreeCuttingStock = {
+	/** TT per unit, known even when none is held. Inventory only. */
+	unitTt?: number;
+	/** Markup paid to produce this stock that a sale must recover. */
+	paidMarkup?: number;
+	/** The activities a sale would credit. Inventory only. */
+	origins?: HoldingOrigin[];
+	/** What a conversion made this stock from. Inventory only. */
+	derivedFrom?: DerivedSource[];
 	itemName: string;
 	heldQty: number;
 	heldTt: number;

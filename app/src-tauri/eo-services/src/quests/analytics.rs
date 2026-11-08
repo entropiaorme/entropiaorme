@@ -106,26 +106,10 @@ impl QuestService {
                         }))
                     },
                 )?;
-                let realised_markup: f64 = conn.query_row(
-                    "WITH outcomes(id, movement_kind, quantity, net_markup) AS ( \
-                         SELECT id, 'listing', quantity, \
-                                COALESCE(final_price, 0) - tt_value - listing_fee - COALESCE(sale_fee, 0) \
-                         FROM auction_listings WHERE status = 'sold' AND undone_at IS NULL \
-                           AND subject_kind = 'loot' \
-                         UNION ALL \
-                         SELECT id, 'trade', quantity, final_price - tt_value \
-                         FROM private_sales WHERE undone_at IS NULL \
-                         UNION ALL \
-                         SELECT id, 'conversion_out', quantity, COALESCE(output_tt_value, tt_value) - tt_value \
-                         FROM stock_conversions WHERE undone_at IS NULL \
-                     ) \
-                     SELECT COALESCE(SUM(o.net_markup * ABS(m.quantity) / NULLIF(o.quantity, 0)), 0) \
-                     FROM outcomes o JOIN stock_movements m \
-                       ON m.ref_id = o.id AND m.movement_kind = o.movement_kind \
-                     WHERE m.source_kind = 'quest' AND m.quest_id = ?",
-                    rusqlite::params![quest_id],
-                    |row| row.get(0),
-                )?;
+                let realised_markup = crate::analytics::realised_markup_by_quest(conn)?
+                    .get(&quest_id)
+                    .copied()
+                    .unwrap_or(0.0);
                 stats["total_realised_reward_markup"] = json!(realised_markup);
                 Ok(stats)
             })

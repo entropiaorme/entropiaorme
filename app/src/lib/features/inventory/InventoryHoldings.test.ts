@@ -22,6 +22,7 @@ describe('inventory assets', () => {
 		onconvert: vi.fn(),
 		onremove: vi.fn(),
 		onshrapnel: vi.fn(),
+		onconvertitems: vi.fn(),
 		onaddequipment: vi.fn(),
 		oncreatelisting: vi.fn(),
 		oneditequipment: vi.fn(),
@@ -40,6 +41,8 @@ describe('inventory assets', () => {
 			markupPaid: 75,
 			notes: 'Tier 4',
 			acquiredAt: '2026-08-01',
+			origins: [],
+			derivedFrom: [],
 		};
 
 		render(InventoryHoldings, {
@@ -56,6 +59,7 @@ describe('inventory assets', () => {
 				onconvert: vi.fn(),
 				onremove: vi.fn(),
 				onshrapnel: vi.fn(),
+				onconvertitems: vi.fn(),
 				onaddequipment: vi.fn(),
 				oncreatelisting: vi.fn(),
 				oneditequipment: onedit,
@@ -78,8 +82,8 @@ describe('inventory assets', () => {
 		const assetCell = screen.getByText('Ares Ring, Improved').parentElement;
 		const actionCell = screen.getByRole('button', { name: 'Edit' }).parentElement;
 		expect(assetCell?.classList.contains('flex-1')).toBe(true);
-		expect(actionCell?.classList.contains('min-w-[5.25rem]')).toBe(true);
-		expect(actionCell?.classList.contains('w-[5.25rem]')).toBe(false);
+		expect(actionCell?.classList.contains('min-w-[7rem]')).toBe(true);
+		expect(actionCell?.classList.contains('w-[7rem]')).toBe(false);
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 		await fireEvent.click(screen.getByRole('button', { name: 'Sell' }));
@@ -124,6 +128,7 @@ describe('inventory assets', () => {
 				onconvert: vi.fn(),
 				onremove: vi.fn(),
 				onshrapnel: vi.fn(),
+				onconvertitems: vi.fn(),
 				onaddequipment: vi.fn(),
 				oncreatelisting: vi.fn(),
 				oneditequipment: vi.fn(),
@@ -133,8 +138,8 @@ describe('inventory assets', () => {
 		});
 
 		const actionCell = screen.getByRole('button', { name: 'Sell' }).parentElement;
-		expect(actionCell?.classList.contains('min-w-[7rem]')).toBe(true);
-		expect(actionCell?.classList.contains('w-[7rem]')).toBe(false);
+		expect(actionCell?.classList.contains('min-w-[9rem]')).toBe(true);
+		expect(actionCell?.classList.contains('w-[9rem]')).toBe(false);
 	});
 
 	it('keeps packet readiness to one quiet white-or-green column', () => {

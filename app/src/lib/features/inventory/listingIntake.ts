@@ -35,6 +35,8 @@ export interface HoldingOption {
 	name: string;
 	score: number;
 	heldQty: number | null;
+	/** Markup paid per unit that a sale of this holding must recover. */
+	paidPerUnit?: number;
 }
 
 /** What the sale window states, as read or typed. Percentages are the game's

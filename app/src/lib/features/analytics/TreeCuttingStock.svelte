@@ -3,6 +3,7 @@
 	import { filterByQuery } from '$lib/view/search';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
+	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { tick } from 'svelte';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
@@ -22,6 +23,7 @@
 		onconvert,
 		onremove,
 		onshrapnelconvert,
+		onconvertitems,
 		heading,
 		controlsLabel,
 		actions,
@@ -39,6 +41,8 @@
 		onconvert: (item: TreeCuttingStock) => void;
 		onremove: (item: TreeCuttingStock) => void;
 		onshrapnelconvert: (item: TreeCuttingStock) => void;
+		/** Start a hand-in or box opening from this item. Inventory only. */
+		onconvertitems?: (item: TreeCuttingStock) => void;
 		heading?: Snippet;
 		controlsLabel?: Snippet;
 		/** Page-level actions for the strip's right-hand slot. */
@@ -300,7 +304,7 @@
 		{/if}
 		<span class="eyebrow w-20 text-right shrink-0">MU</span>
 		<span class="eyebrow w-12 text-center shrink-0">Conf</span>
-		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[7rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
+		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[9rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
 	</div>
 
 	<div class="relative {fillAvailable ? 'min-h-0 flex-1' : ''}">
@@ -315,12 +319,18 @@
 				activity produces, and its market reading is worth keeping
 				legible for the next time there is stock to sell. -->
 			{@const empty = item.heldQty <= 0}
+			{@const derivedLabel = derivedFromLabel(item.derivedFrom)}
 			<li class="flex items-center gap-3 rounded-md px-2.5 py-2">
 				<span
 					class="flex-1 min-w-0 text-sm font-medium truncate tracking-tight
 						{empty ? 'text-text-tertiary' : 'text-text'}"
 				>
 					{item.itemName}
+					{#if derivedLabel}
+						<span class="block truncate text-xs font-normal tracking-normal text-text-tertiary">
+							{derivedLabel}
+						</span>
+					{/if}
 				</span>
 
 				<span
@@ -439,7 +449,7 @@
 
 				<div
 					class="shrink-0 flex items-center justify-end gap-1.5 {actionLayout === 'inventory'
-						? 'min-w-[7rem]'
+						? 'min-w-[9rem]'
 						: ''}"
 				>
 					{#if actionLayout === 'inventory'}
@@ -469,6 +479,17 @@
 								letter="N"
 								label="Nanocubes"
 								onclick={() => onconvert(item)}
+								disabled={item.heldQty <= 0}
+								title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
+							/>
+						{:else}
+							<span class="h-6 w-6 shrink-0" aria-hidden="true"></span>
+						{/if}
+						{#if onconvertitems && item.itemName !== 'Shrapnel'}
+							<ExpandingActionButton
+								letter="C"
+								label="Convert"
+								onclick={() => onconvertitems?.(item)}
 								disabled={item.heldQty <= 0}
 								title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
 							/>

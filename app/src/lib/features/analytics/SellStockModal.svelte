@@ -58,9 +58,17 @@
 	// is created: a preview that quoted the gross would promise more than the
 	// player can ever end up holding, and by a margin that matters on a
 	// low-markup clear.
+	// Markup paid to produce converted stock is recovered before anything
+	// counts as gained, in proportion to how much of it is being sold.
+	const paidShare = $derived(
+		item?.paidMarkup && item.heldQty > 0
+			? item.paidMarkup * Math.min(quantity / item.heldQty, 1)
+			: 0,
+	);
 	const netMarkup = $derived(
 		(saleMethod === 'trade' ? soldFor : (buyout ?? startingBid)) -
 			listedTt -
+			paidShare -
 			(saleMethod === 'auction' ? listingFee || 0 : 0),
 	);
 
@@ -137,6 +145,12 @@
 					<span class="text-text-secondary">{saleMethod === 'auction' ? 'Listing TT' : 'Sale TT'}</span>
 					<span class="tabular-nums text-text">{formatPed(listedTt)} PED</span>
 				</div>
+				{#if paidShare > 0}
+					<div class="flex items-center justify-between">
+						<span class="text-text-secondary">Markup paid</span>
+						<span class="tabular-nums text-text">{formatPed(paidShare)} PED</span>
+					</div>
+				{/if}
 				{#if (saleMethod === 'trade' ? soldFor : (buyout ?? startingBid)) > 0}
 					<div class="flex items-center justify-between pt-1.5 border-t border-border/50">
 						<span class="text-text font-medium">

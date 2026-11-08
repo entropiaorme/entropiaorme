@@ -1844,10 +1844,11 @@ mod tests {
         // derived-ledger source index + weapon correction batches' index
         // + the market manual markups' 2 tables and 1 index
         // + item conversions' 2 tables and 3 indexes
+        // + the ledger's session-attribution index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 235);
+        assert_eq!(master.len(), 236);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

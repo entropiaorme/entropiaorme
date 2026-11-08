@@ -43,7 +43,21 @@
 		{ id: 'history', label: 'History' },
 	];
 
-	onMount(() => void model.load());
+	onMount(() => {
+		void model.load();
+		// Market data moves from other windows too (a markup set on the
+		// dashboard, a paste on the Market page): follow every write.
+		let stop: (() => void) | undefined;
+		let disposed = false;
+		void model.subscribe().then((unlisten) => {
+			if (disposed) unlisten();
+			else stop = unlisten;
+		});
+		return () => {
+			disposed = true;
+			stop?.();
+		};
+	});
 
 	function selectView(id: string) {
 		model.view = id as InventoryView;

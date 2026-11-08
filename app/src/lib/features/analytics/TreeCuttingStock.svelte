@@ -6,7 +6,12 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { tick } from 'svelte';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
-	import { shrapnelConversionTip, shrapnelMarkupLabel } from './marketConfidence';
+	import {
+		manualMarkupTip,
+		shrapnelConversionTip,
+		shrapnelMarkupLabel,
+	} from './marketConfidence';
+	import ManualMarkupEditor from '$lib/features/market/ManualMarkupEditor.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 
 	let {
@@ -115,6 +120,9 @@
 		if (item.markupBasis === 'shrapnel_conversion') {
 			return shrapnelMarkupLabel(item.markupPct, item.effectiveMarkupPct);
 		}
+		if (item.markupBasis === 'manual') {
+			return `Your markup ${formatPercent(item.effectiveMarkupPct / 100)}`;
+		}
 		if (item.floored && item.markupPct !== null) {
 			return `Observed markup ${formatPercent(item.markupPct / 100)}; projections use ${formatPercent(item.effectiveMarkupPct / 100)} Nanocube markup`;
 		}
@@ -132,6 +140,9 @@
 	} {
 		if (item.markupBasis === 'shrapnel_conversion' && item.effectiveMarkupPct !== null) {
 			return shrapnelConversionTip(item.markupPct, item.effectiveMarkupPct);
+		}
+		if (item.markupBasis === 'manual' && item.marketItem?.manual) {
+			return manualMarkupTip(item.marketItem.manual);
 		}
 		if (item.markupPct == null || !item.opportunity) {
 			return {
@@ -287,7 +298,7 @@
 		{/if}
 		<span class="eyebrow w-20 text-right shrink-0">MU</span>
 		<span class="eyebrow w-12 text-center shrink-0">Conf</span>
-		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[5.25rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
+		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[7rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
 	</div>
 
 	<div class="relative {fillAvailable ? 'min-h-0 flex-1' : ''}">
@@ -355,11 +366,15 @@
 									class="inline-flex h-5 flex-col items-end justify-center tabular-nums
 										border-b border-dotted border-border/70"
 								>
-									{#if item.floored || item.markupBasis === 'shrapnel_conversion'}
+									{#if item.floored || item.markupBasis === 'shrapnel_conversion' || item.markupBasis === 'manual'}
 										<span class="text-[9px] leading-[9px] text-text-tertiary line-through">
 											{formatPercent(observedMarkup / 100)}
 										</span>
-										<span class="text-xs leading-[11px] text-text-secondary">
+										<span
+											class="text-xs leading-[11px] {item.markupBasis === 'manual'
+												? 'text-accent'
+												: 'text-text-secondary'}"
+										>
 											{formatPercent(appliedMarkup / 100)}
 										</span>
 									{:else}
@@ -374,7 +389,9 @@
 					{:else if item.effectiveMarkupPct !== null}
 						{@const appliedMarkup = item.effectiveMarkupPct}
 						<span
-							class="inline-flex h-5 items-center text-sm tabular-nums text-text-secondary"
+							class="inline-flex h-5 items-center text-sm tabular-nums {item.markupBasis === 'manual'
+								? 'text-accent'
+								: 'text-text-secondary'}"
 							aria-label={markupLabel(item)}
 						>
 							{formatPercent(appliedMarkup / 100)}
@@ -387,6 +404,13 @@
 				<div class="w-12 shrink-0 flex items-center justify-center">
 					{#if item.markupBasis === 'shrapnel_conversion'}
 						<InfoTip align="right" width="w-96" label="Fixed Shrapnel conversion value">
+							{@render confidenceBody(item)}
+						</InfoTip>
+					{:else if item.markupBasis === 'manual'}
+						<InfoTip align="right" width="w-96" label="Your markup">
+							{#snippet trigger()}
+								<span class="text-accent" aria-label="Your markup" data-testid="conf-manual">✎</span>
+							{/snippet}
 							{@render confidenceBody(item)}
 						</InfoTip>
 					{:else if item.tier}
@@ -413,10 +437,23 @@
 
 				<div
 					class="shrink-0 flex items-center justify-end gap-1.5 {actionLayout === 'inventory'
-						? 'min-w-[5.25rem]'
+						? 'min-w-[7rem]'
 						: ''}"
 				>
 					{#if actionLayout === 'inventory'}
+						{#if item.itemName !== 'Shrapnel'}
+							<ManualMarkupEditor
+								itemName={item.itemName}
+								quantity={item.heldQty}
+								ttValue={item.heldTt}
+								market={item.marketItem ?? undefined}
+								applied={item.effectiveMarkupPct !== null && item.markupBasis !== null
+									? { markupPct: item.effectiveMarkupPct, basis: item.markupBasis }
+									: null}
+							/>
+						{:else}
+							<span class="h-6 w-6 shrink-0" aria-hidden="true"></span>
+						{/if}
 						{#if item.itemName === 'Shrapnel'}
 							<ExpandingActionButton
 								letter="C"

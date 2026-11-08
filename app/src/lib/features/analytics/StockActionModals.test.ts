@@ -22,6 +22,7 @@ const stock: TreeCuttingStock = {
 	salesPed: null,
 	weeklySalesPed: null,
 	recommendedPacketTt: null,
+	marketItem: null,
 };
 
 beforeAll(() => {

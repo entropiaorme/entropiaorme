@@ -24,8 +24,8 @@ vi.mock('$lib/api/inventory', () => ({
 
 vi.mock('$lib/api/market', () => ({
 	getMarketAuctionPacketThreshold: vi.fn(),
-	getMarketHarvestMarkups: vi.fn(),
-	getMarketHuntMarkups: vi.fn(),
+	getMarketItemMarkups: vi.fn(),
+	MARKET_TOPIC: 'market:updated',
 }));
 
 import * as inventoryApi from '$lib/api/inventory';
@@ -52,7 +52,7 @@ beforeEach(() => {
 	mocked.getInventoryListings.mockResolvedValue([]);
 	mocked.getInventoryHistory.mockResolvedValue([]);
 	mocked.commitInventorySaleDraft.mockResolvedValue(undefined);
-	mockedMarket.getMarketHuntMarkups.mockResolvedValue({
+	mockedMarket.getMarketItemMarkups.mockResolvedValue({
 		nanocubeMarkupPct: 100.6,
 		items: [
 			{
@@ -73,13 +73,62 @@ beforeEach(() => {
 			},
 		],
 	});
-	mockedMarket.getMarketHarvestMarkups.mockResolvedValue({
-		nanocubeMarkupPct: 100.6,
-		items: [],
-	});
 	mockedMarket.getMarketAuctionPacketThreshold.mockResolvedValue({
 		maxFeeSharePct: 10,
 		grossMarkupPed: 9.8,
+	});
+});
+
+describe('inventory market valuation', () => {
+	it('reads the market for exactly the items held', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		expect(mockedMarket.getMarketItemMarkups).toHaveBeenCalledWith(['Animal Oil Residue']);
+	});
+
+	it("values a holding at the player's own markup when it is the more recent", async () => {
+		mockedMarket.getMarketItemMarkups.mockResolvedValue({
+			nanocubeMarkupPct: 100.6,
+			items: [
+				{
+					itemName: 'Animal Oil Residue',
+					markupPct: 125,
+					unitPricePed: null,
+					marketObservedAt: 1_700_000_000,
+					manual: {
+						kind: 'ped_per_unit',
+						value: 0.05,
+						unitTtPed: 0.1,
+						markupPct: 150,
+						recordedAt: 1_700_000_100,
+					},
+					preferred: 'manual',
+					nanocubeMarked: false,
+					horizon: 'week',
+					salesPed: 1_000,
+					recommendedPacketTt: null,
+					readings: [],
+				},
+			],
+		});
+		const model = createInventoryModel();
+		await model.load();
+		// 10 units at 0.1 PED TT each, plus 0.05 PED each: 150% of TT.
+		expect(model.loot[0]).toMatchObject({
+			markupBasis: 'manual',
+			markupPct: 125,
+			floored: false,
+		});
+		expect(model.loot[0].effectiveMarkupPct).toBeCloseTo(150, 6);
+		expect(model.loot[0].marketItem?.manual?.kind).toBe('ped_per_unit');
+	});
+
+	it('re-reads the market when a market write lands', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		mockedMarket.getMarketItemMarkups.mockClear();
+		await model.refreshMarket();
+		expect(mockedMarket.getMarketItemMarkups).toHaveBeenCalledWith(['Animal Oil Residue']);
 	});
 });
 
@@ -164,7 +213,7 @@ describe('central inventory model', () => {
 	});
 
 	it('applies the shared confidence threshold without hiding the observed markup', async () => {
-		mockedMarket.getMarketHuntMarkups.mockResolvedValue({
+		mockedMarket.getMarketItemMarkups.mockResolvedValue({
 			nanocubeMarkupPct: 100.6,
 			items: [
 				{
@@ -207,7 +256,7 @@ describe('central inventory model', () => {
 		mocked.getLootInventory.mockResolvedValue([
 			{ itemName: 'Shrapnel', quantity: 10_000, ttValue: 10, listedQuantity: 0 },
 		]);
-		mockedMarket.getMarketHuntMarkups.mockResolvedValue({
+		mockedMarket.getMarketItemMarkups.mockResolvedValue({
 			nanocubeMarkupPct: 100.6,
 			items: [
 				{

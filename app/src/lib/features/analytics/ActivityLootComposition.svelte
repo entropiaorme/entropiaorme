@@ -108,15 +108,23 @@
 								class="inline-flex h-5 flex-col items-end justify-center tabular-nums"
 								aria-label={markupLabel(item)}
 							>
-								{#if (item.floored || item.markupBasis === 'shrapnel_conversion') && item.ownMarkupPct !== null}
+								{#if (item.floored || item.markupBasis === 'shrapnel_conversion' || item.markupBasis === 'manual') && item.ownMarkupPct !== null}
 									<span class="text-[9px] leading-[9px] text-text-tertiary line-through">
 										{formatPercent(item.ownMarkupPct / 100)}
 									</span>
-									<span class="text-xs leading-[11px] text-text-secondary">
+									<span
+										class="text-xs leading-[11px] {item.markupBasis === 'manual'
+											? 'text-accent'
+											: 'text-text-secondary'}"
+									>
 										{formatPercent(item.effectiveMarkupPct / 100)}
 									</span>
 								{:else}
-									<span class="text-sm leading-5 text-text-secondary">
+									<span
+										class="text-sm leading-5 {item.markupBasis === 'manual'
+											? 'text-accent'
+											: 'text-text-secondary'}"
+									>
 										{formatPercent(item.effectiveMarkupPct / 100)}
 									</span>
 								{/if}
@@ -129,6 +137,13 @@
 							<span class="text-sm text-text-tertiary">{NO_DATA}</span>
 						{:else if item.markupBasis === 'shrapnel_conversion'}
 							<InfoTip align="right" width="w-96" label="Fixed Shrapnel conversion value">
+								{@render confidenceBody(item)}
+							</InfoTip>
+						{:else if item.markupBasis === 'manual'}
+							<InfoTip align="right" width="w-96" label="Your markup">
+								{#snippet trigger()}
+									<span class="text-accent" aria-label="Your markup">✎</span>
+								{/snippet}
 								{@render confidenceBody(item)}
 							</InfoTip>
 						{:else}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { TrackingLive, TrackingStatus, WeaponMismatchDecision } from '$lib/api';
 	import { overlayStats, scopedStats } from '$lib/statsCustomisation.svelte';
-	import { getStatDef } from '$lib/statsRegistry';
+	import { getStatDef, type StatContext } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
 	import { ICON_ARMOUR } from './icons';
 	import { IconHealing, IconWeapons } from '$lib/icons';
@@ -44,10 +44,14 @@
 		onWeaponDecision = noop,
 		onArmourCostToggle = noop,
 		onDosesTrigger = noop,
-		onEquipmentTrigger = noop
+		onEquipmentTrigger = noop,
+		statContext = {}
 	}: {
 		data: TrackingLive;
 		status?: TrackingStatus | null;
+		/** What the markup pills read beyond the snapshot: the session's
+		 * loot valued at market, from the overlay's own valuation. */
+		statContext?: StatContext;
 		toggling?: boolean;
 		releasing?: boolean;
 		selectingMob?: boolean;
@@ -565,7 +569,7 @@
 				{#if def}
 					{@const r = showingLifetime && def.renderLifetime && lifetime
 						? def.renderLifetime(lifetime)
-						: def.render(status)}
+						: def.render(status, statContext)}
 					{@const valueColor = r.value === NO_DATA
 						? 'text-white/25'
 						: r.color === 'text-text'

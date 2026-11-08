@@ -359,8 +359,8 @@ describe('drift guard', () => {
 		expect(ALL_STAT_IDS).toEqual(Object.keys(STAT_DEFS));
 	});
 
-	it('ALL_STAT_IDS has length 20', () => {
-		expect(ALL_STAT_IDS).toHaveLength(20);
+	it('ALL_STAT_IDS has length 22', () => {
+		expect(ALL_STAT_IDS).toHaveLength(22);
 	});
 });
 
@@ -442,5 +442,41 @@ describe('figures built on a cost with unpriced shots in it', () => {
 		}
 		expect(STAT_DEFS.loot_tt.renderLifetime?.(lifetime).incomplete).toBeUndefined();
 		expect(STAT_DEFS.cycled.renderLifetime?.({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);
+	});
+});
+
+describe('the live markup stats', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 40,
+		marketValuePed: 42,
+		lootMuFactor: 42 / 40,
+		coverage: { marketTt: 40, manualTt: 0, flooredTt: 0, markedTt: 0, shrapnelTt: 0 },
+		confidence: 'liquidMiddling' as const,
+	};
+	const session = (fields: Partial<Record<keyof TrackingStatus, unknown>> = {}) =>
+		active({ session_id: 's1', cost: 50, ...fields });
+
+	it('reads Loot MU over loot TT and MU Rate over Cycled', () => {
+		expect(STAT_DEFS.loot_mu.render(session(), { valuation }).value).toBe('105.0%');
+		expect(STAT_DEFS.mu_rate.render(session(), { valuation }).value).toBe('84.0%');
+	});
+
+	it('reads empty without a valuation, or with one from another session', () => {
+		expect(STAT_DEFS.loot_mu.render(session())).toEqual(EMPTY);
+		expect(STAT_DEFS.mu_rate.render(session(), { valuation: null })).toEqual(EMPTY);
+		const stale = { ...valuation, sessionId: 's0' };
+		expect(STAT_DEFS.loot_mu.render(session(), { valuation: stale })).toEqual(EMPTY);
+	});
+
+	it('marks MU Rate incomplete while shots sit unpriced', () => {
+		const render = STAT_DEFS.mu_rate.render(session({ unpricedShots: 3 }), { valuation });
+		expect(render.incomplete).toBeTruthy();
+	});
+
+	it('has no lifetime form', () => {
+		expect(STAT_DEFS.loot_mu.renderLifetime).toBeUndefined();
+		expect(STAT_DEFS.mu_rate.renderLifetime).toBeUndefined();
 	});
 });

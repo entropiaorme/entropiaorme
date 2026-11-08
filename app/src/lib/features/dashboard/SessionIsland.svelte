@@ -12,6 +12,7 @@
 	import { getStatDef } from '$lib/statsRegistry';
 	import { setStatsScope } from '$lib/statsScope.svelte';
 	import { describeError } from '$lib/view/errorState';
+	import type { LiveLootValuation } from './liveLootValuation.svelte';
 	import StatTip from './StatTip.svelte';
 	import type { StatsGridModel } from './statsGridModel.svelte';
 
@@ -19,10 +20,13 @@
 		status,
 		statsGrid,
 		definitions,
+		valuation = null,
 		onReview
 	}: {
 		status: TrackingSnapshot | null;
 		statsGrid: StatsGridModel;
+		/** The session's loot at market markup, for the markup stats. */
+		valuation?: LiveLootValuation | null;
 		/** The sessions model; the route hosts it (and the authoring
 		 * environment) so the surface can replace the whole dashboard. */
 		definitions: DefinitionsModel;
@@ -284,7 +288,7 @@
 			{@const r = def
 				? showingLifetime && def.renderLifetime && lifetime
 					? def.renderLifetime(lifetime)
-					: def.render(status)
+					: def.render(status, { valuation: valuation?.view ?? null })
 				: { value: '\u2014', color: 'text-text-tertiary' }}
 			{@const isDragged = statsGrid.dragFilteredIndex === i}
 			<div
@@ -307,7 +311,7 @@
 				<span class="flex min-w-0 items-center gap-1 eyebrow">
 					<span class="truncate">{def?.shortLabel ?? def?.label ?? pref.id}</span>
 					{#if def && !pending && !showingLifetime}
-						<StatTip id={def.id} {status} render={r} />
+						<StatTip id={def.id} {status} render={r} valuation={valuation?.view ?? null} />
 					{/if}
 				</span>
 				{#if pending}

@@ -116,6 +116,7 @@ describe('inventory assets', () => {
 						salesPed: null,
 						weeklySalesPed: null,
 						recommendedPacketTt: null,
+						marketItem: null,
 					},
 				],
 				equipment: [],
@@ -132,8 +133,8 @@ describe('inventory assets', () => {
 		});
 
 		const actionCell = screen.getByRole('button', { name: 'Sell' }).parentElement;
-		expect(actionCell?.classList.contains('min-w-[5.25rem]')).toBe(true);
-		expect(actionCell?.classList.contains('w-[5.25rem]')).toBe(false);
+		expect(actionCell?.classList.contains('min-w-[7rem]')).toBe(true);
+		expect(actionCell?.classList.contains('w-[7rem]')).toBe(false);
 	});
 
 	it('keeps packet readiness to one quiet white-or-green column', () => {
@@ -155,6 +156,7 @@ describe('inventory assets', () => {
 			salesPed: 1_000,
 			weeklySalesPed: 1_000,
 			recommendedPacketTt: 2,
+			marketItem: null,
 		};
 		render(InventoryHoldings, {
 			props: lootProps([
@@ -208,6 +210,7 @@ describe('inventory assets', () => {
 					salesPed: 20_000,
 					weeklySalesPed: 20_000,
 					recommendedPacketTt: null,
+					marketItem: null,
 				},
 			]),
 		});

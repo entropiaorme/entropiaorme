@@ -15,6 +15,7 @@
 	import { initUpdater, maybeCheckOnLaunch, updateAvailable } from '$lib/updater.svelte';
 	import { maybeRefreshOnMount } from '$lib/newsFetch';
 	import { initLooterBasis } from '$lib/looterBasis.svelte';
+	import { followLiveMarkupSettings, initLiveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import { getPreference, purgeRetiredPreferences } from '$lib/preferences';
 	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
 	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
@@ -56,9 +57,16 @@
 			if (unmounted) detach();
 			else unlisten = detach;
 		})();
+		// So are the live markup settings (confidence and looter basis).
+		let unlistenLive: (() => void) | undefined;
+		void followLiveMarkupSettings().then((detach) => {
+			if (unmounted) detach();
+			else unlistenLive = detach;
+		});
 		return () => {
 			unmounted = true;
 			unlisten?.();
+			unlistenLive?.();
 		};
 	});
 
@@ -80,6 +88,7 @@
 			initUpdater(),
 			purgeRetiredPreferences(),
 			initLooterBasis(),
+			initLiveMarkupSettings(),
 		]);
 		void maybeRefreshOnMount();
 		if (

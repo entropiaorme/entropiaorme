@@ -32,6 +32,7 @@ import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyt
 import {
 	type ConfidenceMode,
 	effectiveMarkup,
+	manualValuation,
 	marketOpportunity,
 	NANOCUBE_FALLBACK_MARKUP,
 	projectLoot,
@@ -479,6 +480,9 @@ export function projectRewardItems(
 	return stockItems.reduce((sum, item) => {
 		const marketItem = marketByItem.get(item.itemName);
 		if (!market || !marketItem) return sum + item.valuePed;
+		// The player's own value stands wherever it is the more recent.
+		const manual = manualValuation(marketItem, item.quantity, item.valuePed);
+		if (manual) return sum + manual.valuePed;
 		if (marketItem.unitPricePed !== null) {
 			return sum + item.quantity * marketItem.unitPricePed;
 		}

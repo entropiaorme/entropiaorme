@@ -24,6 +24,9 @@ const item = {
 	tier: 'liquid' as const,
 	salesPed: 320,
 	weeklySalesPed: 320,
+	marketValuePed: 0,
+	manual: null,
+	nanocubeMarked: false,
 };
 
 function section(

@@ -24,6 +24,7 @@ import {
 	type HarvestData,
 	type MarketHarvestData,
 	type MarketHarvestItem,
+	type MarketManualMarkup,
 } from '$lib/api';
 import type {
 	AuctionListingInput,
@@ -49,7 +50,18 @@ export type ActivityTradeDraft = {
 export type OpportunityKind = 'broad' | 'niche' | 'thin' | 'recycle';
 export type ConfidenceTier = 'liquid' | 'middling' | 'illiquid';
 export type ConfidenceMode = 'liquid' | 'liquidMiddling' | 'all';
-export type MarkupBasis = 'market' | 'nanocube' | 'shrapnel_conversion';
+/**
+ * Where a valuation's markup came from: the item's own market reading, the
+ * Nanocube floor (an unsupported or confidence-excluded market), Shrapnel's
+ * fixed conversion, the player's own entry (`manual`), or the player's live
+ * Nanocube mark (`nanocube_mark`, honoured by the live session figures only).
+ */
+export type MarkupBasis =
+	| 'market'
+	| 'nanocube'
+	| 'shrapnel_conversion'
+	| 'manual'
+	| 'nanocube_mark';
 
 const TIER_RANK: Record<ConfidenceTier, number> = { liquid: 3, middling: 2, illiquid: 1 };
 const MODE_THRESHOLD: Record<ConfidenceMode, number> = { liquid: 3, liquidMiddling: 2, all: 1 };
@@ -215,17 +227,63 @@ export function effectiveMarkup(
 	};
 }
 
+/** A row's value at the player's own markup entry: a percentage of its TT,
+ * or its TT plus the entered PED per unit (exact whatever the unit TT). */
+export interface ManualValuation {
+	valuePed: number;
+	/** The value as a markup of the row's TT; for a row with no TT, the
+	 * entry's own percentage, or 100 when it has none. */
+	markupPct: number;
+	entry: MarketManualMarkup;
+}
+
+/**
+ * The player's manual markup applied to one row, when it is the reading the
+ * item's valuation uses: the backend names the more recent of the manual
+ * entry and the market import as `preferred`. Null otherwise.
+ */
+export function manualValuation(
+	market: MarketHarvestItem | undefined,
+	quantity: number,
+	ttValue: number,
+): ManualValuation | null {
+	const entry = market?.manual ?? null;
+	if (!entry || market?.preferred !== 'manual') return null;
+	const valuePed =
+		entry.kind === 'percent' ? (ttValue * entry.value) / 100 : ttValue + quantity * entry.value;
+	const markupPct = ttValue > 0 ? (valuePed / ttValue) * 100 : (entry.markupPct ?? 100);
+	return { valuePed, markupPct, entry };
+}
+
+/** What the valuation route may take beyond the market reading: the
+ * player's manual entry for the row, and whether the live Nanocube mark
+ * applies (only the live session figures pass it). */
+export interface ValuationOverrides {
+	manual?: ManualValuation | null;
+	nanocubeMarked?: boolean;
+}
+
 /** Resolve the valuation route shared by activity projections and Inventory.
  * Shrapnel deliberately ignores market confidence because its ordinary exit
- * is the game's deterministic 101% ammo conversion, not a speculative sale. */
+ * is the game's deterministic 101% ammo conversion, not a speculative sale.
+ * Then the live Nanocube mark, then the player's manual entry (trusted as
+ * given, so neither the confidence filter nor the floor touches it), then
+ * the market reading under the confidence mode. */
 export function effectiveItemMarkup(
 	itemName: string,
 	opportunity: MarketOpportunity | null,
 	nanocubeMarkupPct: number,
 	mode: ConfidenceMode,
+	overrides: ValuationOverrides = {},
 ): { markupPct: number; basis: MarkupBasis } | null {
 	if (isShrapnel(itemName)) {
 		return { markupPct: SHRAPNEL_CONVERSION_MARKUP, basis: 'shrapnel_conversion' };
+	}
+	if (overrides.nanocubeMarked) {
+		return { markupPct: nanocubeMarkupPct, basis: 'nanocube_mark' };
+	}
+	if (overrides.manual) {
+		return { markupPct: overrides.manual.markupPct, basis: 'manual' };
 	}
 	if (!opportunity) return null;
 	const applied = effectiveMarkup(opportunity, nanocubeMarkupPct, mode);
@@ -258,6 +316,13 @@ export type TreeCuttingItem = {
 	floored: boolean;
 	salesPed: number | null;
 	weeklySalesPed: number | null;
+	/** The row's estimated market value at the applied markup. */
+	marketValuePed: number;
+	/** The player's standing manual entry for the item, applied or not. */
+	manual: MarketManualMarkup | null;
+	/** Whether the player marked the item for Nanocube valuation in the live
+	 * session figures (applied only where the projection is live). */
+	nanocubeMarked: boolean;
 };
 
 /** The combined stat line across every sub-activity (the "Overall" block). */
@@ -335,6 +400,9 @@ export type TreeCuttingStock = {
 	salesPed: number | null;
 	weeklySalesPed: number | null;
 	recommendedPacketTt: number | null;
+	/** The item's market signals, with the player's standing manual entry
+	 * (applied or not); null when the feed has no row for it. */
+	marketItem: MarketHarvestItem | null;
 };
 
 /** Project one activity's loot composition at current market markup. Shared
@@ -346,6 +414,7 @@ export function projectLoot(
 	market: MarketHarvestData | null,
 	marketByItem: Map<string, MarketHarvestItem>,
 	confidenceMode: ConfidenceMode,
+	options: { live?: boolean } = {},
 ): {
 	items: TreeCuttingItem[];
 	muProjectedReturns: number | null;
@@ -359,9 +428,18 @@ export function projectLoot(
 		const m = marketByItem.get(item.itemName);
 		const opportunity = marketOpportunity(m, nanocube);
 		const tier = opportunityTier(opportunity);
-		const applied = effectiveItemMarkup(item.itemName, opportunity, nanocube, confidenceMode);
+		const manual = manualValuation(m, item.quantity, item.valuePed);
+		const nanocubeMarked = m?.nanocubeMarked ?? false;
+		const applied = effectiveItemMarkup(item.itemName, opportunity, nanocube, confidenceMode, {
+			manual,
+			nanocubeMarked: options.live === true && nanocubeMarked,
+		});
 		if (!applied) throw new Error(`Missing valuation route for ${item.itemName}`);
-		marketProjected += (item.valuePed * applied.markupPct) / 100;
+		const marketValuePed =
+			applied.basis === 'manual' && manual
+				? manual.valuePed
+				: (item.valuePed * applied.markupPct) / 100;
+		marketProjected += marketValuePed;
 		return {
 			name: item.itemName,
 			quantity: item.quantity,
@@ -373,9 +451,12 @@ export function projectLoot(
 			tier,
 			effectiveMarkupPct: applied.markupPct,
 			markupBasis: applied.basis,
-			floored: applied.basis === 'nanocube',
+			floored: applied.basis === 'nanocube' || applied.basis === 'nanocube_mark',
 			salesPed: opportunity.salesPed,
 			weeklySalesPed: opportunity.weeklySalesPed,
+			marketValuePed,
+			manual: m?.manual ?? null,
+			nanocubeMarked,
 		};
 	});
 

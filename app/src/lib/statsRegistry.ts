@@ -1,4 +1,5 @@
 import type { LifetimeStats, TrackingStatus } from './api';
+import type { LiveValuationView } from './features/dashboard/liveLootValuation.svelte';
 import { describeUnpriced } from './features/weapons/weaponReview';
 import { formatMultiplier, formatPed, formatPercent } from './utils/format';
 
@@ -22,7 +23,9 @@ export type StatId =
 	| 'kills_count'
 	| 'globals_count'
 	| 'hofs_count'
-	| 'uses_tree';
+	| 'uses_tree'
+	| 'loot_mu'
+	| 'mu_rate';
 
 export type StatRender = {
 	value: string;
@@ -34,6 +37,15 @@ export type StatRender = {
 	 * as a precise total.
 	 */
 	incomplete?: string;
+};
+
+/**
+ * What a live surface knows beyond the tracking snapshot: the session's
+ * loot valued at market markup. Surfaces without it (or before it has
+ * answered) pass none, and the markup stats read empty.
+ */
+export type StatContext = {
+	valuation?: LiveValuationView | null;
 };
 
 export type StatDef = {
@@ -49,7 +61,7 @@ export type StatDef = {
 	shortLabel?: string;
 	defaultEnabled: boolean;
 	defaultOverlayEnabled?: boolean;
-	render: (status: TrackingStatus | null) => StatRender;
+	render: (status: TrackingStatus | null, context?: StatContext) => StatRender;
 	/**
 	 * Render the stat over a session family's lifetime aggregate rather
 	 * than the instance in play.
@@ -103,12 +115,19 @@ function costBased(
 
 /** A live figure built on the session's cost. */
 function liveCost(
-	render: (status: TrackingStatus) => StatRender,
-): (status: TrackingStatus | null) => StatRender {
-	return (status) =>
+	render: (status: TrackingStatus, context: StatContext) => StatRender,
+): (status: TrackingStatus | null, context?: StatContext) => StatRender {
+	return (status, context = {}) =>
 		isActive(status)
-			? costBased(status.unpricedShots, render(status), status.unpricedCostBound)
+			? costBased(status.unpricedShots, render(status, context), status.unpricedCostBound)
 			: EMPTY;
+}
+
+/** The live valuation for the session in the snapshot, or none: a
+ * valuation left over from a previous session never stands for this one. */
+function liveValuation(status: TrackingStatus, context: StatContext): LiveValuationView | null {
+	const valuation = context.valuation ?? null;
+	return valuation && valuation.sessionId === status.session_id ? valuation : null;
 }
 
 /** A lifetime figure built on the family's cycled total. */
@@ -343,6 +362,30 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		render: (status) =>
 			isActive(status) ? { value: String(status.harvestSwings ?? 0), color: PLAIN } : EMPTY,
 	},
+	// The markup stats are estimates over the informational market layer:
+	// what the loot would be worth at market, never realised P&L. They have
+	// no lifetime form yet (the family's past loot is not valued live).
+	loot_mu: {
+		id: 'loot_mu',
+		label: 'Loot MU',
+		defaultEnabled: false,
+		render: (status, context = {}) => {
+			if (!isActive(status)) return EMPTY;
+			const factor = liveValuation(status, context)?.lootMuFactor ?? null;
+			return factor === null ? EMPTY : { value: formatPercent(factor), color: PLAIN };
+		},
+	},
+	mu_rate: {
+		id: 'mu_rate',
+		label: 'MU Rate',
+		defaultEnabled: false,
+		render: liveCost((status, context) => {
+			const valuation = liveValuation(status, context);
+			const cost = status.cost ?? 0;
+			if (!valuation || valuation.lootTt <= 0 || cost <= 0) return EMPTY;
+			return { value: formatPercent(valuation.marketValuePed / cost), color: PLAIN };
+		}),
+	},
 };
 
 export const ALL_STAT_IDS: StatId[] = [
@@ -366,6 +409,8 @@ export const ALL_STAT_IDS: StatId[] = [
 	'globals_count',
 	'hofs_count',
 	'uses_tree',
+	'loot_mu',
+	'mu_rate',
 ];
 
 /**

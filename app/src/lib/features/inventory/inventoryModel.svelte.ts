@@ -1,3 +1,4 @@
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
 	ActivityHistoryEntry,
 	AuctionListing,
@@ -7,7 +8,6 @@ import type {
 	InventoryItem,
 	InventorySaleDraft,
 	MarketHarvestData,
-	MarketHarvestItem,
 	StockPosition,
 } from '$lib/api/commands.gen';
 import {
@@ -33,8 +33,8 @@ import {
 } from '$lib/api/inventory';
 import {
 	getMarketAuctionPacketThreshold,
-	getMarketHarvestMarkups,
-	getMarketHuntMarkups,
+	getMarketItemMarkups,
+	MARKET_TOPIC,
 } from '$lib/api/market';
 import type {
 	ActivityListingDraft,
@@ -44,6 +44,7 @@ import type {
 import {
 	type ConfidenceMode,
 	effectiveItemMarkup,
+	manualValuation,
 	marketOpportunity,
 	NANOCUBE_FALLBACK_MARKUP,
 	opportunityTier,
@@ -54,18 +55,12 @@ import type { ListingDraftFields } from './listingIntake';
 export type InventoryKind = 'loot' | 'equipment';
 export type InventoryView = 'holdings' | 'listings' | 'history';
 
-function mergeMarketFeeds(feeds: Array<MarketHarvestData | null>): MarketHarvestData | null {
-	const available = feeds.filter((feed): feed is MarketHarvestData => feed !== null);
-	if (available.length === 0) return null;
-	const items = new Map<string, MarketHarvestItem>();
-	for (const feed of available) {
-		for (const item of feed.items) items.set(item.itemName, item);
-	}
-	return {
-		nanocubeMarkupPct:
-			available.find((feed) => feed.nanocubeMarkupPct !== null)?.nanocubeMarkupPct ?? null,
-		items: [...items.values()].sort((a, b) => a.itemName.localeCompare(b.itemName)),
-	};
+/** The market signals for exactly the items held: every holding gets its
+ * reading (and the player's own markup) whether or not tracked play ever
+ * looted it. A failed read leaves the holdings unvalued rather than
+ * failing the page. */
+async function holdingsMarket(rows: StockPosition[]): Promise<MarketHarvestData | null> {
+	return getMarketItemMarkups(rows.map((row) => row.itemName)).catch(() => null);
 }
 
 function stockRow(
@@ -77,8 +72,14 @@ function stockRow(
 	const marketItem = market?.items.find((item) => item.itemName === row.itemName);
 	const nanocubeMarkup = market?.nanocubeMarkupPct ?? NANOCUBE_FALLBACK_MARKUP;
 	const opportunity = market ? marketOpportunity(marketItem, nanocubeMarkup) : null;
-	const applied = effectiveItemMarkup(row.itemName, opportunity, nanocubeMarkup, confidenceMode);
-	const premium = marketItem?.markupPct ? marketItem.markupPct / 100 - 1 : 0;
+	const manual = manualValuation(marketItem, row.quantity, row.ttValue);
+	const applied = effectiveItemMarkup(row.itemName, opportunity, nanocubeMarkup, confidenceMode, {
+		manual,
+	});
+	// A packet is sized against the markup the stock would sell at: the
+	// player's own value when it stands, else the market reading.
+	const sellingMarkup = applied?.basis === 'manual' ? applied.markupPct : marketItem?.markupPct;
+	const premium = sellingMarkup ? sellingMarkup / 100 - 1 : 0;
 	const recommendedPacketTt =
 		packetGrossMarkupPed !== null && premium > 0
 			? Math.ceil((packetGrossMarkupPed / premium) * 100 - 1e-9) / 100
@@ -104,6 +105,7 @@ function stockRow(
 		weeklySalesPed:
 			marketItem?.readings.find((reading) => reading.horizon === 'week')?.salesPed ?? null,
 		recommendedPacketTt,
+		marketItem: marketItem ?? null,
 	};
 }
 
@@ -154,23 +156,14 @@ export function createInventoryModel() {
 		loading = true;
 		error = null;
 		try {
-			const [
-				positionRows,
-				equipmentRows,
-				listingRows,
-				huntingMarket,
-				harvestingMarket,
-				packetThreshold,
-			] = await Promise.all([
+			const [positionRows, equipmentRows, listingRows, packetThreshold] = await Promise.all([
 				getLootInventory(),
 				getEquipmentInventory(),
 				getInventoryListings(),
-				getMarketHuntMarkups().catch(() => null),
-				getMarketHarvestMarkups().catch(() => null),
 				getMarketAuctionPacketThreshold(packetFeeSharePct),
 			]);
 			positions = positionRows;
-			market = mergeMarketFeeds([huntingMarket, harvestingMarket]);
+			market = await holdingsMarket(positionRows);
 			equipment = equipmentRows;
 			listings = listingRows;
 			packetFeeSharePct = packetThreshold.maxFeeSharePct;
@@ -222,6 +215,20 @@ export function createInventoryModel() {
 		equipment = equipmentRows;
 		listings = listingRows;
 		history = historyRows;
+		// A sale or conversion can bring an item into holdings or take
+		// the last of one out.
+		market = await holdingsMarket(positionRows);
+	}
+
+	/** Re-read the holdings' market signals: a paste, a manual markup, or
+	 * a mark committed here or in another window. */
+	async function refreshMarket() {
+		market = await holdingsMarket(positions);
+	}
+
+	/** Follow market writes from any window; returns the detach function. */
+	function subscribe(): Promise<UnlistenFn> {
+		return listen(MARKET_TOPIC, () => void refreshMarket());
 	}
 
 	async function withRefresh(work: () => Promise<unknown>, message: string) {
@@ -502,6 +509,8 @@ export function createInventoryModel() {
 		load,
 		loadHistory,
 		refresh,
+		refreshMarket,
+		subscribe,
 		setPacketFeeSharePct,
 		listLoot,
 		sellLootByTrade,

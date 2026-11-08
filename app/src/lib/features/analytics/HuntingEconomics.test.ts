@@ -29,6 +29,9 @@ const item = {
 	salesPed: 5000,
 	weeklySalesPed: 5000,
 	recommendedPacketTt: 32.67,
+	marketValuePed: 15.6,
+	manual: null,
+	nanocubeMarked: false,
 };
 
 const expectedEconomics: ExpectedHuntingEconomics = {
@@ -264,6 +267,7 @@ describe('Hunting economic comparisons', () => {
 			salesPed: null,
 			weeklySalesPed: null,
 			recommendedPacketTt: null,
+			marketItem: null,
 		}));
 		render(TreeCuttingStock, {
 			props: {
@@ -314,6 +318,7 @@ describe('Hunting economic comparisons', () => {
 			salesPed: null,
 			weeklySalesPed: null,
 			recommendedPacketTt: null,
+			marketItem: null,
 		};
 		const onremove = vi.fn();
 		const onshrapnelconvert = vi.fn();

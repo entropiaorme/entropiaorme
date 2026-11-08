@@ -1,109 +1,64 @@
 <script lang="ts">
-	import { getSessionDetail } from '$lib/api';
-	import type { SessionDetail } from '$lib/types/tracking';
-	import { formatPed } from '$lib/utils/format';
-	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import MarkupConfidenceControl from '$lib/features/analytics/MarkupConfidenceControl.svelte';
+	import { markupLabel } from '$lib/features/analytics/marketConfidence';
+	import {
+		type ConfidenceMode,
+		isShrapnel,
+	} from '$lib/features/analytics/treeCuttingModel.svelte';
+	import type { LiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
+	import {
+		type CompositionRow,
+		composeLoot,
+		segmentKeyOf,
+	} from '$lib/features/dashboard/lootComposition';
+	import ManualMarkupEditor from '$lib/features/market/ManualMarkupEditor.svelte';
+	import NanocubeMarkButton from '$lib/features/market/NanocubeMarkButton.svelte';
+	import { liveMarkupSettings, setLiveConfidence } from '$lib/liveMarkupSettings.svelte';
+	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 
-	let { sessionId }: { sessionId: string | null } = $props();
+	let {
+		sessionId,
+		valuation,
+	}: {
+		sessionId: string | null;
+		/** The session's live loot valuation, shared with the stat tiles. */
+		valuation: LiveLootValuation | null;
+	} = $props();
 
-	let detail = $state<SessionDetail | null>(null);
-	let loading = $state(false);
 	let hovered = $state<string | null>(null);
+	let expanded = $state(false);
+	let actionError = $state<string | null>(null);
 
-	const POLL_MS = 3000;
-	const MAX_VISIBLE = 7;
+	const view = $derived(valuation?.view ?? null);
+	const composition = $derived(
+		composeLoot(valuation?.loot ?? [], view?.items ?? null, expanded),
+	);
+	const marketByItem = $derived(
+		new Map((valuation?.market?.items ?? []).map((item) => [item.itemName, item])),
+	);
+	const loading = $derived(sessionId !== null && (valuation?.loading ?? true));
 
-	// Curated palette tuned to the dark theme — distinct hues that read
-	// cleanly against panel/surface backgrounds and stay cohesive with
-	// existing accent (sky) and positive (teal) tokens.
-	const PALETTE = [
-		'#38bdf8', // sky (accent)
-		'#2dd4bf', // teal (positive)
-		'#fbbf24', // amber
-		'#a78bfa', // violet
-		'#f472b6', // rose
-		'#34d399', // emerald
-		'#60a5fa', // blue
-	];
-	const OTHER_COLOR = '#475569'; // slate
+	function isLit(row: CompositionRow): boolean {
+		return hovered !== null && (hovered === row.key || hovered === segmentKeyOf(row));
+	}
 
-	type Segment = {
-		key: string;
-		name: string;
-		quantity: number;
-		ttValue: number;
-		sharePct: number;
-		color: string;
-		rank: number;
-		isOther: boolean;
-		count: number;
-	};
+	function markupClass(row: CompositionRow): string {
+		const basis = row.valued?.markupBasis;
+		if (basis === 'manual') return 'text-accent';
+		if (basis === 'nanocube' || basis === 'nanocube_mark') return 'text-text-tertiary';
+		return 'text-text';
+	}
 
-	let segments = $derived.by<Segment[]>(() => {
-		if (!detail || detail.lootBreakdown.length === 0) return [];
-		const sorted = [...detail.lootBreakdown].sort((a, b) => b.ttValue - a.ttValue);
-		const total = sorted.reduce((s, item) => s + item.ttValue, 0);
-		if (total <= 0) return [];
+	/** Actions stay visible on a row the player has already set. */
+	function pinned(row: CompositionRow): boolean {
+		const market = marketByItem.get(row.name);
+		return Boolean(market?.manual || market?.nanocubeMarked);
+	}
 
-		const top = sorted.slice(0, MAX_VISIBLE);
-		const rest = sorted.slice(MAX_VISIBLE);
-		const out: Segment[] = top.map((item, i) => ({
-			key: item.name,
-			name: item.name,
-			quantity: item.quantity,
-			ttValue: item.ttValue,
-			sharePct: (item.ttValue / total) * 100,
-			color: PALETTE[i % PALETTE.length],
-			rank: i + 1,
-			isOther: false,
-			count: 1,
-		}));
-		if (rest.length > 0) {
-			const restTt = rest.reduce((s, item) => s + item.ttValue, 0);
-			const restQty = rest.reduce((s, item) => s + item.quantity, 0);
-			out.push({
-				key: '__other__',
-				name: `+${rest.length} more`,
-				quantity: restQty,
-				ttValue: restTt,
-				sharePct: (restTt / total) * 100,
-				color: OTHER_COLOR,
-				rank: MAX_VISIBLE + 1,
-				isOther: true,
-				count: rest.length,
-			});
-		}
-		return out;
-	});
-
-	$effect(() => {
-		if (!sessionId) {
-			detail = null;
-			return;
-		}
-		const id = sessionId;
-		let disposed = false;
-
-		async function fetchOnce() {
-			try {
-				const d = await getSessionDetail(id);
-				if (!disposed && sessionId === id) detail = d;
-			} catch {
-				/* ignore — keep previous snapshot */
-			}
-		}
-
-		loading = detail === null;
-		void fetchOnce().finally(() => {
-			if (!disposed) loading = false;
-		});
-		const stop = useVisiblePoll(fetchOnce, { intervalMs: POLL_MS, immediate: false });
-
-		return () => {
-			disposed = true;
-			stop();
-		};
-	});
+	function changed() {
+		actionError = null;
+		valuation?.marketChanged();
+	}
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-4">
@@ -125,11 +80,11 @@
 				</p>
 			</div>
 		</div>
-	{:else if loading && !detail}
+	{:else if loading}
 		<div class="flex-1 flex items-center justify-center">
 			<p class="text-xs text-text-tertiary animate-pulse tracking-wider uppercase">Loading…</p>
 		</div>
-	{:else if segments.length === 0}
+	{:else if composition.segments.length === 0}
 		<!-- Active but no loot yet -->
 		<div class="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
 			<span class="signal-dot positive animate-pulse"></span>
@@ -141,9 +96,27 @@
 			</div>
 		</div>
 	{:else}
+		<!-- Valuation summary and the confidence the live figures trust -->
+		<div class="flex items-center justify-between gap-3 mt-1">
+			<p class="text-xs text-text-secondary tabular-nums" data-testid="composition-loot-mu">
+				{#if view?.lootMuFactor != null}
+					Loot MU <span class="font-semibold text-text">{formatPercent(view.lootMuFactor)}</span>
+					<span class="text-text-tertiary">· {formatPed(view.marketValuePed)} PED at market</span>
+				{:else if valuation?.marketFailed}
+					<span class="text-text-tertiary">Market markup unavailable</span>
+				{:else}
+					<span class="text-text-tertiary">Valuing at market…</span>
+				{/if}
+			</p>
+			<MarkupConfidenceControl
+				active={liveMarkupSettings.confidence}
+				onchange={(mode: ConfidenceMode) => void setLiveConfidence(mode)}
+			/>
+		</div>
+
 		<!-- Composition bar -->
-		<div class="relative h-2.5 rounded-full overflow-hidden bg-base/60 border border-border/60 flex mt-3">
-			{#each segments as seg (seg.key)}
+		<div class="relative h-2.5 rounded-full overflow-hidden bg-base/60 border border-border/60 flex">
+			{#each composition.segments as seg (seg.key)}
 				<button
 					type="button"
 					class="relative h-full transition-[opacity,filter] duration-[var(--duration-base)] ease-[var(--ease-out)]
@@ -160,6 +133,10 @@
 			{/each}
 		</div>
 
+		{#if actionError}
+			<p class="text-xs text-error -mb-1" role="alert">{actionError}</p>
+		{/if}
+
 		<!-- Column headers -->
 		<div class="flex items-center gap-3 px-2.5 -mb-1">
 			<div class="flex items-center gap-2.5 shrink-0">
@@ -167,77 +144,139 @@
 				<span class="w-2.5"></span>
 			</div>
 			<span class="eyebrow flex-1 min-w-0">Item</span>
-			<span class="hidden sm:block w-20 shrink-0"></span>
-			<span class="eyebrow w-20 text-right shrink-0">TT</span>
+			<span class="hidden xl:block w-16 shrink-0"></span>
+			<span class="eyebrow w-16 text-right shrink-0">TT</span>
+			<span class="eyebrow w-16 text-right shrink-0">MU</span>
 			<span class="eyebrow w-12 text-right shrink-0">Share</span>
+			<span class="w-14 shrink-0"></span>
 		</div>
 
 		<!-- Ranked list -->
 		<div class="flex-1 min-h-0 overflow-y-auto -mr-2 pr-2">
-			<ul class="flex flex-col gap-1">
-				{#each segments as seg (seg.key)}
+			<ul class="flex flex-col gap-1" data-testid="loot-composition-rows">
+				{#each composition.rows as row (row.key)}
 					<li>
 						<div
 							class="group relative flex items-center gap-3 rounded-md px-2.5 py-2
 								transition-[background-color,border-color] duration-[var(--duration-base)] ease-[var(--ease-out)]
 								border border-transparent
-								{hovered === seg.key
+								{isLit(row)
 									? 'bg-surface-hover/50 border-border/50'
 									: 'hover:bg-surface-hover/30 hover:border-border/40'}"
-							onmouseenter={() => (hovered = seg.key)}
+							onmouseenter={() => (hovered = row.key)}
 							onmouseleave={() => (hovered = null)}
 							role="presentation"
 						>
 							<!-- Rank + swatch -->
 							<div class="flex items-center gap-2.5 shrink-0">
 								<span class="text-[10.5px] font-medium tabular-nums text-text-tertiary tracking-[0.12em] w-4 text-right">
-									{seg.rank}
+									{row.isOther ? '' : row.rank}
 								</span>
 								<span
 									class="block h-2.5 w-2.5 rounded-sm shrink-0
 										transition-[box-shadow] duration-[var(--duration-base)] ease-[var(--ease-out)]"
-									style="background-color: {seg.color};
-										box-shadow: 0 0 0 1px color-mix(in oklab, {seg.color} 40%, transparent),
-											{hovered === seg.key
-												? `0 0 10px color-mix(in oklab, ${seg.color} 60%, transparent)`
+									style="background-color: {row.color};
+										box-shadow: 0 0 0 1px color-mix(in oklab, {row.color} 40%, transparent),
+											{isLit(row)
+												? `0 0 10px color-mix(in oklab, ${row.color} 60%, transparent)`
 												: 'none'};"
 								></span>
 							</div>
 
-							<!-- Name + qty -->
+							<!-- Name + qty (the pool expands into its items) -->
 							<div class="flex-1 min-w-0 flex items-center gap-2">
-								<span class="text-sm font-medium truncate tracking-tight
-									{seg.isOther ? 'text-text-tertiary italic' : 'text-text'}">
-									{seg.name}
-								</span>
-								{#if !seg.isOther}
-									<span class="text-xs text-text-tertiary tabular-nums shrink-0">
-										×{seg.quantity}
-									</span>
+								{#if row.isOther}
+									<button
+										type="button"
+										class="text-sm italic text-text-tertiary hover:text-text-secondary truncate tracking-tight"
+										aria-expanded={expanded}
+										onclick={() => (expanded = true)}
+									>
+										{row.name}
+									</button>
+								{:else}
+									<span class="text-sm font-medium truncate tracking-tight text-text">{row.name}</span>
+									<span class="text-xs text-text-tertiary tabular-nums shrink-0">×{row.quantity}</span>
 								{/if}
 							</div>
 
 							<!-- Mini share bar -->
-							<div class="hidden sm:block w-20 h-1 rounded-full bg-base/60 overflow-hidden shrink-0">
+							<div class="hidden xl:block w-16 h-1 rounded-full bg-base/60 overflow-hidden shrink-0">
 								<div
 									class="h-full rounded-full transition-[width] duration-[var(--duration-slow)] ease-[var(--ease-out)]"
-									style="width: {seg.sharePct}%; background-color: {seg.color};"
+									style="width: {row.sharePct}%; background-color: {row.color};"
 								></div>
 							</div>
 
 							<!-- TT value -->
-							<span class="text-sm tabular-nums font-medium text-text shrink-0 w-20 text-right">
-								{formatPed(seg.ttValue)}
+							<span class="text-sm tabular-nums font-medium text-text shrink-0 w-16 text-right">
+								{formatPed(row.ttValue)}
 							</span>
 
-							<!-- Share % — promoted to primary emphasis -->
-							<span class="text-sm tabular-nums font-semibold shrink-0 w-12 text-right tracking-tight
-								{seg.isOther ? 'text-text-tertiary' : 'text-accent'}">
-								{seg.sharePct.toFixed(1)}%
+							<!-- Applied markup, with where it came from -->
+							<span
+								class="text-sm tabular-nums shrink-0 w-16 text-right {markupClass(row)}"
+								title={row.valued ? markupLabel(row.valued) : undefined}
+								data-testid="composition-markup"
+							>
+								{#if row.valued}
+									{#if row.valued.markupBasis === 'nanocube_mark'}
+										<span class="line-through decoration-text-tertiary/70">NC</span>
+									{/if}
+									{formatPercent(row.valued.effectiveMarkupPct / 100)}{#if row.valued.markupBasis === 'manual'}<span
+											class="ml-0.5 align-super text-[9px]"
+											aria-hidden="true">✎</span
+										>{/if}
+									<span class="sr-only">, {markupLabel(row.valued)}</span>
+								{:else}
+									<span class="text-text-tertiary">{row.isOther ? '' : NO_DATA}</span>
+								{/if}
 							</span>
+
+							<!-- Share % -->
+							<span class="text-sm tabular-nums font-semibold shrink-0 w-12 text-right tracking-tight
+								{row.isOther ? 'text-text-tertiary' : 'text-accent'}">
+								{row.sharePct.toFixed(1)}%
+							</span>
+
+							<!-- Row actions: correct the markup, or scratch it to Nanocube -->
+							<div class="flex w-14 shrink-0 items-center justify-end gap-0.5
+								transition-opacity duration-[var(--duration-fast)]
+								{pinned(row) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}">
+								{#if !row.isOther && !isShrapnel(row.name)}
+									<NanocubeMarkButton
+										itemName={row.name}
+										marked={marketByItem.get(row.name)?.nanocubeMarked ?? false}
+										onChanged={changed}
+										onError={(message) => (actionError = message)}
+									/>
+									<ManualMarkupEditor
+										itemName={row.name}
+										quantity={row.quantity}
+										ttValue={row.ttValue}
+										market={marketByItem.get(row.name)}
+										applied={row.valued
+											? { markupPct: row.valued.effectiveMarkupPct, basis: row.valued.markupBasis }
+											: null}
+										onChanged={changed}
+									/>
+								{/if}
+							</div>
 						</div>
 					</li>
 				{/each}
+				{#if expanded && composition.pooled > 0}
+					<li>
+						<button
+							type="button"
+							class="w-full px-2.5 py-1.5 text-left text-xs text-text-tertiary hover:text-text-secondary"
+							aria-expanded={expanded}
+							onclick={() => (expanded = false)}
+						>
+							Show the top {composition.rows.length - composition.pooled} only
+						</button>
+					</li>
+				{/if}
 			</ul>
 		</div>
 	{/if}

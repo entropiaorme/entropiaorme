@@ -70,6 +70,8 @@
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
+	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 
 	// The colon-form Tauri topic the shell's event bridge emits each backend
 	// tracking frame on (the wire topic `tracking.session.updated`; Tauri event
@@ -87,6 +89,8 @@
 	let decidingWeapon = $state(false);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
+	// The session's loot at market markup, for the markup pills.
+	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
 	// for the client-side elapsed tick. null when no active session is timed.
 	let sessionStartedAtMs = $state<number | null>(null);
@@ -918,6 +922,7 @@
 	<OverlayStrip
 		{data}
 		{status}
+		statContext={{ valuation: liveValuation.view }}
 		{toggling}
 		{releasing}
 		{selectingMob}

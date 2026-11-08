@@ -15,11 +15,13 @@
 		hasUnseenEvents,
 	} from '$lib/features/dashboard/recentEvents';
 	import type { RecentEvent } from '$lib/api';
+	import type { LiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
 
 	let {
 		trackingPending,
 		recentEvents,
 		sessionId,
+		valuation = null,
 		multiplierHistory,
 		cumulativeNetHistory,
 		board,
@@ -36,6 +38,8 @@
 		 * the tracking snapshot has been read. */
 		recentEvents: RecentEvent[] | null;
 		sessionId: string | null;
+		/** The live session's loot valuation, shared with the stat tiles. */
+		valuation?: LiveLootValuation | null;
 		multiplierHistory: number[] | null;
 		cumulativeNetHistory: number[] | null;
 		/** The quest board's view model (the Quests widget tab). */
@@ -105,7 +109,7 @@
 	{:else if activeTab === 'pulse'}
 		<LootPulseWidget history={multiplierHistory} netHistory={cumulativeNetHistory} />
 	{:else if activeTab === 'loot'}
-		<LootCompositionWidget {sessionId} />
+		<LootCompositionWidget {sessionId} {valuation} />
 	{:else if activeTab === 'quests'}
 		<QuestBoard
 			model={board}

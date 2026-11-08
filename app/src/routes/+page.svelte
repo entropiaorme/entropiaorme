@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import DashboardWidgets from '$lib/components/dashboard/DashboardWidgets.svelte';
 	import SessionIsland from '$lib/features/dashboard/SessionIsland.svelte';
+	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import { createStatsGridModel } from '$lib/features/dashboard/statsGridModel.svelte';
 	import SessionStage from '$lib/features/sessions/SessionStage.svelte';
 	import { createLiveDefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
@@ -37,6 +39,9 @@
 	// grid is a dashboard feature model.
 	const questsModel = createQuestsModel();
 	const statsGrid = createStatsGridModel(() => status?.lifetime != null);
+	// The session's loot at market markup, shared by the stat tiles and the
+	// Loot Composition widget so the two never disagree.
+	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
 
 	// The sessions surface: the island renders the picker and the review
 	// entry; the stage hosts the two full-screen surfaces (authoring and
@@ -149,6 +154,7 @@
 	<SessionIsland
 		{status}
 		{statsGrid}
+		valuation={liveValuation}
 		{definitions}
 		onReview={(definitionId) => void review.openReview(definitionId)}
 	/>
@@ -157,6 +163,7 @@
 		trackingPending={status === null}
 		recentEvents={status === null ? null : (status.recentEvents ?? [])}
 		sessionId={status?.session_id ?? null}
+		valuation={liveValuation}
 		multiplierHistory={status?.multiplierHistory ?? null}
 		cumulativeNetHistory={status?.cumulativeNetHistory ?? null}
 		{board}

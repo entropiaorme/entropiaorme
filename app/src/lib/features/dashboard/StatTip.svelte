@@ -2,6 +2,8 @@
 	import type { TrackingSnapshot } from '$lib/api';
 	import type { StatId, StatRender } from '$lib/statsRegistry';
 	import CycledTip from './CycledTip.svelte';
+	import type { LiveValuationView } from './liveLootValuation.svelte';
+	import MarkupStatTip from './MarkupStatTip.svelte';
 
 	/**
 	 * The explanatory tip a dashboard stat tile carries beside its label,
@@ -12,20 +14,30 @@
 	let {
 		id,
 		status,
-		render
+		render,
+		valuation = null,
 	}: {
 		id: StatId;
 		status: TrackingSnapshot | null;
 		render: StatRender;
+		valuation?: LiveValuationView | null;
 	} = $props();
 
-	/** The stats that carry a tip. */
-	const TIPPED: ReadonlySet<StatId> = new Set(['cycled']);
-
 	const active = $derived(status?.status === 'active' ? status : null);
+	// A markup tip explains a figure; while the figure reads empty there is
+	// nothing to explain.
+	const valued = $derived(
+		active && valuation && valuation.sessionId === active.session_id && valuation.lootTt > 0
+			? valuation
+			: null,
+	);
+	const shown = $derived(
+		active !== null &&
+			(id === 'cycled' || ((id === 'loot_mu' || id === 'mu_rate') && valued !== null)),
+	);
 </script>
 
-{#if active && TIPPED.has(id)}
+{#if active && shown}
 	<!-- A press on the tip must not start the tile's drag-reorder. -->
 	<span class="inline-flex" onpointerdown={(event) => event.stopPropagation()} role="presentation">
 		{#if id === 'cycled'}
@@ -34,6 +46,10 @@
 				totalPed={active.cost ?? 0}
 				incomplete={render.incomplete}
 			/>
+		{:else if valued && id === 'loot_mu'}
+			<MarkupStatTip valuation={valued} />
+		{:else if valued && id === 'mu_rate'}
+			<MarkupStatTip valuation={valued} cycledPed={active.cost ?? 0} />
 		{/if}
 	</span>
 {/if}

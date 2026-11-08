@@ -15,7 +15,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::json;
 
-mod common;
+use crate::common;
 
 /// A catalogue holding the purchase questions' items.
 fn write_snapshot(dir: &Path) {

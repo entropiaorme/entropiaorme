@@ -28,7 +28,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde::Serialize;
 
-mod common;
+use crate::common;
 
 const WARMUPS: usize = 3;
 const SAMPLES: usize = 30;

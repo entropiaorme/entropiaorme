@@ -16,7 +16,7 @@ use eo_services::game_data_store::GameDataStore;
 use eo_services::planet_maps::PlanetMapStore;
 use eo_services::skill_panel::BgrImage;
 
-mod common;
+use crate::common;
 
 /// The repo's bundled maps directory (the dev-layout resolution).
 fn bundled_maps_dir() -> PathBuf {

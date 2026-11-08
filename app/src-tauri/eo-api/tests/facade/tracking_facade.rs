@@ -15,7 +15,7 @@ use eo_services::db::Db;
 use eo_services::event_bus::EventBus;
 use eo_services::game_data_store::GameDataStore;
 
-mod common;
+use crate::common;
 
 /// The composed facade over a fresh migrated database. `settings` writes a
 /// `settings.json` into the data dir first (for the config-flag reads);

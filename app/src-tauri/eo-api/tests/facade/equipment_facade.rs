@@ -14,7 +14,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 /// A minimal catalogue snapshot: two weapons (a limited one, so the
 /// `(L)` flag pins, and a fast one with a catalogue attack rate), one

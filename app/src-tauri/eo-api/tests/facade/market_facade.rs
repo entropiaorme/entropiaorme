@@ -13,7 +13,7 @@ use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 
-mod common;
+use crate::common;
 
 /// The composed facade over a fresh migrated database, with its market
 /// change signal counted.

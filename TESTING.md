@@ -46,6 +46,20 @@ cargo test --workspace --doc      # nextest does not run doctests; this leg keep
 
 A `.cargo/config.toml` under the workspace redirects test temporary directories into `target/`, so an interrupted run does not accumulate scratch directories in the OS temp area; reclaim any leftovers with `cargo clean`.
 
+### Running one part of the suite
+
+nextest builds every test target of the crates it is given; a filter (`-E`) chooses which tests run, not which targets build. To build and run only what you need, name the target:
+
+```sh
+cargo nextest run -p eo-services --lib -E 'test(/^tracker::/)'   # one module's unit tests
+cargo nextest run -p eo-services --test corpus_replay_oracle      # one integration target
+cargo nextest run -p eo-api --test facade -E 'test(/^tracking_facade::/)'   # one facade family
+```
+
+The `eo-api` facade tests are a single test binary (`eo-api/tests/facade/`), one module per command family, because every test binary links its own copy of the application: separate binaries multiplied the link time of each run by the number of families. Add a new family as a module in `facade/main.rs`, not as a new file directly under `tests/`.
+
+Development and test builds carry line-table debug information only (`[profile.dev]` in the workspace `Cargo.toml`): panics and backtraces still name the file and line, and the test binaries stay a fraction of the size and link time that full debug information costs.
+
 ### The replay corpus
 
 `eo-services/tests/corpus_replay_oracle.rs` replays every scenario under `app/src-tauri/fixtures/corpus/scripted/` through the complete pipeline (chat-log tail to event bus to tracker to database), then asserts the scenario's two goldens byte-for-byte: the normalised event-stream fingerprint (`expected/fingerprint.jsonl`) and the database-state snapshot (`expected/db_state.json`). The two serialisations share one normaliser (`eo-wire`) in fingerprint-then-snapshot order, so the symbols standing in for ids and timestamps are assigned consistently across both. `eo-wire/tests/conformance.rs` pins that normaliser's own behaviour against a fixed input and output table.

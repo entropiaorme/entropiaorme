@@ -29,7 +29,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::{json, Value};
 
-mod common;
+use crate::common;
 
 /// 2026-01-10 00:00 UTC: the base history's first day, long rolled up.
 const DAY: f64 = 1_768_003_200.0;

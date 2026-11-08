@@ -24,6 +24,13 @@ authors = ["Mikel Williams-Lekuona <MikelWL@protonmail.com>"]
 edition = "2021"
 license = "MIT"
 
+# Development and test builds keep line tables (a panic or backtrace still
+# names the file and line) but not full variable debug info, which made every
+# test binary several times larger and its link several times slower. Release
+# builds are unaffected.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.dependencies]
 # Tauri is pinned to the 2.11 minor (the known-good release line when this
 # workspace was laid down). The backend runs inside the shell process, and a

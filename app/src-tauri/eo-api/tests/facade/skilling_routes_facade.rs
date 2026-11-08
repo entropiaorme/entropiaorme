@@ -19,7 +19,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::json;
 
-mod common;
+use crate::common;
 
 /// A catalogue with a sword and a pistol, the professions they train, and
 /// two level-4 mobs of very different HP.

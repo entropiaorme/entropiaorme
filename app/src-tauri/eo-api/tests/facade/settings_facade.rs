@@ -14,7 +14,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::Value;
 
-mod common;
+use crate::common;
 
 /// The composed facade over a fresh migrated database, an empty catalogue
 /// snapshot (so a default preset validates not-ready, catalogue-free), and

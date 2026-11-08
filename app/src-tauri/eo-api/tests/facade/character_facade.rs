@@ -12,7 +12,7 @@ use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use serde_json::{json, Value};
 
-mod common;
+use crate::common;
 
 fn write_fixture(dir: &Path, name: &str, value: &Value) {
     std::fs::write(dir.join(name), serde_json::to_string(value).unwrap()).unwrap();

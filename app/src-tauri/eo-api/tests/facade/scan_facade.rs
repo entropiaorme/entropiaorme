@@ -15,7 +15,7 @@ use eo_services::game_data_store::GameDataStore;
 use eo_services::skill_scan_manual::{ScanProviders, SkillScanManual};
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 
-mod common;
+use crate::common;
 
 /// A configured scan: the OCR engine is available, the skill panel is
 /// found at a fixed region, each grab yields bytes, and the extractor

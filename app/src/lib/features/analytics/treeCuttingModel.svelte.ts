@@ -26,13 +26,13 @@ import {
 	type MarketHarvestItem,
 	type MarketManualMarkup,
 } from '$lib/api';
+import type { DerivedSource, HoldingOrigin } from '$lib/api/commands.gen';
 import type {
 	AuctionListingInput,
 	HarvestLootItem,
 	HarvestTierComparison,
 	HarvestYieldTier,
 } from '$lib/types/analytics';
-import type { DerivedSource, HoldingOrigin } from '$lib/api/commands.gen';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';

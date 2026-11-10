@@ -416,7 +416,8 @@ impl TrackerActor {
     /// Remove a dose: its effect stops counting, any cost it booked comes
     /// back off its session, and the earlier dose of the item it ended runs
     /// on in its place: again until its own expiry, or, when a later dose
-    /// had already replaced this one, until that later dose started.
+    /// had already replaced this one or a dose of the item runs now, until
+    /// that later dose started.
     /// Removing a removed dose changes nothing.
     pub(super) async fn remove_dose(
         &mut self,
@@ -437,8 +438,27 @@ impl TrackerActor {
             .standing_prior(&dose)
             .await?
             .filter(|prior| prior.superseded_at == Some(dose.started_at));
+        // Two doses of one item never run together. Another dose of the
+        // item running now (taken after this one had run out, or restored
+        // since) would have ended the earlier dose where it started, so the
+        // earlier dose runs on only up to there; the stretch it ran before
+        // this one started is never taken from it.
+        let rival_start = self
+            .doses
+            .running
+            .iter()
+            .filter(|running| {
+                running.equipment_id == dose.equipment_id
+                    && running.id != dose.id
+                    && prior.as_ref().is_none_or(|prior| prior.id != running.id)
+            })
+            .map(|running| running.started_at.max(dose.started_at))
+            .reduce(f64::min);
         let mut prior_back = prior.map(|mut prior| {
-            prior.superseded_at = dose.superseded_at;
+            prior.superseded_at = [dose.superseded_at, rival_start]
+                .into_iter()
+                .flatten()
+                .reduce(f64::min);
             prior
         });
         let close: Vec<i64> = dose.interval_id.into_iter().collect();

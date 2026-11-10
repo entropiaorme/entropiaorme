@@ -514,6 +514,41 @@ fn a_restore_is_refused_while_a_later_dose_of_the_item_runs() {
 }
 
 #[test]
+fn a_removed_re_dose_gives_its_stretch_back_only_up_to_the_dose_running_now() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+    rig.wait(tracker.start_session()).unwrap();
+    let first = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    rig.clock.advance(10.0).unwrap();
+    let misclick = rig
+        .wait(tracker.start_dose(adrenaline_already_taken()))
+        .unwrap();
+    rig.clock.advance(10.0).unwrap();
+    rig.wait(tracker.end_dose(&misclick.id)).unwrap();
+    // Nothing of the item runs, so this dose replaces none.
+    rig.clock.advance(10.0).unwrap();
+    let latest = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    rig.clock.advance(10.0).unwrap();
+
+    rig.wait(tracker.remove_dose(&misclick.id)).unwrap();
+    // The first dose ran on where the misclick stood, and the latest dose
+    // ended it where it started: the two never stack.
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT superseded_at FROM consumable_doses WHERE id = ?",
+            &[&first.id]
+        ),
+        latest.started_at
+    );
+    let running = board.in_effect_at(now(&rig));
+    assert_eq!(running.len(), 1);
+    assert_eq!(running[0].id, latest.id);
+    assert_eq!(live_reload(&rig, &tracker), 10.0);
+    assert_eq!(open_consumable_intervals(&rig), 1);
+}
+
+#[test]
 fn a_restart_ends_the_doses_of_the_session_it_interrupted() {
     let rig = rig();
     let board_one = board(&rig);
@@ -802,6 +837,67 @@ mod properties {
         ]
     }
 
+    /// Run `steps` against a fresh session, checking after each that the
+    /// session's dose cost is exactly what its standing doses booked, the
+    /// live total agrees with the row, and at most one dose of an item runs
+    /// at a time.
+    fn run_steps(steps: Vec<Step>) -> Result<(), TestCaseError> {
+        let rig = rig();
+        let board = board(&rig);
+        let tracker = tracker_with(&rig, &board);
+        let session = rig.wait(tracker.start_session()).unwrap();
+        let mut ids: Vec<String> = Vec::new();
+        for step in steps {
+            match step {
+                Step::Start(kind) => {
+                    let start = match kind {
+                        0 => adrenaline(true),
+                        1 => rush(),
+                        _ => adrenaline_already_taken(),
+                    };
+                    ids.push(rig.wait(tracker.start_dose(start)).unwrap().id);
+                }
+                Step::End(index) if !ids.is_empty() => {
+                    let _ = rig.wait(tracker.end_dose(&ids[index % ids.len()]));
+                }
+                Step::Remove(index) if !ids.is_empty() => {
+                    let _ = rig.wait(tracker.remove_dose(&ids[index % ids.len()]));
+                }
+                Step::Restore(index) if !ids.is_empty() => {
+                    let _ = rig.wait(tracker.restore_dose(&ids[index % ids.len()]));
+                }
+                Step::Wait(seconds) => {
+                    rig.clock.advance(f64::from(seconds)).unwrap();
+                    rig.wait(tracker.wake_doses());
+                }
+                _ => {}
+            }
+            let booked = rig.scalar_f64(
+                "SELECT COALESCE(SUM(cost_ped), 0) FROM consumable_doses \
+                 WHERE session_id = ? AND removed_at IS NULL",
+                &[&session.id],
+            );
+            let row = session_cost(&rig, &session.id);
+            prop_assert!((booked - row).abs() < 1e-9);
+            let live = rig.probe(&tracker, |actor| {
+                actor.session.active().unwrap().consumable_cost.value()
+            });
+            prop_assert!((live - row).abs() < 1e-9);
+            let at = now(&rig);
+            let running = board.in_effect_at(at);
+            for item in [40, 41] {
+                prop_assert!(
+                    running
+                        .iter()
+                        .filter(|dose| dose.equipment_id == Some(item))
+                        .count()
+                        <= 1
+                );
+            }
+        }
+        Ok(())
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
@@ -811,55 +907,29 @@ mod properties {
         /// at most one dose of an item runs at a time.
         #[test]
         fn a_sessions_dose_cost_is_exactly_its_standing_doses(steps in proptest::collection::vec(step(), 1..24)) {
-            let rig = rig();
-            let board = board(&rig);
-            let tracker = tracker_with(&rig, &board);
-            let session = rig.wait(tracker.start_session()).unwrap();
-            let mut ids: Vec<String> = Vec::new();
-            for step in steps {
-                match step {
-                    Step::Start(kind) => {
-                        let start = match kind {
-                            0 => adrenaline(true),
-                            1 => rush(),
-                            _ => adrenaline_already_taken(),
-                        };
-                        ids.push(rig.wait(tracker.start_dose(start)).unwrap().id);
-                    }
-                    Step::End(index) if !ids.is_empty() => {
-                        let _ = rig.wait(tracker.end_dose(&ids[index % ids.len()]));
-                    }
-                    Step::Remove(index) if !ids.is_empty() => {
-                        let _ = rig.wait(tracker.remove_dose(&ids[index % ids.len()]));
-                    }
-                    Step::Restore(index) if !ids.is_empty() => {
-                        let _ = rig.wait(tracker.restore_dose(&ids[index % ids.len()]));
-                    }
-                    Step::Wait(seconds) => {
-                        rig.clock.advance(f64::from(seconds)).unwrap();
-                        rig.wait(tracker.wake_doses());
-                    }
-                    _ => {}
-                }
-                let booked = rig.scalar_f64(
-                    "SELECT COALESCE(SUM(cost_ped), 0) FROM consumable_doses \
-                     WHERE session_id = ? AND removed_at IS NULL",
-                    &[&session.id],
-                );
-                let row = session_cost(&rig, &session.id);
-                prop_assert!((booked - row).abs() < 1e-9);
-                let live = rig.probe(&tracker, |actor| {
-                    actor.session.active().unwrap().consumable_cost.value()
-                });
-                prop_assert!((live - row).abs() < 1e-9);
-                let at = now(&rig);
-                let running = board.in_effect_at(at);
-                for item in [40, 41] {
-                    prop_assert!(
-                        running.iter().filter(|dose| dose.equipment_id == Some(item)).count() <= 1
-                    );
-                }
-            }
+            run_steps(steps)?;
         }
+    }
+
+    /// An untimed dose re-dosed four times and then ended by hand, an
+    /// earlier untimed dose of the item restored, and the ended one then
+    /// removed: the re-dose it had ended must not come back beside the
+    /// restored dose.
+    #[test]
+    fn removing_an_ended_re_dose_brings_back_no_second_running_dose() {
+        use Step::{End, Remove, Restore, Start};
+        run_steps(vec![
+            Start(2),
+            Remove(0),
+            Start(0),
+            Start(0),
+            Start(0),
+            Start(0),
+            Start(2),
+            End(5),
+            Restore(0),
+            Remove(5),
+        ])
+        .unwrap();
     }
 }

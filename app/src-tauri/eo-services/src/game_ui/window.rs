@@ -44,10 +44,15 @@ pub struct ChromeProfile {
     pub edge_gap: i32,
     /// Smallest window worth reporting, `[width, height]`.
     pub min_window: [i32; 2],
+    /// The same for a rectangle whose title marker is seen: what shows
+    /// of a window mostly under another, or mostly off the frame.
+    pub min_window_marked: [i32; 2],
     /// Share of a side's uncovered length that must show the ridge.
     pub side_support: f32,
     /// Fewest ridge pixels, over all sides, that make a window.
     pub min_evidence: i32,
+    /// The same floor for a rectangle whose title marker is seen.
+    pub min_evidence_marked: i32,
     /// A side with fewer uncovered pixels than this is treated as hidden.
     pub min_visible_side: i32,
     /// How far from a corner a side's ridge may begin: the client cuts
@@ -355,13 +360,13 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
     for &left in &lefts {
         for &right in &rights {
             let (x0, x1) = (left.unwrap_or(0), right.unwrap_or(w - 1));
-            if x1 - x0 + 1 < chrome.min_window[0] {
+            if x1 - x0 + 1 < chrome.min_window_marked[0] {
                 continue;
             }
             for &top in &tops {
                 for &bottom in &bottoms {
                     let (y0, y1) = (top.unwrap_or(0), bottom.unwrap_or(h - 1));
-                    if y1 - y0 + 1 < chrome.min_window[1] {
+                    if y1 - y0 + 1 < chrome.min_window_marked[1] {
                         continue;
                     }
                     let beyond = [
@@ -409,6 +414,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
             let mut hidden = [false; 4];
             let mut weak = false;
             let mut weakest_side = 20;
+            let mut side_hits = [0i32; 4];
             for (i, side) in sides.iter().enumerate() {
                 let Some((hit, free)) = side else { continue };
                 if *free < chrome.min_visible_side {
@@ -420,42 +426,81 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                     break;
                 }
                 seen += 1;
+                side_hits[i] = *hit;
                 weakest_side = weakest_side.min(hit * 20 / free);
                 evidence += hit;
                 visible += free;
             }
-            if weak || seen < 2 || evidence < chrome.min_evidence {
+            if weak || seen < 2 {
                 continue;
             }
-            // With only two sides to go on, they must be seen to meet:
-            // two unrelated edges that merely cross under another
-            // window would otherwise pass for a window's corner.
-            if seen == 2 {
-                let is_seen = |i: usize| !c.beyond[i] && !hidden[i];
+            // The sides seen must be seen to belong to one window: two
+            // sides are known to only where the ridge is seen turning
+            // the corner between them. A side that joins none of the
+            // others may be another window's edge that happens to line
+            // up, with the place where the two would part hidden under a
+            // third; it is kept as a guess, not a measurement.
+            {
                 let reach = chrome.corner_reach;
-                let meets = |vertical_bit: u8,
-                             x: i32,
-                             horizontal_bit: u8,
-                             y: i32,
-                             dy: i32,
-                             dx: i32| {
-                    let free = |px: i32, py: i32| {
-                        px >= 0 && py >= 0 && px < w && py < h && !covered[(py * w + px) as usize]
+                let free = |px: i32, py: i32| {
+                    px >= 0 && py >= 0 && px < w && py < h && !covered[(py * w + px) as usize]
+                };
+                let meets =
+                    |vertical_bit: u8, x: i32, horizontal_bit: u8, y: i32, dy: i32, dx: i32| {
+                        (0..reach)
+                            .any(|k| free(x, y + dy * k) && map.at(x, y + dy * k, vertical_bit))
+                            && (0..reach).any(|k| {
+                                free(x + dx * k, y) && map.at(x + dx * k, y, horizontal_bit)
+                            })
                     };
-                    (0..reach).any(|k| free(x, y + dy * k) && map.at(x, y + dy * k, vertical_bit))
-                        && (0..reach)
-                            .any(|k| free(x + dx * k, y) && map.at(x + dx * k, y, horizontal_bit))
+                let is_seen = |i: usize, hidden: &[bool; 4]| !c.beyond[i] && !hidden[i];
+                let corners = [
+                    (0, 1, meets(LEFT, c.x0, TOP, c.y0, 1, 1)),
+                    (1, 2, meets(RIGHT, c.x1, TOP, c.y0, 1, -1)),
+                    (2, 3, meets(RIGHT, c.x1, BOTTOM, c.y1, -1, -1)),
+                    (3, 0, meets(LEFT, c.x0, BOTTOM, c.y1, -1, 1)),
+                ];
+                let mut group = [0usize, 1, 2, 3];
+                for (a, b, joined) in corners {
+                    if joined && is_seen(a, &hidden) && is_seen(b, &hidden) {
+                        let (keep, merge) = (group[a], group[b]);
+                        for g in group.iter_mut() {
+                            if *g == merge {
+                                *g = keep;
+                            }
+                        }
+                    }
+                }
+                let weight = |g: usize| -> i32 {
+                    (0..4)
+                        .filter(|&i| group[i] == g && is_seen(i, &hidden))
+                        .map(|i| side_hits[i])
+                        .sum()
                 };
-                let adjacent_ok = match (is_seen(0), is_seen(1), is_seen(2), is_seen(3)) {
-                    (true, true, false, false) => meets(LEFT, c.x0, TOP, c.y0, 1, 1),
-                    (false, true, true, false) => meets(RIGHT, c.x1, TOP, c.y0, 1, -1),
-                    (false, false, true, true) => meets(RIGHT, c.x1, BOTTOM, c.y1, -1, -1),
-                    (true, false, false, true) => meets(LEFT, c.x0, BOTTOM, c.y1, -1, 1),
-                    // Opposite sides: a window spanning the frame.
-                    _ => true,
-                };
-                if !adjacent_ok {
-                    continue;
+                let main = (0..4)
+                    .filter(|&i| is_seen(i, &hidden))
+                    .map(|i| group[i])
+                    .max_by_key(|&g| weight(g))
+                    .expect("at least two sides are seen");
+                let joined_sides = (0..4)
+                    .filter(|&i| is_seen(i, &hidden) && group[i] == main)
+                    .count();
+                // Two opposite sides with both others off the frame have
+                // no corner on the frame to be seen at: a window spanning
+                // the frame.
+                let spans_frame =
+                    seen == 2 && ((c.beyond[0] && c.beyond[2]) || (c.beyond[1] && c.beyond[3]));
+                if !spans_frame {
+                    if joined_sides < 2 {
+                        continue;
+                    }
+                    for i in 0..4 {
+                        if is_seen(i, &hidden) && group[i] != main {
+                            hidden[i] = true;
+                            seen -= 1;
+                            evidence -= side_hits[i];
+                        }
+                    }
                 }
             }
             // A side taken as the frame's boundary must have a
@@ -499,6 +544,19 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
             };
             let marker = corner_on_frame && has_marker(image, c.x0, c.y0, &chrome.marker);
             if corner_free && !marker {
+                continue;
+            }
+            // A window showing its own title marker has proved itself
+            // with that, and needs less of its border in view than a
+            // rectangle known only by its edges. Without this a window
+            // mostly under another is passed over, and its visible edges
+            // are left to be mistaken for parts of the windows behind it.
+            let (floor, smallest) = if marker {
+                (chrome.min_evidence_marked, chrome.min_window_marked)
+            } else {
+                (chrome.min_evidence, chrome.min_window)
+            };
+            if evidence < floor || c.x1 - c.x0 + 1 < smallest[0] || c.y1 - c.y0 + 1 < smallest[1] {
                 continue;
             }
             qualifying.push(Scored {
@@ -827,6 +885,32 @@ mod tests {
         assert!(found[0].fully_visible(), "{:?}", found[0]);
     }
 
+    /// Two windows whose tops line up, and a third partly showing: the
+    /// first two's edges must not be stitched into one window.
+    #[test]
+    fn windows_with_their_tops_in_line_are_not_stitched_together() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(600, 420, 11);
+        let (back, middle, front) = (
+            Rect::new(5, 166, 361, 382),
+            Rect::new(306, 338, 562, 556),
+            Rect::new(354, 166, 567, 348),
+        );
+        for rect in [back, middle, front] {
+            draw_window(&mut image, rect);
+        }
+        let found = find_windows(&image, &chrome);
+        assert_eq!(found[0].rect, front);
+        for f in found.iter().filter(|f| f.extent_certain()) {
+            let clipped = Rect::new(middle.x0, middle.y0, middle.x1, 419);
+            assert!(
+                f.rect == front || f.rect == back || f.rect == clipped,
+                "{:?} is no drawn window",
+                f.rect
+            );
+        }
+    }
+
     /// A pane inside a window is ruled like the window's own border;
     /// the window must still come back whole.
     #[test]
@@ -871,14 +955,16 @@ mod tests {
     fn random_layouts_never_produce_a_false_window() {
         let chrome = bundled_profile().chrome;
         let mut rng = Lcg(0x5eed);
-        let (w, h) = (840i32, 600i32);
+        // A small frame keeps two hundred layouts quick in an unoptimised
+        // build; the locator's cost is per pixel.
+        let (w, h) = (600i32, 420i32);
         let mut layouts = 0;
         let mut certain = 0;
         for seed in 0..220u64 {
             let mut image = scenery(w as usize, h as usize, 100 + seed);
             let mut drawn: Vec<Rect> = Vec::new();
             for _ in 0..rng.range(1, 3) {
-                let (ww, wh) = (rng.range(200, 700), rng.range(150, 500));
+                let (ww, wh) = (rng.range(170, 480), rng.range(120, 340));
                 let (x, y) = (rng.range(-120, w - 80), rng.range(-90, h - 60));
                 let rect = Rect::new(x, y, x + ww, y + wh);
                 draw_window(&mut image, rect);

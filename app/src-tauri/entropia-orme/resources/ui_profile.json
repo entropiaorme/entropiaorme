@@ -28,8 +28,13 @@
       150,
       100
     ],
+    "min_window_marked": [
+      90,
+      64
+    ],
     "side_support": 0.8,
     "min_evidence": 300,
+    "min_evidence_marked": 120,
     "min_visible_side": 12,
     "corner_reach": 40,
     "marker": {

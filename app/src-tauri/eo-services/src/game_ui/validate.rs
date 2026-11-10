@@ -108,6 +108,73 @@ pub fn pager(raw: &str) -> Option<(u32, u32)> {
     (page <= count).then_some((page, count))
 }
 
+/// A whole number printed after its own label, as the client prints a
+/// position: `LON 67739`. The text must begin with exactly `label`, then
+/// at most one stretch of space, then one unbroken run of between
+/// `digits[0]` and `digits[1]` digits without a leading zero, and
+/// nothing else. A different label (`L0N`, `LAT` where `LON` is
+/// wanted), a letter or a space among the digits, a second run of
+/// digits and any punctuation are all things the client never draws
+/// there, so each is a refusal rather than something to tidy away. The
+/// parsed text is the canonical `LON 67739`.
+pub fn labelled_integer(raw: &str, label: &str, digits: [usize; 2]) -> Option<Parsed> {
+    // Fullwidth digits fold to ASCII; spaces stay, because a space
+    // inside the digits is a refusal, not noise.
+    let text: String = raw
+        .trim()
+        .chars()
+        .map(|c| match digit_value(c) {
+            Some(d) => char::from_digit(d, 10).expect("decimal digit"),
+            None => c,
+        })
+        .collect();
+    let number = text.strip_prefix(label)?.trim_start();
+    let count = number.chars().count();
+    if count < digits[0]
+        || count > digits[1]
+        || number.starts_with('0')
+        || !number.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(Parsed {
+        text: format!("{label} {number}"),
+        number: Some(number.parse::<u64>().ok()? as f64),
+    })
+}
+
+/// Distances printed one after another, each a whole number without a
+/// leading zero followed by `unit`, as the client labels the radar's
+/// rings: `50 m`, or `50 m100 m` where two labels touch. Spaces between
+/// a number and its unit, or between two distances, are allowed;
+/// anything else, including a number without its unit, is a refusal.
+pub fn distance_labels(raw: &str, unit: &str) -> Option<Vec<u32>> {
+    if unit.is_empty() {
+        return None;
+    }
+    let text: String = raw
+        .chars()
+        .map(|c| match digit_value(c) {
+            Some(d) => char::from_digit(d, 10).expect("decimal digit"),
+            None => c,
+        })
+        .collect();
+    let mut rest = text.trim();
+    let mut out = Vec::new();
+    while !rest.is_empty() {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || digits.starts_with('0') {
+            return None;
+        }
+        out.push(digits.parse().ok()?);
+        rest = rest[digits.len()..]
+            .trim_start()
+            .strip_prefix(unit)?
+            .trim_start();
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// Check `raw` against `grammar`. `None` is a refusal.
 pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
     let text = fold(raw);
@@ -330,6 +397,58 @@ mod tests {
             "14 / 13", "0 / 13", "2 /", "/ 13", "2 13", "2 / 1x", "02 / 13", "2 // 13", "",
         ] {
             assert_eq!(parse(Grammar::Pager, raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn a_labelled_integer_reads_only_as_its_own_label_and_one_run_of_digits() {
+        let read = |raw: &str| labelled_integer(raw, "LON", [4, 6]).map(|p| p.text);
+        assert_eq!(read("LON 67739"), Some("LON 67739".into()));
+        assert_eq!(read("  LON 67739 "), Some("LON 67739".into()));
+        assert_eq!(read("LON67739"), Some("LON 67739".into()));
+        assert_eq!(read("LON ６７７３９"), Some("LON 67739".into()));
+        assert_eq!(read("LON 1234"), Some("LON 1234".into()));
+        assert_eq!(read("LON 123456"), Some("LON 123456".into()));
+        assert_eq!(
+            labelled_integer("LAT 87740", "LAT", [4, 6]).and_then(|p| p.number),
+            Some(87740.0)
+        );
+        for raw in [
+            "L0N 67739",
+            "LoN 67739",
+            "LAT 87740",
+            "LONG 67739",
+            "ON 67739",
+            "LON",
+            "LON 123",
+            "LON 1234567",
+            "LON 067739",
+            "LON 677 39",
+            "LON 677a9",
+            "LON 6773g",
+            "LON 67739.",
+            "LON: 67739",
+            "LON 67,739",
+            "LON 67739 87740",
+            "",
+        ] {
+            assert_eq!(read(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn ring_distances_read_as_numbers_each_with_its_unit() {
+        let read = |raw: &str| distance_labels(raw, "m");
+        assert_eq!(read("50 m"), Some(vec![50]));
+        assert_eq!(read("100m"), Some(vec![100]));
+        assert_eq!(read("50 m100 m"), Some(vec![50, 100]));
+        assert_eq!(read(" 50m 100m "), Some(vec![50, 100]));
+        assert_eq!(read("２００ m"), Some(vec![200]));
+        for raw in [
+            "", "m", "50", "100", "Eom", "E0m", "50 ml", "050 m", "50 m100", "5O m", "50 km",
+            "50.5 m", "50 m E",
+        ] {
+            assert_eq!(read(raw), None, "{raw:?}");
         }
     }
 

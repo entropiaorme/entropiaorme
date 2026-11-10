@@ -9,7 +9,7 @@
 
 use serde::Deserialize;
 
-use super::geometry::{Pixels, Rect};
+use super::geometry::{chroma, Pixels, Rect};
 
 /// What counts as ink and how glyphs join into runs.
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +24,10 @@ pub struct TextProfile {
     pub join_factor: f32,
     /// Glyphs of visibly different colour never join, however close.
     pub max_colour_distance: u16,
+    /// Two pieces of lettering are on one line when the middle of the
+    /// shorter lies within the taller's span widened by this share of the
+    /// taller's height (a comma hangs just below a digit's foot).
+    pub line_slack: f32,
     /// A run shorter or taller than this is not lettering, `[min, max]`.
     pub run_height: [i32; 2],
     /// Fewest ink pixels in a run.
@@ -79,18 +83,67 @@ fn find(parent: &mut [u32], mut a: u32) -> u32 {
     a
 }
 
+/// What sets lettering the client draws straight onto the game scene
+/// apart from the scene behind it. Such lettering has no panel, so
+/// brightness alone does not find it: a sunlit wall is as bright. The
+/// client draws it white with a dark shadow, so each stroke is a thin
+/// pale line with darker pixels close on both of its sides, which a
+/// broad bright surface does not have.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StrokeProfile {
+    /// Largest channel spread a stroke pixel may have: it is a grey.
+    pub max_chroma: u8,
+    /// How far either side of a pixel the shadow is looked for.
+    pub reach: i32,
+    /// How much brighter than the darkest pixel within reach, on each
+    /// of two opposite sides, a stroke pixel is.
+    pub contrast: u8,
+}
+
+/// Whether `(x, y)` is a stroke of lettering drawn on the scene: bright
+/// enough to be ink, a grey, and with shadow on both sides of it either
+/// across or along.
+pub fn stroke_ink<P: Pixels>(
+    image: &P,
+    x: i32,
+    y: i32,
+    min_ink: u8,
+    stroke: &StrokeProfile,
+) -> bool {
+    let rgb = image.rgb(x, y);
+    if rgb[0].max(rgb[1]).max(rgb[2]) < min_ink || chroma(rgb) > stroke.max_chroma {
+        return false;
+    }
+    let lum = image.lum(x, y);
+    let shadowed = |dx: i32, dy: i32| {
+        (1..=stroke.reach).any(|k| {
+            let (px, py) = (x + dx * k, y + dy * k);
+            image.in_bounds(px, py) && image.lum(px, py).saturating_add(stroke.contrast) <= lum
+        })
+    };
+    (shadowed(-1, 0) && shadowed(1, 0)) || (shadowed(0, -1) && shadowed(0, 1))
+}
+
 /// Connected groups of ink within `roi`, joining pixels on a row that
-/// sit within `glyph_gap` of each other.
-fn glyph_blobs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<Blob> {
+/// sit within `glyph_gap` of each other. `ink` says whether a pixel, in
+/// the frame's coordinates, is ink.
+fn glyph_blobs<P: Pixels>(
+    image: &P,
+    roi: Rect,
+    profile: &TextProfile,
+    ink: &dyn Fn(i32, i32) -> bool,
+) -> Vec<Blob> {
     let roi = match roi.intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1)) {
         Some(r) => r,
         None => return Vec::new(),
     };
     let (w, h) = (roi.width() as usize, roi.height() as usize);
-    let ink_at = |x: usize, y: usize| {
-        let [r, g, b] = image.rgb(roi.x0 + x as i32, roi.y0 + y as i32);
-        r.max(g).max(b) >= profile.min_ink
-    };
+    // Each pixel is asked once: the test can look at its neighbours.
+    let mask: Vec<bool> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| ink(roi.x0 + x as i32, roi.y0 + y as i32))
+        .collect();
+    let ink_at = |x: usize, y: usize| mask[y * w + x];
     // Each row becomes spans of ink bridged across small gaps; spans on
     // adjacent rows that overlap are one blob.
     let mut labels = vec![0u32; w * h];
@@ -167,9 +220,100 @@ fn colour_distance(a: [u8; 3], b: [u8; 3]) -> u16 {
         .sum()
 }
 
+/// Whether `(x, y)` is ink on one of the client's panels: anything
+/// bright enough, since the panel itself is dark.
+fn panel_ink<P: Pixels>(image: &P, x: i32, y: i32, profile: &TextProfile) -> bool {
+    let [r, g, b] = image.rgb(x, y);
+    r.max(g).max(b) >= profile.min_ink
+}
+
 /// Every run of text-like ink inside `roi`, in reading order.
 pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<TextRun> {
-    let blobs = glyph_blobs(image, roi, profile);
+    let blobs = glyph_blobs(image, roi, profile, &|x, y| panel_ink(image, x, y, profile));
+    finish_runs(join_runs(blobs, profile), profile)
+}
+
+/// Every run of lettering drawn straight onto the scene inside `roi`,
+/// in reading order: the same grouping as [`text_runs`], over strokes
+/// told from the scene by their shadow (see [`StrokeProfile`]). Nothing
+/// inside the rectangles in `in_front` is ink: the client's windows are
+/// drawn over the scene, so their own lettering and furniture are never
+/// part of lettering on it.
+pub fn scenery_runs<P: Pixels>(
+    image: &P,
+    roi: Rect,
+    profile: &TextProfile,
+    stroke: &StrokeProfile,
+    in_front: &[Rect],
+) -> Vec<TextRun> {
+    let blobs = glyph_blobs(image, roi, profile, &|x, y| {
+        !in_front.iter().any(|front| front.contains(x, y))
+            && stroke_ink(image, x, y, profile.min_ink, stroke)
+    });
+    finish_runs(merge_lines(join_runs(blobs, profile), profile), profile)
+}
+
+/// Whether two runs share a line: the middle of the shorter lies within
+/// the taller's span, widened by the profile's line slack.
+fn same_line(a: &Rect, b: &Rect, profile: &TextProfile) -> bool {
+    let (tall, short) = if a.height() >= b.height() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let slack = (tall.height() as f32 * profile.line_slack) as i32;
+    let mid = (short.y0 + short.y1) / 2;
+    mid >= tall.y0 - slack && mid <= tall.y1 + slack
+}
+
+/// Runs on one line that overlap or stand within joining distance merged
+/// into one. Strokes on the scene break into many small pieces where the
+/// scene behind them is bright: a fragment of a serif can open a run that
+/// the full glyph beside it is too tall to join, leaving one phrase split
+/// across runs that overlap. Lettering on a panel does not break up so.
+fn merge_lines(mut runs: Vec<Blob>, profile: &TextProfile) -> Vec<Blob> {
+    loop {
+        let mut merged = false;
+        'search: for i in 0..runs.len() {
+            for j in i + 1..runs.len() {
+                let (a, b) = (runs[i].rect, runs[j].rect);
+                let gap = a.x0.max(b.x0) - a.x1.min(b.x1);
+                let height = a.height().max(b.height());
+                if same_line(&a, &b, profile) && gap as f32 <= profile.join_factor * height as f32 {
+                    let other = runs.remove(j);
+                    runs[i].absorb(&other);
+                    merged = true;
+                    break 'search;
+                }
+            }
+        }
+        if !merged {
+            return runs;
+        }
+    }
+}
+
+/// Runs that have the size and ink of lettering, in reading order.
+fn finish_runs(runs: Vec<Blob>, profile: &TextProfile) -> Vec<TextRun> {
+    let mut out: Vec<TextRun> = runs
+        .into_iter()
+        .filter(|r| {
+            r.rect.height() >= profile.run_height[0]
+                && r.rect.height() <= profile.run_height[1]
+                && r.ink >= profile.min_ink_pixels
+        })
+        .map(|r| TextRun {
+            rect: r.rect,
+            rgb: r.rgb(),
+            ink: r.ink,
+        })
+        .collect();
+    out.sort_by_key(|r| (r.rect.y0, r.rect.x0));
+    out
+}
+
+/// Glyphs joined into phrase-sized runs.
+fn join_runs(blobs: Vec<Blob>, profile: &TextProfile) -> Vec<Blob> {
     let mut runs: Vec<Blob> = Vec::new();
     for blob in blobs {
         if blob.rect.height() > profile.run_height[1] {
@@ -185,7 +329,7 @@ pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<
             }
             // Same line: the shorter of the two sits within the taller's
             // vertical span (a comma hangs just below a digit's foot).
-            let slack = height / 3;
+            let slack = (height as f32 * profile.line_slack) as i32;
             let (top, bottom) = (run.rect.y0 - slack, run.rect.y1 + slack);
             let mid = (blob.rect.y0 + blob.rect.y1) / 2;
             if mid < top || mid > bottom || blob.rect.height() > run.rect.height() * 2 {
@@ -207,21 +351,7 @@ pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<
             None => runs.push(blob),
         }
     }
-    let mut out: Vec<TextRun> = runs
-        .into_iter()
-        .filter(|r| {
-            r.rect.height() >= profile.run_height[0]
-                && r.rect.height() <= profile.run_height[1]
-                && r.ink >= profile.min_ink_pixels
-        })
-        .map(|r| TextRun {
-            rect: r.rect,
-            rgb: r.rgb(),
-            ink: r.ink,
-        })
-        .collect();
-    out.sort_by_key(|r| (r.rect.y0, r.rect.x0));
-    out
+    runs
 }
 
 /// The bounds of each connected group of ink inside `roi`, before any
@@ -230,7 +360,7 @@ pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<
 /// reader tells a picture from the text beside it when the two are close
 /// enough in colour to join into one run.
 pub fn ink_groups<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<Rect> {
-    glyph_blobs(image, roi, profile)
+    glyph_blobs(image, roi, profile, &|x, y| panel_ink(image, x, y, profile))
         .into_iter()
         .map(|blob| blob.rect)
         .collect()
@@ -352,6 +482,46 @@ mod tests {
             .iter()
             .filter(|g| **g != picture)
             .all(|g| g.x0 >= letters.x0 && g.x1 <= letters.x1));
+    }
+
+    #[test]
+    fn shadowed_lettering_on_a_bright_scene_is_a_run_and_the_scene_is_not() {
+        use crate::game_ui::test_support::put;
+        let coords = bundled_profile().radar.coordinates;
+        let mut image = blank(400, 100, [120, 110, 90]);
+        // A sunlit wall, as bright and as grey as the lettering, and a
+        // pale stripe across it: broad bright surfaces with no shadow.
+        fill(&mut image, Rect::new(200, 22, 399, 50), [225, 225, 222]);
+        fill(&mut image, Rect::new(0, 80, 399, 87), [235, 235, 235]);
+        // Lettering: white glyph outlines on their own dark shadow, the
+        // last of them on the wall.
+        let text = Rect::new(150, 30, 239, 40);
+        fill(&mut image, text.padded(1), [24, 24, 24]);
+        let mut x = text.x0;
+        while x + 5 <= text.x1 {
+            for k in x..x + 6 {
+                put(&mut image, k, text.y0, [250, 250, 250]);
+                put(&mut image, k, text.y1, [250, 250, 250]);
+            }
+            for y in text.y0..=text.y1 {
+                put(&mut image, x, y, [250, 250, 250]);
+                put(&mut image, x + 5, y, [250, 250, 250]);
+            }
+            x += 8;
+        }
+        let runs = scenery_runs(
+            &image,
+            Rect::new(0, 0, 399, 99),
+            &coords.lettering,
+            &coords.stroke,
+            &[],
+        );
+        assert_eq!(
+            runs.iter().map(|r| r.rect).collect::<Vec<_>>(),
+            vec![Rect::new(150, 30, 235, 40)]
+        );
+        // On a panel's terms the wall and the stripe would be ink.
+        assert!(text_runs(&image, Rect::new(0, 0, 399, 99), &coords.lettering).len() > 1);
     }
 
     #[test]

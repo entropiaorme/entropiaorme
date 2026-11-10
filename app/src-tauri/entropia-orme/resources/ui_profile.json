@@ -51,6 +51,7 @@
     "glyph_gap": 2,
     "join_factor": 1.7,
     "max_colour_distance": 110,
+    "line_slack": 0.3334,
     "run_height": [
       5,
       60
@@ -185,6 +186,139 @@
     },
     "options": {
       "title": "OPTIONS"
+    }
+  },
+  "radar": {
+    "disc": {
+      "min_green": 90,
+      "green_over_red": 40,
+      "green_over_blue": 25,
+      "cell": 8,
+      "cell_share": 0.5,
+      "radius": [
+        40.0,
+        600.0
+      ],
+      "edge_green_margin": 12,
+      "edge_run": 10,
+      "rim_max_lum": 60,
+      "rim_share": 0.5,
+      "rays": 90,
+      "ray_span": [
+        0.25,
+        1.6
+      ],
+      "fit_tolerance": 0.03,
+      "fit_divisions": [
+        3,
+        4,
+        6
+      ],
+      "fit_passes": 3,
+      "min_on_circle": 0.5,
+      "max_arc_gap": 150.0,
+      "dot": {
+        "min_channel": 200,
+        "max_chroma": 60,
+        "reach": 0.08,
+        "min_pixels": 4,
+        "max_size": 0.06,
+        "slack": 1.0
+      }
+    },
+    "rings": {
+      "samples": 720,
+      "min_visible": 0.5,
+      "span": [
+        0.1,
+        0.95
+      ],
+      "prominence": 8.0,
+      "tolerance": 0.03,
+      "unit": "m",
+      "min_labels": 2,
+      "label_reach": 0.1,
+      "lettering": {
+        "min_ink": 120,
+        "glyph_gap": 1,
+        "join_factor": 1.0,
+        "max_colour_distance": 110,
+        "line_slack": 0.3334,
+        "run_height": [
+          4,
+          30
+        ],
+        "min_ink_pixels": 10
+      },
+      "stroke": {
+        "max_chroma": 90,
+        "reach": 2,
+        "contrast": 60
+      }
+    },
+    "coordinates": {
+      "lon": {
+        "label": "LON",
+        "aligned": "left",
+        "offset": [
+          -0.8,
+          0.8
+        ],
+        "anchor": [
+          -0.9,
+          0.4
+        ],
+        "label_pitches": 3.75,
+        "space_pitches": 0.875,
+        "label_digits": 4.31
+      },
+      "lat": {
+        "label": "LAT",
+        "aligned": "right",
+        "offset": [
+          -1.6,
+          0.3
+        ],
+        "anchor": [
+          -1.1,
+          -0.2
+        ],
+        "label_pitches": 3.5,
+        "space_pitches": 0.5,
+        "label_digits": 3.875
+      },
+      "digits": [
+        4,
+        6
+      ],
+      "band": [
+        0.12,
+        0.5
+      ],
+      "band_reach": 0.15,
+      "lettering": {
+        "min_ink": 170,
+        "glyph_gap": 1,
+        "join_factor": 1.0,
+        "max_colour_distance": 110,
+        "line_slack": 0.3334,
+        "run_height": [
+          6,
+          40
+        ],
+        "min_ink_pixels": 30
+      },
+      "stroke": {
+        "max_chroma": 40,
+        "reach": 2,
+        "contrast": 50
+      },
+      "guard_rows": 1,
+      "split_reach": 0.6,
+      "min_space": 0.25,
+      "digit_trim": 0.2,
+      "ruler_tolerance": 0.4,
+      "pair_tolerance": 0.05
     }
   }
 }

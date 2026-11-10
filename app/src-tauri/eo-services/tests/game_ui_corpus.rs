@@ -20,11 +20,15 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::radar::{
+    find_radar, read_coordinates, ring_scale, CoordError, CoordinateBounds,
+};
 use eo_services::game_ui::skills::{
     nearest_skill, read_skills_page, Admission, Checksum, RowName, SkillRow, SkillVocabulary,
     SkillsError, SkillsPage, SkillsSweep, SkillsTableProfile,
 };
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
+use eo_services::planet_maps::PlanetMapStore;
 use eo_services::skill_panel::BgrImage;
 use serde_json::Value;
 
@@ -840,4 +844,363 @@ fn a_recogniser_that_drops_repeated_digits_never_gets_a_number_accepted() {
         "`1,444.77` read as `1,44.77` must be among the refusals"
     );
     assert!(refused > 0 && !damaged.is_empty());
+}
+
+/// Values the coordinates reader refuses although their labels show them:
+/// the frame, the value, the refusal it must give, and why. Every other
+/// labelled value is required to read exactly.
+fn coord_refusals() -> Vec<(&'static str, &'static str, CoordError, &'static str)> {
+    vec![
+        (
+            "f44",
+            "lon",
+            CoordError::Invalid {
+                raw: "ON68520".into(),
+            },
+            "the Trade Terminal's right edge lies over the L of LON, which reads as ON",
+        ),
+        (
+            "f46",
+            "lon",
+            CoordError::Invalid {
+                raw: "ON68520".into(),
+            },
+            "the Trade Terminal's right edge lies over the L of LON, which reads as ON",
+        ),
+        (
+            "f25",
+            "lat",
+            CoordError::NotFound,
+            "pale sky through dark trees behind LAT joins the lettering into a run too tall \
+             and too wide to stand aligned with the disc",
+        ),
+        (
+            "f29",
+            "lat",
+            CoordError::NotFound,
+            "sunlit foliage around LAT joins the lettering into a run taller than lettering",
+        ),
+        (
+            "f53",
+            "lon",
+            CoordError::Invalid {
+                raw: "LON.67835".into(),
+            },
+            "the recogniser read a speck of the sand between LON and the digits as a stop",
+        ),
+        (
+            "f54",
+            "lat",
+            CoordError::Misplaced {
+                raw: " LAT 87750".into(),
+            },
+            "a rock beside the last digit of LAT joins its lettering, so its end lies past the \
+             disc's edge",
+        ),
+        (
+            "f29",
+            "lon",
+            CoordError::NoSpace {
+                raw: "LON 67707".into(),
+            },
+            "sunlit foliage left of LON joins the lettering, so the label is not where it is \
+             predicted to end",
+        ),
+        (
+            "f31",
+            "lat",
+            CoordError::NoSpace {
+                raw: "LAT87925".into(),
+            },
+            "foliage bridges the space after LAT, so where the label ends cannot be found",
+        ),
+    ]
+}
+
+/// What a frame's labels say about one coordinate: `Some(Some(text))`
+/// for a value on screen, `Some(None)` for one the labels mark covered,
+/// and `None` when the labels have no coordinates (the radar is hidden).
+fn coord_label(labels: &Value, key: &str) -> Option<Option<String>> {
+    let coords = labels.get("coords").filter(|c| !c.is_null())?;
+    Some(coords[key].as_str().map(String::from))
+}
+
+/// The coordinate range of Calypso, where every frame of the corpus was
+/// captured, from the application's bundled planet maps.
+fn calypso() -> CoordinateBounds {
+    let store = PlanetMapStore::new(&resources().join("maps")).expect("the bundled maps load");
+    let bounds = store
+        .record("Calypso")
+        .and_then(|record| record.calibration.as_ref())
+        .expect("Calypso's map is calibrated")
+        .bounds;
+    CoordinateBounds {
+        lon: (bounds.lon_min, bounds.lon_max),
+        lat: (bounds.lat_min, bounds.lat_max),
+    }
+}
+
+/// The frames to replay for coordinates in shard `shard`.
+fn coordinate_frames(corpus: &Corpus, shard: usize) -> Vec<(String, &Value)> {
+    corpus
+        .frames()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % COORD_SHARDS == shard)
+        .map(|(_, frame)| frame)
+        .collect()
+}
+
+fn replay_coordinates_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let bounds = calypso();
+    let mut tally = Tally::default();
+    let mut covered = 0;
+    let refusals = coord_refusals();
+    let mut mismatched = Vec::new();
+    for (name, labels) in coordinate_frames(&corpus, shard) {
+        let image = corpus.frame(&name);
+        let got = read_coordinates(&image, &profile, &bounds, &read);
+        if labels.get("coords").is_none_or(Value::is_null) {
+            // The radar is hidden: under a maximised window in this corpus.
+            match &got {
+                Err(CoordError::RadarNotFound) => {
+                    covered += 2;
+                    println!("  {name}: no radar, as the labels say");
+                }
+                other => tally.wrong.push(format!(
+                    "{name}: the radar is hidden, but the reader answered {other:?}"
+                )),
+            }
+            continue;
+        }
+        for (key, label) in [("lon", "LON"), ("lat", "LAT")] {
+            let excused = refusals.iter().find(|(f, k, _, _)| *f == name && *k == key);
+            let want = coord_label(labels, key).expect("the frame has coordinates");
+            let value = match &got {
+                Ok(c) if key == "lon" => c.lon.clone(),
+                Ok(c) => c.lat.clone(),
+                Err(CoordError::NoRecogniser) => panic!("the recogniser stopped answering"),
+                Err(e) => Err(e.clone()),
+            };
+            match (want, value) {
+                (Some(want), Ok(v)) if v.text == format!("{label} {want}") => tally.exact += 1,
+                (Some(want), Ok(v)) => tally.wrong.push(format!(
+                    "{name}: {key} read {:?} (raw {:?}), the screen shows {want:?}",
+                    v.text, v.raw
+                )),
+                (None, Ok(v)) => tally.wrong.push(format!(
+                    "{name}: {key} read {:?}, a value the screen does not show whole",
+                    v.text
+                )),
+                (None, Err(e)) => {
+                    covered += 1;
+                    println!("  {name}: {key} is covered, refused: {e}");
+                }
+                (Some(want), Err(e)) => match excused {
+                    Some((_, _, expected, why)) if *expected == e => {
+                        tally
+                            .refused
+                            .push(format!("{name}: {key} {want}: {e}; {why} (excused)"));
+                    }
+                    Some((_, _, expected, why)) => mismatched.push(format!(
+                        "{name}: {key} {want} refused as {e:?}, where {why} ({expected:?})"
+                    )),
+                    None => tally.refused.push(format!("{name}: {key} {want}: {e}")),
+                },
+            }
+        }
+    }
+    println!("coordinates shard {shard}: {covered} covered values refused as they must be");
+    tally.report(&format!("coordinates, shard {shard}"));
+    let unexcused: Vec<&String> = tally
+        .refused
+        .iter()
+        .filter(|line| !line.ends_with("(excused)"))
+        .collect();
+    assert!(
+        unexcused.is_empty(),
+        "values the screen shows were refused: {unexcused:#?}"
+    );
+    assert!(
+        mismatched.is_empty(),
+        "values were refused for another reason than the one known: {mismatched:#?}"
+    );
+}
+
+const COORD_SHARDS: usize = 8;
+
+/// The recogniser's known failure applied to the coordinates: one of the
+/// first pair of repeated digits in any reading is dropped.
+fn collapsing_any(
+    read: impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync,
+) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+    move |image: &BgrImage| {
+        let (text, confidence) = read(image)?;
+        let chars: Vec<char> = text.chars().collect();
+        let Some(at) = chars
+            .windows(2)
+            .position(|pair| pair[0] == pair[1] && pair[0].is_ascii_digit())
+        else {
+            return Some((text, confidence));
+        };
+        let mut short = chars;
+        short.remove(at);
+        Some((short.into_iter().collect(), confidence))
+    }
+}
+
+/// Whether a coordinate has the same digit twice running, which the
+/// damaging recogniser merges.
+fn has_repeat(value: &str) -> bool {
+    value.as_bytes().windows(2).any(|pair| pair[0] == pair[1])
+}
+
+/// Every coordinate frame read with a recogniser that drops one of every
+/// repeated pair of digits. A coordinate a digit short still parses, so
+/// each damaged value must be refused by something else: its own width
+/// against its label, the planet's bounds, or the comparison of the two
+/// values. Every value returned must still be the one on screen.
+fn replay_digit_loss_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = collapsing_any(reader(engine));
+    let profile = profile();
+    let bounds = calypso();
+    let (mut damaged, mut whole_read, mut whole_refused) = (0, 0, 0);
+    let mut by: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    let mut wrong = Vec::new();
+    for (name, labels) in coordinate_frames(&corpus, shard) {
+        if labels.get("coords").is_none_or(Value::is_null) {
+            continue;
+        }
+        let image = corpus.frame(&name);
+        let got = match read_coordinates(&image, &profile, &bounds, &read) {
+            Ok(got) => got,
+            Err(CoordError::NoRecogniser) => panic!("the recogniser stopped answering"),
+            Err(_) => continue,
+        };
+        for (key, label, value) in [("lon", "LON", &got.lon), ("lat", "LAT", &got.lat)] {
+            let Some(want) = coord_label(labels, key).flatten() else {
+                if let Ok(v) = value {
+                    wrong.push(format!(
+                        "{name}: {key} read {:?} where it is covered",
+                        v.text
+                    ));
+                }
+                continue;
+            };
+            let hit = has_repeat(&want);
+            damaged += hit as usize;
+            match value {
+                Ok(v) if v.text == format!("{label} {want}") => whole_read += 1,
+                Ok(v) => wrong.push(format!(
+                    "{name}: {key} read {:?}, the screen shows {want}",
+                    v.text
+                )),
+                Err(e) if hit => {
+                    let how = match e {
+                        CoordError::WrongWidth { .. } => "its own width",
+                        CoordError::NoSpace { .. } => "its label not found",
+                        CoordError::Misplaced { .. } => "its place",
+                        CoordError::OutOfBounds { .. } => "the planet's bounds",
+                        CoordError::WidthsDisagree { .. } => "the other value",
+                        CoordError::Invalid { .. } => "the grammar",
+                        _ => "a refusal before reading",
+                    };
+                    *by.entry(how).or_default() += 1;
+                }
+                Err(_) => whole_refused += 1,
+            }
+        }
+    }
+    println!(
+        "digit loss, shard {shard}: {damaged} values damaged, refused by {by:?}; {whole_read} undamaged read exactly, {whole_refused} undamaged refused; {} WRONG",
+        wrong.len()
+    );
+    assert!(
+        wrong.is_empty(),
+        "a damaged coordinate was accepted:\n{}",
+        wrong.join("\n")
+    );
+}
+
+macro_rules! coord_shards {
+    ($($name:ident, $loss:ident: $shard:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            replay_coordinates_shard($shard);
+        }
+
+        #[test]
+        fn $loss() {
+            replay_digit_loss_shard($shard);
+        }
+    )*};
+}
+
+coord_shards! {
+    coordinates_shard_0, digit_loss_shard_0: 0,
+    coordinates_shard_1, digit_loss_shard_1: 1,
+    coordinates_shard_2, digit_loss_shard_2: 2,
+    coordinates_shard_3, digit_loss_shard_3: 3,
+    coordinates_shard_4, digit_loss_shard_4: 4,
+    coordinates_shard_5, digit_loss_shard_5: 5,
+    coordinates_shard_6, digit_loss_shard_6: 6,
+    coordinates_shard_7, digit_loss_shard_7: 7,
+}
+
+/// The rings give one map scale whatever the radar's size, from the
+/// distances read beside them: the default radar (f05, f26, f27) and the
+/// enlarged one (f30, f32) agree on metres per pixel within 3%, and their
+/// edges reach about 218 m and 329 m.
+#[test]
+fn the_ring_scale_is_the_same_for_a_default_and_an_enlarged_radar() {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let mut scales = Vec::new();
+    for (name, edge_m) in [
+        ("f05", 218.0),
+        ("f26", 218.0),
+        ("f27", 218.0),
+        ("f30", 329.0),
+        ("f32", 329.0),
+    ] {
+        let image = corpus.frame(name);
+        let radar = find_radar(&image, &profile).unwrap_or_else(|| panic!("{name}: no radar"));
+        let scale = ring_scale(&image, &radar, &profile, &read)
+            .unwrap_or_else(|| panic!("{name}: no ring scale for {radar:?}"));
+        println!(
+            "ring scale {name}: radius {:.1} px, labels read {:?}, rings {:?}, unlabelled {:?}, {:.4} m/px, edge {:.1} m",
+            radar.radius,
+            scale.labels,
+            scale
+                .rings
+                .iter()
+                .map(|(r, d)| format!("{d} m at {r:.1} px"))
+                .collect::<Vec<_>>(),
+            scale
+                .unlabelled
+                .iter()
+                .map(|r| format!("{r:.1} px"))
+                .collect::<Vec<_>>(),
+            scale.metres_per_pixel,
+            scale.edge_range_m
+        );
+        assert!(
+            (scale.edge_range_m / edge_m - 1.0).abs() <= 0.02,
+            "{name}: the edge is at {:.1} m, not about {edge_m} m",
+            scale.edge_range_m
+        );
+        scales.push(scale.metres_per_pixel);
+    }
+    let mean = scales.iter().sum::<f64>() / scales.len() as f64;
+    for scale in &scales {
+        assert!((scale / mean - 1.0).abs() <= 0.03, "{scales:?}");
+    }
 }

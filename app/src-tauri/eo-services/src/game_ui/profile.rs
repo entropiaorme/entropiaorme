@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use super::field::ReadProfile;
 use super::locate::{TitleProfile, WindowProfile};
+use super::radar::RadarProfile;
 use super::table::RuleProfile;
 use super::text::TextProfile;
 use super::window::ChromeProfile;
@@ -34,6 +35,8 @@ pub struct UiProfile {
     pub titles: TitleProfile,
     /// The kinds of window the readers know, by key.
     pub windows: BTreeMap<String, WindowProfile>,
+    /// The radar, and the coordinates printed under it.
+    pub radar: RadarProfile,
 }
 
 /// Why a profile could not be used.

@@ -34,6 +34,7 @@ pub mod expected_hunting;
 pub mod fingerprint_recorder;
 pub mod fuzzy_match;
 pub mod game_data_store;
+pub mod game_ui;
 pub mod harvest_yield;
 pub mod healing_profile;
 pub mod healing_review;

@@ -1,0 +1,125 @@
+{
+  "format": 1,
+  "client_interface": "2026-09",
+  "chrome": {
+    "panel_rgb": [
+      8,
+      11,
+      11
+    ],
+    "panel_tolerance": 3,
+    "ridge_lum": [
+      22,
+      100
+    ],
+    "ridge_max_chroma": 10,
+    "ridge_step": 10,
+    "ridge_widths": [
+      2,
+      1,
+      3
+    ],
+    "scaled_ridge_widths": [
+      3
+    ],
+    "min_edge_run": 40,
+    "edge_gap": 3,
+    "min_window": [
+      150,
+      100
+    ],
+    "side_support": 0.8,
+    "min_evidence": 300,
+    "min_visible_side": 12,
+    "corner_reach": 40,
+    "marker": {
+      "search": [
+        14,
+        8,
+        60,
+        60
+      ],
+      "min_red": 200,
+      "min_red_over_blue": 60,
+      "min_pixels": 20,
+      "max_width": 14,
+      "min_height": 12
+    }
+  },
+  "text": {
+    "min_ink": 110,
+    "glyph_gap": 2,
+    "join_factor": 1.7,
+    "max_colour_distance": 110,
+    "run_height": [
+      5,
+      60
+    ],
+    "min_ink_pixels": 14
+  },
+  "rules": {
+    "row_rule_lum": [
+      18,
+      200
+    ],
+    "column_rule_lum": [
+      18,
+      70
+    ],
+    "coverage": 0.85,
+    "row_inset": [
+      20,
+      40
+    ],
+    "merge": 2,
+    "row_height": [
+      30,
+      110
+    ]
+  },
+  "read": {
+    "crop_margin": 0.45,
+    "label_score": 80.0
+  },
+  "titles": {
+    "strip_height": 90,
+    "score": 82.0
+  },
+  "windows": {
+    "repair_terminal": {
+      "title": "REPAIR TERMINAL",
+      "fields": {
+        "repair_cost": {
+          "label": "REPAIR COST:",
+          "value": "right_of",
+          "grammar": "ped_amount"
+        }
+      }
+    },
+    "trade_terminal": {
+      "title": "TRADE TERMINAL",
+      "fields": {
+        "total": {
+          "label": "TOTAL AMOUNT:",
+          "value": "below",
+          "grammar": "ped_amount"
+        }
+      }
+    },
+    "skills": {
+      "title": "SKILLS & PROFESSIONS"
+    },
+    "auction_sell": {
+      "title": "AUCTION / SELL"
+    },
+    "auction": {
+      "title": "AUCTION"
+    },
+    "inventory": {
+      "title": "INVENTORY"
+    },
+    "options": {
+      "title": "OPTIONS"
+    }
+  }
+}

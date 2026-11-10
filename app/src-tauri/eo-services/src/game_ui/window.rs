@@ -342,6 +342,11 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
         .into_iter()
         .map(Some)
         .collect();
+    // A side may also be the frame's own boundary, for a window dragged
+    // partly off the screen. A maximised window has its border ON the
+    // boundary instead; both readings of such a side yield the same
+    // rectangle, and the one that saw the ridge wins below because it
+    // has more sides seen.
     for list in [&mut lefts, &mut rights, &mut tops, &mut bottoms] {
         list.push(None);
     }
@@ -585,7 +590,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                         && k.y1 > c.y1
                         && carries_on(&c, k, true)
                 })
-                .max_by_key(|s| s.candidate.y1);
+                .max_by_key(|s| (s.candidate.y1, s.seen));
             let wider = qualifying
                 .iter()
                 .filter(|s| {
@@ -596,7 +601,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                         && k.x1 > c.x1
                         && carries_on(&c, k, false)
                 })
-                .max_by_key(|s| s.candidate.x1);
+                .max_by_key(|s| (s.candidate.x1, s.seen));
             match deeper.or(wider) {
                 Some(next) => chosen = next,
                 None => break,
@@ -772,6 +777,54 @@ mod tests {
         let behind = behind.expect("the covered window is still reported");
         assert_eq!(behind.left, Side::Hidden);
         assert!(!behind.extent_certain());
+    }
+
+    #[test]
+    fn a_maximised_window_has_all_four_sides_seen() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 8);
+        let rect = Rect::new(0, 0, 899, 599);
+        draw_window(&mut image, rect);
+        let found = find_windows(&image, &chrome);
+        assert_eq!(rects(&found), vec![rect]);
+        assert!(found[0].fully_visible(), "{:?}", found[0]);
+    }
+
+    #[test]
+    fn a_window_run_off_the_frame_is_still_found_over_a_maximised_one() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 9);
+        let maximised = Rect::new(0, 0, 899, 599);
+        let front = Rect::new(500, 350, 1100, 800);
+        draw_window(&mut image, maximised);
+        draw_window(&mut image, front);
+        let found = find_windows(&image, &chrome);
+        assert_eq!(found[0].rect, Rect::new(500, 350, 899, 599));
+        assert_eq!(
+            (found[0].right, found[0].bottom),
+            (Side::BeyondFrame, Side::BeyondFrame)
+        );
+        let behind = found
+            .iter()
+            .find(|f| f.rect == maximised)
+            .expect("the maximised window");
+        assert_eq!((behind.left, behind.top), (Side::Seen, Side::Seen));
+    }
+
+    #[test]
+    fn a_maximised_window_with_panes_still_has_its_sides_seen() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 10);
+        let rect = Rect::new(0, 0, 899, 599);
+        draw_window(&mut image, rect);
+        for (inset, rgb) in [(0, [8u8, 11, 11]), (1, [45, 49, 49]), (2, [76, 82, 84])] {
+            for x in rect.x0..=rect.x1 {
+                put(&mut image, x, 450 - inset, rgb);
+            }
+        }
+        let found = find_windows(&image, &chrome);
+        assert_eq!(rects(&found), vec![rect]);
+        assert!(found[0].fully_visible(), "{:?}", found[0]);
     }
 
     /// A pane inside a window is ruled like the window's own border;

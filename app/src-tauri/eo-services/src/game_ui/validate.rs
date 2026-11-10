@@ -25,6 +25,9 @@ pub enum Grammar {
     Integer,
     /// A number followed by a percent sign. `201.92%`.
     Percent,
+    /// A pager's position: page, a slash, page count, with the page
+    /// between one and the count. `2 / 13`; its number is the page.
+    Pager,
     /// Free text: anything non-empty.
     Text,
 }
@@ -86,6 +89,23 @@ fn grouped_number(text: &str) -> Option<f64> {
     plain.parse().ok()
 }
 
+/// A pager's `page / count`: both plain positive integers without
+/// leading zeros, the page no larger than the count. A page past the
+/// count is a misread digit, not a position.
+pub fn pager(raw: &str) -> Option<(u32, u32)> {
+    let text = fold(raw);
+    // The recogniser's alphabet has a fullwidth slash as well.
+    let (page, count) = text.split_once(['/', '\u{ff0f}'])?;
+    let number = |part: &str| -> Option<u32> {
+        if part.is_empty() || part.starts_with('0') || !part.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    };
+    let (page, count) = (number(page)?, number(count)?);
+    (page <= count).then_some((page, count))
+}
+
 /// Check `raw` against `grammar`. `None` is a refusal.
 pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
     let text = fold(raw);
@@ -123,6 +143,13 @@ pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
             Some(Parsed {
                 text,
                 number: Some(number),
+            })
+        }
+        Grammar::Pager => {
+            let (page, count) = pager(&text)?;
+            Some(Parsed {
+                text: format!("{page} / {count}"),
+                number: Some(page as f64),
             })
         }
         Grammar::Text => Some(Parsed {
@@ -187,5 +214,22 @@ mod tests {
         assert_eq!(parse(Grammar::Integer, "L0N"), None);
         assert_eq!(number(Grammar::Percent, "201.92%"), Some(201.92));
         assert_eq!(parse(Grammar::Percent, "201.92"), None);
+    }
+
+    #[test]
+    fn a_pager_reads_as_page_of_count_or_is_refused() {
+        let page = |raw: &str| parse(Grammar::Pager, raw).map(|p| p.text);
+        assert_eq!(page("2 / 13"), Some("2 / 13".into()));
+        assert_eq!(page("13/13"), Some("13 / 13".into()));
+        assert_eq!(page("１ / １３"), Some("1 / 13".into()));
+        assert_eq!(
+            parse(Grammar::Pager, "2 / 13").and_then(|p| p.number),
+            Some(2.0)
+        );
+        for raw in [
+            "14 / 13", "0 / 13", "2 /", "/ 13", "2 13", "2 / 1x", "02 / 13", "2 // 13", "",
+        ] {
+            assert_eq!(parse(Grammar::Pager, raw), None, "{raw:?}");
+        }
     }
 }

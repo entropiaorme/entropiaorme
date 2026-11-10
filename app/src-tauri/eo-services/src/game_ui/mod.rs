@@ -11,6 +11,7 @@ pub mod field;
 pub mod geometry;
 pub mod locate;
 pub mod profile;
+pub mod skills;
 pub mod table;
 pub mod text;
 pub mod validate;

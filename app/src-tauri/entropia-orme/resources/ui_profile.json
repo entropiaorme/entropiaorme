@@ -75,11 +75,18 @@
     "row_height": [
       30,
       110
-    ]
+    ],
+    "column_rule_max_chroma": 24,
+    "divider_reach": 3
   },
   "read": {
     "crop_margin": 0.45,
-    "label_score": 80.0
+    "label_score": 80.0,
+    "label_aspect_per_char": [
+      0.3,
+      2.5
+    ],
+    "label_aspect_slack": 4.0
   },
   "titles": {
     "strip_height": 90,
@@ -107,7 +114,54 @@
       }
     },
     "skills": {
-      "title": "SKILLS & PROFESSIONS"
+      "title": "SKILLS & PROFESSIONS",
+      "skills_table": {
+        "name_header": "Skill Name",
+        "points_header": "Points",
+        "total_labels": [
+          "Total:",
+          "Total skill points in category:"
+        ],
+        "all_categories": "ALL CATEGORIES",
+        "uncounted": [
+          "Promoter Rating",
+          "Reputation"
+        ],
+        "columns": [
+          "name",
+          "rank",
+          "progress",
+          "points"
+        ],
+        "row_slack": 0.05,
+        "header_height_share": 0.53,
+        "line_slack": 0.5,
+        "cut_reach": 2.0,
+        "word_gap": 1.0,
+        "min_name_length": 3,
+        "points_clearance": 0.5,
+        "max_pages": 100,
+        "near_miss": {
+          "score": 88.0,
+          "margin": 5.0,
+          "max_length_difference": 2,
+          "sweep_score": 66.0
+        },
+        "scrollbar": {
+          "thumb_lum": [
+            120,
+            175
+          ],
+          "thumb_max_chroma": 25,
+          "thumb_width": [
+            0.12,
+            0.35
+          ],
+          "thumb_min_length": 0.5,
+          "max_stray": 0.5,
+          "fill_share": 0.97
+        }
+      }
     },
     "auction_sell": {
       "title": "AUCTION / SELL"

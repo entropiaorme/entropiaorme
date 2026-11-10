@@ -20,6 +20,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::skills::{
+    nearest_skill, read_skills_page, Admission, Checksum, RowName, SkillRow, SkillVocabulary,
+    SkillsError, SkillsPage, SkillsSweep, SkillsTableProfile,
+};
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::skill_panel::BgrImage;
 use serde_json::Value;
@@ -244,4 +248,490 @@ fn a_closed_terminal_is_a_refusal() {
         checked += 1;
     }
     println!("closed terminal: {checked} frames with other windows open, all refused");
+}
+
+/// The skill names and categories the application ships.
+fn skill_vocabulary() -> SkillVocabulary {
+    let path = resources().join("snapshot/skills.json");
+    let entities: Vec<Value> = serde_json::from_str(
+        &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}")),
+    )
+    .unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    SkillVocabulary::from_entities(&entities)
+}
+
+/// Whether a skill named `name` is the row the labels call `label`. A
+/// label ending in an ellipsis is the client's cut name, which reads as
+/// the one skill it begins; an empty label is the row the client draws
+/// without a name.
+fn same_skill(name: Option<&str>, label: &str) -> bool {
+    match (name, label.strip_suffix("...")) {
+        (None, _) => label.is_empty(),
+        (Some(name), Some(stem)) => name.starts_with(stem) && name.len() > stem.len(),
+        (Some(name), None) => name == label,
+    }
+}
+
+/// Whether a row read is the row the labels call `label`: a known skill
+/// by its name, a skill the vocabulary lacks by exactly the text the
+/// screen shows.
+fn row_is(row: &SkillRow, label: &str) -> bool {
+    match &row.name {
+        RowName::Known { name, .. } => same_skill(Some(name), label),
+        RowName::Blank => label.is_empty(),
+        RowName::Unknown => row.raw_name.trim() == label,
+    }
+}
+
+/// The frames whose labels carry the skills table, less the held-out
+/// ones, in shard `shard`.
+fn skills_frames(corpus: &Corpus, shard: usize) -> Vec<(String, Value)> {
+    corpus
+        .frames()
+        .into_iter()
+        .filter(|(_, labels)| labels.get("skills").is_some())
+        .enumerate()
+        .filter(|(i, _)| i % SKILLS_SHARDS == shard)
+        .map(|(_, (name, labels))| (name, labels["skills"].clone()))
+        .collect()
+}
+
+/// Frames that show their page whole. A page is whole only where every
+/// labelled row is fully visible and the table's scrollbar shows the
+/// whole list in view: no thumb (f13, f15, f62 to f74). Elsewhere a
+/// thumb shorter than its track shows rows out of view, even where every
+/// row in view is whole: f48 (a 280-pixel thumb on a 440-pixel track)
+/// and f16 (445 on 548) both show the Combat category's second page,
+/// which the thumbs put at eleven rows, nine of them in f16's view and
+/// seven in f48's; f05, f06 and f14 show part of their page with a thumb
+/// as well, and the rest have rows cut by the view.
+const WHOLE_FRAMES: [&str; 15] = [
+    "f13", "f15", "f62", "f63", "f64", "f65", "f66", "f67", "f68", "f69", "f70", "f71", "f72",
+    "f73", "f74",
+];
+
+/// Compare one page's reading with its labels, row by row, for whether
+/// it calls itself whole, and for the bar above the table.
+fn score_skills_page(
+    name: &str,
+    labels: &Value,
+    page: &SkillsPage,
+    rows: &mut Tally,
+    bar: &mut Tally,
+) {
+    let labelled = labels["rows"].as_array().expect("rows");
+    let readable = |row: &Value| {
+        row["fully_visible"].as_bool() == Some(true)
+            && row["name"].is_string()
+            && row["points"].is_string()
+    };
+    let should_be_whole = WHOLE_FRAMES.contains(&name);
+    if page.whole != should_be_whole {
+        rows.wrong.push(format!(
+            "{name}: the page reads as whole {}, the screen shows it whole {should_be_whole}",
+            page.whole
+        ));
+    }
+    if should_be_whole && !labelled.iter().all(readable) {
+        rows.wrong.push(format!(
+            "{name}: listed as whole, but its labels mark a row not fully visible"
+        ));
+    }
+    let mut matched = vec![false; labelled.len()];
+    for got in &page.rows {
+        match &got.name {
+            RowName::Known {
+                name: skill,
+                near_miss: true,
+            } => println!(
+                "  {name}: {:?} read as {skill:?} by a near miss",
+                got.raw_name
+            ),
+            RowName::Unknown => println!(
+                "  {name}: {:?} = {} is a skill the vocabulary lacks",
+                got.raw_name, got.points_text
+            ),
+            _ => {}
+        }
+        let found = labelled
+            .iter()
+            .position(|row| row["name"].as_str().is_some_and(|l| row_is(got, l)));
+        match found {
+            Some(i) if matched[i] => rows.wrong.push(format!(
+                "{name}: {:?} = {} matches a row already read",
+                got.name, got.points_text
+            )),
+            Some(i) if !readable(&labelled[i]) => rows.wrong.push(format!(
+                "{name}: read {:?} = {}, a row the screen does not show whole",
+                got.name, got.points_text
+            )),
+            Some(i) if labelled[i]["points"].as_str() == Some(got.points_text.as_str()) => {
+                matched[i] = true;
+                rows.exact += 1;
+            }
+            Some(i) => rows.wrong.push(format!(
+                "{name}: {:?} read {:?}, the screen shows {:?}",
+                got.name, got.points_text, labelled[i]["points"]
+            )),
+            None => rows.wrong.push(format!(
+                "{name}: read {:?} (raw {:?}) = {}, which is no row on the screen",
+                got.name, got.raw_name, got.points_text
+            )),
+        }
+    }
+    for (i, row) in labelled.iter().enumerate() {
+        if readable(row) && !matched[i] {
+            rows.refused.push(format!(
+                "{name}: {:?} = {} (unread rows: {:?})",
+                row["name"], row["points"], page.unread
+            ));
+        }
+    }
+    let total_label = labels["total_text"].as_str().and_then(|t| {
+        t.rsplit(' ')
+            .next()
+            .and_then(|digits| digits.parse::<u64>().ok())
+    });
+    let page_label = labels["page"].as_str().map(|p| p.replace(' ', ""));
+    let fields = [
+        (
+            "total",
+            total_label.map(|t| t.to_string()),
+            page.total.map(|t| t.to_string()),
+        ),
+        (
+            "page",
+            page_label,
+            page.page.map(|(i, n)| format!("{i}/{n}")),
+        ),
+        (
+            "category",
+            labels["category"].as_str().map(String::from),
+            page.category.clone(),
+        ),
+    ];
+    for (what, want, got) in fields {
+        match (want, got) {
+            (Some(want), Some(got)) if want == got => bar.exact += 1,
+            (Some(want), Some(got)) => bar.wrong.push(format!(
+                "{name}: {what} read {got:?}, the screen shows {want:?}"
+            )),
+            (Some(want), None) => bar.refused.push(format!("{name}: {what} {want:?}")),
+            (None, Some(got)) => bar.wrong.push(format!(
+                "{name}: {what} read {got:?} where the labels have none"
+            )),
+            (None, None) => {}
+        }
+    }
+}
+
+/// Frames the reader refuses although their labels show whole rows: the
+/// refusal it must give, and why. Every other labelled row is required.
+const SKILLS_REFUSALS: [(&str, SkillsError, &str); 3] = [
+    (
+        "f47",
+        SkillsError::ExtentUncertain,
+        "the desktop scaled the frame, so the window's extent is uncertain",
+    ),
+    (
+        "f18",
+        SkillsError::WindowNotFound,
+        "the window runs off the frame's left edge, which cuts the start of its title (so \
+         the window cannot be identified) and the names",
+    ),
+    (
+        "f17",
+        SkillsError::WindowNotFound,
+        "the Inventory window covers the skills window's title, so the window cannot be \
+         identified; the labels mark every row but one under the Inventory window",
+    ),
+];
+
+fn replay_skills_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let vocabulary = skill_vocabulary();
+    let (mut rows, mut bar) = (Tally::default(), Tally::default());
+    for (name, labels) in skills_frames(&corpus, shard) {
+        let image = corpus.frame(&name);
+        let excused = SKILLS_REFUSALS.iter().find(|(f, _, _)| *f == name);
+        let labelled = labels["rows"].as_array().expect("rows");
+        let readable = labelled
+            .iter()
+            .filter(|row| row["fully_visible"].as_bool() == Some(true) && row["name"].is_string())
+            .count();
+        match (
+            read_skills_page(&image, &profile, &vocabulary, &read),
+            excused,
+        ) {
+            (Err(SkillsError::NoRecogniser), _) => panic!("the recogniser stopped answering"),
+            (Ok(page), Some((_, _, why))) => rows
+                .wrong
+                .push(format!("{name}: read a page where {why}: {page:?}")),
+            (Err(error), Some((_, want, why))) => {
+                println!("  {name}: frame refused: {error} ({why})");
+                if error != *want {
+                    rows.wrong.push(format!(
+                        "{name}: refused as {error:?}, where {why} ({want:?})"
+                    ));
+                }
+                for _ in 0..readable {
+                    rows.refused
+                        .push(format!("{name}: frame refused ({error})"));
+                }
+            }
+            (Err(error), None) => {
+                println!("  {name}: frame refused: {error}");
+                for _ in 0..readable {
+                    rows.refused
+                        .push(format!("{name}: frame refused ({error})"));
+                }
+            }
+            (Ok(page), None) => {
+                println!(
+                    "  {name}: {} rows read, {} unread, {} partial, whole {}",
+                    page.rows.len(),
+                    page.unread.len(),
+                    page.partial,
+                    page.whole
+                );
+                score_skills_page(&name, &labels, &page, &mut rows, &mut bar);
+            }
+        }
+    }
+    rows.report(&format!("skills rows, shard {shard}"));
+    bar.report(&format!("skills total, page and category, shard {shard}"));
+    let unexcused: Vec<&String> = rows
+        .refused
+        .iter()
+        .filter(|line| {
+            !SKILLS_REFUSALS
+                .iter()
+                .any(|(frame, _, _)| line.starts_with(&format!("{frame}:")))
+        })
+        .collect();
+    assert!(
+        unexcused.is_empty(),
+        "rows the screen shows whole were refused: {unexcused:#?}"
+    );
+    assert!(
+        bar.refused.is_empty(),
+        "the bar above the table was refused: {:#?}",
+        bar.refused
+    );
+}
+
+/// The one frame refused for a covered title loses only the rows the
+/// labels say are readable there; the rest are under the window in front.
+#[test]
+fn a_frame_refused_for_a_covered_title_hides_only_one_readable_row() {
+    let Some(corpus) = Corpus::open() else { return };
+    let rows = corpus.labels["frames"]["f17"]["skills"]["rows"]
+        .as_array()
+        .expect("f17 rows")
+        .clone();
+    let readable: Vec<&Value> = rows
+        .iter()
+        .filter(|row| row["fully_visible"].as_bool() == Some(true))
+        .collect();
+    assert_eq!(readable.len(), 1, "{readable:?}");
+    assert!(rows
+        .iter()
+        .filter(|row| row["fully_visible"].as_bool() != Some(true))
+        .all(|row| row["name"].is_null()));
+}
+
+const SKILLS_SHARDS: usize = 8;
+
+macro_rules! skills_shards {
+    ($($name:ident: $shard:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            replay_skills_shard($shard);
+        }
+    )*};
+}
+
+skills_shards! {
+    skills_rows_shard_0: 0,
+    skills_rows_shard_1: 1,
+    skills_rows_shard_2: 2,
+    skills_rows_shard_3: 3,
+    skills_rows_shard_4: 4,
+    skills_rows_shard_5: 5,
+    skills_rows_shard_6: 6,
+    skills_rows_shard_7: 7,
+}
+
+/// One sweep of every skill: the thirteen pages of the whole list, read
+/// one after another with nothing gained in between.
+const SWEEP_FRAMES: [&str; 13] = [
+    "f62", "f63", "f64", "f65", "f66", "f67", "f68", "f69", "f70", "f71", "f72", "f73", "f74",
+];
+
+/// The sweep's labelled rows, page by page, split into the names the
+/// bundled vocabulary knows (with the blank row) and those it lacks.
+fn sweep_labels(corpus: &Corpus, vocabulary: &SkillVocabulary) -> (Vec<Value>, Vec<Value>) {
+    SWEEP_FRAMES
+        .iter()
+        .flat_map(|frame| {
+            corpus.labels["frames"][*frame]["skills"]["rows"]
+                .as_array()
+                .expect("rows")
+                .clone()
+        })
+        .partition(|row| {
+            let label = row["name"].as_str().expect("named");
+            label.is_empty()
+                || vocabulary
+                    .names()
+                    .iter()
+                    .any(|n| same_skill(Some(n), label))
+        })
+}
+
+fn skills_table(profile: &UiProfile) -> SkillsTableProfile {
+    profile.windows["skills"]
+        .skills_table
+        .clone()
+        .expect("the profile describes the skills table")
+}
+
+/// A skill the bundled vocabulary lacks is read with the text the screen
+/// shows and its points, never given a vocabulary name, and leaves its
+/// page whole.
+#[test]
+fn a_skill_the_vocabulary_lacks_is_read_and_leaves_its_page_whole() {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let table = skills_table(&profile);
+    let vocabulary = skill_vocabulary();
+    let page =
+        read_skills_page(&corpus.frame("f66"), &profile, &vocabulary, &read).expect("f66 reads");
+    assert!(page.whole, "f66: {page:?}");
+    let unknown: Vec<&SkillRow> = page
+        .rows
+        .iter()
+        .filter(|row| row.name == RowName::Unknown)
+        .collect();
+    assert_eq!(unknown.len(), 1, "{unknown:?}");
+    assert_eq!(
+        (
+            unknown[0].raw_name.as_str(),
+            unknown[0].points_text.as_str()
+        ),
+        ("Food Technology", "1")
+    );
+    let (nearest, score) =
+        nearest_skill(&unknown[0].raw_name, &vocabulary).expect("a nearest skill");
+    println!(
+        "skill the bundled vocabulary lacks: {:?} = {}, nearest {nearest:?} at {score:.1} (near-miss floor {}, sweep floor {})",
+        unknown[0].raw_name, unknown[0].points_text, table.near_miss.score, table.near_miss.sweep_score
+    );
+}
+
+/// Two different readings of page 2 (the list before and after a skill
+/// rose: the same skills, another total): the later one is kept, each
+/// time. Then page 4's rows arriving under page 3's number, as a misread
+/// pager would bring them, unsettle page 3 until it is read again.
+#[test]
+fn rereadings_replace_and_a_misplaced_page_unsettles_its_number() {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let vocabulary = skill_vocabulary();
+    let mut sweep = SkillsSweep::new(&skills_table(&profile), &vocabulary);
+    let page = |frame: &str| {
+        read_skills_page(&corpus.frame(frame), &profile, &vocabulary, &read)
+            .unwrap_or_else(|e| panic!("{frame}: {e}"))
+    };
+    let (older, newer) = (page("f13"), page("f63"));
+    assert_eq!((older.page, older.total), (Some((2, 13)), Some(198258)));
+    assert_eq!((newer.page, newer.total), (Some((2, 13)), Some(198259)));
+    assert_eq!(sweep.accept(older.clone()), Admission::Kept);
+    assert_eq!(sweep.accept(newer.clone()), Admission::Kept);
+    assert_eq!(sweep.page(2).and_then(|p| p.total), Some(198259));
+    assert_eq!(sweep.accept(older), Admission::Kept);
+    assert_eq!(sweep.page(2).and_then(|p| p.total), Some(198258));
+
+    let (third, fourth) = (page("f64"), page("f65"));
+    assert_eq!(sweep.accept(third.clone()), Admission::Kept);
+    let mut misplaced = fourth;
+    misplaced.page = Some((3, 13));
+    assert_eq!(sweep.accept(misplaced), Admission::Conflict);
+    assert!(sweep.missing().expect("count known").contains(&3));
+    assert_eq!(sweep.accept(third.clone()), Admission::Kept);
+    assert_eq!(sweep.page(3), Some(&third));
+    println!("skills sweep rereadings: page 2 kept from the later reading each time; page 3 unsettled by a misplaced page and settled by a reread");
+}
+
+/// The sweep's pages, read with the bundled vocabulary, fed out of order
+/// and with one page read twice, merge into every skill (those it knows
+/// and the one it does not) and add up to the total the panel prints.
+#[test]
+fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let vocabulary = skill_vocabulary();
+    let pages: Vec<SkillsPage> = SWEEP_FRAMES
+        .iter()
+        .map(|name| {
+            read_skills_page(&corpus.frame(name), &profile, &vocabulary, &read)
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+        })
+        .collect();
+    let mut sweep = SkillsSweep::new(&skills_table(&profile), &vocabulary);
+    for index in [12usize, 3, 7, 0, 1, 11, 5, 9, 2, 4, 10, 6, 8, 1] {
+        assert_eq!(
+            sweep.accept(pages[index].clone()),
+            Admission::Kept,
+            "{} (page {}) is whole",
+            SWEEP_FRAMES[index],
+            index + 1
+        );
+    }
+    assert_eq!(sweep.missing(), Some(Vec::new()));
+    let result = sweep.finish().expect("every page is whole");
+    let (known, lacking) = sweep_labels(&corpus, &vocabulary);
+    assert_eq!(result.skills.len(), known.len());
+    for (got, want) in result.skills.iter().zip(&known) {
+        assert!(
+            same_skill(got.name.as_deref(), want["name"].as_str().expect("named")),
+            "{:?} where the screen shows {:?}",
+            got.name,
+            want["name"]
+        );
+        assert_eq!(Some(got.points_text.as_str()), want["points"].as_str());
+    }
+    assert_eq!(result.unknown.len(), lacking.len());
+    for (got, want) in result.unknown.iter().zip(&lacking) {
+        assert_eq!(Some(got.raw_name.as_str()), want["name"].as_str());
+        assert_eq!(Some(got.points_text.as_str()), want["points"].as_str());
+    }
+    assert!(result.unresolved.is_empty() && result.duplicates.is_empty());
+    let unknown: Vec<String> = result
+        .unknown
+        .iter()
+        .map(|s| format!("{} {}", s.raw_name, s.points_text))
+        .collect();
+    let near_misses = result.skills.iter().filter(|s| s.near_miss).count();
+    println!(
+        "skills sweep: {} pages, {} known ({near_misses} by near miss), {} unknown {unknown:?}, checksum {:?}, total {:?}",
+        SWEEP_FRAMES.len(),
+        result.skills.len(),
+        result.unknown.len(),
+        result.checksum,
+        result.total
+    );
+    assert_eq!(result.skills.len(), 151);
+    assert_eq!(unknown, vec!["Food Technology 1".to_string()]);
+    assert_eq!(result.total, Some(198259));
+    assert_eq!(result.checksum, Checksum::Matches);
 }

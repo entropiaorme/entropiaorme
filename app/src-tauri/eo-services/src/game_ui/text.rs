@@ -224,6 +224,18 @@ pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<
     out
 }
 
+/// The bounds of each connected group of ink inside `roi`, before any
+/// joining into runs. A picture, such as a skill's icon, is one or a few
+/// large groups where lettering is many small ones, so this is how a
+/// reader tells a picture from the text beside it when the two are close
+/// enough in colour to join into one run.
+pub fn ink_groups<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<Rect> {
+    glyph_blobs(image, roi, profile)
+        .into_iter()
+        .map(|blob| blob.rect)
+        .collect()
+}
+
 /// The run immediately to the right of `anchor` on its line, if any.
 pub fn run_right_of<'a>(anchor: &TextRun, runs: &'a [TextRun]) -> Option<&'a TextRun> {
     let mid = (anchor.rect.y0 + anchor.rect.y1) / 2;
@@ -320,6 +332,26 @@ mod tests {
         let runs = text_runs(&image, Rect::new(0, 0, 599, 119), &profile);
         let label_run = runs.iter().find(|r| r.rect == label).expect("label");
         assert_eq!(run_below(label_run, &runs).map(|r| r.rect), Some(value));
+    }
+
+    #[test]
+    fn a_picture_beside_lettering_is_its_own_ink_group() {
+        let profile = bundled_profile().text;
+        let mut image = blank(600, 80, [8, 11, 11]);
+        // A picture and a word close enough in colour and position to
+        // join into one run, as a skill's icon and name can.
+        let picture = Rect::new(20, 12, 60, 60);
+        fill(&mut image, picture, [170, 160, 150]);
+        let letters = word(&mut image, (75, 30), 5, (6, 12), 4, [180, 180, 180]);
+        let runs = text_runs(&image, Rect::new(0, 0, 599, 79), &profile);
+        assert_eq!(runs.len(), 1, "the picture and the word join");
+        let groups = ink_groups(&image, Rect::new(0, 0, 599, 79), &profile);
+        assert_eq!(groups.len(), 6);
+        assert!(groups.contains(&picture));
+        assert!(groups
+            .iter()
+            .filter(|g| **g != picture)
+            .all(|g| g.x0 >= letters.x0 && g.x1 <= letters.x1));
     }
 
     #[test]

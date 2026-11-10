@@ -15,7 +15,7 @@ use crate::skill_panel::BgrImage;
 
 use super::geometry::{crop, Rect};
 use super::text::{run_below, run_right_of, text_runs, TextProfile, TextRun};
-use super::validate::{parse, Grammar, Parsed};
+use super::validate::{parse, width_agrees, Grammar, NumeralMetrics, Parsed};
 
 /// The recognition seam: one crop to `(text, confidence)`, or `None`
 /// when no recogniser is available.
@@ -117,6 +117,9 @@ pub struct ReadProfile {
     /// its text is long. Runs outside it are not worth recognising.
     pub label_aspect_per_char: [f32; 2],
     pub label_aspect_slack: f32,
+    /// How wide the client's numerals are, for checking a number's
+    /// reading against its ink.
+    pub numerals: NumeralMetrics,
 }
 
 /// Why a field could not be read. Every variant is a refusal: the
@@ -131,6 +134,8 @@ pub enum FieldError {
     ValueNotFound,
     #[error("the value read as {raw:?}, which is not a valid value for this field")]
     Invalid { raw: String },
+    #[error("the value read as {raw:?}, but the figure on screen is not that wide")]
+    WrongWidth { raw: String },
 }
 
 /// One field read and validated.
@@ -248,6 +253,9 @@ pub fn read_field_in(
     let (raw, confidence) =
         read_run(image, value.rect, read, recogniser).ok_or(FieldError::NoRecogniser)?;
     let parsed = parse(field.grammar, &raw).ok_or(FieldError::Invalid { raw: raw.clone() })?;
+    if !width_agrees(image, value.rect, &parsed.text, &read.numerals) {
+        return Err(FieldError::WrongWidth { raw });
+    }
     Ok(FieldRead {
         parsed,
         raw,

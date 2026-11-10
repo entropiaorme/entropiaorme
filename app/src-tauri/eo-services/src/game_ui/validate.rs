@@ -11,6 +11,8 @@ use serde::Deserialize;
 
 use crate::skill_panel::digit_value;
 
+use super::geometry::{Pixels, Rect};
+
 /// The shapes a field's text can be required to have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -159,6 +161,104 @@ pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
     }
 }
 
+/// How wide the client's numerals are, in units of a digit's height.
+///
+/// The grammar cannot see a digit lost from a fraction, or from an
+/// ungrouped number: `8,429.5` is as well formed as `8,429.55`. The
+/// lettering itself can: the client's numerals have fixed advances, so
+/// the text a value is read as predicts how wide its ink must be, and a
+/// reading a digit short is most of a digit too narrow.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NumeralMetrics {
+    /// A pixel is ink when its brightest channel reaches this.
+    pub min_ink: u8,
+    /// Rows holding at least this share of the busiest row's ink are
+    /// the digits' body; a comma's tail below them is not.
+    pub body_row_share: f32,
+    /// Advance of a digit other than one.
+    pub digit: f32,
+    /// Advance of the digit one.
+    pub one: f32,
+    /// Advance of a comma.
+    pub comma: f32,
+    /// Advance of a full stop.
+    pub period: f32,
+    /// Width of ` PED` after an amount, space included.
+    pub ped_suffix: f32,
+    /// What the first and last glyph's side bearings take off the sum.
+    pub bias: f32,
+    /// Largest disagreement accepted. Under half a digit.
+    pub tolerance: f32,
+}
+
+/// The width `text` should have, in digit heights; `None` when it holds
+/// a character the metrics do not cover.
+pub fn expected_width(text: &str, metrics: &NumeralMetrics) -> Option<f32> {
+    let (number, suffix) = match text.strip_suffix(" PED") {
+        Some(number) => (number, metrics.ped_suffix),
+        None => (text, 0.0),
+    };
+    let mut units = metrics.bias + suffix;
+    for c in number.chars() {
+        units += match c {
+            '1' => metrics.one,
+            '0' | '2'..='9' => metrics.digit,
+            ',' => metrics.comma,
+            '.' => metrics.period,
+            _ => return None,
+        };
+    }
+    Some(units)
+}
+
+/// Width and body height of the ink in `rect`.
+fn ink_size<P: Pixels>(image: &P, rect: Rect, metrics: &NumeralMetrics) -> Option<(i32, i32)> {
+    let rect = rect.intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))?;
+    let ink = |x: i32, y: i32| {
+        let [r, g, b] = image.rgb(x, y);
+        r.max(g).max(b) >= metrics.min_ink
+    };
+    let mut row_ink = Vec::with_capacity(rect.height() as usize);
+    let (mut left, mut right) = (i32::MAX, i32::MIN);
+    for y in rect.y0..=rect.y1 {
+        let mut count = 0;
+        for x in rect.x0..=rect.x1 {
+            if ink(x, y) {
+                count += 1;
+                left = left.min(x);
+                right = right.max(x);
+            }
+        }
+        row_ink.push(count);
+    }
+    let busiest = *row_ink.iter().max()?;
+    if busiest == 0 {
+        return None;
+    }
+    let floor = (busiest as f32 * metrics.body_row_share).ceil() as i32;
+    let top = row_ink.iter().position(|&c| c >= floor)?;
+    let bottom = row_ink.iter().rposition(|&c| c >= floor)?;
+    Some((right - left + 1, (bottom - top + 1) as i32))
+}
+
+/// Whether the ink in `rect` is as wide as `text` says it should be.
+/// Text the metrics do not cover cannot be checked and passes; a
+/// rectangle with no ink fails.
+pub fn width_agrees<P: Pixels>(
+    image: &P,
+    rect: Rect,
+    text: &str,
+    metrics: &NumeralMetrics,
+) -> bool {
+    let Some(expected) = expected_width(text, metrics) else {
+        return true;
+    };
+    let Some((width, height)) = ink_size(image, rect, metrics) else {
+        return false;
+    };
+    (width as f32 / height as f32 - expected).abs() <= metrics.tolerance
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,5 +331,56 @@ mod tests {
         ] {
             assert_eq!(parse(Grammar::Pager, raw), None, "{raw:?}");
         }
+    }
+
+    fn metrics() -> NumeralMetrics {
+        crate::game_ui::test_support::bundled_profile()
+            .read
+            .numerals
+    }
+
+    /// A block of ink as wide as `text` should be at digit height `h`.
+    fn lettering(text: &str, h: i32) -> (crate::skill_panel::BgrImage, Rect) {
+        use crate::game_ui::test_support::{blank, fill};
+        let width = (expected_width(text, &metrics()).expect("covered") * h as f32).round() as i32;
+        let mut image = blank(600, 80, [8, 11, 11]);
+        let rect = Rect::new(20, 20, 20 + width - 1, 20 + h - 1);
+        fill(&mut image, rect, [200, 200, 200]);
+        (image, rect.padded(4))
+    }
+
+    #[test]
+    fn a_reading_a_digit_short_is_too_narrow_for_its_ink() {
+        let m = metrics();
+        for h in [10, 14, 28] {
+            let (image, rect) = lettering("8,429.55", h);
+            assert!(width_agrees(&image, rect, "8,429.55", &m), "height {h}");
+            assert!(!width_agrees(&image, rect, "8,429.5", &m), "height {h}");
+            assert!(!width_agrees(&image, rect, "8,429.555", &m), "height {h}");
+            let (image, rect) = lettering("27.47542 PED", h);
+            assert!(width_agrees(&image, rect, "27.47542 PED", &m), "height {h}");
+            assert!(!width_agrees(&image, rect, "27.4742 PED", &m), "height {h}");
+        }
+    }
+
+    #[test]
+    fn even_the_narrowest_glyphs_are_told_apart() {
+        let m = metrics();
+        let (image, rect) = lettering("111", 10);
+        assert!(width_agrees(&image, rect, "111", &m));
+        assert!(!width_agrees(&image, rect, "11", &m));
+    }
+
+    #[test]
+    fn text_the_metrics_do_not_cover_passes_and_no_ink_fails() {
+        let m = metrics();
+        let (image, rect) = lettering("123", 10);
+        assert!(width_agrees(&image, rect, "Newbie", &m));
+        assert!(!width_agrees(
+            &image,
+            Rect::new(300, 50, 400, 70),
+            "123",
+            &m
+        ));
     }
 }

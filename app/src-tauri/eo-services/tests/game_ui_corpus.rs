@@ -735,3 +735,109 @@ fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
     assert_eq!(result.total, Some(198259));
     assert_eq!(result.checksum, Checksum::Matches);
 }
+
+/// The recogniser's known failure, made systematic: wherever a number
+/// has the same digit twice running, one of the pair is dropped. It has
+/// done exactly this to `1,444.77` at 96% confidence.
+fn collapsing(
+    read: impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync,
+    collapsed: Arc<Mutex<Vec<(String, String)>>>,
+) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+    move |image: &BgrImage| {
+        let (text, confidence) = read(image)?;
+        let numeric = text.chars().any(|c| c.is_ascii_digit())
+            && text
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, ',' | '.' | ' '));
+        if !numeric {
+            return Some((text, confidence));
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let Some(at) = chars
+            .windows(2)
+            .position(|pair| pair[0] == pair[1] && pair[0].is_ascii_digit())
+        else {
+            return Some((text, confidence));
+        };
+        let mut short = chars.clone();
+        short.remove(at);
+        let short: String = short.into_iter().collect();
+        collapsed.lock().unwrap().push((text, short.clone()));
+        Some((short, confidence))
+    }
+}
+
+/// With a recogniser that drops one of every repeated pair of digits,
+/// no skill's points may come back wrong: each damaged number must be
+/// refused, by its grouping or by its width. The sweep's thirteen pages
+/// hold the figure this failure was first seen on.
+#[test]
+fn a_recogniser_that_drops_repeated_digits_never_gets_a_number_accepted() {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let collapsed = Arc::new(Mutex::new(Vec::new()));
+    let read = collapsing(reader(engine), collapsed.clone());
+    let profile = profile();
+    let vocabulary = skill_vocabulary();
+    let (mut exact, mut refused) = (0usize, 0usize);
+    let mut wrong = Vec::new();
+    let mut seen_the_first_case = false;
+    // Three pages keep the test well inside the runner's ceiling; they
+    // include the page with `1,444.77`.
+    for name in ["f65", "f71", "f72"] {
+        let labels = &corpus.labels["frames"][name]["skills"];
+        let image = corpus.frame(name);
+        let page = read_skills_page(&image, &profile, &vocabulary, &read)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let labelled: Vec<(&str, &str)> = labels["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap_or(""),
+                    row["points"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        for row in &page.rows {
+            match labelled.iter().find(|(label, _)| row_is(row, label)) {
+                Some((_, points)) if *points == row.points_text => exact += 1,
+                Some((label, points)) => wrong.push(format!(
+                    "{name}: {label} read as {:?}, the screen shows {points:?}",
+                    row.points_text
+                )),
+                None => wrong.push(format!(
+                    "{name}: a row was read that is not on screen: {row:?}"
+                )),
+            }
+        }
+        refused += page.unread.len();
+        for unread in &page.unread {
+            if unread.raw_points.as_deref() == Some("1,44.77") {
+                seen_the_first_case = true;
+            }
+        }
+    }
+    let damaged = collapsed.lock().unwrap().clone();
+    println!(
+        "collapsed digits: {} numbers damaged ({}); rows: {exact} read exactly, {refused} refused, {} WRONG",
+        damaged.len(),
+        damaged
+            .iter()
+            .map(|(was, became)| format!("{was} -> {became}"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        wrong.len()
+    );
+    assert!(
+        wrong.is_empty(),
+        "a damaged number was accepted:\n{}",
+        wrong.join("\n")
+    );
+    assert!(
+        seen_the_first_case,
+        "`1,444.77` read as `1,44.77` must be among the refusals"
+    );
+    assert!(refused > 0 && !damaged.is_empty());
+}

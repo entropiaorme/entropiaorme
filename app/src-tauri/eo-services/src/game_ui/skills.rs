@@ -33,7 +33,7 @@ use super::locate::{locate, ReadError};
 use super::profile::UiProfile;
 use super::table::{carries_across, column_rules, row_rules, rule_extent, Panel};
 use super::text::{ink_groups, run_right_of, text_runs, TextRun};
-use super::validate::{pager, parse, Grammar};
+use super::validate::{pager, parse, width_agrees, Grammar};
 use super::window::Side;
 
 /// The profile key of the skills window.
@@ -936,7 +936,11 @@ pub fn read_skills_page(
                 (Some(raw), name)
             }
         };
-        let points = parse(Grammar::GroupedDecimal, &raw_points).filter(|_| clear_of_divider);
+        // A digit lost from the fraction still parses; its ink is too
+        // wide for what was read.
+        let points = parse(Grammar::GroupedDecimal, &raw_points)
+            .filter(|_| clear_of_divider)
+            .filter(|p| width_agrees(image, points_rect, &p.text, &profile.read.numerals));
         match (name, points) {
             (Some(name), Some(points)) => rows.push(SkillRow {
                 name,
@@ -2081,7 +2085,16 @@ mod tests {
                 d.text(r, "Newbie");
             }
             let points_x = w.x0 + layout.points_x;
-            if let Some(r) = visible(Rect::new(points_x, top + 22, points_x + 50, top + 35)) {
+            // As wide as the client's numerals would make this figure.
+            let numerals = &bundled_profile().read.numerals;
+            let width = crate::game_ui::validate::expected_width(points, numerals)
+                .map_or(50, |units| (units * 14.0).round() as i32);
+            if let Some(r) = visible(Rect::new(
+                points_x,
+                top + 22,
+                points_x + width - 1,
+                top + 35,
+            )) {
                 d.text(r, points);
             }
         }

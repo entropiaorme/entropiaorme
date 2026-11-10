@@ -85,6 +85,7 @@ use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::seams::RegionLookup;
 use eo_services::hotbar_listener::{
     GameFocusProbe, HotbarListener, HotbarResolver, ItemResolver, ResolvedHotbarItem,
     HOTBAR_SLOT_KEYS,
@@ -1127,8 +1128,7 @@ async fn compose_scan_services(
     // filters to resolved (name, level) rows.
     let has_engine = ocr_engine.is_some();
     let region_presets = presets.clone();
-    let skill_region: Arc<dyn Fn() -> Option<ScanRegion> + Send + Sync> =
-        Arc::new(move || eu_window::skill_region(&region_presets));
+    let skill_region: RegionLookup = Arc::new(move || eu_window::skill_region(&region_presets));
     let capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync> =
         Arc::new(|(tl, br): ScanRegion| {
             capture_region_png(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])

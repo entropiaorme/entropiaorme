@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 use crate::bus_events::BusEvent;
 use crate::clock::Clock;
 use crate::event_bus::EventBus;
+use crate::game_ui::seams::RegionLookup;
 use crate::time::{naive_to_epoch, to_iso_utc};
 use eo_wire::domain_events::{
     ScanPhase, ScanStatusChanged, ScanStatusChangedPayload, ScanStatusChangedTag,
@@ -66,7 +67,7 @@ pub struct ScanProviders {
     /// Whether the extraction engine can be loaded right now.
     pub engine_available: Arc<dyn Fn() -> bool + Send + Sync>,
     /// The skill-panel region from the live game window, when found.
-    pub skill_region: Arc<dyn Fn() -> Option<ScanRegion> + Send + Sync>,
+    pub skill_region: RegionLookup,
     /// Capture the region as PNG bytes; None on any capture failure.
     pub capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync>,
     /// Extract `{canonical_name: level}` rows from one page.

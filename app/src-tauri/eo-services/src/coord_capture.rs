@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::game_ui::seams::{FrameReader, RegionCapture};
 use crate::skill_panel::{digit_value, BgrImage};
 
 /// The persisted capture rectangle, in screen coordinates.
@@ -47,10 +48,6 @@ pub struct CoordRegion {
 pub type CursorPosition = Arc<dyn Fn() -> Option<(i64, i64)> + Send + Sync>;
 /// The region-provider seam: how the capture rectangle is obtained.
 pub type RegionProvider = Arc<dyn Fn() -> Option<CoordRegion> + Send + Sync>;
-/// The screen-capture seam: an `x/y/w/h` rectangle as BGR pixels.
-pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Send + Sync>;
-/// The recognition seam: one frame to `(text, confidence)`.
-pub type FrameReader = Arc<dyn Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync>;
 /// The persistence sink a completed calibration writes through.
 pub type RegionSink = Arc<dyn Fn(CoordRegion) -> Result<(), String> + Send + Sync>;
 /// Where scan debug artefacts (the captured frame and what the

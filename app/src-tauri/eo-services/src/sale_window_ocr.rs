@@ -29,6 +29,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Map, Value};
 
 use crate::fuzzy_match::wratio;
+use crate::game_ui::seams::{FrameReader, RegionCapture, RegionLookup};
 use crate::ocr_text::parse_amount;
 use crate::scan_presets::PanelAnchor;
 use crate::skill_panel::BgrImage;
@@ -36,16 +37,6 @@ use crate::skill_panel::BgrImage;
 /// The capture observer (the recording controller's seam): called as
 /// `tap(panel, region, frame)` after a successful grab.
 pub type SaleCaptureTap = Arc<dyn Fn(&str, &Value, &BgrImage) + Send + Sync>;
-
-/// The window-region lookup seam: the sale window's corners when found.
-pub type RegionLookup = Arc<dyn Fn() -> Option<([i64; 2], [i64; 2])> + Send + Sync>;
-
-/// The screen-capture seam: an `x/y/w/h` rectangle as BGR pixels.
-pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Send + Sync>;
-
-/// The recognition seam: one frame to `(text, confidence)`, or the
-/// engine's unavailability.
-pub type FrameReader = Arc<dyn Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync>;
 
 /// The calibrated field rectangles, panel-relative.
 pub type AnchorLookup = Arc<dyn Fn() -> PanelAnchor + Send + Sync>;
